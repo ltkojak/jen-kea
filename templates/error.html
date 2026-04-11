@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error {{ code }} — Jen</title>
+    <link rel="icon" href="/favicon.ico">
+    <style>
+        :root[data-theme="dark"] { --bg:#0d0d0d; --surface:#141414; --border:#2a2a2a; --text:#e0e0e0; --text-muted:#666; --primary:#00b4d8; --danger:#e74c3c; --radius:6px; }
+        :root[data-theme="light"] { --bg:#f0f2f5; --surface:#ffffff; --border:#dee2e6; --text:#212529; --text-muted:#6c757d; --primary:#0077b6; --danger:#dc3545; --radius:6px; }
+        * { box-sizing:border-box; margin:0; padding:0; }
+        body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+        .box { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:48px; max-width:480px; text-align:center; }
+        .code { font-size:72px; font-weight:700; color:var(--danger); line-height:1; margin-bottom:16px; }
+        .msg { font-size:16px; color:var(--text-muted); margin-bottom:28px; }
+        .btn { display:inline-block; padding:10px 24px; background:var(--primary); color:#fff; border-radius:var(--radius); text-decoration:none; font-weight:600; }
+        .btn:hover { opacity:0.9; }
+        .hint { font-size:12px; color:var(--text-muted); margin-top:16px; }
+    </style>
+    <script>(function(){const s=localStorage.getItem('jen-theme')||'dark';document.documentElement.setAttribute('data-theme',s);})();</script>
+</head>
+<body>
+<div class="box">
+    <div class="code">{{ code }}</div>
+    <div class="msg">{{ message }}</div>
+    <a href="/" class="btn">← Back to Dashboard</a>
+    {% if code == 500 %}
+    <div class="hint">Check Jen logs: <code>sudo journalctl -u jen -n 30</code></div>
+    {% endif %}
+</div>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# Don't include these in the Docker build context
+jen.config
+.env
+*.tar.gz
+*.bak
+__pycache__/
+*.pyc
+.git/
+static/favicon.ico
+/etc/jen/

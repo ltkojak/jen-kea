@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>⚙️ Settings</h1>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+<!-- SSL Certificate -->
+<div class="card" style="grid-column:1/-1;">
+    <div class="card-header">
+        <span class="card-title">🔒 SSL Certificate</span>
+        {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
+        {% else %}<span class="badge" style="background:#2a2a1a;color:var(--warning);">HTTP Only — port 5050</span>{% endif %}
+    </div>
+    {% if ssl_configured and cert_info %}
+    <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+        {% if cert_info.subject %}<div><div class="stat-label">Subject</div><div class="mono" style="font-size:11px;">{{ cert_info.subject }}</div></div>{% endif %}
+        {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono" style="font-size:11px;">{{ cert_info.issuer }}</div></div>{% endif %}
+        {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
+    </div>
+    <form method="POST" action="/settings/remove-cert" onsubmit="return confirm('Remove SSL certificate? Jen will restart in HTTP mode.')">
+        <button type="submit" class="btn btn-danger btn-sm" style="margin-bottom:16px;">🗑️ Remove Certificate</button>
+    </form>
+    {% endif %}
+    <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data">
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">{% if ssl_configured %}Replace current certificate:{% else %}Upload certificate to enable HTTPS:{% endif %}</div>
+        <div class="form-row">
+            <div class="form-group"><label>Certificate *</label><input type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
+            <div class="form-group"><label>Private Key *</label><input type="file" name="private_key" accept=".key,.pem" required><div class="form-hint">private.key</div></div>
+            <div class="form-group"><label>CA Bundle</label><input type="file" name="ca_bundle" accept=".crt,.pem"><div class="form-hint">ca_bundle.crt — required for ZeroSSL</div></div>
+        </div>
+        <button type="submit" class="btn btn-primary">{% if ssl_configured %}🔄 Replace Certificate{% else %}🔒 Enable HTTPS{% endif %}</button>
+    </form>
+</div>
+
+<!-- Telegram -->
+<div class="card" style="grid-column:1/-1;">
+    <div class="card-header">
+        <span class="card-title">📱 Telegram Alerts</span>
+        {% if telegram.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>{% else %}<span class="badge badge-dynamic">Disabled</span>{% endif %}
+    </div>
+    <form method="POST" action="/settings/save-telegram">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Bot Token</label>
+                <input type="text" name="token" value="{{ telegram.token }}" placeholder="1234567890:ABCdef...">
+                <div class="form-hint">From @BotFather on Telegram</div>
+            </div>
+            <div class="form-group">
+                <label>Chat ID</label>
+                <input type="text" name="chat_id" value="{{ telegram.chat_id }}" placeholder="-1001234567890">
+                <div class="form-hint">Your Telegram chat or group ID</div>
+            </div>
+            <div class="form-group">
+                <label>Utilization Threshold %</label>
+                <input type="number" name="threshold_pct" value="{{ telegram.alert_threshold_pct }}" min="1" max="100">
+                <div class="form-hint">Alert when subnet hits this % utilization</div>
+            </div>
+        </div>
+        <div style="display:flex;gap:20px;margin-bottom:16px;flex-wrap:wrap;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:normal;">
+                <input type="checkbox" name="enabled" value="true" {% if telegram.enabled=='true' %}checked{% endif %}> Enable Telegram alerts
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:normal;">
+                <input type="checkbox" name="alert_kea_down" value="true" {% if telegram.alert_kea_down=='true' %}checked{% endif %}> Kea goes down/up
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:normal;">
+                <input type="checkbox" name="alert_new_lease" value="true" {% if telegram.alert_new_lease=='true' %}checked{% endif %}> New device lease
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:normal;">
+                <input type="checkbox" name="alert_utilization" value="true" {% if telegram.alert_utilization=='true' %}checked{% endif %}> Utilization threshold
+            </label>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button type="submit" class="btn btn-primary">Save Telegram Settings</button>
+        </div>
+    </form>
+    <form method="POST" action="/settings/test-telegram" style="margin-top:10px;">
+        <button type="submit" class="btn btn-secondary">📤 Send Test Message</button>
+    </form>
+</div>
+
+<!-- SSH Key Management -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🔑 SSH Key Management</span>
+        {% if ssh_configured %}<span class="badge badge-reserved">Key Generated</span>{% else %}<span class="badge badge-dynamic">Not Configured</span>{% endif %}
+    </div>
+    {% if ssh_configured %}
+    <div style="margin-bottom:12px;">
+        <div class="stat-label" style="margin-bottom:6px;">Public Key — add to your-kea-server authorized_keys</div>
+        <div style="background:var(--surface2);border-radius:var(--radius);padding:10px;font-family:monospace;font-size:11px;word-break:break-all;color:var(--text-muted);">{{ ssh_pub_key }}</div>
+    </div>
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Add to: <code>~/.ssh/authorized_keys</code> on {{ kea_ssh_user }}@{{ kea_ssh_host }}</div>
+    {% endif %}
+    <form method="POST" action="/settings/generate-ssh-key" onsubmit="return confirm('{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}')">
+        <button type="submit" class="btn btn-primary">{% if ssh_configured %}🔄 Regenerate Key{% else %}🔑 Generate SSH Key{% endif %}</button>
+    </form>
+</div>
+
+<!-- Session Settings -->
+<div class="card">
+    <div class="card-header"><span class="card-title">⏱️ Session Timeout</span></div>
+    <form method="POST" action="/settings/save-session">
+        <div class="form-group">
+            <label>Global Timeout (minutes)</label>
+            <input type="number" name="timeout_minutes" value="{{ session.timeout }}" min="1" max="1440">
+            <div class="form-hint">Default for all users. Per-user overrides can be set in Users.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+</div>
+
+<!-- Rate Limiting -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🛡️ Login Rate Limiting</span>
+        {% if rl.mode == 'off' or rl.max_attempts == '0' %}
+        <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
+        {% else %}
+        <span class="badge badge-reserved">Enabled</span>
+        {% endif %}
+    </div>
+    <form method="POST" action="/settings/save-rate-limit">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Max Failed Attempts</label>
+                <input type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100">
+                <div class="form-hint">0 = disabled</div>
+            </div>
+            <div class="form-group">
+                <label>Lockout Duration (minutes)</label>
+                <input type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440">
+                <div class="form-hint">0 = permanent until admin clears</div>
+            </div>
+            <div class="form-group">
+                <label>Lockout Mode</label>
+                <select name="mode">
+                    <option value="both" {% if rl.mode == 'both' %}selected{% endif %}>Both IP and Username</option>
+                    <option value="ip" {% if rl.mode == 'ip' %}selected{% endif %}>IP Address only</option>
+                    <option value="username" {% if rl.mode == 'username' %}selected{% endif %}>Username only</option>
+                    <option value="off" {% if rl.mode == 'off' %}selected{% endif %}>Off</option>
+                </select>
+            </div>
+        </div>
+        <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12px;display:flex;gap:24px;">
+            <div><span class="stat-label">Failed attempts (last hour)</span><br><strong style="color:var(--warning);">{{ rl_attempts_1h }}</strong></div>
+            <div><span class="stat-label">Unique IPs affected</span><br><strong style="color:var(--warning);">{{ rl_active_ips }}</strong></div>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <form method="POST" action="/settings/clear-lockouts" style="display:inline;" onsubmit="return confirm('Clear all login attempt records? This will unlock all locked accounts.')">
+                <button type="submit" class="btn btn-secondary">🔓 Clear All Lockouts</button>
+            </form>
+        </div>
+    </form>
+</div>
+
+<!-- Favicon -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🖼️ Favicon</span>
+        {% if has_favicon %}<span class="badge badge-reserved">Custom</span>{% endif %}
+    </div>
+    {% if has_favicon %}
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <img src="/favicon.ico" style="width:32px;height:32px;border-radius:4px;background:var(--surface2);padding:2px;">
+        <form method="POST" action="/settings/remove-favicon" style="display:inline;">
+            <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+        </form>
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data">
+        <div class="form-group">
+            <label>Upload Favicon</label>
+            <input type="file" name="favicon" accept=".ico,.png">
+            <div class="form-hint">.ico or .png — 32x32 or 64x64 recommended</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+</div>
+
+<!-- System Info -->
+<div class="card">
+    <div class="card-header"><span class="card-title">ℹ️ System</span></div>
+    <table>
+        <tr><td class="stat-label" style="width:130px;">Version</td><td>Jen v{{ jen_version }}</td></tr>
+        <tr><td class="stat-label">HTTP Port</td><td class="mono">5050 {% if ssl_configured %}(redirects){% else %}(active){% endif %}</td></tr>
+        <tr><td class="stat-label">HTTPS Port</td><td class="mono">{{ https_port }} {% if ssl_configured %}<span style="color:var(--success);">✓</span>{% endif %}</td></tr>
+        <tr><td class="stat-label">Kea API</td><td class="mono" style="font-size:11px;">{{ config_kea_url if config_kea_url is defined else 'see jen.config' }}</td></tr>
+        <tr><td class="stat-label">SSH Host</td><td class="mono">{{ kea_ssh_host or 'not set' }}</td></tr>
+        <tr><td class="stat-label">Config</td><td class="mono">/etc/jen/jen.config</td></tr>
+    </table>
+</div>
+
+</div>
+{% endblock %}

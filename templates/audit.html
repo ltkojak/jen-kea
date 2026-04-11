@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Audit Log{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📝 Audit Log</h1>
+    <p>{{ total }} event(s) recorded</p>
+</div>
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table class="sortable">
+    <thead><tr>
+        <th data-sort>Timestamp</th>
+        <th data-sort>User</th>
+        <th data-sort>Action</th>
+        <th data-sort>Entity</th>
+        <th>Details</th>
+        <th data-sort>IP</th>
+    </tr></thead>
+    <tbody>
+    {% for log in logs %}
+    <tr>
+        <td class="mono" style="font-size:12px;color:var(--text-muted);white-space:nowrap;">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td><strong>{{ log.username }}</strong></td>
+        <td><span class="badge {% if 'DELETE' in log.action %}badge-admin{% elif 'ADD' in log.action %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ log.action }}</span></td>
+        <td class="mono" style="font-size:12px;">{{ log.entity }}</td>
+        <td style="font-size:12px;color:var(--text-muted);">{{ log.details }}</td>
+        <td class="mono" style="font-size:11px;color:var(--text-muted);">{{ log.ip_address }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted);">No audit events yet.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+{% if pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}<a href="?page={{ page-1 }}">‹ Prev</a>{% endif %}
+    {% for p in range(1, pages+1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
+    <a href="?page={{ p }}">{{ p }}</a>
+    {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
+    {% endfor %}
+    {% if page < pages %}<a href="?page={{ page+1 }}">Next ›</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Jen - The Internet Management Console
+# Docker Compose — Bundled MySQL for Jen DB
+#
+# Use this when you want Docker to manage the Jen database locally.
+# The Kea database still connects to your external Kea server.
+#
+# Usage:
+#   cp jen.config.example jen.config
+#   # Edit jen.config — set [jen_db] host to: jen-mysql
+#   docker compose -f docker-compose.mysql.yml up -d
+#
+# Note: jen.config [jen_db] section should be:
+#   host     = jen-mysql
+#   user     = jen
+#   password = (match JEN_MYSQL_PASSWORD below)
+#   database = jen
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  jen:
+    build: .
+    image: jen-dhcp:1.0.0
+    container_name: jen
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-5050}:5050"
+      - "${HTTPS_PORT:-8443}:8443"
+    volumes:
+      - jen-config:/etc/jen
+      - ./jen.config:/etc/jen/jen.config:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      jen-mysql:
+        condition: service_healthy
+    networks:
+      - jen-network
+
+  jen-mysql:
+    image: mariadb:11
+    container_name: jen-mysql
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MARIADB_DATABASE: jen
+      MARIADB_USER: jen
+      MARIADB_PASSWORD: ${JEN_MYSQL_PASSWORD:-jen_password}
+    volumes:
+      - jen-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - jen-network
+    # Not exposed externally — only accessible to jen container
+    expose:
+      - "3306"
+
+volumes:
+  jen-config:
+    name: jen-config
+  jen-mysql-data:
+    name: jen-mysql-data
+
+networks:
+  jen-network:
+    name: jen-network

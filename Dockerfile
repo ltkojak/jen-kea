@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Jen - The Internet Management Console
+# Dockerfile
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:24.04
+
+LABEL maintainer="jen-dhcp"
+LABEL description="Jen - The Internet Management Console for ISC Kea DHCP"
+LABEL version="1.0.0"
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Install dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    mariadb-client-core \
+    openssh-client \
+    openssl \
+    curl \
+    && pip3 install --break-system-packages \
+        flask \
+        flask-login \
+        pymysql \
+        requests \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app user matching bare metal setup
+RUN groupadd -r www-data 2>/dev/null || true && \
+    useradd -r -g www-data -s /sbin/nologin www-data 2>/dev/null || true
+
+# Create directories
+RUN mkdir -p /opt/jen/static /opt/jen/templates \
+             /etc/jen/ssl /etc/jen/ssh /etc/jen/backups
+
+# Copy application files
+COPY jen.py /opt/jen/jen.py
+COPY templates/ /opt/jen/templates/
+
+# Set permissions
+RUN chown -R www-data:www-data /opt/jen /etc/jen
+
+# Config volume — persists jen.config, ssl, ssh keys, backups
+VOLUME ["/etc/jen"]
+
+# Expose ports
+EXPOSE 5050 8443
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -sf http://localhost:5050/ || curl -skf https://localhost:8443/ || exit 1
+
+USER www-data
+
+CMD ["python3", "/opt/jen/jen.py"]

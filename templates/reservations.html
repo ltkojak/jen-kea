@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Reservations{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📌 Reservations</h1>
+    <p>{{ total }} reservation(s)</p>
+</div>
+
+<div class="filter-bar">
+    <form method="GET" style="display:contents;">
+        <select name="subnet" onchange="this.form.submit()">
+            <option value="all" {% if subnet_filter=='all' %}selected{% endif %}>All Subnets</option>
+            {% for sid, info in subnet_map.items() %}
+            <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="search" value="{{ search }}" placeholder="Search IP, hostname, MAC...">
+        <button type="submit" class="btn btn-secondary">Filter</button>
+        <a href="/reservations" class="btn btn-secondary">Clear</a>
+    </form>
+    {% if current_user.role == 'admin' %}
+    <a href="/reservations/add" class="btn btn-primary">+ Add Reservation</a>
+    <a href="/reservations/export" class="btn btn-secondary">⬇ Export CSV</a>
+    <label class="btn btn-secondary" style="cursor:pointer;">
+        ⬆ Import CSV
+        <form id="import-form" method="POST" action="/reservations/import" enctype="multipart/form-data" style="display:none;">
+            <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('import-form').submit()">
+        </form>
+    </label>
+    {% endif %}
+</div>
+
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table class="sortable">
+    <thead><tr>
+        <th data-sort>IP Address</th>
+        <th data-sort>Hostname</th>
+        <th data-sort>MAC Address</th>
+        <th data-sort>Subnet</th>
+        <th data-sort>DNS Override</th>
+        <th data-sort>Notes</th>
+        {% if current_user.role == 'admin' %}<th>Actions</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for h in hosts %}
+    <tr>
+        <td class="mono">{{ h.ip }}</td>
+        <td>{{ h.hostname or '—' }}</td>
+        <td class="mono">{{ h.mac }}</td>
+        <td><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
+        <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
+        {% if current_user.role == 'admin' %}
+        <td style="white-space:nowrap;">
+            <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary">✏️</a>
+            <form method="POST" action="/reservations/delete/{{ h.host_id }}" style="display:inline;" onsubmit="return confirm('Delete reservation for {{ h.ip }}?')">
+                <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+            </form>
+        </td>
+        {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No reservations found.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+
+{% if pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}<a href="?page={{ page-1 }}&subnet={{ subnet_filter }}&search={{ search }}">‹ Prev</a>{% endif %}
+    {% for p in range(1, pages+1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
+    <a href="?page={{ p }}&subnet={{ subnet_filter }}&search={{ search }}">{{ p }}</a>
+    {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
+    {% endfor %}
+    {% if page < pages %}<a href="?page={{ page+1 }}&subnet={{ subnet_filter }}&search={{ search }}">Next ›</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

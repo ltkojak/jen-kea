@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Jen{% endblock %} — Jen</title>
+    <link rel="icon" href="/favicon.ico">
+    <style>
+        :root[data-theme="dark"] {
+            --bg: #0d0d0d; --surface: #141414; --surface2: #1c1c1c;
+            --border: #2a2a2a; --text: #e0e0e0; --text-muted: #666;
+            --primary: #00b4d8; --success: #2ecc71; --warning: #f39c12;
+            --danger: #e74c3c; --radius: 6px;
+        }
+        :root[data-theme="light"] {
+            --bg: #f0f2f5; --surface: #ffffff; --surface2: #f8f9fa;
+            --border: #dee2e6; --text: #212529; --text-muted: #6c757d;
+            --primary: #0077b6; --success: #198754; --warning: #fd7e14;
+            --danger: #dc3545; --radius: 6px;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
+        a { color: var(--primary); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Nav */
+        .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; height: 48px; gap: 4px; position: sticky; top: 0; z-index: 100; }
+        .nav-brand { color: var(--primary); font-weight: 700; font-size: 16px; margin-right: 16px; text-decoration: none; }
+        .nav-brand span { color: var(--text-muted); font-size: 11px; font-weight: 400; display: block; }
+        .nav a { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; }
+        .nav a:hover, .nav a.active { background: var(--surface2); color: var(--text); text-decoration: none; }
+        .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+        .nav-user { font-size: 12px; color: var(--text-muted); }
+        .nav-user strong { color: var(--primary); }
+        .kea-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .kea-up { background: var(--success); box-shadow: 0 0 6px var(--success); }
+        .kea-down { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
+
+        /* Layout */
+        .container { max-width: 1400px; margin: 0 auto; padding: 24px 20px; }
+        .page-header { margin-bottom: 24px; }
+        .page-header h1 { font-size: 22px; font-weight: 600; }
+        .page-header p { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+        /* Cards */
+        .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+        .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+        .card-title { font-weight: 600; font-size: 14px; }
+
+        /* Tables */
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; }
+        th:hover { color: var(--text); }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background: var(--surface2); }
+
+        /* Buttons */
+        .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 14px; border-radius: var(--radius); border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: opacity 0.15s; text-decoration: none; }
+        .btn:hover { opacity: 0.85; text-decoration: none; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-icon { padding: 5px 8px; }
+
+        /* Forms */
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+        .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+        input[type=text], input[type=password], input[type=email], input[type=number], input[type=file], select, textarea {
+            background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius);
+            color: var(--text); padding: 8px 12px; font-size: 13px; width: 100%; outline: none;
+        }
+        input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+        .form-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+        input[type=checkbox] { width: auto; margin-right: 6px; }
+
+        /* Badges */
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+        .badge-production { background: #1a3a4a; color: var(--primary); }
+        .badge-iot { background: #1a3a1a; color: var(--success); }
+        .badge-vlan70 { background: #3a1a3a; color: #c77dff; }
+        .badge-admin { background: #2a1a1a; color: var(--danger); }
+        .badge-viewer { background: #1a1a2a; color: #7b9dff; }
+        .badge-dynamic { background: #1a2a3a; color: var(--primary); }
+        .badge-reserved { background: #1a3a1a; color: var(--success); }
+
+        /* Alerts */
+        .alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
+        .alert-success { background: #1a3a1a; border: 1px solid #2ecc7133; color: var(--success); }
+        .alert-error { background: #3a1a1a; border: 1px solid #e74c3c33; color: var(--danger); }
+        .alert-info { background: #1a2a3a; border: 1px solid #00b4d833; color: var(--primary); }
+        .alert-warning { background: #2a2a1a; border: 1px solid #f39c1233; color: var(--warning); }
+
+        /* Utilization bar */
+        .util-bar { height: 4px; background: var(--surface2); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+        .util-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+        /* Pagination */
+        .pagination { display: flex; align-items: center; gap: 6px; margin-top: 16px; }
+        .pagination a, .pagination span { padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--border); font-size: 12px; }
+        .pagination a { color: var(--text); }
+        .pagination a:hover { background: var(--surface2); text-decoration: none; }
+        .pagination .current { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+        /* Mono */
+        .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+
+        /* Stat cards */
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+        .stat-value { font-size: 36px; font-weight: 700; color: var(--primary); margin: 4px 0; }
+        .stat-meta { font-size: 12px; color: var(--text-muted); }
+
+        /* Filter bar */
+        .filter-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+        .filter-bar select, .filter-bar input { width: auto; min-width: 140px; }
+
+        /* Theme toggle */
+        .theme-toggle { background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); padding: 4px 8px; cursor: pointer; font-size: 13px; }
+        .theme-toggle:hover { color: var(--text); }
+
+        /* Sortable indicator */
+        th.sort-asc::after { content: ' ↑'; color: var(--primary); }
+        th.sort-desc::after { content: ' ↓'; color: var(--primary); }
+
+        /* IP Map */
+        .ip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 4px; }
+        .ip-cell { padding: 5px 8px; border-radius: 4px; font-size: 11px; font-family: monospace; text-align: center; border: 1px solid var(--border); cursor: default; }
+        .ip-free { background: var(--surface2); color: var(--text-muted); }
+        .ip-dynamic { background: #1a2a3a; color: var(--primary); border-color: #00b4d833; }
+        .ip-reserved { background: #1a3a1a; color: var(--success); border-color: #2ecc7133; }
+        .ip-cell:hover { opacity: 0.8; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .nav { overflow-x: auto; }
+            .container { padding: 16px 12px; }
+            .stat-grid { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+<nav class="nav">
+    <a href="/" class="nav-brand">Jen <span>The Kea DHCP Management Console</span></a>
+    {% if current_user.is_authenticated %}
+    <a href="/" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
+    <a href="/leases" class="{% if request.endpoint in ['leases','ipmap'] %}active{% endif %}">📋 Leases</a>
+    <a href="/reservations" class="{% if request.endpoint in ['reservations','add_reservation','edit_reservation'] %}active{% endif %}">📌 Reservations</a>
+    <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
+    <a href="/ddns" class="{% if request.endpoint == 'ddns' %}active{% endif %}">🔗 DDNS</a>
+    {% if current_user.role == 'admin' %}
+    <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit</a>
+    <a href="/users" class="{% if request.endpoint in ['users'] %}active{% endif %}">👤 Users</a>
+    <a href="/settings" class="{% if request.endpoint == 'settings' %}active{% endif %}">⚙️ Settings</a>
+    {% endif %}
+    <div class="nav-right">
+        <span class="kea-status" id="kea-indicator" title="Kea status"></span>
+        <span class="nav-user">Logged in as <strong>{{ current_user.username }}</strong></span>
+        <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        <a href="/logout" class="btn btn-sm btn-secondary">Logout</a>
+    </div>
+    {% endif %}
+</nav>
+
+<div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</div>
+
+<script>
+// Theme
+function toggleTheme() {
+    const html = document.documentElement;
+    const current = html.getAttribute('data-theme');
+    const next = current === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    localStorage.setItem('jen-theme', next);
+    document.querySelector('.theme-toggle').textContent = next === 'dark' ? '🌙' : '☀️';
+}
+(function() {
+    const saved = localStorage.getItem('jen-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', saved);
+    document.addEventListener('DOMContentLoaded', function() {
+        const btn = document.querySelector('.theme-toggle');
+        if (btn) btn.textContent = saved === 'dark' ? '🌙' : '☀️';
+    });
+})();
+
+// Kea status indicator
+function updateKeaStatus() {
+    fetch('/api/stats').then(r => r.json()).then(data => {
+        const el = document.getElementById('kea-indicator');
+        if (el) {
+            el.className = 'kea-status ' + (data.kea_up ? 'kea-up' : 'kea-down');
+            el.title = data.kea_up ? 'Kea: Online' : 'Kea: OFFLINE';
+        }
+    }).catch(() => {});
+}
+updateKeaStatus();
+setInterval(updateKeaStatus, 30000);
+
+// Sortable tables
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('table.sortable').forEach(table => {
+        table.querySelectorAll('th[data-sort]').forEach((th, idx) => {
+            th.addEventListener('click', function() {
+                sortTable(table, idx, th);
+            });
+        });
+    });
+});
+
+function sortTable(table, col, th) {
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const asc = !th.classList.contains('sort-asc');
+    table.querySelectorAll('th').forEach(t => t.classList.remove('sort-asc', 'sort-desc'));
+    th.classList.add(asc ? 'sort-asc' : 'sort-desc');
+    rows.sort((a, b) => {
+        const aVal = a.cells[col]?.textContent.trim() || '';
+        const bVal = b.cells[col]?.textContent.trim() || '';
+        return asc ? aVal.localeCompare(bVal, undefined, {numeric: true}) : bVal.localeCompare(aVal, undefined, {numeric: true});
+    });
+    rows.forEach(r => tbody.appendChild(r));
+}
+
+// Auto-refresh
+{% block scripts %}{% endblock %}
+</script>
+</body>
+</html>

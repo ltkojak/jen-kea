@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}IP Map{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🗺️ IP Address Map</h1>
+    <p>Visual layout of address space usage</p>
+</div>
+
+<div class="filter-bar">
+    <form method="GET">
+        <select name="subnet" onchange="this.form.submit()">
+            {% for sid, info in subnet_map.items() %}
+            <option value="{{ sid }}" {% if subnet_id==sid %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
+            {% endfor %}
+        </select>
+    </form>
+    <span style="font-size:12px;color:var(--text-muted);">Pool: {{ pool_start }} — {{ pool_end }}</span>
+</div>
+
+<div class="card">
+    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
+        <span><span style="display:inline-block;width:12px;height:12px;background:var(--surface2);border:1px solid var(--border);border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--text-muted);">Free</span></span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#1a2a3a;border:1px solid #00b4d833;border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--primary);">Dynamic Lease</span></span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#1a3a1a;border:1px solid #2ecc7133;border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--success);">Reserved</span></span>
+    </div>
+
+    {% if pool_start and pool_end %}
+    <div class="ip-grid">
+        {% set ns = namespace(a=pool_start.split('.'), b=pool_end.split('.')) %}
+        {% set start_last = ns.a[3]|int %}
+        {% set end_last = ns.b[3]|int %}
+        {% set prefix = ns.a[0] + '.' + ns.a[1] + '.' + ns.a[2] + '.' %}
+        {% for i in range(start_last, end_last + 1) %}
+        {% set ip = prefix + i|string %}
+        {% if ip in used %}
+        <div class="ip-cell ip-{{ used[ip].type }}" title="{{ ip }}&#10;{{ used[ip].hostname or 'No hostname' }}&#10;{{ used[ip].type }}">
+            .{{ i }}<br><span style="font-size:9px;opacity:0.7;">{{ (used[ip].hostname or '')[:8] }}</span>
+        </div>
+        {% else %}
+        <div class="ip-cell ip-free" title="{{ ip }} — Free">.{{ i }}</div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% else %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">Could not determine pool range from Kea config.</div>
+    {% endif %}
+</div>
+{% endblock %}

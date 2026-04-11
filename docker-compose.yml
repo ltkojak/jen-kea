@@ -1,0 +1,44 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Jen - The Internet Management Console
+# Docker Compose — External MySQL for Jen DB
+#
+# Use this when you want to connect Jen to an existing external MySQL server
+# for both the Kea database and the Jen database.
+#
+# Usage:
+#   cp jen.config.example jen.config   # edit with your values
+#   docker compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  jen:
+    build: .
+    image: jen-dhcp:1.0.0
+    container_name: jen
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-5050}:5050"
+      - "${HTTPS_PORT:-8443}:8443"
+    volumes:
+      # Persistent config, certs, SSH keys, and backups
+      - jen-config:/etc/jen
+      # Mount your jen.config directly (recommended for easy editing)
+      - ./jen.config:/etc/jen/jen.config:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5050/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - jen-network
+
+volumes:
+  jen-config:
+    name: jen-config
+
+networks:
+  jen-network:
+    name: jen-network

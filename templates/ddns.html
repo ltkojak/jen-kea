@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}DDNS Status{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔗 DDNS Status</h1>
+    <p>Technitium DNS update activity</p>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+<div class="card">
+    <div class="card-header"><span class="card-title">🔍 Hostname Lookup</span></div>
+    <form method="GET">
+        <div style="display:flex;gap:8px;">
+            <input type="text" name="lookup" value="{{ lookup_host }}" placeholder="hostname.domain.com" style="flex:1;">
+            <button type="submit" class="btn btn-primary">Lookup</button>
+        </div>
+    </form>
+    {% if lookup_host %}
+    <div style="margin-top:16px;">
+        {% if lookup_result is string %}
+        <div class="alert alert-error">{{ lookup_result }}</div>
+        {% elif lookup_result %}
+        <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Value</th><th>TTL</th></tr></thead>
+            <tbody>
+            {% for r in lookup_result %}
+            <tr>
+                <td class="mono" style="font-size:12px;">{{ r.get('name','') }}</td>
+                <td><span class="badge badge-dynamic">{{ r.get('type','') }}</span></td>
+                <td class="mono" style="font-size:12px;">{{ r.get('rData',{}).get('ipAddress','') or r.get('rData','') }}</td>
+                <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ r.get('ttl','') }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div style="color:var(--text-muted);font-size:13px;">No records found for <strong>{{ lookup_host }}</strong>.</div>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-header"><span class="card-title">ℹ️ Log Info</span></div>
+    <table>
+        <tr><td class="stat-label" style="width:100px;">Log File</td><td class="mono" style="font-size:12px;">{{ '/var/log/kea/kea-ddns-technitium.log' }}</td></tr>
+        <tr><td class="stat-label">Showing</td><td>Last 200 lines</td></tr>
+        <tr><td class="stat-label">Entries</td><td>{{ lines|length }}</td></tr>
+    </table>
+</div>
+
+</div>
+
+<div class="card">
+    <div class="card-header"><span class="card-title">📄 Recent Log Activity</span></div>
+    {% if lines %}
+    <div style="background:var(--surface2);border-radius:var(--radius);padding:14px;max-height:500px;overflow-y:auto;">
+    {% for line in lines %}
+    <div class="mono" style="font-size:11px;padding:2px 0;border-bottom:1px solid var(--border);
+        color:{% if 'ERROR' in line %}var(--danger){% elif 'SUCCESS' in line or 'Added' in line %}var(--success){% elif 'Deleted' in line %}var(--warning){% else %}var(--text-muted){% endif %};">{{ line.strip() }}</div>
+    {% endfor %}
+    </div>
+    {% else %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No log data available. Check that the DDNS log path is configured correctly.</div>
+    {% endif %}
+</div>
+{% endblock %}

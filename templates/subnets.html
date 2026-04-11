@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Subnets{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🌐 Subnets & Scope Options</h1>
+    <p>Subnet configuration pulled live from Kea</p>
+</div>
+
+{% if not ssh_ready %}
+<div class="alert alert-warning">💡 Subnet editing requires SSH to be configured. Go to <a href="/settings">Settings → SSH Key Management</a> to set it up.</div>
+{% endif %}
+
+{% for s in subnets %}
+<div class="card">
+    <div class="card-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
+            <span class="mono" style="font-size:15px;">{{ s.subnet }}</span>
+        </div>
+        {% if current_user.role == 'admin' and ssh_ready %}
+        <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+        {% endif %}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:16px;">
+        <div>
+            <div class="stat-label">Lease Duration</div>
+            <div style="font-size:20px;font-weight:700;color:var(--primary);">
+                {% if s.valid_lifetime %}
+                    {% set days = (s.valid_lifetime / 86400)|int %}
+                    {% set hours = ((s.valid_lifetime % 86400) / 3600)|round(1) %}
+                    {{ days ~ ' day' ~ ('s' if days != 1) if days else hours ~ 'h' }}
+                {% else %}—{% endif %}
+            </div>
+        </div>
+        <div>
+            <div class="stat-label">Renew Timer (T1)</div>
+            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ ((s.renew_timer or 0) / 3600)|round(1) }}h</div>
+        </div>
+        <div>
+            <div class="stat-label">Rebind Timer (T2)</div>
+            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ ((s.rebind_timer or 0) / 3600)|round(1) }}h</div>
+        </div>
+    </div>
+    <div style="margin-bottom:12px;">
+        <div class="stat-label" style="margin-bottom:6px;">Address Pools</div>
+        {% for pool in s.pools %}
+        <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;margin-right:6px;">{{ pool }}</span>
+        {% endfor %}
+    </div>
+    {% if s.options %}
+    <div>
+        <div class="stat-label" style="margin-bottom:8px;">Scope Options</div>
+        <table style="width:auto;">
+            <thead><tr><th>Option</th><th>Value</th></tr></thead>
+            <tbody>
+            {% for opt in s.options %}
+            <tr>
+                <td style="color:var(--text-muted);">{{ opt.code }} <strong>{{ opt.name }}</strong></td>
+                <td class="mono">{{ opt.data }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endblock %}

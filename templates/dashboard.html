@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📊 Dashboard</h1>
+    <p>Live overview of your DHCP infrastructure</p>
+</div>
+
+<div class="stat-grid">
+{% for subnet_id, s in stats.items() %}
+<div class="stat-card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div>
+            <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
+            <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
+            <div class="stat-meta">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
+        </div>
+    </div>
+    <div class="util-bar">
+        <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%"></div>
+    </div>
+</div>
+{% endfor %}
+</div>
+
+<!-- Recent leases filter -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🕐 Recently Issued Leases</span>
+        <form method="GET" style="display:flex;gap:8px;align-items:center;">
+            <select name="hours" onchange="this.form.submit()" style="width:auto;">
+                <option value="0.5" {% if hours=='0.5' %}selected{% endif %}>Last 30 min</option>
+                <option value="1" {% if hours=='1' %}selected{% endif %}>Last 1 hour</option>
+                <option value="4" {% if hours=='4' %}selected{% endif %}>Last 4 hours</option>
+                <option value="8" {% if hours=='8' %}selected{% endif %}>Last 8 hours</option>
+                <option value="12" {% if hours=='12' %}selected{% endif %}>Last 12 hours</option>
+                <option value="24" {% if hours=='24' %}selected{% endif %}>Last 24 hours</option>
+            </select>
+            <a href="/leases" class="btn btn-sm btn-secondary">View All</a>
+        </form>
+    </div>
+    {% if recent %}
+    <div class="table-wrap">
+    <table class="sortable">
+        <thead><tr>
+            <th data-sort>IP Address</th>
+            <th data-sort>Hostname</th>
+            <th data-sort>MAC Address</th>
+            <th data-sort>Subnet</th>
+            <th data-sort>Obtained</th>
+        </tr></thead>
+        <tbody>
+        {% for l in recent %}
+        <tr>
+            <td class="mono">{{ l.ip }}</td>
+            <td>{{ l.hostname or '—' }}</td>
+            <td class="mono">{{ l.mac }}</td>
+            <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+            <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%H:%M:%S') if l.obtained else '—' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</div>
+    {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+// Auto-refresh stats every 30 seconds
+setInterval(function() {
+    fetch('/api/stats').then(r => r.json()).then(data => {
+        if (data.subnets) {
+            Object.keys(data.subnets).forEach(id => {
+                const el = document.getElementById('stat-active-' + id);
+                if (el) el.textContent = data.subnets[id].active;
+            });
+        }
+    });
+}, 30000);
+{% endblock %}

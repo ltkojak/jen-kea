@@ -1,0 +1,201 @@
+# Jen User Guide
+
+This guide covers the day-to-day use of Jen for managing your Kea DHCP infrastructure.
+
+---
+
+## Dashboard
+
+The dashboard is the first page you see after logging in. It gives you a live overview of your entire DHCP infrastructure at a glance.
+
+### Subnet Utilization Cards
+
+Each configured subnet has a card showing:
+
+- **Active leases** — total number of devices currently holding a lease
+- **Dynamic** — devices using a dynamically assigned address (no reservation)
+- **Reserved** — devices with a static reservation
+
+The utilization bar at the bottom of each card fills as the subnet gets more active leases.
+
+### Recently Issued Leases
+
+The lower section of the dashboard shows leases issued within a recent time window. Use the dropdown in the top right of this section to change the window:
+
+| Option | Shows leases from |
+|---|---|
+| Last 30 min | Default — good for seeing what just connected |
+| Last 1 hour | Useful after a network change |
+| Last 4 / 8 / 12 hours | Broader activity view |
+| Last 24 hours | Full day overview |
+
+Click **View All** to go to the full Leases page.
+
+### Auto-Refresh
+
+Dashboard statistics refresh automatically every 30 seconds. You do not need to reload the page.
+
+### Kea Health Indicator
+
+The small dot in the top right navigation bar shows whether Jen can reach the Kea DHCP service:
+
+- 🟢 **Green** — Kea is online and responding
+- 🔴 **Red** — Kea is unreachable (check if `isc-kea-dhcp4-server` is running on your Kea server)
+
+---
+
+## Leases
+
+The Leases page shows all active dynamic leases — devices that received an IP address from the DHCP pool but do not have a static reservation.
+
+### Filtering Leases
+
+**Subnet** — filter to show only leases from a specific subnet.
+
+**Time filter** — show only leases issued or renewed within the last N minutes. Useful for finding recently connected devices.
+
+**Search** — search across IP address, hostname, and MAC address simultaneously.
+
+**Show History** — toggle to show expired leases instead of active ones. Useful for seeing what was on your network recently.
+
+### Converting a Lease to a Reservation
+
+Click the **📌** button next to any lease to convert it to a static reservation. This pre-fills the IP, MAC, and hostname from the lease. You can optionally set a DNS override at this step.
+
+This is the fastest way to reserve an IP for a device that is already connected.
+
+### Releasing a Lease
+
+Click the **✕** button next to any lease to release it immediately. The device will request a new lease the next time it needs one. This is useful for troubleshooting or forcing a device to pick up a new address.
+
+### Deleting Stale Leases
+
+The **🗑️ Delete Stale** button removes expired leases from the database. Kea normally handles this automatically, but the button is useful if you want to clean up immediately.
+
+### IP Address Map
+
+Click **🗺️ IP Map** to see a visual grid of the selected subnet showing which addresses are free, dynamically leased, or reserved. Hover over any cell to see the hostname and lease type.
+
+---
+
+## Reservations
+
+The Reservations page shows all static host reservations — devices that always receive the same IP address.
+
+### Adding a Reservation
+
+Click **+ Add Reservation** and fill in:
+
+| Field | Required | Notes |
+|---|---|---|
+| Subnet | Yes | Select which subnet this reservation belongs to |
+| IP Address | Yes | Must be within the selected subnet's CIDR range |
+| MAC Address | Yes | Format: `aa:bb:cc:dd:ee:ff` |
+| Hostname | No | DNS-friendly name for the device |
+| DNS Override | No | Comma-separated IPs — overrides the subnet's default DNS servers for this device |
+| Notes | No | Free-text notes stored in Jen's database |
+
+Jen checks for duplicate IPs and MACs before adding — you'll get a clear error if a conflict exists.
+
+### Editing a Reservation
+
+Click **✏️** to edit a reservation. You can change the hostname, DNS override, and notes. The IP address and MAC address cannot be changed through the edit form — delete and recreate the reservation to change these.
+
+### Deleting a Reservation
+
+Click **🗑️** and confirm to delete a reservation. The device will fall back to dynamic addressing on its next DHCP request.
+
+### Exporting Reservations
+
+Click **⬇ Export CSV** to download all reservations as a CSV file. The export includes IP, MAC, hostname, subnet, DNS override, and notes.
+
+### Importing Reservations
+
+Click **⬆ Import CSV** to bulk-import reservations from a CSV file. The file must have at minimum these columns: `ip`, `mac`, `subnet_id`. Optional columns: `hostname`, `dns_override`, `notes`.
+
+Duplicate IPs are skipped automatically. Any rows with validation errors are reported after the import completes.
+
+---
+
+## Subnets & Scope Options
+
+The Subnets page shows the live configuration of all subnets pulled directly from the Kea API. It is read-only by default unless SSH is configured for subnet editing.
+
+### Reading Subnet Information
+
+Each subnet card shows:
+
+- **Lease Duration** — how long devices hold their lease before needing to renew
+- **Renew Timer (T1)** — when devices first attempt to renew their lease
+- **Rebind Timer (T2)** — when devices begin broadcasting for any DHCP server if renewal fails
+- **Address Pools** — the range of IPs available for dynamic assignment
+- **Scope Options** — DHCP options sent to devices on this subnet (router, DNS, etc.)
+
+### Editing a Subnet
+
+If SSH is configured in Settings, an **✏️ Edit** button appears on each subnet card. Click it to edit:
+
+- **Address pool** range
+- **Valid lifetime** (lease duration in seconds)
+- **Renew timer** (T1 in seconds)
+- **Rebind timer** (T2 in seconds)
+- **Router** (gateway address)
+- **DNS servers**
+
+Changes are validated before being applied. If validation fails, your previous configuration is automatically restored from a backup. Kea restarts briefly when changes are applied — expect a few seconds of DHCP interruption.
+
+---
+
+## DDNS Status
+
+The DDNS Status page shows activity from the Technitium DNS update script that runs alongside Kea.
+
+### Log Activity
+
+The log panel shows the most recent 200 lines from the DDNS log file, newest first. Lines are colour-coded:
+
+- **Green** — successful DNS updates (new leases added)
+- **Yellow** — deletions (leases expired or released)
+- **Red** — errors
+
+### Hostname Lookup
+
+Enter a fully-qualified hostname in the lookup field and click **Lookup** to query your Technitium DNS server directly. The result shows all DNS records for that hostname including IP address, record type, and TTL.
+
+---
+
+## Audit Log
+
+The Audit Log records every change made through Jen — who did it, when, and what changed.
+
+### What Gets Logged
+
+| Action | Logged when |
+|---|---|
+| LOGIN / LOGOUT | User signs in or out |
+| ADD_RESERVATION | New reservation created |
+| EDIT_RESERVATION | Reservation hostname or DNS changed |
+| DELETE_RESERVATION | Reservation removed |
+| RELEASE_LEASE | Lease manually released |
+| DELETE_STALE | Stale leases purged |
+| IMPORT_RESERVATIONS | CSV import completed |
+| EXPORT_RESERVATIONS | CSV export downloaded |
+| EDIT_SUBNET | Subnet configuration changed |
+| ADD_USER / DELETE_USER | User account created or removed |
+| CHANGE_PASSWORD | Password changed |
+| UPLOAD_CERT | SSL certificate uploaded |
+| SAVE_SETTINGS | Any settings page saved |
+| GENERATE_SSH_KEY | SSH key pair generated |
+| CLEAR_LOCKOUTS | Login attempt records cleared |
+
+### Reading the Log
+
+Each entry shows the timestamp, username, action type, the affected entity (usually an IP address or username), details, and the source IP address of the request.
+
+The log is paginated — 50 entries per page.
+
+---
+
+## Dark / Light Mode
+
+Click the 🌙 / ☀️ button in the top right navigation bar to toggle between dark and light mode. Your preference is saved in your browser and persists between sessions.

@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Leases{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📋 Leases</h1>
+    <p>{{ total }} lease(s) found</p>
+</div>
+
+<div class="filter-bar">
+    <form method="GET" style="display:contents;">
+        <select name="subnet" onchange="this.form.submit()">
+            <option value="all" {% if subnet_filter=='all' %}selected{% endif %}>All Subnets</option>
+            {% for sid, info in subnet_map.items() %}
+            <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
+            {% endfor %}
+        </select>
+        <select name="minutes" onchange="this.form.submit()">
+            <option value="" {% if not minutes %}selected{% endif %}>All time</option>
+            <option value="5" {% if minutes=='5' %}selected{% endif %}>Last 5 min</option>
+            <option value="15" {% if minutes=='15' %}selected{% endif %}>Last 15 min</option>
+            <option value="30" {% if minutes=='30' %}selected{% endif %}>Last 30 min</option>
+            <option value="60" {% if minutes=='60' %}selected{% endif %}>Last 1 hour</option>
+            <option value="360" {% if minutes=='360' %}selected{% endif %}>Last 6 hours</option>
+            <option value="1440" {% if minutes=='1440' %}selected{% endif %}>Last 24 hours</option>
+        </select>
+        <input type="text" name="search" value="{{ search }}" placeholder="Search IP, hostname, MAC..." style="min-width:220px;">
+        <button type="submit" class="btn btn-secondary">Filter</button>
+        <a href="/leases" class="btn btn-secondary">Clear</a>
+        <input type="hidden" name="expired" value="{{ '1' if show_expired else '0' }}">
+    </form>
+    <a href="/leases?expired={{ '0' if show_expired else '1' }}" class="btn btn-secondary">
+        {{ '📋 Show Active' if show_expired else '🕐 Show History' }}
+    </a>
+    <a href="/ipmap" class="btn btn-secondary">🗺️ IP Map</a>
+    {% if current_user.role == 'admin' %}
+    <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return confirm('Delete all expired/stale leases from the database?')">
+        <button type="submit" class="btn btn-danger btn-sm">🗑️ Delete Stale</button>
+    </form>
+    {% endif %}
+</div>
+
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table class="sortable">
+    <thead><tr>
+        <th data-sort>IP Address</th>
+        <th data-sort>Hostname</th>
+        <th data-sort>MAC Address</th>
+        <th data-sort>Subnet</th>
+        <th data-sort>{{ 'Expired' if show_expired else 'Obtained' }}</th>
+        <th data-sort>{{ 'Expired At' if show_expired else 'Expires' }}</th>
+        {% if not show_expired and current_user.role == 'admin' %}<th>Actions</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for l in leases %}
+    <tr>
+        <td class="mono">{{ l.ip }}</td>
+        <td>{{ l.hostname or '—' }}</td>
+        <td class="mono">{{ l.mac }}</td>
+        <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+        <td class="mono" style="color:var(--text-muted);font-size:12px;">{{ l.obtained.strftime('%Y-%m-%d %H:%M') if l.obtained else '—' }}</td>
+        <td class="mono" style="color:var(--text-muted);font-size:12px;">{{ l.expire.strftime('%Y-%m-%d %H:%M') if l.expire else '—' }}</td>
+        {% if not show_expired and current_user.role == 'admin' %}
+        <td style="white-space:nowrap;">
+            <form method="POST" action="/leases/make-reservation" style="display:inline;">
+                <input type="hidden" name="ip" value="{{ l.ip }}">
+                <input type="hidden" name="mac" value="{{ l.mac }}">
+                <input type="hidden" name="hostname" value="{{ l.hostname }}">
+                <input type="hidden" name="subnet_id" value="{{ l.subnet_id }}">
+                <button type="submit" class="btn btn-sm btn-success" title="Reserve this IP">📌</button>
+            </form>
+            <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return confirm('Release lease for {{ l.ip }}?')">
+                <input type="hidden" name="ip" value="{{ l.ip }}">
+                <button type="submit" class="btn btn-sm btn-danger" title="Release lease">✕</button>
+            </form>
+        </td>
+        {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No leases found.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+
+{% if pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}<a href="?page={{ page-1 }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}">‹ Prev</a>{% endif %}
+    {% for p in range(1, pages+1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
+    <a href="?page={{ p }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}">{{ p }}</a>
+    {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
+    {% endfor %}
+    {% if page < pages %}<a href="?page={{ page+1 }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}">Next ›</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
