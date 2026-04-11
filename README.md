@@ -234,7 +234,7 @@ Select bare metal, then choose to keep your existing config. Your config file, S
 After cloning the repo, future updates are:
 
 ```bash
-cd ~/jen-dhcp
+cd ~/jen-kea
 git pull
 sudo cp jen.py /opt/jen/jen.py
 sudo cp -r templates/* /opt/jen/templates/
