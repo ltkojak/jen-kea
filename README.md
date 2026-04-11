@@ -1,7 +1,5 @@
 # Jen — The Kea DHCP Management Console
 
-> *"Have you tried turning it off and on again?"*
-
 A web-based DHCP management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built as a Python Flask application. Jen provides a full-featured UI closer to Windows DHCP Server — accessible from any browser including mobile.
 
 ![Version](https://img.shields.io/badge/Version-1.0.0-blue?style=flat)
