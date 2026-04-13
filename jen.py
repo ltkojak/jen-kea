@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Jen - The Kea DHCP Management Console
-Version 1.0.0
+Version 1.0.1
 """
 
 from flask import (Flask, render_template, request, redirect, url_for,
@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.0.0"
+JEN_VERSION = "1.0.1"
 
 # ─────────────────────────────────────────
 # App setup
@@ -204,9 +204,18 @@ def admin_required(f):
     return decorated
 
 @app.before_request
+@app.before_request
 def check_session_timeout():
     if current_user.is_authenticated:
-        timeout = current_user.session_timeout or int(get_global_setting("session_timeout_minutes", 60))
+        # Check if session timeout is enabled
+        timeout_enabled = get_global_setting("session_timeout_enabled", "true")
+        if timeout_enabled == "false":
+            session["last_active"] = datetime.now(timezone.utc).isoformat()
+            return
+        timeout = current_user.session_timeout or int(get_global_setting("session_timeout_minutes", "60"))
+        if int(timeout) == 0:
+            session["last_active"] = datetime.now(timezone.utc).isoformat()
+            return
         last = session.get("last_active")
         if last:
             try:
@@ -1669,7 +1678,10 @@ def settings():
         "alert_utilization": get_global_setting("alert_utilization", "true"),
         "alert_threshold_pct": get_global_setting("alert_threshold_pct", "80"),
     }
-    session_settings = {"timeout": get_global_setting("session_timeout_minutes", "60")}
+    session_settings = {
+        "timeout": get_global_setting("session_timeout_minutes", "60"),
+        "enabled": get_global_setting("session_timeout_enabled", "true"),
+    }
     rl_settings = {
         "max_attempts": get_global_setting("rl_max_attempts", "10"),
         "lockout_minutes": get_global_setting("rl_lockout_minutes", "15"),
@@ -1764,11 +1776,24 @@ def test_telegram():
 @admin_required
 def save_session_settings():
     timeout = request.form.get("timeout_minutes", "60").strip()
-    if not timeout.isdigit() or not (1 <= int(timeout) <= 1440):
-        flash("Session timeout must be between 1 and 1440 minutes.", "error")
+    enabled = request.form.get("timeout_enabled", "true").strip()
+    if enabled not in ("true", "false"):
+        enabled = "true"
+
+    if not timeout.isdigit() or not (0 <= int(timeout) <= 1440):
+        flash("Session timeout must be between 0 and 1440 minutes (0 = never).", "error")
         return redirect(url_for("settings"))
+
     set_global_setting("session_timeout_minutes", timeout)
-    flash(f"Session timeout set to {timeout} minutes.", "success")
+    set_global_setting("session_timeout_enabled", enabled)
+
+    if enabled == "false":
+        flash("Session timeout disabled — sessions will not expire.", "success")
+    elif int(timeout) == 0:
+        flash("Session timeout enabled — sessions will never expire.", "success")
+    else:
+        flash(f"Session timeout set to {timeout} minutes.", "success")
+    audit("SAVE_SETTINGS", "session", f"enabled={enabled} timeout={timeout}min")
     return redirect(url_for("settings"))
 
 @app.route("/settings/save-rate-limit", methods=["POST"])
