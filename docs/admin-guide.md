@@ -278,7 +278,7 @@ chmod 600 ~/.ssh/authorized_keys
 ### Add Sudoers Entry on Kea Server
 
 ```bash
-echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3" | sudo tee /etc/sudoers.d/jen-kea
+echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3, /usr/bin/tail" | sudo tee /etc/sudoers.d/jen-kea
 sudo chmod 440 /etc/sudoers.d/jen-kea
 ```
 

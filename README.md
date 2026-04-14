@@ -1,5 +1,7 @@
 # Jen — The Kea DHCP Management Console
 
+> *"Have you tried turning it off and on again?"*
+
 A web-based DHCP management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built as a Python Flask application. Jen provides a full-featured UI closer to Windows DHCP Server — accessible from any browser including mobile.
 
 ![Version](https://img.shields.io/badge/Version-1.0.0-blue?style=flat)
@@ -253,7 +255,7 @@ echo "ssh-rsa AAAA... jen@your-jen-server" >> ~/.ssh/authorized_keys
 ```
 4. Add a sudoers entry on your Kea server:
 ```bash
-echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3" | sudo tee /etc/sudoers.d/jen-kea
+echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3, /usr/bin/tail" | sudo tee /etc/sudoers.d/jen-kea
 sudo chmod 440 /etc/sudoers.d/jen-kea
 ```
 
@@ -300,7 +302,7 @@ sudo journalctl -u jen -n 30 --no-pager
 mysql -u jen -p -h your-db-server jen -e "UPDATE users SET password=SHA2('newpassword',256) WHERE username='admin';"
 ```
 
-**Subnet editing fails:** Verify SSH is configured in Settings, the public key is in the Kea server's authorized_keys, and the sudoers entry allows python3, tee, and cp.
+**Subnet editing fails:** Verify SSH is configured in Settings, the public key is in the Kea server's authorized_keys, and the sudoers entry allows python3, tee, cp, and tail.
 
 ---
 
