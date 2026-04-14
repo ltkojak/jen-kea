@@ -215,17 +215,23 @@ def check_session_timeout():
         if int(timeout) == 0:
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
+        now = datetime.now(timezone.utc)
         last = session.get("last_active")
-        if last:
+        if not last:
+            # First request after login — initialize
+            session["last_active"] = now.isoformat()
+        else:
             try:
-                elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60
+                elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60
                 if elapsed > int(timeout):
                     logout_user()
                     flash("Session expired. Please log in again.", "error")
                     return redirect(url_for("login"))
             except Exception:
                 pass
-        session["last_active"] = datetime.now(timezone.utc).isoformat()
+            # Only update last_active on real page requests, not background API polls
+            if not request.path.startswith("/api/") and not request.path == "/metrics":
+                session["last_active"] = now.isoformat()
 
 @app.before_request
 def redirect_to_https():
