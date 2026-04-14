@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}About{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>ℹ️ About Jen</h1>
+    <p>System information and credits</p>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+<!-- System Info -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🖥️ System</span></div>
+    <table style="width:100%;">
+        <tr><td class="stat-label" style="width:140px;padding:8px 0;">Jen Version</td>
+            <td><span style="color:var(--primary);font-weight:600;">v{{ jen_version }}</span></td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Kea Version</td>
+            <td class="mono" style="font-size:12px;">{{ kea_version or 'Unknown' }}</td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Kea Status</td>
+            <td>
+                {% if kea_up %}
+                <span style="color:var(--success);">● Online</span>
+                {% else %}
+                <span style="color:var(--danger);">● Unreachable</span>
+                {% endif %}
+            </td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">HTTP Port</td>
+            <td>{{ http_port }} <span style="color:var(--text-muted);font-size:11px;">(redirects to HTTPS)</span></td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">HTTPS Port</td>
+            <td>{{ https_port }}
+                {% if ssl_on %}<span style="color:var(--success);font-size:12px;"> ✓ Active</span>{% endif %}
+            </td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Config File</td>
+            <td class="mono" style="font-size:12px;">/etc/jen/jen.config</td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">App Directory</td>
+            <td class="mono" style="font-size:12px;">/opt/jen</td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Kea SSH Host</td>
+            <td class="mono" style="font-size:12px;">{{ kea_ssh_host or '—' }}</td></tr>
+    </table>
+</div>
+
+<!-- About -->
+<div class="card">
+    <div class="card-header"><span class="card-title">📖 About</span></div>
+    <div style="text-align:center;padding:20px 0 10px;">
+        <div style="font-size:48px;font-weight:800;letter-spacing:-2px;background:linear-gradient(135deg,#00b4d8,#0077b6,#48cae4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 12px rgba(0,180,216,0.3));">Jen</div>
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:2px;margin-top:4px;">The Kea DHCP Management Console</div>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:16px 0;"></div>
+    <p style="color:var(--text-muted);font-size:13px;line-height:1.7;margin-bottom:12px;">
+        A full-featured web management interface for ISC Kea DHCP Server, built as a practical alternative to ISC Stork for homelab and small infrastructure deployments.
+    </p>
+    <p style="color:var(--text-muted);font-size:13px;line-height:1.7;margin-bottom:20px;">
+        Jen provides lease management, static reservations, subnet editing, Telegram alerts, audit logging, and more — all from a browser-based UI.
+    </p>
+    <div style="border-top:1px solid var(--border);padding-top:16px;">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">CREATED BY</div>
+        <div style="font-size:15px;font-weight:600;color:var(--text);">Matthew Thibodeau</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">with the assistance of Claude (Anthropic)</div>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px;display:flex;gap:12px;">
+        <a href="https://github.com/ltkojak/jen-kea" target="_blank" class="btn btn-secondary btn-sm">⭐ GitHub</a>
+        <a href="https://github.com/ltkojak/jen-kea/issues" target="_blank" class="btn btn-secondary btn-sm">🐛 Report Issue</a>
+        <a href="https://github.com/ltkojak/jen-kea/releases" target="_blank" class="btn btn-secondary btn-sm">📦 Releases</a>
+    </div>
+</div>
+
+</div>
+
+<!-- Subnet Summary -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🌐 Configured Subnets</span></div>
+    <table style="width:100%;">
+        <thead><tr>
+            <th style="text-align:left;padding:8px 12px;">Subnet ID</th>
+            <th style="text-align:left;padding:8px 12px;">Name</th>
+            <th style="text-align:left;padding:8px 12px;">CIDR</th>
+            <th style="text-align:right;padding:8px 12px;">Active Leases</th>
+        </tr></thead>
+        <tbody>
+        {% for sid, info in subnet_map.items() %}
+        <tr>
+            <td class="mono">{{ sid }}</td>
+            <td><strong>{{ info.name }}</strong></td>
+            <td class="mono">{{ info.cidr }}</td>
+            <td style="text-align:right;color:var(--primary);font-weight:600;">{{ lease_counts.get(sid, 0) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% endblock %}

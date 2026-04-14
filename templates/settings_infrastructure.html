@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}Infrastructure Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🖧 Infrastructure Settings</h1>
+    <p>Kea API, database connections, SSH, and subnet configuration</p>
+</div>
+
+<div style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:12px;">
+    <a href="/settings/system" class="btn btn-sm btn-secondary">⚙️ System</a>
+    <a href="/settings/alerts" class="btn btn-sm btn-secondary">🔔 Alerts</a>
+    <a href="/settings/infrastructure" class="btn btn-sm btn-primary">🖧 Infrastructure</a>
+</div>
+
+{% if restart_pending %}
+<div class="alert alert-warning">⚠️ Infrastructure changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
+{% endif %}
+
+<!-- Kea API -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔌 Kea Control Agent API</span>
+        {% if kea_up %}<span style="color:var(--success);font-size:12px;">● Connected</span>
+        {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
+    </div>
+    <form method="POST" action="/settings/infrastructure/save-kea">
+        <div class="form-row">
+            <div class="form-group">
+                <label>API URL</label>
+                <input type="text" name="api_url" value="{{ infra.kea_api_url }}" placeholder="http://YOUR-KEA-SERVER:8000">
+            </div>
+            <div class="form-group">
+                <label>API Username</label>
+                <input type="text" name="api_user" value="{{ infra.kea_api_user }}">
+            </div>
+            <div class="form-group">
+                <label>API Password</label>
+                <input type="password" name="api_pass" value="{{ infra.kea_api_pass }}" placeholder="(unchanged)">
+                <div class="form-hint">Leave blank to keep existing password</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Kea API</button>
+    </form>
+</div>
+
+<!-- Kea Database -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🗄️ Kea MySQL Database</span></div>
+    <form method="POST" action="/settings/infrastructure/save-kea-db">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Host</label>
+                <input type="text" name="host" value="{{ infra.kea_db_host }}">
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" name="user" value="{{ infra.kea_db_user }}">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" name="password" placeholder="(unchanged)">
+                <div class="form-hint">Leave blank to keep existing password</div>
+            </div>
+            <div class="form-group">
+                <label>Database Name</label>
+                <input type="text" name="database" value="{{ infra.kea_db_name }}">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Kea DB</button>
+    </form>
+</div>
+
+<!-- Jen Database -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🗄️ Jen MySQL Database</span></div>
+    <form method="POST" action="/settings/infrastructure/save-jen-db">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Host</label>
+                <input type="text" name="host" value="{{ infra.jen_db_host }}">
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" name="user" value="{{ infra.jen_db_user }}">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" name="password" placeholder="(unchanged)">
+                <div class="form-hint">Leave blank to keep existing password</div>
+            </div>
+            <div class="form-group">
+                <label>Database Name</label>
+                <input type="text" name="database" value="{{ infra.jen_db_name }}">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Jen DB</button>
+    </form>
+</div>
+
+<!-- SSH -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🔑 SSH Configuration</span>
+        {% if ssh_configured %}<span style="color:var(--success);font-size:12px;">● Key present</span>
+        {% else %}<span style="color:var(--warning);font-size:12px;">● No key generated</span>{% endif %}
+    </div>
+    <form method="POST" action="/settings/infrastructure/save-ssh">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Kea Server Host</label>
+                <input type="text" name="host" value="{{ infra.ssh_host }}">
+            </div>
+            <div class="form-group">
+                <label>SSH Username</label>
+                <input type="text" name="user" value="{{ infra.ssh_user }}">
+            </div>
+            <div class="form-group">
+                <label>Kea Config Path</label>
+                <input type="text" name="kea_conf" value="{{ infra.kea_conf }}">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save SSH Config</button>
+    </form>
+    {% if ssh_pub_key %}
+    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
+        <div class="stat-label" style="margin-bottom:6px;">Public Key — add to Kea server authorized_keys</div>
+        <div class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;word-break:break-all;border:1px solid var(--border);">{{ ssh_pub_key }}</div>
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" onsubmit="return confirm('{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}')">
+        <button type="submit" class="btn btn-secondary">{% if ssh_configured %}🔄 Regenerate SSH Key{% else %}🔑 Generate SSH Key{% endif %}</button>
+    </form>
+</div>
+
+<!-- Subnets -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🌐 Subnet Map</span></div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">Maps Kea subnet IDs to friendly names. Must match the <code>id</code> field in kea-dhcp4.conf.</p>
+    <form method="POST" action="/settings/infrastructure/save-subnets">
+        <div id="subnet-list">
+        {% for sid, info in infra.subnets.items() %}
+        <div class="form-row subnet-row" style="align-items:end;margin-bottom:8px;">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Subnet ID</label>
+                <input type="number" name="subnet_id[]" value="{{ sid }}" min="1">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Name</label>
+                <input type="text" name="subnet_name[]" value="{{ info.name }}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>CIDR</label>
+                <input type="text" name="subnet_cidr[]" value="{{ info.cidr }}">
+            </div>
+            <div style="padding-bottom:4px;">
+                <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.subnet-row').remove()">✕</button>
+            </div>
+        </div>
+        {% endfor %}
+        </div>
+        <button type="button" class="btn btn-sm btn-secondary" style="margin-bottom:12px;" onclick="addSubnetRow()">+ Add Subnet</button><br>
+        <button type="submit" class="btn btn-primary">Save Subnets</button>
+    </form>
+</div>
+
+<!-- DDNS -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔗 DDNS Configuration</span></div>
+    <form method="POST" action="/settings/infrastructure/save-ddns">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Log File Path</label>
+                <input type="text" name="log_path" value="{{ infra.ddns_log }}">
+                <div class="form-hint">Path on the Kea server</div>
+            </div>
+            <div class="form-group">
+                <label>Technitium API URL</label>
+                <input type="text" name="api_url" value="{{ infra.ddns_url }}">
+            </div>
+            <div class="form-group">
+                <label>API Token</label>
+                <input type="password" name="api_token" placeholder="(unchanged)">
+                <div class="form-hint">Leave blank to keep existing token</div>
+            </div>
+            <div class="form-group">
+                <label>Forward Zone</label>
+                <input type="text" name="forward_zone" value="{{ infra.ddns_zone }}">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save DDNS</button>
+    </form>
+</div>
+
+{% endblock %}
+{% block scripts %}
+function addSubnetRow() {
+    const list = document.getElementById('subnet-list');
+    const row = document.createElement('div');
+    row.className = 'form-row subnet-row';
+    row.style.cssText = 'align-items:end;margin-bottom:8px;';
+    row.innerHTML = `
+        <div class="form-group" style="margin-bottom:0;">
+            <label>Subnet ID</label>
+            <input type="number" name="subnet_id[]" min="1" placeholder="1">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+            <label>Name</label>
+            <input type="text" name="subnet_name[]" placeholder="Production">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+            <label>CIDR</label>
+            <input type="text" name="subnet_cidr[]" placeholder="192.168.1.0/24">
+        </div>
+        <div style="padding-bottom:4px;">
+            <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.subnet-row').remove()">✕</button>
+        </div>`;
+    list.appendChild(row);
+}
+{% endblock %}

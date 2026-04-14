@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.1.1"
+JEN_VERSION = "1.2.0"
 
 # ─────────────────────────────────────────
 # App setup
@@ -59,6 +59,30 @@ def load_config():
     return cfg
 
 cfg = load_config()
+
+def write_config_value(section, key, value):
+    """Update a single config value and write back to disk."""
+    parser = configparser.ConfigParser()
+    parser.read(CONFIG_FILE)
+    if not parser.has_section(section):
+        parser.add_section(section)
+    parser.set(section, key, value)
+    with open(CONFIG_FILE, 'w') as f:
+        parser.write(f)
+
+def write_subnets_config(subnet_dict):
+    """Rewrite the [subnets] section entirely."""
+    parser = configparser.ConfigParser()
+    parser.read(CONFIG_FILE)
+    if parser.has_section('subnets'):
+        parser.remove_section('subnets')
+    parser.add_section('subnets')
+    for sid, info in subnet_dict.items():
+        parser.set('subnets', str(sid), f"{info['name']}, {info['cidr']}")
+    with open(CONFIG_FILE, 'w') as f:
+        parser.write(f)
+
+
 
 KEA_API_URL  = cfg.get("kea", "api_url")
 KEA_API_USER = cfg.get("kea", "api_user")
@@ -1706,10 +1730,51 @@ def ddns():
 # ─────────────────────────────────────────
 # Settings
 # ─────────────────────────────────────────
+# ─────────────────────────────────────────
+# About
+# ─────────────────────────────────────────
+@app.route("/about")
+@login_required
+def about():
+    kea_up = False
+    kea_version = ""
+    try:
+        ver_result = kea_command("version-get")
+        if ver_result.get("result") == 0:
+            kea_up = True
+            kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
+            kea_version = kea_version.splitlines()[0] if kea_version else ""
+    except Exception:
+        pass
+    lease_counts = {}
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            for sid in SUBNET_MAP:
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                lease_counts[sid] = cur.fetchone()["cnt"]
+        db.close()
+    except Exception:
+        pass
+    return render_template("about.html",
+                           jen_version=JEN_VERSION, kea_version=kea_version,
+                           kea_up=kea_up, http_port=HTTP_PORT, https_port=HTTPS_PORT,
+                           ssl_on=ssl_configured(), kea_ssh_host=KEA_SSH_HOST,
+                           subnet_map=SUBNET_MAP, lease_counts=lease_counts)
+
+# ─────────────────────────────────────────
+# Settings — System
+# ─────────────────────────────────────────
 @app.route("/settings")
 @login_required
 @admin_required
 def settings():
+    return redirect(url_for("settings_system"))
+
+@app.route("/settings/system")
+@login_required
+@admin_required
+def settings_system():
     cert_info = {}
     if ssl_configured():
         try:
@@ -1775,7 +1840,7 @@ def settings():
     except Exception:
         pass
 
-    return render_template("settings.html",
+    return render_template("settings_system.html",
                            ssl_configured=ssl_configured(), cert_info=cert_info,
                            has_favicon=os.path.exists(FAVICON_PATH),
                            https_port=HTTPS_PORT, ssh_pub_key=ssh_pub_key,
@@ -1786,6 +1851,210 @@ def settings():
                            rl_attempts_1h=rl_attempts_1h,
                            jen_version=JEN_VERSION,
                            kea_version=kea_version)
+
+@app.route("/settings/alerts")
+@login_required
+@admin_required
+def settings_alerts():
+    telegram_settings = {
+        "enabled": get_global_setting("telegram_enabled", "false"),
+        "token": get_global_setting("telegram_token", ""),
+        "chat_id": get_global_setting("telegram_chat_id", ""),
+        "alert_kea_down": get_global_setting("alert_kea_down", "true"),
+        "alert_new_lease": get_global_setting("alert_new_lease", "false"),
+        "alert_utilization": get_global_setting("alert_utilization", "true"),
+        "alert_threshold_pct": get_global_setting("alert_threshold_pct", "80"),
+    }
+    return render_template("settings_alerts.html", telegram=telegram_settings)
+
+@app.route("/settings/infrastructure")
+@login_required
+@admin_required
+def settings_infrastructure():
+    kea_up = kea_is_up()
+    ssh_pub_key = ""
+    if os.path.exists(SSH_KEY_PATH + ".pub"):
+        try:
+            with open(SSH_KEY_PATH + ".pub") as f:
+                ssh_pub_key = f.read().strip()
+        except Exception:
+            pass
+    infra = {
+        "kea_api_url": cfg.get("kea", "api_url", fallback=""),
+        "kea_api_user": cfg.get("kea", "api_user", fallback=""),
+        "kea_api_pass": cfg.get("kea", "api_pass", fallback=""),
+        "kea_db_host": cfg.get("kea_db", "host", fallback=""),
+        "kea_db_user": cfg.get("kea_db", "user", fallback=""),
+        "kea_db_name": cfg.get("kea_db", "database", fallback="kea"),
+        "jen_db_host": cfg.get("jen_db", "host", fallback=""),
+        "jen_db_user": cfg.get("jen_db", "user", fallback=""),
+        "jen_db_name": cfg.get("jen_db", "database", fallback="jen"),
+        "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
+        "ssh_user": cfg.get("kea_ssh", "user", fallback=""),
+        "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+        "ddns_log": cfg.get("ddns", "log_path", fallback=""),
+        "ddns_url": cfg.get("ddns", "api_url", fallback=""),
+        "ddns_zone": cfg.get("ddns", "forward_zone", fallback=""),
+        "subnets": SUBNET_MAP,
+    }
+    restart_pending = get_global_setting("restart_pending", "false") == "true"
+    return render_template("settings_infrastructure.html", infra=infra, kea_up=kea_up,
+                           ssh_pub_key=ssh_pub_key, ssh_configured=bool(ssh_pub_key),
+                           restart_pending=restart_pending)
+
+@app.route("/settings/infrastructure/save-kea", methods=["POST"])
+@login_required
+@admin_required
+def save_infra_kea():
+    api_url = request.form.get("api_url", "").strip()
+    api_user = request.form.get("api_user", "").strip()
+    api_pass = request.form.get("api_pass", "").strip()
+    if not api_url:
+        flash("API URL is required.", "error")
+        return redirect(url_for("settings_infrastructure"))
+    global cfg, KEA_API_URL, KEA_API_USER, KEA_API_PASS
+    write_config_value("kea", "api_url", api_url)
+    write_config_value("kea", "api_user", api_user)
+    if api_pass:
+        write_config_value("kea", "api_pass", api_pass)
+    cfg = load_config()
+    KEA_API_URL = cfg.get("kea", "api_url")
+    KEA_API_USER = cfg.get("kea", "api_user")
+    KEA_API_PASS = cfg.get("kea", "api_pass")
+    set_global_setting("restart_pending", "true")
+    flash("Kea API settings saved. Restart Jen to apply.", "success")
+    audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user}")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-kea-db", methods=["POST"])
+@login_required
+@admin_required
+def save_infra_kea_db():
+    host = request.form.get("host", "").strip()
+    user = request.form.get("user", "").strip()
+    password = request.form.get("password", "").strip()
+    database = request.form.get("database", "").strip()
+    if not host or not user or not database:
+        flash("Host, username, and database name are required.", "error")
+        return redirect(url_for("settings_infrastructure"))
+    write_config_value("kea_db", "host", host)
+    write_config_value("kea_db", "user", user)
+    if password:
+        write_config_value("kea_db", "password", password)
+    write_config_value("kea_db", "database", database)
+    set_global_setting("restart_pending", "true")
+    flash("Kea database settings saved. Restart Jen to apply.", "success")
+    audit("SAVE_INFRA", "kea_db", f"host={host}")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-jen-db", methods=["POST"])
+@login_required
+@admin_required
+def save_infra_jen_db():
+    host = request.form.get("host", "").strip()
+    user = request.form.get("user", "").strip()
+    password = request.form.get("password", "").strip()
+    database = request.form.get("database", "").strip()
+    if not host or not user or not database:
+        flash("Host, username, and database name are required.", "error")
+        return redirect(url_for("settings_infrastructure"))
+    write_config_value("jen_db", "host", host)
+    write_config_value("jen_db", "user", user)
+    if password:
+        write_config_value("jen_db", "password", password)
+    write_config_value("jen_db", "database", database)
+    set_global_setting("restart_pending", "true")
+    flash("Jen database settings saved. Restart Jen to apply.", "success")
+    audit("SAVE_INFRA", "jen_db", f"host={host}")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-ssh", methods=["POST"])
+@login_required
+@admin_required
+def save_infra_ssh():
+    host = request.form.get("host", "").strip()
+    user = request.form.get("user", "").strip()
+    kea_conf = request.form.get("kea_conf", "").strip()
+    write_config_value("kea_ssh", "host", host)
+    write_config_value("kea_ssh", "user", user)
+    if kea_conf:
+        write_config_value("kea_ssh", "kea_conf", kea_conf)
+    set_global_setting("restart_pending", "true")
+    flash("SSH settings saved. Restart Jen to apply.", "success")
+    audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-subnets", methods=["POST"])
+@login_required
+@admin_required
+def save_infra_subnets():
+    ids = request.form.getlist("subnet_id[]")
+    names = request.form.getlist("subnet_name[]")
+    cidrs = request.form.getlist("subnet_cidr[]")
+    errors = []
+    new_subnets = {}
+    for sid, name, cidr in zip(ids, names, cidrs):
+        sid = sid.strip()
+        name = name.strip()
+        cidr = cidr.strip()
+        if not sid or not name or not cidr:
+            continue
+        if not sid.isdigit():
+            errors.append(f"Invalid subnet ID: {sid}")
+            continue
+        if not valid_cidr(cidr):
+            errors.append(f"Invalid CIDR for subnet {sid}: {cidr}")
+            continue
+        new_subnets[int(sid)] = {"name": name, "cidr": cidr}
+    if errors:
+        for e in errors:
+            flash(e, "error")
+        return redirect(url_for("settings_infrastructure"))
+    if not new_subnets:
+        flash("At least one subnet is required.", "error")
+        return redirect(url_for("settings_infrastructure"))
+    write_subnets_config(new_subnets)
+    global SUBNET_MAP
+    SUBNET_MAP = new_subnets
+    flash("Subnet map updated successfully.", "success")
+    audit("SAVE_INFRA", "subnets", f"{len(new_subnets)} subnets saved")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-ddns", methods=["POST"])
+@login_required
+@admin_required
+def save_infra_ddns():
+    log_path = request.form.get("log_path", "").strip()
+    api_url = request.form.get("api_url", "").strip()
+    api_token = request.form.get("api_token", "").strip()
+    forward_zone = request.form.get("forward_zone", "").strip()
+    if log_path:
+        write_config_value("ddns", "log_path", log_path)
+        global DDNS_LOG
+        DDNS_LOG = log_path
+    if api_url:
+        write_config_value("ddns", "api_url", api_url)
+    if api_token:
+        write_config_value("ddns", "api_token", api_token)
+    if forward_zone:
+        write_config_value("ddns", "forward_zone", forward_zone)
+    flash("DDNS settings saved.", "success")
+    audit("SAVE_INFRA", "ddns", f"log={log_path}")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/restart", methods=["POST"])
+@login_required
+@admin_required
+def restart_jen():
+    flash("Jen is restarting...", "success")
+    set_global_setting("restart_pending", "false")
+    audit("RESTART", "jen", "Manual restart triggered from Infrastructure settings")
+    def do_restart():
+        import time
+        time.sleep(2)
+        subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+    threading.Thread(target=do_restart, daemon=True).start()
+    return redirect(url_for("settings_infrastructure"))
 
 @app.route("/settings/generate-ssh-key", methods=["POST"])
 @login_required

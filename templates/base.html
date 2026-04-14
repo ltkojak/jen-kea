@@ -156,7 +156,10 @@
     {% if current_user.role == 'admin' %}
     <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit</a>
     <a href="/users" class="{% if request.endpoint in ['users'] %}active{% endif %}">👤 Users</a>
-    <a href="/settings" class="{% if request.endpoint == 'settings' %}active{% endif %}">⚙️ Settings</a>
+    <a href="/settings/system" class="{% if request.endpoint in ['settings_system'] %}active{% endif %}">⚙️ System</a>
+    <a href="/settings/alerts" class="{% if request.endpoint in ['settings_alerts'] %}active{% endif %}">🔔 Alerts</a>
+    <a href="/settings/infrastructure" class="{% if request.endpoint in ['settings_infrastructure'] %}active{% endif %}">🖧 Infrastructure</a>
+    <a href="/about" class="{% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
     {% endif %}
     <div class="nav-right">
         <span class="kea-status" id="kea-indicator" title="Kea status"></span>
