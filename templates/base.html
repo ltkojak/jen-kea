@@ -136,6 +136,12 @@
         .ip-reserved { background: #1a3a1a; color: var(--success); border-color: #2ecc7133; }
         .ip-cell:hover { opacity: 0.8; }
 
+        /* Settings sub-tabs */
+        .settings-tabs { display:flex; gap:2px; margin-bottom:24px; border-bottom:2px solid var(--border); padding-bottom:0; }
+        .settings-tab { padding:8px 18px; font-size:13px; font-weight:500; color:var(--text-muted); border-radius:6px 6px 0 0; text-decoration:none; border:1px solid transparent; border-bottom:none; transition:all 0.15s; }
+        .settings-tab:hover { color:var(--text); background:var(--surface2); text-decoration:none; }
+        .settings-tab.active { color:var(--primary); background:var(--surface); border-color:var(--border); margin-bottom:-2px; border-bottom:2px solid var(--surface); }
+
         /* Responsive */
         @media (max-width: 768px) {
             .nav { overflow-x: auto; }
@@ -156,9 +162,7 @@
     {% if current_user.role == 'admin' %}
     <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit</a>
     <a href="/users" class="{% if request.endpoint in ['users'] %}active{% endif %}">👤 Users</a>
-    <a href="/settings/system" class="{% if request.endpoint in ['settings_system'] %}active{% endif %}">⚙️ System</a>
-    <a href="/settings/alerts" class="{% if request.endpoint in ['settings_alerts'] %}active{% endif %}">🔔 Alerts</a>
-    <a href="/settings/infrastructure" class="{% if request.endpoint in ['settings_infrastructure'] %}active{% endif %}">🖧 Infrastructure</a>
+    <a href="/settings/system" class="{% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure'] %}active{% endif %}">⚙️ Settings</a>
     <a href="/about" class="{% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
     {% endif %}
     <div class="nav-right">
