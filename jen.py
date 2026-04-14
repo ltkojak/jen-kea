@@ -204,7 +204,6 @@ def admin_required(f):
     return decorated
 
 @app.before_request
-@app.before_request
 def check_session_timeout():
     if current_user.is_authenticated:
         # Check if session timeout is enabled
