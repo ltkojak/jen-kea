@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Jen - The Kea DHCP Management Console
-Version 1.0.1
+Version 1.0.2
 """
 
 from flask import (Flask, render_template, request, redirect, url_for,
@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.0.1"
+JEN_VERSION = "1.1.0"
 
 # ─────────────────────────────────────────
 # App setup
@@ -772,8 +772,22 @@ def dashboard():
         logger.error(f"Dashboard recent leases error: {e}")
 
     kea_up = kea_is_up()
+    # Get pool sizes for utilization bars
+    pool_sizes = {}
+    try:
+        result = kea_command("config-get")
+        if result.get("result") == 0:
+            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+                for pool in s.get("pools", []):
+                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                    if "-" in p:
+                        start, end = [x.strip() for x in p.split("-")]
+                        pool_sizes[str(s["id"])] = ip_to_int(end) - ip_to_int(start) + 1
+    except Exception:
+        pass
     return render_template("dashboard.html", stats=stats, recent=recent,
-                           kea_up=kea_up, hours=str(hours_val), subnet_map=SUBNET_MAP)
+                           kea_up=kea_up, hours=str(hours_val), subnet_map=SUBNET_MAP,
+                           pool_sizes=pool_sizes)
 
 # ─────────────────────────────────────────
 # Leases
@@ -1607,14 +1621,24 @@ def audit_log():
 @login_required
 def ddns():
     lines = []
+    log_status = "ok"
+    log_message = ""
     try:
         with open(DDNS_LOG, "r") as f:
             all_lines = f.readlines()
             lines = list(reversed(all_lines[-200:]))
+        if not lines:
+            log_status = "empty"
+            log_message = "Log file exists but contains no entries yet."
     except FileNotFoundError:
-        pass
+        log_status = "missing"
+        log_message = f"Log file not found: {DDNS_LOG} — Check the log_path setting in jen.config [ddns] section."
+    except PermissionError:
+        log_status = "error"
+        log_message = f"Permission denied reading {DDNS_LOG} — the www-data user may not have read access."
     except Exception as e:
-        flash(f"Could not read DDNS log: {str(e)}", "error")
+        log_status = "error"
+        log_message = f"Could not read DDNS log: {str(e)}"
 
     lookup_result = None
     lookup_host = request.args.get("lookup", "").strip()[:253]
@@ -1642,7 +1666,9 @@ def ddns():
         else:
             lookup_result = "DDNS API not configured. Set api_url and api_token in [ddns] config section."
 
-    return render_template("ddns.html", lines=lines, lookup_host=lookup_host, lookup_result=lookup_result)
+    return render_template("ddns.html", lines=lines, lookup_host=lookup_host,
+                           lookup_result=lookup_result, log_status=log_status,
+                           log_message=log_message, ddns_log=DDNS_LOG)
 
 # ─────────────────────────────────────────
 # Settings
@@ -1706,6 +1732,16 @@ def settings():
         rl_active_ips = 0
         rl_attempts_1h = 0
 
+    # Get Kea version
+    kea_version = ""
+    try:
+        ver_result = kea_command("version-get")
+        if ver_result.get("result") == 0:
+            kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
+            kea_version = kea_version.splitlines()[0] if kea_version else ""
+    except Exception:
+        pass
+
     return render_template("settings.html",
                            ssl_configured=ssl_configured(), cert_info=cert_info,
                            has_favicon=os.path.exists(FAVICON_PATH),
@@ -1715,7 +1751,8 @@ def settings():
                            telegram=telegram_settings, session=session_settings,
                            rl=rl_settings, rl_active_ips=rl_active_ips,
                            rl_attempts_1h=rl_attempts_1h,
-                           jen_version=JEN_VERSION)
+                           jen_version=JEN_VERSION,
+                           kea_version=kea_version)
 
 @app.route("/settings/generate-ssh-key", methods=["POST"])
 @login_required
@@ -1770,10 +1807,30 @@ def save_telegram():
 @login_required
 @admin_required
 def test_telegram():
-    if send_telegram("🔔 <b>Jen Test</b>\nTelegram alerts are working correctly!"):
-        flash("Test message sent successfully.", "success")
-    else:
-        flash("Failed to send test message. Check your token and chat ID in the logs.", "error")
+    token = get_global_setting("telegram_token")
+    chat_id = get_global_setting("telegram_chat_id")
+    if not token or not chat_id:
+        flash("Telegram not configured — enter a token and chat ID first.", "error")
+        return redirect(url_for("settings"))
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": "🔔 <b>Jen Test</b>\nTelegram alerts are working correctly!", "parse_mode": "HTML"},
+            timeout=10
+        )
+        data = resp.json()
+        if data.get("ok"):
+            flash("Test message sent successfully.", "success")
+        else:
+            error_desc = data.get("description", "Unknown error")
+            error_code = data.get("error_code", "")
+            flash(f"Telegram error {error_code}: {error_desc}", "error")
+    except requests.exceptions.ConnectionError:
+        flash("Could not connect to Telegram API. Check your internet connection.", "error")
+    except requests.exceptions.Timeout:
+        flash("Telegram API request timed out.", "error")
+    except Exception as e:
+        flash(f"Unexpected error: {str(e)}", "error")
     return redirect(url_for("settings"))
 
 @app.route("/settings/save-session", methods=["POST"])
@@ -2073,11 +2130,50 @@ def api_stats():
         with db.cursor() as cur:
             for subnet_id, info in SUBNET_MAP.items():
                 cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                stats[str(subnet_id)] = {"active": cur.fetchone()["cnt"], "name": info["name"]}
+                active = cur.fetchone()["cnt"]
+                cur.execute("""
+                    SELECT COUNT(*) as cnt FROM lease4 l
+                    LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
+                        AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
+                    WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
+                """, (subnet_id,))
+                dynamic = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                reservations = cur.fetchone()["cnt"]
+                stats[str(subnet_id)] = {
+                    "active": active,
+                    "dynamic": dynamic,
+                    "reservations": reservations,
+                    "name": info["name"],
+                    "cidr": info["cidr"],
+                }
         db.close()
-        return jsonify({"subnets": stats, "kea_up": kea_is_up()})
+        # Get pool sizes from Kea config
+        pool_sizes = {}
+        result = kea_command("config-get")
+        if result.get("result") == 0:
+            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+                for pool in s.get("pools", []):
+                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                    if "-" in p:
+                        start, end = [x.strip() for x in p.split("-")]
+                        pool_sizes[str(s["id"])] = ip_to_int(end) - ip_to_int(start) + 1
+        # Get Kea version
+        kea_up = False
+        kea_version = ""
+        ver_result = kea_command("version-get")
+        if ver_result.get("result") == 0:
+            kea_up = True
+            kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
+            kea_version = kea_version.splitlines()[0] if kea_version else ""
+        return jsonify({
+            "subnets": stats,
+            "pool_sizes": pool_sizes,
+            "kea_up": kea_up,
+            "kea_version": kea_version,
+        })
     except Exception as e:
-        return jsonify({"subnets": {}, "kea_up": False, "error": str(e)})
+        return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False, "error": str(e)})
 
 @app.route("/metrics")
 def prometheus_metrics():

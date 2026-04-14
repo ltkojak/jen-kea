@@ -44,7 +44,13 @@
 <div class="card">
     <div class="card-header"><span class="card-title">ℹ️ Log Info</span></div>
     <table>
-        <tr><td class="stat-label" style="width:100px;">Log File</td><td class="mono" style="font-size:12px;">{{ '/var/log/kea/kea-ddns-technitium.log' }}</td></tr>
+        <tr><td class="stat-label" style="width:100px;">Log File</td><td class="mono" style="font-size:12px;">{{ ddns_log }}</td></tr>
+        <tr><td class="stat-label">Status</td><td>
+            {% if log_status == 'ok' %}<span style="color:var(--success);">✓ Reading</span>
+            {% elif log_status == 'empty' %}<span style="color:var(--warning);">⚠ Empty</span>
+            {% elif log_status == 'missing' %}<span style="color:var(--danger);">✗ File not found</span>
+            {% else %}<span style="color:var(--danger);">✗ Error</span>{% endif %}
+        </td></tr>
         <tr><td class="stat-label">Showing</td><td>Last 200 lines</td></tr>
         <tr><td class="stat-label">Entries</td><td>{{ lines|length }}</td></tr>
     </table>

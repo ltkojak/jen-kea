@@ -31,7 +31,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="1.0.1"
+JEN_VERSION="1.1.0"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"

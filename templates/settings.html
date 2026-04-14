@@ -201,6 +201,7 @@
     <div class="card-header"><span class="card-title">ℹ️ System</span></div>
     <table>
         <tr><td class="stat-label" style="width:130px;">Version</td><td>Jen v{{ jen_version }}</td></tr>
+                <tr><td class="stat-label">Kea Version</td><td>{{ kea_version if kea_version else 'Unknown — check Kea API connection' }}</td></tr>
         <tr><td class="stat-label">HTTP Port</td><td class="mono">5050 {% if ssl_configured %}(redirects){% else %}(active){% endif %}</td></tr>
         <tr><td class="stat-label">HTTPS Port</td><td class="mono">{{ https_port }} {% if ssl_configured %}<span style="color:var(--success);">✓</span>{% endif %}</td></tr>
         <tr><td class="stat-label">Kea API</td><td class="mono" style="font-size:11px;">{{ config_kea_url if config_kea_url is defined else 'see jen.config' }}</td></tr>

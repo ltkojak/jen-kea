@@ -1,29 +1,46 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<div class="page-header">
-    <h1>📊 Dashboard</h1>
-    <p>Live overview of your DHCP infrastructure</p>
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div>
+        <h1>📊 Dashboard</h1>
+        <p>Live overview of your DHCP infrastructure</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+        <span style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
+        <select id="refreshInterval" style="width:auto;font-size:12px;padding:4px 8px;" onchange="setRefreshInterval(this.value)">
+            <option value="0">Off</option>
+            <option value="5000">5s</option>
+            <option value="10000">10s</option>
+            <option value="15000">15s</option>
+            <option value="30000" selected>30s</option>
+            <option value="60000">60s</option>
+        </select>
+        <span id="refreshDot" style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block;"></span>
+    </div>
 </div>
 
 <div class="stat-grid">
 {% for subnet_id, s in stats.items() %}
 <div class="stat-card">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-        <div>
+        <div style="flex:1;">
             <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
             <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
-            <div class="stat-meta">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
+            <div class="stat-meta" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
         </div>
     </div>
-    <div class="util-bar">
-        <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%"></div>
+    <div class="util-bar" style="margin-top:10px;">
+        <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%;transition:width 0.5s ease;"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px;">
+        <span style="font-size:11px;color:var(--text-muted);" id="util-pct-{{ subnet_id }}"></span>
     </div>
 </div>
 {% endfor %}
 </div>
 
-<!-- Recent leases filter -->
+<!-- Recent leases -->
 <div class="card">
     <div class="card-header">
         <span class="card-title">🕐 Recently Issued Leases</span>
@@ -68,15 +85,70 @@
 </div>
 {% endblock %}
 {% block scripts %}
-// Auto-refresh stats every 30 seconds
-setInterval(function() {
-    fetch('/api/stats').then(r => r.json()).then(data => {
-        if (data.subnets) {
+// ── Dashboard refresh ──────────────────────────────────────────
+let refreshTimer = null;
+const POOL_SIZES = {{ pool_sizes | tojson }};
+
+function updateStats() {
+    const dot = document.getElementById('refreshDot');
+    if (dot) dot.style.background = 'var(--warning)';
+    fetch('/api/stats')
+        .then(r => r.json())
+        .then(data => {
+            if (dot) dot.style.background = 'var(--success)';
+            if (!data.subnets) return;
             Object.keys(data.subnets).forEach(id => {
-                const el = document.getElementById('stat-active-' + id);
-                if (el) el.textContent = data.subnets[id].active;
+                const s = data.subnets[id];
+                const activeEl = document.getElementById('stat-active-' + id);
+                const metaEl = document.getElementById('stat-meta-' + id);
+                const utilEl = document.getElementById('util-' + id);
+                const pctEl = document.getElementById('util-pct-' + id);
+                if (activeEl) activeEl.textContent = s.active;
+                if (metaEl) metaEl.textContent = `Active leases · ${s.dynamic} dynamic · ${s.reservations} reserved`;
+                // Update utilization bar
+                const poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
+                if (poolSize > 0 && utilEl) {
+                    const pct = Math.min(100, Math.round(s.dynamic / poolSize * 100));
+                    utilEl.style.width = pct + '%';
+                    if (pct >= 90) utilEl.style.background = 'var(--danger)';
+                    else if (pct >= 75) utilEl.style.background = 'var(--warning)';
+                    else utilEl.style.background = 'var(--primary)';
+                    if (pctEl) pctEl.textContent = `${pct}% of pool (${s.dynamic}/${poolSize})`;
+                }
             });
-        }
-    });
-}, 30000);
+            // Update Kea health dot in nav
+            const keaDot = document.getElementById('kea-status-dot');
+            if (keaDot) {
+                keaDot.style.background = data.kea_up ? 'var(--success)' : 'var(--danger)';
+                keaDot.title = data.kea_up ? 'Kea: Online' : 'Kea: Unreachable';
+            }
+        })
+        .catch(() => { if (dot) dot.style.background = 'var(--danger)'; });
+}
+
+function setRefreshInterval(ms) {
+    if (refreshTimer) clearInterval(refreshTimer);
+    localStorage.setItem('jen-refresh-interval', ms);
+    const dot = document.getElementById('refreshDot');
+    if (ms == 0) {
+        if (dot) dot.style.background = 'var(--text-muted)';
+    } else {
+        refreshTimer = setInterval(updateStats, parseInt(ms));
+        if (dot) dot.style.background = 'var(--success)';
+    }
+}
+
+// Restore saved interval on load
+(function() {
+    const saved = localStorage.getItem('jen-refresh-interval') || '30000';
+    const sel = document.getElementById('refreshInterval');
+    if (sel) {
+        sel.value = saved;
+        // If saved value isn't in options, default to 30s
+        if (!sel.value) sel.value = '30000';
+    }
+    setRefreshInterval(saved);
+    // Run once immediately to populate util bars
+    updateStats();
+})();
 {% endblock %}
