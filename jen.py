@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.1.0"
+JEN_VERSION = "1.1.1"
 
 # ─────────────────────────────────────────
 # App setup
@@ -1623,22 +1623,55 @@ def ddns():
     lines = []
     log_status = "ok"
     log_message = ""
-    try:
-        with open(DDNS_LOG, "r") as f:
-            all_lines = f.readlines()
-            lines = list(reversed(all_lines[-200:]))
-        if not lines:
-            log_status = "empty"
-            log_message = "Log file exists but contains no entries yet."
-    except FileNotFoundError:
-        log_status = "missing"
-        log_message = f"Log file not found: {DDNS_LOG} — Check the log_path setting in jen.config [ddns] section."
-    except PermissionError:
-        log_status = "error"
-        log_message = f"Permission denied reading {DDNS_LOG} — the www-data user may not have read access."
-    except Exception as e:
-        log_status = "error"
-        log_message = f"Could not read DDNS log: {str(e)}"
+
+    # If SSH is configured, read the log from the Kea server via SSH
+    # (the log file lives on the Kea server, not the Jen server)
+    if KEA_SSH_HOST and os.path.exists(SSH_KEY_PATH):
+        SSH_OPTS = [
+            "-i", SSH_KEY_PATH,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/etc/jen/ssh/known_hosts",
+        ]
+        try:
+            result = subprocess.run(
+                ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
+                 f"sudo tail -200 {DDNS_LOG} 2>/dev/null || echo __NOTFOUND__"],
+                capture_output=True, text=True, timeout=10
+            )
+            raw = result.stdout.strip()
+            if "__NOTFOUND__" in raw or not raw:
+                log_status = "missing"
+                log_message = f"Log file not found on Kea server: {DDNS_LOG}"
+            else:
+                all_lines = raw.splitlines()
+                lines = list(reversed(all_lines))
+                if not lines:
+                    log_status = "empty"
+                    log_message = "Log file exists but contains no entries yet."
+        except subprocess.TimeoutExpired:
+            log_status = "error"
+            log_message = "SSH connection to Kea server timed out."
+        except Exception as e:
+            log_status = "error"
+            log_message = f"SSH error reading log: {str(e)}"
+    else:
+        # Fall back to reading locally (only works if Jen and Kea are on same server)
+        try:
+            with open(DDNS_LOG, "r") as f:
+                all_lines = f.readlines()
+                lines = list(reversed(all_lines[-200:]))
+            if not lines:
+                log_status = "empty"
+                log_message = "Log file exists but contains no entries yet."
+        except FileNotFoundError:
+            log_status = "missing"
+            log_message = f"Log file not found: {DDNS_LOG} — SSH not configured, falling back to local read."
+        except PermissionError:
+            log_status = "error"
+            log_message = f"Permission denied reading {DDNS_LOG}."
+        except Exception as e:
+            log_status = "error"
+            log_message = f"Could not read log: {str(e)}"
 
     lookup_result = None
     lookup_host = request.args.get("lookup", "").strip()[:253]
