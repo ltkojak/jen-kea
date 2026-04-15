@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.4.5"
+JEN_VERSION = "1.4.6"
 
 # ─────────────────────────────────────────
 # App setup
@@ -2322,12 +2322,14 @@ def settings_alerts():
         flash(f"Error loading alert settings: {e}", "error")
     summary_time = get_global_setting("daily_summary_time", "07:00")
     pool_exhaustion_free = get_global_setting("pool_exhaustion_free", "5")
+    threshold_pct = get_global_setting("alert_threshold_pct", "80")
     return render_template("settings_alerts.html",
                            channels=channels, templates=templates,
                            default_templates=DEFAULT_TEMPLATES,
                            alert_type_labels=ALERT_TYPE_LABELS,
                            summary_time=summary_time,
-                           pool_exhaustion_free=pool_exhaustion_free)
+                           pool_exhaustion_free=pool_exhaustion_free,
+                           threshold_pct=threshold_pct)
 
 @app.route("/settings/alerts/save-channel", methods=["POST"])
 @login_required

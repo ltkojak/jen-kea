@@ -19,7 +19,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Subnet Utilization Threshold %</label>
-                <input type="number" name="alert_threshold_pct" value="{{ pool_exhaustion_free }}" min="1" max="100" style="max-width:100px;">
+                <input type="number" name="alert_threshold_pct" value="{{ threshold_pct }}" min="1" max="100" style="max-width:100px;">
                 <div class="form-hint">Alert when dynamic leases exceed this % of pool</div>
             </div>
             <div class="form-group">
@@ -286,6 +286,8 @@ function showAddChannel() {
     const typeEl = document.getElementById('channelType');
     typeEl.disabled = false;
     typeEl.value = 'telegram';
+    const hiddenType = document.getElementById('hiddenChannelType');
+    if (hiddenType) hiddenType.remove();
     document.getElementById('channelName').value = '';
     document.getElementById('channelEnabled').checked = true;
     document.querySelectorAll('.alert-type-cb').forEach(cb => cb.checked = false);
@@ -307,6 +309,16 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes) {
     const typeEl = document.getElementById('channelType');
     typeEl.value = ctype;
     typeEl.disabled = true;
+    // Add hidden input so disabled select still submits
+    let hiddenType = document.getElementById('hiddenChannelType');
+    if (!hiddenType) {
+        hiddenType = document.createElement('input');
+        hiddenType.type = 'hidden';
+        hiddenType.name = 'channel_type';
+        hiddenType.id = 'hiddenChannelType';
+        document.getElementById('channelForm').appendChild(hiddenType);
+    }
+    hiddenType.value = ctype;
     document.getElementById('channelName').value = cname;
     document.getElementById('channelEnabled').checked = enabled == 1;
     const cfg = config || {};
