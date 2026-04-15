@@ -1,8 +1,8 @@
 # Jen — The Kea DHCP Management Console
 
-> *"Have you tried turning it off and on again?"*
+A full-featured web management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/) — built for homelabs and small infrastructure where ISC Stork falls short.
 
-A full-featured web management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built as a practical alternative to ISC Stork for homelab and small infrastructure deployments.
+Stork is designed for large enterprise deployments with teams of network engineers. It lacks the day-to-day conveniences that matter in smaller environments: one-click lease conversion, bulk reservation management, device tracking, multi-channel alerts, and a UI that doesn't require a manual to navigate. Jen fills that gap.
 
 ![Version](https://img.shields.io/badge/Version-1.5.0-blue?style=flat)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)
