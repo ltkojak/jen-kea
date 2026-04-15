@@ -162,6 +162,75 @@
     </form>
 </div>
 
+<!-- Additional Kea Servers -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🖥️ Additional Kea Servers</span>
+        <span style="font-size:12px;color:var(--text-muted);">For HA and multi-server deployments</span>
+    </div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
+        Server 1 is configured above in the Kea Control Agent API section. Add additional servers here for HA or multi-server setups. Each server needs its own API credentials and SSH config.
+    </p>
+    <div id="extra-servers-list">
+    {% for srv in infra.extra_servers %}
+    <div class="extra-server-row" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <strong>Server {{ loop.index + 1 }}</strong>
+            <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.extra-server-row').remove()">✕ Remove</button>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Server Name</label>
+                <input type="text" name="extra_name[]" value="{{ srv.name }}" placeholder="Kea Standby">
+            </div>
+            <div class="form-group">
+                <label>Role</label>
+                <select name="extra_role[]">
+                    <option value="primary" {% if srv.role == 'primary' %}selected{% endif %}>Primary</option>
+                    <option value="standby" {% if srv.role == 'standby' %}selected{% endif %}>Standby</option>
+                    <option value="peer" {% if srv.role == 'peer' %}selected{% endif %}>Peer (load-balancing)</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>API URL</label>
+                <input type="text" name="extra_api_url[]" value="{{ srv.api_url }}" placeholder="http://YOUR-KEA-SERVER-2:8000">
+            </div>
+            <div class="form-group">
+                <label>API Username</label>
+                <input type="text" name="extra_api_user[]" value="{{ srv.api_user }}" placeholder="kea-api">
+            </div>
+            <div class="form-group">
+                <label>API Password</label>
+                <input type="password" name="extra_api_pass[]" placeholder="(unchanged)">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>SSH Host</label>
+                <input type="text" name="extra_ssh_host[]" value="{{ srv.ssh_host }}" placeholder="10.0.0.x">
+            </div>
+            <div class="form-group">
+                <label>SSH Username</label>
+                <input type="text" name="extra_ssh_user[]" value="{{ srv.ssh_user }}" placeholder="ubuntu">
+            </div>
+            <div class="form-group">
+                <label>Kea Config Path</label>
+                <input type="text" name="extra_kea_conf[]" value="{{ srv.kea_conf }}" placeholder="/etc/kea/kea-dhcp4.conf">
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    </div>
+    <button type="button" class="btn btn-sm btn-secondary" onclick="addServerRow()" style="margin-bottom:12px;">+ Add Server</button>
+    <br>
+    <form method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm">
+        <div id="extra-servers-hidden"></div>
+        <button type="submit" class="btn btn-primary" onclick="serializeServers()">Save Additional Servers</button>
+    </form>
+</div>
+
 <!-- DDNS -->
 <div class="card">
     <div class="card-header"><span class="card-title">🔗 DDNS Configuration</span></div>
@@ -192,6 +261,54 @@
 
 {% endblock %}
 {% block scripts %}
+function addServerRow() {
+    const list = document.getElementById('extra-servers-list');
+    const count = list.querySelectorAll('.extra-server-row').length + 2;
+    const row = document.createElement('div');
+    row.className = 'extra-server-row';
+    row.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;';
+    row.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <strong>Server ${count}</strong>
+            <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.extra-server-row').remove()">✕ Remove</button>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Server Name</label><input type="text" name="extra_name[]" placeholder="Kea Standby"></div>
+            <div class="form-group"><label>Role</label><select name="extra_role[]"><option value="standby">Standby</option><option value="primary">Primary</option><option value="peer">Peer</option></select></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>API URL</label><input type="text" name="extra_api_url[]" placeholder="http://YOUR-KEA-SERVER-2:8000"></div>
+            <div class="form-group"><label>API Username</label><input type="text" name="extra_api_user[]" placeholder="kea-api"></div>
+            <div class="form-group"><label>API Password</label><input type="password" name="extra_api_pass[]" placeholder="password"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>SSH Host</label><input type="text" name="extra_ssh_host[]"></div>
+            <div class="form-group"><label>SSH Username</label><input type="text" name="extra_ssh_user[]"></div>
+            <div class="form-group"><label>Kea Config Path</label><input type="text" name="extra_kea_conf[]" value="/etc/kea/kea-dhcp4.conf"></div>
+        </div>`;
+    list.appendChild(row);
+}
+
+function serializeServers() {
+    // Collect all server rows and put into hidden inputs for the form
+    const rows = document.querySelectorAll('.extra-server-row');
+    const hidden = document.getElementById('extra-servers-hidden');
+    hidden.innerHTML = '';
+    rows.forEach((row, i) => {
+        const fields = ['extra_name', 'extra_role', 'extra_api_url', 'extra_api_user', 'extra_api_pass', 'extra_ssh_host', 'extra_ssh_user', 'extra_kea_conf'];
+        fields.forEach(field => {
+            const el = row.querySelector(`[name="${field}[]"]`);
+            if (el) {
+                const inp = document.createElement('input');
+                inp.type = 'hidden';
+                inp.name = field + '[]';
+                inp.value = el.value;
+                hidden.appendChild(inp);
+            }
+        });
+    });
+}
+
 function addSubnetRow() {
     const list = document.getElementById('subnet-list');
     const row = document.createElement('div');

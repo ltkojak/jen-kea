@@ -159,6 +159,7 @@
     <a href="/reservations" class="{% if request.endpoint in ['reservations','add_reservation','edit_reservation'] %}active{% endif %}">📌 Reservations</a>
     <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
     <a href="/ddns" class="{% if request.endpoint == 'ddns' %}active{% endif %}">🔗 DDNS</a>
+    <a href="/servers" class="{% if request.endpoint in ['servers'] %}active{% endif %}">🖥️ Servers</a>
     <a href="/devices" class="{% if request.endpoint in ['devices'] %}active{% endif %}">📱 Devices</a>
     <a href="/reports" class="{% if request.endpoint in ['reports'] %}active{% endif %}">📈 Reports</a>
     {% if current_user.role == 'admin' %}

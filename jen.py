@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.5.1"
+JEN_VERSION = "2.0.1"
 
 # ─────────────────────────────────────────
 # App setup
@@ -119,6 +119,43 @@ KEA_SSH_HOST = cfg.get("kea_ssh", "host",     fallback="")
 KEA_SSH_USER = cfg.get("kea_ssh", "user",     fallback="")
 KEA_SSH_KEY  = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
 KEA_CONF     = cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf")
+
+def load_kea_servers():
+    """Load all configured Kea servers. Server 1 always comes from [kea] section."""
+    servers = []
+    # Server 1 — always from [kea] section
+    servers.append({
+        "id": 1,
+        "name": cfg.get("kea", "name", fallback="Kea Server 1"),
+        "api_url": cfg.get("kea", "api_url"),
+        "api_user": cfg.get("kea", "api_user"),
+        "api_pass": cfg.get("kea", "api_pass"),
+        "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
+        "ssh_user": cfg.get("kea_ssh", "user", fallback=""),
+        "ssh_key":  cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa"),
+        "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+        "role":     cfg.get("kea", "role", fallback="primary"),
+    })
+    # Additional servers — [kea_server_2], [kea_server_3], etc.
+    n = 2
+    while cfg.has_section(f"kea_server_{n}"):
+        sec = f"kea_server_{n}"
+        servers.append({
+            "id": n,
+            "name": cfg.get(sec, "name", fallback=f"Kea Server {n}"),
+            "api_url": cfg.get(sec, "api_url", fallback=""),
+            "api_user": cfg.get(sec, "api_user", fallback=KEA_API_USER),
+            "api_pass": cfg.get(sec, "api_pass", fallback=KEA_API_PASS),
+            "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
+            "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
+            "ssh_key":  cfg.get(sec, "ssh_key",  fallback="/etc/jen/ssh/jen_rsa"),
+            "kea_conf": cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+            "role":     cfg.get(sec, "role", fallback="standby"),
+        })
+        n += 1
+    return servers
+
+KEA_SERVERS = load_kea_servers()
 
 # Parse subnet map with validation
 SUBNET_MAP = {}
@@ -616,26 +653,64 @@ def audit(action, entity, details=""):
 # ─────────────────────────────────────────
 # Kea API
 # ─────────────────────────────────────────
-def kea_command(command, service="dhcp4", arguments=None):
+def kea_command(command, service="dhcp4", arguments=None, server=None):
+    """Send command to a specific Kea server or the default (server 1)."""
+    if server is None:
+        url  = KEA_API_URL
+        user = KEA_API_USER
+        pwd  = KEA_API_PASS
+    else:
+        url  = server["api_url"]
+        user = server["api_user"]
+        pwd  = server["api_pass"]
     payload = {"command": command, "service": [service]}
     if arguments:
         payload["arguments"] = arguments
     try:
-        resp = requests.post(KEA_API_URL, json=payload,
-                             auth=(KEA_API_USER, KEA_API_PASS), timeout=10)
+        resp = requests.post(url, json=payload, auth=(user, pwd), timeout=10)
         resp.raise_for_status()
         data = resp.json()
         return data[0] if isinstance(data, list) else data
     except requests.exceptions.ConnectionError:
-        return {"result": 1, "text": "Cannot connect to Kea API. Is Kea running?"}
+        return {"result": 1, "text": f"Cannot connect to Kea API at {url}"}
     except requests.exceptions.Timeout:
         return {"result": 1, "text": "Kea API request timed out."}
     except Exception as e:
         return {"result": 1, "text": str(e)}
 
-def kea_is_up():
-    result = kea_command("version-get")
+def kea_command_all(command, service="dhcp4", arguments=None):
+    """Send command to ALL configured Kea servers. Returns list of (server, result)."""
+    results = []
+    for server in KEA_SERVERS:
+        result = kea_command(command, service, arguments, server=server)
+        results.append((server, result))
+    return results
+
+def kea_is_up(server=None):
+    result = kea_command("version-get", server=server)
     return result.get("result") == 0
+
+def get_all_server_status():
+    """Get status of all Kea servers."""
+    statuses = []
+    for server in KEA_SERVERS:
+        up = kea_is_up(server=server)
+        ha_state = None
+        ha_partner = None
+        if up and len(KEA_SERVERS) > 1:
+            # Try to get HA status
+            ha_result = kea_command("ha-heartbeat", server=server)
+            if ha_result.get("result") == 0:
+                args = ha_result.get("arguments", {})
+                ha_state = args.get("state", "unknown")
+                ha_partner = args.get("partner-state", "")
+        statuses.append({
+            "server": server,
+            "up": up,
+            "ha_state": ha_state,
+            "ha_partner": ha_partner,
+        })
+    return statuses
 
 def format_mac(raw_bytes):
     if not raw_bytes:
@@ -670,8 +745,8 @@ def send_telegram(message):
 # ─────────────────────────────────────────
 
 DEFAULT_TEMPLATES = {
-    "kea_down":           "🚨 <b>Kea Alert</b>\nKea DHCP server is <b>DOWN</b>!",
-    "kea_up":             "✅ <b>Kea Alert</b>\nKea DHCP server is back <b>UP</b>.",
+    "kea_down":           "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
+    "kea_up":             "✅ <b>Kea Alert</b>\n{server_name} is back <b>UP</b>.",
     "new_lease":          "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "new_device":         "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "utilization_high":   "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
@@ -974,14 +1049,20 @@ def check_alerts():
 
     while True:
         try:
-            kea_up = kea_is_up()
-
-            # ── Kea up/down ──
-            if not kea_up and last_kea_status:
-                send_alert("kea_down")
-            elif kea_up and not last_kea_status:
-                send_alert("kea_up")
-            last_kea_status = kea_up
+            # ── Kea up/down — check all servers ──
+            for srv in KEA_SERVERS:
+                srv_id = srv["id"]
+                srv_up = kea_is_up(server=srv)
+                prev_status = last_kea_status if isinstance(last_kea_status, bool) else last_kea_status.get(srv_id, True)
+                if not srv_up and prev_status:
+                    send_alert("kea_down", server_name=srv["name"])
+                elif srv_up and not prev_status:
+                    send_alert("kea_up", server_name=srv["name"])
+                if isinstance(last_kea_status, dict):
+                    last_kea_status[srv_id] = srv_up
+                else:
+                    last_kea_status = {s["id"]: kea_is_up(server=s) for s in KEA_SERVERS}
+            kea_up = any(isinstance(last_kea_status, dict) and v for v in last_kea_status.values()) if isinstance(last_kea_status, dict) else last_kea_status
 
             if kea_up:
                 db = get_kea_db()
@@ -2616,6 +2697,23 @@ def settings_infrastructure():
                 ssh_pub_key = f.read().strip()
         except Exception:
             pass
+    # Load extra servers
+    extra_servers = []
+    n = 2
+    while cfg.has_section(f"kea_server_{n}"):
+        sec = f"kea_server_{n}"
+        extra_servers.append({
+            "id": n,
+            "name": cfg.get(sec, "name", fallback=f"Kea Server {n}"),
+            "api_url": cfg.get(sec, "api_url", fallback=""),
+            "api_user": cfg.get(sec, "api_user", fallback=""),
+            "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
+            "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
+            "kea_conf": cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+            "role": cfg.get(sec, "role", fallback="standby"),
+        })
+        n += 1
+
     infra = {
         "kea_api_url": cfg.get("kea", "api_url", fallback=""),
         "kea_api_user": cfg.get("kea", "api_user", fallback=""),
@@ -2633,6 +2731,7 @@ def settings_infrastructure():
         "ddns_url": cfg.get("ddns", "api_url", fallback=""),
         "ddns_zone": cfg.get("ddns", "forward_zone", fallback=""),
         "subnets": SUBNET_MAP,
+        "extra_servers": extra_servers,
     }
     restart_pending = get_global_setting("restart_pending", "false") == "true"
     return render_template("settings_infrastructure.html", infra=infra, kea_up=kea_up,
@@ -2755,6 +2854,62 @@ def save_infra_subnets():
     SUBNET_MAP = new_subnets
     flash("Subnet map updated successfully.", "success")
     audit("SAVE_INFRA", "subnets", f"{len(new_subnets)} subnets saved")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-extra-servers", methods=["POST"])
+@login_required
+@admin_required
+def save_extra_servers():
+    global cfg, KEA_SERVERS
+    names = request.form.getlist("extra_name[]")
+    roles = request.form.getlist("extra_role[]")
+    api_urls = request.form.getlist("extra_api_url[]")
+    api_users = request.form.getlist("extra_api_user[]")
+    api_passes = request.form.getlist("extra_api_pass[]")
+    ssh_hosts = request.form.getlist("extra_ssh_host[]")
+    ssh_users = request.form.getlist("extra_ssh_user[]")
+    kea_confs = request.form.getlist("extra_kea_conf[]")
+
+    # Remove all existing extra server sections
+    n = 2
+    while cfg.has_section(f"kea_server_{n}"):
+        cfg.remove_section(f"kea_server_{n}")
+        n += 1
+
+    # Add new ones
+    for i, (name, role, api_url, api_user, api_pass, ssh_host, ssh_user, kea_conf) in enumerate(
+        zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs), start=2
+    ):
+        if not api_url.strip():
+            continue
+        sec = f"kea_server_{i}"
+        cfg.add_section(sec)
+        cfg.set(sec, "name", name.strip() or f"Kea Server {i}")
+        cfg.set(sec, "role", role.strip() or "standby")
+        cfg.set(sec, "api_url", api_url.strip())
+        cfg.set(sec, "api_user", api_user.strip())
+        if api_pass.strip():
+            cfg.set(sec, "api_pass", api_pass.strip())
+        else:
+            # Try to preserve existing password
+            try:
+                existing_pass = cfg.get(sec, "api_pass", fallback=KEA_API_PASS)
+                cfg.set(sec, "api_pass", existing_pass)
+            except Exception:
+                cfg.set(sec, "api_pass", KEA_API_PASS)
+        cfg.set(sec, "ssh_host", ssh_host.strip())
+        cfg.set(sec, "ssh_user", ssh_user.strip())
+        cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
+
+    with open(CONFIG_FILE, 'w') as f:
+        cfg.write(f)
+
+    # Reload server list
+    KEA_SERVERS = load_kea_servers()
+    count = len(KEA_SERVERS) - 1
+    flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
+    set_global_setting("restart_pending", "true")
+    audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
     return redirect(url_for("settings_infrastructure"))
 
 @app.route("/settings/infrastructure/save-ddns", methods=["POST"])
@@ -3393,6 +3548,58 @@ def save_subnet_note():
         return jsonify({"ok": False, "error": str(e)})
 
 # ─────────────────────────────────────────
+# HA / Multi-server Status
+# ─────────────────────────────────────────
+@app.route("/servers")
+@login_required
+def servers():
+    statuses = get_all_server_status()
+    # Get version info for each server
+    for s in statuses:
+        if s["up"]:
+            ver = kea_command("version-get", server=s["server"])
+            s["version"] = ver.get("arguments", {}).get("extended", ver.get("text", ""))
+            s["version"] = s["version"].splitlines()[0] if s["version"] else ""
+            # Get lease stats per server
+            stats_result = kea_command("stat-lease4-get", server=s["server"])
+            s["lease_stats"] = stats_result.get("arguments", {}).get("result-set", {}) if stats_result.get("result") == 0 else {}
+        else:
+            s["version"] = ""
+            s["lease_stats"] = {}
+    single_server = len(KEA_SERVERS) == 1
+    return render_template("servers.html", statuses=statuses,
+                           single_server=single_server,
+                           subnet_map=SUBNET_MAP)
+
+@app.route("/servers/restart/<int:server_id>", methods=["POST"])
+@login_required
+@admin_required
+def restart_kea_server(server_id):
+    server = next((s for s in KEA_SERVERS if s["id"] == server_id), None)
+    if not server:
+        flash("Server not found.", "error")
+        return redirect(url_for("servers"))
+    if not server["ssh_host"]:
+        flash("SSH not configured for this server.", "error")
+        return redirect(url_for("servers"))
+    SSH_OPTS = ["-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
+                "-o", f"UserKnownHostsFile=/etc/jen/ssh/known_hosts"]
+    try:
+        result = subprocess.run(
+            ["ssh"] + SSH_OPTS + [f"{server['ssh_user']}@{server['ssh_host']}",
+             "sudo systemctl restart isc-kea-dhcp4-server"],
+            capture_output=True, timeout=15
+        )
+        if result.returncode == 0:
+            flash(f"Kea restarted on {server['name']}.", "success")
+            audit("RESTART_KEA", server["name"], f"Remote restart via SSH")
+        else:
+            flash(f"Restart failed on {server['name']}: {result.stderr.decode()}", "error")
+    except Exception as e:
+        flash(f"SSH error: {str(e)}", "error")
+    return redirect(url_for("servers"))
+
+# ─────────────────────────────────────────
 # Reports
 # ─────────────────────────────────────────
 @app.route("/reports")
@@ -3538,11 +3745,15 @@ def api_stats():
             kea_up = True
             kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
             kea_version = kea_version.splitlines()[0] if kea_version else ""
+        server_statuses = [{
+            "id": s["id"], "name": s["name"], "up": kea_is_up(server=s), "role": s["role"]
+        } for s in KEA_SERVERS]
         return jsonify({
             "subnets": stats,
             "pool_sizes": pool_sizes,
-            "kea_up": kea_up,
+            "kea_up": any(s["up"] for s in server_statuses),
             "kea_version": kea_version,
+            "servers": server_statuses,
         })
     except Exception as e:
         return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False, "error": str(e)})

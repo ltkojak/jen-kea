@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Kea Servers{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🖥️ Kea Servers</h1>
+    <p>{% if single_server %}Single server deployment{% else %}Multi-server / HA deployment — {{ statuses|length }} servers configured{% endif %}</p>
+</div>
+
+{% if single_server %}
+<!-- Single server view -->
+{% set s = statuses[0] %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">{{ s.server.name }}</span>
+        {% if s.up %}
+        <span class="badge badge-reserved">● Online</span>
+        {% else %}
+        <span class="badge" style="background:#3a1a1a;color:var(--danger);">● Offline</span>
+        {% endif %}
+    </div>
+    <table style="width:100%;">
+        <tr><td class="stat-label" style="width:160px;padding:8px 0;">API URL</td>
+            <td class="mono" style="font-size:12px;">{{ s.server.api_url }}</td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Role</td>
+            <td><span class="badge badge-production">{{ s.server.role|title }}</span></td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Version</td>
+            <td class="mono" style="font-size:12px;">{{ s.version or '—' }}</td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">SSH Host</td>
+            <td class="mono" style="font-size:12px;">{{ s.server.ssh_host or '—' }}</td></tr>
+    </table>
+    {% if current_user.role == 'admin' and s.server.ssh_host %}
+    <div style="margin-top:16px;">
+        <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
+              onsubmit="return confirm('Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable.')">
+            <button type="submit" class="btn btn-secondary">🔄 Restart Kea</button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card" style="background:var(--surface2);border-style:dashed;">
+    <div style="text-align:center;padding:16px;color:var(--text-muted);">
+        <div style="font-size:24px;margin-bottom:8px;">🔗</div>
+        <div style="font-weight:600;margin-bottom:4px;">Running a Kea HA setup?</div>
+        <div style="font-size:13px;">Add additional servers to <code>jen.config</code> using <code>[kea_server_2]</code>, <code>[kea_server_3]</code> sections,
+        or configure them via <a href="/settings/infrastructure">Settings → Infrastructure</a>.</div>
+    </div>
+</div>
+
+{% else %}
+<!-- Multi-server / HA view -->
+<div class="stat-grid">
+{% for s in statuses %}
+<div class="stat-card" style="border-left:3px solid {% if s.up %}var(--success){% else %}var(--danger){% endif %};">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
+        <div>
+            <div class="stat-label">{{ s.server.role|upper }}</div>
+            <div style="font-size:18px;font-weight:700;margin-top:2px;">{{ s.server.name }}</div>
+        </div>
+        {% if s.up %}
+        <span class="badge badge-reserved">● Online</span>
+        {% else %}
+        <span class="badge" style="background:#3a1a1a;color:var(--danger);">● Offline</span>
+        {% endif %}
+    </div>
+    <table style="width:100%;font-size:12px;">
+        <tr><td class="stat-label" style="width:90px;">API</td>
+            <td class="mono" style="font-size:11px;">{{ s.server.api_url }}</td></tr>
+        {% if s.version %}
+        <tr><td class="stat-label">Version</td>
+            <td class="mono" style="font-size:11px;">{{ s.version }}</td></tr>
+        {% endif %}
+        {% if s.ha_state %}
+        <tr><td class="stat-label">HA State</td>
+            <td>
+                <span class="badge {% if s.ha_state == 'hot-standby' or s.ha_state == 'partner-in-maintenance' %}badge-reserved
+                {% elif s.ha_state == 'partner-down' or s.ha_state == 'terminated' %}badge-danger
+                {% elif s.ha_state == 'load-balancing' %}badge-production
+                {% else %}badge-dynamic{% endif %}">
+                    {{ s.ha_state }}
+                </span>
+            </td></tr>
+        {% if s.ha_partner %}
+        <tr><td class="stat-label">Partner</td>
+            <td class="mono" style="font-size:11px;">{{ s.ha_partner }}</td></tr>
+        {% endif %}
+        {% endif %}
+        <tr><td class="stat-label">SSH</td>
+            <td class="mono" style="font-size:11px;">{{ s.server.ssh_host or '—' }}</td></tr>
+    </table>
+    {% if current_user.role == 'admin' and s.server.ssh_host %}
+    <div style="margin-top:12px;">
+        <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
+              onsubmit="return confirm('Restart Kea on {{ s.server.name }}?')">
+            <button type="submit" class="btn btn-sm btn-secondary">🔄 Restart</button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+</div>
+
+<!-- HA State guide -->
+<div class="card">
+    <div class="card-header"><span class="card-title">ℹ️ HA State Reference</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;font-size:13px;">
+        <div><span class="badge badge-reserved">hot-standby</span><br><span style="color:var(--text-muted);font-size:12px;">Normal HA operation — primary active, standby ready</span></div>
+        <div><span class="badge badge-production">load-balancing</span><br><span style="color:var(--text-muted);font-size:12px;">Both servers handling leases</span></div>
+        <div><span class="badge badge-dynamic">partner-down</span><br><span style="color:var(--text-muted);font-size:12px;">Partner unreachable — server operating alone</span></div>
+        <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span style="color:var(--text-muted);font-size:12px;">HA terminated — manual intervention required</span></div>
+        <div><span class="badge badge-dynamic">waiting</span><br><span style="color:var(--text-muted);font-size:12px;">Server starting up, waiting for partner</span></div>
+        <div><span class="badge badge-dynamic">syncing</span><br><span style="color:var(--text-muted);font-size:12px;">Synchronizing lease database with partner</span></div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+// Auto-refresh server status every 30 seconds
+setInterval(function() { location.reload(); }, 30000);
+{% endblock %}
