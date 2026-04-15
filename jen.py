@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.4.6"
+JEN_VERSION = "1.5.0"
 
 # ─────────────────────────────────────────
 # App setup
@@ -370,6 +370,19 @@ def init_jen_db():
                     subnet_id INT PRIMARY KEY,
                     notes TEXT,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS lease_history (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    subnet_id INT NOT NULL,
+                    snapshot_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    active_leases INT DEFAULT 0,
+                    dynamic_leases INT DEFAULT 0,
+                    reserved_leases INT DEFAULT 0,
+                    pool_size INT DEFAULT 0,
+                    INDEX idx_subnet_time (subnet_id, snapshot_time),
+                    INDEX idx_time (snapshot_time)
                 )
             """)
             cur.execute("""
@@ -856,6 +869,52 @@ def _send_webhook_channel(message, alert_type, config):
         raise Exception(f"Webhook error {resp.status_code}: {resp.text[:200]}")
     return True
 
+def take_lease_snapshot():
+    """Record current lease counts for all subnets."""
+    try:
+        retention_days = int(get_global_setting("history_retention_days", "90"))
+        kdb = get_kea_db()
+        jdb = get_jen_db()
+
+        # Get pool sizes from Kea config
+        pool_sizes = {}
+        result = kea_command("config-get")
+        if result.get("result") == 0:
+            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+                for pool in s.get("pools", []):
+                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                    if "-" in p:
+                        start, end = [x.strip() for x in p.split("-")]
+                        pool_sizes[s["id"]] = ip_to_int(end) - ip_to_int(start) + 1
+
+        with kdb.cursor() as kcur:
+            with jdb.cursor() as jcur:
+                for subnet_id, info in SUBNET_MAP.items():
+                    kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    active = kcur.fetchone()["cnt"]
+                    kcur.execute("""
+                        SELECT COUNT(*) as cnt FROM lease4 l
+                        LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
+                            AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
+                        WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
+                    """, (subnet_id,))
+                    dynamic = kcur.fetchone()["cnt"]
+                    kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                    reserved = kcur.fetchone()["cnt"]
+                    pool_size = pool_sizes.get(subnet_id, 0)
+                    jcur.execute("""
+                        INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (subnet_id, active, dynamic, reserved, pool_size))
+
+                # Purge old history
+                jcur.execute(f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)")
+        jdb.commit()
+        kdb.close()
+        jdb.close()
+    except Exception as e:
+        logger.error(f"Snapshot error: {e}")
+
 def send_daily_summary():
     """Build and send daily summary."""
     try:
@@ -897,6 +956,7 @@ def check_alerts():
     alerted_stale_macs = set()
     first_run = True
     last_summary_date = None
+    last_snapshot_time = 0
 
     while True:
         try:
@@ -1032,6 +1092,13 @@ def check_alerts():
 
                 finally:
                     db.close()
+
+            # ── Lease history snapshot ──
+            snapshot_interval = int(get_global_setting("snapshot_interval_minutes", "30")) * 60
+            now_ts = time.time()
+            if now_ts - last_snapshot_time >= snapshot_interval:
+                take_lease_snapshot()
+                last_snapshot_time = now_ts
 
             # ── Daily summary ──
             import datetime as dt
@@ -3310,6 +3377,104 @@ def save_subnet_note():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
+
+# ─────────────────────────────────────────
+# Reports
+# ─────────────────────────────────────────
+@app.route("/reports")
+@login_required
+def reports():
+    days = request.args.get("days", "7")
+    try:
+        days = max(1, min(int(days), 90))
+    except ValueError:
+        days = 7
+
+    history = {}
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            for subnet_id, info in SUBNET_MAP.items():
+                cur.execute("""
+                    SELECT
+                        DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:%%i') as ts,
+                        active_leases, dynamic_leases, reserved_leases, pool_size
+                    FROM lease_history
+                    WHERE subnet_id=%s
+                    AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    ORDER BY snapshot_time ASC
+                """, (subnet_id, days))
+                rows = cur.fetchall()
+                history[subnet_id] = {
+                    "name": info["name"],
+                    "cidr": info["cidr"],
+                    "data": rows
+                }
+        db.close()
+    except Exception as e:
+        logger.error(f"Reports error: {e}")
+        flash(f"Could not load history data: {str(e)}", "error")
+
+    # Summary stats
+    summary = {}
+    try:
+        db = get_kea_db()
+        jdb = get_jen_db()
+        with db.cursor() as cur:
+            with jdb.cursor() as jcur:
+                for subnet_id, info in SUBNET_MAP.items():
+                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    active = cur.fetchone()["cnt"]
+                    jcur.execute("""
+                        SELECT active_leases, pool_size, snapshot_time
+                        FROM lease_history WHERE subnet_id=%s
+                        ORDER BY snapshot_time DESC LIMIT 1
+                    """, (subnet_id,))
+                    last = jcur.fetchone()
+                    jcur.execute("""
+                        SELECT MAX(active_leases) as peak FROM lease_history
+                        WHERE subnet_id=%s AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    """, (subnet_id, days))
+                    peak = jcur.fetchone()
+                    summary[subnet_id] = {
+                        "name": info["name"],
+                        "cidr": info["cidr"],
+                        "current": active,
+                        "pool_size": last["pool_size"] if last else 0,
+                        "peak": peak["peak"] if peak and peak["peak"] else active,
+                    }
+        db.close()
+        jdb.close()
+    except Exception as e:
+        logger.error(f"Reports summary error: {e}")
+
+    snapshot_interval = get_global_setting("snapshot_interval_minutes", "30")
+    retention_days = get_global_setting("history_retention_days", "90")
+    data_points = sum(len(h["data"]) for h in history.values())
+
+    return render_template("reports.html",
+                           history=history, summary=summary, days=days,
+                           subnet_map=SUBNET_MAP, data_points=data_points,
+                           snapshot_interval=snapshot_interval,
+                           retention_days=retention_days)
+
+@app.route("/reports/settings", methods=["POST"])
+@login_required
+@admin_required
+def save_report_settings():
+    interval = request.form.get("snapshot_interval", "30").strip()
+    retention = request.form.get("retention_days", "90").strip()
+    if not interval.isdigit() or not (5 <= int(interval) <= 1440):
+        flash("Snapshot interval must be between 5 and 1440 minutes.", "error")
+        return redirect(url_for("reports"))
+    if not retention.isdigit() or not (1 <= int(retention) <= 365):
+        flash("Retention must be between 1 and 365 days.", "error")
+        return redirect(url_for("reports"))
+    set_global_setting("snapshot_interval_minutes", interval)
+    set_global_setting("history_retention_days", retention)
+    flash(f"Report settings saved — snapshots every {interval} minutes, kept for {retention} days.", "success")
+    audit("SAVE_SETTINGS", "reports", f"interval={interval}min retention={retention}days")
+    return redirect(url_for("reports"))
 
 # ─────────────────────────────────────────
 # API

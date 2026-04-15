@@ -160,6 +160,7 @@
     <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
     <a href="/ddns" class="{% if request.endpoint == 'ddns' %}active{% endif %}">🔗 DDNS</a>
     <a href="/devices" class="{% if request.endpoint in ['devices'] %}active{% endif %}">📱 Devices</a>
+    <a href="/reports" class="{% if request.endpoint in ['reports'] %}active{% endif %}">📈 Reports</a>
     {% if current_user.role == 'admin' %}
     <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit</a>
     <a href="/users" class="{% if request.endpoint in ['users'] %}active{% endif %}">👤 Users</a>

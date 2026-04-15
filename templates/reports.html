@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div>
+        <h1>📈 Reports</h1>
+        <p>Lease utilization history and network trends</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <span style="font-size:12px;color:var(--text-muted);">Time range:</span>
+        <select onchange="window.location='?days='+this.value" style="width:auto;">
+            <option value="1" {% if days==1 %}selected{% endif %}>Last 24 hours</option>
+            <option value="3" {% if days==3 %}selected{% endif %}>Last 3 days</option>
+            <option value="7" {% if days==7 %}selected{% endif %}>Last 7 days</option>
+            <option value="14" {% if days==14 %}selected{% endif %}>Last 14 days</option>
+            <option value="30" {% if days==30 %}selected{% endif %}>Last 30 days</option>
+            <option value="90" {% if days==90 %}selected{% endif %}>Last 90 days</option>
+        </select>
+    </div>
+</div>
+
+<!-- Summary cards -->
+<div class="stat-grid">
+{% for subnet_id, s in summary.items() %}
+<div class="stat-card">
+    <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
+    <div class="stat-value" style="font-size:28px;">{{ s.current }}</div>
+    <div class="stat-meta">active leases</div>
+    <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;color:var(--text-muted);">
+        <span>Peak ({{ days }}d): <strong style="color:var(--warning);">{{ s.peak }}</strong></span>
+        {% if s.pool_size > 0 %}
+        <span>Pool: <strong>{{ s.pool_size }}</strong></span>
+        <span>Free: <strong style="color:var(--success);">{{ s.pool_size - s.current }}</strong></span>
+        {% endif %}
+    </div>
+    {% if s.pool_size > 0 %}
+    <div class="util-bar" style="margin-top:8px;">
+        <div class="util-fill" style="width:{{ [(s.current / s.pool_size * 100)|round, 100]|min }}%;
+            background:{% if (s.current / s.pool_size * 100) >= 90 %}var(--danger){% elif (s.current / s.pool_size * 100) >= 75 %}var(--warning){% else %}var(--primary){% endif %};">
+        </div>
+    </div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
+        {{ (s.current / s.pool_size * 100)|round }}% utilized
+    </div>
+    {% endif %}
+</div>
+{% endfor %}
+</div>
+
+{% if data_points == 0 %}
+<div class="card" style="text-align:center;padding:48px;">
+    <div style="font-size:48px;margin-bottom:16px;">📊</div>
+    <div style="font-size:16px;font-weight:600;margin-bottom:8px;">No history data yet</div>
+    <div style="color:var(--text-muted);font-size:13px;">
+        Jen collects a snapshot every <strong>{{ snapshot_interval }} minutes</strong>.
+        Come back after the first snapshot is taken, or adjust the interval below.
+    </div>
+</div>
+{% else %}
+
+<!-- Charts -->
+{% for subnet_id, h in history.items() %}
+{% if h.data %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">📊 {{ h.name }} — {{ h.cidr }}</span>
+        <span style="font-size:12px;color:var(--text-muted);">{{ h.data|length }} data points</span>
+    </div>
+    <canvas id="chart-{{ subnet_id }}" height="80"></canvas>
+</div>
+{% endif %}
+{% endfor %}
+
+{% endif %}
+
+<!-- Settings -->
+{% if current_user.role == 'admin' %}
+<div class="card">
+    <div class="card-header"><span class="card-title">⚙️ History Settings</span></div>
+    <form method="POST" action="/reports/settings">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Snapshot Interval (minutes)</label>
+                <input type="number" name="snapshot_interval" value="{{ snapshot_interval }}" min="5" max="1440" style="max-width:120px;">
+                <div class="form-hint">How often to record a data point (5–1440 min)</div>
+            </div>
+            <div class="form-group">
+                <label>Retention Period (days)</label>
+                <input type="number" name="retention_days" value="{{ retention_days }}" min="1" max="365" style="max-width:120px;">
+                <div class="form-hint">How long to keep history (1–365 days)</div>
+            </div>
+            <div class="form-group" style="align-self:flex-end;">
+                <div class="form-hint">Data points stored: <strong>{{ data_points }}</strong></div>
+                <div class="form-hint" style="margin-top:4px;">Est. per day: <strong>{{ (1440 / snapshot_interval|int)|round|int }} snapshots × {{ subnet_map|length }} subnets</strong></div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+    </form>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+{% if data_points > 0 %}
+// Load Chart.js
+(function() {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    script.onload = function() { buildCharts(); };
+    document.head.appendChild(script);
+})();
+
+const HISTORY = {{ history | tojson }};
+const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
+
+function buildCharts() {
+    const gridColor = IS_DARK ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+    const textColor = IS_DARK ? '#666' : '#999';
+
+    Object.entries(HISTORY).forEach(([subnetId, h]) => {
+        const canvas = document.getElementById('chart-' + subnetId);
+        if (!canvas || !h.data || !h.data.length) return;
+
+        const labels = h.data.map(d => d.ts);
+        const dynamic = h.data.map(d => d.dynamic_leases);
+        const reserved = h.data.map(d => d.reserved_leases);
+        const poolSize = h.data.map(d => d.pool_size);
+        const free = h.data.map((d, i) => Math.max(0, (d.pool_size || 0) - d.active_leases));
+
+        new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Dynamic Leases',
+                        data: dynamic,
+                        borderColor: '#00b4d8',
+                        backgroundColor: 'rgba(0,180,216,0.15)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: h.data.length > 100 ? 0 : 2,
+                        borderWidth: 2,
+                    },
+                    {
+                        label: 'Reserved',
+                        data: reserved,
+                        borderColor: '#2ecc71',
+                        backgroundColor: 'rgba(46,204,113,0.1)',
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: h.data.length > 100 ? 0 : 2,
+                        borderWidth: 2,
+                    },
+                    {
+                        label: 'Pool Size',
+                        data: poolSize,
+                        borderColor: 'rgba(255,255,255,0.1)',
+                        backgroundColor: 'transparent',
+                        fill: false,
+                        tension: 0,
+                        pointRadius: 0,
+                        borderWidth: 1,
+                        borderDash: [4, 4],
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        labels: { color: textColor, boxWidth: 12, font: { size: 11 } }
+                    },
+                    tooltip: {
+                        backgroundColor: IS_DARK ? '#1c1c1c' : '#fff',
+                        borderColor: IS_DARK ? '#2a2a2a' : '#dee2e6',
+                        borderWidth: 1,
+                        titleColor: IS_DARK ? '#e0e0e0' : '#212529',
+                        bodyColor: IS_DARK ? '#999' : '#6c757d',
+                        callbacks: {
+                            afterBody: function(items) {
+                                const idx = items[0].dataIndex;
+                                const total = (dynamic[idx] || 0) + (reserved[idx] || 0);
+                                const pool = poolSize[idx] || 0;
+                                const pct = pool > 0 ? Math.round(total / pool * 100) : 0;
+                                return [`Total active: ${total}`, pool > 0 ? `Utilization: ${pct}%` : ''];
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { color: gridColor },
+                        ticks: {
+                            color: textColor,
+                            font: { size: 10 },
+                            maxTicksLimit: 12,
+                            maxRotation: 0,
+                        }
+                    },
+                    y: {
+                        grid: { color: gridColor },
+                        ticks: { color: textColor, font: { size: 11 } },
+                        beginAtZero: true,
+                    }
+                }
+            }
+        });
+    });
+}
+{% endif %}
+{% endblock %}
