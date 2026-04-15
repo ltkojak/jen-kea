@@ -31,7 +31,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="1.3.1"
+JEN_VERSION="1.4.5"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"
@@ -235,10 +235,20 @@ install_dependencies() {
         success "All system packages already present."
     fi
 
-    info "Installing Python packages..."
-    pip3 install -q flask flask-login pymysql requests --break-system-packages 2>/dev/null || \
-    pip3 install -q flask flask-login pymysql requests
-    success "Python packages installed."
+    info "Checking Python packages..."
+    MISSING_PKGS=()
+    for pkg in flask flask_login pymysql requests; do
+        python3 -c "import ${pkg}" 2>/dev/null || MISSING_PKGS+=("${pkg/-/_}")
+    done
+
+    if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
+        info "Installing missing packages: ${MISSING_PKGS[*]}"
+        pip3 install -q flask flask-login pymysql requests --break-system-packages 2>/dev/null || \
+        pip3 install -q flask flask-login pymysql requests
+        success "Python packages installed."
+    else
+        success "Python packages already installed."
+    fi
 }
 
 # ─────────────────────────────────────────

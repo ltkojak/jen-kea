@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.3.1"
+JEN_VERSION = "1.4.5"
 
 # ─────────────────────────────────────────
 # App setup
@@ -373,6 +373,38 @@ def init_jen_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS alert_channels (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    channel_type VARCHAR(20) NOT NULL,
+                    channel_name VARCHAR(100) NOT NULL,
+                    enabled TINYINT(1) DEFAULT 0,
+                    config JSON,
+                    alert_types JSON,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY unique_channel (channel_type, channel_name)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS alert_templates (
+                    alert_type VARCHAR(50) PRIMARY KEY,
+                    template_text TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS alert_log (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    channel_type VARCHAR(20),
+                    alert_type VARCHAR(50),
+                    message TEXT,
+                    status VARCHAR(20),
+                    error TEXT,
+                    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_sent (sent_at)
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS login_attempts (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     ip_address VARCHAR(45),
@@ -390,6 +422,29 @@ def init_jen_db():
                     ("admin", hash_password("admin"))
                 )
                 print("Created default admin user: admin / admin")
+        # Migrate old Telegram settings in a fresh cursor
+        import json as _json
+        with db.cursor() as cur2:
+            cur2.execute("SELECT COUNT(*) as cnt FROM alert_channels WHERE channel_type='telegram'")
+            if cur2.fetchone()["cnt"] == 0:
+                cur2.execute("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('telegram_token','telegram_chat_id','telegram_enabled','alert_kea_down','alert_new_lease','alert_utilization')")
+                old_settings = {row["setting_key"]: row["setting_value"] for row in cur2.fetchall()}
+                token = old_settings.get("telegram_token", "")
+                chat_id = old_settings.get("telegram_chat_id", "")
+                if token and chat_id:
+                    enabled = 1 if old_settings.get("telegram_enabled") == "true" else 0
+                    alert_types = []
+                    if old_settings.get("alert_kea_down", "true") == "true":
+                        alert_types += ["kea_down", "kea_up"]
+                    if old_settings.get("alert_new_lease", "false") == "true":
+                        alert_types.append("new_lease")
+                    if old_settings.get("alert_utilization", "true") == "true":
+                        alert_types.append("utilization_high")
+                    cur2.execute("""
+                        INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
+                        VALUES ('telegram', 'Telegram', %s, %s, %s)
+                    """, (enabled, _json.dumps({"token": token, "chat_id": chat_id}), _json.dumps(alert_types)))
+                    print("Migrated existing Telegram settings to new alert_channels table.")
         db.commit()
     finally:
         db.close()
@@ -583,6 +638,252 @@ def send_telegram(message):
         logger.error(f"Telegram send failed: {e}")
         return False
 
+# ─────────────────────────────────────────
+# Alert Engine
+# ─────────────────────────────────────────
+
+DEFAULT_TEMPLATES = {
+    "kea_down":           "🚨 <b>Kea Alert</b>\nKea DHCP server is <b>DOWN</b>!",
+    "kea_up":             "✅ <b>Kea Alert</b>\nKea DHCP server is back <b>UP</b>.",
+    "new_lease":          "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "new_device":         "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "utilization_high":   "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
+    "utilization_ok":     "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
+    "pool_exhaustion":    "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
+    "reservation_added":  "📌 <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "reservation_deleted":"🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
+    "stale_reservation":  "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
+    "kea_config_changed": "⚙️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
+    "daily_summary":      "📊 <b>Daily Summary</b>\n{summary}",
+}
+
+ALERT_TYPE_LABELS = {
+    "kea_down":           "Kea goes down",
+    "kea_up":             "Kea comes back up",
+    "new_lease":          "New dynamic lease",
+    "new_device":         "Unknown device detected",
+    "utilization_high":   "Subnet utilization high",
+    "utilization_ok":     "Subnet utilization recovery",
+    "pool_exhaustion":    "Pool exhaustion warning",
+    "reservation_added":  "Reservation added",
+    "reservation_deleted":"Reservation deleted",
+    "stale_reservation":  "Stale reservation detected",
+    "kea_config_changed": "Kea config changed via Jen",
+    "daily_summary":      "Daily summary",
+}
+
+def get_alert_template(alert_type):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT template_text FROM alert_templates WHERE alert_type=%s", (alert_type,))
+            row = cur.fetchone()
+        db.close()
+        if row and row["template_text"]:
+            return row["template_text"]
+    except Exception:
+        pass
+    return DEFAULT_TEMPLATES.get(alert_type, "")
+
+def render_template_str(template, **kwargs):
+    """Render alert template with variable substitution."""
+    try:
+        return template.format(**kwargs)
+    except KeyError:
+        return template
+
+def get_active_channels():
+    """Get all enabled alert channels."""
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
+            channels = cur.fetchall()
+        db.close()
+        return channels
+    except Exception as e:
+        logger.error(f"get_active_channels error: {e}")
+        return []
+
+def channel_handles_alert(channel, alert_type):
+    """Check if channel is configured to send this alert type."""
+    try:
+        alert_types = channel.get("alert_types")
+        if not alert_types:
+            return False
+        if isinstance(alert_types, str):
+            import json
+            alert_types = json.loads(alert_types)
+        return alert_type in alert_types
+    except Exception:
+        return False
+
+def get_channel_config(channel):
+    """Parse channel config JSON."""
+    try:
+        cfg_data = channel.get("config")
+        if not cfg_data:
+            return {}
+        if isinstance(cfg_data, str):
+            import json
+            return json.loads(cfg_data)
+        return cfg_data
+    except Exception:
+        return {}
+
+def send_alert(alert_type, log_result=True, **kwargs):
+    """Send alert to all enabled channels that handle this alert type."""
+    template = get_alert_template(alert_type)
+    message = render_template_str(template, **kwargs)
+    channels = get_active_channels()
+    results = []
+    for channel in channels:
+        if not channel_handles_alert(channel, alert_type):
+            continue
+        ctype = channel["channel_type"]
+        config = get_channel_config(channel)
+        ok = False
+        error = ""
+        try:
+            if ctype == "telegram":
+                ok = _send_telegram_channel(message, config)
+            elif ctype == "email":
+                ok = _send_email_channel(message, alert_type, config)
+            elif ctype == "slack":
+                ok = _send_slack_channel(message, config)
+            elif ctype == "webhook":
+                ok = _send_webhook_channel(message, alert_type, config)
+        except Exception as e:
+            error = str(e)
+            logger.error(f"Alert send error ({ctype}): {e}")
+        if log_result:
+            try:
+                db = get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO alert_log (channel_type, alert_type, message, status, error)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (ctype, alert_type, message[:500], "ok" if ok else "failed", error[:500] if error else None))
+                db.commit()
+                db.close()
+            except Exception as e:
+                logger.error(f"Alert log error: {e}")
+        results.append((ctype, ok, error))
+    return results
+
+def _send_telegram_channel(message, config):
+    token = config.get("token", "")
+    chat_id = config.get("chat_id", "")
+    if not token or not chat_id:
+        return False
+    resp = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+        timeout=10
+    )
+    data = resp.json()
+    if not data.get("ok"):
+        raise Exception(f"Telegram error: {data.get('description', 'Unknown')}")
+    return True
+
+def _send_email_channel(message, alert_type, config):
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    host = config.get("smtp_host", "")
+    port = int(config.get("smtp_port", 587))
+    user = config.get("smtp_user", "")
+    password = config.get("smtp_pass", "")
+    from_addr = config.get("from_addr", user)
+    to_addr = config.get("to_addr", "")
+    if not host or not to_addr:
+        return False
+    # Strip HTML tags for email subject, keep for body
+    import re
+    subject_text = re.sub(r'<[^>]+>', '', message.split('\n')[0])
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Jen Alert: {subject_text}"
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    # Plain text version
+    plain = re.sub(r'<[^>]+>', '', message).replace('\n', '\n')
+    # HTML version
+    html_body = message.replace('\n', '<br>').replace('<b>', '<strong>').replace('</b>', '</strong>')
+    html = f"<html><body style='font-family:sans-serif;'>{html_body}</body></html>"
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    use_tls = config.get("use_tls", "true") == "true"
+    with smtplib.SMTP(host, port, timeout=15) as server:
+        if use_tls:
+            server.starttls()
+        if user and password:
+            server.login(user, password)
+        server.sendmail(from_addr, to_addr, msg.as_string())
+    return True
+
+def _send_slack_channel(message, config):
+    webhook_url = config.get("webhook_url", "")
+    if not webhook_url:
+        return False
+    import re
+    plain = re.sub(r'<[^>]+>', '', message).replace('\n', '\n')
+    # Convert HTML bold to Slack bold
+    slack_text = message.replace('<b>', '*').replace('</b>', '*')
+    slack_text = re.sub(r'<[^>]+>', '', slack_text)
+    resp = requests.post(webhook_url, json={"text": slack_text}, timeout=10)
+    if resp.status_code != 200:
+        raise Exception(f"Slack error {resp.status_code}: {resp.text}")
+    return True
+
+def _send_webhook_channel(message, alert_type, config):
+    webhook_url = config.get("webhook_url", "")
+    if not webhook_url:
+        return False
+    import re
+    plain = re.sub(r'<[^>]+>', '', message).replace('\n', '\n')
+    payload_type = config.get("payload_type", "json")
+    headers = {"Content-Type": "application/json"}
+    custom_header_name = config.get("header_name", "")
+    custom_header_value = config.get("header_value", "")
+    if custom_header_name:
+        headers[custom_header_name] = custom_header_value
+    if payload_type == "json":
+        payload = {"alert_type": alert_type, "message": plain, "html": message}
+    else:
+        payload = {"text": plain}
+    resp = requests.post(webhook_url, json=payload, headers=headers, timeout=10)
+    if resp.status_code not in (200, 201, 202, 204):
+        raise Exception(f"Webhook error {resp.status_code}: {resp.text[:200]}")
+    return True
+
+def send_daily_summary():
+    """Build and send daily summary."""
+    try:
+        lines = ["<b>Daily Network Summary</b>"]
+        db = get_kea_db()
+        jdb = get_jen_db()
+        with db.cursor() as cur:
+            for subnet_id, info in SUBNET_MAP.items():
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                active = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                reserved = cur.fetchone()["cnt"]
+                lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
+            # New devices in last 24h
+            with jdb.cursor() as jcur:
+                jcur.execute("SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+                new_devices = jcur.fetchone()["cnt"]
+                jcur.execute("SELECT COUNT(*) as cnt FROM devices")
+                total_devices = jcur.fetchone()["cnt"]
+        lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
+        lines.append(f"Total known devices: <b>{total_devices}</b>")
+        db.close()
+        jdb.close()
+        summary = "\n".join(lines)
+        send_alert("daily_summary", summary=summary)
+    except Exception as e:
+        logger.error(f"Daily summary error: {e}")
+
 def ip_to_int(ip):
     parts = ip.strip().split(".")
     return sum(int(x) << (8*(3-i)) for i, x in enumerate(parts))
@@ -591,22 +892,28 @@ def check_alerts():
     import time
     last_kea_status = True
     last_seen_leases = set()
+    known_macs = set()
+    alerted_high_subnets = set()
+    alerted_stale_macs = set()
     first_run = True
+    last_summary_date = None
+
     while True:
         try:
-            alerts_enabled = get_global_setting("telegram_enabled", "false") == "true"
             kea_up = kea_is_up()
-            if alerts_enabled and get_global_setting("alert_kea_down", "true") == "true":
-                if not kea_up and last_kea_status:
-                    send_telegram("🚨 <b>Jen Alert</b>\nKea DHCP server is <b>DOWN</b>!")
-                elif kea_up and not last_kea_status:
-                    send_telegram("✅ <b>Jen Alert</b>\nKea DHCP server is back <b>UP</b>.")
+
+            # ── Kea up/down ──
+            if not kea_up and last_kea_status:
+                send_alert("kea_down")
+            elif kea_up and not last_kea_status:
+                send_alert("kea_up")
             last_kea_status = kea_up
 
             if kea_up:
                 db = get_kea_db()
                 try:
                     with db.cursor() as cur:
+                        # ── Lease tracking ──
                         cur.execute("""
                             SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
                                    IFNULL(l.hostname,'') AS hostname, l.subnet_id
@@ -622,19 +929,17 @@ def check_alerts():
                             if not first_run and row["ip"] not in last_seen_leases:
                                 new_lease_rows.append(row)
 
-                        # Update device inventory for all current leases
+                        # ── Device inventory update ──
+                        cur.execute("""
+                            SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
+                                   IFNULL(l.hostname,'') AS hostname, l.subnet_id
+                            FROM lease4 l WHERE l.state=0
+                        """)
+                        all_leases = cur.fetchall()
                         try:
                             jdb = get_jen_db()
                             with jdb.cursor() as jcur:
-                                for row in cur.fetchall() if False else []:
-                                    pass  # already iterated above
-                                # Re-query for device tracking
-                                cur.execute("""
-                                    SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
-                                           IFNULL(l.hostname,'') AS hostname, l.subnet_id
-                                    FROM lease4 l WHERE l.state=0
-                                """)
-                                for row in cur.fetchall():
+                                for row in all_leases:
                                     mac = format_mac(row["hwaddr"])
                                     jcur.execute("""
                                         INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen)
@@ -649,45 +954,99 @@ def check_alerts():
                         except Exception as e:
                             logger.error(f"Device tracking error: {e}")
 
-                        if alerts_enabled and get_global_setting("alert_new_lease", "false") == "true":
-                            for row in new_lease_rows:
-                                mac = format_mac(row["hwaddr"])
-                                subnet_name = SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
-                                send_telegram(
-                                    f"🆕 <b>New DHCP Lease</b>\n"
-                                    f"IP: <code>{row['ip']}</code>\n"
-                                    f"MAC: <code>{mac}</code>\n"
-                                    f"Hostname: <code>{row['hostname'] or '(none)'}</code>\n"
-                                    f"Subnet: <b>{subnet_name}</b>"
-                                )
+                        # ── New lease alerts ──
+                        for row in new_lease_rows:
+                            mac = format_mac(row["hwaddr"])
+                            subnet_name = SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
+                            send_alert("new_lease", ip=row["ip"], mac=mac,
+                                      hostname=row["hostname"] or "(none)", subnet=subnet_name)
+                            # Unknown device alert
+                            if mac not in known_macs:
+                                send_alert("new_device", ip=row["ip"], mac=mac,
+                                          hostname=row["hostname"] or "(none)", subnet=subnet_name)
+
+                        # Update known MACs
+                        for row in all_leases:
+                            known_macs.add(format_mac(row["hwaddr"]))
+
                         last_seen_leases = current_leases
                         first_run = False
 
-                        if alerts_enabled and get_global_setting("alert_utilization", "true") == "true":
+                        # ── Utilization alerts ──
+                        kea_cfg = kea_command("config-get")
+                        if kea_cfg.get("result") == 0:
                             threshold = int(get_global_setting("alert_threshold_pct", "80"))
-                            result = kea_command("config-get")
-                            if result.get("result") == 0:
-                                for s in result["arguments"]["Dhcp4"].get("subnet4", []):
-                                    sid = s["id"]
-                                    if sid not in SUBNET_MAP:
-                                        continue
-                                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
-                                    active = cur.fetchone()["cnt"]
-                                    for pool in s.get("pools", []):
-                                        p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                                        if "-" in p:
-                                            start, end = [x.strip() for x in p.split("-")]
-                                            pool_size = ip_to_int(end) - ip_to_int(start) + 1
-                                            pct = (active / pool_size * 100) if pool_size > 0 else 0
-                                            if pct >= threshold:
-                                                info = SUBNET_MAP[sid]
-                                                send_telegram(
-                                                    f"⚠️ <b>Utilization Alert</b>\n"
-                                                    f"Subnet <b>{info['name']} ({info['cidr']})</b>\n"
-                                                    f"Usage: <b>{pct:.0f}%</b> ({active}/{pool_size} addresses)"
-                                                )
+                            exhaustion_threshold = int(get_global_setting("pool_exhaustion_free", "5"))
+                            for s in kea_cfg["arguments"]["Dhcp4"].get("subnet4", []):
+                                sid = s["id"]
+                                if sid not in SUBNET_MAP:
+                                    continue
+                                info = SUBNET_MAP[sid]
+                                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                                active = cur.fetchone()["cnt"]
+                                for pool in s.get("pools", []):
+                                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                                    if "-" in p:
+                                        start, end = [x.strip() for x in p.split("-")]
+                                        pool_size = ip_to_int(end) - ip_to_int(start) + 1
+                                        pct = round(active / pool_size * 100) if pool_size > 0 else 0
+                                        free = pool_size - active
+                                        subnet_key = f"{sid}"
+                                        if pct >= threshold and subnet_key not in alerted_high_subnets:
+                                            send_alert("utilization_high", subnet=info["name"],
+                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size)
+                                            alerted_high_subnets.add(subnet_key)
+                                        elif pct < threshold and subnet_key in alerted_high_subnets:
+                                            send_alert("utilization_ok", subnet=info["name"],
+                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size)
+                                            alerted_high_subnets.discard(subnet_key)
+                                        if free <= exhaustion_threshold:
+                                            send_alert("pool_exhaustion", subnet=info["name"],
+                                                      cidr=info["cidr"], free=free)
+
+                        # ── Stale reservation alerts ──
+                        try:
+                            stale_days = int(get_global_setting("stale_device_days", "30"))
+                            jdb = get_jen_db()
+                            with jdb.cursor() as jcur:
+                                jcur.execute(f"""
+                                    SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days
+                                    FROM devices
+                                    WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)
+                                """)
+                                stale_rows = jcur.fetchall()
+                            jdb.close()
+                            for row in stale_rows:
+                                if row["mac"] not in alerted_stale_macs:
+                                    # Check if has reservation
+                                    mac_hex = row["mac"].replace(":", "")
+                                    cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
+                                    res = cur.fetchone()
+                                    if res:
+                                        send_alert("stale_reservation", ip=res["ip"] or "",
+                                                  mac=row["mac"], hostname=res["hostname"] or "",
+                                                  days=row["days"])
+                                        alerted_stale_macs.add(row["mac"])
+                        except Exception as e:
+                            logger.error(f"Stale reservation check error: {e}")
+
                 finally:
                     db.close()
+
+            # ── Daily summary ──
+            import datetime as dt
+            summary_time = get_global_setting("daily_summary_time", "07:00")
+            now = dt.datetime.now()
+            today = now.date()
+            try:
+                h, m = [int(x) for x in summary_time.split(":")]
+                summary_due = now.hour == h and now.minute == m
+                if summary_due and last_summary_date != today:
+                    send_daily_summary()
+                    last_summary_date = today
+            except Exception:
+                pass
+
         except Exception as e:
             logger.error(f"Alert thread error: {e}")
         time.sleep(30)
@@ -1259,6 +1618,9 @@ def add_reservation():
                     logger.error(f"Failed to save notes: {e}")
             flash(f"Reservation added for {ip}.", "success")
             audit("ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname}")
+            subnet_name = SUBNET_MAP.get(subnet_id, {}).get("name", f"Subnet {subnet_id}")
+            send_alert("reservation_added", ip=ip, mac=mac,
+                      hostname=hostname or "(none)", subnet=subnet_name)
             return redirect(url_for("reservations"))
         else:
             flash(f"Kea error: {result.get('text')}", "error")
@@ -1373,6 +1735,8 @@ def delete_reservation(host_id):
             pass
         flash(f"Reservation for {host['ip']} deleted.", "success")
         audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
+        subnet_name = SUBNET_MAP.get(host["dhcp4_subnet_id"], {}).get("name", f"Subnet {host['dhcp4_subnet_id']}")
+        send_alert("reservation_deleted", ip=host["ip"], mac=mac, subnet=subnet_name)
     else:
         flash(f"Kea error: {result.get('text')}", "error")
     return redirect(url_for("reservations"))
@@ -1668,6 +2032,8 @@ print('OK')
                     )
                     flash(f"Subnet {subnet['name']} updated successfully.", "success")
                     audit("EDIT_SUBNET", str(subnet_id), f"pool={new_pool} valid_lifetime={new_valid}")
+                    send_alert("kea_config_changed", subnet=subnet["name"],
+                              details=f"pool={new_pool or 'unchanged'} valid_lifetime={new_valid or 'unchanged'}")
                 else:
                     subprocess.run(
                         ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
@@ -1932,16 +2298,228 @@ def settings_system():
 @login_required
 @admin_required
 def settings_alerts():
-    telegram_settings = {
-        "enabled": get_global_setting("telegram_enabled", "false"),
-        "token": get_global_setting("telegram_token", ""),
-        "chat_id": get_global_setting("telegram_chat_id", ""),
-        "alert_kea_down": get_global_setting("alert_kea_down", "true"),
-        "alert_new_lease": get_global_setting("alert_new_lease", "false"),
-        "alert_utilization": get_global_setting("alert_utilization", "true"),
-        "alert_threshold_pct": get_global_setting("alert_threshold_pct", "80"),
-    }
-    return render_template("settings_alerts.html", telegram=telegram_settings)
+    import json
+    channels = []
+    templates = {}
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM alert_channels ORDER BY channel_type, channel_name")
+            channels = cur.fetchall()
+            # Parse JSON fields
+            for ch in channels:
+                if isinstance(ch.get("config"), str):
+                    try: ch["config"] = json.loads(ch["config"])
+                    except: ch["config"] = {}
+                if isinstance(ch.get("alert_types"), str):
+                    try: ch["alert_types"] = json.loads(ch["alert_types"])
+                    except: ch["alert_types"] = []
+            cur.execute("SELECT alert_type, template_text FROM alert_templates")
+            for row in cur.fetchall():
+                templates[row["alert_type"]] = row["template_text"]
+        db.close()
+    except Exception as e:
+        flash(f"Error loading alert settings: {e}", "error")
+    summary_time = get_global_setting("daily_summary_time", "07:00")
+    pool_exhaustion_free = get_global_setting("pool_exhaustion_free", "5")
+    return render_template("settings_alerts.html",
+                           channels=channels, templates=templates,
+                           default_templates=DEFAULT_TEMPLATES,
+                           alert_type_labels=ALERT_TYPE_LABELS,
+                           summary_time=summary_time,
+                           pool_exhaustion_free=pool_exhaustion_free)
+
+@app.route("/settings/alerts/save-channel", methods=["POST"])
+@login_required
+@admin_required
+def save_alert_channel():
+    import json
+    channel_id = request.form.get("channel_id", "").strip()
+    channel_type = request.form.get("channel_type", "").strip()
+    channel_name = request.form.get("channel_name", "").strip()[:100]
+    enabled = 1 if request.form.get("enabled") else 0
+    alert_types = request.form.getlist("alert_types[]")
+
+    if channel_type not in ("telegram", "email", "slack", "webhook"):
+        flash("Invalid channel type.", "error")
+        return redirect(url_for("settings_alerts"))
+    if not channel_name:
+        flash("Channel name is required.", "error")
+        return redirect(url_for("settings_alerts"))
+
+    # Build config based on type
+    config = {}
+    if channel_type == "telegram":
+        config = {
+            "token": request.form.get("token", "").strip(),
+            "chat_id": request.form.get("chat_id", "").strip(),
+        }
+    elif channel_type == "email":
+        config = {
+            "smtp_host": request.form.get("smtp_host", "").strip(),
+            "smtp_port": request.form.get("smtp_port", "587").strip(),
+            "smtp_user": request.form.get("smtp_user", "").strip(),
+            "smtp_pass": request.form.get("smtp_pass", "").strip(),
+            "from_addr": request.form.get("from_addr", "").strip(),
+            "to_addr": request.form.get("to_addr", "").strip(),
+            "use_tls": "true" if request.form.get("use_tls") else "false",
+        }
+    elif channel_type == "slack":
+        config = {"webhook_url": request.form.get("slack_webhook", "").strip()}
+    elif channel_type == "webhook":
+        config = {
+            "webhook_url": request.form.get("webhook_url", "").strip(),
+            "payload_type": request.form.get("payload_type", "json").strip(),
+            "header_name": request.form.get("header_name", "").strip(),
+            "header_value": request.form.get("header_value", "").strip(),
+        }
+
+    # Don't overwrite password if blank
+    if channel_id and channel_type == "email" and not config["smtp_pass"]:
+        try:
+            db = get_jen_db()
+            with db.cursor() as cur:
+                cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
+                row = cur.fetchone()
+                if row:
+                    existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+                    config["smtp_pass"] = existing.get("smtp_pass", "")
+            db.close()
+        except Exception:
+            pass
+
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            if channel_id:
+                cur.execute("""
+                    UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s
+                    WHERE id=%s
+                """, (channel_name, enabled, json.dumps(config), json.dumps(alert_types), channel_id))
+            else:
+                cur.execute("""
+                    INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (channel_type, channel_name, enabled, json.dumps(config), json.dumps(alert_types)))
+        db.commit()
+        db.close()
+        flash(f"Alert channel '{channel_name}' saved.", "success")
+        audit("SAVE_ALERT_CHANNEL", channel_name, f"type={channel_type} enabled={enabled}")
+    except Exception as e:
+        flash(f"Error saving channel: {str(e)}", "error")
+    return redirect(url_for("settings_alerts"))
+
+@app.route("/settings/alerts/delete-channel/<int:channel_id>", methods=["POST"])
+@login_required
+@admin_required
+def delete_alert_channel(channel_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT channel_name FROM alert_channels WHERE id=%s", (channel_id,))
+            row = cur.fetchone()
+            cur.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
+        db.commit()
+        db.close()
+        flash(f"Alert channel deleted.", "success")
+        audit("DELETE_ALERT_CHANNEL", str(channel_id), "")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("settings_alerts"))
+
+@app.route("/settings/alerts/test-channel/<int:channel_id>", methods=["POST"])
+@login_required
+@admin_required
+def test_alert_channel(channel_id):
+    import json
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
+            channel = cur.fetchone()
+        db.close()
+        if not channel:
+            flash("Channel not found.", "error")
+            return redirect(url_for("settings_alerts"))
+        config = json.loads(channel["config"]) if isinstance(channel["config"], str) else channel["config"]
+        ctype = channel["channel_type"]
+        test_msg = f"🔔 <b>Jen Test</b>\nTest message from channel: {channel['channel_name']}"
+        if ctype == "telegram":
+            ok = _send_telegram_channel(test_msg, config)
+        elif ctype == "email":
+            ok = _send_email_channel(test_msg, "test", config)
+        elif ctype == "slack":
+            ok = _send_slack_channel(test_msg, config)
+        elif ctype == "webhook":
+            ok = _send_webhook_channel(test_msg, "test", config)
+        else:
+            ok = False
+        if ok:
+            flash(f"Test message sent successfully to '{channel['channel_name']}'.", "success")
+        else:
+            flash(f"Test failed for '{channel['channel_name']}'.", "error")
+    except Exception as e:
+        flash(f"Test error: {str(e)}", "error")
+    return redirect(url_for("settings_alerts"))
+
+@app.route("/settings/alerts/save-template", methods=["POST"])
+@login_required
+@admin_required
+def save_alert_template():
+    alert_type = request.form.get("alert_type", "").strip()
+    template_text = request.form.get("template_text", "").strip()
+    if alert_type not in DEFAULT_TEMPLATES:
+        flash("Invalid alert type.", "error")
+        return redirect(url_for("settings_alerts"))
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO alert_templates (alert_type, template_text) VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE template_text=%s, updated_at=NOW()
+            """, (alert_type, template_text, template_text))
+        db.commit()
+        db.close()
+        flash(f"Template for '{ALERT_TYPE_LABELS.get(alert_type, alert_type)}' saved.", "success")
+        audit("SAVE_ALERT_TEMPLATE", alert_type, "Template updated")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("settings_alerts"))
+
+@app.route("/settings/alerts/reset-template", methods=["POST"])
+@login_required
+@admin_required
+def reset_alert_template():
+    alert_type = request.form.get("alert_type", "").strip()
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_templates WHERE alert_type=%s", (alert_type,))
+        db.commit()
+        db.close()
+        flash(f"Template reset to default.", "success")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("settings_alerts"))
+
+@app.route("/settings/alerts/save-global", methods=["POST"])
+@login_required
+@admin_required
+def save_alert_global():
+    summary_time = request.form.get("summary_time", "07:00").strip()
+    pool_free = request.form.get("pool_exhaustion_free", "5").strip()
+    threshold = request.form.get("alert_threshold_pct", "80").strip()
+    if not pool_free.isdigit() or int(pool_free) < 1:
+        flash("Pool exhaustion threshold must be a positive number.", "error")
+        return redirect(url_for("settings_alerts"))
+    if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
+        flash("Utilization threshold must be between 1 and 100.", "error")
+        return redirect(url_for("settings_alerts"))
+    set_global_setting("daily_summary_time", summary_time)
+    set_global_setting("pool_exhaustion_free", pool_free)
+    set_global_setting("alert_threshold_pct", threshold)
+    flash("Global alert settings saved.", "success")
+    return redirect(url_for("settings_alerts"))
 
 @app.route("/settings/infrastructure")
 @login_required
