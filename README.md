@@ -7,7 +7,7 @@ Stork is designed for large enterprise deployments with teams of network enginee
 ![Version](https://img.shields.io/badge/Version-1.5.0-blue?style=flat)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)
 ![Flask](https://img.shields.io/badge/Flask-3.0-green?style=flat)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)
+![License](https://img.shields.io/badge/License-GPL%20v3-blue?style=flat)
 
 ---
 
@@ -285,4 +285,14 @@ Jen was built by Matthew Thibodeau, an IT engineer with over two decades of expe
 
 ## License
 
-MIT — do whatever you want with it.
+Copyright (C) 2026 Matthew Thibodeau
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the **GNU General Public License v3** as published by the Free
+Software Foundation.
+
+This means you are free to use, copy, modify, and distribute Jen — including
+for personal and commercial use — as long as any distributed modifications are
+also released under GPL v3 with source code available.
+
+See the [LICENSE](LICENSE) file or [gnu.org/licenses/gpl-3.0](https://www.gnu.org/licenses/gpl-3.0.txt) for full terms.

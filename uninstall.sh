@@ -1,4 +1,8 @@
 #!/bin/bash
+# Jen - The Kea DHCP Management Console
+# Copyright (C) 2026 Matthew Thibodeau
+# Licensed under GNU General Public License v3
+# https://www.gnu.org/licenses/gpl-3.0.txt
 # ─────────────────────────────────────────────────────────────────────────────
 # Jen - The Kea DHCP Management Console
 # Uninstaller
