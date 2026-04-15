@@ -2,9 +2,9 @@
 
 > *"Have you tried turning it off and on again?"*
 
-A web-based DHCP management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built as a Python Flask application. Jen provides a full-featured UI closer to Windows DHCP Server — accessible from any browser including mobile.
+A full-featured web management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built as a practical alternative to ISC Stork for homelab and small infrastructure deployments.
 
-![Version](https://img.shields.io/badge/Version-1.0.0-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-1.5.0-blue?style=flat)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)
 ![Flask](https://img.shields.io/badge/Flask-3.0-green?style=flat)
 ![License](https://img.shields.io/badge/License-MIT-yellow?style=flat)
@@ -13,65 +13,80 @@ A web-based DHCP management interface for [ISC Kea DHCP Server](https://www.isc.
 
 ## Features
 
-**Dashboard**
-- Live subnet utilization with dynamic/reserved breakdown
-- Recently issued leases with time filter (30min / 1h / 4h / 8h / 12h / 24h)
-- Auto-refresh every 30 seconds
+**📊 Dashboard**
+- Live subnet utilization with dynamic/reserved breakdown and color-coded utilization bars
+- Recently issued leases with configurable time filter (30min to 24h)
+- Configurable auto-refresh (5s / 10s / 15s / 30s / 60s / off) — remembered per browser
 - Kea health indicator in nav bar
 
-**Lease Management**
-- Browse active and expired leases with subnet/time/search filters
-- Manual lease release
-- Delete stale leases from database
-- One-click convert dynamic lease to reservation
+**📋 Lease Management**
+- Browse active and expired leases with subnet, time, and search filters
+- Manual lease release and stale lease cleanup
+- One-click conversion of dynamic lease to static reservation
 - Visual IP address map — free/dynamic/reserved at a glance
 
-**Reservations**
-- Full add/edit/delete with per-reservation notes
-- Duplicate detection (IP and MAC)
-- Bulk CSV import and export
-- Per-reservation DNS override support
+**📌 Reservations**
+- Add, edit, delete with per-reservation notes
+- Duplicate detection on IP and MAC
+- Per-reservation DNS override
+- Bulk select, delete, and export to CSV
+- CSV import with per-row validation
+- Stale reservation detection — flags MACs not seen in configurable number of days
 
-**Subnet Editing**
-- Edit pool ranges, lease times, and scope options directly from the UI
-- Changes applied via SSH to the Kea server
-- Auto-backup before every change with rollback on validation failure
+**🌐 Subnets**
+- Live subnet configuration pulled from Kea API
+- Edit pool ranges, lease times, and scope options via UI
+- Changes applied via SSH with auto-backup and rollback on failure
+- Per-subnet notes/descriptions
 
-**Alerts (Telegram)**
-- Kea goes down or comes back up
-- New device gets a DHCP lease (IP, MAC, hostname in message)
-- Subnet utilization exceeds configurable threshold
-- All toggleable per-alert-type in Settings UI
+**📱 Device Inventory**
+- Automatically tracks every MAC address seen via DHCP
+- Editable device name, owner, and notes per device
+- Stale device detection and filtering
+- Quick-reserve button for unregistered devices
 
-**Security**
-- Login rate limiting — configurable max attempts, lockout duration, and mode (IP / username / both)
-- HTTPS via SSL certificate upload in Settings UI (ZeroSSL compatible)
-- Session timeout — global default with per-user override
-- Full audit log of all changes
+**📈 Reports**
+- Lease history charts per subnet (area charts — dynamic, reserved, pool size)
+- Configurable snapshot interval and retention period
+- Time range selector: 24h / 3d / 7d / 14d / 30d / 90d
+- Summary cards with current, peak, and free address counts
 
-**Audit Log**
-- Every add/edit/delete tracked with user, timestamp, and source IP
-- Paginated log page
+**🔔 Alerts**
+- Multiple independent alert channels: Telegram, Email (SMTP), Slack, Generic Webhook
+- 12 alert types: Kea down/up, new lease, unknown device, high utilization, utilization recovery, pool exhaustion, reservation added/deleted, stale reservation, config changed, daily summary
+- Custom message templates with variable substitution
+- Per-channel enable/disable with independent alert type selection
+- Alert delivery log
 
-**DDNS Status**
-- Recent Technitium DNS update log activity
+**🔗 DDNS Status**
+- Recent Technitium DNS update log (read via SSH from Kea server)
 - Hostname lookup via Technitium API
+
+**📝 Audit Log**
+- Every change tracked with user, timestamp, and source IP
+
+**⚙️ Settings**
+- **System** — HTTPS/SSL certificate upload, session timeout, login rate limiting, custom icon
+- **Alerts** — All alert channel configuration and message templates
+- **Infrastructure** — Kea API, databases, SSH, subnet map, DDNS — all editable via UI without touching config files
+
+**ℹ️ About**
+- System info, Kea version, subnet summary with live lease counts
 
 **Infrastructure**
 - Prometheus metrics at `/metrics`
-- SSH key generation for subnet editing in Settings UI
-- Dark/light mode toggle
-- Sortable columns, pagination everywhere
-- Docker support (external or bundled MySQL)
+- Docker support — external or bundled MySQL modes
+- Guided installer with bare metal and Docker paths
+- Automatic config migration on upgrade
 
 ---
 
 ## Requirements
 
 - Ubuntu 22.04 or 24.04 (bare metal) or any Docker-capable host
-- Python 3.10+ (bare metal only — handled automatically by installer)
+- Python 3.10+ (handled automatically by installer on bare metal)
 - ISC Kea DHCP 3.0+ with MySQL backend and Control Agent running
-- MySQL/MariaDB accessible for both the Kea database and Jen database
+- MySQL/MariaDB for both Kea database and Jen database
 
 ---
 
@@ -80,68 +95,49 @@ A web-based DHCP management interface for [ISC Kea DHCP Server](https://www.isc.
 ### Option 1 — Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v1.0.0.tar.gz
+tar xzf jen-v1.5.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
 
-The installer will:
-- Check all system requirements (OS, Python, disk space, dependencies)
-- Offer bare metal/systemd or Docker install
-- Walk you through all configuration values interactively
-- Test Kea API and database connections live
-- Install all files, set permissions, enable and start the service
-- Verify Jen is responding before finishing
+The installer checks system requirements, offers bare metal or Docker, walks through configuration, tests connections live, and verifies Jen is running before finishing.
 
-### Option 2 — Docker (external MySQL for Jen DB)
-
-Jen connects to your existing MySQL server for both the Kea database and the Jen database.
+### Option 2 — Docker (external MySQL)
 
 ```bash
 cd jen
 cp jen.config.example jen.config
-nano jen.config        # fill in your values
+nano jen.config
 docker compose up -d
 ```
 
-### Option 3 — Docker (bundled MySQL for Jen DB)
-
-Docker manages a local MariaDB container for the Jen database. Kea database still connects externally.
+### Option 3 — Docker (bundled MySQL)
 
 ```bash
 cd jen
 cp jen.config.example jen.config
-nano jen.config        # set [jen_db] host = jen-mysql
+# Set [jen_db] host = jen-mysql
 cp .env.example .env
-nano .env              # set MySQL passwords
+nano .env
 docker compose -f docker-compose.mysql.yml up -d
 ```
 
 ### Option 4 — Manual bare metal
 
 ```bash
-# Install dependencies
 sudo apt install -y python3-pip mariadb-client-core openssh-client
 sudo pip3 install flask flask-login pymysql requests --break-system-packages
 
-# Extract and install
-tar xzf jen-v1.0.0.tar.gz
-cd jen
+tar xzf jen-v1.5.0.tar.gz && cd jen
 sudo mkdir -p /opt/jen /opt/jen/static /etc/jen /etc/jen/ssl /etc/jen/ssh
 sudo cp jen.py /opt/jen/jen.py
 sudo cp -r templates /opt/jen/templates
 sudo cp jen.service /etc/systemd/system/jen.service
-sudo cp jen-sudoers /etc/sudoers.d/jen
-sudo chmod 440 /etc/sudoers.d/jen
-
-# Configure
+sudo cp jen-sudoers /etc/sudoers.d/jen && sudo chmod 440 /etc/sudoers.d/jen
 sudo cp jen.config.example /etc/jen/jen.config
-sudo nano /etc/jen/jen.config    # fill in your values
-
-# Start
+sudo nano /etc/jen/jen.config
 sudo chown -R www-data:www-data /opt/jen /etc/jen
-sudo systemctl daemon-reload
-sudo systemctl enable --now jen
+sudo systemctl daemon-reload && sudo systemctl enable --now jen
 ```
 
 ### Uninstall
@@ -154,36 +150,33 @@ sudo ./uninstall.sh
 
 ## First Login
 
-Open `http://your-server:5050` in your browser.
+Open `http://your-server:5050`
 
 | Username | Password |
 |---|---|
 | admin | admin |
 
-**Change your password immediately** after first login via **Users → Change My Password**.
+**Change your password immediately** — Users → Change My Password.
 
 ---
 
 ## Configuration
 
-All configuration lives in `/etc/jen/jen.config`. Copy `jen.config.example` as a starting point.
+All configuration lives in `/etc/jen/jen.config`. After initial setup, most settings can also be changed via **Settings → Infrastructure** in the UI without editing the file directly.
 
 ```ini
 [kea]
-# Kea Control Agent REST API
 api_url  = http://YOUR-KEA-SERVER:8000
 api_user = kea-api
 api_pass = your-password
 
 [kea_db]
-# Kea MySQL database
 host     = YOUR-KEA-SERVER
 user     = kea
 password = your-password
 database = kea
 
 [jen_db]
-# Jen MySQL database (separate from Kea)
 host     = YOUR-DB-SERVER
 user     = jen
 password = your-password
@@ -194,7 +187,6 @@ http_port  = 5050
 https_port = 8443
 
 [kea_ssh]
-# SSH access to Kea server for subnet editing (optional)
 host     = YOUR-KEA-SERVER
 user     = your-ssh-user
 key_path = /etc/jen/ssh/jen_rsa
@@ -206,7 +198,6 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 30 = IoT, 192.168.30.0/24
 
 [ddns]
-# Technitium DNS integration (optional)
 log_path    = /var/log/kea/kea-ddns-technitium.log
 api_url     = https://your-technitium-server/api
 api_token   = your-token
@@ -217,21 +208,17 @@ forward_zone = your.domain.com
 
 ## Upgrading
 
-Run the installer — it detects the existing version and handles the upgrade automatically:
-
 ```bash
-tar xzf jen-v1.0.0.tar.gz
+tar xzf jen-vX.X.X.tar.gz
 cd jen
 sudo ./install.sh
 ```
 
-Select bare metal, then choose to keep your existing config. Your config file, SSL certificates, SSH keys, and user accounts are always preserved.
+Select bare metal → keep existing config. Your config, SSL certificates, SSH keys, and user accounts are always preserved. A backup of the previous `jen.py` is saved to `/etc/jen/backups/` before every upgrade.
 
 ---
 
 ## Updating from Git
-
-After cloning the repo, future updates are:
 
 ```bash
 cd ~/jen-kea
@@ -241,19 +228,17 @@ sudo cp -r templates/* /opt/jen/templates/
 sudo systemctl restart jen
 ```
 
-Or just run `sudo ./install.sh` from the repo directory for a full guided upgrade.
+Or run `sudo ./install.sh` for a full guided upgrade.
 
 ---
 
 ## SSH Setup for Subnet Editing
 
-1. Go to **Settings → SSH Key Management → Generate SSH Key**
-2. Copy the public key shown on screen
-3. On your Kea server, add it to the SSH user's authorized_keys:
-```bash
-echo "ssh-rsa AAAA... jen@your-jen-server" >> ~/.ssh/authorized_keys
-```
-4. Add a sudoers entry on your Kea server:
+1. Go to **Settings → Infrastructure → SSH Configuration → Generate SSH Key**
+2. Copy the public key shown
+3. On your Kea server: `echo "ssh-rsa AAAA... jen@your-jen-server" >> ~/.ssh/authorized_keys`
+4. Add sudoers on your Kea server:
+
 ```bash
 echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3, /usr/bin/tail" | sudo tee /etc/sudoers.d/jen-kea
 sudo chmod 440 /etc/sudoers.d/jen-kea
@@ -261,26 +246,12 @@ sudo chmod 440 /etc/sudoers.d/jen-kea
 
 ---
 
-## Telegram Alerts Setup
-
-1. Message **@BotFather** on Telegram → `/newbot` → follow prompts → copy the token
-2. Message **@userinfobot** on Telegram to get your chat ID
-3. Go to **Settings → Telegram Alerts** in Jen
-4. Enter token and chat ID, enable desired alert types, click **Save**
-5. Click **Send Test Message** to verify
-
----
-
 ## Jen Database Setup
-
-Jen requires its own MySQL database separate from the Kea database. Create it on your MySQL server:
 
 ```sql
 CREATE DATABASE jen;
-CREATE USER 'jen'@'localhost' IDENTIFIED BY 'your-password';
-CREATE USER 'jen'@'your-jen-server-ip' IDENTIFIED BY 'your-password';
-GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'localhost';
-GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'your-jen-server-ip';
+CREATE USER 'jen'@'YOUR-JEN-SERVER-IP' IDENTIFIED BY 'your-password';
+GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'YOUR-JEN-SERVER-IP';
 FLUSH PRIVILEGES;
 ```
 
@@ -295,20 +266,20 @@ Jen creates all required tables automatically on first start.
 sudo journalctl -u jen -n 30 --no-pager
 ```
 
-**Config file errors:** Check that all required sections are present and values are filled in. The installer will report missing config values clearly.
-
 **Lost admin password:**
 ```bash
 mysql -u jen -p -h your-db-server jen -e "UPDATE users SET password=SHA2('newpassword',256) WHERE username='admin';"
 ```
 
-**Subnet editing fails:** Verify SSH is configured in Settings, the public key is in the Kea server's authorized_keys, and the sudoers entry allows python3, tee, cp, and tail.
+**Subnet editing fails:** Verify SSH key is generated in Settings → Infrastructure, added to Kea server authorized_keys, and sudoers entry includes `python3`, `tee`, `cp`, and `tail`.
+
+**DDNS log not showing:** Check the log path in Settings → Infrastructure → DDNS matches the actual path on your Kea server.
 
 ---
 
 ## Background
 
-Jen was built by Matthew Thibodeau, an IT engineer with over two decades of experience. After deploying ISC Kea DHCP in his home lab, he found that ISC Stork fell short of what he needed for day-to-day management — so he built Jen to fill that gap.
+Jen was built by Matthew Thibodeau, an IT engineer with over two decades of experience, with the assistance of Claude (Anthropic). After deploying ISC Kea DHCP in his home lab, he found that ISC Stork fell short of what he needed for day-to-day management — so he built Jen to fill that gap.
 
 ---
 
