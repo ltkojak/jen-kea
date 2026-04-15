@@ -1,5 +1,36 @@
 {% extends "base.html" %}
 {% block title %}Subnets{% endblock %}
+{% block scripts %}
+function editNote(id) {
+    document.getElementById('note-display-' + id).style.display = 'none';
+    document.getElementById('note-edit-' + id).style.display = 'block';
+    document.getElementById('note-text-' + id).focus();
+}
+function cancelNote(id) {
+    document.getElementById('note-display-' + id).style.display = 'block';
+    document.getElementById('note-edit-' + id).style.display = 'none';
+}
+function saveNote(id) {
+    const notes = document.getElementById('note-text-' + id).value.trim();
+    fetch('/subnets/save-note', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'subnet_id=' + id + '&notes=' + encodeURIComponent(notes)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            const display = document.getElementById('note-display-' + id);
+            display.innerHTML = notes
+                ? '<span style="font-size:13px;color:var(--text-muted);">' + notes + '</span>'
+                : '<span style="font-size:12px;color:var(--text-muted);font-style:italic;">No notes — click to add</span>';
+            cancelNote(id);
+        } else {
+            alert('Error saving note: ' + data.error);
+        }
+    });
+}
+{% endblock %}
 {% block content %}
 <div class="page-header">
     <h1>🌐 Subnets & Scope Options</h1>

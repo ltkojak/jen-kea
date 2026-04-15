@@ -29,7 +29,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "1.2.1"
+JEN_VERSION = "1.3.1"
 
 # ─────────────────────────────────────────
 # App setup
@@ -350,6 +350,29 @@ def init_jen_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS devices (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    mac VARCHAR(17) UNIQUE NOT NULL,
+                    device_name VARCHAR(200) DEFAULT NULL,
+                    owner VARCHAR(200) DEFAULT NULL,
+                    notes TEXT DEFAULT NULL,
+                    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    last_ip VARCHAR(45) DEFAULT NULL,
+                    last_hostname VARCHAR(253) DEFAULT NULL,
+                    last_subnet_id INT DEFAULT NULL,
+                    INDEX idx_mac (mac),
+                    INDEX idx_last_seen (last_seen)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS subnet_notes (
+                    subnet_id INT PRIMARY KEY,
+                    notes TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS login_attempts (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     ip_address VARCHAR(45),
@@ -598,6 +621,33 @@ def check_alerts():
                             current_leases.add(row["ip"])
                             if not first_run and row["ip"] not in last_seen_leases:
                                 new_lease_rows.append(row)
+
+                        # Update device inventory for all current leases
+                        try:
+                            jdb = get_jen_db()
+                            with jdb.cursor() as jcur:
+                                for row in cur.fetchall() if False else []:
+                                    pass  # already iterated above
+                                # Re-query for device tracking
+                                cur.execute("""
+                                    SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
+                                           IFNULL(l.hostname,'') AS hostname, l.subnet_id
+                                    FROM lease4 l WHERE l.state=0
+                                """)
+                                for row in cur.fetchall():
+                                    mac = format_mac(row["hwaddr"])
+                                    jcur.execute("""
+                                        INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen)
+                                        VALUES (%s, %s, %s, %s, NOW())
+                                        ON DUPLICATE KEY UPDATE
+                                            last_ip=%s, last_hostname=%s,
+                                            last_subnet_id=%s, last_seen=NOW()
+                                    """, (mac, row["ip"], row["hostname"], row["subnet_id"],
+                                          row["ip"], row["hostname"], row["subnet_id"]))
+                            jdb.commit()
+                            jdb.close()
+                        except Exception as e:
+                            logger.error(f"Device tracking error: {e}")
 
                         if alerts_enabled and get_global_setting("alert_new_lease", "false") == "true":
                             for row in new_lease_rows:
@@ -1104,9 +1154,23 @@ def reservations():
         flash("Could not load reservations. Check database connection.", "error")
 
     pages = max(1, (total + per_page - 1) // per_page)
+    stale_days = int(get_global_setting("stale_device_days", "30"))
+    # Get stale MACs from device inventory
+    stale_macs = set()
+    try:
+        jdb = get_jen_db()
+        with jdb.cursor() as jcur:
+            jcur.execute(f"SELECT mac FROM devices WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)")
+            stale_macs = {row["mac"] for row in jcur.fetchall()}
+        jdb.close()
+    except Exception:
+        pass
+    for host in hosts:
+        host["is_stale"] = host["mac"] in stale_macs
     return render_template("reservations.html", hosts=hosts,
                            subnet_filter=subnet_filter, search=search,
-                           subnet_map=SUBNET_MAP, page=page, pages=pages, total=total)
+                           subnet_map=SUBNET_MAP, page=page, pages=pages, total=total,
+                           stale_days=stale_days)
 
 @app.route("/reservations/add", methods=["GET", "POST"])
 @login_required
@@ -1475,7 +1539,19 @@ def subnets():
         flash(f"Error fetching subnet configuration: {str(e)}", "error")
 
     ssh_ready = os.path.exists(SSH_KEY_PATH) and bool(KEA_SSH_HOST)
-    return render_template("subnets.html", subnets=subnet_data, ssh_ready=ssh_ready)
+    # Load subnet notes
+    subnet_notes = {}
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_id, notes FROM subnet_notes")
+            for row in cur.fetchall():
+                subnet_notes[row["subnet_id"]] = row["notes"]
+        db.close()
+    except Exception:
+        pass
+    return render_template("subnets.html", subnets=subnet_data, ssh_ready=ssh_ready,
+                           subnet_notes=subnet_notes)
 
 @app.route("/subnets/edit/<int:subnet_id>", methods=["GET", "POST"])
 @login_required
@@ -2419,6 +2495,241 @@ def set_user_timeout(user_id):
     except Exception as e:
         flash(f"Error updating timeout: {str(e)}", "error")
     return redirect(url_for("users"))
+
+# ─────────────────────────────────────────
+# Devices
+# ─────────────────────────────────────────
+@app.route("/devices")
+@login_required
+def devices():
+    try:
+        page = max(1, int(request.args.get("page", 1)))
+    except ValueError:
+        page = 1
+    search = sanitize_search(request.args.get("search", "").strip())
+    show_stale = request.args.get("stale", "0") == "1"
+    per_page = 50
+    stale_days = int(get_global_setting("stale_device_days", "30"))
+
+    devices_list = []
+    total = 0
+    try:
+        db = get_jen_db()
+        kdb = get_kea_db()
+        with db.cursor() as cur:
+            where = []
+            params = []
+            if search:
+                where.append("(d.mac LIKE %s OR d.device_name LIKE %s OR d.owner LIKE %s OR d.last_ip LIKE %s OR d.last_hostname LIKE %s)")
+                s = f"%{search}%"
+                params += [s, s, s, s, s]
+            if show_stale:
+                where.append(f"d.last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)")
+            where_str = " AND ".join(where) if where else "1=1"
+
+            cur.execute(f"SELECT COUNT(*) as cnt FROM devices d WHERE {where_str}", params)
+            total = cur.fetchone()["cnt"]
+            offset = (page - 1) * per_page
+            cur.execute(f"""
+                SELECT d.id, d.mac, d.device_name, d.owner, d.notes,
+                       d.first_seen, d.last_seen, d.last_ip, d.last_hostname, d.last_subnet_id,
+                       DATEDIFF(NOW(), d.last_seen) as days_since_seen
+                FROM devices d
+                WHERE {where_str}
+                ORDER BY d.last_seen DESC
+                LIMIT {per_page} OFFSET {offset}
+            """, params)
+            rows = cur.fetchall()
+
+            # Check which MACs have reservations
+            with kdb.cursor() as kcur:
+                for row in rows:
+                    mac_hex = row["mac"].replace(":", "")
+                    kcur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
+                    res = kcur.fetchone()
+                    row["has_reservation"] = bool(res)
+                    row["reservation_ip"] = res["ip"] if res else None
+                    row["subnet_name"] = SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "") if row["last_subnet_id"] else ""
+                    row["is_stale"] = row["days_since_seen"] >= stale_days
+                    devices_list.append(row)
+        db.close()
+        kdb.close()
+    except Exception as e:
+        logger.error(f"Devices error: {e}")
+        flash(f"Could not load device inventory: {str(e)}", "error")
+
+    pages = max(1, (total + per_page - 1) // per_page)
+    return render_template("devices.html", devices=devices_list, page=page, pages=pages,
+                           total=total, search=search, show_stale=show_stale,
+                           stale_days=stale_days, subnet_map=SUBNET_MAP)
+
+@app.route("/devices/edit/<int:device_id>", methods=["POST"])
+@login_required
+@admin_required
+def edit_device(device_id):
+    device_name = request.form.get("device_name", "").strip()[:200]
+    owner = request.form.get("owner", "").strip()[:200]
+    notes = request.form.get("notes", "").strip()[:1000]
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("UPDATE devices SET device_name=%s, owner=%s, notes=%s WHERE id=%s",
+                        (device_name or None, owner or None, notes or None, device_id))
+        db.commit()
+        db.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route("/devices/delete/<int:device_id>", methods=["POST"])
+@login_required
+@admin_required
+def delete_device(device_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
+        db.commit()
+        db.close()
+        flash("Device removed from inventory.", "success")
+        audit("DELETE_DEVICE", str(device_id), "Removed from device inventory")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("devices"))
+
+@app.route("/devices/settings", methods=["POST"])
+@login_required
+@admin_required
+def save_device_settings():
+    stale_days = request.form.get("stale_days", "30").strip()
+    if not stale_days.isdigit() or not (1 <= int(stale_days) <= 365):
+        flash("Stale threshold must be between 1 and 365 days.", "error")
+        return redirect(url_for("devices"))
+    set_global_setting("stale_device_days", stale_days)
+    flash(f"Stale device threshold set to {stale_days} days.", "success")
+    return redirect(url_for("devices"))
+
+# ─────────────────────────────────────────
+# Reservations — bulk actions + stale detection
+# ─────────────────────────────────────────
+@app.route("/reservations/bulk-delete", methods=["POST"])
+@login_required
+@admin_required
+def bulk_delete_reservations():
+    host_ids = request.form.getlist("host_ids[]")
+    if not host_ids:
+        flash("No reservations selected.", "error")
+        return redirect(url_for("reservations"))
+
+    deleted = 0
+    errors = 0
+    try:
+        db = get_kea_db()
+        jdb = get_jen_db()
+        with db.cursor() as cur:
+            for host_id in host_ids:
+                try:
+                    host_id = int(host_id)
+                    cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+                    host = cur.fetchone()
+                    if host:
+                        mac = format_mac(host["dhcp_identifier"])
+                        result = kea_command("reservation-del", arguments={
+                            "subnet-id": host["dhcp4_subnet_id"],
+                            "identifier-type": "hw-address", "identifier": mac
+                        })
+                        if result.get("result") == 0:
+                            with jdb.cursor() as jcur:
+                                jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
+                            deleted += 1
+                        else:
+                            errors += 1
+                except Exception:
+                    errors += 1
+        db.close()
+        jdb.commit()
+        jdb.close()
+    except Exception as e:
+        flash(f"Bulk delete error: {str(e)}", "error")
+        return redirect(url_for("reservations"))
+
+    flash(f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""), 
+          "success" if errors == 0 else "warning")
+    audit("BULK_DELETE_RESERVATIONS", "reservations", f"Deleted={deleted} Errors={errors}")
+    return redirect(url_for("reservations"))
+
+@app.route("/reservations/bulk-export", methods=["POST"])
+@login_required
+def bulk_export_reservations():
+    host_ids = request.form.getlist("host_ids[]")
+    if not host_ids:
+        flash("No reservations selected.", "error")
+        return redirect(url_for("reservations"))
+    try:
+        db = get_kea_db()
+        jdb = get_jen_db()
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
+        with db.cursor() as cur:
+            for host_id in host_ids:
+                try:
+                    host_id = int(host_id)
+                    cur.execute("""
+                        SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
+                               h.dhcp_identifier, h.hostname, h.dhcp4_subnet_id
+                        FROM hosts h WHERE h.host_id=%s
+                    """, (host_id,))
+                    row = cur.fetchone()
+                    if row:
+                        mac = format_mac(row["dhcp_identifier"])
+                        cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
+                        dns_row = cur.fetchone()
+                        dns = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
+                        with jdb.cursor() as jcur:
+                            jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (host_id,))
+                            note_row = jcur.fetchone()
+                            notes = note_row["notes"] if note_row else ""
+                        subnet_name = SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "")
+                        writer.writerow([row["ip"], mac, row["hostname"] or "", row["dhcp4_subnet_id"],
+                                         subnet_name, dns, notes])
+                except Exception:
+                    pass
+        db.close()
+        jdb.close()
+        output.seek(0)
+        audit("BULK_EXPORT_RESERVATIONS", "reservations", f"Exported {len(host_ids)} selected")
+        return Response(output.getvalue(), mimetype="text/csv",
+                        headers={"Content-Disposition": "attachment;filename=reservations_selected.csv"})
+    except Exception as e:
+        flash(f"Export error: {str(e)}", "error")
+        return redirect(url_for("reservations"))
+
+# ─────────────────────────────────────────
+# Subnet notes
+# ─────────────────────────────────────────
+@app.route("/subnets/save-note", methods=["POST"])
+@login_required
+@admin_required
+def save_subnet_note():
+    try:
+        subnet_id = int(request.form.get("subnet_id"))
+    except (ValueError, TypeError):
+        return jsonify({"ok": False, "error": "Invalid subnet ID"})
+    notes = request.form.get("notes", "").strip()[:1000]
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO subnet_notes (subnet_id, notes) VALUES (%s, %s)
+                ON DUPLICATE KEY UPDATE notes=%s, updated_at=NOW()
+            """, (subnet_id, notes, notes))
+        db.commit()
+        db.close()
+        audit("SAVE_SUBNET_NOTE", str(subnet_id), f"Note updated")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 # ─────────────────────────────────────────
 # API

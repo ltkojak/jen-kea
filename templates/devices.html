@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Device Inventory{% endblock %}
+{% block content %}
+<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div>
+        <h1>📱 Device Inventory</h1>
+        <p>All MAC addresses seen on your network — {{ total }} device{{ 's' if total != 1 else '' }} total</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <form method="POST" action="/devices/settings" style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:12px;color:var(--text-muted);">Stale after</span>
+            <input type="number" name="stale_days" value="{{ stale_days }}" min="1" max="365" style="width:70px;">
+            <span style="font-size:12px;color:var(--text-muted);">days</span>
+            <button type="submit" class="btn btn-sm btn-secondary">Set</button>
+        </form>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div class="filter-bar">
+    <form method="GET" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:260px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
+            <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %} onchange="this.form.submit()">
+            Show stale only ({{ stale_days }}+ days inactive)
+        </label>
+        <button type="submit" class="btn btn-sm btn-primary">Search</button>
+        {% if search or show_stale %}<a href="/devices" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
+    </form>
+</div>
+
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table class="sortable">
+    <thead><tr>
+        <th data-sort>MAC Address</th>
+        <th data-sort>Device Name</th>
+        <th data-sort>Owner</th>
+        <th data-sort>Last IP</th>
+        <th data-sort>Hostname</th>
+        <th data-sort>Subnet</th>
+        <th data-sort>First Seen</th>
+        <th data-sort>Last Seen</th>
+        <th>Status</th>
+        <th>Actions</th>
+    </tr></thead>
+    <tbody>
+    {% for d in devices %}
+    <tr id="dev-row-{{ d.id }}">
+        <td class="mono">{{ d.mac }}</td>
+        <td>
+            <span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span>
+        </td>
+        <td>
+            <span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span>
+        </td>
+        <td class="mono">{{ d.last_ip or '—' }}</td>
+        <td>{{ d.last_hostname or '—' }}</td>
+        <td>
+            {% if d.subnet_name %}
+            <span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>
+            {% else %}—{% endif %}
+        </td>
+        <td class="mono" style="color:var(--text-muted);font-size:11px;">
+            {{ d.first_seen.strftime('%Y-%m-%d') if d.first_seen else '—' }}
+        </td>
+        <td class="mono" style="font-size:11px;{% if d.is_stale %}color:var(--warning);{% endif %}">
+            {{ d.last_seen.strftime('%Y-%m-%d %H:%M') if d.last_seen else '—' }}
+        </td>
+        <td>
+            {% if d.is_stale %}
+            <span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">⚠ Stale</span>
+            {% elif d.has_reservation %}
+            <span class="badge badge-reserved" title="Has static reservation: {{ d.reservation_ip }}">📌 Reserved</span>
+            {% else %}
+            <span class="badge badge-dynamic">● Dynamic</span>
+            {% endif %}
+        </td>
+        <td>
+            <div style="display:flex;gap:4px;">
+                {% if current_user.role == 'admin' %}
+                <button class="btn btn-sm btn-secondary" onclick="openEditModal({{ d.id }}, '{{ d.mac }}', {{ d.device_name|tojson if d.device_name else 'null' }}, {{ d.owner|tojson if d.owner else 'null' }}, {{ d.notes|tojson if d.notes else 'null' }})">✏️</button>
+                <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return confirm('Remove {{ d.mac }} from inventory?')">
+                    <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+                </form>
+                {% endif %}
+                {% if not d.has_reservation %}
+                <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="btn btn-sm btn-secondary" title="Create reservation">📌</a>
+                {% endif %}
+            </div>
+        </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">
+        {% if show_stale %}No stale devices found (none inactive for {{ stale_days }}+ days).
+        {% elif search %}No devices matching "{{ search }}".
+        {% else %}No devices in inventory yet. Devices appear automatically as DHCP leases are issued.{% endif %}
+    </td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+
+{% if pages > 1 %}
+<div class="pagination">
+    {% if page > 1 %}<a href="?page={{ page-1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}">‹ Prev</a>{% endif %}
+    {% for p in range(1, pages+1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
+    <a href="?page={{ p }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}">{{ p }}</a>
+    {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
+    {% endfor %}
+    {% if page < pages %}<a href="?page={{ page+1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}">Next ›</a>{% endif %}
+</div>
+{% endif %}
+
+<!-- Edit Modal -->
+<div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:420px;max-width:95vw;">
+        <h3 style="margin-bottom:4px;">Edit Device</h3>
+        <div id="editMac" class="mono" style="color:var(--text-muted);font-size:12px;margin-bottom:20px;"></div>
+        <div class="form-group">
+            <label>Device Name</label>
+            <input type="text" id="editDeviceName" placeholder="e.g. Living Room TV" maxlength="200">
+        </div>
+        <div class="form-group">
+            <label>Owner</label>
+            <input type="text" id="editOwner" placeholder="e.g. Matthew" maxlength="200">
+        </div>
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea id="editNotes" rows="3" placeholder="Any notes about this device..." maxlength="1000" style="resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
+            <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveDevice()">Save</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+let editingId = null;
+
+function openEditModal(id, mac, name, owner, notes) {
+    editingId = id;
+    document.getElementById('editMac').textContent = mac;
+    document.getElementById('editDeviceName').value = name || '';
+    document.getElementById('editOwner').value = owner || '';
+    document.getElementById('editNotes').value = notes || '';
+    const modal = document.getElementById('editModal');
+    modal.style.display = 'flex';
+    document.getElementById('editDeviceName').focus();
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+    editingId = null;
+}
+
+function saveDevice() {
+    if (!editingId) return;
+    const name = document.getElementById('editDeviceName').value.trim();
+    const owner = document.getElementById('editOwner').value.trim();
+    const notes = document.getElementById('editNotes').value.trim();
+    fetch(`/devices/edit/${editingId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `device_name=${encodeURIComponent(name)}&owner=${encodeURIComponent(owner)}&notes=${encodeURIComponent(notes)}`
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            document.getElementById(`dname-${editingId}`).textContent = name || '—';
+            document.getElementById(`downer-${editingId}`).textContent = owner || '—';
+            closeEditModal();
+        } else {
+            alert('Error saving: ' + data.error);
+        }
+    });
+}
+
+// Close modal on backdrop click
+document.getElementById('editModal').addEventListener('click', function(e) {
+    if (e.target === this) closeEditModal();
+});
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeEditModal();
+});
+{% endblock %}

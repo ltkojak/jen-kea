@@ -1,5 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Reservations{% endblock %}
+{% block scripts %}
+function toggleAll(cb) {
+    document.querySelectorAll('.row-checkbox').forEach(c => c.checked = cb.checked);
+    updateCount();
+}
+function updateCount() {
+    const n = document.querySelectorAll('.row-checkbox:checked').length;
+    const el = document.getElementById('selectedCount');
+    if (el) el.textContent = n + ' selected';
+    const all = document.getElementById('selectAll');
+    if (all) {
+        const total = document.querySelectorAll('.row-checkbox').length;
+        all.indeterminate = n > 0 && n < total;
+        all.checked = n === total && total > 0;
+    }
+}
+function confirmBulk(action) {
+    const n = document.querySelectorAll('.row-checkbox:checked').length;
+    if (n === 0) { alert('No reservations selected.'); return false; }
+    if (action === 'delete') return confirm(`Delete ${n} reservation(s)? This cannot be undone.`);
+    return true;
+}
+{% endblock %}
 {% block content %}
 <div class="page-header">
     <h1>📌 Reservations</h1>
