@@ -4,7 +4,7 @@ A full-featured web management interface for [ISC Kea DHCP Server](https://www.i
 
 Stork is designed for large enterprise deployments with teams of network engineers. It lacks the day-to-day conveniences that matter in smaller environments: one-click lease conversion, bulk reservation management, device tracking, multi-channel alerts, and a UI that doesn't require a manual to navigate. Jen fills that gap.
 
-![Version](https://img.shields.io/badge/Version-1.5.0-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-2.0.1-blue?style=flat)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)
 ![Flask](https://img.shields.io/badge/Flask-3.0-green?style=flat)
 ![License](https://img.shields.io/badge/License-GPL%20v3-blue?style=flat)
@@ -58,6 +58,13 @@ Stork is designed for large enterprise deployments with teams of network enginee
 - Per-channel enable/disable with independent alert type selection
 - Alert delivery log
 
+**🖥️ Kea Servers**
+- Single server status with version, role, and SSH restart
+- Multi-server / HA support — connect to primary, standby, and peer servers
+- HA state visibility (hot-standby, load-balancing, partner-down, etc.)
+- Subnet config changes applied to all servers simultaneously
+- Configure additional servers via UI — no manual config file editing required
+
 **🔗 DDNS Status**
 - Recent Technitium DNS update log (read via SSH from Kea server)
 - Hostname lookup via Technitium API
@@ -95,7 +102,7 @@ Stork is designed for large enterprise deployments with teams of network enginee
 ### Option 1 — Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v1.5.0.tar.gz
+tar xzf jen-v2.0.1.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -128,7 +135,7 @@ docker compose -f docker-compose.mysql.yml up -d
 sudo apt install -y python3-pip mariadb-client-core openssh-client
 sudo pip3 install flask flask-login pymysql requests --break-system-packages
 
-tar xzf jen-v1.5.0.tar.gz && cd jen
+tar xzf jen-v2.0.1.tar.gz && cd jen
 sudo mkdir -p /opt/jen /opt/jen/static /etc/jen /etc/jen/ssl /etc/jen/ssh
 sudo cp jen.py /opt/jen/jen.py
 sudo cp -r templates /opt/jen/templates
@@ -209,7 +216,7 @@ forward_zone = your.domain.com
 ## Upgrading
 
 ```bash
-tar xzf jen-vX.X.X.tar.gz
+tar xzf jen-v2.0.1.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -221,7 +228,7 @@ Select bare metal → keep existing config. Your config, SSL certificates, SSH k
 ## Updating from Git
 
 ```bash
-cd ~/jen-kea
+cd ~/jen-kea  # or wherever you cloned the repo
 git pull
 sudo cp jen.py /opt/jen/jen.py
 sudo cp -r templates/* /opt/jen/templates/
@@ -234,7 +241,7 @@ Or run `sudo ./install.sh` for a full guided upgrade.
 
 ## SSH Setup for Subnet Editing
 
-1. Go to **Settings → Infrastructure → SSH Configuration → Generate SSH Key**
+1. Go to **Settings → Infrastructure → SSH Configuration → Generate SSH Key** (or Regenerate SSH Key if already exists)
 2. Copy the public key shown
 3. On your Kea server: `echo "ssh-rsa AAAA... jen@your-jen-server" >> ~/.ssh/authorized_keys`
 4. Add sudoers on your Kea server:
@@ -280,6 +287,8 @@ mysql -u jen -p -h your-db-server jen -e "UPDATE users SET password=SHA2('newpas
 ## Background
 
 Jen was built by Matthew Thibodeau, an IT engineer with over two decades of experience, with the assistance of Claude (Anthropic). After deploying ISC Kea DHCP in his home lab, he found that ISC Stork fell short of what he needed for day-to-day management — so he built Jen to fill that gap.
+
+Jen is actively developed and versioned. See [Releases](https://github.com/ltkojak/jen-kea/releases) for the full changelog.
 
 ---
 
