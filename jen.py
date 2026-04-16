@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.0.1"
+JEN_VERSION = "2.0.2"
 
 # ─────────────────────────────────────────
 # App setup
