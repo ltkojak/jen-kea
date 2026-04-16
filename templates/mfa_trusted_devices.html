@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Trusted Devices{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📱 Trusted Devices</h1>
+    <p>Devices where you've chosen to skip MFA verification</p>
+</div>
+
+<div class="card">
+    {% if devices %}
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>Device</th>
+            <th>Trusted Since</th>
+            <th>Last Used</th>
+            <th>Expires</th>
+            <th>Action</th>
+        </tr></thead>
+        <tbody>
+        {% for d in devices %}
+        <tr>
+            <td>{{ d.device_name or 'Unknown Device' }}</td>
+            <td class="mono" style="font-size:12px;">{{ d.created_at.strftime('%Y-%m-%d') if d.created_at else '—' }}</td>
+            <td class="mono" style="font-size:12px;">{{ d.last_used.strftime('%Y-%m-%d %H:%M') if d.last_used else '—' }}</td>
+            <td style="color:var(--text-muted);font-size:12px;">{{ d.expires_at.strftime('%Y-%m-%d') if d.expires_at else 'Never' }}</td>
+            <td>
+                <form method="POST" action="/mfa/revoke-device/{{ d.id }}" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Revoke this trusted device?')">Revoke</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    <div style="margin-top:16px;">
+        <form method="POST" action="/mfa/revoke-all-devices" onsubmit="return confirm('Revoke ALL trusted devices? You will need to complete MFA on every device next login.')">
+            <button type="submit" class="btn btn-danger">Revoke All Trusted Devices</button>
+        </form>
+    </div>
+    {% else %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No trusted devices. When you log in with MFA and choose to remember the device, it will appear here.</div>
+    {% endif %}
+</div>
+
+<a href="/mfa/enroll" class="btn btn-secondary">← Back to MFA Settings</a>
+{% endblock %}

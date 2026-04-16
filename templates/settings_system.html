@@ -12,6 +12,38 @@
     <a href="/settings/infrastructure" class="settings-tab">🖧 Infrastructure</a>
 </div>
 
+<!-- MFA Settings -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🔐 Multi-Factor Authentication</span>
+        {% if mfa_mode == 'off' %}
+        <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
+        {% elif mfa_mode == 'optional' %}
+        <span class="badge badge-dynamic">Optional</span>
+        {% elif mfa_mode == 'required_admins' %}
+        <span class="badge badge-reserved">Required for Admins</span>
+        {% else %}
+        <span class="badge badge-reserved">Required for All</span>
+        {% endif %}
+    </div>
+    <form method="POST" action="/settings/system/save-mfa-mode">
+        <div class="form-group">
+            <label>MFA Policy</label>
+            <select name="mfa_mode" style="max-width:280px;">
+                <option value="off" {% if mfa_mode=='off' %}selected{% endif %}>Off — MFA not required</option>
+                <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %}>Optional — users can enroll if they want</option>
+                <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %}>Required for Admins</option>
+                <option value="required_all" {% if mfa_mode=='required_all' %}selected{% endif %}>Required for All Users</option>
+            </select>
+            <div class="form-hint">When required, users without MFA enrolled will be forced to enroll on next login.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+            <button type="submit" class="btn btn-primary">Save MFA Policy</button>
+            <a href="/mfa/enroll" class="btn btn-secondary">🔐 My MFA Settings</a>
+        </div>
+    </form>
+</div>
+
 <!-- SSL Certificate -->
 <div class="card" style="grid-column:1/-1;">
     <div class="card-header">

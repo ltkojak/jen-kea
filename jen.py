@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.0.2"
+JEN_VERSION = "2.1.0"
 
 # ─────────────────────────────────────────
 # App setup
@@ -424,6 +424,57 @@ def init_jen_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS mfa_methods (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    method_type VARCHAR(20) NOT NULL,
+                    secret TEXT,
+                    name VARCHAR(100) DEFAULT 'Authenticator',
+                    enabled TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP NULL,
+                    INDEX idx_user (user_id),
+                    UNIQUE KEY unique_user_method (user_id, method_type, name)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mfa_backup_codes (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    code_hash VARCHAR(64) NOT NULL,
+                    used TINYINT(1) DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    used_at TIMESTAMP NULL,
+                    INDEX idx_user (user_id)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS mfa_trusted_devices (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    token_hash VARCHAR(64) NOT NULL,
+                    device_name VARCHAR(200),
+                    expires_at TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_user (user_id),
+                    INDEX idx_token (token_hash)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS webauthn_credentials (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    credential_id TEXT NOT NULL,
+                    public_key TEXT NOT NULL,
+                    sign_count INT DEFAULT 0,
+                    name VARCHAR(100) DEFAULT 'Passkey',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP NULL,
+                    INDEX idx_user (user_id)
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS lease_history (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     subnet_id INT NOT NULL,
@@ -609,6 +660,135 @@ def is_locked_out(ip, username):
     except Exception as e:
         logger.error(f"Rate limit check error: {e}")
         return False, 0
+
+# ─────────────────────────────────────────
+# MFA Engine
+# ─────────────────────────────────────────
+def get_mfa_mode():
+    return get_global_setting("mfa_mode", "off")  # off, optional, required_admins, required_all
+
+def user_needs_mfa(user):
+    mode = get_mfa_mode()
+    if mode == "off":
+        return False
+    if mode == "optional":
+        return False  # user chooses to enroll
+    if mode == "required_admins":
+        return user.role == "admin"
+    if mode == "required_all":
+        return True
+    return False
+
+def user_has_mfa(user_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (user_id,))
+            totp = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (user_id,))
+            passkeys = cur.fetchone()["cnt"]
+        db.close()
+        return (totp + passkeys) > 0
+    except Exception:
+        return False
+
+def generate_backup_codes(user_id):
+    """Generate 8 single-use backup codes."""
+    import secrets
+    codes = [secrets.token_hex(4).upper() + "-" + secrets.token_hex(4).upper() for _ in range(8)]
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
+            for code in codes:
+                cur.execute("INSERT INTO mfa_backup_codes (user_id, code_hash) VALUES (%s, %s)",
+                           (user_id, hashlib.sha256(code.encode()).hexdigest()))
+        db.commit()
+        db.close()
+    except Exception as e:
+        logger.error(f"Backup code generation error: {e}")
+    return codes
+
+def verify_backup_code(user_id, code):
+    code_hash = hashlib.sha256(code.strip().upper().encode()).hexdigest()
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id FROM mfa_backup_codes WHERE user_id=%s AND code_hash=%s AND used=0",
+                       (user_id, code_hash))
+            row = cur.fetchone()
+            if row:
+                cur.execute("UPDATE mfa_backup_codes SET used=1, used_at=NOW() WHERE id=%s", (row["id"],))
+                db.commit()
+                db.close()
+                return True
+        db.close()
+        return False
+    except Exception:
+        return False
+
+def verify_totp(user_id, code):
+    try:
+        import pyotp
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT secret FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
+                       (user_id,))
+            row = cur.fetchone()
+        db.close()
+        if not row:
+            return False
+        totp = pyotp.TOTP(row["secret"])
+        return totp.verify(code.strip(), valid_window=1)
+    except Exception as e:
+        logger.error(f"TOTP verify error: {e}")
+        return False
+
+def get_trusted_device_token(request):
+    return request.cookies.get("jen_trusted_device")
+
+def is_trusted_device(user_id, request):
+    token = get_trusted_device_token(request)
+    if not token:
+        return False
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT id FROM mfa_trusted_devices
+                WHERE user_id=%s AND token_hash=%s
+                AND (expires_at IS NULL OR expires_at > NOW())
+            """, (user_id, token_hash))
+            row = cur.fetchone()
+            if row:
+                cur.execute("UPDATE mfa_trusted_devices SET last_used=NOW() WHERE id=%s", (row["id"],))
+                db.commit()
+        db.close()
+        return bool(row)
+    except Exception:
+        return False
+
+def create_trusted_device_token(user_id, remember_days, device_name="Unknown Device"):
+    import secrets
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    expires_at = None
+    if remember_days and int(remember_days) > 0 and remember_days != "forever":
+        from datetime import timedelta
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=int(remember_days))).strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                INSERT INTO mfa_trusted_devices (user_id, token_hash, device_name, expires_at)
+                VALUES (%s, %s, %s, %s)
+            """, (user_id, token_hash, device_name, expires_at))
+        db.commit()
+        db.close()
+    except Exception as e:
+        logger.error(f"Trusted device error: {e}")
+    return token
 
 def get_global_setting(key, default=None):
     try:
@@ -1262,6 +1442,24 @@ def login():
         if row:
             clear_login_attempts(ip, username)
             user = User(row["id"], row["username"], row["role"], row["session_timeout"])
+
+            # Check if MFA is required and user has it enrolled
+            if user_has_mfa(row["id"]) or user_needs_mfa(user):
+                if user_has_mfa(row["id"]) and not is_trusted_device(row["id"], request):
+                    # Store pending auth in session and redirect to MFA
+                    session["mfa_pending_user_id"] = row["id"]
+                    session["mfa_pending_username"] = username
+                    session["mfa_next"] = request.args.get("next", url_for("dashboard"))
+                    return redirect(url_for("mfa_challenge"))
+                elif user_needs_mfa(user) and not user_has_mfa(row["id"]):
+                    # MFA required but not enrolled — force enrollment
+                    session["mfa_pending_user_id"] = row["id"]
+                    session["mfa_pending_username"] = username
+                    login_user(user)
+                    session["last_active"] = datetime.now(timezone.utc).isoformat()
+                    flash("MFA is required for your account. Please enroll now.", "warning")
+                    return redirect(url_for("mfa_enroll"))
+
             login_user(user)
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             audit("LOGIN", "auth", f"User {username} logged in from {ip}")
@@ -1301,6 +1499,282 @@ def logout():
     audit("LOGOUT", "auth", f"User {current_user.username} logged out")
     logout_user()
     return redirect(url_for("login"))
+
+# ─────────────────────────────────────────
+# MFA Routes
+# ─────────────────────────────────────────
+@app.route("/mfa/challenge", methods=["GET", "POST"])
+def mfa_challenge():
+    user_id = session.get("mfa_pending_user_id")
+    username = session.get("mfa_pending_username")
+    if not user_id:
+        return redirect(url_for("login"))
+
+    if request.method == "POST":
+        code = request.form.get("code", "").strip().replace(" ", "").replace("-", "")
+        remember = request.form.get("remember_device", "0")
+        method = request.form.get("method", "totp")
+
+        verified = False
+        if method == "backup":
+            verified = verify_backup_code(user_id, code)
+        else:
+            verified = verify_totp(user_id, code)
+
+        if verified:
+            try:
+                db = get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("SELECT id, username, role, session_timeout FROM users WHERE id=%s", (user_id,))
+                    row = cur.fetchone()
+                db.close()
+            except Exception as e:
+                flash("Database error.", "error")
+                return render_template("mfa_challenge.html", username=username)
+
+            if row:
+                user = User(row["id"], row["username"], row["role"], row["session_timeout"])
+                login_user(user)
+                session["last_active"] = datetime.now(timezone.utc).isoformat()
+                session.pop("mfa_pending_user_id", None)
+                session.pop("mfa_pending_username", None)
+                next_url = session.pop("mfa_next", url_for("dashboard"))
+                audit("LOGIN", "auth", f"User {username} logged in with MFA from {request.remote_addr}")
+
+                resp = redirect(next_url)
+                if remember and remember != "0":
+                    ua = request.headers.get("User-Agent", "Unknown")[:100]
+                    token = create_trusted_device_token(user_id, remember, ua)
+                    days = int(remember) if remember != "forever" else 36500
+                    resp.set_cookie("jen_trusted_device", token,
+                                   max_age=days * 86400,
+                                   secure=ssl_configured(),
+                                   httponly=True, samesite="Lax")
+                return resp
+        else:
+            flash("Invalid code. Try again.", "error")
+
+    # Check what methods are available
+    has_totp = False
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (user_id,))
+            has_totp = cur.fetchone()["cnt"] > 0
+        db.close()
+    except Exception:
+        pass
+
+    return render_template("mfa_challenge.html", username=username, has_totp=has_totp)
+
+@app.route("/mfa/enroll", methods=["GET", "POST"])
+@login_required
+def mfa_enroll():
+    import pyotp, qrcode, io, base64
+    user_id = current_user.id
+
+    if request.method == "POST":
+        action = request.form.get("action")
+
+        if action == "setup_totp":
+            secret = request.form.get("secret")
+            code = request.form.get("code", "").strip()
+            name = request.form.get("name", "Authenticator").strip()[:100]
+            totp = pyotp.TOTP(secret)
+            if totp.verify(code, valid_window=1):
+                try:
+                    db = get_jen_db()
+                    with db.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO mfa_methods (user_id, method_type, secret, name)
+                            VALUES (%s, 'totp', %s, %s)
+                            ON DUPLICATE KEY UPDATE secret=%s, enabled=1, name=%s
+                        """, (user_id, secret, name, secret, name))
+                    db.commit()
+                    db.close()
+                except Exception as e:
+                    flash(f"Error saving MFA: {str(e)}", "error")
+                    return redirect(url_for("mfa_enroll"))
+                codes = generate_backup_codes(user_id)
+                session["new_backup_codes"] = codes
+                flash("TOTP authenticator enrolled successfully.", "success")
+                audit("MFA_ENROLL", current_user.username, "TOTP enrolled")
+                return redirect(url_for("mfa_backup_codes"))
+            else:
+                flash("Invalid verification code. Make sure your authenticator time is synced.", "error")
+
+        elif action == "remove_totp":
+            mfa_id = request.form.get("mfa_id")
+            try:
+                db = get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (mfa_id, user_id))
+                db.commit()
+                db.close()
+                flash("Authenticator removed.", "success")
+                audit("MFA_REMOVE", current_user.username, "TOTP removed")
+            except Exception as e:
+                flash(f"Error: {str(e)}", "error")
+
+        elif action == "remove_passkey":
+            cred_id = request.form.get("cred_id")
+            try:
+                db = get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM webauthn_credentials WHERE id=%s AND user_id=%s", (cred_id, user_id))
+                db.commit()
+                db.close()
+                flash("Passkey removed.", "success")
+                audit("MFA_REMOVE", current_user.username, "Passkey removed")
+            except Exception as e:
+                flash(f"Error: {str(e)}", "error")
+
+        return redirect(url_for("mfa_enroll"))
+
+    # Generate new TOTP secret for enrollment
+    new_secret = pyotp.random_base32()
+    totp = pyotp.TOTP(new_secret)
+    app_name = "Jen DHCP"
+    provisioning_uri = totp.provisioning_uri(current_user.username, issuer_name=app_name)
+
+    # Generate QR code
+    qr = qrcode.QRCode(version=1, box_size=6, border=2)
+    qr.add_data(provisioning_uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    # Get existing methods
+    totp_methods = []
+    passkeys = []
+    backup_count = 0
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (user_id,))
+            totp_methods = cur.fetchall()
+            cur.execute("SELECT id, name, created_at, last_used FROM webauthn_credentials WHERE user_id=%s", (user_id,))
+            passkeys = cur.fetchall()
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (user_id,))
+            backup_count = cur.fetchone()["cnt"]
+        db.close()
+    except Exception as e:
+        logger.error(f"MFA enroll load error: {e}")
+
+    return render_template("mfa_enroll.html",
+                           new_secret=new_secret, qr_b64=qr_b64,
+                           totp_methods=totp_methods, passkeys=passkeys,
+                           backup_count=backup_count,
+                           provisioning_uri=provisioning_uri)
+
+@app.route("/mfa/backup-codes")
+@login_required
+def mfa_backup_codes():
+    codes = session.pop("new_backup_codes", None)
+    if not codes:
+        flash("No backup codes to display.", "error")
+        return redirect(url_for("mfa_enroll"))
+    return render_template("mfa_backup_codes.html", codes=codes)
+
+@app.route("/mfa/regenerate-backup-codes", methods=["POST"])
+@login_required
+def regenerate_backup_codes():
+    codes = generate_backup_codes(current_user.id)
+    session["new_backup_codes"] = codes
+    audit("MFA_BACKUP_REGEN", current_user.username, "Backup codes regenerated")
+    return redirect(url_for("mfa_backup_codes"))
+
+@app.route("/mfa/trusted-devices")
+@login_required
+def mfa_trusted_devices():
+    devices = []
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT id, device_name, expires_at, created_at, last_used
+                FROM mfa_trusted_devices WHERE user_id=%s
+                AND (expires_at IS NULL OR expires_at > NOW())
+                ORDER BY last_used DESC
+            """, (current_user.id,))
+            devices = cur.fetchall()
+        db.close()
+    except Exception as e:
+        flash(f"Error loading devices: {str(e)}", "error")
+    return render_template("mfa_trusted_devices.html", devices=devices)
+
+@app.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])
+@login_required
+def revoke_trusted_device(device_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE id=%s AND user_id=%s",
+                       (device_id, current_user.id))
+        db.commit()
+        db.close()
+        flash("Trusted device revoked.", "success")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("mfa_trusted_devices"))
+
+@app.route("/mfa/revoke-all-devices", methods=["POST"])
+@login_required
+def revoke_all_trusted_devices():
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (current_user.id,))
+        db.commit()
+        db.close()
+        flash("All trusted devices revoked.", "success")
+        audit("MFA_REVOKE_ALL", current_user.username, "All trusted devices revoked")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("mfa_trusted_devices"))
+
+# Admin MFA management
+@app.route("/users/reset-mfa/<int:user_id>", methods=["POST"])
+@login_required
+@admin_required
+def admin_reset_mfa(user_id):
+    if user_id == current_user.id:
+        flash("Use your own MFA settings page to manage your own MFA.", "error")
+        return redirect(url_for("users"))
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                flash("User not found.", "error")
+                return redirect(url_for("users"))
+            cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM webauthn_credentials WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
+        db.commit()
+        db.close()
+        flash(f"MFA reset for {row['username']}. They can now log in without MFA.", "success")
+        audit("ADMIN_RESET_MFA", row["username"], f"MFA cleared by {current_user.username}")
+    except Exception as e:
+        flash(f"Error resetting MFA: {str(e)}", "error")
+    return redirect(url_for("users"))
+
+@app.route("/settings/system/save-mfa-mode", methods=["POST"])
+@login_required
+@admin_required
+def save_mfa_mode():
+    mode = request.form.get("mfa_mode", "off")
+    if mode not in ("off", "optional", "required_admins", "required_all"):
+        flash("Invalid MFA mode.", "error")
+        return redirect(url_for("settings_system"))
+    set_global_setting("mfa_mode", mode)
+    flash(f"MFA mode set to: {mode.replace('_', ' ').title()}.", "success")
+    audit("SAVE_SETTINGS", "mfa_mode", f"mode={mode}")
+    return redirect(url_for("settings_system"))
 
 # ─────────────────────────────────────────
 # Dashboard
@@ -2444,6 +2918,7 @@ def settings_system():
     except Exception:
         pass
 
+    mfa_mode = get_mfa_mode()
     return render_template("settings_system.html",
                            ssl_configured=ssl_configured(), cert_info=cert_info,
                            has_favicon=os.path.exists(FAVICON_PATH),
@@ -2454,7 +2929,8 @@ def settings_system():
                            rl=rl_settings, rl_active_ips=rl_active_ips,
                            rl_attempts_1h=rl_attempts_1h,
                            jen_version=JEN_VERSION,
-                           kea_version=kea_version)
+                           kea_version=kea_version,
+                           mfa_mode=mfa_mode)
 
 @app.route("/settings/alerts")
 @login_required
@@ -3191,12 +3667,21 @@ def users():
         with db.cursor() as cur:
             cur.execute("SELECT id, username, role, session_timeout, created_at FROM users ORDER BY username")
             all_users = cur.fetchall()
+            # Add MFA status
+            for u in all_users:
+                cur.execute("""
+                    SELECT
+                        (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) +
+                        (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as mfa_count
+                """, (u["id"], u["id"]))
+                u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
         db.close()
     except Exception as e:
         flash(f"Could not load users: {str(e)}", "error")
         all_users = []
     global_timeout = get_global_setting("session_timeout_minutes", "60")
-    return render_template("users.html", users=all_users, global_timeout=global_timeout)
+    mfa_mode = get_mfa_mode()
+    return render_template("users.html", users=all_users, global_timeout=global_timeout, mfa_mode=mfa_mode)
 
 @app.route("/users/add", methods=["POST"])
 @login_required

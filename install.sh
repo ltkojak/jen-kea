@@ -35,7 +35,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="2.0.2"
+JEN_VERSION="2.1.0"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"
@@ -241,14 +241,14 @@ install_dependencies() {
 
     info "Checking Python packages..."
     MISSING_PKGS=()
-    for pkg in flask flask_login pymysql requests; do
+    for pkg in flask flask_login pymysql requests pyotp qrcode authlib; do
         python3 -c "import ${pkg}" 2>/dev/null || MISSING_PKGS+=("${pkg/-/_}")
     done
 
     if [[ ${#MISSING_PKGS[@]} -gt 0 ]]; then
         info "Installing missing packages: ${MISSING_PKGS[*]}"
-        pip3 install -q flask flask-login pymysql requests --break-system-packages 2>/dev/null || \
-        pip3 install -q flask flask-login pymysql requests
+        pip3 install -q flask flask-login pymysql requests "pyotp" "qrcode[pil]" "authlib" --break-system-packages 2>/dev/null || \
+        pip3 install -q flask flask-login pymysql requests pyotp "qrcode[pil]" authlib
         success "Python packages installed."
     else
         success "Python packages already installed."

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}MFA Enrollment{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔐 Two-Factor Authentication</h1>
+    <p>Secure your account with an additional verification step</p>
+</div>
+
+<!-- Current methods -->
+{% if totp_methods or passkeys %}
+<div class="card">
+    <div class="card-header"><span class="card-title">✅ Enrolled Methods</span></div>
+    {% for m in totp_methods %}
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+        <div>
+            <strong>🔢 {{ m.name }}</strong>
+            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ m.created_at.strftime('%Y-%m-%d') if m.created_at else '' }} · Last used {{ m.last_used.strftime('%Y-%m-%d') if m.last_used else 'never' }}</div>
+        </div>
+        <form method="POST"><input type="hidden" name="action" value="remove_totp"><input type="hidden" name="mfa_id" value="{{ m.id }}">
+            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove this authenticator?')">Remove</button>
+        </form>
+    </div>
+    {% endfor %}
+    {% for p in passkeys %}
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+        <div>
+            <strong>🔑 {{ p.name }}</strong>
+            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ p.created_at.strftime('%Y-%m-%d') if p.created_at else '' }} · Last used {{ p.last_used.strftime('%Y-%m-%d') if p.last_used else 'never' }}</div>
+        </div>
+        <form method="POST"><input type="hidden" name="action" value="remove_passkey"><input type="hidden" name="cred_id" value="{{ p.id }}">
+            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove this passkey?')">Remove</button>
+        </form>
+    </div>
+    {% endfor %}
+    <div style="margin-top:16px;display:flex;gap:8px;">
+        <a href="/mfa/trusted-devices" class="btn btn-secondary btn-sm">📱 Manage Trusted Devices</a>
+        {% if backup_count > 0 %}
+        <span style="font-size:13px;color:var(--text-muted);align-self:center;">{{ backup_count }} backup codes remaining</span>
+        {% endif %}
+        <form method="POST" action="/mfa/regenerate-backup-codes" style="display:inline;">
+            <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Regenerate backup codes? Your old codes will be invalidated.')">🔄 New Backup Codes</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<!-- Enroll TOTP -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔢 Enroll Authenticator App (TOTP)</span></div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Works with Google Authenticator, Authy, 1Password, Bitwarden, and any TOTP app.</p>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start;">
+        <div>
+            <img src="data:image/png;base64,{{ qr_b64 }}" style="border:8px solid white;border-radius:4px;width:180px;height:180px;">
+            <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:6px;">Scan with your app</div>
+        </div>
+        <div>
+            <div style="margin-bottom:12px;">
+                <div class="stat-label" style="margin-bottom:4px;">Or enter manually:</div>
+                <div class="mono" style="background:var(--surface2);padding:8px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);word-break:break-all;">{{ new_secret }}</div>
+            </div>
+            <form method="POST">
+                <input type="hidden" name="action" value="setup_totp">
+                <input type="hidden" name="secret" value="{{ new_secret }}">
+                <div class="form-group">
+                    <label>Device Name (optional)</label>
+                    <input type="text" name="name" placeholder="Work Phone, Home Authenticator..." style="margin-bottom:8px;">
+                </div>
+                <div class="form-group">
+                    <label>Verification Code</label>
+                    <input type="text" name="code" maxlength="6" inputmode="numeric" placeholder="Enter 6-digit code" autofocus style="letter-spacing:4px;font-size:18px;text-align:center;">
+                    <div class="form-hint">Enter the code shown in your authenticator app to confirm enrollment</div>
+                </div>
+                <button type="submit" class="btn btn-primary">Enroll Authenticator</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Passkeys info -->
+<div class="card" style="border-style:dashed;opacity:0.7;">
+    <div class="card-header"><span class="card-title">🔑 Passkeys (Coming Soon)</span></div>
+    <p style="color:var(--text-muted);font-size:13px;">Passkey support using WebAuthn/FIDO2 is planned for a future update. Passkeys work with Keeper, 1Password, iCloud Keychain, Windows Hello, and hardware security keys like YubiKey.</p>
+</div>
+
+{% endblock %}

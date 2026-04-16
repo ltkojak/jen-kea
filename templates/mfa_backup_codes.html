@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Backup Codes{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔑 Backup Recovery Codes</h1>
+    <p>Save these codes somewhere safe — they can be used if you lose access to your authenticator</p>
+</div>
+
+<div class="card">
+    <div style="background:rgba(243,156,18,0.1);border:1px solid rgba(243,156,18,0.3);border-radius:var(--radius);padding:12px 16px;margin-bottom:20px;color:var(--warning);font-size:13px;">
+        ⚠️ <strong>Save these codes now.</strong> They will only be shown once. Each code can only be used one time.
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px;">
+    {% for code in codes %}
+    <div class="mono" style="background:var(--surface2);padding:10px 16px;border-radius:var(--radius);font-size:14px;letter-spacing:1px;border:1px solid var(--border);text-align:center;">{{ code }}</div>
+    {% endfor %}
+    </div>
+
+    <div style="display:flex;gap:8px;">
+        <button onclick="copyAll()" class="btn btn-secondary">📋 Copy All</button>
+        <button onclick="printCodes()" class="btn btn-secondary">🖨️ Print</button>
+        <a href="/mfa/enroll" class="btn btn-primary">✓ I've saved these codes</a>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+function copyAll() {
+    const codes = {{ codes | tojson }};
+    navigator.clipboard.writeText(codes.join('\n')).then(() => alert('Codes copied to clipboard'));
+}
+function printCodes() { window.print(); }
+{% endblock %}
