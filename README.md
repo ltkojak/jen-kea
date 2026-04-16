@@ -4,7 +4,7 @@ A full-featured web management interface for [ISC Kea DHCP Server](https://www.i
 
 Stork is designed for large enterprise deployments with teams of network engineers. It lacks the day-to-day conveniences that matter in smaller environments: one-click lease conversion, bulk reservation management, device tracking, multi-channel alerts, and a UI that doesn't require a manual to navigate. Jen fills that gap.
 
-![Version](https://img.shields.io/badge/Version-2.0.1-blue?style=flat)
+![Version](https://img.shields.io/badge/Version-2.1.0-blue?style=flat)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)
 ![Flask](https://img.shields.io/badge/Flask-3.0-green?style=flat)
 ![License](https://img.shields.io/badge/License-GPL%20v3-blue?style=flat)
@@ -72,8 +72,16 @@ Stork is designed for large enterprise deployments with teams of network enginee
 **📝 Audit Log**
 - Every change tracked with user, timestamp, and source IP
 
+**🔐 Security & MFA**
+- TOTP two-factor authentication — works with Google Authenticator, Authy, 1Password, Bitwarden, and any TOTP app
+- Backup recovery codes — 8 single-use codes generated at enrollment
+- Trusted device remembering — skip MFA for 24h, 30 days, 60 days, 90 days, or forever
+- MFA policy — Off, Optional, Required for Admins, or Required for All
+- Admin can reset any user's MFA from the Users page
+- Passkeys (WebAuthn/FIDO2) coming in a future release
+
 **⚙️ Settings**
-- **System** — HTTPS/SSL certificate upload, session timeout, login rate limiting, custom icon
+- **System** — HTTPS/SSL certificate upload, session timeout, login rate limiting, MFA policy, custom icon
 - **Alerts** — All alert channel configuration and message templates
 - **Infrastructure** — Kea API, databases, SSH, subnet map, DDNS — all editable via UI without touching config files
 
@@ -102,7 +110,7 @@ Stork is designed for large enterprise deployments with teams of network enginee
 ### Option 1 — Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v2.0.1.tar.gz
+tar xzf jen-v2.1.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -135,7 +143,7 @@ docker compose -f docker-compose.mysql.yml up -d
 sudo apt install -y python3-pip mariadb-client-core openssh-client
 sudo pip3 install flask flask-login pymysql requests --break-system-packages
 
-tar xzf jen-v2.0.1.tar.gz && cd jen
+tar xzf jen-v2.1.0.tar.gz && cd jen
 sudo mkdir -p /opt/jen /opt/jen/static /etc/jen /etc/jen/ssl /etc/jen/ssh
 sudo cp jen.py /opt/jen/jen.py
 sudo cp -r templates /opt/jen/templates
@@ -216,7 +224,7 @@ forward_zone = your.domain.com
 ## Upgrading
 
 ```bash
-tar xzf jen-v2.0.1.tar.gz
+tar xzf jen-v2.1.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
