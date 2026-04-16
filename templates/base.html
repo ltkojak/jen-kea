@@ -136,6 +136,24 @@
         .ip-reserved { background: #1a3a1a; color: var(--success); border-color: #2ecc7133; }
         .ip-cell:hover { opacity: 0.8; }
 
+        /* Nav dropdowns - checkbox hack for iOS/mobile reliability */
+        .nav-dd-toggle { display:none; }
+        .nav-dropdown { position:relative; display:inline-block; }
+        .nav-dropbtn { background:none; border:none; color:var(--text-muted); padding:6px 10px; border-radius:var(--radius); font-size:13px; cursor:pointer; display:flex; align-items:center; gap:4px; font-family:inherit; text-decoration:none; -webkit-tap-highlight-color:transparent; touch-action:manipulation; user-select:none; -webkit-user-select:none; }
+        .nav-dropbtn:hover, .nav-dropbtn.active { background:var(--surface2); color:var(--text); }
+        .nav-caret { font-size:9px; opacity:0.6; }
+        .nav-dd-toggle:checked ~ .nav-dropdown-content { display:block; }
+        .nav-dropdown-content { display:none; position:absolute; top:calc(100% + 6px); left:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); min-width:180px; box-shadow:0 8px 24px rgba(0,0,0,0.4); z-index:200; overflow:hidden; }
+        .nav-dropdown-right { left:auto; right:0; }
+        .nav-dropdown-content a { display:block; padding:8px 14px; color:var(--text-muted); font-size:13px; text-decoration:none; }
+        .nav-dropdown-content a:hover, .nav-dropdown-content a.active { background:var(--surface2); color:var(--text); }
+        .nav-dropdown-divider { height:1px; background:var(--border); margin:4px 0; }
+        .nav-dropdown-header { padding:10px 14px 6px; }
+        /* User avatar */
+        .nav-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#0077b6,#00b4d8); color:#fff; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
+        .nav-avatar:hover { opacity:0.9; }
+        .nav-avatar-wrap .nav-dropdown-content { min-width:200px; }
+
         /* Settings sub-tabs */
         .settings-tabs { display:flex; gap:2px; margin-bottom:24px; border-bottom:2px solid var(--border); padding-bottom:0; }
         .settings-tab { padding:8px 18px; font-size:13px; font-weight:500; color:var(--text-muted); border-radius:6px 6px 0 0; text-decoration:none; border:1px solid transparent; border-bottom:none; transition:all 0.15s; }
@@ -144,36 +162,196 @@
 
         /* Responsive */
         @media (max-width: 768px) {
-            .nav { overflow-x: auto; }
             .container { padding: 16px 12px; }
             .stat-grid { grid-template-columns: 1fr 1fr; }
+        }
+
+        /* ── Mobile hamburger nav ── */
+        .nav-hamburger-toggle { display:none; }
+        .nav-hamburger-btn {
+            display:none;
+            background:none; border:none; cursor:pointer;
+            font-size:22px; color:var(--text); padding:4px 8px;
+            -webkit-tap-highlight-color:transparent;
+            touch-action:manipulation;
+            line-height:1;
+        }
+        .nav-mobile-panel {
+            display:none;
+            position:fixed; top:48px; left:0; right:0; bottom:0;
+            background:var(--surface); z-index:999;
+            overflow-y:auto; padding:8px 0 32px;
+            border-top:1px solid var(--border);
+        }
+        .nav-mobile-panel a {
+            display:block; padding:14px 24px;
+            color:var(--text); font-size:15px; text-decoration:none;
+            border-bottom:1px solid var(--border);
+            touch-action:manipulation; -webkit-tap-highlight-color:rgba(0,0,0,0);
+            cursor:pointer;
+        }
+        .nav-mobile-panel a:active { background:var(--surface2); }
+        .nav-mobile-panel a.active { color:var(--primary); }
+        .nav-mobile-divider {
+            height:1px; background:var(--border);
+            margin:4px 0;
+        }
+        .nav-mobile-section {
+            padding:8px 24px 4px;
+            font-size:11px; font-weight:600; letter-spacing:0.08em;
+            color:var(--text-muted); text-transform:uppercase;
+        }
+        .nav-mobile-panel a.nav-mobile-logout { color:var(--danger); }
+        .nav-hamburger-toggle:checked ~ .nav-mobile-panel { display:block; }
+        .nav-hamburger-toggle:checked + .nav-hamburger-btn { color:var(--primary); }
+
+        @media (max-width: 768px) {
+            /* Hide desktop nav items, show hamburger */
+            .nav-desktop { display:none !important; }
+            .nav-right-desktop { display:none !important; }
+            .nav-hamburger-btn { display:flex; align-items:center; justify-content:center; }
+            .nav { position:relative; }
+        }
+        @media (min-width: 769px) {
+            /* Hide mobile elements on desktop */
+            .nav-hamburger-btn { display:none !important; }
+            .nav-mobile-panel { display:none !important; }
         }
     </style>
 </head>
 <body>
-<nav class="nav">
-    <a href="/" class="nav-brand">Jen <span>The Kea DHCP Management Console</span></a>
+<nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
+    <a href="/" class="nav-brand">{{ branding_name }} <span>v{{ jen_version }}</span></a>
+
     {% if current_user.is_authenticated %}
-    <a href="/" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
-    <a href="/leases" class="{% if request.endpoint in ['leases','ipmap'] %}active{% endif %}">📋 Leases</a>
-    <a href="/reservations" class="{% if request.endpoint in ['reservations','add_reservation','edit_reservation'] %}active{% endif %}">📌 Reservations</a>
-    <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
-    <a href="/ddns" class="{% if request.endpoint == 'ddns' %}active{% endif %}">🔗 DDNS</a>
-    <a href="/servers" class="{% if request.endpoint in ['servers'] %}active{% endif %}">🖥️ Servers</a>
-    <a href="/devices" class="{% if request.endpoint in ['devices'] %}active{% endif %}">📱 Devices</a>
-    <a href="/reports" class="{% if request.endpoint in ['reports'] %}active{% endif %}">📈 Reports</a>
-    {% if current_user.role == 'admin' %}
-    <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit</a>
-    <a href="/users" class="{% if request.endpoint in ['users'] %}active{% endif %}">👤 Users</a>
-    <a href="/settings/system" class="{% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure'] %}active{% endif %}">⚙️ Settings</a>
-    <a href="/about" class="{% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
-    {% endif %}
-    <div class="nav-right">
-        <span class="kea-status" id="kea-indicator" title="Kea status"></span>
-        <span class="nav-user">Logged in as <strong>{{ current_user.username }}</strong></span>
-        <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
-        <a href="/logout" class="btn btn-sm btn-secondary">Logout</a>
+    <!-- ── Desktop nav ── -->
+    <div class="nav-desktop" style="display:flex;align-items:center;gap:2px;flex:1;">
+        <a href="/" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
+
+        <!-- Management dropdown -->
+        <div class="nav-dropdown">
+            <input type="checkbox" id="dd-mgmt" class="nav-dd-toggle">
+            <label for="dd-mgmt" class="nav-dropbtn {% if request.endpoint in ['leases','ipmap','reservations','add_reservation','edit_reservation','devices'] %}active{% endif %}">
+                📋 Management <span class="nav-caret">▾</span>
+            </label>
+            <div class="nav-dropdown-content">
+                <a href="/leases" class="{% if request.endpoint in ['leases','ipmap'] %}active{% endif %}">📋 Leases</a>
+                <a href="/reservations" class="{% if request.endpoint in ['reservations','add_reservation','edit_reservation'] %}active{% endif %}">📌 Reservations</a>
+                <a href="/devices" class="{% if request.endpoint in ['devices'] %}active{% endif %}">📱 Devices</a>
+            </div>
+        </div>
+
+        <!-- Network dropdown -->
+        <div class="nav-dropdown">
+            <input type="checkbox" id="dd-net" class="nav-dd-toggle">
+            <label for="dd-net" class="nav-dropbtn {% if request.endpoint in ['subnets','edit_subnet','ddns','servers','reports'] %}active{% endif %}">
+                🌐 Network <span class="nav-caret">▾</span>
+            </label>
+            <div class="nav-dropdown-content">
+                <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
+                <a href="/servers" class="{% if request.endpoint in ['servers'] %}active{% endif %}">🖥️ Servers</a>
+                <a href="/ddns" class="{% if request.endpoint == 'ddns' %}active{% endif %}">🔗 DDNS</a>
+                <a href="/reports" class="{% if request.endpoint in ['reports'] %}active{% endif %}">📈 Reports</a>
+            </div>
+        </div>
+
+        {% if current_user.role == 'admin' %}
+        <!-- Admin dropdown -->
+        <div class="nav-dropdown">
+            <input type="checkbox" id="dd-admin" class="nav-dd-toggle">
+            <label for="dd-admin" class="nav-dropbtn {% if request.endpoint in ['audit_log','users','settings_system','settings_alerts','settings_infrastructure','about'] %}active{% endif %}">
+                ⚙️ Admin <span class="nav-caret">▾</span>
+            </label>
+            <div class="nav-dropdown-content">
+                <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit Log</a>
+                <a href="/users" class="{% if request.endpoint in ['users'] %}active{% endif %}">👤 Users</a>
+                <div class="nav-dropdown-divider"></div>
+                <a href="/settings/system" class="{% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure'] %}active{% endif %}">⚙️ Settings</a>
+                <a href="/about" class="{% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
+            </div>
+        </div>
+        {% endif %}
     </div>
+
+    <div class="nav-right nav-right-desktop" style="display:flex;align-items:center;gap:8px;">
+        <span class="kea-status" id="kea-indicator" title="Kea status"></span>
+        <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        <!-- User avatar dropdown -->
+        <div class="nav-dropdown nav-avatar-wrap">
+            <input type="checkbox" id="dd-avatar" class="nav-dd-toggle">
+            <label for="dd-avatar" class="nav-avatar" style="cursor:pointer;">
+                {% if current_user_avatar %}
+                <img src="{{ current_user_avatar }}" alt="{{ current_user.username[0].upper() }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
+                {% else %}
+                {{ current_user.username[0].upper() }}
+                {% endif %}
+            </label>
+            <div class="nav-dropdown-content nav-dropdown-right">
+                <div class="nav-dropdown-header">
+                    <div style="font-weight:600;">{{ current_user.username }}</div>
+                    <div style="font-size:11px;color:var(--text-muted);text-transform:capitalize;">{{ current_user.role }}</div>
+                </div>
+                <div class="nav-dropdown-divider"></div>
+                <a href="/profile">👤 My Profile</a>
+                <a href="/mfa/enroll">🔐 Security & MFA</a>
+                <a href="/mfa/trusted-devices">📱 Trusted Devices</a>
+                <div class="nav-dropdown-divider"></div>
+                <a href="/logout" style="color:var(--danger);">⏻ Logout</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Mobile hamburger ── -->
+    <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+
+    </div>
+    <input type="checkbox" id="nav-hamburger-toggle" class="nav-hamburger-toggle">
+    <label for="nav-hamburger-toggle" class="nav-hamburger-btn" aria-label="Menu">☰</label>
+
+    <!-- Mobile full panel -->
+    <div class="nav-mobile-panel">
+        <div style="padding:12px 24px;border-bottom:2px solid var(--border);display:flex;align-items:center;gap:12px;">
+            {% if current_user_avatar %}
+            <img src="{{ current_user_avatar }}" style="width:40px;height:40px;border-radius:50%;object-fit:cover;">
+            {% else %}
+            <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#0077b6,#00b4d8);display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#fff;">{{ current_user.username[0].upper() }}</div>
+            {% endif %}
+            <div>
+                <div style="font-weight:600;font-size:15px;">{{ current_user.username }}</div>
+                <div style="font-size:12px;color:var(--text-muted);text-transform:capitalize;">{{ current_user.role }}</div>
+            </div>
+            <button onclick="toggleTheme()" style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;">🌙</button>
+        </div>
+
+        <a href="/" class="{% if request.endpoint == 'dashboard' %}active{% endif %}" ontouchstart="">📊 Dashboard</a>
+
+        <div class="nav-mobile-section">Management</div>
+        <a href="/leases" class="{% if request.endpoint in ['leases','ipmap'] %}active{% endif %}" ontouchstart="">📋 Leases</a>
+        <a href="/reservations" class="{% if request.endpoint in ['reservations','add_reservation','edit_reservation'] %}active{% endif %}" ontouchstart="">📌 Reservations</a>
+        <a href="/devices" class="{% if request.endpoint == 'devices' %}active{% endif %}" ontouchstart="">📱 Devices</a>
+
+        <div class="nav-mobile-section">Network</div>
+        <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet'] %}active{% endif %}" ontouchstart="">🌐 Subnets</a>
+        <a href="/servers" class="{% if request.endpoint == 'servers' %}active{% endif %}" ontouchstart="">🖥️ Servers</a>
+        <a href="/ddns" class="{% if request.endpoint == 'ddns' %}active{% endif %}" ontouchstart="">🔗 DDNS</a>
+        <a href="/reports" class="{% if request.endpoint == 'reports' %}active{% endif %}" ontouchstart="">📈 Reports</a>
+
+        {% if current_user.role == 'admin' %}
+        <div class="nav-mobile-section">Admin</div>
+        <a href="/audit" class="{% if request.endpoint == 'audit_log' %}active{% endif %}" ontouchstart="">📝 Audit Log</a>
+        <a href="/users" class="{% if request.endpoint == 'users' %}active{% endif %}" ontouchstart="">👤 Users</a>
+        <a href="/settings/system" class="{% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure'] %}active{% endif %}" ontouchstart="">⚙️ Settings</a>
+        <a href="/about" class="{% if request.endpoint == 'about' %}active{% endif %}" ontouchstart="">ℹ️ About</a>
+        {% endif %}
+
+        <div class="nav-mobile-section">Account</div>
+        <a href="/profile" class="{% if request.endpoint == 'user_profile' %}active{% endif %}" ontouchstart="">👤 My Profile</a>
+        <a href="/mfa/enroll" ontouchstart="">🔐 Security & MFA</a>
+        <a href="/mfa/trusted-devices" ontouchstart="">📱 Trusted Devices</a>
+        <div class="nav-mobile-divider"></div>
+        <a href="/logout" class="nav-mobile-logout" ontouchstart="">⏻ Logout</a>
+    </div>
+
     {% endif %}
 </nav>
 
@@ -247,6 +425,47 @@ function sortTable(table, col, th) {
 
 // Auto-refresh
 {% block scripts %}{% endblock %}
+</script>
+
+<script>
+(function() {
+    // Desktop: uncheck other dropdowns when one opens
+    var ddIds = ['dd-mgmt', 'dd-net', 'dd-admin', 'dd-avatar'];
+    ddIds.forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('change', function() {
+            if (this.checked) {
+                ddIds.forEach(function(otherId) {
+                    if (otherId !== id) {
+                        var other = document.getElementById(otherId);
+                        if (other) other.checked = false;
+                    }
+                });
+            }
+        });
+    });
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.nav-dropdown')) {
+            ddIds.forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.checked = false;
+            });
+        }
+    });
+
+    // Mobile: force immediate navigation on first tap
+    // iOS WebKit delays click on first touch - touchstart + window.location bypasses this
+    document.querySelectorAll('.nav-mobile-panel a').forEach(function(a) {
+        a.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            var href = this.getAttribute('href');
+            if (href && href !== '#') {
+                window.location.href = href;
+            }
+        }, { passive: false });
+    });
+})();
 </script>
 </body>
 </html>

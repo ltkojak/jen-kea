@@ -12,6 +12,37 @@
     <a href="/settings/infrastructure" class="settings-tab">🖧 Infrastructure</a>
 </div>
 
+<!-- Custom Branding -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🎨 Custom Branding</span>
+    </div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
+        Customize the app name shown in the nav bar and on the login page. Leave blank to use the default "Jen" branding.
+    </p>
+    <form method="POST" action="/settings/system/save-branding">
+        <div class="form-row">
+            <div class="form-group">
+                <label>App Name</label>
+                <input type="text" name="app_name" value="{{ branding.app_name }}" placeholder="Jen" maxlength="50">
+                <div class="form-hint">Shown in the nav bar (replaces "Jen")</div>
+            </div>
+            <div class="form-group">
+                <label>Login Page Subtitle</label>
+                <input type="text" name="app_tagline" value="{{ branding.app_tagline }}" placeholder="The Kea DHCP Management Console" maxlength="100">
+                <div class="form-hint">Shown below the app name on the login page</div>
+            </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">💾 Save Branding</button>
+            {% if branding.app_name or branding.app_tagline %}
+            <button type="submit" name="reset" value="1" class="btn btn-secondary"
+                    onclick="return confirm('Reset to default Jen branding?')">↺ Reset to Default</button>
+            {% endif %}
+        </div>
+    </form>
+</div>
+
 <!-- MFA Settings -->
 <div class="card">
     <div class="card-header">

@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.1.0"
+JEN_VERSION = "2.2.16"
 
 # ─────────────────────────────────────────
 # App setup
@@ -372,6 +372,10 @@ def init_jen_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # Migrate: add avatar_url if missing
+            cur.execute("SHOW COLUMNS FROM users LIKE 'avatar_url'")
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE users ADD COLUMN avatar_url MEDIUMTEXT DEFAULT NULL")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -865,6 +869,28 @@ def kea_command_all(command, service="dhcp4", arguments=None):
         result = kea_command(command, service, arguments, server=server)
         results.append((server, result))
     return results
+
+@app.context_processor
+def inject_branding():
+    avatar_url = None
+    if current_user and current_user.is_authenticated:
+        try:
+            db = get_jen_db()
+            with db.cursor() as cur:
+                cur.execute("SELECT avatar_url FROM users WHERE id=%s", (current_user.id,))
+                row = cur.fetchone()
+                if row:
+                    avatar_url = row.get("avatar_url")
+            db.close()
+        except Exception:
+            pass
+    return {
+        "branding_name": get_global_setting("branding_app_name", "") or "Jen",
+        "branding_subtitle": get_global_setting("branding_app_subtitle", "") or "The Kea DHCP Management Console",
+        "branding_nav_color": get_global_setting("branding_nav_color", ""),
+        "current_user_avatar": avatar_url,
+        "jen_version": JEN_VERSION,
+    }
 
 def kea_is_up(server=None):
     result = kea_command("version-get", server=server)
@@ -1501,6 +1527,8 @@ def logout():
     return redirect(url_for("login"))
 
 # ─────────────────────────────────────────
+# User Profile
+# ─────────────────────────────────────────
 # MFA Routes
 # ─────────────────────────────────────────
 @app.route("/mfa/challenge", methods=["GET", "POST"])
@@ -1762,6 +1790,25 @@ def admin_reset_mfa(user_id):
     except Exception as e:
         flash(f"Error resetting MFA: {str(e)}", "error")
     return redirect(url_for("users"))
+
+@app.route("/settings/system/save-branding", methods=["POST"])
+@login_required
+@admin_required
+def save_branding():
+    reset = request.form.get("reset") == "1"
+    if reset:
+        set_global_setting("branding_app_name", "")
+        set_global_setting("branding_app_subtitle", "")
+        flash("Branding reset to defaults.", "success")
+        audit("SAVE_SETTINGS", "branding", "reset to defaults")
+    else:
+        app_name = request.form.get("app_name", "").strip()[:50]
+        app_tagline = request.form.get("app_tagline", "").strip()[:100]
+        set_global_setting("branding_app_name", app_name)
+        set_global_setting("branding_app_subtitle", app_tagline)
+        flash("Branding updated.", "success")
+        audit("SAVE_SETTINGS", "branding", f"name={app_name or 'Jen'}")
+    return redirect(url_for("settings_system"))
 
 @app.route("/settings/system/save-mfa-mode", methods=["POST"])
 @login_required
@@ -2919,6 +2966,10 @@ def settings_system():
         pass
 
     mfa_mode = get_mfa_mode()
+    branding = {
+        "app_name": get_global_setting("branding_app_name", ""),
+        "app_tagline": get_global_setting("branding_app_subtitle", ""),
+    }
     return render_template("settings_system.html",
                            ssl_configured=ssl_configured(), cert_info=cert_info,
                            has_favicon=os.path.exists(FAVICON_PATH),
@@ -2930,7 +2981,8 @@ def settings_system():
                            rl_attempts_1h=rl_attempts_1h,
                            jen_version=JEN_VERSION,
                            kea_version=kea_version,
-                           mfa_mode=mfa_mode)
+                           mfa_mode=mfa_mode,
+                           branding=branding)
 
 @app.route("/settings/alerts")
 @login_required
@@ -3656,6 +3708,45 @@ def remove_favicon():
     return redirect(url_for("settings"))
 
 # ─────────────────────────────────────────
+# User Profile
+# ─────────────────────────────────────────
+@app.route("/profile")
+@login_required
+def user_profile():
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s",
+                       (current_user.id,))
+            user_data = cur.fetchone()
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1",
+                       (current_user.id,))
+            totp_count = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s",
+                       (current_user.id,))
+            passkey_count = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0",
+                       (current_user.id,))
+            backup_count = cur.fetchone()["cnt"]
+            cur.execute("""
+                SELECT COUNT(*) as cnt FROM mfa_trusted_devices
+                WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())
+            """, (current_user.id,))
+            trusted_count = cur.fetchone()["cnt"]
+        db.close()
+    except Exception as e:
+        flash(f"Error loading profile: {str(e)}", "error")
+        user_data = None
+        totp_count = passkey_count = backup_count = trusted_count = 0
+    return render_template("user_profile.html",
+                           user_data=user_data,
+                           totp_count=totp_count,
+                           passkey_count=passkey_count,
+                           backup_count=backup_count,
+                           device_count=trusted_count,
+                           mfa_enrolled=(totp_count + passkey_count) > 0)
+
+# ─────────────────────────────────────────
 # Users
 # ─────────────────────────────────────────
 @app.route("/users")
@@ -3743,6 +3834,43 @@ def delete_user(user_id):
     except Exception as e:
         flash(f"Error deleting user: {str(e)}", "error")
     return redirect(url_for("users"))
+
+@app.route("/users/upload-avatar", methods=["POST"])
+@login_required
+def upload_avatar():
+    import base64, re
+    data_url = request.form.get("avatar_data_url", "").strip()
+    if data_url and data_url.startswith("data:image/"):
+        # Validate it's a reasonable size (max ~200KB base64)
+        if len(data_url) > 280000:
+            flash("Image too large. Please use an image under 200KB.", "error")
+            return redirect(url_for("user_profile"))
+        # Validate format
+        if not re.match(r'^data:image/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$', data_url):
+            flash("Invalid image format.", "error")
+            return redirect(url_for("user_profile"))
+        try:
+            db = get_jen_db()
+            with db.cursor() as cur:
+                cur.execute("UPDATE users SET avatar_url=%s WHERE id=%s", (data_url, current_user.id))
+            db.commit()
+            db.close()
+            flash("Profile picture updated.", "success")
+            audit("UPDATE_AVATAR", "user", current_user.username)
+        except Exception as e:
+            flash(f"Error saving avatar: {str(e)}", "error")
+    elif data_url == "":
+        # Remove avatar
+        try:
+            db = get_jen_db()
+            with db.cursor() as cur:
+                cur.execute("UPDATE users SET avatar_url=NULL WHERE id=%s", (current_user.id,))
+            db.commit()
+            db.close()
+            flash("Profile picture removed.", "success")
+        except Exception as e:
+            flash(f"Error removing avatar: {str(e)}", "error")
+    return redirect(url_for("user_profile"))
 
 @app.route("/users/change-password", methods=["POST"])
 @login_required

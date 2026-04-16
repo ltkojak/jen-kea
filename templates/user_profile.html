@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}My Profile{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>👤 My Profile</h1>
+    <p>Account settings and security for {{ current_user.username }}</p>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+<!-- Avatar Upload -->
+<div class="card" style="margin-bottom:16px;">
+    <div class="card-header"><span class="card-title">🖼️ Profile Picture</span></div>
+    <div style="display:flex;align-items:center;gap:24px;padding:8px 0;">
+        <div id="avatar-preview" style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,#0077b6,#00b4d8);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;overflow:hidden;flex-shrink:0;">
+            {% if current_user_avatar %}
+            <img src="{{ current_user_avatar }}" style="width:100%;height:100%;object-fit:cover;">
+            {% else %}
+            {{ current_user.username[0].upper() }}
+            {% endif %}
+        </div>
+        <div style="flex:1;">
+            <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">Upload a profile picture (JPG, PNG, GIF, WebP — max 200KB). It will appear in the nav bar.</p>
+            <form method="POST" action="/users/upload-avatar" id="avatar-form">
+                <input type="hidden" name="avatar_data_url" id="avatar-data-input">
+                <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;" onchange="previewAvatar(this)">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('avatar-file-input').click()">📁 Choose Image</button>
+                    <button type="submit" id="avatar-save-btn" class="btn btn-primary" style="display:none;">💾 Save Picture</button>
+                    {% if current_user_avatar %}
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="document.getElementById('avatar-data-input').value='';">🗑️ Remove</button>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+function previewAvatar(input) {
+    if (!input.files || !input.files[0]) return;
+    var file = input.files[0];
+    if (file.size > 204800) {
+        alert("Image must be under 200KB. Please resize it first.");
+        input.value = "";
+        return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+        var dataUrl = e.target.result;
+        var preview = document.getElementById("avatar-preview");
+        preview.innerHTML = "<img src=\"" + dataUrl + "\" style=\"width:100%;height:100%;object-fit:cover;\">";
+        document.getElementById("avatar-data-input").value = dataUrl;
+        document.getElementById("avatar-save-btn").style.display = "inline-flex";
+    };
+    reader.readAsDataURL(file);
+}
+</script>
+
+<!-- Account info -->
+<div class="card">
+    <div class="card-header"><span class="card-title">👤 Account</span></div>
+    <table style="width:100%;">
+        <tr><td class="stat-label" style="width:140px;padding:8px 0;">Username</td>
+            <td><strong>{{ current_user.username }}</strong></td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Role</td>
+            <td><span class="badge {% if current_user.role == 'admin' %}badge-admin{% else %}badge-viewer{% endif %}">{{ current_user.role|title }}</span></td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Jen Version</td>
+            <td class="mono" style="font-size:12px;">v{{ jen_version }}</td></tr>
+    </table>
+</div>
+
+<!-- Security summary -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔐 Security</span></div>
+    <table style="width:100%;">
+        <tr><td class="stat-label" style="width:140px;padding:8px 0;">MFA Status</td>
+            <td>
+                {% if mfa_enrolled %}
+                <span class="badge badge-reserved">✓ Enrolled</span>
+                {% else %}
+                <span class="badge" style="background:#2a1a1a;color:var(--warning);">⚠ Not enrolled</span>
+                {% endif %}
+            </td></tr>
+        <tr><td class="stat-label" style="padding:8px 0;">Trusted Devices</td>
+            <td>{{ device_count }} device{{ 's' if device_count != 1 else '' }}</td></tr>
+    </table>
+    <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
+        <a href="/mfa/enroll" class="btn btn-sm btn-secondary">🔐 MFA Settings</a>
+        <a href="/mfa/trusted-devices" class="btn btn-sm btn-secondary">📱 Trusted Devices</a>
+    </div>
+</div>
+
+</div>
+
+<!-- Change password -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔑 Change Password</span></div>
+    <form method="POST" action="/users/change-password" style="max-width:400px;">
+        <div class="form-group">
+            <label>Current Password</label>
+            <input type="password" name="current_password" required>
+        </div>
+        <div class="form-group">
+            <label>New Password</label>
+            <input type="password" name="new_password" required minlength="8">
+            <div class="form-hint">Minimum 8 characters</div>
+        </div>
+        <div class="form-group">
+            <label>Confirm New Password</label>
+            <input type="password" name="confirm_password" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Update Password</button>
+    </form>
+</div>
+{% endblock %}

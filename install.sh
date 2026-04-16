@@ -35,7 +35,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="2.1.0"
+JEN_VERSION="2.2.16"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"
@@ -701,10 +701,10 @@ print_summary() {
 main() {
     clear
     echo -e "${BOLD}${CYAN}"
-    echo "  ╔════════════════════════════════════════╗"
-    echo "  ║   Jen - The Kea DHCP Management Console ║"
-    echo "  ║   Installer v${JEN_VERSION}                      ║"
-    echo "  ╚════════════════════════════════════════╝"
+    echo "  ╔══════════════════════════════════════════════╗"
+    echo "  ║   Jen - The Kea DHCP Management Console      ║"
+    printf "  ║   Installer v%-32s║\\n" "${JEN_VERSION}"
+    echo "  ╚══════════════════════════════════════════════╝"
     echo -e "${NC}"
 
     require_root
@@ -716,9 +716,15 @@ main() {
     echo -e "  ${BOLD}1)${NC} Bare metal / systemd ${GREEN}(recommended)${NC}"
     echo -e "  ${BOLD}2)${NC} Docker"
     echo ""
-    echo -e "${YELLOW}▶${NC}  Choice [1]: " > /dev/tty
-    read -r INSTALL_TYPE < /dev/tty
-    INSTALL_TYPE="${INSTALL_TYPE:-1}"
+    while true; do
+        printf "${YELLOW}▶${NC}  Choice [1]: " > /dev/tty
+        read -r INSTALL_TYPE < /dev/tty
+        INSTALL_TYPE="${INSTALL_TYPE:-1}"
+        if [[ "$INSTALL_TYPE" == "1" || "$INSTALL_TYPE" == "2" ]]; then
+            break
+        fi
+        echo -e "  ${RED}Invalid choice. Please enter 1 or 2.${NC}" > /dev/tty
+    done
 
     if [[ "$INSTALL_TYPE" == "2" ]]; then
         docker_install
@@ -803,9 +809,15 @@ docker_install() {
     echo -e "  ${BOLD}1)${NC} External MySQL — connect to an existing MySQL server"
     echo -e "  ${BOLD}2)${NC} Bundled MySQL — Docker manages a local MySQL container for Jen"
     echo ""
-    echo -e "${YELLOW}▶${NC}  Choice [1]: " > /dev/tty
-    read -r DB_CHOICE < /dev/tty
-    DB_CHOICE="${DB_CHOICE:-1}"
+    while true; do
+        printf "${YELLOW}▶${NC}  Choice [1]: " > /dev/tty
+        read -r DB_CHOICE < /dev/tty
+        DB_CHOICE="${DB_CHOICE:-1}"
+        if [[ "$DB_CHOICE" == "1" || "$DB_CHOICE" == "2" ]]; then
+            break
+        fi
+        echo -e "  ${RED}Invalid choice. Please enter 1 or 2.${NC}" > /dev/tty
+    done
 
     local COMPOSE_FILE="docker-compose.yml"
     if [[ "$DB_CHOICE" == "2" ]]; then
