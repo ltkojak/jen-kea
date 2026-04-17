@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.2.33] - 2026-04-17
+
+### Fixed
+- Fix nav logo version number alignment: when a logo image is set, version number now centers beneath the logo instead of left-justifying awkwardly beside it
+
+## [2.2.32] - 2026-04-17
+
+### Fixed
+- Fix branding nav color section: had a nested `<form>` inside a `<form>` for the Reset button (invalid HTML — browsers silently ignore inner forms). Split into two separate forms. Reset button now always visible, disabled/greyed out when no custom color is set rather than hidden.
+
+## [2.2.31] - 2026-04-17
+
+### Fixed
+- Fix About page error: `lease_counts` was referenced in the template but never passed by the route
+
+### Changed
+- Rework Custom Branding in Settings: replace pointless app-name text field with nav logo image upload (PNG/SVG/JPG/WebP, max 200KB) — logo replaces "Jen" text in nav bar when set. Nav bar color picker kept. Added missing save routes (`/settings/upload-nav-logo`, `/settings/remove-nav-logo`, `/settings/save-nav-color`) which previously didn't exist, making the old branding form completely non-functional.
+
+## [2.2.30] - 2026-04-17
+
+### Changed
+- Replace dropdown nav menus with flat nav links + contextual section tab bars — eliminates iPad/touch double-tap issues entirely. Management, Network, and Settings are now direct links; when you're inside a section, a sticky tab bar appears below the nav showing all pages in that section. Profile avatar dropdown preserved as-is.
+- Rename "Admin" nav item to "Settings"; moved Users and Audit Log into Settings section tabs alongside System, Alerts, Infrastructure
+- Moved Reports from Network to Management section tabs
+- About is now a direct top-level nav link (no submenu needed)
+- Mobile hamburger menu updated to match new structure with Settings section replacing Admin
+
 ## [2.2.29] - 2026-04-17
 
 ### Fixed

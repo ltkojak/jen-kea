@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.2.29"
+JEN_VERSION = "2.2.33"
 
 # ─────────────────────────────────────────
 # App setup
@@ -202,6 +202,7 @@ SSL_CA       = "/etc/jen/ssl/ca_bundle.crt"
 SSL_COMBINED = "/etc/jen/ssl/combined.crt"
 FAVICON_PATH = "/opt/jen/static/favicon.ico"
 STATIC_DIR   = "/opt/jen/static"
+NAV_LOGO_PATH = "/opt/jen/static/nav_logo"  # no extension — we detect it
 SSH_KEY_PATH = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
 DDNS_LOG     = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns-technitium.log")
 
@@ -922,10 +923,16 @@ def inject_branding():
             db.close()
         except Exception:
             pass
+    # Detect nav logo file (any extension)
+    nav_logo_url = None
+    for ext in ("png", "svg", "jpg", "jpeg", "webp"):
+        if os.path.exists(f"{NAV_LOGO_PATH}.{ext}"):
+            nav_logo_url = f"/static/nav_logo.{ext}?v={int(os.path.getmtime(f'{NAV_LOGO_PATH}.{ext}'))}"
+            break
     return {
-        "branding_name": get_global_setting("branding_app_name", "") or "Jen",
-        "branding_subtitle": get_global_setting("branding_app_subtitle", "") or "The Kea DHCP Management Console",
+        "branding_name": "Jen",
         "branding_nav_color": get_global_setting("branding_nav_color", ""),
+        "branding_nav_logo": nav_logo_url,
         "current_user_avatar": avatar_url,
         "jen_version": JEN_VERSION,
     }
@@ -2186,6 +2193,7 @@ def audit_log():
 def about():
     kea_up = False
     kea_version = ""
+    lease_counts = {}
     try:
         ver_result = kea_command("version-get")
         if ver_result.get("result") == 0:
@@ -2194,8 +2202,18 @@ def about():
             kea_version = kea_version.splitlines()[0] if kea_version else ""
     except Exception:
         pass
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            for sid in SUBNET_MAP:
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                lease_counts[sid] = cur.fetchone()["cnt"]
+        db.close()
+    except Exception:
+        pass
     return render_template("about.html", jen_version=JEN_VERSION, kea_version=kea_version,
-                           kea_up=kea_up, https_port=HTTPS_PORT, subnet_map=SUBNET_MAP)
+                           kea_up=kea_up, https_port=HTTPS_PORT, subnet_map=SUBNET_MAP,
+                           lease_counts=lease_counts)
 
 # ─────────────────────────────────────────
 @app.route("/settings")
@@ -2274,9 +2292,14 @@ def settings_system():
         pass
 
     mfa_mode = get_mfa_mode()
+    nav_logo_url = None
+    for ext in ("png", "svg", "jpg", "jpeg", "webp"):
+        if os.path.exists(f"{NAV_LOGO_PATH}.{ext}"):
+            nav_logo_url = f"/static/nav_logo.{ext}?v={int(os.path.getmtime(f'{NAV_LOGO_PATH}.{ext}'))}"
+            break
     branding = {
-        "app_name": get_global_setting("branding_app_name", ""),
-        "app_tagline": get_global_setting("branding_app_subtitle", ""),
+        "nav_logo": nav_logo_url,
+        "nav_color": get_global_setting("branding_nav_color", ""),
     }
     return render_template("settings_system.html",
                            ssl_configured=ssl_configured(), cert_info=cert_info,
@@ -3014,6 +3037,64 @@ def remove_favicon():
     if os.path.exists(FAVICON_PATH): os.remove(FAVICON_PATH)
     flash("Favicon removed.", "success")
     return redirect(url_for("settings"))
+
+@app.route("/settings/upload-nav-logo", methods=["POST"])
+@login_required
+@admin_required
+def upload_nav_logo():
+    logo_file = request.files.get("logo")
+    if not logo_file or not logo_file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("settings_system"))
+    ext = logo_file.filename.rsplit(".", 1)[-1].lower()
+    if ext not in ("png", "svg", "jpg", "jpeg", "webp"):
+        flash("Logo must be PNG, SVG, JPG, or WebP.", "error")
+        return redirect(url_for("settings_system"))
+    logo_file.seek(0, 2)
+    size = logo_file.tell()
+    logo_file.seek(0)
+    if size > 200 * 1024:
+        flash("Logo file must be under 200KB.", "error")
+        return redirect(url_for("settings_system"))
+    # Remove any existing logo files
+    for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
+        old = f"{NAV_LOGO_PATH}.{old_ext}"
+        if os.path.exists(old): os.remove(old)
+    os.makedirs(STATIC_DIR, exist_ok=True)
+    try:
+        logo_file.save(f"{NAV_LOGO_PATH}.{ext}")
+        audit("BRANDING", "settings", f"Nav logo uploaded by {current_user.username}")
+        flash("Nav logo updated.", "success")
+    except Exception as e:
+        flash(f"Error saving logo: {str(e)}", "error")
+    return redirect(url_for("settings_system"))
+
+@app.route("/settings/remove-nav-logo", methods=["POST"])
+@login_required
+@admin_required
+def remove_nav_logo():
+    for ext in ("png", "svg", "jpg", "jpeg", "webp"):
+        f = f"{NAV_LOGO_PATH}.{ext}"
+        if os.path.exists(f): os.remove(f)
+    audit("BRANDING", "settings", f"Nav logo removed by {current_user.username}")
+    flash("Nav logo removed.", "success")
+    return redirect(url_for("settings_system"))
+
+@app.route("/settings/save-nav-color", methods=["POST"])
+@login_required
+@admin_required
+def save_nav_color():
+    # Accept value from either the color picker or the text field
+    color = request.form.get("nav_color_hex", "").strip() or request.form.get("nav_color", "").strip()
+    # Validate — must be empty or a valid hex color
+    import re
+    if color and not re.match(r'^#[0-9a-fA-F]{3,6}$', color):
+        flash("Invalid color value. Use a hex code like #1a1a2a.", "error")
+        return redirect(url_for("settings_system"))
+    set_global_setting("branding_nav_color", color)
+    audit("BRANDING", "settings", f"Nav color set to '{color}' by {current_user.username}")
+    flash("Nav bar color updated." if color else "Nav bar color reset to default.", "success")
+    return redirect(url_for("settings_system"))
 
 # ─────────────────────────────────────────
 # Saved Searches

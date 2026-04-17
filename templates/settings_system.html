@@ -6,41 +6,52 @@
     <p>SSL, session management, security, and appearance</p>
 </div>
 
-<div class="settings-tabs">
-    <a href="/settings/system" class="settings-tab active">⚙️ System</a>
-    <a href="/settings/alerts" class="settings-tab">🔔 Alerts</a>
-    <a href="/settings/infrastructure" class="settings-tab">🖧 Infrastructure</a>
-</div>
-
 <!-- Custom Branding -->
 <div class="card">
     <div class="card-header">
         <span class="card-title">🎨 Custom Branding</span>
     </div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
-        Customize the app name shown in the nav bar and on the login page. Leave blank to use the default "Jen" branding.
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:20px;">
+        Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar colour to distinguish environments.
     </p>
-    <form method="POST" action="/settings/system/save-branding">
-        <div class="form-row">
-            <div class="form-group">
-                <label>App Name</label>
-                <input type="text" name="app_name" value="{{ branding.app_name }}" placeholder="Jen" maxlength="50">
-                <div class="form-hint">Shown in the nav bar (replaces "Jen")</div>
+    <div class="form-row">
+        <!-- Nav logo upload -->
+        <div class="form-group">
+            <label>Nav Logo</label>
+            {% if branding.nav_logo %}
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+                <img src="{{ branding.nav_logo }}" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
+                <form method="POST" action="/settings/remove-nav-logo" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove logo?')">🗑 Remove</button>
+                </form>
             </div>
-            <div class="form-group">
-                <label>Login Page Subtitle</label>
-                <input type="text" name="app_tagline" value="{{ branding.app_tagline }}" placeholder="The Kea DHCP Management Console" maxlength="100">
-                <div class="form-hint">Shown below the app name on the login page</div>
-            </div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
-            <button type="submit" class="btn btn-primary">💾 Save Branding</button>
-            {% if branding.app_name or branding.app_tagline %}
-            <button type="submit" name="reset" value="1" class="btn btn-secondary"
-                    onclick="return confirm('Reset to default Jen branding?')">↺ Reset to Default</button>
             {% endif %}
+            <form method="POST" action="/settings/upload-nav-logo" enctype="multipart/form-data">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" style="flex:1;">
+                    <button type="submit" class="btn btn-primary btn-sm">⬆ Upload</button>
+                </div>
+                <div class="form-hint">PNG, SVG, JPG, or WebP — max 200KB. Replaces "Jen" text in the nav bar. Recommended height: 28–36px.</div>
+            </form>
         </div>
-    </form>
+        <!-- Nav colour -->
+        <div class="form-group">
+            <label>Nav Bar Colour</label>
+            <form method="POST" action="/settings/save-nav-color">
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                    <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">
+                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" style="flex:1;">
+                    <button type="submit" class="btn btn-primary btn-sm">💾 Save</button>
+                </div>
+                <div class="form-hint">Useful for distinguishing prod vs dev environments. Leave blank for default.</div>
+            </form>
+            <form method="POST" action="/settings/save-nav-color" style="margin-top:8px;">
+                <input type="hidden" name="nav_color" value="">
+                <input type="hidden" name="nav_color_hex" value="">
+                <button type="submit" class="btn btn-sm btn-secondary" {% if not branding.nav_color %}disabled style="opacity:0.4;cursor:not-allowed;"{% endif %}>↺ Reset to Default</button>
+            </form>
+        </div>
+    </div>
 </div>
 
 <!-- MFA Settings -->

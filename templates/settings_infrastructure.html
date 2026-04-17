@@ -6,12 +6,6 @@
     <p>Kea API, database connections, SSH, and subnet configuration</p>
 </div>
 
-<div class="settings-tabs">
-    <a href="/settings/system" class="settings-tab">⚙️ System</a>
-    <a href="/settings/alerts" class="settings-tab">🔔 Alerts</a>
-    <a href="/settings/infrastructure" class="settings-tab active">🖧 Infrastructure</a>
-</div>
-
 {% if restart_pending %}
 <div class="alert alert-warning">⚠️ Infrastructure changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
 {% endif %}
