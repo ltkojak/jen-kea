@@ -7,6 +7,7 @@
         <p>Live overview of your DHCP infrastructure</p>
     </div>
     <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="toggleCustomize()">⚙️ Customize</button>
         <span style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
         <select id="refreshInterval" style="width:auto;font-size:12px;padding:4px 8px;" onchange="setRefreshInterval(this.value)">
             <option value="0">Off</option>
@@ -20,77 +21,138 @@
     </div>
 </div>
 
-<div class="stat-grid">
-{% for subnet_id, s in stats.items() %}
-<div class="stat-card">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-        <div style="flex:1;">
-            <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
-            <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
-            <div class="stat-meta" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
+<!-- Customize panel -->
+<div id="dash-customize" style="display:none;" class="card">
+    <div class="card-header"><span class="card-title">⚙️ Customize Dashboard</span></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Choose which widgets to show. Changes are saved to your account.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-subnet_stats"> Subnet Statistics</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-recent_leases"> Recently Issued Leases</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-server_status"> Server Status</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="saveDashPrefs()">💾 Save Layout</button>
+</div>
+
+<!-- Subnet statistics widget -->
+<div id="dash-subnet_stats">
+    <div class="stat-grid">
+    {% for subnet_id, s in stats.items() %}
+    <div class="stat-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="flex:1;">
+                <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
+                <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
+            </div>
+        </div>
+        <div class="stat-meta" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
+        <div class="util-bar" style="margin-top:10px;">
+            <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%;transition:width 0.5s ease;"></div>
+        </div>
+        <div style="margin-top:4px;">
+            <span style="font-size:11px;color:var(--text-muted);" id="util-pct-{{ subnet_id }}"></span>
         </div>
     </div>
-    <div class="util-bar" style="margin-top:10px;">
-        <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%;transition:width 0.5s ease;"></div>
+    {% endfor %}
     </div>
-    <div style="display:flex;justify-content:space-between;margin-top:4px;">
-        <span style="font-size:11px;color:var(--text-muted);" id="util-pct-{{ subnet_id }}"></span>
-    </div>
-</div>
-{% endfor %}
 </div>
 
-<!-- Recent leases -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">🕐 Recently Issued Leases</span>
-        <form method="GET" style="display:flex;gap:8px;align-items:center;">
-            <select name="hours" onchange="this.form.submit()" style="width:auto;">
-                <option value="0.5" {% if hours=='0.5' %}selected{% endif %}>Last 30 min</option>
-                <option value="1" {% if hours=='1' %}selected{% endif %}>Last 1 hour</option>
-                <option value="4" {% if hours=='4' %}selected{% endif %}>Last 4 hours</option>
-                <option value="8" {% if hours=='8' %}selected{% endif %}>Last 8 hours</option>
-                <option value="12" {% if hours=='12' %}selected{% endif %}>Last 12 hours</option>
-                <option value="24" {% if hours=='24' %}selected{% endif %}>Last 24 hours</option>
-            </select>
-            <a href="/leases" class="btn btn-sm btn-secondary">View All</a>
-        </form>
+<!-- Recently issued leases widget -->
+<div id="dash-recent_leases">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">🕐 Recently Issued Leases</span>
+            <form method="GET" style="display:flex;gap:8px;align-items:center;">
+                <select name="hours" onchange="this.form.submit()" style="width:auto;">
+                    <option value="0.5" {% if hours=='0.5' %}selected{% endif %}>Last 30 min</option>
+                    <option value="1"   {% if hours=='1'   %}selected{% endif %}>Last 1 hour</option>
+                    <option value="4"   {% if hours=='4'   %}selected{% endif %}>Last 4 hours</option>
+                    <option value="8"   {% if hours=='8'   %}selected{% endif %}>Last 8 hours</option>
+                    <option value="12"  {% if hours=='12'  %}selected{% endif %}>Last 12 hours</option>
+                    <option value="24"  {% if hours=='24'  %}selected{% endif %}>Last 24 hours</option>
+                </select>
+                <a href="/leases" class="btn btn-sm btn-secondary">View All</a>
+            </form>
+        </div>
+        {% if recent %}
+        <div class="table-wrap">
+        <table class="sortable">
+            <thead><tr>
+                <th data-sort>IP Address</th>
+                <th data-sort>Hostname</th>
+                <th data-sort>MAC Address</th>
+                <th data-sort>Subnet</th>
+                <th data-sort>Obtained</th>
+            </tr></thead>
+            <tbody>
+            {% for l in recent %}
+            <tr>
+                <td class="mono">{{ l.ip }}</td>
+                <td>{{ l.hostname or '—' }}</td>
+                <td class="mono">{{ l.mac }}</td>
+                <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+                <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%H:%M:%S') if l.obtained else '—' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </div>
+        {% else %}
+        <div style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</div>
+        {% endif %}
     </div>
-    {% if recent %}
-    <div class="table-wrap">
-    <table class="sortable">
-        <thead><tr>
-            <th data-sort>IP Address</th>
-            <th data-sort>Hostname</th>
-            <th data-sort>MAC Address</th>
-            <th data-sort>Subnet</th>
-            <th data-sort>Obtained</th>
-        </tr></thead>
-        <tbody>
-        {% for l in recent %}
-        <tr>
-            <td class="mono">{{ l.ip }}</td>
-            <td>{{ l.hostname or '—' }}</td>
-            <td class="mono">{{ l.mac }}</td>
-            <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-            <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%H:%M:%S') if l.obtained else '—' }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</div>
-    {% endif %}
 </div>
+
+<!-- Server status widget -->
+<div id="dash-server_status" style="display:none;">
+    <div class="card">
+        <div class="card-header"><span class="card-title">🖥️ Server Status</span></div>
+        <p style="color:var(--text-muted);font-size:13px;">Server status details are available on the Servers page.</p>
+    </div>
+</div>
+
+<!-- Alert summary widget -->
+<div id="dash-alert_summary" style="display:none;">
+    <div class="card">
+        <div class="card-header"><span class="card-title">🔔 Alert Summary</span></div>
+        <p style="color:var(--text-muted);font-size:13px;">No recent alerts.</p>
+    </div>
+</div>
+
 {% endblock %}
 {% block scripts %}
-// ── Dashboard refresh ──────────────────────────────────────────
-let refreshTimer = null;
 const POOL_SIZES = {{ pool_sizes | tojson }};
+let refreshTimer = null;
+
+function toggleCustomize() {
+    var p = document.getElementById('dash-customize');
+    p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+function applyDashPrefs(widgets) {
+    ['subnet_stats','recent_leases','server_status','alert_summary'].forEach(function(w) {
+        var el = document.getElementById('dash-' + w);
+        if (el) el.style.display = widgets.includes(w) ? '' : 'none';
+    });
+}
+
+function saveDashPrefs() {
+    var widgets = ['subnet_stats','recent_leases','server_status','alert_summary']
+        .filter(function(w) { var el = document.getElementById('w-' + w); return el && el.checked; });
+    fetch('/api/dashboard/save-prefs', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({widgets: widgets})
+    }).then(r => r.json()).then(function(d) {
+        if (d.ok) {
+            applyDashPrefs(widgets);
+            document.getElementById('dash-customize').style.display = 'none';
+        }
+    }).catch(function(e) { console.error('Save prefs failed:', e); });
+}
 
 function updateStats() {
-    const dot = document.getElementById('refreshDot');
+    var dot = document.getElementById('refreshDot');
     if (dot) dot.style.background = 'var(--warning)';
     fetch('/api/stats')
         .then(r => r.json())
@@ -98,26 +160,22 @@ function updateStats() {
             if (dot) dot.style.background = 'var(--success)';
             if (!data.subnets) return;
             Object.keys(data.subnets).forEach(id => {
-                const s = data.subnets[id];
-                const activeEl = document.getElementById('stat-active-' + id);
-                const metaEl = document.getElementById('stat-meta-' + id);
-                const utilEl = document.getElementById('util-' + id);
-                const pctEl = document.getElementById('util-pct-' + id);
+                var s = data.subnets[id];
+                var activeEl = document.getElementById('stat-active-' + id);
+                var metaEl   = document.getElementById('stat-meta-' + id);
+                var utilEl   = document.getElementById('util-' + id);
+                var pctEl    = document.getElementById('util-pct-' + id);
                 if (activeEl) activeEl.textContent = s.active;
-                if (metaEl) metaEl.textContent = `Active leases · ${s.dynamic} dynamic · ${s.reservations} reserved`;
-                // Update utilization bar
-                const poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
+                if (metaEl)   metaEl.textContent = 'Active leases · ' + s.dynamic + ' dynamic · ' + s.reservations + ' reserved';
+                var poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
                 if (poolSize > 0 && utilEl) {
-                    const pct = Math.min(100, Math.round(s.dynamic / poolSize * 100));
+                    var pct = Math.min(100, Math.round(s.dynamic / poolSize * 100));
                     utilEl.style.width = pct + '%';
-                    if (pct >= 90) utilEl.style.background = 'var(--danger)';
-                    else if (pct >= 75) utilEl.style.background = 'var(--warning)';
-                    else utilEl.style.background = 'var(--primary)';
-                    if (pctEl) pctEl.textContent = `${pct}% of pool (${s.dynamic}/${poolSize})`;
+                    utilEl.style.background = pct >= 90 ? 'var(--danger)' : pct >= 75 ? 'var(--warning)' : 'var(--primary)';
+                    if (pctEl) pctEl.textContent = pct + '% of pool (' + s.dynamic + '/' + poolSize + ')';
                 }
             });
-            // Update Kea health dot in nav
-            const keaDot = document.getElementById('kea-status-dot');
+            var keaDot = document.getElementById('kea-status-dot');
             if (keaDot) {
                 keaDot.style.background = data.kea_up ? 'var(--success)' : 'var(--danger)';
                 keaDot.title = data.kea_up ? 'Kea: Online' : 'Kea: Unreachable';
@@ -129,7 +187,7 @@ function updateStats() {
 function setRefreshInterval(ms) {
     if (refreshTimer) clearInterval(refreshTimer);
     localStorage.setItem('jen-refresh-interval', ms);
-    const dot = document.getElementById('refreshDot');
+    var dot = document.getElementById('refreshDot');
     if (ms == 0) {
         if (dot) dot.style.background = 'var(--text-muted)';
     } else {
@@ -138,17 +196,22 @@ function setRefreshInterval(ms) {
     }
 }
 
-// Restore saved interval on load
 (function() {
-    const saved = localStorage.getItem('jen-refresh-interval') || '30000';
-    const sel = document.getElementById('refreshInterval');
-    if (sel) {
-        sel.value = saved;
-        // If saved value isn't in options, default to 30s
-        if (!sel.value) sel.value = '30000';
-    }
+    fetch('/api/dashboard/get-prefs').then(r => r.json()).then(function(d) {
+        var all = ['subnet_stats','recent_leases','server_status','alert_summary'];
+        all.forEach(function(w) {
+            var el = document.getElementById('w-' + w);
+            if (el) el.checked = d.widgets.includes(w);
+        });
+        applyDashPrefs(d.widgets);
+    }).catch(function() {
+        applyDashPrefs(['subnet_stats','recent_leases','server_status','alert_summary']);
+    });
+
+    var saved = localStorage.getItem('jen-refresh-interval') || '30000';
+    var sel = document.getElementById('refreshInterval');
+    if (sel) { sel.value = saved; if (!sel.value) sel.value = '30000'; }
     setRefreshInterval(saved);
-    // Run once immediately to populate util bars
     updateStats();
 })();
 {% endblock %}

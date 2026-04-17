@@ -43,13 +43,34 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.2.16"
+JEN_VERSION = "2.2.25"
 
 # ─────────────────────────────────────────
 # App setup
 # ─────────────────────────────────────────
 app = Flask(__name__, static_folder="/opt/jen/static")
-app.secret_key = os.urandom(24).hex()
+# Load or generate a persistent secret key so sessions survive restarts
+# and are consistent across gunicorn workers
+_SECRET_KEY_FILE = "/etc/jen/secret_key"
+def _load_secret_key():
+    try:
+        if os.path.exists(_SECRET_KEY_FILE):
+            with open(_SECRET_KEY_FILE, "r") as _f:
+                _key = _f.read().strip()
+            if len(_key) >= 32:
+                return _key
+        _key = os.urandom(32).hex()
+        os.makedirs("/etc/jen", exist_ok=True)
+        with open(_SECRET_KEY_FILE, "w") as _f:
+            _f.write(_key)
+        os.chmod(_SECRET_KEY_FILE, 0o640)
+        return _key
+    except Exception as _e:
+        # Fallback: not persistent but at least won't crash
+        import logging
+        logging.getLogger("jen").warning(f"Could not persist secret key: {_e}")
+        return os.urandom(32).hex()
+app.secret_key = _load_secret_key()
 
 # ─────────────────────────────────────────
 # Config
@@ -463,6 +484,23 @@ def init_jen_db():
                     last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_user (user_id),
                     INDEX idx_token (token_hash)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS saved_searches (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    user_id INT NOT NULL,
+                    name VARCHAR(100) NOT NULL,
+                    page VARCHAR(50) NOT NULL,
+                    params TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS dashboard_prefs (
+                    user_id INT PRIMARY KEY,
+                    widgets TEXT NOT NULL DEFAULT '["subnet_stats","recent_leases"]',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
                 )
             """)
             cur.execute("""
@@ -1440,7 +1478,7 @@ def login():
 
         if not username or not password:
             flash("Username and password are required.", "error")
-            return render_template("login.html", jen_version=JEN_VERSION)
+            return render_template("login.html", jen_version=JEN_VERSION, prefill_username=username)
 
         # Check rate limit
         locked, remaining = is_locked_out(ip, username)
@@ -1449,7 +1487,7 @@ def login():
                 flash("Account is locked. Contact an administrator.", "error")
             else:
                 flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
-            return render_template("login.html", jen_version=JEN_VERSION)
+            return render_template("login.html", jen_version=JEN_VERSION, prefill_username=username)
 
         try:
             db = get_jen_db()
@@ -1463,7 +1501,7 @@ def login():
         except Exception as e:
             logger.error(f"Login DB error: {e}")
             flash("Database error. Please try again.", "error")
-            return render_template("login.html", jen_version=JEN_VERSION)
+            return render_template("login.html", jen_version=JEN_VERSION, prefill_username=username)
 
         if row:
             clear_login_attempts(ip, username)
@@ -1476,7 +1514,7 @@ def login():
                     session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
                     session["mfa_next"] = request.args.get("next", url_for("dashboard"))
-                    return redirect(url_for("mfa_challenge"))
+                    return redirect(url_for("mfa_verify"))
                 elif user_needs_mfa(user) and not user_has_mfa(row["id"]):
                     # MFA required but not enrolled — force enrollment
                     session["mfa_pending_user_id"] = row["id"]
@@ -1516,8 +1554,9 @@ def login():
                     flash("Invalid username or password.", "error")
         else:
             flash("Invalid username or password.", "error")
+        return render_template("login.html", jen_version=JEN_VERSION, prefill_username=username)
 
-    return render_template("login.html", jen_version=JEN_VERSION)
+    return render_template("login.html", jen_version=JEN_VERSION, prefill_username="")
 
 @app.route("/logout")
 @login_required
@@ -1527,368 +1566,39 @@ def logout():
     return redirect(url_for("login"))
 
 # ─────────────────────────────────────────
-# User Profile
-# ─────────────────────────────────────────
-# MFA Routes
-# ─────────────────────────────────────────
-@app.route("/mfa/challenge", methods=["GET", "POST"])
-def mfa_challenge():
-    user_id = session.get("mfa_pending_user_id")
-    username = session.get("mfa_pending_username")
-    if not user_id:
-        return redirect(url_for("login"))
-
-    if request.method == "POST":
-        code = request.form.get("code", "").strip().replace(" ", "").replace("-", "")
-        remember = request.form.get("remember_device", "0")
-        method = request.form.get("method", "totp")
-
-        verified = False
-        if method == "backup":
-            verified = verify_backup_code(user_id, code)
-        else:
-            verified = verify_totp(user_id, code)
-
-        if verified:
-            try:
-                db = get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("SELECT id, username, role, session_timeout FROM users WHERE id=%s", (user_id,))
-                    row = cur.fetchone()
-                db.close()
-            except Exception as e:
-                flash("Database error.", "error")
-                return render_template("mfa_challenge.html", username=username)
-
-            if row:
-                user = User(row["id"], row["username"], row["role"], row["session_timeout"])
-                login_user(user)
-                session["last_active"] = datetime.now(timezone.utc).isoformat()
-                session.pop("mfa_pending_user_id", None)
-                session.pop("mfa_pending_username", None)
-                next_url = session.pop("mfa_next", url_for("dashboard"))
-                audit("LOGIN", "auth", f"User {username} logged in with MFA from {request.remote_addr}")
-
-                resp = redirect(next_url)
-                if remember and remember != "0":
-                    ua = request.headers.get("User-Agent", "Unknown")[:100]
-                    token = create_trusted_device_token(user_id, remember, ua)
-                    days = int(remember) if remember != "forever" else 36500
-                    resp.set_cookie("jen_trusted_device", token,
-                                   max_age=days * 86400,
-                                   secure=ssl_configured(),
-                                   httponly=True, samesite="Lax")
-                return resp
-        else:
-            flash("Invalid code. Try again.", "error")
-
-    # Check what methods are available
-    has_totp = False
-    try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (user_id,))
-            has_totp = cur.fetchone()["cnt"] > 0
-        db.close()
-    except Exception:
-        pass
-
-    return render_template("mfa_challenge.html", username=username, has_totp=has_totp)
-
-@app.route("/mfa/enroll", methods=["GET", "POST"])
-@login_required
-def mfa_enroll():
-    import pyotp, qrcode, io, base64
-    user_id = current_user.id
-
-    if request.method == "POST":
-        action = request.form.get("action")
-
-        if action == "setup_totp":
-            secret = request.form.get("secret")
-            code = request.form.get("code", "").strip()
-            name = request.form.get("name", "Authenticator").strip()[:100]
-            totp = pyotp.TOTP(secret)
-            if totp.verify(code, valid_window=1):
-                try:
-                    db = get_jen_db()
-                    with db.cursor() as cur:
-                        cur.execute("""
-                            INSERT INTO mfa_methods (user_id, method_type, secret, name)
-                            VALUES (%s, 'totp', %s, %s)
-                            ON DUPLICATE KEY UPDATE secret=%s, enabled=1, name=%s
-                        """, (user_id, secret, name, secret, name))
-                    db.commit()
-                    db.close()
-                except Exception as e:
-                    flash(f"Error saving MFA: {str(e)}", "error")
-                    return redirect(url_for("mfa_enroll"))
-                codes = generate_backup_codes(user_id)
-                session["new_backup_codes"] = codes
-                flash("TOTP authenticator enrolled successfully.", "success")
-                audit("MFA_ENROLL", current_user.username, "TOTP enrolled")
-                return redirect(url_for("mfa_backup_codes"))
-            else:
-                flash("Invalid verification code. Make sure your authenticator time is synced.", "error")
-
-        elif action == "remove_totp":
-            mfa_id = request.form.get("mfa_id")
-            try:
-                db = get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (mfa_id, user_id))
-                db.commit()
-                db.close()
-                flash("Authenticator removed.", "success")
-                audit("MFA_REMOVE", current_user.username, "TOTP removed")
-            except Exception as e:
-                flash(f"Error: {str(e)}", "error")
-
-        elif action == "remove_passkey":
-            cred_id = request.form.get("cred_id")
-            try:
-                db = get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("DELETE FROM webauthn_credentials WHERE id=%s AND user_id=%s", (cred_id, user_id))
-                db.commit()
-                db.close()
-                flash("Passkey removed.", "success")
-                audit("MFA_REMOVE", current_user.username, "Passkey removed")
-            except Exception as e:
-                flash(f"Error: {str(e)}", "error")
-
-        return redirect(url_for("mfa_enroll"))
-
-    # Generate new TOTP secret for enrollment
-    new_secret = pyotp.random_base32()
-    totp = pyotp.TOTP(new_secret)
-    app_name = "Jen DHCP"
-    provisioning_uri = totp.provisioning_uri(current_user.username, issuer_name=app_name)
-
-    # Generate QR code
-    qr = qrcode.QRCode(version=1, box_size=6, border=2)
-    qr.add_data(provisioning_uri)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    qr_b64 = base64.b64encode(buf.getvalue()).decode()
-
-    # Get existing methods
-    totp_methods = []
-    passkeys = []
-    backup_count = 0
-    try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (user_id,))
-            totp_methods = cur.fetchall()
-            cur.execute("SELECT id, name, created_at, last_used FROM webauthn_credentials WHERE user_id=%s", (user_id,))
-            passkeys = cur.fetchall()
-            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (user_id,))
-            backup_count = cur.fetchone()["cnt"]
-        db.close()
-    except Exception as e:
-        logger.error(f"MFA enroll load error: {e}")
-
-    return render_template("mfa_enroll.html",
-                           new_secret=new_secret, qr_b64=qr_b64,
-                           totp_methods=totp_methods, passkeys=passkeys,
-                           backup_count=backup_count,
-                           provisioning_uri=provisioning_uri)
-
-@app.route("/mfa/backup-codes")
-@login_required
-def mfa_backup_codes():
-    codes = session.pop("new_backup_codes", None)
-    if not codes:
-        flash("No backup codes to display.", "error")
-        return redirect(url_for("mfa_enroll"))
-    return render_template("mfa_backup_codes.html", codes=codes)
-
-@app.route("/mfa/regenerate-backup-codes", methods=["POST"])
-@login_required
-def regenerate_backup_codes():
-    codes = generate_backup_codes(current_user.id)
-    session["new_backup_codes"] = codes
-    audit("MFA_BACKUP_REGEN", current_user.username, "Backup codes regenerated")
-    return redirect(url_for("mfa_backup_codes"))
-
-@app.route("/mfa/trusted-devices")
-@login_required
-def mfa_trusted_devices():
-    devices = []
-    try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                SELECT id, device_name, expires_at, created_at, last_used
-                FROM mfa_trusted_devices WHERE user_id=%s
-                AND (expires_at IS NULL OR expires_at > NOW())
-                ORDER BY last_used DESC
-            """, (current_user.id,))
-            devices = cur.fetchall()
-        db.close()
-    except Exception as e:
-        flash(f"Error loading devices: {str(e)}", "error")
-    return render_template("mfa_trusted_devices.html", devices=devices)
-
-@app.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])
-@login_required
-def revoke_trusted_device(device_id):
-    try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE id=%s AND user_id=%s",
-                       (device_id, current_user.id))
-        db.commit()
-        db.close()
-        flash("Trusted device revoked.", "success")
-    except Exception as e:
-        flash(f"Error: {str(e)}", "error")
-    return redirect(url_for("mfa_trusted_devices"))
-
-@app.route("/mfa/revoke-all-devices", methods=["POST"])
-@login_required
-def revoke_all_trusted_devices():
-    try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (current_user.id,))
-        db.commit()
-        db.close()
-        flash("All trusted devices revoked.", "success")
-        audit("MFA_REVOKE_ALL", current_user.username, "All trusted devices revoked")
-    except Exception as e:
-        flash(f"Error: {str(e)}", "error")
-    return redirect(url_for("mfa_trusted_devices"))
-
-# Admin MFA management
-@app.route("/users/reset-mfa/<int:user_id>", methods=["POST"])
-@login_required
-@admin_required
-def admin_reset_mfa(user_id):
-    if user_id == current_user.id:
-        flash("Use your own MFA settings page to manage your own MFA.", "error")
-        return redirect(url_for("users"))
-    try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                flash("User not found.", "error")
-                return redirect(url_for("users"))
-            cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM webauthn_credentials WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
-        db.commit()
-        db.close()
-        flash(f"MFA reset for {row['username']}. They can now log in without MFA.", "success")
-        audit("ADMIN_RESET_MFA", row["username"], f"MFA cleared by {current_user.username}")
-    except Exception as e:
-        flash(f"Error resetting MFA: {str(e)}", "error")
-    return redirect(url_for("users"))
-
-@app.route("/settings/system/save-branding", methods=["POST"])
-@login_required
-@admin_required
-def save_branding():
-    reset = request.form.get("reset") == "1"
-    if reset:
-        set_global_setting("branding_app_name", "")
-        set_global_setting("branding_app_subtitle", "")
-        flash("Branding reset to defaults.", "success")
-        audit("SAVE_SETTINGS", "branding", "reset to defaults")
-    else:
-        app_name = request.form.get("app_name", "").strip()[:50]
-        app_tagline = request.form.get("app_tagline", "").strip()[:100]
-        set_global_setting("branding_app_name", app_name)
-        set_global_setting("branding_app_subtitle", app_tagline)
-        flash("Branding updated.", "success")
-        audit("SAVE_SETTINGS", "branding", f"name={app_name or 'Jen'}")
-    return redirect(url_for("settings_system"))
-
-@app.route("/settings/system/save-mfa-mode", methods=["POST"])
-@login_required
-@admin_required
-def save_mfa_mode():
-    mode = request.form.get("mfa_mode", "off")
-    if mode not in ("off", "optional", "required_admins", "required_all"):
-        flash("Invalid MFA mode.", "error")
-        return redirect(url_for("settings_system"))
-    set_global_setting("mfa_mode", mode)
-    flash(f"MFA mode set to: {mode.replace('_', ' ').title()}.", "success")
-    audit("SAVE_SETTINGS", "mfa_mode", f"mode={mode}")
-    return redirect(url_for("settings_system"))
-
-# ─────────────────────────────────────────
 # Dashboard
 # ─────────────────────────────────────────
 @app.route("/")
 @login_required
 def dashboard():
-    hours = request.args.get("hours", "0.5")
-    try:
-        hours_val = float(hours)
-        if hours_val <= 0 or hours_val > 168:
-            hours_val = 0.5
-    except ValueError:
-        hours_val = 0.5
-    minutes_val = int(hours_val * 60)
-
     stats = {}
+    recent = []
     try:
         db = get_kea_db()
         with db.cursor() as cur:
             for subnet_id, info in SUBNET_MAP.items():
                 cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                 active = cur.fetchone()["cnt"]
-                cur.execute("""
-                    SELECT COUNT(*) as cnt FROM lease4 l
-                    LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
-                        AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                    WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
-                """, (subnet_id,))
-                dynamic = cur.fetchone()["cnt"]
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                reservations = cur.fetchone()["cnt"]
-                stats[subnet_id] = {
-                    "name": info["name"], "cidr": info["cidr"],
-                    "active": active, "dynamic": dynamic, "reservations": reservations,
-                }
-        db.close()
-    except Exception as e:
-        logger.error(f"Dashboard stats error: {e}")
-        flash("Could not load subnet statistics. Check Kea database connection.", "error")
-
-    recent = []
-    try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            cur.execute(f"""
-                SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
-                       IFNULL(l.hostname,'') AS hostname,
-                       l.subnet_id, l.expire, l.valid_lifetime,
-                       DATE_SUB(l.expire, INTERVAL l.valid_lifetime SECOND) AS obtained
+                reserved = cur.fetchone()["cnt"]
+                stats[subnet_id] = {"active": active, "reserved": reserved,
+                                    "name": info["name"], "cidr": info["cidr"]}
+            cur.execute("""
+                SELECT inet_ntoa(l.address) AS ip, l.hostname,
+                       HEX(l.hwaddr) AS mac_hex, l.subnet_id,
+                       FROM_UNIXTIME(l.expire) AS obtained
                 FROM lease4 l
-                LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
-                    AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                WHERE l.state=0 AND h.host_id IS NULL
-                AND DATE_SUB(l.expire, INTERVAL l.valid_lifetime SECOND) >= DATE_SUB(NOW(), INTERVAL %s MINUTE)
-                ORDER BY obtained DESC LIMIT 50
-            """, (minutes_val,))
+                WHERE l.state=0
+                ORDER BY l.expire DESC LIMIT 50
+            """)
             for row in cur.fetchall():
-                row["mac"] = format_mac(row["hwaddr"])
-                row["subnet_name"] = SUBNET_MAP.get(row["subnet_id"], {}).get("name", "Unknown")
-                recent.append(row)
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                recent.append({"ip": row["ip"], "hostname": row["hostname"] or "",
+                                "mac": mac, "subnet_id": row["subnet_id"],
+                                "obtained": row["obtained"]})
         db.close()
     except Exception as e:
-        logger.error(f"Dashboard recent leases error: {e}")
-
-    kea_up = kea_is_up()
-    # Get pool sizes for utilization bars
+        flash(f"Could not load dashboard data: {str(e)}", "error")
     pool_sizes = {}
     try:
         result = kea_command("config-get")
@@ -1901,8 +1611,9 @@ def dashboard():
                         pool_sizes[str(s["id"])] = ip_to_int(end) - ip_to_int(start) + 1
     except Exception:
         pass
+    kea_up = kea_is_up()
     return render_template("dashboard.html", stats=stats, recent=recent,
-                           kea_up=kea_up, hours=str(hours_val), subnet_map=SUBNET_MAP,
+                           kea_up=kea_up, subnet_map=SUBNET_MAP,
                            pool_sizes=pool_sizes)
 
 # ─────────────────────────────────────────
@@ -1920,16 +1631,12 @@ def leases():
     except ValueError:
         page = 1
     per_page = 50
-
-    # Validate subnet filter
     if subnet_filter != "all":
         try:
-            subnet_filter_int = int(subnet_filter)
-            if subnet_filter_int not in SUBNET_MAP:
+            if int(subnet_filter) not in SUBNET_MAP:
                 subnet_filter = "all"
         except ValueError:
             subnet_filter = "all"
-
     leases_list = []
     total = 0
     try:
@@ -1937,71 +1644,47 @@ def leases():
         with db.cursor() as cur:
             where = []
             params = []
-            if show_expired:
-                where.append("l.state=1")
-            else:
+            if not show_expired:
                 where.append("l.state=0")
-                where.append("h.host_id IS NULL")
             if subnet_filter != "all":
                 where.append("l.subnet_id=%s")
                 params.append(int(subnet_filter))
-            if minutes and minutes.isdigit() and 0 < int(minutes) <= 10080:
-                where.append("DATE_SUB(l.expire, INTERVAL l.valid_lifetime SECOND) >= DATE_SUB(NOW(), INTERVAL %s MINUTE)")
-                params.append(int(minutes))
+            if minutes:
+                try:
+                    mins = int(minutes)
+                    where.append("FROM_UNIXTIME(l.expire) >= DATE_SUB(NOW(), INTERVAL %s MINUTE)")
+                    params.append(mins)
+                except ValueError:
+                    pass
             if search:
                 where.append("(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)")
                 s = f"%{search}%"
                 params += [s, s, s.replace(":", "")]
-
-            join = "" if show_expired else """
-                LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
-                    AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-            """
             where_str = " AND ".join(where) if where else "1=1"
-
-            cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l {join} WHERE {where_str}", params)
+            cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
             total = cur.fetchone()["cnt"]
             offset = (page - 1) * per_page
             cur.execute(f"""
-                SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
-                       IFNULL(l.hostname,'') AS hostname,
-                       l.subnet_id, l.expire, l.valid_lifetime, l.state,
-                       DATE_SUB(l.expire, INTERVAL l.valid_lifetime SECOND) AS obtained
-                FROM lease4 l {join}
-                WHERE {where_str}
-                ORDER BY l.subnet_id, l.address
+                SELECT inet_ntoa(l.address) AS ip, l.hostname,
+                       HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
+                       l.expire,
+                       FROM_UNIXTIME(l.expire) AS obtained,
+                       FROM_UNIXTIME(l.expire) AS expires
+                FROM lease4 l WHERE {where_str}
+                ORDER BY l.expire DESC
                 LIMIT {per_page} OFFSET {offset}
             """, params)
             for row in cur.fetchall():
-                row["mac"] = format_mac(row["hwaddr"])
-                row["subnet_name"] = SUBNET_MAP.get(row["subnet_id"], {}).get("name", "Unknown")
-                leases_list.append(row)
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                leases_list.append({**row, "mac": mac,
+                                    "subnet_name": SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")})
         db.close()
     except Exception as e:
-        logger.error(f"Leases error: {e}")
-        flash("Could not load leases. Check Kea database connection.", "error")
-
+        flash(f"Could not load leases: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page)
-    return render_template("leases.html", leases=leases_list,
-                           subnet_filter=subnet_filter, minutes=minutes,
-                           search=search, show_expired=show_expired,
-                           subnet_map=SUBNET_MAP, page=page, pages=pages, total=total)
-
-@app.route("/leases/release", methods=["POST"])
-@login_required
-@admin_required
-def release_lease():
-    ip = request.form.get("ip", "").strip()
-    if not valid_ip(ip):
-        flash("Invalid IP address.", "error")
-        return redirect(url_for("leases"))
-    result = kea_command("lease4-del", arguments={"ip-address": ip})
-    if result.get("result") == 0:
-        flash(f"Lease for {ip} released.", "success")
-        audit("RELEASE_LEASE", ip, f"Lease released for {ip}")
-    else:
-        flash(f"Failed to release lease: {result.get('text')}", "error")
-    return redirect(url_for("leases"))
+    return render_template("leases.html", leases=leases_list, page=page, pages=pages,
+                           total=total, subnet_filter=subnet_filter, minutes=minutes,
+                           search=search, show_expired=show_expired, subnet_map=SUBNET_MAP)
 
 @app.route("/leases/delete-stale", methods=["POST"])
 @login_required
@@ -2010,130 +1693,45 @@ def delete_stale_leases():
     try:
         db = get_kea_db()
         with db.cursor() as cur:
-            cur.execute("DELETE FROM lease4 WHERE state=1 AND expire < NOW()")
+            cur.execute("DELETE FROM lease4 WHERE state != 0")
             deleted = cur.rowcount
         db.commit()
         db.close()
-        flash(f"Deleted {deleted} stale lease(s).", "success")
-        audit("DELETE_STALE", "leases", f"Deleted {deleted} stale leases")
+        flash(f"Deleted {deleted} expired/stale lease(s).", "success")
+        audit("DELETE_STALE_LEASES", "leases", f"Deleted {deleted}")
     except Exception as e:
-        flash(f"Error deleting stale leases: {str(e)}", "error")
+        flash(f"Error: {str(e)}", "error")
     return redirect(url_for("leases"))
 
-@app.route("/leases/make-reservation", methods=["POST"])
-@login_required
-@admin_required
-def make_reservation():
-    ip = request.form.get("ip", "").strip()
-    mac = request.form.get("mac", "").strip().lower()
-    hostname = request.form.get("hostname", "").strip()[:253]
-    dns_override = request.form.get("dns_override", "").strip()
-
-    errors = []
-    if not valid_ip(ip):
-        errors.append(f"Invalid IP address: {ip}")
-    if not valid_mac(mac):
-        errors.append(f"Invalid MAC address: {mac}")
-    if hostname and not valid_hostname(hostname):
-        errors.append(f"Invalid hostname: {hostname}")
-    if dns_override and not valid_dns(dns_override):
-        errors.append(f"Invalid DNS override (must be comma-separated IPs): {dns_override}")
-    if errors:
-        for e in errors:
-            flash(e, "error")
-        return redirect(url_for("leases"))
-
-    try:
-        subnet_id = int(request.form.get("subnet_id"))
-    except (ValueError, TypeError):
-        flash("Invalid subnet ID.", "error")
-        return redirect(url_for("leases"))
-
-    # Duplicate check
-    try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
-            if cur.fetchone():
-                flash(f"A reservation for {ip} already exists.", "error")
-                db.close()
-                return redirect(url_for("leases"))
-            mac_hex = mac.replace(":", "")
-            cur.execute("SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp4_subnet_id=%s", (mac_hex, subnet_id))
-            if cur.fetchone():
-                flash(f"A reservation for MAC {mac} already exists in this subnet.", "error")
-                db.close()
-                return redirect(url_for("leases"))
-        db.close()
-    except Exception as e:
-        flash(f"Database error during duplicate check: {str(e)}", "error")
-        return redirect(url_for("leases"))
-
-    result = kea_command("reservation-add", arguments={
-        "reservation": {
-            "subnet-id": subnet_id, "hw-address": mac,
-            "ip-address": ip, "hostname": hostname,
-            **({"option-data": [{"name": "domain-name-servers", "data": dns_override}]} if dns_override else {})
-        }
-    })
-    if result.get("result") == 0:
-        flash(f"Reservation created for {ip}.", "success")
-        audit("ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname}")
-    else:
-        flash(f"Failed to create reservation: {result.get('text')}", "error")
-    return redirect(url_for("leases"))
-
-# ─────────────────────────────────────────
-# IP Map
-# ─────────────────────────────────────────
 @app.route("/ipmap")
 @login_required
 def ipmap():
-    default_subnet = list(SUBNET_MAP.keys())[0] if SUBNET_MAP else 1
+    subnet_filter = request.args.get("subnet", list(SUBNET_MAP.keys())[0] if SUBNET_MAP else 1)
     try:
-        subnet_id = int(request.args.get("subnet", default_subnet))
-        if subnet_id not in SUBNET_MAP:
-            subnet_id = default_subnet
-    except ValueError:
-        subnet_id = default_subnet
-
-    used = {}
+        subnet_filter = int(subnet_filter)
+        if subnet_filter not in SUBNET_MAP:
+            subnet_filter = list(SUBNET_MAP.keys())[0]
+    except (ValueError, IndexError):
+        subnet_filter = list(SUBNET_MAP.keys())[0] if SUBNET_MAP else 1
+    leases_by_ip = {}
+    reservations_by_ip = {}
+    cidr = SUBNET_MAP.get(subnet_filter, {}).get("cidr", "")
     try:
         db = get_kea_db()
         with db.cursor() as cur:
-            cur.execute("""
-                SELECT inet_ntoa(address) AS ip, hostname, 'dynamic' AS type
-                FROM lease4 WHERE state=0 AND subnet_id=%s
-            """, (subnet_id,))
+            cur.execute("SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_filter,))
             for row in cur.fetchall():
-                used[row["ip"]] = {"hostname": row["hostname"], "type": "dynamic"}
-            cur.execute("""
-                SELECT inet_ntoa(ipv4_address) AS ip, hostname, 'reserved' AS type
-                FROM hosts WHERE dhcp4_subnet_id=%s
-            """, (subnet_id,))
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                leases_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "dynamic"}
+            cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_filter,))
             for row in cur.fetchall():
-                used[row["ip"]] = {"hostname": row["hostname"], "type": "reserved"}
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
         db.close()
     except Exception as e:
-        logger.error(f"IP map error: {e}")
-        flash("Could not load IP map data.", "error")
-
-    pool_start = pool_end = None
-    try:
-        result = kea_command("config-get")
-        if result.get("result") == 0:
-            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
-                if s["id"] == subnet_id:
-                    for pool in s.get("pools", []):
-                        p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                        if "-" in p:
-                            pool_start, pool_end = [x.strip() for x in p.split("-")]
-                            break
-    except Exception as e:
-        logger.error(f"IP map pool fetch error: {e}")
-
-    return render_template("ipmap.html", used=used, subnet_id=subnet_id,
-                           subnet_map=SUBNET_MAP, pool_start=pool_start, pool_end=pool_end)
+        flash(f"Could not load IP map: {str(e)}", "error")
+    return render_template("ipmap.html", leases=leases_by_ip, reservations=reservations_by_ip,
+                           subnet_filter=subnet_filter, subnet_map=SUBNET_MAP, cidr=cidr)
 
 # ─────────────────────────────────────────
 # Reservations
@@ -2148,7 +1746,6 @@ def reservations():
     except ValueError:
         page = 1
     per_page = 50
-
     hosts = []
     total = 0
     try:
@@ -2167,222 +1764,156 @@ def reservations():
                 where.append("(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)")
                 s = f"%{search}%"
                 params += [s, s, s.replace(":", "")]
-
             cur.execute(f"SELECT COUNT(*) as cnt FROM hosts h WHERE {' AND '.join(where)}", params)
             total = cur.fetchone()["cnt"]
             offset = (page - 1) * per_page
             cur.execute(f"""
                 SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
-                       h.dhcp_identifier, h.hostname, h.dhcp4_subnet_id
-                FROM hosts h WHERE {' AND '.join(where)}
-                ORDER BY h.dhcp4_subnet_id, h.ipv4_address
+                       h.hostname, HEX(h.dhcp_identifier) AS mac_hex,
+                       h.dhcp4_subnet_id AS subnet_id
+                FROM hosts h
+                WHERE {' AND '.join(where)}
+                ORDER BY h.ipv4_address
                 LIMIT {per_page} OFFSET {offset}
             """, params)
-            for row in cur.fetchall():
-                row["mac"] = format_mac(row["dhcp_identifier"])
-                row["subnet_name"] = SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "Unknown")
-                cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
-                dns_row = cur.fetchone()
-                row["dns_override"] = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
-                with jen_db.cursor() as jcur:
+            rows = cur.fetchall()
+            with jen_db.cursor() as jcur:
+                for row in rows:
+                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
                     jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
-                    note_row = jcur.fetchone()
-                    row["notes"] = note_row["notes"] if note_row else ""
-                hosts.append(row)
+                    note = jcur.fetchone()
+                    hosts.append({**row, "mac": mac,
+                                  "notes": note["notes"] if note else "",
+                                  "subnet_name": SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")})
         kea_db.close()
         jen_db.close()
     except Exception as e:
-        logger.error(f"Reservations error: {e}")
-        flash("Could not load reservations. Check database connection.", "error")
-
+        flash(f"Could not load reservations: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page)
     stale_days = int(get_global_setting("stale_device_days", "30"))
-    # Get stale MACs from device inventory
-    stale_macs = set()
-    try:
-        jdb = get_jen_db()
-        with jdb.cursor() as jcur:
-            jcur.execute(f"SELECT mac FROM devices WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)")
-            stale_macs = {row["mac"] for row in jcur.fetchall()}
-        jdb.close()
-    except Exception:
-        pass
-    for host in hosts:
-        host["is_stale"] = host["mac"] in stale_macs
     return render_template("reservations.html", hosts=hosts,
                            subnet_filter=subnet_filter, search=search,
-                           subnet_map=SUBNET_MAP, page=page, pages=pages, total=total,
-                           stale_days=stale_days)
+                           subnet_map=SUBNET_MAP, page=page, pages=pages,
+                           total=total, stale_days=stale_days)
 
-@app.route("/reservations/add", methods=["GET", "POST"])
+@app.route("/reservations/add")
 @login_required
 @admin_required
 def add_reservation():
-    if request.method == "POST":
-        mac = request.form.get("mac", "").strip().lower()
-        ip = request.form.get("ip", "").strip()
-        hostname = request.form.get("hostname", "").strip()[:253]
-        dns_override = request.form.get("dns_override", "").strip()
-        notes = request.form.get("notes", "").strip()[:1000]
-
-        try:
-            subnet_id = int(request.form.get("subnet_id"))
-            if subnet_id not in SUBNET_MAP:
-                flash("Invalid subnet selected.", "error")
-                return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-        except (ValueError, TypeError):
-            flash("Invalid subnet.", "error")
-            return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-
-        errors = []
-        if not valid_ip(ip):
-            errors.append(f"Invalid IP address: {ip}")
-        if not valid_mac(mac):
-            errors.append(f"Invalid MAC address format. Expected: aa:bb:cc:dd:ee:ff")
-        if hostname and not valid_hostname(hostname):
-            errors.append(f"Invalid hostname: {hostname}")
-        if dns_override and not valid_dns(dns_override):
-            errors.append(f"Invalid DNS override — must be comma-separated IP addresses.")
-        if errors:
-            for e in errors:
-                flash(e, "error")
-            return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-
-        # Verify IP is in the correct subnet
-        try:
-            network = ipaddress.ip_network(SUBNET_MAP[subnet_id]["cidr"], strict=False)
-            if ipaddress.ip_address(ip) not in network:
-                flash(f"IP {ip} is not within subnet {SUBNET_MAP[subnet_id]['cidr']}.", "error")
-                return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-        except Exception:
-            pass
-
-        # Duplicate check
-        try:
-            db = get_kea_db()
-            with db.cursor() as cur:
-                cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
-                if cur.fetchone():
-                    flash(f"A reservation for IP {ip} already exists.", "error")
-                    db.close()
-                    return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-                mac_hex = mac.replace(":", "")
-                cur.execute("SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp4_subnet_id=%s", (mac_hex, subnet_id))
-                if cur.fetchone():
-                    flash(f"A reservation for MAC {mac} already exists in this subnet.", "error")
-                    db.close()
-                    return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-            db.close()
-        except Exception as e:
-            flash(f"Database error during duplicate check: {str(e)}", "error")
-            return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
-
-        res = {"subnet-id": subnet_id, "hw-address": mac, "ip-address": ip, "hostname": hostname}
-        if dns_override:
-            res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
-
-        result = kea_command("reservation-add", arguments={"reservation": res})
-        if result.get("result") == 0:
-            if notes:
-                try:
-                    db = get_kea_db()
-                    with db.cursor() as cur:
-                        cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
-                        hrow = cur.fetchone()
-                        if hrow:
-                            jdb = get_jen_db()
-                            with jdb.cursor() as jcur:
-                                jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s, %s) ON DUPLICATE KEY UPDATE notes=%s",
-                                             (hrow["host_id"], notes, notes))
-                            jdb.commit()
-                            jdb.close()
-                    db.close()
-                except Exception as e:
-                    logger.error(f"Failed to save notes: {e}")
-            flash(f"Reservation added for {ip}.", "success")
-            audit("ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname}")
-            subnet_name = SUBNET_MAP.get(subnet_id, {}).get("name", f"Subnet {subnet_id}")
-            send_alert("reservation_added", ip=ip, mac=mac,
-                      hostname=hostname or "(none)", subnet=subnet_name)
-            return redirect(url_for("reservations"))
-        else:
-            flash(f"Kea error: {result.get('text')}", "error")
-
     return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
 
-@app.route("/reservations/edit/<int:host_id>", methods=["GET", "POST"])
+@app.route("/reservations/add", methods=["POST"])
+@login_required
+@admin_required
+def add_reservation_post():
+    ip = request.form.get("ip", "").strip()
+    mac = request.form.get("mac", "").strip().lower()
+    hostname = request.form.get("hostname", "").strip()[:253]
+    notes = request.form.get("notes", "").strip()[:1000]
+    dns_override = request.form.get("dns_override", "").strip()
+    try:
+        subnet_id = int(request.form.get("subnet_id", 1))
+    except ValueError:
+        flash("Invalid subnet.", "error")
+        return redirect(url_for("add_reservation"))
+    errors = []
+    if not valid_ip(ip): errors.append(f"Invalid IP: {ip}")
+    if not valid_mac(mac): errors.append(f"Invalid MAC: {mac}")
+    if hostname and not valid_hostname(hostname): errors.append(f"Invalid hostname: {hostname}")
+    if dns_override and not valid_dns(dns_override): errors.append(f"Invalid DNS: {dns_override}")
+    if errors:
+        for e in errors: flash(e, "error")
+        return redirect(url_for("add_reservation"))
+    res = {"subnet-id": subnet_id, "hw-address": mac, "ip-address": ip, "hostname": hostname}
+    if dns_override:
+        res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
+    result = kea_command("reservation-add", arguments={"reservation": res})
+    if result.get("result") == 0:
+        if notes:
+            try:
+                db = get_kea_db()
+                with db.cursor() as cur:
+                    cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
+                    row = cur.fetchone()
+                    if row:
+                        jdb = get_jen_db()
+                        with jdb.cursor() as jcur:
+                            jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
+                                         (row["host_id"], notes, notes))
+                        jdb.commit(); jdb.close()
+                db.close()
+            except Exception:
+                pass
+        flash(f"Reservation added: {ip} → {mac}", "success")
+        audit("ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname}")
+        return redirect(url_for("reservations"))
+    else:
+        flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
+        return redirect(url_for("add_reservation"))
+
+@app.route("/reservations/edit/<int:host_id>")
 @login_required
 @admin_required
 def edit_reservation(host_id):
     try:
-        kea_db = get_kea_db()
-        jen_db = get_jen_db()
-        with kea_db.cursor() as cur:
-            cur.execute("""
-                SELECT host_id, inet_ntoa(ipv4_address) AS ip,
-                       dhcp_identifier, hostname, dhcp4_subnet_id
-                FROM hosts WHERE host_id=%s
-            """, (host_id,))
+        db = get_kea_db()
+        jdb = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
             host = cur.fetchone()
             if not host:
                 flash("Reservation not found.", "error")
                 return redirect(url_for("reservations"))
-            host["mac"] = format_mac(host["dhcp_identifier"])
+            mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
             cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
             dns_row = cur.fetchone()
-            host["dns_override"] = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
-        with jen_db.cursor() as jcur:
+            host["mac"] = mac
+            host["dns_override"] = dns_row["formatted_value"] if dns_row else ""
+        with jdb.cursor() as jcur:
             jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (host_id,))
-            note_row = jcur.fetchone()
-            host["notes"] = note_row["notes"] if note_row else ""
-        kea_db.close()
-        jen_db.close()
+            note = jcur.fetchone()
+            host["notes"] = note["notes"] if note else ""
+        db.close(); jdb.close()
     except Exception as e:
-        flash(f"Error loading reservation: {str(e)}", "error")
+        flash(f"Error: {str(e)}", "error")
         return redirect(url_for("reservations"))
-
-    if request.method == "POST":
-        new_hostname = request.form.get("hostname", "").strip()[:253]
-        new_dns = request.form.get("dns_override", "").strip()
-        new_notes = request.form.get("notes", "").strip()[:1000]
-
-        errors = []
-        if new_hostname and not valid_hostname(new_hostname):
-            errors.append(f"Invalid hostname: {new_hostname}")
-        if new_dns and not valid_dns(new_dns):
-            errors.append("Invalid DNS override — must be comma-separated IP addresses.")
-        if errors:
-            for e in errors:
-                flash(e, "error")
-            return render_template("edit_reservation.html", host=host, subnet_map=SUBNET_MAP)
-
-        kea_command("reservation-del", arguments={
-            "subnet-id": host["dhcp4_subnet_id"],
-            "identifier-type": "hw-address", "identifier": host["mac"]
-        })
-        res = {"subnet-id": host["dhcp4_subnet_id"], "hw-address": host["mac"],
-               "ip-address": host["ip"], "hostname": new_hostname}
-        if new_dns:
-            res["option-data"] = [{"name": "domain-name-servers", "data": new_dns}]
-
-        add_result = kea_command("reservation-add", arguments={"reservation": res})
-        if add_result.get("result") == 0:
-            try:
-                jdb = get_jen_db()
-                with jdb.cursor() as jcur:
-                    jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s, %s) ON DUPLICATE KEY UPDATE notes=%s",
-                                 (host_id, new_notes, new_notes))
-                jdb.commit()
-                jdb.close()
-            except Exception as e:
-                logger.error(f"Failed to save notes: {e}")
-            flash(f"Reservation updated for {host['ip']}.", "success")
-            audit("EDIT_RESERVATION", host["ip"], f"hostname={new_hostname}")
-            return redirect(url_for("reservations"))
-        else:
-            flash(f"Kea error: {add_result.get('text')}", "error")
-
     return render_template("edit_reservation.html", host=host, subnet_map=SUBNET_MAP)
+
+@app.route("/reservations/edit/<int:host_id>", methods=["POST"])
+@login_required
+@admin_required
+def edit_reservation_post(host_id):
+    hostname = request.form.get("hostname", "").strip()[:253]
+    notes = request.form.get("notes", "").strip()[:1000]
+    dns_override = request.form.get("dns_override", "").strip()
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+            host = cur.fetchone()
+            if not host:
+                flash("Reservation not found.", "error")
+                return redirect(url_for("reservations"))
+            mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
+            kea_command("reservation-del", arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac})
+            res = {"subnet-id": host["subnet_id"], "hw-address": mac, "ip-address": host["ip"], "hostname": hostname}
+            if dns_override:
+                res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
+            result = kea_command("reservation-add", arguments={"reservation": res})
+            if result.get("result") != 0:
+                flash(f"Kea error: {result.get('text')}", "error")
+                return redirect(url_for("edit_reservation", host_id=host_id))
+        db.close()
+        jdb = get_jen_db()
+        with jdb.cursor() as jcur:
+            jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
+                         (host_id, notes, notes))
+        jdb.commit(); jdb.close()
+        flash("Reservation updated.", "success")
+        audit("EDIT_RESERVATION", host["ip"], f"hostname={hostname}")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("reservations"))
 
 @app.route("/reservations/delete/<int:host_id>", methods=["POST"])
 @login_required
@@ -2391,37 +1922,23 @@ def delete_reservation(host_id):
     try:
         db = get_kea_db()
         with db.cursor() as cur:
-            cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+            cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
             host = cur.fetchone()
+            if host:
+                mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
+                result = kea_command("reservation-del", arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac})
+                if result.get("result") == 0:
+                    jdb = get_jen_db()
+                    with jdb.cursor() as jcur:
+                        jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
+                    jdb.commit(); jdb.close()
+                    flash(f"Reservation {host['ip']} deleted.", "success")
+                    audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
+                else:
+                    flash(f"Kea error: {result.get('text')}", "error")
         db.close()
     except Exception as e:
-        flash(f"Database error: {str(e)}", "error")
-        return redirect(url_for("reservations"))
-
-    if not host:
-        flash("Reservation not found.", "error")
-        return redirect(url_for("reservations"))
-
-    mac = format_mac(host["dhcp_identifier"])
-    result = kea_command("reservation-del", arguments={
-        "subnet-id": host["dhcp4_subnet_id"],
-        "identifier-type": "hw-address", "identifier": mac
-    })
-    if result.get("result") == 0:
-        try:
-            jdb = get_jen_db()
-            with jdb.cursor() as jcur:
-                jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
-            jdb.commit()
-            jdb.close()
-        except Exception:
-            pass
-        flash(f"Reservation for {host['ip']} deleted.", "success")
-        audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
-        subnet_name = SUBNET_MAP.get(host["dhcp4_subnet_id"], {}).get("name", f"Subnet {host['dhcp4_subnet_id']}")
-        send_alert("reservation_deleted", ip=host["ip"], mac=mac, subnet=subnet_name)
-    else:
-        flash(f"Kea error: {result.get('text')}", "error")
+        flash(f"Error: {str(e)}", "error")
     return redirect(url_for("reservations"))
 
 @app.route("/reservations/export")
@@ -2434,130 +1951,24 @@ def export_reservations():
         writer = csv.writer(output)
         writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
         with db.cursor() as cur:
-            cur.execute("""
-                SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
-                       h.dhcp_identifier, h.hostname, h.dhcp4_subnet_id
-                FROM hosts h WHERE h.dhcp4_subnet_id > 0
-                ORDER BY h.dhcp4_subnet_id, h.ipv4_address
-            """)
+            cur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp4_subnet_id > 0 ORDER BY ipv4_address")
             for row in cur.fetchall():
-                mac = format_mac(row["dhcp_identifier"])
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
                 cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
                 dns_row = cur.fetchone()
-                dns = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
+                dns = dns_row["formatted_value"] if dns_row else ""
                 with jdb.cursor() as jcur:
                     jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
-                    note_row = jcur.fetchone()
-                    notes = note_row["notes"] if note_row else ""
-                subnet_name = SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "")
-                writer.writerow([row["ip"], mac, row["hostname"] or "", row["dhcp4_subnet_id"], subnet_name, dns, notes])
-        db.close()
-        jdb.close()
+                    note = jcur.fetchone()
+                subnet_name = SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")
+                writer.writerow([row["ip"], mac, row["hostname"] or "", row["subnet_id"], subnet_name, dns, note["notes"] if note else ""])
+        db.close(); jdb.close()
         output.seek(0)
-        audit("EXPORT_RESERVATIONS", "reservations", "CSV export")
         return Response(output.getvalue(), mimetype="text/csv",
                         headers={"Content-Disposition": "attachment;filename=reservations.csv"})
     except Exception as e:
-        flash(f"Export failed: {str(e)}", "error")
+        flash(f"Export error: {str(e)}", "error")
         return redirect(url_for("reservations"))
-
-@app.route("/reservations/import", methods=["POST"])
-@login_required
-@admin_required
-def import_reservations():
-    f = request.files.get("csv_file")
-    if not f or not f.filename.endswith(".csv"):
-        flash("Please select a valid .csv file.", "error")
-        return redirect(url_for("reservations"))
-
-    added = skipped = errors = 0
-    error_details = []
-
-    try:
-        reader = csv.DictReader(io.StringIO(f.read().decode("utf-8")))
-        required_cols = {"ip", "mac", "subnet_id"}
-        if not reader.fieldnames or not required_cols.issubset(set(reader.fieldnames)):
-            flash(f"CSV missing required columns: {required_cols}", "error")
-            return redirect(url_for("reservations"))
-
-        for i, row in enumerate(reader, 1):
-            try:
-                ip = row.get("ip", "").strip()
-                mac = row.get("mac", "").strip().lower()
-                hostname = row.get("hostname", "").strip()[:253]
-                dns_override = row.get("dns_override", "").strip()
-                notes = row.get("notes", "").strip()[:1000]
-
-                try:
-                    subnet_id = int(row.get("subnet_id", 1))
-                except ValueError:
-                    error_details.append(f"Row {i}: Invalid subnet_id")
-                    errors += 1
-                    continue
-
-                row_errors = []
-                if not valid_ip(ip): row_errors.append(f"invalid IP '{ip}'")
-                if not valid_mac(mac): row_errors.append(f"invalid MAC '{mac}'")
-                if hostname and not valid_hostname(hostname): row_errors.append(f"invalid hostname '{hostname}'")
-                if dns_override and not valid_dns(dns_override): row_errors.append(f"invalid DNS '{dns_override}'")
-                if row_errors:
-                    error_details.append(f"Row {i}: {', '.join(row_errors)}")
-                    errors += 1
-                    continue
-
-                # Duplicate check
-                db = get_kea_db()
-                with db.cursor() as cur:
-                    cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
-                    if cur.fetchone():
-                        skipped += 1
-                        db.close()
-                        continue
-                db.close()
-
-                res = {"subnet-id": subnet_id, "hw-address": mac, "ip-address": ip, "hostname": hostname}
-                if dns_override:
-                    res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
-
-                result = kea_command("reservation-add", arguments={"reservation": res})
-                if result.get("result") == 0:
-                    added += 1
-                    if notes:
-                        try:
-                            db = get_kea_db()
-                            with db.cursor() as cur:
-                                cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
-                                hrow = cur.fetchone()
-                                if hrow:
-                                    jdb = get_jen_db()
-                                    with jdb.cursor() as jcur:
-                                        jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
-                                                     (hrow["host_id"], notes, notes))
-                                    jdb.commit()
-                                    jdb.close()
-                            db.close()
-                        except Exception:
-                            pass
-                else:
-                    error_details.append(f"Row {i}: Kea error — {result.get('text')}")
-                    errors += 1
-            except Exception as e:
-                error_details.append(f"Row {i}: {str(e)}")
-                errors += 1
-
-    except Exception as e:
-        flash(f"Import failed: {str(e)}", "error")
-        return redirect(url_for("reservations"))
-
-    msg = f"Import complete: {added} added, {skipped} skipped (duplicates), {errors} errors."
-    flash(msg, "success" if errors == 0 else "warning")
-    if error_details:
-        for detail in error_details[:5]:  # show first 5 errors
-            flash(detail, "error")
-        if len(error_details) > 5:
-            flash(f"...and {len(error_details)-5} more errors. Check your CSV file.", "error")
-    audit("IMPORT_RESERVATIONS", "reservations", f"Added={added} Skipped={skipped} Errors={errors}")
-    return redirect(url_for("reservations"))
 
 # ─────────────────────────────────────────
 # Subnets
@@ -2567,173 +1978,132 @@ def import_reservations():
 def subnets():
     subnet_data = []
     try:
-        result = kea_command("config-get")
-        if result.get("result") == 0:
-            cfg_data = result.get("arguments", {}).get("Dhcp4", {})
-            for s in cfg_data.get("subnet4", []):
-                subnet_data.append({
-                    "id": s.get("id"), "subnet": s.get("subnet"),
-                    "pools": [p.get("pool", "") if isinstance(p, dict) else str(p) for p in s.get("pools", []) if p],
-                    "valid_lifetime": s.get("valid-lifetime"),
-                    "renew_timer": s.get("renew-timer"),
-                    "rebind_timer": s.get("rebind-timer"),
-                    "options": s.get("option-data", []),
-                    "name": SUBNET_MAP.get(s.get("id"), {}).get("name", f"Subnet {s.get('id')}"),
-                })
-        elif result.get("result") == 1:
-            flash(f"Could not load subnet config from Kea: {result.get('text')}", "error")
+        db = get_kea_db()
+        with db.cursor() as cur:
+            for subnet_id, info in SUBNET_MAP.items():
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                active = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                reserved = cur.fetchone()["cnt"]
+                subnet_data.append({"id": subnet_id, "name": info["name"], "cidr": info["cidr"],
+                                    "active": active, "reserved": reserved})
+        db.close()
     except Exception as e:
-        flash(f"Error fetching subnet configuration: {str(e)}", "error")
-
+        flash(f"Could not load subnet data: {str(e)}", "error")
     ssh_ready = os.path.exists(SSH_KEY_PATH) and bool(KEA_SSH_HOST)
-    # Load subnet notes
     subnet_notes = {}
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT subnet_id, notes FROM subnet_notes")
-            for row in cur.fetchall():
+        jdb = get_jen_db()
+        with jdb.cursor() as jcur:
+            jcur.execute("SELECT subnet_id, notes FROM subnet_notes")
+            for row in jcur.fetchall():
                 subnet_notes[row["subnet_id"]] = row["notes"]
-        db.close()
+        jdb.close()
     except Exception:
         pass
     return render_template("subnets.html", subnets=subnet_data, ssh_ready=ssh_ready,
                            subnet_notes=subnet_notes)
 
-@app.route("/subnets/edit/<int:subnet_id>", methods=["GET", "POST"])
+@app.route("/subnets/edit/<int:subnet_id>")
 @login_required
 @admin_required
 def edit_subnet(subnet_id):
-    if not os.path.exists(SSH_KEY_PATH) or not KEA_SSH_HOST:
-        flash("SSH not configured. Set up SSH keys in Settings first.", "error")
-        return redirect(url_for("subnets"))
-
-    subnet = None
-    try:
-        result = kea_command("config-get")
-        if result.get("result") == 0:
-            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
-                if s["id"] == subnet_id:
-                    subnet = s
-                    subnet["name"] = SUBNET_MAP.get(subnet_id, {}).get("name", f"Subnet {subnet_id}")
-                    subnet["pools"] = [p.get("pool", "") if isinstance(p, dict) else str(p) for p in s.get("pools", []) if p]
-                    break
-    except Exception as e:
-        flash(f"Error fetching subnet config: {str(e)}", "error")
-        return redirect(url_for("subnets"))
-
-    if not subnet:
+    if subnet_id not in SUBNET_MAP:
         flash("Subnet not found.", "error")
         return redirect(url_for("subnets"))
+    return render_template("edit_subnet.html", subnet_id=subnet_id,
+                           subnet=SUBNET_MAP[subnet_id], subnet_map=SUBNET_MAP)
 
-    if request.method == "POST":
-        new_pool   = request.form.get("pool", "").strip()
-        new_valid  = request.form.get("valid_lifetime", "").strip()
-        new_renew  = request.form.get("renew_timer", "").strip()
-        new_rebind = request.form.get("rebind_timer", "").strip()
-        new_routers = request.form.get("routers", "").strip()
-        new_dns    = request.form.get("dns_servers", "").strip()
-
-        errors = []
-        if new_pool and not valid_pool(new_pool):
-            errors.append("Invalid pool format. Use: x.x.x.x-y.y.y.y")
-        if new_valid and not valid_positive_int(new_valid):
-            errors.append("Valid lifetime must be a positive integer (seconds).")
-        if new_renew and not valid_positive_int(new_renew):
-            errors.append("Renew timer must be a positive integer (seconds).")
-        if new_rebind and not valid_positive_int(new_rebind):
-            errors.append("Rebind timer must be a positive integer (seconds).")
-        if new_routers and not valid_ip(new_routers):
-            errors.append(f"Invalid router IP: {new_routers}")
-        if new_dns and not valid_dns(new_dns):
-            errors.append("Invalid DNS servers — must be comma-separated IP addresses.")
-        if new_valid and new_renew:
-            if int(new_renew) >= int(new_valid):
-                errors.append("Renew timer must be less than valid lifetime.")
-        if new_valid and new_rebind:
-            if int(new_rebind) >= int(new_valid):
-                errors.append("Rebind timer must be less than valid lifetime.")
-        if new_renew and new_rebind:
-            if int(new_renew) >= int(new_rebind):
-                errors.append("Renew timer must be less than rebind timer.")
-        if errors:
-            for e in errors:
-                flash(e, "error")
-            return render_template("edit_subnet.html", subnet=subnet, subnet_map=SUBNET_MAP)
-
-        update_script = f"""
-import json, subprocess, os
-with open('{KEA_CONF}') as f:
-    cfg = json.load(f)
-for s in cfg['Dhcp4']['subnet4']:
-    if s['id'] == {subnet_id}:
-        if '{new_pool}':
-            s['pools'] = [{{'option-data': [], 'pool': '{new_pool}'}}]
-        if '{new_valid}'.isdigit():
-            s['valid-lifetime'] = int('{new_valid}')
-            s['max-valid-lifetime'] = int('{new_valid}')
-            s['min-valid-lifetime'] = int('{new_valid}')
-        if '{new_renew}'.isdigit():
-            s['renew-timer'] = int('{new_renew}')
-        if '{new_rebind}'.isdigit():
-            s['rebind-timer'] = int('{new_rebind}')
-        for opt in s.get('option-data', []):
-            if opt.get('name') == 'routers' and '{new_routers}':
-                opt['data'] = '{new_routers}'
-            if opt.get('name') == 'domain-name-servers' and '{new_dns}':
-                opt['data'] = '{new_dns}'
-import json as _json
-new_content = _json.dumps(cfg, indent=2)
-subprocess.run(['sudo', 'cp', '{KEA_CONF}', '{KEA_CONF}.bak'], check=True)
-proc = subprocess.run(['sudo', 'tee', '{KEA_CONF}'], input=new_content, capture_output=True, text=True, check=True)
-print('OK')
-"""
-        SSH_OPTS = [
-            "-i", SSH_KEY_PATH,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/etc/jen/ssh/known_hosts",
-        ]
-        try:
-            import base64
-            script_b64 = base64.b64encode(update_script.strip().encode()).decode()
-            decode_cmd = f"echo {script_b64} | base64 -d > /tmp/jen_subnet_update.py && sudo python3 /tmp/jen_subnet_update.py && rm /tmp/jen_subnet_update.py"
-            result = subprocess.run(
-                ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}", decode_cmd],
-                capture_output=True, text=True, timeout=30
-            )
-            if "OK" in result.stdout:
-                val = subprocess.run(
-                    ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
-                     f"sudo kea-dhcp4 -t {KEA_CONF} 2>&1 | tail -5"],
-                    capture_output=True, text=True, timeout=30
-                )
-                if "error" not in val.stdout.lower() and "fatal" not in val.stdout.lower():
-                    subprocess.run(
-                        ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
-                         "sudo systemctl restart isc-kea-dhcp4-server"],
-                        capture_output=True, timeout=30
-                    )
-                    flash(f"Subnet {subnet['name']} updated successfully.", "success")
-                    audit("EDIT_SUBNET", str(subnet_id), f"pool={new_pool} valid_lifetime={new_valid}")
-                    send_alert("kea_config_changed", subnet=subnet["name"],
-                              details=f"pool={new_pool or 'unchanged'} valid_lifetime={new_valid or 'unchanged'}")
-                else:
-                    subprocess.run(
-                        ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
-                         f"sudo cp {KEA_CONF}.bak {KEA_CONF}"],
-                        capture_output=True, timeout=30
-                    )
-                    flash(f"Config validation failed — changes rolled back.", "error")
-            else:
-                flash(f"Failed to update config: {result.stderr or result.stdout}", "error")
-        except subprocess.TimeoutExpired:
-            flash("SSH connection timed out. Check that your-kea-server is reachable.", "error")
-        except Exception as e:
-            flash(f"SSH error: {str(e)}", "error")
-
+@app.route("/subnets/edit/<int:subnet_id>", methods=["POST"])
+@login_required
+@admin_required
+def edit_subnet_post(subnet_id):
+    if subnet_id not in SUBNET_MAP:
+        flash("Subnet not found.", "error")
         return redirect(url_for("subnets"))
+    action = request.form.get("action", "")
+    config_text = request.form.get("config", "")
+    errors = []
+    results = []
+    for server in KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        try:
+            import paramiko, base64, tempfile
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(server["ssh_host"], username=server.get("ssh_user", "matthew"),
+                        key_filename=SSH_KEY_PATH, timeout=10)
+            script = f"""
+import json, sys
+path = {repr(server.get('kea_conf', '/etc/kea/kea-dhcp4.conf'))}
+with open(path) as f: cfg = json.load(f)
+for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
+    if s['id'] == {subnet_id}:
+        s['subnet'] = {repr(config_text.strip())}
+        break
+with open(path, 'w') as f: json.dump(cfg, f, indent=2)
+print('ok')
+"""
+            enc = base64.b64encode(script.encode()).decode()
+            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+            out = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
+            if "ok" in out:
+                ssh.exec_command("sudo systemctl restart isc-kea-dhcp4-server")
+                results.append(f"✅ {server.get('name', server['ssh_host'])}: updated")
+            else:
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
+            ssh.close()
+        except Exception as e:
+            errors.append(f"❌ {server.get('name', server.get('ssh_host','?'))}: {str(e)}")
+    for r in results: flash(r, "success")
+    for e in errors: flash(e, "error")
+    audit("EDIT_SUBNET", str(subnet_id), f"action={action}")
+    return redirect(url_for("subnets"))
 
-    return render_template("edit_subnet.html", subnet=subnet, subnet_map=SUBNET_MAP)
+# ─────────────────────────────────────────
+# DDNS
+# ─────────────────────────────────────────
+@app.route("/ddns")
+@login_required
+def ddns():
+    lines = []
+    log_status = "ok"
+    log_message = ""
+    try:
+        with open(DDNS_LOG, "r") as f:
+            all_lines = f.readlines()
+            lines = list(reversed(all_lines[-200:]))
+        if not lines:
+            log_status = "empty"
+            log_message = "Log file exists but contains no entries yet."
+    except FileNotFoundError:
+        log_status = "missing"
+        log_message = f"Log file not found: {DDNS_LOG}"
+    except Exception as e:
+        log_status = "error"
+        log_message = f"Could not read DDNS log: {str(e)}"
+    lookup_host = request.args.get("host", "")
+    lookup_result = ""
+    if lookup_host:
+        try:
+            technitium_url = cfg.get("ddns", "api_url", fallback="")
+            technitium_token = cfg.get("ddns", "api_token", fallback="")
+            forward_zone = cfg.get("ddns", "forward_zone", fallback="")
+            if technitium_url and technitium_token:
+                import requests as req
+                r = req.get(f"{technitium_url}/api/zones/records/get",
+                            params={"token": technitium_token, "domain": lookup_host, "zone": forward_zone},
+                            timeout=5)
+                lookup_result = r.text
+            else:
+                lookup_result = "DDNS API not configured."
+        except Exception as e:
+            lookup_result = f"Lookup error: {str(e)}"
+    return render_template("ddns.html", lines=lines, lookup_host=lookup_host,
+                           lookup_result=lookup_result, log_status=log_status,
+                           log_message=log_message, ddns_log=DDNS_LOG)
 
 # ─────────────────────────────────────────
 # Audit Log
@@ -2746,115 +2116,32 @@ def audit_log():
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
         page = 1
+    search = sanitize_search(request.args.get("search", "").strip())
     per_page = 50
     logs = []
     total = 0
     try:
         db = get_jen_db()
         with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) as cnt FROM audit_log")
+            where = []
+            params = []
+            if search:
+                where.append("(username LIKE %s OR action LIKE %s OR entity LIKE %s OR details LIKE %s)")
+                s = f"%{search}%"
+                params += [s, s, s, s]
+            where_str = " WHERE " + " AND ".join(where) if where else ""
+            cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
             total = cur.fetchone()["cnt"]
             offset = (page - 1) * per_page
-            cur.execute("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT %s OFFSET %s", (per_page, offset))
+            cur.execute(f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}", params)
             logs = cur.fetchall()
         db.close()
     except Exception as e:
         flash(f"Could not load audit log: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page)
-    return render_template("audit.html", logs=logs, page=page, pages=pages, total=total)
+    return render_template("audit.html", logs=logs, page=page, pages=pages,
+                           total=total, search=search)
 
-# ─────────────────────────────────────────
-# DDNS
-# ─────────────────────────────────────────
-@app.route("/ddns")
-@login_required
-def ddns():
-    lines = []
-    log_status = "ok"
-    log_message = ""
-
-    # If SSH is configured, read the log from the Kea server via SSH
-    # (the log file lives on the Kea server, not the Jen server)
-    if KEA_SSH_HOST and os.path.exists(SSH_KEY_PATH):
-        SSH_OPTS = [
-            "-i", SSH_KEY_PATH,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/etc/jen/ssh/known_hosts",
-        ]
-        try:
-            result = subprocess.run(
-                ["ssh"] + SSH_OPTS + [f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
-                 f"sudo tail -200 {DDNS_LOG} 2>/dev/null || echo __NOTFOUND__"],
-                capture_output=True, text=True, timeout=10
-            )
-            raw = result.stdout.strip()
-            if "__NOTFOUND__" in raw or not raw:
-                log_status = "missing"
-                log_message = f"Log file not found on Kea server: {DDNS_LOG}"
-            else:
-                all_lines = raw.splitlines()
-                lines = list(reversed(all_lines))
-                if not lines:
-                    log_status = "empty"
-                    log_message = "Log file exists but contains no entries yet."
-        except subprocess.TimeoutExpired:
-            log_status = "error"
-            log_message = "SSH connection to Kea server timed out."
-        except Exception as e:
-            log_status = "error"
-            log_message = f"SSH error reading log: {str(e)}"
-    else:
-        # Fall back to reading locally (only works if Jen and Kea are on same server)
-        try:
-            with open(DDNS_LOG, "r") as f:
-                all_lines = f.readlines()
-                lines = list(reversed(all_lines[-200:]))
-            if not lines:
-                log_status = "empty"
-                log_message = "Log file exists but contains no entries yet."
-        except FileNotFoundError:
-            log_status = "missing"
-            log_message = f"Log file not found: {DDNS_LOG} — SSH not configured, falling back to local read."
-        except PermissionError:
-            log_status = "error"
-            log_message = f"Permission denied reading {DDNS_LOG}."
-        except Exception as e:
-            log_status = "error"
-            log_message = f"Could not read log: {str(e)}"
-
-    lookup_result = None
-    lookup_host = request.args.get("lookup", "").strip()[:253]
-    if lookup_host:
-        technitium_url = cfg.get("ddns", "api_url", fallback="")
-        technitium_token = cfg.get("ddns", "api_token", fallback="")
-        forward_zone = cfg.get("ddns", "forward_zone", fallback="")
-        if technitium_url and technitium_token:
-            try:
-                resp = requests.get(
-                    f"{technitium_url}/zones/records/get",
-                    params={"token": technitium_token, "domain": lookup_host,
-                            "zone": forward_zone, "listZone": "false"},
-                    timeout=10, verify=False
-                )
-                data = resp.json()
-                if data.get("status") == "ok":
-                    lookup_result = data.get("response", {}).get("records", [])
-                else:
-                    lookup_result = f"API error: {data.get('errorMessage', 'Unknown error')}"
-            except requests.exceptions.ConnectionError:
-                lookup_result = "Cannot connect to Technitium DNS server."
-            except Exception as e:
-                lookup_result = str(e)
-        else:
-            lookup_result = "DDNS API not configured. Set api_url and api_token in [ddns] config section."
-
-    return render_template("ddns.html", lines=lines, lookup_host=lookup_host,
-                           lookup_result=lookup_result, log_status=log_status,
-                           log_message=log_message, ddns_log=DDNS_LOG)
-
-# ─────────────────────────────────────────
-# Settings
-# ─────────────────────────────────────────
 # ─────────────────────────────────────────
 # About
 # ─────────────────────────────────────────
@@ -2871,24 +2158,9 @@ def about():
             kea_version = kea_version.splitlines()[0] if kea_version else ""
     except Exception:
         pass
-    lease_counts = {}
-    try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            for sid in SUBNET_MAP:
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
-                lease_counts[sid] = cur.fetchone()["cnt"]
-        db.close()
-    except Exception:
-        pass
-    return render_template("about.html",
-                           jen_version=JEN_VERSION, kea_version=kea_version,
-                           kea_up=kea_up, http_port=HTTP_PORT, https_port=HTTPS_PORT,
-                           ssl_on=ssl_configured(), kea_ssh_host=KEA_SSH_HOST,
-                           subnet_map=SUBNET_MAP, lease_counts=lease_counts)
+    return render_template("about.html", jen_version=JEN_VERSION, kea_version=kea_version,
+                           kea_up=kea_up, https_port=HTTPS_PORT, subnet_map=SUBNET_MAP)
 
-# ─────────────────────────────────────────
-# Settings — System
 # ─────────────────────────────────────────
 @app.route("/settings")
 @login_required
@@ -3706,6 +2978,370 @@ def remove_favicon():
     if os.path.exists(FAVICON_PATH): os.remove(FAVICON_PATH)
     flash("Favicon removed.", "success")
     return redirect(url_for("settings"))
+
+# ─────────────────────────────────────────
+# Saved Searches
+# ─────────────────────────────────────────
+@app.route("/saved-searches", methods=["GET"])
+@login_required
+def saved_searches():
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY created_at DESC", (current_user.id,))
+            searches = cur.fetchall()
+        db.close()
+    except Exception:
+        searches = []
+    return render_template("saved_searches.html", searches=searches)
+
+@app.route("/saved-searches/save", methods=["POST"])
+@login_required
+def save_search():
+    name = request.form.get("name", "").strip()[:100]
+    page = request.form.get("page", "").strip()[:50]
+    params = request.form.get("params", "").strip()[:1000]
+    if not name or not page:
+        return jsonify({"error": "Name and page required"}), 400
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            # Max 20 saved searches per user
+            cur.execute("SELECT COUNT(*) as cnt FROM saved_searches WHERE user_id=%s", (current_user.id,))
+            if cur.fetchone()["cnt"] >= 20:
+                cur.execute("""DELETE FROM saved_searches WHERE user_id=%s
+                               ORDER BY created_at ASC LIMIT 1""", (current_user.id,))
+            cur.execute("INSERT INTO saved_searches (user_id, name, page, params) VALUES (%s,%s,%s,%s)",
+                        (current_user.id, name, page, params))
+        db.commit()
+        db.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/saved-searches/delete/<int:search_id>", methods=["POST"])
+@login_required
+def delete_saved_search(search_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM saved_searches WHERE id=%s AND user_id=%s", (search_id, current_user.id))
+        db.commit()
+        db.close()
+    except Exception:
+        pass
+    return redirect(url_for("saved_searches"))
+
+@app.route("/api/saved-searches")
+@login_required
+def api_saved_searches():
+    page = request.args.get("page", "")
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            if page:
+                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name", (current_user.id, page))
+            else:
+                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
+            searches = cur.fetchall()
+        db.close()
+        return jsonify([dict(s) for s in searches])
+    except Exception as e:
+        return jsonify([])
+
+# ─────────────────────────────────────────
+# Dashboard Preferences
+# ─────────────────────────────────────────
+@app.route("/api/dashboard/save-prefs", methods=["POST"])
+@login_required
+def save_dashboard_prefs():
+    import json
+    widgets = request.json.get("widgets", ["subnet_stats", "recent_leases"])
+    valid = {"subnet_stats", "recent_leases", "top_devices", "alert_summary", "server_status"}
+    widgets = [w for w in widgets if w in valid]
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""INSERT INTO dashboard_prefs (user_id, widgets)
+                           VALUES (%s, %s)
+                           ON DUPLICATE KEY UPDATE widgets=%s, updated_at=NOW()""",
+                        (current_user.id, json.dumps(widgets), json.dumps(widgets)))
+        db.commit()
+        db.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/dashboard/get-prefs")
+@login_required
+def get_dashboard_prefs():
+    import json
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=%s", (current_user.id,))
+            row = cur.fetchone()
+        db.close()
+        widgets = json.loads(row["widgets"]) if row else ["subnet_stats", "recent_leases"]
+        return jsonify({"widgets": widgets})
+    except Exception:
+        return jsonify({"widgets": ["subnet_stats", "recent_leases"]})
+
+# ─────────────────────────────────────────
+# Global Search
+# ─────────────────────────────────────────
+@app.route("/search")
+@login_required
+def global_search():
+    q = sanitize_search(request.args.get("q", "").strip())
+    results = {"leases": [], "reservations": [], "devices": []}
+    if len(q) >= 2:
+        try:
+            kea_db = get_kea_db()
+            jen_db = get_jen_db()
+            s = f"%{q}%"
+            s_mac = s.replace(":", "")
+
+            # Search leases
+            with kea_db.cursor() as cur:
+                cur.execute("""
+                    SELECT inet_ntoa(l.address) AS ip,
+                           l.hostname,
+                           HEX(l.hwaddr) AS mac_hex,
+                           l.subnet_id,
+                           l.expire, l.state
+                    FROM lease4 l
+                    WHERE inet_ntoa(l.address) LIKE %s
+                       OR l.hostname LIKE %s
+                       OR HEX(l.hwaddr) LIKE %s
+                    LIMIT 20
+                """, (s, s, s_mac))
+                for row in cur.fetchall():
+                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    results["leases"].append({
+                        "ip": row["ip"], "hostname": row["hostname"] or "",
+                        "mac": mac, "subnet_id": row["subnet_id"]
+                    })
+
+            # Search reservations
+            with kea_db.cursor() as cur:
+                cur.execute("""
+                    SELECT inet_ntoa(h.ipv4_address) AS ip,
+                           h.hostname,
+                           HEX(h.dhcp_identifier) AS mac_hex,
+                           h.dhcp4_subnet_id AS subnet_id
+                    FROM hosts h
+                    WHERE h.dhcp4_subnet_id > 0
+                      AND (inet_ntoa(h.ipv4_address) LIKE %s
+                           OR h.hostname LIKE %s
+                           OR HEX(h.dhcp_identifier) LIKE %s)
+                    LIMIT 20
+                """, (s, s, s_mac))
+                for row in cur.fetchall():
+                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    results["reservations"].append({
+                        "ip": row["ip"], "hostname": row["hostname"] or "",
+                        "mac": mac, "subnet_id": row["subnet_id"]
+                    })
+
+            # Search devices
+            with jen_db.cursor() as cur:
+                cur.execute("""
+                    SELECT mac, last_ip, name, owner, notes
+                    FROM devices
+                    WHERE mac LIKE %s OR last_ip LIKE %s
+                       OR name LIKE %s OR owner LIKE %s
+                    LIMIT 20
+                """, (s, s, s, s))
+                results["devices"] = cur.fetchall()
+
+            kea_db.close()
+            jen_db.close()
+        except Exception as e:
+            flash(f"Search error: {str(e)}", "error")
+
+    total = sum(len(v) for v in results.values())
+    return render_template("search_results.html",
+                           q=q, results=results, total=total,
+                           subnet_map=SUBNET_MAP,
+                           subnet_names=SUBNET_NAMES)
+
+# ─────────────────────────────────────────
+# MFA Routes
+# ─────────────────────────────────────────
+@app.route("/mfa/verify", methods=["GET", "POST"])
+def mfa_verify():
+    # At this point the user has passed password auth but is not yet logged in.
+    # Their user ID is held in the session under mfa_pending_user_id.
+    pending_id = session.get("mfa_pending_user_id")
+    pending_username = session.get("mfa_pending_username", "unknown")
+    if not pending_id:
+        # No pending MFA — if already fully logged in, go to dashboard; else back to login
+        if current_user.is_authenticated:
+            return redirect(url_for("dashboard"))
+        return redirect(url_for("login"))
+    if request.method == "POST":
+        code = request.form.get("code", "").strip().replace(" ", "")
+        # Try backup code first (8 hex chars without dash, or with dash stripped)
+        clean_code = code.replace("-", "").upper()
+        if verify_backup_code(pending_id, clean_code):
+            user = load_user(pending_id)
+            if user:
+                login_user(user)
+                session["last_active"] = datetime.now(timezone.utc).isoformat()
+                session.pop("mfa_pending_user_id", None)
+                session.pop("mfa_pending_username", None)
+                next_url = session.pop("mfa_next", url_for("dashboard"))
+                audit("MFA_BACKUP_CODE", "auth", pending_username)
+                return redirect(next_url)
+        # Try TOTP
+        if verify_totp(pending_id, code):
+            user = load_user(pending_id)
+            if user:
+                login_user(user)
+                session["last_active"] = datetime.now(timezone.utc).isoformat()
+                session.pop("mfa_pending_user_id", None)
+                session.pop("mfa_pending_username", None)
+                remember = request.form.get("remember_device")
+                next_url = session.pop("mfa_next", url_for("dashboard"))
+                if remember:
+                    days = int(request.form.get("remember_days", 30))
+                    device_name = request.user_agent.string[:100] if request.user_agent else "Unknown"
+                    token = create_trusted_device_token(pending_id, days, device_name)
+                    resp = redirect(next_url)
+                    resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax")
+                    audit("MFA_VERIFY", "auth", f"{pending_username} trusted={days}d")
+                    return resp
+                audit("MFA_VERIFY", "auth", pending_username)
+                return redirect(next_url)
+        flash("Invalid code. Please try again.", "error")
+        audit("MFA_FAILED", "auth", pending_username)
+    has_totp = user_has_mfa(pending_id) if pending_id else False
+    return render_template("mfa_challenge.html", username=pending_username, has_totp=has_totp)
+
+@app.route("/mfa/enroll", methods=["GET", "POST"])
+@login_required
+def mfa_enroll():
+    import pyotp, qrcode, io as _io, base64
+    if request.method == "POST":
+        action = request.form.get("action")
+        if action == "enroll":
+            secret = request.form.get("secret", "").strip()
+            code = request.form.get("code", "").strip()
+            device_name = request.form.get("device_name", "Authenticator").strip()[:100] or "Authenticator"
+            if not secret or not code:
+                flash("Missing secret or code.", "error")
+                return redirect(url_for("mfa_enroll"))
+            totp = pyotp.TOTP(secret)
+            if not totp.verify(code, valid_window=1):
+                flash("Invalid verification code. Please try again.", "error")
+                return redirect(url_for("mfa_enroll"))
+            try:
+                db = get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("""INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
+                                   VALUES (%s, 'totp', %s, %s, 1)""",
+                                (current_user.id, secret, device_name))
+                db.commit()
+                # Generate backup codes
+                codes = generate_backup_codes(current_user.id)
+                db.close()
+                audit("MFA_ENROLL", "auth", f"{current_user.username} device={device_name}")
+                flash("Authenticator enrolled successfully!", "success")
+                return render_template("mfa_backup_codes.html", codes=codes)
+            except Exception as e:
+                flash(f"Enrollment error: {str(e)}", "error")
+                return redirect(url_for("mfa_enroll"))
+        elif action in ("remove", "remove_totp"):
+            method_id = request.form.get("method_id") or request.form.get("mfa_id")
+            try:
+                db = get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (method_id, current_user.id))
+                db.commit(); db.close()
+                audit("MFA_REMOVE", "auth", f"{current_user.username} method_id={method_id}")
+                flash("Authenticator removed.", "success")
+            except Exception as e:
+                flash(f"Error: {str(e)}", "error")
+            return redirect(url_for("mfa_enroll"))
+        elif action == "new_backup_codes":
+            codes = generate_backup_codes(current_user.id)
+            audit("MFA_NEW_BACKUP", "auth", current_user.username)
+            return render_template("mfa_backup_codes.html", codes=codes)
+    # GET - show enrollment page
+    secret = pyotp.random_base32()
+    totp = pyotp.TOTP(secret)
+    uri = totp.provisioning_uri(name=current_user.username, issuer_name="Jen DHCP")
+    qr = qrcode.make(uri)
+    buf = _io.BytesIO()
+    qr.save(buf, format="PNG")
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (current_user.id,))
+            methods = cur.fetchall()
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,))
+            backup_count = cur.fetchone()["cnt"]
+        db.close()
+    except Exception as e:
+        logger.error(f"mfa_enroll fetch error: {e}")
+        methods = []; backup_count = 0
+    return render_template("mfa_enroll.html", secret=secret, qr_b64=qr_b64,
+                           totp_methods=methods, passkeys=[], backup_count=backup_count)
+
+@app.route("/mfa/regenerate-backup-codes", methods=["POST"])
+@login_required
+def regenerate_backup_codes():
+    codes = generate_backup_codes(current_user.id)
+    audit("MFA_NEW_BACKUP", "auth", current_user.username)
+    return render_template("mfa_backup_codes.html", codes=codes)
+
+@app.route("/mfa/trusted-devices")
+@login_required
+def mfa_trusted_devices():
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""SELECT id, device_name, created_at, expires_at, last_used
+                           FROM mfa_trusted_devices WHERE user_id=%s
+                           ORDER BY created_at DESC""", (current_user.id,))
+            devices = cur.fetchall()
+        db.close()
+    except Exception:
+        devices = []
+    return render_template("mfa_trusted_devices.html", devices=devices)
+
+@app.route("/mfa/trusted-devices/remove/<int:device_id>", methods=["POST"])
+@login_required
+def remove_trusted_device(device_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE id=%s AND user_id=%s", (device_id, current_user.id))
+        db.commit(); db.close()
+        flash("Trusted device removed.", "success")
+        audit("REMOVE_TRUSTED_DEVICE", "auth", f"device_id={device_id}")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("mfa_trusted_devices"))
+
+@app.route("/mfa/admin-reset/<int:user_id>", methods=["POST"])
+@login_required
+@admin_required
+def admin_reset_mfa(user_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
+        db.commit(); db.close()
+        flash(f"MFA reset for user ID {user_id}.", "success")
+        audit("ADMIN_RESET_MFA", str(user_id), f"Reset by {current_user.username}")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("users"))
 
 # ─────────────────────────────────────────
 # User Profile

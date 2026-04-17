@@ -56,14 +56,14 @@
         <div>
             <div style="margin-bottom:12px;">
                 <div class="stat-label" style="margin-bottom:4px;">Or enter manually:</div>
-                <div class="mono" style="background:var(--surface2);padding:8px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);word-break:break-all;">{{ new_secret }}</div>
+                <div class="mono" style="background:var(--surface2);padding:8px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);word-break:break-all;">{{ secret }}</div>
             </div>
             <form method="POST">
-                <input type="hidden" name="action" value="setup_totp">
-                <input type="hidden" name="secret" value="{{ new_secret }}">
+                <input type="hidden" name="action" value="enroll">
+                <input type="hidden" name="secret" value="{{ secret }}">
                 <div class="form-group">
                     <label>Device Name (optional)</label>
-                    <input type="text" name="name" placeholder="Work Phone, Home Authenticator..." style="margin-bottom:8px;">
+                    <input type="text" name="device_name" placeholder="Work Phone, Home Authenticator..." style="margin-bottom:8px;">
                 </div>
                 <div class="form-group">
                     <label>Verification Code</label>

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Saved Searches{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔖 Saved Searches & Filters</h1>
+    <p>Your saved page filters — accessible from the filter bar on Leases and Reservations pages</p>
+</div>
+
+{% if searches %}
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table>
+    <thead><tr>
+        <th>Name</th>
+        <th>Page</th>
+        <th class="hide-mobile">Parameters</th>
+        <th>Saved</th>
+        <th>Actions</th>
+    </tr></thead>
+    <tbody>
+    {% for s in searches %}
+    <tr>
+        <td><strong>{{ s.name }}</strong></td>
+        <td><span class="badge badge-dynamic">{{ s.page }}</span></td>
+        <td class="mono hide-mobile" style="font-size:11px;color:var(--text-muted);">{{ s.params[:80] }}{% if s.params|length > 80 %}…{% endif %}</td>
+        <td style="color:var(--text-muted);font-size:12px;">{{ s.created_at.strftime('%Y-%m-%d') if s.created_at else '—' }}</td>
+        <td style="display:flex;gap:6px;">
+            <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">▶ Load</a>
+            <form method="POST" action="/saved-searches/delete/{{ s.id }}" style="display:inline;"
+                  onsubmit="return confirm('Delete this saved filter?')">
+                <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    No saved searches yet. Use the <strong>🔖 Save Filter</strong> button on the Leases or Reservations page to save your current filter.
+</div>
+{% endif %}
+{% endblock %}

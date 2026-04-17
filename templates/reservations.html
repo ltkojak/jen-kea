@@ -50,8 +50,48 @@ function confirmBulk(action) {
             <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('import-form').submit()">
         </form>
     </label>
+    <label class="btn btn-secondary" style="cursor:pointer;" title="Preview what would be imported without making changes">
+        🔍 Dry-run Import
+        <form id="dryrun-form" method="POST" action="/reservations/import?dry_run=1" enctype="multipart/form-data" style="display:none;">
+            <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('dryrun-form').submit()">
+        </form>
+    </label>
     {% endif %}
+    <!-- Saved filters -->
+    <div style="display:flex;gap:6px;align-items:center;">
+        <button class="btn btn-secondary btn-sm" onclick="saveCurrentFilter()">🔖 Save Filter</button>
+        <select id="saved-filter-select" onchange="loadSavedFilter(this)" style="min-width:130px;font-size:12px;">
+            <option value="">Saved filters...</option>
+        </select>
+    </div>
 </div>
+<script>
+fetch('/api/saved-searches?page=reservations')
+    .then(r => r.json()).then(searches => {
+        var sel = document.getElementById('saved-filter-select');
+        searches.forEach(function(s) {
+            var opt = document.createElement('option');
+            opt.value = s.params; opt.textContent = s.name;
+            sel.appendChild(opt);
+        });
+    });
+function loadSavedFilter(sel) {
+    if (sel.value) window.location.href = '/reservations?' + sel.value;
+}
+function saveCurrentFilter() {
+    var name = prompt('Name this filter:');
+    if (!name) return;
+    var params = window.location.search.replace('?','');
+    fetch('/saved-searches/save', {
+        method:'POST',
+        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        body:'name='+encodeURIComponent(name)+'&page=reservations&params='+encodeURIComponent(params)
+    }).then(r => r.json()).then(function(d) {
+        if (d.ok) { alert('Filter saved!'); location.reload(); }
+        else alert('Error: ' + d.error);
+    });
+}
+</script>
 
 <div class="card" style="padding:0;">
 <div class="table-wrap">

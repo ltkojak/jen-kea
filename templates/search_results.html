@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Search Results{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔍 Search Results</h1>
+    <p>{{ total }} result{{ 's' if total != 1 else '' }} for <strong>{{ q }}</strong></p>
+</div>
+
+<form action="/search" method="GET" style="display:flex;gap:8px;margin-bottom:24px;">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search IP, hostname, MAC..." style="max-width:320px;">
+    <button type="submit" class="btn btn-primary">🔍 Search</button>
+</form>
+
+{% if q and total == 0 %}
+<div class="alert alert-info">No results found for <strong>{{ q }}</strong>. Try a partial IP, hostname, or MAC address.</div>
+{% endif %}
+
+{% if results.leases %}
+<div class="card">
+    <div class="card-header"><span class="card-title">📋 Leases ({{ results.leases|length }})</span></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>IP Address</th>
+            <th>Hostname</th>
+            <th class="hide-mobile">MAC Address</th>
+            <th>Subnet</th>
+            <th>Action</th>
+        </tr></thead>
+        <tbody>
+        {% for l in results.leases %}
+        <tr>
+            <td class="mono">{{ l.ip }}</td>
+            <td>{{ l.hostname or '—' }}</td>
+            <td class="mono hide-mobile">{{ l.mac }}</td>
+            <td>{% set sname = subnet_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) %}
+                <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>
+            <td><a href="/leases?search={{ l.ip }}" class="btn btn-sm btn-secondary">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
+{% if results.reservations %}
+<div class="card">
+    <div class="card-header"><span class="card-title">📌 Reservations ({{ results.reservations|length }})</span></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>IP Address</th>
+            <th>Hostname</th>
+            <th class="hide-mobile">MAC Address</th>
+            <th>Subnet</th>
+            <th>Action</th>
+        </tr></thead>
+        <tbody>
+        {% for r in results.reservations %}
+        <tr>
+            <td class="mono">{{ r.ip }}</td>
+            <td>{{ r.hostname or '—' }}</td>
+            <td class="mono hide-mobile">{{ r.mac }}</td>
+            <td>{% set sname = subnet_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) %}
+                <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>
+            <td><a href="/reservations?search={{ r.ip }}" class="btn btn-sm btn-secondary">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
+{% if results.devices %}
+<div class="card">
+    <div class="card-header"><span class="card-title">📱 Devices ({{ results.devices|length }})</span></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>MAC Address</th>
+            <th>Last IP</th>
+            <th>Name</th>
+            <th class="hide-mobile">Owner</th>
+            <th>Action</th>
+        </tr></thead>
+        <tbody>
+        {% for d in results.devices %}
+        <tr>
+            <td class="mono">{{ d.mac }}</td>
+            <td class="mono">{{ d.last_ip or '—' }}</td>
+            <td>{{ d.name or '—' }}</td>
+            <td class="hide-mobile">{{ d.owner or '—' }}</td>
+            <td><a href="/devices?search={{ d.mac }}" class="btn btn-sm btn-secondary">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
