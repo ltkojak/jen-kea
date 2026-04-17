@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.2.25"
+JEN_VERSION = "2.2.29"
 
 # ─────────────────────────────────────────
 # App setup
@@ -787,7 +787,7 @@ def verify_totp(user_id, code):
         return False
 
 def get_trusted_device_token(request):
-    return request.cookies.get("jen_trusted_device")
+    return request.cookies.get("jen_trusted")
 
 def is_trusted_device(user_id, request):
     token = get_trusted_device_token(request)
@@ -1571,50 +1571,86 @@ def logout():
 @app.route("/")
 @login_required
 def dashboard():
+    try:
+        hours = float(request.args.get("hours", "0.5"))
+    except ValueError:
+        hours = 0.5
+    if hours not in (0.5, 1, 4, 8, 12, 24):
+        hours = 0.5
+    # hours_str must exactly match the option values in the template (no trailing .0)
+    hours_str = str(int(hours)) if hours == int(hours) else str(hours)
+
     stats = {}
     recent = []
+    # First fetch Kea config so we know pool sizes AND lease lifetimes
+    pool_sizes = {}
+    default_lifetime = 86400
+    try:
+        result = kea_command("config-get")
+        if result.get("result") == 0:
+            cfg = result["arguments"]["Dhcp4"]
+            default_lifetime = cfg.get("valid-lifetime", 86400)
+            for s in cfg.get("subnet4", []):
+                sid = str(s["id"])
+                for pool in s.get("pools", []):
+                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                    if "-" in p:
+                        start, end = [x.strip() for x in p.split("-")]
+                        pool_sizes[sid] = ip_to_int(end) - ip_to_int(start) + 1
+    except Exception:
+        pass
+
     try:
         db = get_kea_db()
         with db.cursor() as cur:
             for subnet_id, info in SUBNET_MAP.items():
                 cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                 active = cur.fetchone()["cnt"]
+                cur.execute("""
+                    SELECT COUNT(*) as cnt FROM lease4 l
+                    WHERE l.state=0 AND l.subnet_id=%s
+                    AND NOT EXISTS (
+                        SELECT 1 FROM hosts h
+                        WHERE h.dhcp4_subnet_id=%s AND h.dhcp_identifier=l.hwaddr
+                    )
+                """, (subnet_id, subnet_id))
+                dynamic = cur.fetchone()["cnt"]
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                 reserved = cur.fetchone()["cnt"]
-                stats[subnet_id] = {"active": active, "reserved": reserved,
+                stats[subnet_id] = {"active": active, "dynamic": dynamic,
+                                    "reservations": reserved,
                                     "name": info["name"], "cidr": info["cidr"]}
+
+            # issued_at = expire - valid_lifetime (valid_lifetime is stored per-lease in Kea)
+            # expire is a TIMESTAMP column, so use INTERVAL arithmetic not UNIX_TIMESTAMP()
+            window_seconds = int(hours * 3600)
+            logger.info(f"Dashboard: hours={hours}, window={window_seconds}s")
             cur.execute("""
                 SELECT inet_ntoa(l.address) AS ip, l.hostname,
                        HEX(l.hwaddr) AS mac_hex, l.subnet_id,
-                       FROM_UNIXTIME(l.expire) AS obtained
+                       (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
                 FROM lease4 l
                 WHERE l.state=0
-                ORDER BY l.expire DESC LIMIT 50
-            """)
+                  AND l.expire > NOW()
+                  AND (l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)
+                ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
+                LIMIT 200
+            """, (window_seconds,))
             for row in cur.fetchall():
-                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                sname = SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
                 recent.append({"ip": row["ip"], "hostname": row["hostname"] or "",
                                 "mac": mac, "subnet_id": row["subnet_id"],
+                                "subnet_name": sname,
                                 "obtained": row["obtained"]})
         db.close()
     except Exception as e:
+        logger.error(f"Dashboard DB error: {e}")
         flash(f"Could not load dashboard data: {str(e)}", "error")
-    pool_sizes = {}
-    try:
-        result = kea_command("config-get")
-        if result.get("result") == 0:
-            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
-                for pool in s.get("pools", []):
-                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                    if "-" in p:
-                        start, end = [x.strip() for x in p.split("-")]
-                        pool_sizes[str(s["id"])] = ip_to_int(end) - ip_to_int(start) + 1
-    except Exception:
-        pass
     kea_up = kea_is_up()
     return render_template("dashboard.html", stats=stats, recent=recent,
                            kea_up=kea_up, subnet_map=SUBNET_MAP,
-                           pool_sizes=pool_sizes)
+                           pool_sizes=pool_sizes, hours=hours_str)
 
 # ─────────────────────────────────────────
 # Leases

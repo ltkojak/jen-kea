@@ -62,7 +62,7 @@
     <div class="card">
         <div class="card-header">
             <span class="card-title">🕐 Recently Issued Leases</span>
-            <form method="GET" style="display:flex;gap:8px;align-items:center;">
+            <form method="GET" action="/" style="display:flex;gap:8px;align-items:center;">
                 <select name="hours" onchange="this.form.submit()" style="width:auto;">
                     <option value="0.5" {% if hours=='0.5' %}selected{% endif %}>Last 30 min</option>
                     <option value="1"   {% if hours=='1'   %}selected{% endif %}>Last 1 hour</option>
