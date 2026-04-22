@@ -51,6 +51,7 @@
             {% elif log_status == 'missing' %}<span style="color:var(--danger);">✗ File not found</span>
             {% else %}<span style="color:var(--danger);">✗ Error</span>{% endif %}
         </td></tr>
+        {% if log_message %}<tr><td class="stat-label">Detail</td><td style="color:var(--text-muted);font-size:12px;">{{ log_message }}</td></tr>{% endif %}
         <tr><td class="stat-label">Showing</td><td>Last 200 lines</td></tr>
         <tr><td class="stat-label">Entries</td><td>{{ lines|length }}</td></tr>
     </table>

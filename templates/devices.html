@@ -33,14 +33,15 @@
 <div class="table-wrap">
 <table class="sortable">
     <thead><tr>
-        <th data-sort>MAC Address</th>
-        <th data-sort>Device Name</th>
-        <th data-sort>Owner</th>
-        <th data-sort>Last IP</th>
-        <th data-sort>Hostname</th>
-        <th data-sort>Subnet</th>
-        <th data-sort>First Seen</th>
-        <th data-sort>Last Seen</th>
+        {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') %}
+        <th><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=device_name&dir={{ 'desc' if sort=='device_name' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Device Name{% if sort=='device_name' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Owner{% if sort=='owner' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=last_ip&dir={{ 'desc' if sort=='last_ip' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last IP{% if sort=='last_ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">First Seen{% if sort=='first_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last Seen{% if sort=='last_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th>Status</th>
         <th>Actions</th>
     </tr></thead>
@@ -104,14 +105,14 @@
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% if page > 1 %}<a href="?page={{ page-1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}">‹ Prev</a>{% endif %}
+    {% if page > 1 %}<a href="?page={{ page-1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
     {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
-    <a href="?page={{ p }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}">{{ p }}</a>
+    <a href="?page={{ p }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?page={{ page+1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?page={{ page+1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}">Next ›</a>{% endif %}
 </div>
 {% endif %}
 

@@ -97,12 +97,12 @@ function saveCurrentFilter() {
 <div class="table-wrap">
 <table class="sortable">
     <thead><tr>
-        <th data-sort>IP Address</th>
-        <th data-sort>Hostname</th>
-        <th data-sort>MAC Address</th>
-        <th data-sort>Subnet</th>
-        <th data-sort>DNS Override</th>
-        <th data-sort>Notes</th>
+        <th><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th>DNS Override</th>
+        <th>Notes</th>
         {% if current_user.role == 'admin' %}<th>Actions</th>{% endif %}
     </tr></thead>
     <tbody>
@@ -133,14 +133,14 @@ function saveCurrentFilter() {
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% if page > 1 %}<a href="?page={{ page-1 }}&subnet={{ subnet_filter }}&search={{ search }}">‹ Prev</a>{% endif %}
+    {% if page > 1 %}<a href="?page={{ page-1 }}&subnet={{ subnet_filter }}&search={{ search }}&sort={{ sort }}&dir={{ direction }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
     {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
-    <a href="?page={{ p }}&subnet={{ subnet_filter }}&search={{ search }}">{{ p }}</a>
+    <a href="?page={{ p }}&subnet={{ subnet_filter }}&search={{ search }}&sort={{ sort }}&dir={{ direction }}">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?page={{ page+1 }}&subnet={{ subnet_filter }}&search={{ search }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?page={{ page+1 }}&subnet={{ subnet_filter }}&search={{ search }}&sort={{ sort }}&dir={{ direction }}">Next ›</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

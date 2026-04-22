@@ -106,8 +106,40 @@
 <!-- Server status widget -->
 <div id="dash-server_status" style="display:none;">
     <div class="card">
-        <div class="card-header"><span class="card-title">🖥️ Server Status</span></div>
-        <p style="color:var(--text-muted);font-size:13px;">Server status details are available on the Servers page.</p>
+        <div class="card-header">
+            <span class="card-title">🖥️ Server Status</span>
+            <a href="/servers" class="btn btn-sm btn-secondary">View Details</a>
+        </div>
+        {% if server_statuses %}
+        <table style="width:100%;">
+            <thead><tr>
+                <th style="text-align:left;">Server</th>
+                <th style="text-align:left;">Status</th>
+                <th style="text-align:left;">Role / HA State</th>
+                <th style="text-align:left;">Version</th>
+            </tr></thead>
+            <tbody>
+            {% for s in server_statuses %}
+            <tr>
+                <td class="mono">{{ s.server.get('name', s.server.get('url','?')) }}</td>
+                <td>
+                    {% if s.up %}
+                    <span style="color:var(--success);">● Online</span>
+                    {% else %}
+                    <span style="color:var(--danger);">● Offline</span>
+                    {% endif %}
+                </td>
+                <td style="color:var(--text-muted);font-size:12px;">
+                    {% if s.ha_state %}{{ s.ha_state }}{% elif s.up %}primary{% else %}—{% endif %}
+                </td>
+                <td style="color:var(--text-muted);font-size:12px;">{{ s.version or '—' }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color:var(--text-muted);font-size:13px;">No servers configured.</p>
+        {% endif %}
     </div>
 </div>
 

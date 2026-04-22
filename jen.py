@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.2.33"
+JEN_VERSION = "2.2.38"
 
 # ─────────────────────────────────────────
 # App setup
@@ -1655,9 +1655,22 @@ def dashboard():
         logger.error(f"Dashboard DB error: {e}")
         flash(f"Could not load dashboard data: {str(e)}", "error")
     kea_up = kea_is_up()
+    server_statuses = []
+    try:
+        server_statuses = get_all_server_status()
+        for s in server_statuses:
+            if s["up"]:
+                ver = kea_command("version-get", server=s["server"])
+                s["version"] = ver.get("arguments", {}).get("extended", ver.get("text", ""))
+                s["version"] = s["version"].splitlines()[0] if s["version"] else ""
+            else:
+                s["version"] = ""
+    except Exception:
+        pass
     return render_template("dashboard.html", stats=stats, recent=recent,
                            kea_up=kea_up, subnet_map=SUBNET_MAP,
-                           pool_sizes=pool_sizes, hours=hours_str)
+                           pool_sizes=pool_sizes, hours=hours_str,
+                           server_statuses=server_statuses)
 
 # ─────────────────────────────────────────
 # Leases
@@ -1669,6 +1682,20 @@ def leases():
     minutes = request.args.get("minutes", "")
     search = sanitize_search(request.args.get("search", "").strip())
     show_expired = request.args.get("expired", "0") == "1"
+    sort = request.args.get("sort", "expires")
+    direction = request.args.get("dir", "desc")
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+    # Map sort keys to SQL columns
+    sort_map = {
+        "ip": "l.address",
+        "hostname": "l.hostname",
+        "mac": "l.hwaddr",
+        "subnet": "l.subnet_id",
+        "obtained": "(l.expire - INTERVAL l.valid_lifetime SECOND)",
+        "expires": "l.expire",
+    }
+    sort_col = sort_map.get(sort, "l.expire")
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
@@ -1711,10 +1738,10 @@ def leases():
                 SELECT inet_ntoa(l.address) AS ip, l.hostname,
                        HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
                        l.expire,
-                       FROM_UNIXTIME(l.expire) AS obtained,
-                       FROM_UNIXTIME(l.expire) AS expires
+                       (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained,
+                       l.expire AS expires
                 FROM lease4 l WHERE {where_str}
-                ORDER BY l.expire DESC
+                ORDER BY {sort_col} {direction}
                 LIMIT {per_page} OFFSET {offset}
             """, params)
             for row in cur.fetchall():
@@ -1727,7 +1754,8 @@ def leases():
     pages = max(1, (total + per_page - 1) // per_page)
     return render_template("leases.html", leases=leases_list, page=page, pages=pages,
                            total=total, subnet_filter=subnet_filter, minutes=minutes,
-                           search=search, show_expired=show_expired, subnet_map=SUBNET_MAP)
+                           search=search, show_expired=show_expired, subnet_map=SUBNET_MAP,
+                           sort=sort, direction=direction)
 
 @app.route("/leases/delete-stale", methods=["POST"])
 @login_required
@@ -1784,6 +1812,17 @@ def ipmap():
 def reservations():
     subnet_filter = request.args.get("subnet", "all")
     search = sanitize_search(request.args.get("search", "").strip())
+    sort = request.args.get("sort", "ip")
+    direction = request.args.get("dir", "asc")
+    if direction not in ("asc", "desc"):
+        direction = "asc"
+    sort_map = {
+        "ip": "h.ipv4_address",
+        "hostname": "h.hostname",
+        "mac": "h.dhcp_identifier",
+        "subnet": "h.dhcp4_subnet_id",
+    }
+    sort_col = sort_map.get(sort, "h.ipv4_address")
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
@@ -1816,7 +1855,7 @@ def reservations():
                        h.dhcp4_subnet_id AS subnet_id
                 FROM hosts h
                 WHERE {' AND '.join(where)}
-                ORDER BY h.ipv4_address
+                ORDER BY {sort_col} {direction}
                 LIMIT {per_page} OFFSET {offset}
             """, params)
             rows = cur.fetchall()
@@ -1837,7 +1876,8 @@ def reservations():
     return render_template("reservations.html", hosts=hosts,
                            subnet_filter=subnet_filter, search=search,
                            subnet_map=SUBNET_MAP, page=page, pages=pages,
-                           total=total, stale_days=stale_days)
+                           total=total, stale_days=stale_days,
+                           sort=sort, direction=direction)
 
 @app.route("/reservations/add")
 @login_required
@@ -2020,6 +2060,29 @@ def export_reservations():
 @login_required
 def subnets():
     subnet_data = []
+    # Fetch Kea config for lease times, timers, pools
+    kea_subnets = {}
+    try:
+        result = kea_command("config-get")
+        if result.get("result") == 0:
+            cfg = result["arguments"]["Dhcp4"]
+            global_lifetime = cfg.get("valid-lifetime", 0)
+            global_renew = cfg.get("renew-timer", 0)
+            global_rebind = cfg.get("rebind-timer", 0)
+            for s in cfg.get("subnet4", []):
+                pools = []
+                for p in s.get("pools", []):
+                    pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)
+                    if pool_str:
+                        pools.append(pool_str)
+                kea_subnets[s["id"]] = {
+                    "valid_lifetime": s.get("valid-lifetime", global_lifetime),
+                    "renew_timer": s.get("renew-timer", global_renew),
+                    "rebind_timer": s.get("rebind-timer", global_rebind),
+                    "pools": pools,
+                }
+    except Exception:
+        pass
     try:
         db = get_kea_db()
         with db.cursor() as cur:
@@ -2028,8 +2091,18 @@ def subnets():
                 active = cur.fetchone()["cnt"]
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                 reserved = cur.fetchone()["cnt"]
-                subnet_data.append({"id": subnet_id, "name": info["name"], "cidr": info["cidr"],
-                                    "active": active, "reserved": reserved})
+                kea = kea_subnets.get(subnet_id, {})
+                subnet_data.append({
+                    "id": subnet_id,
+                    "name": info["name"],
+                    "cidr": info["cidr"],
+                    "active": active,
+                    "reserved": reserved,
+                    "valid_lifetime": kea.get("valid_lifetime", 0),
+                    "renew_timer": kea.get("renew_timer", 0),
+                    "rebind_timer": kea.get("rebind_timer", 0),
+                    "pools": kea.get("pools", []),
+                })
         db.close()
     except Exception as e:
         flash(f"Could not load subnet data: {str(e)}", "error")
@@ -2072,7 +2145,7 @@ def edit_subnet_post(subnet_id):
         if not server.get("ssh_host"):
             continue
         try:
-            import paramiko, base64, tempfile
+            import base64, tempfile
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(server["ssh_host"], username=server.get("ssh_user", "matthew"),
@@ -2114,19 +2187,42 @@ def ddns():
     lines = []
     log_status = "ok"
     log_message = ""
-    try:
-        with open(DDNS_LOG, "r") as f:
-            all_lines = f.readlines()
-            lines = list(reversed(all_lines[-200:]))
-        if not lines:
-            log_status = "empty"
-            log_message = "Log file exists but contains no entries yet."
-    except FileNotFoundError:
-        log_status = "missing"
-        log_message = f"Log file not found: {DDNS_LOG}"
-    except Exception as e:
+    if not KEA_SSH_HOST:
         log_status = "error"
-        log_message = f"Could not read DDNS log: {str(e)}"
+        log_message = "SSH host not configured. Set it in Settings → Infrastructure → SSH."
+    else:
+        try:
+            result = subprocess.run(
+                ["ssh", "-i", SSH_KEY_PATH,
+                 "-o", "StrictHostKeyChecking=no",
+                 "-o", "ConnectTimeout=10",
+                 f"{KEA_SSH_USER}@{KEA_SSH_HOST}",
+                 f"sudo tail -200 {DDNS_LOG}"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                err = result.stderr.strip()
+                if "No such file" in err or "No such file" in result.stdout:
+                    log_status = "missing"
+                    log_message = f"Log file not found on Kea server: {DDNS_LOG}"
+                else:
+                    log_status = "error"
+                    log_message = f"SSH error: {err or 'unknown error'}"
+                    logger.error(f"DDNS SSH error: {err}")
+            else:
+                raw_lines = result.stdout.splitlines()
+                lines = list(reversed(raw_lines))
+                if not lines:
+                    log_status = "empty"
+                    log_message = "Log file exists but contains no entries yet."
+        except subprocess.TimeoutExpired:
+            log_status = "error"
+            log_message = "SSH connection timed out. Check that theelders is reachable."
+            logger.error("DDNS SSH timeout")
+        except Exception as e:
+            log_status = "error"
+            log_message = f"Could not read DDNS log: {str(e)}"
+            logger.error(f"DDNS error: {e}")
     lookup_host = request.args.get("host", "")
     lookup_result = ""
     if lookup_host:
@@ -3690,6 +3786,22 @@ def devices():
         page = 1
     search = sanitize_search(request.args.get("search", "").strip())
     show_stale = request.args.get("stale", "0") == "1"
+    sort = request.args.get("sort", "last_seen")
+    direction = request.args.get("dir", "desc")
+    if direction not in ("asc", "desc"):
+        direction = "desc"
+    sort_map = {
+        "mac": "d.mac",
+        "device_name": "d.device_name",
+        "owner": "d.owner",
+        "last_ip": "d.last_ip",
+        "hostname": "d.last_hostname",
+        "subnet": "d.last_subnet_id",
+        "first_seen": "d.first_seen",
+        "last_seen": "d.last_seen",
+        "status": "d.last_seen",
+    }
+    sort_col = sort_map.get(sort, "d.last_seen")
     per_page = 50
     stale_days = int(get_global_setting("stale_device_days", "30"))
 
@@ -3718,7 +3830,7 @@ def devices():
                        DATEDIFF(NOW(), d.last_seen) as days_since_seen
                 FROM devices d
                 WHERE {where_str}
-                ORDER BY d.last_seen DESC
+                ORDER BY {sort_col} {direction}
                 LIMIT {per_page} OFFSET {offset}
             """, params)
             rows = cur.fetchall()
@@ -3743,7 +3855,8 @@ def devices():
     pages = max(1, (total + per_page - 1) // per_page)
     return render_template("devices.html", devices=devices_list, page=page, pages=pages,
                            total=total, search=search, show_stale=show_stale,
-                           stale_days=stale_days, subnet_map=SUBNET_MAP)
+                           stale_days=stale_days, subnet_map=SUBNET_MAP,
+                           sort=sort, direction=direction)
 
 @app.route("/devices/edit/<int:device_id>", methods=["POST"])
 @login_required
