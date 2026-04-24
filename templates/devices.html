@@ -56,16 +56,16 @@
             <span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span>
         </td>
         <td class="mono">{{ d.last_ip or '—' }}</td>
-        <td>{{ d.last_hostname or '—' }}</td>
+        <td style="white-space:nowrap;">{{ d.last_hostname or '—' }}</td>
         <td>
             {% if d.subnet_name %}
             <span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>
             {% else %}—{% endif %}
         </td>
-        <td class="mono" style="color:var(--text-muted);font-size:11px;">
+        <td class="mono" style="color:var(--text-muted);">
             {{ d.first_seen.strftime('%Y-%m-%d') if d.first_seen else '—' }}
         </td>
-        <td class="mono" style="font-size:11px;{% if d.is_stale %}color:var(--warning);{% endif %}">
+        <td class="mono" style="{% if d.is_stale %}color:var(--warning);{% endif %}">
             {{ d.last_seen.strftime('%Y-%m-%d %H:%M') if d.last_seen else '—' }}
         </td>
         <td>
@@ -80,9 +80,9 @@
         <td>
             <div style="display:flex;gap:4px;">
                 {% if current_user.role == 'admin' %}
-                <button class="btn btn-sm btn-secondary" onclick="openEditModal({{ d.id }}, '{{ d.mac }}', {{ d.device_name|tojson if d.device_name else 'null' }}, {{ d.owner|tojson if d.owner else 'null' }}, {{ d.notes|tojson if d.notes else 'null' }})">✏️</button>
+                <button class="btn btn-sm btn-secondary" onclick="openEditModal({{ d.id }}, '{{ d.mac }}', {{ d.device_name|tojson if d.device_name else 'null' }}, {{ d.owner|tojson if d.owner else 'null' }}, {{ d.notes|tojson if d.notes else 'null' }})">✏</button>
                 <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return confirm('Remove {{ d.mac }} from inventory?')">
-                    <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+                    <button type="submit" class="btn btn-sm btn-danger">✕</button>
                 </form>
                 {% endif %}
                 {% if not d.has_reservation %}

@@ -1,5 +1,66 @@
 # Changelog
 
+## [2.3.8] - 2026-04-24
+
+### Fixed
+- Fix lease release button (✕ on Leases page) — `/leases/release` route was missing entirely; added with proper audit logging
+- Fix MFA trusted device revoke buttons — template used `/mfa/revoke-device/<id>` and `/mfa/revoke-all-devices` but routes were named differently; added alias routes and the missing revoke-all route
+- Fix MFA policy Save button in Settings → System — `/settings/system/save-mfa-mode` route was missing; added
+- Fix CSV Import on Reservations page — `/reservations/import` route was missing entirely; added with full dry-run support, duplicate detection, and per-row error reporting
+
+## [2.3.7] - 2026-04-24
+
+### Fixed
+- Fix Add Reservation form not pre-selecting the correct subnet when arriving from the Leases pin button: the `selected` attribute comparison used `s.id` but the template iterates as `sid` — option was never matched so the form always defaulted to the first subnet (Production)
+
+## [2.3.6] - 2026-04-24
+
+### Fixed
+- Fix 404 when clicking the pin (📌) button on the Leases page: button was POSTing to `/leases/make-reservation` which never existed. Changed to a GET link to `/reservations/add` with IP, MAC, hostname, and subnet pre-filled as query params. The Add Reservation form now pre-populates all fields when arriving from a lease row.
+
+## [2.3.5] - 2026-04-23
+
+### Fixed
+- Fix API keys and all REST API v1 routes returning 404: routes were appended after the `if __name__ == "__main__"` block which starts `serve_forever()` — the server was already running and blocking before the route decorators at the bottom of the file ever executed. Moved all API routes before the main block so they register correctly at startup.
+
+## [2.3.4] - 2026-04-23
+
+### Fixed
+- Fix Reservations rows taller than Leases: root cause was emoji buttons (🗑️ ✏️) rendering taller than their line-height and stretching table rows. Replaced with plain text equivalents (✕ ✏) in Reservations, Devices, and Saved Searches action columns to match the plain-text buttons already used in Leases.
+
+## [2.3.3] - 2026-04-23
+
+### Fixed
+- Fix Reservations rows taller than Leases rows: hostname column text was wrapping to two lines when the column was narrow (7-column table). Added `white-space:nowrap` to hostname cells on Leases, Reservations, and Devices. Also removed remaining `font-size:11px` inline overrides from Devices date cells.
+
+## [2.3.2] - 2026-04-23
+
+### Fixed
+- Fix table row inconsistency between Leases and Reservations pages — inline `font-size:12px` overrides on individual `<td>` cells were fighting the global 13px rule. Removed inline font-size from data cells; added `td.mono { font-size: 12px }` CSS rule so monospace cells (IPs, MACs, timestamps) are consistently slightly smaller across all pages without per-cell overrides.
+
+## [2.3.1] - 2026-04-23
+
+### Fixed
+- Fix `/api/docs` returning JSON 404 — path starts with `/api/` so the API 404 handler intercepted it before the login redirect could fire. Moved to `/settings/api-docs` so it's treated as a settings page.
+
+## [2.3.0] - 2026-04-23
+
+### Added
+- REST API v1 — read-only API at `/api/v1/` with the following endpoints:
+  - `GET /api/v1/health` — Kea status and Jen version (no auth required)
+  - `GET /api/v1/subnets` — subnet utilization stats with pool sizes and utilization percentages
+  - `GET /api/v1/leases` — active leases, filterable by subnet/MAC/hostname
+  - `GET /api/v1/leases/{mac}` — single device lease lookup with `active` boolean
+  - `GET /api/v1/devices` — device inventory, filterable by MAC/name/subnet
+  - `GET /api/v1/devices/{mac}` — single device with `online` status and current lease
+  - `GET /api/v1/reservations` — all reservations, filterable by subnet
+- API key management in Settings → API Keys — generate, revoke, and delete keys; key shown once at creation
+- Live API documentation at `/api/docs` — all endpoints documented with parameters, example requests/responses, and ready-to-paste Home Assistant YAML and Zabbix HTTP agent config
+- `api_keys` table added to Jen database automatically on first run after upgrade
+
+### Fixed
+- Standardized table row height and font size (13px) across all pages — Leases, Reservations, Devices, Users, Audit Log were all slightly different
+
 ## [2.2.38] - 2026-04-21
 
 ### Fixed

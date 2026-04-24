@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}API Keys{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔑 API Keys</h1>
+    <p>Manage read-only API keys for integrations with Home Assistant, Zabbix, and other tools.</p>
+</div>
+
+{% if session.get('new_api_key') %}
+<div class="alert alert-success" style="font-family:monospace;word-break:break-all;">
+    <strong>🔑 New API Key — copy this now, it won't be shown again:</strong><br><br>
+    <span id="newKeyVal" style="font-size:15px;letter-spacing:1px;">{{ session.pop('new_api_key') }}</span>
+    <br><br>
+    <button onclick="navigator.clipboard.writeText(document.getElementById('newKeyVal').textContent);this.textContent='✓ Copied!'" class="btn btn-sm btn-secondary">📋 Copy to Clipboard</button>
+    <span style="font-size:12px;margin-left:12px;color:var(--text-muted);">Key name: {{ session.pop('new_api_key_name', '') }}</span>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Create New API Key</span>
+    </div>
+    <form method="POST" action="/settings/api-keys/create" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+            <label>Key Name</label>
+            <input type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
+            <div class="form-hint">A descriptive name so you know what this key is used for.</div>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-bottom:20px;">🔑 Generate Key</button>
+    </form>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Active & Revoked Keys</span>
+        <a href="/settings/api-docs" class="btn btn-sm btn-secondary">📖 View API Docs</a>
+    </div>
+    {% if keys %}
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>Name</th>
+            <th>Key Prefix</th>
+            <th>Created</th>
+            <th>Last Used</th>
+            <th>Status</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody>
+        {% for k in keys %}
+        <tr>
+            <td><strong>{{ k.name }}</strong></td>
+            <td class="mono" style="color:var(--text-muted);">{{ k.key_prefix }}…</td>
+            <td style="color:var(--text-muted);font-size:12px;">
+                {{ k.created_at.strftime('%Y-%m-%d') if k.created_at else '—' }}
+                {% if k.created_by_name %}<span style="color:var(--text-muted);"> by {{ k.created_by_name }}</span>{% endif %}
+            </td>
+            <td style="color:var(--text-muted);font-size:12px;">{{ k.last_used.strftime('%Y-%m-%d %H:%M') if k.last_used else 'Never' }}</td>
+            <td>
+                {% if k.active %}
+                <span style="color:var(--success);font-size:12px;">● Active</span>
+                {% else %}
+                <span style="color:var(--text-muted);font-size:12px;">● Revoked</span>
+                {% endif %}
+            </td>
+            <td style="display:flex;gap:6px;">
+                {% if k.active %}
+                <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}">
+                    <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Revoke this key? Any integrations using it will stop working.')">⏸ Revoke</button>
+                </form>
+                {% endif %}
+                <form method="POST" action="/settings/api-keys/delete/{{ k.id }}">
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this key permanently?')">🗑</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No API keys yet. Create one above to get started.</div>
+    {% endif %}
+</div>
+
+<div class="card" style="border-style:dashed;opacity:0.8;">
+    <div class="card-header"><span class="card-title">ℹ️ About API Keys</span></div>
+    <p style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+        All API keys are <strong>read-only</strong> — they can query leases, devices, reservations, and subnet stats but cannot make any changes to your network.<br><br>
+        Keys are passed in the <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">Authorization: Bearer &lt;key&gt;</code> HTTP header.<br><br>
+        A key is shown only once at creation time. If you lose it, revoke it and generate a new one.
+    </p>
+</div>
+{% endblock %}

@@ -109,16 +109,16 @@ function saveCurrentFilter() {
     {% for h in hosts %}
     <tr>
         <td class="mono">{{ h.ip }}</td>
-        <td>{{ h.hostname or '—' }}</td>
+        <td style="white-space:nowrap;">{{ h.hostname or '—' }}</td>
         <td class="mono">{{ h.mac }}</td>
         <td><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
-        <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
-        <td style="font-size:12px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
+        <td class="mono" style="color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
+        <td style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
         {% if current_user.role == 'admin' %}
         <td style="white-space:nowrap;">
-            <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary">✏️</a>
+            <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary" title="Edit">✏</a>
             <form method="POST" action="/reservations/delete/{{ h.host_id }}" style="display:inline;" onsubmit="return confirm('Delete reservation for {{ h.ip }}?')">
-                <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+                <button type="submit" class="btn btn-sm btn-danger" title="Delete">✕</button>
             </form>
         </td>
         {% endif %}

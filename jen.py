@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.2.38"
+JEN_VERSION = "2.3.8"
 
 # ─────────────────────────────────────────
 # App setup
@@ -571,6 +571,19 @@ def init_jen_db():
                     INDEX idx_ip (ip_address),
                     INDEX idx_username (username),
                     INDEX idx_attempted (attempted_at)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    key_hash VARCHAR(64) NOT NULL UNIQUE,
+                    key_prefix VARCHAR(8) NOT NULL,
+                    created_by INT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used TIMESTAMP NULL,
+                    active TINYINT(1) DEFAULT 1,
+                    INDEX idx_hash (key_hash)
                 )
             """)
             cur.execute("SELECT COUNT(*) as cnt FROM users")
@@ -1774,6 +1787,30 @@ def delete_stale_leases():
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for("leases"))
 
+@app.route("/leases/release", methods=["POST"])
+@login_required
+@admin_required
+def release_lease():
+    ip = request.form.get("ip", "").strip()
+    if not ip:
+        flash("No IP address specified.", "error")
+        return redirect(url_for("leases"))
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
+            affected = cur.rowcount
+        db.commit()
+        db.close()
+        if affected:
+            flash(f"Lease for {ip} released.", "success")
+            audit("RELEASE_LEASE", "leases", f"Released {ip} by {current_user.username}")
+        else:
+            flash(f"No active lease found for {ip}.", "warning")
+    except Exception as e:
+        flash(f"Error releasing lease: {str(e)}", "error")
+    return redirect(url_for("leases"))
+
 @app.route("/ipmap")
 @login_required
 def ipmap():
@@ -1883,7 +1920,13 @@ def reservations():
 @login_required
 @admin_required
 def add_reservation():
-    return render_template("add_reservation.html", subnet_map=SUBNET_MAP)
+    prefill = {
+        "ip": request.args.get("ip", ""),
+        "mac": request.args.get("mac", ""),
+        "hostname": request.args.get("hostname", ""),
+        "subnet_id": request.args.get("subnet_id", ""),
+    }
+    return render_template("add_reservation.html", subnet_map=SUBNET_MAP, prefill=prefill)
 
 @app.route("/reservations/add", methods=["POST"])
 @login_required
@@ -2052,6 +2095,66 @@ def export_reservations():
     except Exception as e:
         flash(f"Export error: {str(e)}", "error")
         return redirect(url_for("reservations"))
+
+@app.route("/reservations/import", methods=["POST"])
+@login_required
+@admin_required
+def import_reservations():
+    dry_run = request.args.get("dry_run", "0") == "1"
+    csv_file = request.files.get("csv_file")
+    if not csv_file or not csv_file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("reservations"))
+    results = {"added": 0, "skipped": 0, "errors": []}
+    try:
+        stream = io.StringIO(csv_file.stream.read().decode("utf-8-sig"))
+        reader = csv.DictReader(stream)
+        db = get_kea_db()
+        for i, row in enumerate(reader, 1):
+            ip = (row.get("ip") or row.get("IP") or "").strip()
+            mac = (row.get("mac") or row.get("MAC") or "").strip().lower().replace("-", ":")
+            hostname = (row.get("hostname") or row.get("HOSTNAME") or "").strip()
+            subnet_id = (row.get("subnet_id") or row.get("SUBNET_ID") or "").strip()
+            if not ip or not mac:
+                results["errors"].append(f"Row {i}: missing IP or MAC")
+                continue
+            try:
+                subnet_id = int(subnet_id)
+                if subnet_id not in SUBNET_MAP:
+                    results["errors"].append(f"Row {i}: unknown subnet_id {subnet_id}")
+                    continue
+            except (ValueError, TypeError):
+                results["errors"].append(f"Row {i}: invalid subnet_id")
+                continue
+            mac_bytes = mac.replace(":", "")
+            if len(mac_bytes) != 12:
+                results["errors"].append(f"Row {i}: invalid MAC {mac}")
+                continue
+            if not dry_run:
+                with db.cursor() as cur:
+                    # Check for duplicate
+                    cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s AND dhcp4_subnet_id=%s", (ip, subnet_id))
+                    if cur.fetchone():
+                        results["skipped"] += 1
+                        continue
+                    cur.execute("""INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id,
+                                   ipv4_address, hostname, dhcp4_client_classes, dhcp6_client_classes)
+                                   VALUES (UNHEX(%s), 1, %s, INET_ATON(%s), %s, '', '')""",
+                                (mac_bytes, subnet_id, ip, hostname))
+            results["added"] += 1
+        if not dry_run:
+            db.commit()
+        db.close()
+        if dry_run:
+            flash(f"Dry run: {results['added']} would be added, {results['skipped']} skipped. {len(results['errors'])} error(s).", "info")
+        else:
+            flash(f"Import complete: {results['added']} added, {results['skipped']} skipped. {len(results['errors'])} error(s).", "success")
+            audit("IMPORT_RESERVATIONS", "reservations", f"Added {results['added']} by {current_user.username}")
+        for err in results["errors"][:10]:
+            flash(err, "warning")
+    except Exception as e:
+        flash(f"Import error: {str(e)}", "error")
+    return redirect(url_for("reservations"))
 
 # ─────────────────────────────────────────
 # Subnets
@@ -2410,6 +2513,20 @@ def settings_system():
                            kea_version=kea_version,
                            mfa_mode=mfa_mode,
                            branding=branding)
+
+@app.route("/settings/system/save-mfa-mode", methods=["POST"])
+@login_required
+@admin_required
+def save_mfa_mode():
+    mode = request.form.get("mfa_mode", "off")
+    if mode not in ("off", "optional", "required_admins", "required_all"):
+        flash("Invalid MFA mode.", "error")
+        return redirect(url_for("settings_system"))
+    set_global_setting("mfa_mode", mode)
+    labels = {"off": "Off", "optional": "Optional", "required_admins": "Required for Admins", "required_all": "Required for All"}
+    flash(f"MFA policy set to: {labels.get(mode, mode)}", "success")
+    audit("SAVE_MFA_MODE", "settings", f"mode={mode} by {current_user.username}")
+    return redirect(url_for("settings_system"))
 
 @app.route("/settings/alerts")
 @login_required
@@ -3526,6 +3643,7 @@ def mfa_trusted_devices():
     return render_template("mfa_trusted_devices.html", devices=devices)
 
 @app.route("/mfa/trusted-devices/remove/<int:device_id>", methods=["POST"])
+@app.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])
 @login_required
 def remove_trusted_device(device_id):
     try:
@@ -3535,6 +3653,21 @@ def remove_trusted_device(device_id):
         db.commit(); db.close()
         flash("Trusted device removed.", "success")
         audit("REMOVE_TRUSTED_DEVICE", "auth", f"device_id={device_id}")
+    except Exception as e:
+        flash(f"Error: {str(e)}", "error")
+    return redirect(url_for("mfa_trusted_devices"))
+
+@app.route("/mfa/revoke-all-devices", methods=["POST"])
+@login_required
+def revoke_all_trusted_devices():
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (current_user.id,))
+            deleted = cur.rowcount
+        db.commit(); db.close()
+        flash(f"All {deleted} trusted device(s) revoked.", "success")
+        audit("REVOKE_ALL_TRUSTED_DEVICES", "auth", current_user.username)
     except Exception as e:
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for("mfa_trusted_devices"))
@@ -4256,6 +4389,396 @@ def prometheus_metrics():
     lines.append("# TYPE jen_kea_up gauge")
     lines.append(f"jen_kea_up {1 if kea_is_up() else 0}")
     return Response("\n".join(lines) + "\n", mimetype="text/plain")
+
+# ─────────────────────────────────────────
+# REST API v1
+# ─────────────────────────────────────────
+
+def _api_auth():
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    raw_key = auth[7:].strip()
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name FROM api_keys WHERE key_hash=%s AND active=1", (key_hash,))
+            row = cur.fetchone()
+            if row:
+                cur.execute("UPDATE api_keys SET last_used=NOW() WHERE id=%s", (row["id"],))
+                db.commit()
+        db.close()
+        return row
+    except Exception:
+        return None
+
+def api_error(message, code=400):
+    return jsonify({"error": message}), code
+
+def api_ok(data):
+    return jsonify(data)
+
+@app.route("/api/v1/health")
+def api_v1_health():
+    kea_up = kea_is_up()
+    kea_version = ""
+    try:
+        ver = kea_command("version-get")
+        if ver.get("result") == 0:
+            kea_version = ver.get("arguments", {}).get("extended", ver.get("text", ""))
+            kea_version = kea_version.splitlines()[0] if kea_version else ""
+    except Exception:
+        pass
+    return api_ok({"jen_version": JEN_VERSION, "kea_up": kea_up, "kea_version": kea_version, "subnets": len(SUBNET_MAP)})
+
+@app.route("/api/v1/subnets")
+def api_v1_subnets():
+    if not _api_auth():
+        return api_error("Invalid or missing API key.", 401)
+    result = []
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            for sid, info in SUBNET_MAP.items():
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                active = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (sid,))
+                reserved = cur.fetchone()["cnt"]
+                result.append({"id": sid, "name": info["name"], "cidr": info["cidr"],
+                                "active_leases": active, "reservations": reserved,
+                                "pool_size": 0, "pools": [], "utilization_pct": 0})
+        db.close()
+        try:
+            cfg_result = kea_command("config-get")
+            if cfg_result.get("result") == 0:
+                for s in cfg_result["arguments"]["Dhcp4"].get("subnet4", []):
+                    for r in result:
+                        if r["id"] == s["id"]:
+                            pool_size = 0
+                            pools = []
+                            for p in s.get("pools", []):
+                                ps = p.get("pool", "") if isinstance(p, dict) else str(p)
+                                if "-" in ps:
+                                    start, end = [x.strip() for x in ps.split("-")]
+                                    pool_size += ip_to_int(end) - ip_to_int(start) + 1
+                                    pools.append(ps)
+                            r["pool_size"] = pool_size
+                            r["pools"] = pools
+                            r["utilization_pct"] = round(r["active_leases"] / pool_size * 100, 1) if pool_size > 0 else 0
+        except Exception:
+            pass
+    except Exception as e:
+        return api_error(str(e), 500)
+    return api_ok({"subnets": result, "count": len(result)})
+
+@app.route("/api/v1/leases")
+def api_v1_leases():
+    if not _api_auth():
+        return api_error("Invalid or missing API key.", 401)
+    subnet = request.args.get("subnet", "")
+    mac = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
+    hostname = request.args.get("hostname", "")
+    try:
+        limit = min(int(request.args.get("limit", 200)), 1000)
+    except ValueError:
+        limit = 200
+    result = []
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            where = ["l.state=0", "l.expire > NOW()"]
+            params = []
+            if subnet:
+                sid = next((k for k, v in SUBNET_MAP.items() if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                if sid:
+                    where.append("l.subnet_id=%s")
+                    params.append(sid)
+            if mac:
+                where.append("HEX(l.hwaddr) LIKE %s")
+                params.append("%" + mac + "%")
+            if hostname:
+                where.append("l.hostname LIKE %s")
+                params.append("%" + hostname + "%")
+            cur.execute(
+                "SELECT inet_ntoa(l.address) AS ip, l.hostname, HEX(l.hwaddr) AS mac_hex, l.subnet_id, "
+                "(l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
+                "l.expire AS expires, l.valid_lifetime "
+                "FROM lease4 l WHERE " + " AND ".join(where) + " ORDER BY l.expire DESC LIMIT %s",
+                params + [limit]
+            )
+            for row in cur.fetchall():
+                mf = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)).lower() if row["mac_hex"] else ""
+                si = SUBNET_MAP.get(row["subnet_id"], {})
+                result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
+                                "subnet_id": row["subnet_id"], "subnet_name": si.get("name",""),
+                                "obtained": row["obtained"].isoformat() if row["obtained"] else None,
+                                "expires": row["expires"].isoformat() if row["expires"] else None,
+                                "valid_lifetime": row["valid_lifetime"]})
+        db.close()
+    except Exception as e:
+        return api_error(str(e), 500)
+    return api_ok({"leases": result, "count": len(result)})
+
+@app.route("/api/v1/leases/<mac>")
+def api_v1_lease_by_mac(mac):
+    if not _api_auth():
+        return api_error("Invalid or missing API key.", 401)
+    mac_clean = mac.lower().replace(":", "").replace("-", "")
+    if len(mac_clean) != 12:
+        return api_error("Invalid MAC address format.", 400)
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT inet_ntoa(l.address) AS ip, l.hostname, HEX(l.hwaddr) AS mac_hex, l.subnet_id, "
+                "(l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
+                "l.expire AS expires, l.valid_lifetime, l.state "
+                "FROM lease4 l WHERE HEX(l.hwaddr)=%s ORDER BY l.expire DESC LIMIT 1",
+                (mac_clean.upper(),)
+            )
+            row = cur.fetchone()
+        db.close()
+        if not row:
+            return api_error("No lease found for this MAC address.", 404)
+        mf = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)).lower() if row["mac_hex"] else ""
+        si = SUBNET_MAP.get(row["subnet_id"], {})
+        active = row["state"] == 0 and row["expires"] and row["expires"] > datetime.now()
+        return api_ok({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
+                        "subnet_id": row["subnet_id"], "subnet_name": si.get("name",""),
+                        "obtained": row["obtained"].isoformat() if row["obtained"] else None,
+                        "expires": row["expires"].isoformat() if row["expires"] else None,
+                        "valid_lifetime": row["valid_lifetime"], "active": active})
+    except Exception as e:
+        return api_error(str(e), 500)
+
+@app.route("/api/v1/devices")
+def api_v1_devices_endpoint():
+    if not _api_auth():
+        return api_error("Invalid or missing API key.", 401)
+    mac = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
+    name = request.args.get("name", "")
+    subnet = request.args.get("subnet", "")
+    try:
+        limit = min(int(request.args.get("limit", 200)), 1000)
+    except ValueError:
+        limit = 200
+    result = []
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            where = ["1=1"]
+            params = []
+            if mac:
+                where.append("REPLACE(d.mac, ':', '') LIKE %s")
+                params.append("%" + mac + "%")
+            if name:
+                where.append("(d.device_name LIKE %s OR d.last_hostname LIKE %s)")
+                params += ["%" + name + "%", "%" + name + "%"]
+            if subnet:
+                sid = next((k for k, v in SUBNET_MAP.items() if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                if sid:
+                    where.append("d.last_subnet_id=%s")
+                    params.append(sid)
+            cur.execute(
+                "SELECT d.mac, d.device_name, d.owner, d.last_ip, d.last_hostname, "
+                "d.last_subnet_id, d.first_seen, d.last_seen, "
+                "DATEDIFF(NOW(), d.last_seen) as days_inactive "
+                "FROM devices d WHERE " + " AND ".join(where) + " ORDER BY d.last_seen DESC LIMIT %s",
+                params + [limit]
+            )
+            for row in cur.fetchall():
+                si = SUBNET_MAP.get(row["last_subnet_id"], {})
+                result.append({"mac": row["mac"], "device_name": row["device_name"] or "",
+                                "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
+                                "last_hostname": row["last_hostname"] or "",
+                                "subnet_name": si.get("name",""),
+                                "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
+                                "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+                                "days_inactive": row["days_inactive"]})
+        db.close()
+    except Exception as e:
+        return api_error(str(e), 500)
+    return api_ok({"devices": result, "count": len(result)})
+
+@app.route("/api/v1/devices/<mac>")
+def api_v1_device_by_mac(mac):
+    if not _api_auth():
+        return api_error("Invalid or missing API key.", 401)
+    mac_fmt = mac.lower().replace("-", ":")
+    try:
+        db = get_jen_db()
+        kdb = get_kea_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM devices WHERE mac=%s", (mac_fmt,))
+            row = cur.fetchone()
+        if not row:
+            db.close(); kdb.close()
+            return api_error("Device not found.", 404)
+        mac_clean = mac_fmt.replace(":", "").upper()
+        with kdb.cursor() as kcur:
+            kcur.execute(
+                "SELECT inet_ntoa(address) AS ip, hostname, state, "
+                "(expire - INTERVAL valid_lifetime SECOND) AS obtained, expire AS expires "
+                "FROM lease4 WHERE HEX(hwaddr)=%s ORDER BY expire DESC LIMIT 1",
+                (mac_clean,)
+            )
+            lease = kcur.fetchone()
+        db.close(); kdb.close()
+        si = SUBNET_MAP.get(row["last_subnet_id"], {})
+        result = {"mac": row["mac"], "device_name": row["device_name"] or "",
+                  "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
+                  "last_hostname": row["last_hostname"] or "", "subnet_name": si.get("name",""),
+                  "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
+                  "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+                  "online": False, "current_lease": None}
+        if lease and lease["state"] == 0 and lease["expires"] and lease["expires"] > datetime.now():
+            result["online"] = True
+            result["current_lease"] = {"ip": lease["ip"], "hostname": lease["hostname"] or "",
+                                        "obtained": lease["obtained"].isoformat() if lease["obtained"] else None,
+                                        "expires": lease["expires"].isoformat() if lease["expires"] else None}
+        return api_ok(result)
+    except Exception as e:
+        return api_error(str(e), 500)
+
+@app.route("/api/v1/reservations")
+def api_v1_reservations():
+    if not _api_auth():
+        return api_error("Invalid or missing API key.", 401)
+    subnet = request.args.get("subnet", "")
+    try:
+        limit = min(int(request.args.get("limit", 200)), 1000)
+    except ValueError:
+        limit = 200
+    result = []
+    try:
+        db = get_kea_db()
+        with db.cursor() as cur:
+            where = ["dhcp4_subnet_id > 0"]
+            params = []
+            if subnet:
+                sid = next((k for k, v in SUBNET_MAP.items() if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                if sid:
+                    where.append("dhcp4_subnet_id=%s")
+                    params.append(sid)
+            cur.execute(
+                "SELECT inet_ntoa(ipv4_address) AS ip, hostname, "
+                "HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id "
+                "FROM hosts WHERE " + " AND ".join(where) + " ORDER BY ipv4_address LIMIT %s",
+                params + [limit]
+            )
+            for row in cur.fetchall():
+                mf = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)).lower() if row["mac_hex"] else ""
+                si = SUBNET_MAP.get(row["subnet_id"], {})
+                result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
+                                "subnet_id": row["subnet_id"], "subnet_name": si.get("name","")})
+        db.close()
+    except Exception as e:
+        return api_error(str(e), 500)
+    return api_ok({"reservations": result, "count": len(result)})
+
+# ─────────────────────────────────────────
+# API Key Management
+# ─────────────────────────────────────────
+
+@app.route("/settings/api-keys")
+@login_required
+@admin_required
+def api_keys():
+    keys = []
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
+                "u.username as created_by_name "
+                "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
+                "ORDER BY k.created_at DESC"
+            )
+            keys = cur.fetchall()
+        db.close()
+    except Exception as e:
+        flash(f"Could not load API keys: {str(e)}", "error")
+    return render_template("api_keys.html", keys=keys)
+
+@app.route("/settings/api-keys/create", methods=["POST"])
+@login_required
+@admin_required
+def api_keys_create():
+    import secrets as _secrets
+    name = request.form.get("name", "").strip()[:100]
+    if not name:
+        flash("Key name is required.", "error")
+        return redirect(url_for("api_keys"))
+    raw_key = "jen_" + _secrets.token_hex(24)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    key_prefix = raw_key[:8]
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES (%s,%s,%s,%s)",
+                        (name, key_hash, key_prefix, current_user.id))
+        db.commit(); db.close()
+        audit("API_KEY_CREATE", "api_keys", f"Key '{name}' created by {current_user.username}")
+        session["new_api_key"] = raw_key
+        session["new_api_key_name"] = name
+        flash("API key created. Copy it now — it won't be shown again.", "success")
+    except Exception as e:
+        flash(f"Error creating key: {str(e)}", "error")
+    return redirect(url_for("api_keys"))
+
+@app.route("/settings/api-keys/revoke/<int:key_id>", methods=["POST"])
+@login_required
+@admin_required
+def api_keys_revoke(key_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
+            row = cur.fetchone()
+            if row:
+                cur.execute("UPDATE api_keys SET active=0 WHERE id=%s", (key_id,))
+                db.commit()
+                audit("API_KEY_REVOKE", "api_keys", f"Key '{row['name']}' revoked by {current_user.username}")
+                flash(f"API key '{row['name']}' revoked.", "success")
+        db.close()
+    except Exception as e:
+        flash(f"Error revoking key: {str(e)}", "error")
+    return redirect(url_for("api_keys"))
+
+@app.route("/settings/api-keys/delete/<int:key_id>", methods=["POST"])
+@login_required
+@admin_required
+def api_keys_delete(key_id):
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
+            row = cur.fetchone()
+            if row:
+                cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
+                db.commit()
+                audit("API_KEY_DELETE", "api_keys", f"Key '{row['name']}' deleted by {current_user.username}")
+                flash(f"API key '{row['name']}' deleted.", "success")
+        db.close()
+    except Exception as e:
+        flash(f"Error deleting key: {str(e)}", "error")
+    return redirect(url_for("api_keys"))
+
+@app.route("/settings/api-docs")
+@login_required
+def api_docs():
+    keys = []
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name, key_prefix FROM api_keys WHERE active=1 ORDER BY created_at DESC LIMIT 10")
+            keys = cur.fetchall()
+        db.close()
+    except Exception:
+        pass
+    base_url = request.host_url.rstrip("/")
+    return render_template("api_docs.html", keys=keys, base_url=base_url)
 
 # ─────────────────────────────────────────
 # Run

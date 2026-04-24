@@ -1,0 +1,297 @@
+{% extends "base.html" %}
+{% block title %}API Documentation{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📖 REST API Documentation</h1>
+    <p>Jen v{{ jen_version }} — Read-only API for integrations with Home Assistant, Zabbix, and custom scripts.</p>
+</div>
+
+{% if keys %}
+<div class="card" style="border-color:rgba(0,180,216,0.3);">
+    <div class="card-header"><span class="card-title">🔑 Your API Keys</span><a href="/settings/api-keys" class="btn btn-sm btn-secondary">Manage Keys</a></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Select a key to pre-fill examples below:</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        {% for k in keys %}
+        <button onclick="setKey('{{ k.key_prefix }}…')" class="btn btn-sm btn-secondary" id="keybtn-{{ k.id }}">{{ k.name }}</button>
+        {% endfor %}
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+        <input type="text" id="apiKeyInput" placeholder="Paste your full API key here to pre-fill examples"
+               style="flex:1;font-family:monospace;font-size:12px;" oninput="updateExamples(this.value)">
+        <button onclick="document.getElementById('apiKeyInput').value='';updateExamples('')" class="btn btn-sm btn-secondary">Clear</button>
+    </div>
+</div>
+{% else %}
+<div class="card" style="border-style:dashed;">
+    <p style="color:var(--text-muted);font-size:13px;">No API keys yet. <a href="/settings/api-keys">Create one</a> to get started.</p>
+</div>
+{% endif %}
+
+<!-- Overview -->
+<div class="card">
+    <div class="card-header"><span class="card-title">Overview</span></div>
+    <div style="font-size:13px;line-height:1.8;color:var(--text-muted);">
+        <p><strong style="color:var(--text);">Base URL:</strong> <code class="mono-box">{{ base_url }}</code></p>
+        <p style="margin-top:8px;"><strong style="color:var(--text);">Authentication:</strong> All endpoints (except <code class="mono-box">/api/v1/health</code>) require an API key in the request header:</p>
+        <pre class="code-block">Authorization: Bearer YOUR_API_KEY</pre>
+        <p style="margin-top:8px;"><strong style="color:var(--text);">Response format:</strong> All responses are JSON. Errors return <code class="mono-box">{"error": "message"}</code> with an appropriate HTTP status code.</p>
+        <p style="margin-top:8px;"><strong style="color:var(--text);">All keys are read-only.</strong> The API cannot modify your DHCP configuration or reservations.</p>
+    </div>
+</div>
+
+<!-- Endpoints -->
+{% set endpoints = [
+    {
+        "method": "GET",
+        "path": "/api/v1/health",
+        "title": "Health Check",
+        "auth": false,
+        "desc": "Returns Jen version, Kea status, and subnet count. No authentication required — useful for monitoring checks.",
+        "params": [],
+        "example_path": "/api/v1/health",
+        "example_response": '{\n  "jen_version": "2.3.0",\n  "kea_up": true,\n  "kea_version": "Kea 3.0.0",\n  "subnets": 3\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/subnets",
+        "title": "Subnet Utilization",
+        "auth": true,
+        "desc": "Returns all configured subnets with active lease counts, reservation counts, pool sizes, and utilization percentages.",
+        "params": [],
+        "example_path": "/api/v1/subnets",
+        "example_response": '{\n  "count": 3,\n  "subnets": [\n    {\n      "id": 1,\n      "name": "Production",\n      "cidr": "10.10.10.0/23",\n      "active_leases": 60,\n      "reservations": 40,\n      "pool_size": 201,\n      "utilization_pct": 29.9\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/leases",
+        "title": "List Active Leases",
+        "auth": true,
+        "desc": "Returns currently active leases. Filter by subnet name, MAC address, or hostname.",
+        "params": [
+            {"name": "subnet", "desc": "Filter by subnet name or ID (e.g. Production, IoT, 30)"},
+            {"name": "mac", "desc": "Filter by MAC address (any format: aa:bb:cc:dd:ee:ff, aabbccddeeff)"},
+            {"name": "hostname", "desc": "Filter by hostname (partial match)"},
+            {"name": "limit", "desc": "Max results to return (default: 200, max: 1000)"}
+        ],
+        "example_path": "/api/v1/leases?subnet=IoT&limit=5",
+        "example_response": '{\n  "count": 5,\n  "leases": [\n    {\n      "ip": "10.10.30.10",\n      "mac": "48:e1:e9:19:c3:13",\n      "hostname": "meross-smart-plug",\n      "subnet_id": 30,\n      "subnet_name": "IoT",\n      "obtained": "2026-04-08T01:22:00",\n      "expires": "2027-04-08T01:22:00",\n      "valid_lifetime": 1209600\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/leases/{mac}",
+        "title": "Lease by MAC Address",
+        "auth": true,
+        "desc": "Look up the current lease for a specific device by MAC address. Returns online: true/false — ideal for Home Assistant presence detection.",
+        "params": [
+            {"name": "mac (path)", "desc": "MAC address in any format: aa:bb:cc:dd:ee:ff or aabbccddeeff"}
+        ],
+        "example_path": "/api/v1/leases/aa:bb:cc:dd:ee:ff",
+        "example_response": '{\n  "ip": "10.10.10.60",\n  "mac": "50:2b:73:db:16:04",\n  "hostname": "linuxbook",\n  "subnet_name": "Production",\n  "obtained": "2026-04-22T10:00:00",\n  "expires": "2026-04-23T10:00:00",\n  "active": true\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/devices",
+        "title": "List Device Inventory",
+        "auth": true,
+        "desc": "Returns all devices tracked in Jen's device inventory — every MAC address ever seen on the network.",
+        "params": [
+            {"name": "mac", "desc": "Filter by MAC address (partial match)"},
+            {"name": "name", "desc": "Filter by device name or hostname (partial match)"},
+            {"name": "subnet", "desc": "Filter by subnet name or ID"},
+            {"name": "limit", "desc": "Max results (default: 200, max: 1000)"}
+        ],
+        "example_path": "/api/v1/devices?subnet=Production",
+        "example_response": '{\n  "count": 2,\n  "devices": [\n    {\n      "mac": "50:2b:73:db:16:04",\n      "device_name": "Work Laptop",\n      "owner": "Matthew",\n      "last_ip": "10.10.10.60",\n      "last_hostname": "linuxbook",\n      "subnet_name": "Production",\n      "last_seen": "2026-04-23T10:00:00",\n      "days_inactive": 0\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/devices/{mac}",
+        "title": "Device by MAC Address",
+        "auth": true,
+        "desc": "Full device detail including current online status and active lease info. The online field is true only if the device has a currently active (non-expired) lease.",
+        "params": [
+            {"name": "mac (path)", "desc": "MAC address: aa:bb:cc:dd:ee:ff or aa-bb-cc-dd-ee-ff"}
+        ],
+        "example_path": "/api/v1/devices/50:2b:73:db:16:04",
+        "example_response": '{\n  "mac": "50:2b:73:db:16:04",\n  "device_name": "Work Laptop",\n  "owner": "Matthew",\n  "last_ip": "10.10.10.60",\n  "subnet_name": "Production",\n  "last_seen": "2026-04-23T10:00:00",\n  "online": true,\n  "current_lease": {\n    "ip": "10.10.10.60",\n    "hostname": "linuxbook",\n    "obtained": "2026-04-22T10:00:00",\n    "expires": "2026-04-23T10:00:00"\n  }\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/reservations",
+        "title": "List Reservations",
+        "auth": true,
+        "desc": "Returns all static DHCP reservations.",
+        "params": [
+            {"name": "subnet", "desc": "Filter by subnet name or ID"},
+            {"name": "limit", "desc": "Max results (default: 200, max: 1000)"}
+        ],
+        "example_path": "/api/v1/reservations?subnet=IoT",
+        "example_response": '{\n  "count": 17,\n  "reservations": [\n    {\n      "ip": "10.10.30.1",\n      "mac": "70:2c:1f:31:37:7d",\n      "hostname": "samsung-familyhub",\n      "subnet_id": 30,\n      "subnet_name": "IoT"\n    }\n  ]\n}'
+    }
+] %}
+
+{% for ep in endpoints %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">
+            <span style="background:var(--primary);color:#000;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-right:8px;">{{ ep.method }}</span>
+            <code style="font-size:14px;">{{ ep.path }}</code>
+            {% if not ep.auth %}<span style="background:#2a3a1a;color:var(--success);padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">No auth required</span>{% endif %}
+        </span>
+        <span style="font-size:13px;color:var(--text-muted);">{{ ep.title }}</span>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">{{ ep.desc }}</p>
+
+    {% if ep.params %}
+    <div style="margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Parameters</div>
+        <table style="width:100%;font-size:12px;">
+            <thead><tr>
+                <th style="width:160px;">Name</th>
+                <th>Description</th>
+            </tr></thead>
+            <tbody>
+            {% for p in ep.params %}
+            <tr>
+                <td><code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">{{ p.name }}</code></td>
+                <td style="color:var(--text-muted);">{{ p.desc }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Request</div>
+            <pre class="code-block" id="req-{{ loop.index }}">curl -s {% if ep.auth %}-H "Authorization: Bearer YOUR_KEY" {% endif %}\
+  {{ base_url }}{{ ep.example_path }}</pre>
+        </div>
+        <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Response</div>
+            <pre class="code-block">{{ ep.example_response }}</pre>
+        </div>
+    </div>
+</div>
+{% endfor %}
+
+<!-- Home Assistant section -->
+<div class="card" style="border-color:rgba(0,180,216,0.3);">
+    <div class="card-header"><span class="card-title">🏠 Home Assistant Integration</span></div>
+
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">
+        Add these to your <code class="mono-box">configuration.yaml</code>. Replace <code class="mono-box">YOUR_KEY</code> with your API key and <code class="mono-box">{{ base_url }}</code> with your Jen URL.
+    </div>
+
+    <div style="margin-bottom:24px;">
+        <div style="font-weight:600;margin-bottom:8px;">Presence Detection (device tracker)</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Detects if a device is home based on whether it has an active DHCP lease. Replace the MAC with your phone's MAC address.</div>
+        <pre class="code-block"># configuration.yaml
+rest:
+  - resource: "{{ base_url }}/api/v1/devices/aa:bb:cc:dd:ee:ff"
+    headers:
+      Authorization: "Bearer YOUR_KEY"
+    sensor:
+      - name: "Phone Presence"
+        value_template: "{{ '{{' }} 'home' if value_json.online else 'not_home' {{ '}}' }}"
+        icon: mdi:cellphone</pre>
+    </div>
+
+    <div style="margin-bottom:24px;">
+        <div style="font-weight:600;margin-bottom:8px;">Subnet Utilization Sensor</div>
+        <pre class="code-block"># configuration.yaml
+rest:
+  - resource: "{{ base_url }}/api/v1/subnets"
+    headers:
+      Authorization: "Bearer YOUR_KEY"
+    sensor:
+      - name: "Production DHCP Utilization"
+        value_template: "{{ '{{' }} value_json.subnets[0].utilization_pct {{ '}}' }}"
+        unit_of_measurement: "%"
+        icon: mdi:percent</pre>
+    </div>
+
+    <div>
+        <div style="font-weight:600;margin-bottom:8px;">Kea Health Check</div>
+        <pre class="code-block"># configuration.yaml
+rest:
+  - resource: "{{ base_url }}/api/v1/health"
+    binary_sensor:
+      - name: "Kea DHCP"
+        value_template: "{{ '{{' }} value_json.kea_up {{ '}}' }}"
+        device_class: connectivity</pre>
+    </div>
+</div>
+
+<!-- Zabbix section -->
+<div class="card" style="border-color:rgba(0,180,216,0.3);">
+    <div class="card-header"><span class="card-title">📊 Zabbix Integration</span></div>
+
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">
+        Use Zabbix HTTP Agent items to poll the Jen API. Create an item for each metric you want to track.
+    </div>
+
+    <div style="margin-bottom:24px;">
+        <div style="font-weight:600;margin-bottom:8px;">HTTP Agent Item — Kea Health</div>
+        <table style="width:100%;font-size:12px;">
+            <tbody>
+                <tr><td style="width:140px;color:var(--text-muted);">Type</td><td>HTTP agent</td></tr>
+                <tr><td style="color:var(--text-muted);">URL</td><td><code class="mono-box">{{ base_url }}/api/v1/health</code></td></tr>
+                <tr><td style="color:var(--text-muted);">Request headers</td><td><code class="mono-box">Authorization: Bearer YOUR_KEY</code></td></tr>
+                <tr><td style="color:var(--text-muted);">Type of info</td><td>Numeric (unsigned)</td></tr>
+                <tr><td style="color:var(--text-muted);">JSONPath</td><td><code class="mono-box">$.kea_up</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div>
+        <div style="font-weight:600;margin-bottom:8px;">HTTP Agent Item — Subnet Utilization</div>
+        <table style="width:100%;font-size:12px;">
+            <tbody>
+                <tr><td style="width:140px;color:var(--text-muted);">URL</td><td><code class="mono-box">{{ base_url }}/api/v1/subnets</code></td></tr>
+                <tr><td style="color:var(--text-muted);">Request headers</td><td><code class="mono-box">Authorization: Bearer YOUR_KEY</code></td></tr>
+                <tr><td style="color:var(--text-muted);">JSONPath (Production)</td><td><code class="mono-box">$.subnets[?(@.name=='Production')].utilization_pct</code></td></tr>
+                <tr><td style="color:var(--text-muted);">Trigger</td><td>Last value > 85 → High utilization warning</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<style>
+.code-block {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--text);
+    line-height: 1.6;
+}
+.mono-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: monospace;
+    font-size: 12px;
+}
+</style>
+{% endblock %}
+{% block scripts %}
+var currentKey = '';
+function updateExamples(key) {
+    currentKey = key;
+    document.querySelectorAll('[id^="req-"]').forEach(function(el) {
+        if (key) {
+            el.innerHTML = el.innerHTML.replace(/YOUR_KEY/g, key);
+        }
+    });
+}
+function setKey(prefix) {
+    document.getElementById('apiKeyInput').focus();
+}
+{% endblock %}

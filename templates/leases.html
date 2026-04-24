@@ -90,20 +90,15 @@ function saveCurrentFilter() {
     {% for l in leases %}
     <tr>
         <td class="mono">{{ l.ip }}</td>
-        <td>{{ l.hostname or '—' }}</td>
+        <td style="white-space:nowrap;">{{ l.hostname or '—' }}</td>
         <td class="mono">{{ l.mac }}</td>
         <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-        <td class="mono" style="color:var(--text-muted);font-size:12px;">{{ l.obtained.strftime('%Y-%m-%d %H:%M') if l.obtained else '—' }}</td>
-        <td class="mono" style="color:var(--text-muted);font-size:12px;">{{ l.expire.strftime('%Y-%m-%d %H:%M') if l.expire else '—' }}</td>
+        <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%Y-%m-%d %H:%M') if l.obtained else '—' }}</td>
+        <td class="mono" style="color:var(--text-muted);">{{ l.expire.strftime('%Y-%m-%d %H:%M') if l.expire else '—' }}</td>
         {% if not show_expired and current_user.role == 'admin' %}
         <td style="white-space:nowrap;">
-            <form method="POST" action="/leases/make-reservation" style="display:inline;">
-                <input type="hidden" name="ip" value="{{ l.ip }}">
-                <input type="hidden" name="mac" value="{{ l.mac }}">
-                <input type="hidden" name="hostname" value="{{ l.hostname }}">
-                <input type="hidden" name="subnet_id" value="{{ l.subnet_id }}">
-                <button type="submit" class="btn btn-sm btn-success" title="Reserve this IP">📌</button>
-            </form>
+            <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
+               class="btn btn-sm btn-success" title="Reserve this IP">📌</a>
             <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return confirm('Release lease for {{ l.ip }}?')">
                 <input type="hidden" name="ip" value="{{ l.ip }}">
                 <button type="submit" class="btn btn-sm btn-danger" title="Release lease">✕</button>

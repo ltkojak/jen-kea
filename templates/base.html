@@ -54,9 +54,9 @@
         /* Tables */
         .table-wrap { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; white-space: nowrap; }
-        th:hover { color: var(--text); }
-        td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
+        td.mono { font-size: 12px; }
         tr:last-child td { border-bottom: none; }
         tr:hover td { background: var(--surface2); }
 
@@ -215,7 +215,7 @@
         <a href="/leases" class="nav-link {% if request.endpoint in ['leases','ipmap','reservations','add_reservation','edit_reservation','devices','reports'] %}active{% endif %}">📋 Management</a>
         <a href="/subnets" class="nav-link {% if request.endpoint in ['subnets','edit_subnet','ddns','servers'] %}active{% endif %}">🌐 Network</a>
         {% if current_user.role == 'admin' %}
-        <a href="/settings/system" class="nav-link {% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log'] %}active{% endif %}">⚙️ Settings</a>
+        <a href="/settings/system" class="nav-link {% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log','api_keys','api_docs'] %}active{% endif %}">⚙️ Settings</a>
         {% endif %}
         <a href="/about" class="nav-link {% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
     </div>
@@ -289,13 +289,15 @@
 </div>
 {% endif %}
 
-{% if current_user.role == 'admin' and request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log'] %}
+{% if current_user.role == 'admin' and request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log','api_keys','api_docs'] %}
 <div class="section-tabs">
     <a href="/settings/system" class="section-tab {% if request.endpoint == 'settings_system' %}active{% endif %}">⚙️ System</a>
     <a href="/settings/alerts" class="section-tab {% if request.endpoint == 'settings_alerts' %}active{% endif %}">🔔 Alerts</a>
     <a href="/settings/infrastructure" class="section-tab {% if request.endpoint == 'settings_infrastructure' %}active{% endif %}">🔧 Infrastructure</a>
     <a href="/users" class="section-tab {% if request.endpoint == 'users' %}active{% endif %}">👤 Users</a>
     <a href="/audit" class="section-tab {% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit Log</a>
+    <a href="/settings/api-keys" class="section-tab {% if request.endpoint in ['api_keys'] %}active{% endif %}">🔑 API Keys</a>
+    <a href="/settings/api-docs" class="section-tab {% if request.endpoint == 'api_docs' %}active{% endif %}">📖 API Docs</a>
 </div>
 {% endif %}
 
