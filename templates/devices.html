@@ -29,6 +29,22 @@
     </form>
 </div>
 
+<!-- Device type summary badges -->
+<div id="type-filter-bar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+    <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Filter by type:</span>
+    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}" 
+       class="btn btn-sm {% if not request.args.get('type') %}btn-primary{% else %}btn-secondary{% endif %}">All</a>
+    {% for type_key, type_info in device_type_display.items() %}
+    {% if type_key != 'unknown' %}
+    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}&type={{ type_key }}"
+       class="btn btn-sm {% if request.args.get('type') == type_key %}btn-primary{% else %}btn-secondary{% endif %}"
+       style="{% if request.args.get('type') == type_key %}background:{{ type_info[1] }};{% endif %}">
+        {{ type_info[0] }}
+    </a>
+    {% endif %}
+    {% endfor %}
+</div>
+
 <div class="card" style="padding:0;">
 <div class="table-wrap">
 <table class="sortable">
@@ -40,6 +56,7 @@
         <th><a href="?sort=last_ip&dir={{ 'desc' if sort=='last_ip' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last IP{% if sort=='last_ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th>Type</th>
         <th><a href="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">First Seen{% if sort=='first_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last Seen{% if sort=='last_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th>Status</th>
@@ -61,6 +78,29 @@
             {% if d.subnet_name %}
             <span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>
             {% else %}—{% endif %}
+        </td>
+        <td style="white-space:nowrap;">
+            {% set icon_url = get_manufacturer_icon_url(d.manufacturer) if d.manufacturer else None %}
+            {% set type_info = device_type_display.get(d.device_type, ('', '#555555')) %}
+            {% if d.manufacturer and d.manufacturer != 'Unknown' %}
+            <span title="{{ d.manufacturer }}" style="
+                display:inline-flex;align-items:center;gap:5px;
+                padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;
+                background:{{ type_info[1] }}22;
+                color:{{ type_info[1] }};
+                border:1px solid {{ type_info[1] }}44;
+            ">
+                {% if icon_url %}
+                <img src="{{ icon_url }}" alt="{{ d.manufacturer }}"
+                     style="width:13px;height:13px;object-fit:contain;filter:brightness(0) invert(1);opacity:0.85;">
+                {% else %}
+                {{ d.device_icon or '' }}
+                {% endif %}
+                {{ d.manufacturer }}
+            </span>
+            {% else %}
+            <span style="color:var(--text-muted);font-size:11px;">—</span>
+            {% endif %}
         </td>
         <td class="mono" style="color:var(--text-muted);">
             {{ d.first_seen.strftime('%Y-%m-%d') if d.first_seen else '—' }}

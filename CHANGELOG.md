@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.4.1] - 2026-04-25
+
+### Added
+- Brand SVG logos in Device Inventory — 24 bundled Simple Icons SVGs replace emoji for identified manufacturers (Apple, Samsung, Cisco, Dell, HP, Lenovo, Intel, LG, Google, Raspberry Pi, Roku, Ring, Sonos, Ubiquiti, Netgear, Synology, QNAP, Philips Hue, TP-Link, PlayStation, Epson, Espressif, VMware, QEMU)
+- Custom icon management at Settings → Icons — upload your own SVG to override any bundled icon or add new manufacturers. Custom icons take priority over bundled ones and survive upgrades (stored in `/opt/jen/static/icons/custom/`)
+- Icon display uses white-tinted SVG logos with colored badge backgrounds matching device type
+
+## [2.4.0] - 2026-04-24
+
+### Added
+- Device fingerprinting via OUI (MAC address manufacturer lookup) — automatically identifies device manufacturer and type for every device in the inventory
+- OUI database covering 800+ prefixes across Apple, Samsung, Amazon, Google, Raspberry Pi, Espressif (ESP8266/ESP32/Tasmota/ESPHome), Meross, TP-Link/Kasa, Roku, Ring, Ecobee, Sonos, Nest, Ubiquiti, Cisco, Netgear, Synology, QNAP, Lutron, Philips Hue, Nintendo, PlayStation, Xbox, Intel, Dell, HP, Lenovo, LG, Canon/Epson/Brother printers, VMware/QEMU/Hyper-V virtual machines, and more
+- Hostname-based sub-classification for Apple devices: distinguishes iPhone/iPad (📱) from MacBook/iMac (💻) from Apple TV (📺)
+- Device type badge in inventory table — shows manufacturer name and emoji icon (📱 💻 🔌 📺 🎮 🖨️ 🗄️ 🌐 🥧 etc.)
+- Device type filter bar above inventory — click any type to filter the full inventory
+- Auto-migration: adds `manufacturer`, `device_type`, `device_icon` columns to existing `devices` table on first run
+
 ## [2.3.8] - 2026-04-24
 
 ### Fixed

@@ -35,7 +35,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="2.3.8"
+JEN_VERSION="2.4.1"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"
@@ -549,6 +549,8 @@ install_files() {
 
     # Create directories
     mkdir -p "$INSTALL_DIR/templates" "$INSTALL_DIR/static" \
+             "$INSTALL_DIR/static/icons/brands" \
+             "$INSTALL_DIR/static/icons/custom" \
              "$CONFIG_DIR/ssl" "$CONFIG_DIR/ssh"
 
     # Copy application files
@@ -557,6 +559,12 @@ install_files() {
 
     cp -r "$SCRIPT_DIR/templates/." "$INSTALL_DIR/templates/"
     success "Installed templates ($(ls "$SCRIPT_DIR/templates/" | wc -l) files)"
+
+    # Copy bundled brand icons (never overwrite custom icons)
+    if [ -d "$SCRIPT_DIR/static/icons/brands" ]; then
+        cp "$SCRIPT_DIR/static/icons/brands/"*.svg "$INSTALL_DIR/static/icons/brands/" 2>/dev/null || true
+        success "Installed brand icons ($(ls "$INSTALL_DIR/static/icons/brands/" 2>/dev/null | wc -l) icons)"
+    fi
 
     # Install service file
     cp "$SCRIPT_DIR/jen.service" "$SERVICE_FILE"

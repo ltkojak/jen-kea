@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Brand Icons{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🎨 Brand Icons</h1>
+    <p>Manage icons used in the Device Inventory. Upload custom SVGs to override bundled icons or add new ones.</p>
+</div>
+
+<!-- Upload custom icon -->
+<div class="card">
+    <div class="card-header"><span class="card-title">Upload Custom Icon</span></div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Upload an SVG to override a bundled icon or add a new manufacturer. The icon name must match a key in the
+        manufacturer map (e.g. <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">amazon</code>,
+        <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">apple</code>,
+        <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">mydevice</code>).
+        Custom icons take priority over bundled ones. SVG only, max 100KB.
+    </p>
+    <form method="POST" action="/settings/icons/upload" enctype="multipart/form-data"
+          style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="form-group" style="margin:0;min-width:180px;">
+            <label>Icon Name</label>
+            <input type="text" name="icon_name" placeholder="e.g. amazon, mydevice" maxlength="50" required>
+        </div>
+        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+            <label>SVG File</label>
+            <input type="file" name="icon" accept=".svg" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-bottom:20px;">⬆ Upload</button>
+    </form>
+</div>
+
+<!-- Custom icons -->
+{% if custom %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Custom Icons ({{ custom|length }})</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;">
+        {% for icon in custom %}
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;
+                    background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+                    padding:12px 16px;min-width:100px;">
+            <img src="/static/icons/custom/{{ icon.file }}" alt="{{ icon.name }}"
+                 style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
+            <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
+            <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;">
+                <button type="submit" class="btn btn-sm btn-danger"
+                        onclick="return confirm('Delete custom icon {{ icon.name }}?')">✕ Remove</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Bundled icons -->
+<div class="card">
+    <div class="card-header"><span class="card-title">Bundled Icons ({{ bundled|length }})</span></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">
+        These are included with Jen. Upload a custom icon with the same name to override any of them.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;">
+        {% for icon in bundled %}
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;
+                    background:var(--surface2);border:1px solid {{ 'var(--primary)' if icon.custom_override else 'var(--border)' }};
+                    border-radius:var(--radius);padding:12px 16px;min-width:100px;position:relative;">
+            {% if icon.custom_override %}
+            <span style="position:absolute;top:4px;right:4px;font-size:9px;background:var(--primary);color:#000;
+                          padding:1px 5px;border-radius:3px;">overridden</span>
+            {% endif %}
+            <img src="/static/icons/brands/{{ icon.file }}" alt="{{ icon.name }}"
+                 style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
+            <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

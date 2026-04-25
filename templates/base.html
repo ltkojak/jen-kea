@@ -289,7 +289,7 @@
 </div>
 {% endif %}
 
-{% if current_user.role == 'admin' and request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log','api_keys','api_docs'] %}
+{% if current_user.role == 'admin' and request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log','api_keys','api_docs','settings_icons'] %}
 <div class="section-tabs">
     <a href="/settings/system" class="section-tab {% if request.endpoint == 'settings_system' %}active{% endif %}">⚙️ System</a>
     <a href="/settings/alerts" class="section-tab {% if request.endpoint == 'settings_alerts' %}active{% endif %}">🔔 Alerts</a>
@@ -298,6 +298,7 @@
     <a href="/audit" class="section-tab {% if request.endpoint == 'audit_log' %}active{% endif %}">📝 Audit Log</a>
     <a href="/settings/api-keys" class="section-tab {% if request.endpoint in ['api_keys'] %}active{% endif %}">🔑 API Keys</a>
     <a href="/settings/api-docs" class="section-tab {% if request.endpoint == 'api_docs' %}active{% endif %}">📖 API Docs</a>
+    <a href="/settings/icons" class="section-tab {% if request.endpoint == 'settings_icons' %}active{% endif %}">🎨 Icons</a>
 </div>
 {% endif %}
 
