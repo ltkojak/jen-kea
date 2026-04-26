@@ -104,6 +104,7 @@ Both compose files use Docker volumes for persistent storage:
 | Volume | Contents |
 |---|---|
 | `jen-config` | `/etc/jen` — SSL certs, SSH keys, backups |
+| `jen-icons` | `/opt/jen/static/icons/custom` — user-uploaded brand icons |
 | `jen-mysql-data` | MariaDB data (bundled MySQL mode only) |
 
 Your `jen.config` is mounted read-only from the current directory into the container. Edit it on the host and restart the container to apply changes.

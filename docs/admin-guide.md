@@ -8,7 +8,7 @@ This guide covers installation, configuration, and administration of Jen.
 
 Before starting Jen for the first time, work through this checklist:
 
-**On your Kea server (your Kea server):**
+**On your Kea server:**
 - [ ] Kea DHCP 3.0+ installed and running
 - [ ] Kea Control Agent running on port 8000 (or your chosen port)
 - [ ] Kea MySQL backend configured
@@ -16,14 +16,14 @@ Before starting Jen for the first time, work through this checklist:
 - [ ] MySQL user created for Jen's remote access to the `kea` database
 - [ ] Separate `jen` MySQL database created with a dedicated user
 
-**On your Jen server (your Jen server):**
+**On your Jen server:**
 - [ ] Ubuntu 22.04 or 24.04
 - [ ] Network access to Kea server (API port and MySQL port)
 - [ ] Tarball downloaded
 
 **Run the installer:**
 ```bash
-tar xzf jen-v1.0.0.tar.gz
+tar xzf jen-v2.4.9.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -33,7 +33,7 @@ sudo ./install.sh
 - [ ] Change the default admin password immediately
 - [ ] Upload SSL certificate in Settings → SSL Certificate
 - [ ] Configure Telegram alerts if desired
-- [ ] Generate SSH key in Settings → SSH Key Management
+- [ ] Generate SSH key in Settings → Infrastructure → SSH Key Management
 - [ ] Add the public key to your Kea server's authorized_keys
 
 ---
@@ -63,7 +63,7 @@ sudo systemctl restart mariadb
 
 ## Prerequisites — Jen MySQL Database
 
-Jen requires its own database for users, audit log, settings, and reservation notes.
+Jen requires its own database for users, audit log, settings, device inventory, API keys, and reservation notes.
 
 ```sql
 CREATE DATABASE jen;
@@ -74,7 +74,7 @@ GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'YOUR-JEN-SERVER-IP';
 FLUSH PRIVILEGES;
 ```
 
-Jen creates all required tables automatically on first start.
+Jen creates all required tables automatically on first start and runs schema migrations automatically on upgrade.
 
 ---
 
@@ -88,13 +88,11 @@ By default, Kea shuts itself down if it loses the MySQL connection. Add reconnec
 "max-reconnect-tries": 10
 ```
 
-This keeps Kea serving leases from memory even if MySQL is temporarily unavailable.
-
 ---
 
 ## Configuration File Reference
 
-All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root:www-data` with permissions `640` so the application can read it but it is not world-readable.
+All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root:www-data` with permissions `640`.
 
 ### [kea] section
 
@@ -117,7 +115,7 @@ All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root
 
 | Key | Description | Example |
 |---|---|---|
-| `host` | MySQL server hostname or IP | `YOUR-KEA-SERVER` |
+| `host` | MySQL server hostname or IP | `localhost` |
 | `user` | MySQL username for Jen database | `jen` |
 | `password` | MySQL password | `your-password` |
 | `database` | Jen database name | `jen` |
@@ -157,7 +155,7 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 
 | Key | Description | Example |
 |---|---|---|
-| `log_path` | Path to DDNS update log | `/var/log/kea/kea-ddns-technitium.log` |
+| `log_path` | Path to DDNS update log on Kea server | `/var/log/kea/kea-ddns.log` |
 | `api_url` | Technitium API base URL | `https://dns.example.com/api` |
 | `api_token` | Technitium API token | `your-token` |
 | `forward_zone` | DNS forward zone | `example.com` |
@@ -175,19 +173,107 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 
 ### Adding Users
 
-Go to **Users → Add User**. Enter a username (letters, numbers, underscores, hyphens, dots), password (minimum 8 characters), and select a role.
-
-### Deleting Users
-
-Click **Delete** next to any user. You cannot delete your own account.
-
-### Changing Passwords
-
-Any user can change their own password via **Users → Change My Password**. Admins cannot change other users' passwords — users must do this themselves.
+Go to **Settings → Users → Add User**. Enter a username, password (minimum 8 characters), and select a role.
 
 ### Session Timeout
 
-Go to **Settings → Session Timeout** to set the global default timeout in minutes. Individual users can have their own timeout override set from the Users page. Set to a high value for convenience, lower for security.
+Go to **Settings → System** to set the global default timeout in minutes. Individual users can have their own timeout override set from the Users page.
+
+---
+
+## Multi-Factor Authentication (MFA)
+
+Jen supports TOTP-based MFA (Google Authenticator, Authy, 1Password, etc.).
+
+### MFA Policy
+
+Go to **Settings → System → MFA Policy** to set the policy:
+
+| Policy | Behaviour |
+|---|---|
+| Off | MFA disabled for all users |
+| Optional | Users can enrol but are not required to |
+| Required for Admins | Admin accounts must use MFA |
+| Required for All | All accounts must use MFA |
+
+### Enrolling MFA
+
+Go to **Profile → Security → Enable MFA**. Scan the QR code with your authenticator app. Save your backup codes — they are shown only once.
+
+### Trusted Devices
+
+After successful MFA login, you can choose to trust the device for 30 days. Trusted devices skip MFA on subsequent logins. Manage trusted devices under **Profile → Security → Trusted Devices**.
+
+---
+
+## REST API
+
+Jen provides a read-only REST API at `/api/v1/` for integration with Home Assistant, Zabbix, and custom scripts.
+
+### Authentication
+
+All endpoints (except `/api/v1/health`) require an API key in the request header:
+
+```
+Authorization: Bearer jen_your_key_here
+```
+
+### Managing API Keys
+
+Go to **Settings → API Keys** to generate, view, and revoke keys. A key is shown only once at creation — copy it immediately.
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/v1/health` | Kea status and Jen version — no auth |
+| GET | `/api/v1/subnets` | Subnet utilization with pool sizes |
+| GET | `/api/v1/leases` | Active leases — params: subnet, mac, hostname, limit |
+| GET | `/api/v1/leases/{mac}` | Single device lease with active boolean |
+| GET | `/api/v1/devices` | Device inventory — params: mac, name, subnet, limit |
+| GET | `/api/v1/devices/{mac}` | Single device with online status and current lease |
+| GET | `/api/v1/reservations` | Reservations — params: subnet, limit |
+
+Full documentation with examples is available at **Settings → API Docs** in the Jen interface.
+
+### Home Assistant Quick Start
+
+```yaml
+# Presence detection — is this device home?
+rest:
+  - resource: "https://your-jen-url/api/v1/devices/aa:bb:cc:dd:ee:ff"
+    headers:
+      Authorization: "Bearer jen_your_key_here"
+    binary_sensor:
+      - name: "Phone Home"
+        value_template: "{{ value_json.online }}"
+        device_class: presence
+```
+
+---
+
+## Device Fingerprinting
+
+Jen automatically identifies devices by manufacturer and type using OUI (MAC address prefix) lookup. This runs in the background every 30 seconds — no configuration required.
+
+### How It Works
+
+The first 3 bytes of every MAC address are assigned to a manufacturer by the IEEE. Jen maintains a database of 800+ OUI prefixes mapped to manufacturers and device types. Identified devices show a brand logo badge next to their hostname on the Device Inventory, Leases, Reservations, and Dashboard pages.
+
+For devices with randomized MAC addresses (iOS 14+ private MACs), Jen falls back to hostname pattern matching.
+
+### Manual Override
+
+To override the auto-detected type for a device, click the edit (✏) button on the Device Inventory page and select a device type from the dropdown. Manual overrides show a 🔒 indicator and are preserved through background tracking updates.
+
+### Custom Brand Icons
+
+Go to **Settings → Icons** to:
+- View the 24 bundled brand logos
+- Upload a custom SVG to override any bundled icon or add a new manufacturer
+- Remove custom icons to revert to bundled versions
+
+Custom icons are stored in `/opt/jen/static/icons/custom/` and survive upgrades.
 
 ---
 
@@ -197,64 +283,48 @@ Go to **Settings → Session Timeout** to set the global default timeout in minu
 
 1. Obtain an SSL certificate for your Jen server hostname (ZeroSSL, Let's Encrypt, or internal CA)
 2. Go to **Settings → SSL Certificate**
-3. Upload `certificate.crt`, `private.key`, and `ca_bundle.crt` (CA bundle required for ZeroSSL)
+3. Upload `certificate.crt`, `private.key`, and `ca_bundle.crt`
 4. Click **Enable HTTPS** — Jen restarts automatically
 
 After restart, HTTP on port 5050 redirects to HTTPS on port 8443.
 
-### Renewing a Certificate (ZeroSSL 90-day)
+### Renewing a Certificate
 
-1. Issue a new certificate from ZeroSSL
-2. Go to **Settings → SSL Certificate → Replace Certificate**
-3. Upload the three new files
-4. Jen restarts automatically — no command line needed
-
-### Removing HTTPS
-
-Go to **Settings → SSL Certificate → Remove Certificate**. Jen restarts in HTTP-only mode.
+1. Go to **Settings → SSL Certificate → Replace Certificate**
+2. Upload the three new files
+3. Jen restarts automatically
 
 ---
 
 ## Rate Limiting
 
-Configure in **Settings → Login Rate Limiting**.
+Configure in **Settings → System → Login Rate Limiting**.
 
 | Setting | Description | Default |
 |---|---|---|
 | Max failed attempts | Attempts before lockout. 0 = disabled | 10 |
-| Lockout duration | Minutes to lock out. 0 = permanent until admin clears | 15 |
-| Mode | What to lock: IP address, username, or both | Both |
-
-When a user is locked out they see how many minutes remain. When fewer than 3 attempts remain before lockout, Jen warns the user.
-
-To unlock all accounts immediately: **Settings → Login Rate Limiting → Clear All Lockouts**.
-
-The failed attempt counter uses a rolling window equal to the lockout duration — old attempts outside this window do not count toward the threshold.
+| Lockout duration | Minutes locked out. 0 = permanent until cleared | 15 |
+| Mode | Lock by: IP address, username, or both | Both |
 
 ---
 
 ## Telegram Alerts
 
-Configure in **Settings → Telegram Alerts**.
+Configure in **Settings → Alerts**.
 
 ### Setting Up a Bot
 
-1. Open Telegram and message **@BotFather**
-2. Send `/newbot` and follow the prompts
-3. Copy the token BotFather gives you
-4. Message **@userinfobot** to get your personal chat ID
+1. Message **@BotFather** in Telegram
+2. Send `/newbot` and follow the prompts — copy the token
+3. Message **@userinfobot** to get your chat ID
 
 ### Alert Types
 
 | Alert | Triggered when |
 |---|---|
-| Kea goes down/up | Kea stops responding or recovers |
-| New device lease | A new dynamic lease is issued (sends IP, MAC, hostname, subnet) |
-| Utilization threshold | A subnet's dynamic lease count exceeds the configured % of the pool |
-
-### Testing
-
-Click **Send Test Message** after saving settings to verify the bot can reach you.
+| Kea down/up | Kea stops responding or recovers |
+| New device lease | A new dynamic lease is issued |
+| Utilization threshold | A subnet exceeds the configured pool percentage |
 
 ---
 
@@ -262,13 +332,11 @@ Click **Send Test Message** after saving settings to verify the bot can reach yo
 
 ### Generate the Key
 
-1. Go to **Settings → SSH Key Management**
+1. Go to **Settings → Infrastructure → SSH Key Management**
 2. Click **Generate SSH Key**
 3. Copy the public key displayed
 
 ### Authorize on Kea Server
-
-On your Kea server, add the public key:
 
 ```bash
 echo "ssh-rsa AAAA... jen@your-jen-server" >> ~/.ssh/authorized_keys
@@ -282,18 +350,9 @@ echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl resta
 sudo chmod 440 /etc/sudoers.d/jen-kea
 ```
 
-### Verify
-
-Test the connection from your Jen server:
-```bash
-sudo -u www-data ssh -i /etc/jen/ssh/jen_rsa -o StrictHostKeyChecking=no youruser@YOUR-KEA-SERVER "echo OK"
-```
-
 ---
 
 ## Upgrading Jen
-
-Run the installer from the new tarball:
 
 ```bash
 tar xzf jen-vX.X.X.tar.gz
@@ -301,14 +360,9 @@ cd jen
 sudo ./install.sh
 ```
 
-Select bare metal, then **Keep existing config**. The installer:
-1. Backs up the current `jen.py` to `/etc/jen/backups/`
-2. Installs the new files
-3. Restarts the service
-4. Verifies it started correctly
-5. Rolls back automatically if the service fails to start
+Select **Keep existing config** when prompted. The installer backs up the current application, installs the new files, restarts the service, and rolls back automatically if the service fails to start.
 
-Your config file, SSL certificates, SSH keys, favicon, and user accounts are never modified during an upgrade.
+Your config file, SSL certificates, SSH keys, custom icons, and user accounts are never modified during an upgrade.
 
 ---
 
@@ -332,17 +386,33 @@ sudo journalctl -u jen -n 50 --no-pager
 
 ---
 
+## Prometheus Metrics
+
+Jen exposes a Prometheus-compatible metrics endpoint at `/metrics` (no authentication required):
+
+```bash
+curl -k https://your-jen-server:8443/metrics
+```
+
+Available metrics:
+- `jen_subnet_active_leases` — active lease count per subnet (with subnet name and CIDR labels)
+- `jen_kea_up` — 1 if Kea is reachable, 0 if not
+
+---
+
 ## File Locations Reference
 
 | Path | Purpose |
 |---|---|
 | `/opt/jen/jen.py` | Main application |
 | `/opt/jen/templates/` | HTML templates |
-| `/opt/jen/static/favicon.ico` | Custom favicon (if uploaded) |
+| `/opt/jen/static/icons/brands/` | Bundled brand SVG icons |
+| `/opt/jen/static/icons/custom/` | User-uploaded custom brand icons |
+| `/opt/jen/static/` | Static assets (favicon, nav logo) |
 | `/etc/jen/jen.config` | Configuration — credentials and settings |
-| `/etc/jen/jen.db` | Legacy SQLite (v1.x only — not used in v2+) |
+| `/etc/jen/secret_key` | Flask session secret key (auto-generated) |
 | `/etc/jen/ssl/` | SSL certificates |
 | `/etc/jen/ssh/` | SSH keys for subnet editing |
-| `/etc/jen/backups/` | Automatic backups from upgrades |
+| `/etc/jen/backups/` | Automatic backups created during upgrades |
 | `/etc/systemd/system/jen.service` | Systemd service definition |
 | `/etc/sudoers.d/jen` | Allows Jen to restart itself after cert upload |

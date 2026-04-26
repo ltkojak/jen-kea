@@ -23,7 +23,7 @@ Jen is a web-based management interface for [ISC Kea DHCP Server](https://www.is
 
 ## Current Version
 
-**Jen v1.0.0**
+**Jen v2.4.9**
 
 ---
 

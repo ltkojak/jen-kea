@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.4.9] - 2026-04-26
+
+### Fixed
+- Fix Dockerfile missing pip packages for MFA: `pyotp`, `qrcode[pil]`, `authlib`, `cryptography`
+- Fix Dockerfile not copying `static/icons/brands/` — brand SVGs missing in Docker deployments
+- Fix custom icons not persisting across container updates — added `jen-icons` volume in both compose files
+- Bump Docker image tag to `jen-dhcp:2.4.9`
+
+### Updated
+- `docs/release-notes.md` — complete 2.x release history added
+- `docs/admin-guide.md` — updated for MFA, REST API, device fingerprinting, custom icons, Prometheus metrics
+- `docs/docker.md` — added `jen-icons` volume to persistent data table
+- `docs/installation.md`, `docs/wiki-home.md` — version references updated
+
+## [2.4.8] - 2026-04-25
+
+### Fixed
+- Fix device edit modal not opening for devices with names/owners: use data-* attributes instead of inline onclick
+
+## [2.4.7] - 2026-04-25
+
+### Fixed
+- Fix device edit modal not opening: attempt to HTML-escape quotes in onclick (superseded by 2.4.8)
+
+## [2.4.6] - 2026-04-25
+
+### Fixed
+- Add try/catch debug to edit modal to surface JS errors
+
 ## [2.4.5] - 2026-04-25
 
 ### Fixed

@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Internet Management Console for ISC Kea DHCP"
-LABEL version="1.0.0"
+LABEL version="2.4.9"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         flask-login \
         pymysql \
         requests \
+        pyotp \
+        qrcode[pil] \
+        authlib \
+        cryptography \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -32,18 +36,22 @@ RUN groupadd -r www-data 2>/dev/null || true && \
     useradd -r -g www-data -s /sbin/nologin www-data 2>/dev/null || true
 
 # Create directories
-RUN mkdir -p /opt/jen/static /opt/jen/templates \
+RUN mkdir -p /opt/jen/static/icons/brands \
+             /opt/jen/static/icons/custom \
+             /opt/jen/templates \
              /etc/jen/ssl /etc/jen/ssh /etc/jen/backups
 
 # Copy application files
 COPY jen.py /opt/jen/jen.py
 COPY templates/ /opt/jen/templates/
+COPY static/ /opt/jen/static/
 
 # Set permissions
 RUN chown -R www-data:www-data /opt/jen /etc/jen
 
 # Config volume — persists jen.config, ssl, ssh keys, backups
-VOLUME ["/etc/jen"]
+# Custom icons volume — persists user-uploaded brand icons across container updates
+VOLUME ["/etc/jen", "/opt/jen/static/icons/custom"]
 
 # Expose ports
 EXPOSE 5050 8443

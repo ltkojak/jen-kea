@@ -13,7 +13,7 @@
 services:
   jen:
     build: .
-    image: jen-dhcp:1.0.0
+    image: jen-dhcp:2.4.9
     container_name: jen
     restart: unless-stopped
     ports:
@@ -24,6 +24,8 @@ services:
       - jen-config:/etc/jen
       # Mount your jen.config directly (recommended for easy editing)
       - ./jen.config:/etc/jen/jen.config:ro
+      # Persistent custom brand icons — survives container updates
+      - jen-icons:/opt/jen/static/icons/custom
     environment:
       - PYTHONUNBUFFERED=1
     healthcheck:
@@ -38,6 +40,8 @@ services:
 volumes:
   jen-config:
     name: jen-config
+  jen-icons:
+    name: jen-icons
 
 networks:
   jen-network:
