@@ -2,6 +2,15 @@
 
 ---
 
+## Version 2.4.10 — April 2026
+
+### Documentation Updates
+- `docs/user-guide.md` — added Device Inventory, device fingerprinting badges, API Keys, MFA enrollment, and Settings → Icons sections (all missing since 2.x)
+- `docs/faq.md` — added FAQ sections for device fingerprinting, randomized MACs (iOS private MACs), REST API, and MFA
+- Version references updated throughout
+
+---
+
 ## Version 2.4.9 — April 2026
 
 ### Docker Fixes

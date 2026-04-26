@@ -165,3 +165,67 @@ Every 90 days. Jen's Settings page shows the expiry date. When it's time to rene
 ### Does Jen store any data about my network that I should be aware of?
 
 Jen stores: user accounts and password hashes, per-reservation notes you've added, the audit log of all changes, Telegram credentials, and session/rate limiting settings. All of this is in the `jen` MySQL database. Jen does not cache or store lease or reservation data — it reads that live from Kea's database on every page load.
+
+---
+
+## Device Fingerprinting
+
+### How does Jen identify device manufacturers?
+
+Jen uses OUI (Organizationally Unique Identifier) lookup. The first 3 bytes of every MAC address are assigned to a manufacturer by the IEEE. Jen maintains a database of 800+ OUI prefixes mapped to manufacturer names and device types. Identification runs automatically in the background every 30 seconds.
+
+### Why doesn't Jen recognize my iPhone?
+
+iOS 14 and later use randomized (private) MAC addresses by default for privacy. The OUI of a randomized MAC doesn't belong to Apple — it's locally generated. Jen falls back to hostname pattern matching: if the hostname contains `iphone`, `ipad`, or `ipod`, it will be identified as Apple regardless of the MAC.
+
+To get consistent identification with the real OUI, you can disable Private Wi-Fi Address for your home network on iOS: **Settings → Wi-Fi → your network → Private Wi-Fi Address → Off**.
+
+### Can I override what Jen thinks a device is?
+
+Yes. Click the **✏** edit button on any device in the Device Inventory and choose a device type from the dropdown. The auto-detection loop will not overwrite manual overrides. Set back to "Auto-detect" to re-enable automatic identification.
+
+### A manufacturer is missing from the database. Can I add it?
+
+Yes — two ways:
+
+1. **Custom icon**: Go to Settings → Icons and upload an SVG with the appropriate manufacturer name. This adds the icon but doesn't add OUI entries.
+2. **Report it**: Open an issue on GitHub with the OUI prefix (`xx:xx:xx`) and manufacturer name and it will be added to the next release's database.
+
+---
+
+## REST API
+
+### Does Jen have an API?
+
+Yes. Jen provides a read-only REST API at `/api/v1/`. Go to **Settings → API Docs** for full documentation.
+
+### What can the API be used for?
+
+Common uses:
+- **Home Assistant presence detection** — poll `/api/v1/devices/{mac}` to check if a device is online
+- **Zabbix monitoring** — poll `/api/v1/subnets` for subnet utilization metrics
+- **Custom scripts** — query leases, devices, and reservations programmatically
+
+### Is the API read-only?
+
+Yes. All API keys are read-only — they cannot modify reservations, leases, or any settings. This is by design.
+
+### How do I create an API key?
+
+Go to **Settings → API Keys**, click **Generate Key**, give it a name. The key is shown once — copy it immediately.
+
+---
+
+## MFA
+
+### What MFA methods does Jen support?
+
+TOTP (Time-based One-Time Password) — compatible with Google Authenticator, Authy, 1Password, Microsoft Authenticator, and any other standard TOTP app.
+
+### What if I lose access to my authenticator app?
+
+Use one of your backup codes. Each code works once. After using one, generate a fresh set from Profile → Security. If you lose both your authenticator and your backup codes, an admin can reset your MFA from Settings → Users.
+
+### Can MFA be required for all users?
+
+Yes. Go to **Settings → System → MFA Policy** and set it to "Required for All". Users without MFA enrolled will be forced to enrol on their next login.

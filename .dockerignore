@@ -8,3 +8,4 @@ __pycache__/
 .git/
 static/favicon.ico
 /etc/jen/
+static/icons/custom/

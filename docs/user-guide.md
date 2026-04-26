@@ -199,3 +199,89 @@ The log is paginated — 50 entries per page.
 ## Dark / Light Mode
 
 Click the 🌙 / ☀️ button in the top right navigation bar to toggle between dark and light mode. Your preference is saved in your browser and persists between sessions.
+
+---
+
+## Device Inventory
+
+The Device Inventory (Management → Devices) shows every MAC address ever seen on your network. Unlike the Leases page which only shows currently active leases, the Device Inventory is a persistent record that survives lease expiry.
+
+### Device Fingerprint Badges
+
+Jen automatically identifies devices by manufacturer and type using OUI (MAC address prefix) lookup. Identified devices show a colored badge with the manufacturer's brand logo next to their hostname — on the Device Inventory, Leases, Reservations, and Dashboard pages.
+
+For devices using randomized MAC addresses (iOS 14+ private MACs), Jen falls back to hostname pattern matching to identify the device type.
+
+### Filtering the Inventory
+
+**Search** — search across MAC address, device name, owner, and IP.
+
+**Subnet** — filter to show only devices last seen on a specific subnet.
+
+**Device type filter bar** — click any type badge (Apple, IoT, Gaming, etc.) to filter the inventory to that device type.
+
+**Show stale only** — show only devices that have been inactive for longer than the configured stale threshold (default 30 days). Adjust the threshold with the "Stale after N days" field in the top right.
+
+### Editing a Device
+
+Click the **✏** button on any device row to open the edit modal. You can set:
+
+- **Device Name** — a friendly label (e.g. "Living Room TV", "Work Laptop")
+- **Owner** — who the device belongs to
+- **Device Type** — manually override the auto-detected type. Choose from Apple, Android, IoT, Gaming, etc. Manual overrides show a 🔒 indicator and dashed badge border. The background tracking loop will not overwrite manual overrides. Choose "Auto-detect" to clear the override.
+- **Icon Override** — choose a specific brand logo from the visual picker, including any custom icons you've uploaded in Settings → Icons
+- **Notes** — any notes about the device
+
+### Deleting a Device
+
+Click the **✕** button to remove a device from the inventory. It will reappear the next time it gets a lease.
+
+### Converting to a Reservation
+
+Click the **📌** button to pre-fill the Add Reservation form with this device's MAC, last IP, and hostname.
+
+---
+
+## API Keys
+
+Jen provides a read-only REST API for integration with tools like Home Assistant, Zabbix, and custom scripts.
+
+### Creating an API Key
+
+Go to **Settings → API Keys** and click **Generate Key**. Give the key a descriptive name. The key is shown only once — copy it immediately. If you lose it, revoke it and generate a new one.
+
+Keys use Bearer token authentication:
+```
+Authorization: Bearer jen_your_key_here
+```
+
+### API Documentation
+
+Go to **Settings → API Docs** for full endpoint documentation with parameters, example requests, example responses, and ready-to-paste Home Assistant YAML and Zabbix HTTP agent config.
+
+---
+
+## MFA (Multi-Factor Authentication)
+
+### Enrolling MFA
+
+Go to **Profile → Security → Enable MFA**. Scan the QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.). Save your backup codes — they are shown only once and cannot be recovered.
+
+### Trusted Devices
+
+After a successful MFA login, you can check "Trust this device for 30 days". Trusted devices skip MFA on subsequent logins from that browser. Manage trusted devices under **Profile → Security → Trusted Devices**.
+
+### Backup Codes
+
+If you lose access to your authenticator app, use one of your backup codes to log in. Each backup code can only be used once. After using one, go to Profile → Security to generate a fresh set.
+
+---
+
+## Settings → Icons
+
+Go to **Settings → Icons** to manage the brand logos used in device fingerprint badges.
+
+- **Bundled icons** — 24 brand logos included with Jen (Apple, Samsung, Cisco, Ubiquiti, Raspberry Pi, etc.)
+- **Custom icons** — upload your own SVG to override any bundled icon or add a new manufacturer. Custom icons take priority over bundled ones and survive upgrades.
+
+To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and select an SVG file (max 100KB). The name must match the manufacturer key used in Jen's OUI database. See Settings → Icons for the list of available name keys.

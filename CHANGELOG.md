@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.10] - 2026-04-26
+
+### Updated
+- `docs/user-guide.md` — added Device Inventory, device fingerprinting, API Keys, MFA, and Settings → Icons sections (all missing since 2.x)
+- `docs/faq.md` — added FAQ sections for device fingerprinting, randomized MACs, REST API, and MFA
+- `docs/wiki-home.md` — version reference updated to 2.4.10
+- `jen.config.example` — version comment updated to 2.4.10
+- `Dockerfile`, `docker-compose.yml`, `docker-compose.mysql.yml` — version bumped to 2.4.10
+
 ## [2.4.9] - 2026-04-26
 
 ### Fixed
