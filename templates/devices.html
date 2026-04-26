@@ -19,13 +19,19 @@
 <!-- Filter bar -->
 <div class="filter-bar">
     <form method="GET" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:260px;">
+        <select name="subnet" onchange="this.form.submit()">
+            <option value="all" {% if subnet_filter == 'all' %}selected{% endif %}>All Subnets</option>
+            {% for sid, info in subnet_map.items() %}
+            <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:240px;">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
             <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %} onchange="this.form.submit()">
             Show stale only ({{ stale_days }}+ days inactive)
         </label>
         <button type="submit" class="btn btn-sm btn-primary">Search</button>
-        {% if search or show_stale %}<a href="/devices" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
+        {% if search or show_stale or subnet_filter != 'all' %}<a href="/devices" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
     </form>
 </div>
 
@@ -120,7 +126,14 @@
         <td>
             <div style="display:flex;gap:4px;">
                 {% if current_user.role == 'admin' %}
-                <button class="btn btn-sm btn-secondary" onclick="openEditModal({{ d.id }}, '{{ d.mac }}', {{ d.device_name|tojson if d.device_name else 'null' }}, {{ d.owner|tojson if d.owner else 'null' }}, {{ d.notes|tojson if d.notes else 'null' }})">✏</button>
+                <button class="btn btn-sm btn-secondary edit-btn"
+    data-id="{{ d.id }}"
+    data-mac="{{ d.mac }}"
+    data-name="{{ d.device_name|e if d.device_name else '' }}"
+    data-owner="{{ d.owner|e if d.owner else '' }}"
+    data-notes="{{ d.notes|e if d.notes else '' }}"
+    data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
+    data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}">✏</button>
                 <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return confirm('Remove {{ d.mac }} from inventory?')">
                     <button type="submit" class="btn btn-sm btn-danger">✕</button>
                 </form>
@@ -145,20 +158,20 @@
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% if page > 1 %}<a href="?page={{ page-1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}">‹ Prev</a>{% endif %}
+    {% if page > 1 %}<a href="?page={{ page-1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}&subnet={{ subnet_filter }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
     {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
-    <a href="?page={{ p }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}">{{ p }}</a>
+    <a href="?page={{ p }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}&subnet={{ subnet_filter }}">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?page={{ page+1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?page={{ page+1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}&subnet={{ subnet_filter }}">Next ›</a>{% endif %}
 </div>
 {% endif %}
 
 <!-- Edit Modal -->
 <div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:420px;max-width:95vw;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:460px;max-width:95vw;">
         <h3 style="margin-bottom:4px;">Edit Device</h3>
         <div id="editMac" class="mono" style="color:var(--text-muted);font-size:12px;margin-bottom:20px;"></div>
         <div class="form-group">
@@ -168,6 +181,76 @@
         <div class="form-group">
             <label>Owner</label>
             <input type="text" id="editOwner" placeholder="e.g. Admin, Guest, John" maxlength="200">
+        </div>
+        <div class="form-group">
+            <label>Device Type <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(overrides auto-detection)</span></label>
+            <select id="editTypeOverride">
+                <option value="auto">🔄 Auto-detect (use OUI / hostname)</option>
+                <option value="apple">🍎 Apple</option>
+                <option value="android">📱 Android</option>
+                <option value="windows">🖥️ Windows PC</option>
+                <option value="linux">🐧 Linux</option>
+                <option value="amazon">📦 Amazon</option>
+                <option value="google">🔍 Google</option>
+                <option value="iot">🔌 IoT Device</option>
+                <option value="tv">📺 Smart TV</option>
+                <option value="printer">🖨️ Printer</option>
+                <option value="nas">🗄️ NAS</option>
+                <option value="network">🌐 Network Device</option>
+                <option value="gaming">🎮 Gaming</option>
+                <option value="raspberry_pi">🥧 Raspberry Pi</option>
+                <option value="pc">🖥️ PC / Computer</option>
+                <option value="unknown">❓ Unknown</option>
+            </select>
+            <div id="editTypeHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;display:none;">
+                🔒 Manual override active — auto-detection is disabled for this device.
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Icon Override <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(optional — use a specific brand icon)</span></label>
+            <input type="hidden" id="editIconOverride" value="">
+            <div id="iconPickerSelected" style="display:flex;align-items:center;gap:8px;padding:8px 10px;
+                 background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+                 cursor:pointer;margin-bottom:6px;" onclick="toggleIconPicker()">
+                <span id="iconPickerPreview" style="font-size:18px;">—</span>
+                <span id="iconPickerLabel" style="font-size:13px;color:var(--text-muted);">Default for device type</span>
+                <span style="margin-left:auto;color:var(--text-muted);font-size:11px;">▾ click to change</span>
+            </div>
+            <div id="iconPickerDropdown" style="display:none;background:var(--surface2);border:1px solid var(--border);
+                 border-radius:var(--radius);padding:10px;max-height:200px;overflow-y:auto;">
+                <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                    <div onclick="selectIcon('', 'Default')"
+                         style="display:flex;flex-direction:column;align-items:center;gap:3px;
+                                padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
+                                border:1px solid var(--border);"
+                         onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <span style="font-size:16px;">—</span>
+                        <span style="font-size:9px;color:var(--text-muted);">default</span>
+                    </div>
+                    {% for icon in bundled_icons %}
+                    <div onclick="selectIcon('{{ icon }}', '{{ icon }}')"
+                         style="display:flex;flex-direction:column;align-items:center;gap:3px;
+                                padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
+                                border:1px solid var(--border);"
+                         onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
+                        <img src="/static/icons/brands/{{ icon }}.svg" alt="{{ icon }}"
+                             style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">
+                        <span style="font-size:9px;color:var(--text-muted);">{{ icon }}</span>
+                    </div>
+                    {% endfor %}
+                    {% for icon in custom_icons %}
+                    <div onclick="selectIcon('{{ icon }}', '{{ icon }} ★')"
+                         style="display:flex;flex-direction:column;align-items:center;gap:3px;
+                                padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
+                                border:1px solid var(--primary)44;"
+                         onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--primary)44'">
+                        <img src="/static/icons/custom/{{ icon }}.svg" alt="{{ icon }}"
+                             style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">
+                        <span style="font-size:9px;color:var(--primary);">{{ icon }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
         <div class="form-group">
             <label>Notes</label>
@@ -184,12 +267,41 @@
 {% block scripts %}
 let editingId = null;
 
-function openEditModal(id, mac, name, owner, notes) {
+function toggleIconPicker() {
+    const d = document.getElementById('iconPickerDropdown');
+    d.style.display = d.style.display === 'none' ? 'block' : 'none';
+}
+
+function selectIcon(value, label) {
+    document.getElementById('editIconOverride').value = value;
+    document.getElementById('iconPickerLabel').textContent = label || 'Default for device type';
+    const preview = document.getElementById('iconPickerPreview');
+    if (value) {
+        // Check custom first, then bundled
+        const customUrl = `/static/icons/custom/${value}.svg`;
+        const brandUrl = `/static/icons/brands/${value}.svg`;
+        preview.innerHTML = `<img src="${brandUrl}" onerror="this.src='${customUrl}'" alt="${value}"
+            style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">`;
+    } else {
+        preview.textContent = '—';
+    }
+    document.getElementById('iconPickerDropdown').style.display = 'none';
+}
+
+function openEditModal(id, mac, name, owner, notes, typeOverride, iconOverride) {
     editingId = id;
     document.getElementById('editMac').textContent = mac;
     document.getElementById('editDeviceName').value = name || '';
     document.getElementById('editOwner').value = owner || '';
     document.getElementById('editNotes').value = notes || '';
+    const sel = document.getElementById('editTypeOverride');
+    sel.value = typeOverride || 'auto';
+    document.getElementById('editTypeHint').style.display = typeOverride ? 'block' : 'none';
+    sel.onchange = function() {
+        document.getElementById('editTypeHint').style.display = this.value !== 'auto' ? 'block' : 'none';
+    };
+    selectIcon(iconOverride || '', iconOverride || '');
+    document.getElementById('iconPickerDropdown').style.display = 'none';
     const modal = document.getElementById('editModal');
     modal.style.display = 'flex';
     document.getElementById('editDeviceName').focus();
@@ -205,10 +317,12 @@ function saveDevice() {
     const name = document.getElementById('editDeviceName').value.trim();
     const owner = document.getElementById('editOwner').value.trim();
     const notes = document.getElementById('editNotes').value.trim();
+    const typeOverride = document.getElementById('editTypeOverride').value;
+    const iconOverride = document.getElementById('editIconOverride') ? document.getElementById('editIconOverride').value : '';
     fetch(`/devices/edit/${editingId}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `device_name=${encodeURIComponent(name)}&owner=${encodeURIComponent(owner)}&notes=${encodeURIComponent(notes)}`
+        body: `device_name=${encodeURIComponent(name)}&owner=${encodeURIComponent(owner)}&notes=${encodeURIComponent(notes)}&type_override=${encodeURIComponent(typeOverride)}&icon_override=${encodeURIComponent(iconOverride)}`
     })
     .then(r => r.json())
     .then(data => {
@@ -216,13 +330,28 @@ function saveDevice() {
             document.getElementById(`dname-${editingId}`).textContent = name || '—';
             document.getElementById(`downer-${editingId}`).textContent = owner || '—';
             closeEditModal();
+            // Reload to show updated badge
+            location.reload();
         } else {
             alert('Error saving: ' + data.error);
         }
     });
 }
 
-// Close modal on backdrop click
+// Edit button handler — uses data attributes to avoid quote escaping issues
+document.addEventListener('click', function(e) {
+    const btn = e.target.closest('.edit-btn');
+    if (!btn) return;
+    openEditModal(
+        parseInt(btn.dataset.id),
+        btn.dataset.mac,
+        btn.dataset.name || null,
+        btn.dataset.owner || null,
+        btn.dataset.notes || null,
+        btn.dataset.type || null,
+        btn.dataset.icon || null
+    );
+});
 document.getElementById('editModal').addEventListener('click', function(e) {
     if (e.target === this) closeEditModal();
 });

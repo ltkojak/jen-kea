@@ -1,0 +1,26 @@
+{# Device fingerprint badge macro
+   Usage: {% from '_device_badge.html' import device_badge %}
+          {{ device_badge(device_info, mac, get_manufacturer_icon_url, device_type_display, size='sm') }}
+#}
+{% macro device_badge(device_info, mac, get_icon_url, type_display, size='sm') %}
+{% set info = device_info.get(mac.lower() if mac else '', {}) %}
+{% if info and info.manufacturer and info.manufacturer != 'Unknown' %}
+{% set type_color = type_display.get(info.device_type, ('', '#555555'))[1] %}
+{% set icon_url = get_icon_url(info.manufacturer) %}
+<span title="{{ info.manufacturer }}{% if info.is_manual %} (manual){% endif %}"
+      style="display:inline-flex;align-items:center;gap:4px;
+             padding:{% if size == 'sm' %}2px 6px{% else %}3px 8px{% endif %};
+             border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;
+             background:{{ type_color }}22;color:{{ type_color }};
+             border:1px solid {{ type_color }}44;
+             {% if info.is_manual %}border-style:dashed;{% endif %}">
+    {% if icon_url %}
+    <img src="{{ icon_url }}" alt="{{ info.manufacturer }}"
+         style="width:11px;height:11px;object-fit:contain;filter:brightness(0) invert(1);opacity:0.85;">
+    {% else %}
+    {{ info.device_icon or '' }}
+    {% endif %}
+    {{ info.manufacturer }}{% if info.is_manual %} 🔒{% endif %}
+</span>
+{% endif %}
+{% endmacro %}

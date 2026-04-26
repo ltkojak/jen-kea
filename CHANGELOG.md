@@ -1,5 +1,37 @@
 # Changelog
 
+## [2.4.5] - 2026-04-25
+
+### Fixed
+- Fix device edit silently failing for devices with longer icon names (e.g. `raspberrypi`, `philipshue`): `device_icon_override` column was VARCHAR(10) which truncated/errored on names longer than 10 chars. Widened to VARCHAR(50). Auto-migration fixes existing installs.
+- Replace plain icon name dropdown with visual icon picker in edit modal — shows actual brand logo previews in a grid so you can see what you're selecting.
+
+## [2.4.4] - 2026-04-25
+
+### Fixed
+- Fix device badges not showing on Leases, Reservations, and Dashboard: MACs from Kea are uppercase (`78:C4:FA`) but devices table stores lowercase (`78:c4:fa`) — lookup was silently failing. `get_device_info_map` now normalizes all MACs to lowercase, and the badge macro does the same.
+- Fix Apple TV showing Apple logo instead of Apple TV logo: `classify_device` now returns manufacturer "Apple TV" for appletv hostnames, and `MANUFACTURER_ICON_MAP` maps "Apple TV" → `appletv.svg` (custom icon).
+- Fix `pw08tf8v` (Lenovo) not being identified: added missing Lenovo OUI `c0:a5:e8`.
+
+### Added
+- Icon override in device edit modal — choose any bundled or custom icon to use for a specific device, independent of device type. Useful for Apple TV, HomePod, or any device where the auto-detected icon isn't specific enough.
+- Subnet filter dropdown on Device Inventory page — filter devices by subnet alongside search and stale filter.
+
+## [2.4.3] - 2026-04-25
+
+### Added
+- Manual device type override in the Device Inventory edit modal — choose from a dropdown (Apple, Android, IoT, TV, Gaming, etc.) to override auto-detection for any device. Overridden devices show a 🔒 indicator and a dashed badge border. Setting back to "Auto-detect" clears the override.
+- Auto-detection loop now respects manual overrides — if a device has a manual type set, the background tracker will not overwrite it on subsequent lease updates.
+- Device fingerprint badges now appear on Leases, Reservations, and Dashboard recently issued leases pages — small manufacturer logo/icon badge next to the hostname on every row.
+- API `/api/v1/leases` endpoint now returns `manufacturer` and `device_type` fields per lease.
+- Shared `_device_badge.html` Jinja macro keeps badge rendering consistent across all pages.
+
+## [2.4.2] - 2026-04-25
+
+### Fixed
+- Fix iPhones/iPads not being identified: iOS 14+ uses randomized (private) MAC addresses by default — the OUI lookup always returns Unknown for these. Added hostname-based fallback detection so devices with `iphone`/`ipad` in the hostname are identified as Apple regardless of MAC. Same fallback now catches Echo/Alexa, Chromecast, Roku, Ring, Sonos, and gaming consoles by hostname when OUI is unknown.
+- Add missing Roku OUI `50:06:f5` and Amazon Echo Show OUIs `50:d4:5c`, `b0:8b:a8` plus several other missing Amazon prefixes.
+
 ## [2.4.1] - 2026-04-25
 
 ### Added

@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.4.1"
+JEN_VERSION = "2.4.8"
 
 # ─────────────────────────────────────────
 # App setup
@@ -441,6 +441,9 @@ def init_jen_db():
                     manufacturer VARCHAR(100) DEFAULT NULL,
                     device_type VARCHAR(30) DEFAULT NULL,
                     device_icon VARCHAR(10) DEFAULT NULL,
+                    manufacturer_override VARCHAR(100) DEFAULT NULL,
+                    device_type_override VARCHAR(30) DEFAULT NULL,
+                    device_icon_override VARCHAR(50) DEFAULT NULL,
                     INDEX idx_mac (mac),
                     INDEX idx_last_seen (last_seen)
                 )
@@ -605,6 +608,21 @@ def init_jen_db():
                 cur.execute("ALTER TABLE devices ADD COLUMN device_icon VARCHAR(10) DEFAULT NULL")
                 db.commit()
                 logger.info("Migration: added manufacturer/device_type/device_icon to devices table")
+            # Migrate: add override columns
+            cur.execute("SHOW COLUMNS FROM devices LIKE 'manufacturer_override'")
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE devices ADD COLUMN manufacturer_override VARCHAR(100) DEFAULT NULL")
+                cur.execute("ALTER TABLE devices ADD COLUMN device_type_override VARCHAR(30) DEFAULT NULL")
+                cur.execute("ALTER TABLE devices ADD COLUMN device_icon_override VARCHAR(50) DEFAULT NULL")
+                db.commit()
+                logger.info("Migration: added manufacturer/device_type/device_icon override columns to devices table")
+            else:
+                # Fix VARCHAR(10) → VARCHAR(50) if needed
+                cur.execute("SHOW COLUMNS FROM devices LIKE 'device_icon_override'")
+                col = cur.fetchone()
+                if col and 'varchar(10)' in str(col.get('Type','')).lower():
+                    cur.execute("ALTER TABLE devices MODIFY COLUMN device_icon_override VARCHAR(50) DEFAULT NULL")
+                    db.commit()
         # Migrate old Telegram settings in a fresh cursor
         import json as _json
         with db.cursor() as cur2:
@@ -1402,12 +1420,17 @@ OUI_DB = {
     "ec:fa:bc": ("Espressif", "iot", "🔌"), "f0:08:d1": ("Espressif", "iot", "🔌"),
     "f4:cf:a2": ("Espressif", "iot", "🔌"), "fc:f5:c4": ("Espressif", "iot", "🔌"),
 
-    # Roku
-    "00:0d:4b": ("Roku", "tv", "📺"), "08:05:81": ("Roku", "tv", "📺"),
-    "b0:a7:37": ("Roku", "tv", "📺"), "cc:6d:a0": ("Roku", "tv", "📺"),
-    "d8:31:34": ("Roku", "tv", "📺"), "dc:3a:5e": ("Roku", "tv", "📺"),
-    "e8:df:70": ("Roku", "tv", "📺"), "f0:68:1e": ("Roku", "tv", "📺"),
-    "c8:3a:6b": ("Roku", "tv", "📺"),
+    # Roku (additional OUIs)
+    "50:06:f5": ("Roku", "tv", "📺"), "cc:fd:f7": ("Roku", "tv", "📺"),
+    "ac:ae:19": ("Roku", "tv", "📺"), "b0:a7:37": ("Roku", "tv", "📺"),
+    "08:05:81": ("Roku", "tv", "📺"), "d8:31:34": ("Roku", "tv", "📺"),
+
+    # Amazon Echo/Echo Show (additional OUIs)
+    "50:d4:5c": ("Amazon", "amazon", "📦"), "b0:8b:a8": ("Amazon", "amazon", "📦"),
+    "f0:d2:f1": ("Amazon", "amazon", "📦"), "74:c2:46": ("Amazon", "amazon", "📦"),
+    "44:65:0d": ("Amazon", "amazon", "📦"), "a4:08:f5": ("Amazon", "amazon", "📦"),
+    "cc:9e:a2": ("Amazon", "amazon", "📦"), "40:b4:cd": ("Amazon", "amazon", "📦"),
+    "34:d2:70": ("Amazon", "amazon", "📦"), "ac:63:be": ("Amazon", "amazon", "📦"),
 
     # Ring
     "00:62:6e": ("Ring", "iot", "🔔"), "24:2f:d0": ("Ring", "iot", "🔔"),
@@ -1643,7 +1666,7 @@ OUI_DB = {
     "88:70:8c": ("Lenovo", "pc", "🖥️"), "8c:8d:28": ("Lenovo", "pc", "🖥️"),
     "90:2b:34": ("Lenovo", "pc", "🖥️"), "94:65:9c": ("Lenovo", "pc", "🖥️"),
     "98:fa:9b": ("Lenovo", "pc", "🖥️"), "a4:4e:31": ("Lenovo", "pc", "🖥️"),
-    "c0:d9:62": ("Lenovo", "pc", "🖥️"), "c8:5b:76": ("Lenovo", "pc", "🖥️"),
+    "c0:a5:e8": ("Lenovo", "pc", "🖥️"), "c0:b9:62": ("Lenovo", "pc", "🖥️"),
     "d4:81:d7": ("Lenovo", "pc", "🖥️"), "d8:bb:c1": ("Lenovo", "pc", "🖥️"),
     "e8:6a:64": ("Lenovo", "pc", "🖥️"), "f8:16:54": ("Lenovo", "pc", "🖥️"),
     "f8:a9:63": ("Lenovo", "pc", "🖥️"),
@@ -1872,6 +1895,8 @@ def lookup_oui(mac: str) -> tuple:
 # Custom user uploads take priority over bundled icons
 MANUFACTURER_ICON_MAP = {
     "Apple":            "apple",
+    "Apple TV":         "appletv",
+    "Android":          "android",  # hostname detected
     "Samsung":          "samsung",
     "Amazon":           "amazon",
     "Amazon/Ecobee":    "amazon",
@@ -1941,8 +1966,11 @@ def classify_device(mac: str, hostname: str = "") -> tuple:
     """
     Returns (manufacturer, device_type, icon) with hostname-based refinement.
     For Apple devices, uses hostname to distinguish iPhone/iPad from Mac.
+    Also uses hostname patterns when OUI is unknown (e.g. randomized/private MACs).
     """
     manufacturer, device_type, icon = lookup_oui(mac)
+
+    # Hostname-based refinement for known Apple OUI
     if manufacturer == "Apple" and hostname:
         h = hostname.lower()
         if any(x in h for x in ("iphone", "ipad", "ipod")):
@@ -1950,8 +1978,95 @@ def classify_device(mac: str, hostname: str = "") -> tuple:
         elif any(x in h for x in ("macbook", "imac", "mac-mini", "mac-pro", "macpro", "macmini")):
             return (manufacturer, "apple", "💻")
         elif "appletv" in h or "apple-tv" in h:
-            return (manufacturer, "apple", "📺")
+            return ("Apple TV", "apple", "📺")
+
+    # Hostname-based detection for unknown OUIs (randomized MACs, missing OUI entries)
+    if manufacturer == "Unknown" and hostname:
+        h = hostname.lower()
+        if any(x in h for x in ("iphone", "ipad", "ipod")):
+            return ("Apple", "apple", "📱")
+        elif any(x in h for x in ("macbook", "imac", "mac-mini", "macpro", "macmini")):
+            return ("Apple", "apple", "💻")
+        elif "appletv" in h or "apple-tv" in h:
+            return ("Apple", "apple", "📺")
+        elif any(x in h for x in ("android", "pixel", "galaxy", "samsung")):
+            return ("Android", "android", "📱")
+        elif any(x in h for x in ("echo", "alexa", "kindle", "firetv", "fire-tv")):
+            return ("Amazon", "amazon", "📦")
+        elif any(x in h for x in ("chromecast", "googletv", "google-tv")):
+            return ("Google", "google", "🔍")
+        elif "roku" in h:
+            return ("Roku", "tv", "📺")
+        elif any(x in h for x in ("ring-", "ring_")):
+            return ("Ring", "iot", "🔔")
+        elif "nest" in h:
+            return ("Nest", "iot", "🌡️")
+        elif "sonos" in h:
+            return ("Sonos", "iot", "🔊")
+        elif any(x in h for x in ("meross", "kasa", "wemo", "tuya", "shelly", "tasmota", "espressif", "esphome")):
+            return ("IoT Device", "iot", "🔌")
+        elif any(x in h for x in ("xbox", "playstation", "nintendo", "switch")):
+            return ("Gaming", "gaming", "🎮")
+        elif any(x in h for x in ("printer", "print", "hp-", "canon-", "epson-", "brother-")):
+            return ("Printer", "printer", "🖨️")
+
     return (manufacturer, device_type, icon)
+
+def get_device_info_map(mac_list: list) -> dict:
+    """
+    Given a list of MAC address strings, returns a dict mapping mac -> device info dict.
+    Uses override values when set, falls back to auto-detected values.
+    Normalizes all MACs to lowercase for consistent lookup.
+    Result: {mac: {"manufacturer": str, "device_type": str, "device_icon": str, "icon_url": str, "is_manual": bool}}
+    """
+    if not mac_list:
+        return {}
+    # Normalize all input MACs to lowercase
+    normalized = [m.lower() for m in mac_list if m]
+    if not normalized:
+        return {}
+    result = {}
+    try:
+        db = get_jen_db()
+        with db.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(normalized))
+            cur.execute(f"""
+                SELECT LOWER(mac) AS mac,
+                       COALESCE(manufacturer_override, manufacturer) AS manufacturer,
+                       COALESCE(device_type_override, device_type) AS device_type,
+                       COALESCE(device_icon_override, device_icon) AS device_icon,
+                       manufacturer_override IS NOT NULL AS is_manual
+                FROM devices WHERE LOWER(mac) IN ({placeholders})
+            """, normalized)
+            for row in cur.fetchall():
+                mfr = row["manufacturer"] or ""
+                dtype = row["device_type"] or "unknown"
+                dicon = row["device_icon"] or "❓"
+                # If there's an icon override that's a valid icon name, use it directly
+                icon_url = None
+                if row["is_manual"] and dicon and len(dicon) > 2:
+                    # dicon might be an icon name (e.g. "appletv") not an emoji
+                    test_custom = f"{ICONS_CUSTOM_DIR}/{dicon}.svg"
+                    test_bundled = f"{ICONS_BUNDLED_DIR}/{dicon}.svg"
+                    if os.path.exists(test_custom):
+                        icon_url = f"/static/icons/custom/{dicon}.svg"
+                    elif os.path.exists(test_bundled):
+                        icon_url = f"/static/icons/brands/{dicon}.svg"
+                    else:
+                        icon_url = get_manufacturer_icon_url(mfr)
+                else:
+                    icon_url = get_manufacturer_icon_url(mfr)
+                result[row["mac"]] = {
+                    "manufacturer": mfr,
+                    "device_type": dtype,
+                    "device_icon": dicon,
+                    "icon_url": icon_url,
+                    "is_manual": bool(row["is_manual"]),
+                }
+        db.close()
+    except Exception as e:
+        logger.error(f"get_device_info_map error: {e}")
+    return result
 # ─────────────────────────────────────────
 def send_telegram(message):
     token = get_global_setting("telegram_token")
@@ -2337,7 +2452,9 @@ def check_alerts():
                                         ON DUPLICATE KEY UPDATE
                                             last_ip=%s, last_hostname=%s,
                                             last_subnet_id=%s, last_seen=NOW(),
-                                            manufacturer=%s, device_type=%s, device_icon=%s
+                                            manufacturer=IF(manufacturer_override IS NULL, %s, manufacturer),
+                                            device_type=IF(manufacturer_override IS NULL, %s, device_type),
+                                            device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
                                     """, (mac, row["ip"], row["hostname"], row["subnet_id"],
                                           manufacturer, device_type, device_icon,
                                           row["ip"], row["hostname"], row["subnet_id"],
@@ -2654,10 +2771,15 @@ def dashboard():
                 s["version"] = ""
     except Exception:
         pass
+    mac_list = [l["mac"] for l in recent if l.get("mac")]
+    device_info = get_device_info_map(mac_list)
     return render_template("dashboard.html", stats=stats, recent=recent,
                            kea_up=kea_up, subnet_map=SUBNET_MAP,
                            pool_sizes=pool_sizes, hours=hours_str,
-                           server_statuses=server_statuses)
+                           server_statuses=server_statuses,
+                           device_info=device_info,
+                           get_manufacturer_icon_url=get_manufacturer_icon_url,
+                           device_type_display=DEVICE_TYPE_DISPLAY)
 
 # ─────────────────────────────────────────
 # Leases
@@ -2739,10 +2861,15 @@ def leases():
     except Exception as e:
         flash(f"Could not load leases: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page)
+    # Fetch device fingerprint info for all MACs on this page
+    mac_list = [l["mac"] for l in leases_list if l.get("mac")]
+    device_info = get_device_info_map(mac_list)
     return render_template("leases.html", leases=leases_list, page=page, pages=pages,
                            total=total, subnet_filter=subnet_filter, minutes=minutes,
                            search=search, show_expired=show_expired, subnet_map=SUBNET_MAP,
-                           sort=sort, direction=direction)
+                           sort=sort, direction=direction, device_info=device_info,
+                           get_manufacturer_icon_url=get_manufacturer_icon_url,
+                           device_type_display=DEVICE_TYPE_DISPLAY)
 
 @app.route("/leases/delete-stale", methods=["POST"])
 @login_required
@@ -2884,11 +3011,15 @@ def reservations():
         flash(f"Could not load reservations: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page)
     stale_days = int(get_global_setting("stale_device_days", "30"))
+    mac_list = [h["mac"] for h in hosts if h.get("mac")]
+    device_info = get_device_info_map(mac_list)
     return render_template("reservations.html", hosts=hosts,
                            subnet_filter=subnet_filter, search=search,
                            subnet_map=SUBNET_MAP, page=page, pages=pages,
                            total=total, stale_days=stale_days,
-                           sort=sort, direction=direction)
+                           sort=sort, direction=direction, device_info=device_info,
+                           get_manufacturer_icon_url=get_manufacturer_icon_url,
+                           device_type_display=DEVICE_TYPE_DISPLAY)
 
 @app.route("/reservations/add")
 @login_required
@@ -4951,6 +5082,7 @@ def devices():
     search = sanitize_search(request.args.get("search", "").strip())
     show_stale = request.args.get("stale", "0") == "1"
     type_filter = request.args.get("type", "").strip()
+    subnet_filter = request.args.get("subnet", "all")
     sort = request.args.get("sort", "last_seen")
     direction = request.args.get("dir", "desc")
     if direction not in ("asc", "desc"):
@@ -4987,6 +5119,12 @@ def devices():
             if type_filter:
                 where.append("d.device_type=%s")
                 params.append(type_filter)
+            if subnet_filter != "all":
+                try:
+                    where.append("d.last_subnet_id=%s")
+                    params.append(int(subnet_filter))
+                except ValueError:
+                    subnet_filter = "all"
             where_str = " AND ".join(where) if where else "1=1"
 
             cur.execute(f"SELECT COUNT(*) as cnt FROM devices d WHERE {where_str}", params)
@@ -4995,7 +5133,12 @@ def devices():
             cur.execute(f"""
                 SELECT d.id, d.mac, d.device_name, d.owner, d.notes,
                        d.first_seen, d.last_seen, d.last_ip, d.last_hostname, d.last_subnet_id,
-                       d.manufacturer, d.device_type, d.device_icon,
+                       COALESCE(d.manufacturer_override, d.manufacturer) AS manufacturer,
+                       COALESCE(d.device_type_override, d.device_type) AS device_type,
+                       COALESCE(d.device_icon_override, d.device_icon) AS device_icon,
+                       d.manufacturer_override IS NOT NULL AS is_manual,
+                       d.device_type_override AS type_override_key,
+                       d.device_icon_override AS icon_override_key,
                        DATEDIFF(NOW(), d.last_seen) as days_since_seen
                 FROM devices d
                 WHERE {where_str}
@@ -5022,12 +5165,16 @@ def devices():
         flash(f"Could not load device inventory: {str(e)}", "error")
 
     pages = max(1, (total + per_page - 1) // per_page)
+    bundled_icons = sorted([f.replace(".svg","") for f in os.listdir(ICONS_BUNDLED_DIR) if f.endswith(".svg")]) if os.path.exists(ICONS_BUNDLED_DIR) else []
+    custom_icons = sorted([f.replace(".svg","") for f in os.listdir(ICONS_CUSTOM_DIR) if f.endswith(".svg")]) if os.path.exists(ICONS_CUSTOM_DIR) else []
     return render_template("devices.html", devices=devices_list, page=page, pages=pages,
                            total=total, search=search, show_stale=show_stale,
                            stale_days=stale_days, subnet_map=SUBNET_MAP,
                            sort=sort, direction=direction,
+                           type_filter=type_filter, subnet_filter=subnet_filter,
                            device_type_display=DEVICE_TYPE_DISPLAY,
-                           get_manufacturer_icon_url=get_manufacturer_icon_url)
+                           get_manufacturer_icon_url=get_manufacturer_icon_url,
+                           bundled_icons=bundled_icons, custom_icons=custom_icons)
 
 @app.route("/devices/edit/<int:device_id>", methods=["POST"])
 @login_required
@@ -5036,14 +5183,54 @@ def edit_device(device_id):
     device_name = request.form.get("device_name", "").strip()[:200]
     owner = request.form.get("owner", "").strip()[:200]
     notes = request.form.get("notes", "").strip()[:1000]
+    type_override = request.form.get("type_override", "").strip()
+    icon_override = request.form.get("icon_override", "").strip()  # icon name without .svg
     try:
         db = get_jen_db()
         with db.cursor() as cur:
-            cur.execute("UPDATE devices SET device_name=%s, owner=%s, notes=%s WHERE id=%s",
-                        (device_name or None, owner or None, notes or None, device_id))
+            if type_override == "auto" or type_override == "":
+                # Clear manual override (but keep icon override if set)
+                if icon_override:
+                    cur.execute("""UPDATE devices SET device_name=%s, owner=%s, notes=%s,
+                                   manufacturer_override=NULL, device_type_override=NULL,
+                                   device_icon_override=%s
+                                   WHERE id=%s""",
+                                (device_name or None, owner or None, notes or None,
+                                 icon_override, device_id))
+                else:
+                    cur.execute("""UPDATE devices SET device_name=%s, owner=%s, notes=%s,
+                                   manufacturer_override=NULL, device_type_override=NULL, device_icon_override=NULL
+                                   WHERE id=%s""",
+                                (device_name or None, owner or None, notes or None, device_id))
+                override_info = None
+            elif type_override in DEVICE_TYPE_DISPLAY:
+                type_label, _ = DEVICE_TYPE_DISPLAY[type_override]
+                type_icon_map = {
+                    "apple": ("Apple", "🍎"), "android": ("Android", "📱"),
+                    "windows": ("Windows", "🖥️"), "linux": ("Linux", "🐧"),
+                    "amazon": ("Amazon", "📦"), "iot": ("IoT Device", "🔌"),
+                    "tv": ("Smart TV", "📺"), "printer": ("Printer", "🖨️"),
+                    "nas": ("NAS", "🗄️"), "network": ("Network Device", "🌐"),
+                    "gaming": ("Gaming", "🎮"), "raspberry_pi": ("Raspberry Pi", "🥧"),
+                    "google": ("Google", "🔍"), "pc": ("PC", "🖥️"),
+                    "unknown": ("Unknown", "❓"),
+                }
+                mfr_override, icon_default = type_icon_map.get(type_override, (type_label, "❓"))
+                # Use explicit icon override if set, otherwise default for type
+                final_icon = icon_override if icon_override else icon_default
+                cur.execute("""UPDATE devices SET device_name=%s, owner=%s, notes=%s,
+                               manufacturer_override=%s, device_type_override=%s, device_icon_override=%s
+                               WHERE id=%s""",
+                            (device_name or None, owner or None, notes or None,
+                             mfr_override, type_override, final_icon, device_id))
+                override_info = {"manufacturer": mfr_override, "device_type": type_override, "device_icon": final_icon}
+            else:
+                cur.execute("UPDATE devices SET device_name=%s, owner=%s, notes=%s WHERE id=%s",
+                            (device_name or None, owner or None, notes or None, device_id))
+                override_info = None
         db.commit()
         db.close()
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, "override": override_info})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -5554,6 +5741,11 @@ def api_v1_leases():
                                 "expires": row["expires"].isoformat() if row["expires"] else None,
                                 "valid_lifetime": row["valid_lifetime"]})
         db.close()
+        di = get_device_info_map([r["mac"] for r in result if r["mac"]])
+        for r in result:
+            info = di.get(r["mac"], {})
+            r["manufacturer"] = info.get("manufacturer", "")
+            r["device_type"] = info.get("device_type", "unknown")
     except Exception as e:
         return api_error(str(e), 500)
     return api_ok({"leases": result, "count": len(result)})

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_device_badge.html' import device_badge %}
 {% block title %}Reservations{% endblock %}
 {% block scripts %}
 function toggleAll(cb) {
@@ -109,7 +110,10 @@ function saveCurrentFilter() {
     {% for h in hosts %}
     <tr>
         <td class="mono">{{ h.ip }}</td>
-        <td style="white-space:nowrap;">{{ h.hostname or '—' }}</td>
+        <td style="white-space:nowrap;">
+            {{ h.hostname or '—' }}
+            {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
+        </td>
         <td class="mono">{{ h.mac }}</td>
         <td><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
         <td class="mono" style="color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
