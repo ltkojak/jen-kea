@@ -23,7 +23,7 @@ Before starting Jen for the first time, work through this checklist:
 
 **Run the installer:**
 ```bash
-tar xzf jen-v2.4.10.tar.gz
+tar xzf jen-v2.5.1.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -416,3 +416,102 @@ Available metrics:
 | `/etc/jen/backups/` | Automatic backups created during upgrades |
 | `/etc/systemd/system/jen.service` | Systemd service definition |
 | `/etc/sudoers.d/jen` | Allows Jen to restart itself after cert upload |
+
+---
+
+## Kea HA Configuration
+
+### Enabling HA Mode
+
+Go to **Settings → Infrastructure → High Availability** and set:
+
+- **Primary Server Name** — friendly name shown in the UI and alerts
+- **HA Mode** — must match the `ha-mode` configured in `kea-dhcp4.conf` on your Kea servers
+
+| Mode | Description |
+|---|---|
+| Standalone | No HA — single server deployment |
+| Hot Standby | Primary handles all traffic; standby takes over on failure |
+| Load Balancing | Both servers share the lease load |
+| Passive Backup | Primary active; backup receives updates but doesn't serve |
+
+Or edit `jen.config` directly:
+
+```ini
+[kea]
+name    = Kea Primary
+role    = primary
+ha_mode = hot-standby
+```
+
+### Adding a Standby Server
+
+Go to **Settings → Infrastructure → Additional Servers** and add your standby node, or add it to `jen.config`:
+
+```ini
+[kea_server_2]
+name     = Kea Standby
+role     = standby
+api_url  = http://YOUR-STANDBY-SERVER:8000
+api_user = kea-api
+api_pass = your-kea-api-password
+ssh_host = YOUR-STANDBY-SERVER
+ssh_user = your-ssh-user
+kea_conf = /etc/kea/kea-dhcp4.conf
+```
+
+### How Active Node Routing Works
+
+When HA is configured, Jen automatically routes `config-get` and subnet editing commands to the active node. Jen queries `ha-heartbeat` on each server and selects the primary in `hot-standby`, `load-balancing`, or `partner-down` state. Falls back to the first reachable server if no active node is identified.
+
+### HA Failover Alerts
+
+Add an alert channel and enable the **HA failover / state change** alert type. You will receive a notification any time a server's HA state changes — including failovers, recovery, and sync events.
+
+---
+
+## DDNS Provider Configuration
+
+The DDNS page shows Kea DNS update log activity and supports hostname lookup. The DNS provider is configurable — Jen is not tied to Technitium.
+
+### Setting the DNS Provider
+
+Go to **Settings → Infrastructure → DDNS Configuration** and choose:
+
+| Provider | Description |
+|---|---|
+| Technitium DNS | Uses Technitium REST API for hostname lookup |
+| Generic | Uses `dig`/`host` over SSH to the Kea server |
+| None | Log viewer only — no hostname lookup |
+
+Or set it in `jen.config`:
+
+```ini
+[ddns]
+log_path     = /var/log/kea/kea-ddns.log
+dns_provider = technitium   # technitium, generic, or none
+api_url      = https://your-technitium-server/api
+api_token    = your-token
+forward_zone = your.domain.com
+```
+
+---
+
+## Alert Channels — ntfy and Discord
+
+### ntfy Setup
+
+1. Go to **Settings → Alerts → Add Channel**
+2. Choose **ntfy** as the channel type
+3. Enter your ntfy server URL (use `https://ntfy.sh` for the public server, or your self-hosted URL)
+4. Enter the topic name (e.g. `jen-alerts`)
+5. Optionally set an access token (for protected topics) and priority
+
+No app configuration needed — ntfy delivers to any subscribed device automatically.
+
+### Discord Setup
+
+1. In your Discord server, go to **Server Settings → Integrations → Webhooks → New Webhook**
+2. Choose the channel and copy the webhook URL
+3. Go to **Settings → Alerts → Add Channel** in Jen
+4. Choose **Discord** and paste the webhook URL

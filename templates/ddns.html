@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>🔗 DDNS Status</h1>
-    <p>Technitium DNS update activity</p>
+    <p>Kea DNS update activity{% if dns_provider == 'technitium' %} — Technitium DNS{% elif dns_provider == 'pihole' %} — Pi-hole{% elif dns_provider == 'adguard' %} — AdGuard Home{% elif dns_provider == 'ssh' %} — DNS via SSH{% endif %}</p>
 </div>
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">

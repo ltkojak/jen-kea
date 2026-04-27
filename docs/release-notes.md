@@ -2,6 +2,59 @@
 
 ---
 
+## Version 2.5.1 — April 2026
+
+### Additional DNS Providers
+The DDNS hostname lookup now supports four DNS providers:
+
+- **Technitium DNS** — existing integration unchanged
+- **Pi-hole** — supports both v5 (api.php) and v6 (new REST API with session authentication)
+- **AdGuard Home** — REST API with Basic Auth, queries rewrite rules for hostname lookup
+- **DNS via SSH** — runs `dig` over the existing Kea SSH connection; works with Bind9, Unbound, or any DNS server accessible from the Kea host. No additional configuration required.
+
+Provider-specific fields show and hide dynamically when you change the DNS Provider dropdown in Settings → Infrastructure → DDNS Configuration.
+
+### Bug Fixes
+- Fixed hardcoded server name `theelders` in DDNS SSH timeout error message
+- Fixed hardcoded username `matthew` as SSH fallback in subnet editing
+- Added 10-second TTL cache to active server detection to avoid unnecessary `ha-heartbeat` calls on every page load
+
+---
+
+## Version 2.5.0 — April 2026
+
+### ntfy and Discord Alert Channels
+Two new alert channel types are now supported alongside the existing Telegram, Email, Slack, and Webhook channels.
+
+**ntfy** — works with both the public ntfy.sh server and self-hosted ntfy instances. Configurable topic, access token for protected topics, and message priority (min/low/default/high/urgent).
+
+**Discord** — standard Discord webhook integration. Messages are formatted with bold text preserved and delivered to the configured channel with "Jen DHCP" as the sender username.
+
+Both channels support all existing alert types including the new HA failover alert.
+
+### Kea HA Support
+Jen now has full awareness of Kea High Availability deployments.
+
+**Active node routing** — when multiple servers are configured, Jen automatically routes `config-get` and subnet editing commands to the active primary node. Active node detection uses `ha-heartbeat` to identify the server in `hot-standby`, `load-balancing`, or `partner-down` state with primary role. Falls back to the first reachable server.
+
+**HA state monitoring** — the background alert loop now tracks HA state for all configured servers. Any state change (including failovers, recovery, and sync events) fires an `ha_failover` alert to all configured channels.
+
+**Servers page improvements** — the Servers page now shows an ⚡ ACTIVE indicator on the current active node, a top banner displaying the configured HA mode, and improved HA state badge colors.
+
+**HA configuration UI** — new High Availability card in Settings → Infrastructure with HA mode dropdown (standalone / hot-standby / load-balancing / passive-backup) and primary server name field. Also configurable via `jen.config` `[kea]` section with `ha_mode` and `name` keys.
+
+### DDNS — Provider-Agnostic
+The DDNS page is no longer tied to Technitium DNS.
+
+The DNS provider is now configurable in Settings → Infrastructure → DDNS Configuration with three options:
+- **Technitium** — existing Technitium REST API integration (unchanged for existing users)
+- **Generic** — hostname lookup via `dig`/`host` over SSH to the Kea server
+- **None** — log viewer only, no hostname lookup
+
+Also configurable via `jen.config [ddns]` with the `dns_provider` key.
+
+---
+
 ## Version 2.4.10 — April 2026
 
 ### Documentation Updates

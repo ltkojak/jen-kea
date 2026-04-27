@@ -6,6 +6,21 @@
     <p>{% if single_server %}Single server deployment{% else %}Multi-server / HA deployment — {{ statuses|length }} servers configured{% endif %}</p>
 </div>
 
+{% if not single_server and ha_mode %}
+<div class="card" style="border-color:rgba(0,180,216,0.4);padding:12px 16px;">
+    <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
+        <span style="font-size:20px;">🔄</span>
+        <div>
+            <strong>HA Mode: {{ ha_mode|replace('-',' ')|title }}</strong>
+            <span style="color:var(--text-muted);margin-left:12px;">Active node commands are routed automatically</span>
+        </div>
+        {% for s in statuses %}{% if s.ha_state in ('hot-standby','load-balancing','partner-down') and s.server.role == 'primary' %}
+        <span class="badge badge-reserved" style="margin-left:auto;">⚡ Active: {{ s.server.name }}</span>
+        {% endif %}{% endfor %}
+    </div>
+</div>
+{% endif %}
+
 {% if single_server %}
 <!-- Single server view -->
 {% set s = statuses[0] %}
@@ -40,10 +55,10 @@
 
 <div class="card" style="background:var(--surface2);border-style:dashed;">
     <div style="text-align:center;padding:16px;color:var(--text-muted);">
-        <div style="font-size:24px;margin-bottom:8px;">🔗</div>
+        <div style="font-size:24px;margin-bottom:8px;">🔄</div>
         <div style="font-weight:600;margin-bottom:4px;">Running a Kea HA setup?</div>
-        <div style="font-size:13px;">Add additional servers to <code>jen.config</code> using <code>[kea_server_2]</code>, <code>[kea_server_3]</code> sections,
-        or configure them via <a href="/settings/infrastructure">Settings → Infrastructure</a>.</div>
+        <div style="font-size:13px;">Configure HA mode and add additional servers in
+        <a href="/settings/infrastructure">Settings → Infrastructure</a>.</div>
     </div>
 </div>
 
@@ -54,7 +69,11 @@
 <div class="stat-card" style="border-left:3px solid {% if s.up %}var(--success){% else %}var(--danger){% endif %};">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
         <div>
-            <div class="stat-label">{{ s.server.role|upper }}</div>
+            <div class="stat-label">{{ s.server.role|upper }}
+                {% if s.ha_state in ('hot-standby','load-balancing','partner-down') and s.server.role == 'primary' %}
+                <span style="color:var(--primary);margin-left:6px;">⚡ ACTIVE</span>
+                {% endif %}
+            </div>
             <div style="font-size:18px;font-weight:700;margin-top:2px;">{{ s.server.name }}</div>
         </div>
         {% if s.up %}
@@ -73,9 +92,8 @@
         {% if s.ha_state %}
         <tr><td class="stat-label">HA State</td>
             <td>
-                <span class="badge {% if s.ha_state == 'hot-standby' or s.ha_state == 'partner-in-maintenance' %}badge-reserved
-                {% elif s.ha_state == 'partner-down' or s.ha_state == 'terminated' %}badge-danger
-                {% elif s.ha_state == 'load-balancing' %}badge-production
+                <span class="badge {% if s.ha_state in ('hot-standby','load-balancing') %}badge-reserved
+                {% elif s.ha_state in ('partner-down','terminated') %}badge-danger
                 {% else %}badge-dynamic{% endif %}">
                     {{ s.ha_state }}
                 </span>
@@ -101,6 +119,26 @@
 </div>
 
 <!-- HA State guide -->
+<div class="card">
+    <div class="card-header"><span class="card-title">ℹ️ HA State Reference</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;font-size:13px;">
+        <div><span class="badge badge-reserved">hot-standby</span><br><span style="color:var(--text-muted);font-size:12px;">Normal HA — primary active, standby ready to take over</span></div>
+        <div><span class="badge badge-production">load-balancing</span><br><span style="color:var(--text-muted);font-size:12px;">Both servers actively handling leases</span></div>
+        <div><span class="badge badge-dynamic">partner-down</span><br><span style="color:var(--text-muted);font-size:12px;">Partner unreachable — this server operating alone</span></div>
+        <div><span class="badge badge-dynamic">waiting</span><br><span style="color:var(--text-muted);font-size:12px;">Starting up, waiting for partner sync</span></div>
+        <div><span class="badge badge-dynamic">syncing</span><br><span style="color:var(--text-muted);font-size:12px;">Synchronizing lease database with partner</span></div>
+        <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span style="color:var(--text-muted);font-size:12px;">HA terminated — manual intervention required</span></div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+// Pass ha_mode to template
+const HA_MODE = {{ ha_mode|tojson if ha_mode else '""' }};
+// Auto-refresh server status every 30 seconds
+setInterval(function() { location.reload(); }, 30000);
+{% endblock %}
 <div class="card">
     <div class="card-header"><span class="card-title">ℹ️ HA State Reference</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;font-size:13px;">

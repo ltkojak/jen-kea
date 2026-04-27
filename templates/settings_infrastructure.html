@@ -225,6 +225,35 @@
     </form>
 </div>
 
+<!-- HA Configuration -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔄 High Availability</span></div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Configure Kea HA mode. When configured, Jen automatically targets the active/primary node for config-get and subnet editing operations.
+        Additional HA peer servers are configured in the Additional Servers section below.
+    </p>
+    <form method="POST" action="/settings/infrastructure/save-ha">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Primary Server Name</label>
+                <input type="text" name="server_name" value="{{ infra.server_name }}" placeholder="Kea Server 1">
+                <div class="form-hint">Friendly name shown in the UI and alerts</div>
+            </div>
+            <div class="form-group">
+                <label>HA Mode</label>
+                <select name="ha_mode">
+                    <option value="" {% if not infra.ha_mode %}selected{% endif %}>Standalone (no HA)</option>
+                    <option value="hot-standby" {% if infra.ha_mode == 'hot-standby' %}selected{% endif %}>Hot Standby — primary active, standby takes over on failure</option>
+                    <option value="load-balancing" {% if infra.ha_mode == 'load-balancing' %}selected{% endif %}>Load Balancing — both nodes share the load</option>
+                    <option value="passive-backup" {% if infra.ha_mode == 'passive-backup' %}selected{% endif %}>Passive Backup — primary active, backup receives updates only</option>
+                </select>
+                <div class="form-hint">Must match the ha-mode configured in kea-dhcp4.conf on your Kea servers</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save HA Settings</button>
+    </form>
+</div>
+
 <!-- DDNS -->
 <div class="card">
     <div class="card-header"><span class="card-title">🔗 DDNS Configuration</span></div>
@@ -233,28 +262,97 @@
             <div class="form-group">
                 <label>Log File Path</label>
                 <input type="text" name="log_path" value="{{ infra.ddns_log }}">
-                <div class="form-hint">Path on the Kea server</div>
+                <div class="form-hint">Path on the Kea server — read via SSH</div>
             </div>
             <div class="form-group">
-                <label>Technitium API URL</label>
-                <input type="text" name="api_url" value="{{ infra.ddns_url }}">
-            </div>
-            <div class="form-group">
-                <label>API Token</label>
-                <input type="password" name="api_token" placeholder="(unchanged)">
-                <div class="form-hint">Leave blank to keep existing token</div>
-            </div>
-            <div class="form-group">
-                <label>Forward Zone</label>
-                <input type="text" name="forward_zone" value="{{ infra.ddns_zone }}">
+                <label>DNS Provider</label>
+                <select name="dns_provider" id="dnsProvider" onchange="showDnsFields(this.value)">
+                    <option value="technitium" {% if infra.dns_provider == 'technitium' %}selected{% endif %}>Technitium DNS</option>
+                    <option value="pihole" {% if infra.dns_provider == 'pihole' %}selected{% endif %}>Pi-hole</option>
+                    <option value="adguard" {% if infra.dns_provider == 'adguard' %}selected{% endif %}>AdGuard Home</option>
+                    <option value="ssh" {% if infra.dns_provider == 'ssh' %}selected{% endif %}>DNS via SSH (Bind9, Unbound, etc.)</option>
+                    <option value="none" {% if infra.dns_provider == 'none' %}selected{% endif %}>None (log viewer only)</option>
+                </select>
+                <div class="form-hint">Used for hostname lookup on the DDNS page</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">Save DDNS</button>
+
+        <!-- Technitium fields -->
+        <div id="dns-fields-technitium" style="display:none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>API URL</label>
+                    <input type="text" name="api_url" value="{{ infra.ddns_url }}" placeholder="https://dns.example.com">
+                </div>
+                <div class="form-group">
+                    <label>API Token</label>
+                    <input type="password" name="api_token" placeholder="(unchanged)">
+                    <div class="form-hint">Leave blank to keep existing token</div>
+                </div>
+                <div class="form-group">
+                    <label>Forward Zone</label>
+                    <input type="text" name="forward_zone" value="{{ infra.ddns_zone }}" placeholder="example.com">
+                </div>
+            </div>
+        </div>
+
+        <!-- Pi-hole fields -->
+        <div id="dns-fields-pihole" style="display:none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Pi-hole URL</label>
+                    <input type="text" name="api_url" value="{{ infra.ddns_url }}" placeholder="http://pi.hole">
+                    <div class="form-hint">Supports Pi-hole v5 and v6</div>
+                </div>
+                <div class="form-group">
+                    <label>Password / API Token</label>
+                    <input type="password" name="api_token" placeholder="(unchanged)">
+                    <div class="form-hint">Pi-hole web password (v5) or API token (v6)</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AdGuard Home fields -->
+        <div id="dns-fields-adguard" style="display:none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>AdGuard Home URL</label>
+                    <input type="text" name="api_url" value="{{ infra.ddns_url }}" placeholder="http://adguard.local:3000">
+                </div>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" name="api_user" value="{{ infra.ddns_user }}" placeholder="admin">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" name="api_token" placeholder="(unchanged)">
+                </div>
+            </div>
+        </div>
+
+        <!-- SSH / Bind9 fields — no extra config needed, uses existing SSH settings -->
+        <div id="dns-fields-ssh" style="display:none;">
+            <div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius);font-size:13px;color:var(--text-muted);">
+                ℹ️ Uses the SSH connection configured above to run <code>dig</code> on your Kea server.
+                No additional configuration required.
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px;">Save DDNS</button>
     </form>
 </div>
 
 {% endblock %}
 {% block scripts %}
+function showDnsFields(provider) {
+    ['technitium','pihole','adguard','ssh'].forEach(p => {
+        const el = document.getElementById('dns-fields-' + p);
+        if (el) el.style.display = (p === provider) ? 'block' : 'none';
+    });
+}
+// Set initial state on page load
+showDnsFields(document.getElementById('dnsProvider') ? document.getElementById('dnsProvider').value : 'technitium');
+
 function addServerRow() {
     const list = document.getElementById('extra-servers-list');
     const count = list.querySelectorAll('.extra-server-row').length + 2;

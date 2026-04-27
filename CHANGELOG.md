@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.5.1] - 2026-04-27
+
+### Added
+- Pi-hole DNS provider for DDNS hostname lookup — supports both v5 (api.php) and v6 (REST API with session auth)
+- AdGuard Home DNS provider for DDNS hostname lookup — Basic Auth REST API
+- SSH/Bind9/Unbound DNS provider — runs `dig` over existing SSH connection, no extra config needed
+- Active server TTL cache (10s) in `get_active_kea_server()` to avoid hammering `ha-heartbeat` on every page load
+
+### Fixed
+- Hardcoded `theelders` in DDNS SSH timeout error message — now uses configured `KEA_SSH_HOST`
+- Hardcoded `matthew` as default SSH username in subnet edit — now uses configured `KEA_SSH_USER`
+- `generic` DNS provider renamed to `ssh` for clarity (both values still accepted)
+- DDNS settings UI now shows correct field sections per provider with dynamic show/hide
+- DNS provider fields properly initialised on page load (not just on dropdown change)
+
+### Updated
+- `jen.config.example` — documented all four DNS providers with example config blocks
+- `docs/admin-guide.md` — DDNS provider section updated with Pi-hole, AdGuard, SSH options
+
+## [2.5.0] - 2026-04-26
+
+### Added
+- ntfy alert channel — supports ntfy.sh and self-hosted ntfy, configurable topic/token/priority
+- Discord alert channel — Discord webhook integration with bold text formatting
+- `ha_failover` alert type — fires when any Kea server's HA state changes
+- `get_active_kea_server()` — automatically routes config-get and subnet editing to the active HA node
+- HA state monitoring in `check_alerts()` — tracks HA state per server, alerts on state changes
+- HA Configuration card in Settings → Infrastructure — ha_mode dropdown and server name field
+- `/settings/infrastructure/save-ha` route to save HA settings
+- Servers page HA enhancements — ⚡ ACTIVE indicator, HA mode banner, improved state badge colors
+- DDNS `dns_provider` config option — `technitium`, `generic` (dig/host over SSH), or `none`
+- Generic DNS lookup via SSH for non-Technitium setups
+- `jen.config.example` — documented `ha_mode`, `role`, `name` in `[kea]`; `dns_provider` in `[ddns]`; example `[kea_server_2]` block
+
+### Changed
+- All `kea_command("config-get")` calls now use `get_active_kea_server()` — correct behaviour in HA setups
+- DDNS page subtitle no longer hardcodes "Technitium DNS"
+- Settings → Infrastructure DDNS section — replaced Technitium-specific form with provider-agnostic form
+
+### Updated
+- `docs/admin-guide.md` — HA configuration, DDNS provider config, ntfy/Discord setup
+- `docs/release-notes.md` — 2.5.0 entry
+
 ## [2.4.10] - 2026-04-26
 
 ### Updated

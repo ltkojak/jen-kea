@@ -43,7 +43,7 @@ from werkzeug.serving import make_server
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.4.10"
+JEN_VERSION = "2.5.1"
 
 # ─────────────────────────────────────────
 # App setup
@@ -1005,6 +1005,44 @@ def get_all_server_status():
             "ha_partner": ha_partner,
         })
     return statuses
+
+_active_server_cache = {"server": None, "ts": 0}
+
+def get_active_kea_server():
+    """
+    Returns the best server to send commands to.
+    For HA setups: returns the server in 'hot-standby' primary role or 'partner-down' state.
+    For single server: returns server 1.
+    Falls back to first available server.
+    Result is cached for 10 seconds to avoid hammering ha-heartbeat on every page load.
+    """
+    import time
+    if len(KEA_SERVERS) == 1:
+        return KEA_SERVERS[0]
+    # Use cached result if fresh
+    now = time.time()
+    if _active_server_cache["server"] and (now - _active_server_cache["ts"]) < 10:
+        return _active_server_cache["server"]
+    # For HA: query ha-heartbeat on each server, prefer the primary in active state
+    active_states = ("hot-standby", "load-balancing", "partner-down")
+    for server in KEA_SERVERS:
+        if not kea_is_up(server=server):
+            continue
+        ha = kea_command("ha-heartbeat", server=server)
+        if ha.get("result") == 0:
+            state = ha.get("arguments", {}).get("state", "")
+            role = server.get("role", "primary")
+            if state in active_states and role == "primary":
+                _active_server_cache["server"] = server
+                _active_server_cache["ts"] = now
+                return server
+    # Fallback: return first reachable server
+    for server in KEA_SERVERS:
+        if kea_is_up(server=server):
+            _active_server_cache["server"] = server
+            _active_server_cache["ts"] = now
+            return server
+    return KEA_SERVERS[0]
 
 def format_mac(raw_bytes):
     if not raw_bytes:
@@ -2095,6 +2133,7 @@ def send_telegram(message):
 DEFAULT_TEMPLATES = {
     "kea_down":           "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
     "kea_up":             "✅ <b>Kea Alert</b>\n{server_name} is back <b>UP</b>.",
+    "ha_failover":        "⚡ <b>HA Failover</b>\n{server_name} state changed: <b>{old_state}</b> → <b>{new_state}</b>",
     "new_lease":          "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "new_device":         "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "utilization_high":   "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
@@ -2110,6 +2149,7 @@ DEFAULT_TEMPLATES = {
 ALERT_TYPE_LABELS = {
     "kea_down":           "Kea goes down",
     "kea_up":             "Kea comes back up",
+    "ha_failover":        "HA failover / state change",
     "new_lease":          "New dynamic lease",
     "new_device":         "Unknown device detected",
     "utilization_high":   "Subnet utilization high",
@@ -2203,6 +2243,10 @@ def send_alert(alert_type, log_result=True, **kwargs):
                 ok = _send_slack_channel(message, config)
             elif ctype == "webhook":
                 ok = _send_webhook_channel(message, alert_type, config)
+            elif ctype == "ntfy":
+                ok = _send_ntfy_channel(message, config)
+            elif ctype == "discord":
+                ok = _send_discord_channel(message, config)
         except Exception as e:
             error = str(e)
             logger.error(f"Alert send error ({ctype}): {e}")
@@ -2306,6 +2350,38 @@ def _send_webhook_channel(message, alert_type, config):
         raise Exception(f"Webhook error {resp.status_code}: {resp.text[:200]}")
     return True
 
+def _send_ntfy_channel(message, config):
+    """Send alert via ntfy.sh or self-hosted ntfy."""
+    import re
+    url = config.get("url", "https://ntfy.sh").rstrip("/")
+    topic = config.get("topic", "")
+    token = config.get("token", "")
+    priority = config.get("priority", "default")
+    if not topic:
+        raise Exception("ntfy topic not configured")
+    plain = re.sub(r'<[^>]+>', '', message).strip()
+    headers = {"Title": "Jen Alert", "Priority": priority, "Tags": "bell"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    resp = requests.post(f"{url}/{topic}", data=plain.encode("utf-8"),
+                         headers=headers, timeout=10)
+    if resp.status_code not in (200, 201, 204):
+        raise Exception(f"ntfy error: HTTP {resp.status_code} — {resp.text[:200]}")
+    return True
+
+def _send_discord_channel(message, config):
+    """Send alert via Discord webhook."""
+    import re
+    webhook_url = config.get("webhook_url", "")
+    if not webhook_url:
+        raise Exception("Discord webhook URL not configured")
+    text = message.replace("<b>", "**").replace("</b>", "**")
+    text = re.sub(r'<[^>]+>', '', text).strip()
+    resp = requests.post(webhook_url, json={"content": text, "username": "Jen DHCP"}, timeout=10)
+    if resp.status_code not in (200, 204):
+        raise Exception(f"Discord error: HTTP {resp.status_code} — {resp.text[:200]}")
+    return True
+
 def take_lease_snapshot():
     """Record current lease counts for all subnets."""
     try:
@@ -2315,7 +2391,7 @@ def take_lease_snapshot():
 
         # Get pool sizes from Kea config
         pool_sizes = {}
-        result = kea_command("config-get")
+        result = kea_command("config-get", server=get_active_kea_server())
         if result.get("result") == 0:
             for s in result["arguments"]["Dhcp4"].get("subnet4", []):
                 for pool in s.get("pools", []):
@@ -2394,6 +2470,7 @@ def check_alerts():
     first_run = True
     last_summary_date = None
     last_snapshot_time = 0
+    last_ha_states = {}  # server_id -> last known HA state
 
     while True:
         try:
@@ -2410,6 +2487,18 @@ def check_alerts():
                     last_kea_status[srv_id] = srv_up
                 else:
                     last_kea_status = {s["id"]: kea_is_up(server=s) for s in KEA_SERVERS}
+
+                # ── HA state monitoring ──
+                if srv_up and len(KEA_SERVERS) > 1:
+                    ha = kea_command("ha-heartbeat", server=srv)
+                    if ha.get("result") == 0:
+                        new_state = ha.get("arguments", {}).get("state", "")
+                        old_state = last_ha_states.get(srv_id)
+                        if old_state is not None and new_state != old_state:
+                            send_alert("ha_failover", server_name=srv["name"],
+                                      old_state=old_state, new_state=new_state)
+                        last_ha_states[srv_id] = new_state
+
             kea_up = any(isinstance(last_kea_status, dict) and v for v in last_kea_status.values()) if isinstance(last_kea_status, dict) else last_kea_status
 
             if kea_up:
@@ -2483,7 +2572,7 @@ def check_alerts():
                         first_run = False
 
                         # ── Utilization alerts ──
-                        kea_cfg = kea_command("config-get")
+                        kea_cfg = kea_command("config-get", server=get_active_kea_server())
                         if kea_cfg.get("result") == 0:
                             threshold = int(get_global_setting("alert_threshold_pct", "80"))
                             exhaustion_threshold = int(get_global_setting("pool_exhaustion_free", "5"))
@@ -2697,7 +2786,7 @@ def dashboard():
     pool_sizes = {}
     default_lifetime = 86400
     try:
-        result = kea_command("config-get")
+        result = kea_command("config-get", server=get_active_kea_server())
         if result.get("result") == 0:
             cfg = result["arguments"]["Dhcp4"]
             default_lifetime = cfg.get("valid-lifetime", 86400)
@@ -3271,7 +3360,7 @@ def subnets():
     # Fetch Kea config for lease times, timers, pools
     kea_subnets = {}
     try:
-        result = kea_command("config-get")
+        result = kea_command("config-get", server=get_active_kea_server())
         if result.get("result") == 0:
             cfg = result["arguments"]["Dhcp4"]
             global_lifetime = cfg.get("valid-lifetime", 0)
@@ -3356,7 +3445,7 @@ def edit_subnet_post(subnet_id):
             import base64, tempfile
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(server["ssh_host"], username=server.get("ssh_user", "matthew"),
+            ssh.connect(server["ssh_host"], username=server.get("ssh_user", KEA_SSH_USER),
                         key_filename=SSH_KEY_PATH, timeout=10)
             script = f"""
 import json, sys
@@ -3425,7 +3514,7 @@ def ddns():
                     log_message = "Log file exists but contains no entries yet."
         except subprocess.TimeoutExpired:
             log_status = "error"
-            log_message = "SSH connection timed out. Check that theelders is reachable."
+            log_message = f"SSH connection timed out. Check that {KEA_SSH_HOST} is reachable."
             logger.error("DDNS SSH timeout")
         except Exception as e:
             log_status = "error"
@@ -3435,22 +3524,95 @@ def ddns():
     lookup_result = ""
     if lookup_host:
         try:
-            technitium_url = cfg.get("ddns", "api_url", fallback="")
-            technitium_token = cfg.get("ddns", "api_token", fallback="")
-            forward_zone = cfg.get("ddns", "forward_zone", fallback="")
-            if technitium_url and technitium_token:
-                import requests as req
-                r = req.get(f"{technitium_url}/api/zones/records/get",
-                            params={"token": technitium_token, "domain": lookup_host, "zone": forward_zone},
-                            timeout=5)
-                lookup_result = r.text
+            dns_provider = cfg.get("ddns", "dns_provider", fallback="technitium")
+            if dns_provider == "technitium":
+                dns_url = cfg.get("ddns", "api_url", fallback="")
+                dns_token = cfg.get("ddns", "api_token", fallback="")
+                forward_zone = cfg.get("ddns", "forward_zone", fallback="")
+                if dns_url and dns_token:
+                    import requests as req
+                    r = req.get(f"{dns_url}/api/zones/records/get",
+                                params={"token": dns_token, "domain": lookup_host, "zone": forward_zone},
+                                timeout=5)
+                    data = r.json()
+                    records = data.get("response", {}).get("records", [])
+                    if records:
+                        lookup_result = records
+                    else:
+                        lookup_result = f"No DNS records found for {lookup_host}"
+                else:
+                    lookup_result = "Technitium API not configured."
+
+            elif dns_provider == "pihole":
+                dns_url = cfg.get("ddns", "api_url", fallback="")
+                dns_pass = cfg.get("ddns", "api_token", fallback="")
+                if dns_url:
+                    import requests as req
+                    # Try Pi-hole v6 API first
+                    try:
+                        auth = req.post(f"{dns_url}/api/auth",
+                                        json={"password": dns_pass}, timeout=5)
+                        if auth.status_code == 200 and auth.json().get("session", {}).get("valid"):
+                            sid = auth.json()["session"]["sid"]
+                            r = req.get(f"{dns_url}/api/dns/records",
+                                        params={"domain": lookup_host},
+                                        headers={"X-FTL-SID": sid}, timeout=5)
+                            data = r.json()
+                            records = data.get("records", [])
+                            lookup_result = records if records else f"No DNS records found for {lookup_host}"
+                        else:
+                            raise Exception("Auth failed")
+                    except Exception:
+                        # Fallback to Pi-hole v5 API
+                        r = req.get(f"{dns_url}/admin/api.php",
+                                    params={"customdns": "", "action": "get", "auth": dns_pass},
+                                    timeout=5)
+                        data = r.json()
+                        matches = [e for e in data.get("data", []) if lookup_host in str(e)]
+                        lookup_result = matches if matches else f"No records found for {lookup_host} (Pi-hole v5 API)"
+                else:
+                    lookup_result = "Pi-hole API URL not configured."
+
+            elif dns_provider == "adguard":
+                dns_url = cfg.get("ddns", "api_url", fallback="")
+                dns_user = cfg.get("ddns", "api_user", fallback="")
+                dns_pass = cfg.get("ddns", "api_token", fallback="")
+                if dns_url:
+                    import requests as req
+                    r = req.get(f"{dns_url}/control/rewrite/list",
+                                auth=(dns_user, dns_pass), timeout=5)
+                    data = r.json()
+                    matches = [e for e in data if lookup_host in str(e.get("domain", ""))]
+                    lookup_result = matches if matches else f"No rewrite rules found for {lookup_host}"
+                else:
+                    lookup_result = "AdGuard Home URL not configured."
+
+            elif dns_provider in ("ssh", "generic"):
+                # DNS lookup via dig/host over SSH to Kea server
+                active = get_active_kea_server()
+                ssh_host = active.get("ssh_host") or KEA_SSH_HOST
+                ssh_user = active.get("ssh_user") or KEA_SSH_USER
+                if ssh_host:
+                    result = subprocess.run(
+                        ["ssh", "-i", SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
+                         "-o", "ConnectTimeout=10",
+                         f"{ssh_user}@{ssh_host}",
+                         f"dig +short {lookup_host} 2>/dev/null || host {lookup_host} 2>/dev/null"],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    lookup_result = result.stdout.strip() or f"No DNS result for {lookup_host}"
+                else:
+                    import socket
+                    lookup_result = socket.gethostbyname(lookup_host)
+
             else:
-                lookup_result = "DDNS API not configured."
+                lookup_result = "DNS lookup not configured."
         except Exception as e:
             lookup_result = f"Lookup error: {str(e)}"
     return render_template("ddns.html", lines=lines, lookup_host=lookup_host,
                            lookup_result=lookup_result, log_status=log_status,
-                           log_message=log_message, ddns_log=DDNS_LOG)
+                           log_message=log_message, ddns_log=DDNS_LOG,
+                           dns_provider=cfg.get("ddns", "dns_provider", fallback="technitium"))
 
 # ─────────────────────────────────────────
 # Audit Log
@@ -3681,7 +3843,7 @@ def save_alert_channel():
     enabled = 1 if request.form.get("enabled") else 0
     alert_types = request.form.getlist("alert_types[]")
 
-    if channel_type not in ("telegram", "email", "slack", "webhook"):
+    if channel_type not in ("telegram", "email", "slack", "webhook", "ntfy", "discord"):
         flash("Invalid channel type.", "error")
         return redirect(url_for("settings_alerts"))
     if not channel_name:
@@ -3713,6 +3875,17 @@ def save_alert_channel():
             "payload_type": request.form.get("payload_type", "json").strip(),
             "header_name": request.form.get("header_name", "").strip(),
             "header_value": request.form.get("header_value", "").strip(),
+        }
+    elif channel_type == "ntfy":
+        config = {
+            "url": request.form.get("ntfy_url", "https://ntfy.sh").strip(),
+            "topic": request.form.get("ntfy_topic", "").strip(),
+            "token": request.form.get("ntfy_token", "").strip(),
+            "priority": request.form.get("ntfy_priority", "default").strip(),
+        }
+    elif channel_type == "discord":
+        config = {
+            "webhook_url": request.form.get("discord_webhook", "").strip(),
         }
 
     # Don't overwrite password if blank
@@ -3793,6 +3966,10 @@ def test_alert_channel(channel_id):
             ok = _send_slack_channel(test_msg, config)
         elif ctype == "webhook":
             ok = _send_webhook_channel(test_msg, "test", config)
+        elif ctype == "ntfy":
+            ok = _send_ntfy_channel(test_msg, config)
+        elif ctype == "discord":
+            ok = _send_discord_channel(test_msg, config)
         else:
             ok = False
         if ok:
@@ -3906,7 +4083,11 @@ def settings_infrastructure():
         "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
         "ddns_log": cfg.get("ddns", "log_path", fallback=""),
         "ddns_url": cfg.get("ddns", "api_url", fallback=""),
+        "ddns_user": cfg.get("ddns", "api_user", fallback=""),
         "ddns_zone": cfg.get("ddns", "forward_zone", fallback=""),
+        "dns_provider": cfg.get("ddns", "dns_provider", fallback="technitium"),
+        "ha_mode": cfg.get("kea", "ha_mode", fallback=""),
+        "server_name": cfg.get("kea", "name", fallback="Kea Server 1"),
         "subnets": SUBNET_MAP,
         "extra_servers": extra_servers,
     }
@@ -4094,21 +4275,44 @@ def save_extra_servers():
 @admin_required
 def save_infra_ddns():
     log_path = request.form.get("log_path", "").strip()
+    dns_provider = request.form.get("dns_provider", "technitium").strip()
     api_url = request.form.get("api_url", "").strip()
+    api_user = request.form.get("api_user", "").strip()
     api_token = request.form.get("api_token", "").strip()
     forward_zone = request.form.get("forward_zone", "").strip()
     if log_path:
         write_config_value("ddns", "log_path", log_path)
         global DDNS_LOG
         DDNS_LOG = log_path
+    write_config_value("ddns", "dns_provider", dns_provider)
     if api_url:
         write_config_value("ddns", "api_url", api_url)
+    if api_user:
+        write_config_value("ddns", "api_user", api_user)
     if api_token:
         write_config_value("ddns", "api_token", api_token)
     if forward_zone:
         write_config_value("ddns", "forward_zone", forward_zone)
     flash("DDNS settings saved.", "success")
-    audit("SAVE_INFRA", "ddns", f"log={log_path}")
+    audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
+    return redirect(url_for("settings_infrastructure"))
+
+@app.route("/settings/infrastructure/save-ha", methods=["POST"])
+@login_required
+@admin_required
+def save_ha_settings():
+    """Save HA mode for primary Kea server."""
+    global cfg, KEA_SERVERS
+    ha_mode = request.form.get("ha_mode", "").strip()
+    server_name = request.form.get("server_name", "").strip()
+    if ha_mode in ("hot-standby", "load-balancing", "passive-backup", ""):
+        write_config_value("kea", "ha_mode", ha_mode)
+    if server_name:
+        write_config_value("kea", "name", server_name)
+        # Reload server list
+        KEA_SERVERS = load_kea_servers()
+    flash("HA settings saved.", "success")
+    audit("SAVE_INFRA", "ha_settings", f"mode={ha_mode}")
     return redirect(url_for("settings_infrastructure"))
 
 @app.route("/settings/infrastructure/restart", methods=["POST"])
@@ -5404,8 +5608,10 @@ def servers():
             s["version"] = ""
             s["lease_stats"] = {}
     single_server = len(KEA_SERVERS) == 1
+    ha_mode = cfg.get("kea", "ha_mode", fallback="")
     return render_template("servers.html", statuses=statuses,
                            single_server=single_server,
+                           ha_mode=ha_mode,
                            subnet_map=SUBNET_MAP)
 
 @app.route("/servers/restart/<int:server_id>", methods=["POST"])
@@ -5566,7 +5772,7 @@ def api_stats():
         db.close()
         # Get pool sizes from Kea config
         pool_sizes = {}
-        result = kea_command("config-get")
+        result = kea_command("config-get", server=get_active_kea_server())
         if result.get("result") == 0:
             for s in result["arguments"]["Dhcp4"].get("subnet4", []):
                 for pool in s.get("pools", []):
@@ -5675,7 +5881,7 @@ def api_v1_subnets():
                                 "pool_size": 0, "pools": [], "utilization_pct": 0})
         db.close()
         try:
-            cfg_result = kea_command("config-get")
+            cfg_result = kea_command("config-get", server=get_active_kea_server())
             if cfg_result.get("result") == 0:
                 for s in cfg_result["arguments"]["Dhcp4"].get("subnet4", []):
                     for r in result:

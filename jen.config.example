@@ -1,5 +1,5 @@
 # Jen - The Internet Management Console
-# Version 2.4.10 Configuration File
+# Version 2.5.1 Configuration File
 #
 # Copy this file to /etc/jen/jen.config and fill in your values.
 # This file is gitignored — never commit jen.config with real credentials.
@@ -9,6 +9,16 @@
 api_url  = http://YOUR-KEA-SERVER:8000
 api_user = kea-api
 api_pass = your-kea-api-password
+# Friendly name shown in the UI and alerts
+name     = Kea Server 1
+# Role: primary or standby
+role     = primary
+# HA mode — leave blank for standalone, or set to:
+#   hot-standby      — primary active, standby takes over on failure
+#   load-balancing   — both nodes share the load
+#   passive-backup   — primary active, backup receives updates only
+# Must match ha-mode in kea-dhcp4.conf on your Kea servers
+ha_mode  =
 
 [kea_db]
 # Kea MySQL database
@@ -36,6 +46,17 @@ user     = your-ssh-user
 key_path = /etc/jen/ssh/jen_rsa
 kea_conf = /etc/kea/kea-dhcp4.conf
 
+# For HA setups, add additional servers:
+# [kea_server_2]
+# name     = Kea Standby
+# role     = standby
+# api_url  = http://YOUR-STANDBY-SERVER:8000
+# api_user = kea-api
+# api_pass = your-kea-api-password
+# ssh_host = YOUR-STANDBY-SERVER
+# ssh_user = your-ssh-user
+# kea_conf = /etc/kea/kea-dhcp4.conf
+
 [subnets]
 # Format: subnet_id = Friendly Name, CIDR
 # Example:
@@ -44,8 +65,30 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # 70 = VLAN70, 192.168.70.0/24
 
 [ddns]
-# Technitium DDNS integration
-log_path    = /var/log/kea/kea-ddns-technitium.log
-api_url     = https://your-technitium-server/api
-api_token   = your-technitium-api-token
+# Kea DDNS log file path on the Kea server (read via SSH)
+log_path     = /var/log/kea/kea-ddns.log
+
+# DNS provider for hostname lookup on the DDNS page:
+#   technitium  — Technitium DNS Server REST API
+#   pihole      — Pi-hole REST API (v5 and v6 supported)
+#   adguard     — AdGuard Home REST API
+#   ssh         — DNS lookup via dig over SSH to Kea server (Bind9, Unbound, etc.)
+#   none        — log viewer only, no hostname lookup
+dns_provider = technitium
+
+# Technitium DNS (dns_provider = technitium)
+api_url      = https://your-technitium-server/api
+api_token    = your-technitium-api-token
 forward_zone = your.domain.com
+
+# Pi-hole (dns_provider = pihole)
+# api_url   = http://pi.hole
+# api_token = your-pihole-password-or-api-token
+
+# AdGuard Home (dns_provider = adguard)
+# api_url   = http://adguard.local:3000
+# api_user  = admin
+# api_token = your-adguard-password
+
+# SSH / Bind9 / Unbound (dns_provider = ssh)
+# No additional config needed — uses the SSH connection from [kea_ssh]

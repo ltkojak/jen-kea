@@ -55,6 +55,10 @@ var JEN_CHANNELS = {
                     {% if ch.channel_type == 'telegram' %}📱
                     {% elif ch.channel_type == 'email' %}📧
                     {% elif ch.channel_type == 'slack' %}💬
+                    {% elif ch.channel_type == 'discord' %}🎮
+                    {% elif ch.channel_type == 'ntfy' %}🔔
+                    {% elif ch.channel_type == 'webhook' %}🔗
+                    {% endif %}
                     {% else %}🔗{% endif %}
                 </span>
                 <div>
@@ -142,6 +146,8 @@ var JEN_CHANNELS = {
                         <option value="telegram">📱 Telegram</option>
                         <option value="email">📧 Email (SMTP)</option>
                         <option value="slack">💬 Slack Webhook</option>
+                        <option value="discord">🎮 Discord Webhook</option>
+                        <option value="ntfy">🔔 ntfy</option>
                         <option value="webhook">🔗 Generic Webhook</option>
                     </select>
                 </div>
@@ -243,6 +249,46 @@ var JEN_CHANNELS = {
                 </div>
             </div>
 
+            <!-- ntfy fields -->
+            <div id="fields-ntfy" style="display:none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>ntfy Server URL</label>
+                        <input type="text" name="ntfy_url" placeholder="https://ntfy.sh">
+                        <div class="form-hint">Use https://ntfy.sh for the public server, or your self-hosted URL</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Topic</label>
+                        <input type="text" name="ntfy_topic" placeholder="jen-alerts">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Access Token (optional)</label>
+                        <input type="password" name="ntfy_token" placeholder="(for protected topics)">
+                    </div>
+                    <div class="form-group">
+                        <label>Priority</label>
+                        <select name="ntfy_priority">
+                            <option value="min">Min</option>
+                            <option value="low">Low</option>
+                            <option value="default" selected>Default</option>
+                            <option value="high">High</option>
+                            <option value="urgent">Urgent</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Discord fields -->
+            <div id="fields-discord" style="display:none;">
+                <div class="form-group">
+                    <label>Discord Webhook URL</label>
+                    <input type="text" name="discord_webhook" placeholder="https://discord.com/api/webhooks/...">
+                    <div class="form-hint">Server Settings → Integrations → Webhooks → New Webhook → Copy URL</div>
+                </div>
+            </div>
+
             <!-- Alert types -->
             <div class="form-group" style="margin-top:16px;">
                 <label>Alert Types to Send</label>
@@ -268,7 +314,7 @@ var JEN_CHANNELS = {
 const ALERT_TYPE_LABELS = {{ alert_type_labels | tojson }};
 
 function showChannelFields(type) {
-    ['telegram','email','slack','webhook'].forEach(t => {
+    ['telegram','email','slack','webhook','ntfy','discord'].forEach(t => {
         const el = document.getElementById('fields-' + t);
         if (el) el.style.display = t === type ? 'block' : 'none';
     });
@@ -325,6 +371,12 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes) {
     } else if (ctype === 'webhook') {
         const wEl = document.querySelector('[name=webhook_url]');
         if (wEl) wEl.value = cfg.webhook_url || '';
+    } else if (ctype === 'ntfy') {
+        const u = document.querySelector('[name=ntfy_url]'); if(u) u.value = cfg.url || 'https://ntfy.sh';
+        const t = document.querySelector('[name=ntfy_topic]'); if(t) t.value = cfg.topic || '';
+        const p = document.querySelector('[name=ntfy_priority]'); if(p) p.value = cfg.priority || 'default';
+    } else if (ctype === 'discord') {
+        const d = document.querySelector('[name=discord_webhook]'); if(d) d.value = cfg.webhook_url || '';
     } else if (ctype === 'email') {
         const fields = {smtp_host:'smtp_host',smtp_port:'smtp_port',smtp_user:'smtp_user',from_addr:'from_addr',to_addr:'to_addr'};
         Object.entries(fields).forEach(([cfgKey, name]) => {
