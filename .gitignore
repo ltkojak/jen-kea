@@ -12,5 +12,5 @@ ssl/
 # SSH keys
 ssh/
 
-# Static uploads
-static/favicon.ico
+# Custom icons (user-uploaded, not part of the repo)
+static/icons/custom/

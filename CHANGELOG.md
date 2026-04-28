@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.5.3] - 2026-04-27
+
+### Added
+- Default favicon.ico shipped with Jen — teal circle with white "J", transparent background, available in 16×16 through 256×256. Eliminates blank browser tab icon on fresh installs.
+
+### Fixed
+- Removed `static/favicon.ico` from `.gitignore` and `.dockerignore` so the default favicon is tracked and included in Docker builds. User-uploaded replacements via Settings still work as before.
+
+## [2.5.2] - 2026-04-27
+
+### Security
+- Replaced SHA-256 password hashing with werkzeug `pbkdf2:sha256` (salted, iterated). Existing users are automatically migrated to the new hash on their next successful login — no manual database changes required.
+
+### Fixed
+- Bare `except:` clauses in alert channel JSON parsing replaced with `except (json.JSONDecodeError, ValueError)`
+- Default DDNS log path was still `kea-ddns-technitium.log` — changed to `kea-ddns.log`
+
+### Updated
+- `docs/release-notes.md` — 2.5.2 entry added
+
 ## [2.5.1] - 2026-04-27
 
 ### Added

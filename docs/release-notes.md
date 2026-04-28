@@ -2,6 +2,28 @@
 
 ---
 
+## Version 2.5.3 — April 2026
+
+### Default Favicon
+Jen now ships with a default favicon — a teal circle with a white "J", available in 16×16 through 256×256 resolution. Fresh installs no longer show a blank browser tab icon.
+
+The favicon can still be replaced via **Settings → Appearance → Upload Favicon**. The default is tracked in the repository; user-uploaded replacements are gitignored as before.
+
+---
+
+## Version 2.5.2 — April 2026
+
+### Security Fix — Password Hashing
+Passwords were previously stored as plain SHA-256 hashes — no salt, fast to brute-force. They are now stored using werkzeug's `pbkdf2:sha256` with a random salt and 260,000 iterations.
+
+**Migration is automatic and seamless.** Existing users do not need to change their passwords. On each successful login, Jen detects a legacy hash and silently upgrades it to the new format. No manual database changes are required.
+
+### Bug Fixes
+- Default DDNS log path hardcoded as `kea-ddns-technitium.log` — changed to `kea-ddns.log`
+- Bare `except:` clauses in alert channel config parsing replaced with specific exception types
+
+---
+
 ## Version 2.5.1 — April 2026
 
 ### Additional DNS Providers

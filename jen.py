@@ -39,11 +39,12 @@ import logging
 from datetime import datetime, timezone
 from functools import wraps
 from werkzeug.serving import make_server
+from werkzeug.security import generate_password_hash, check_password_hash
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.5.1"
+JEN_VERSION = "2.5.3"
 
 # ─────────────────────────────────────────
 # App setup
@@ -204,7 +205,7 @@ FAVICON_PATH = "/opt/jen/static/favicon.ico"
 STATIC_DIR   = "/opt/jen/static"
 NAV_LOGO_PATH = "/opt/jen/static/nav_logo"  # no extension — we detect it
 SSH_KEY_PATH = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
-DDNS_LOG     = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns-technitium.log")
+DDNS_LOG     = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
 
 def ssl_configured():
     return os.path.exists(SSL_CERT) and os.path.exists(SSL_KEY)
@@ -651,7 +652,20 @@ def init_jen_db():
         db.close()
 
 def hash_password(p):
-    return hashlib.sha256(p.encode()).hexdigest()
+    """Hash a password using werkzeug pbkdf2-sha256 (salted, iterated)."""
+    return generate_password_hash(p, method="pbkdf2:sha256")
+
+def verify_password(stored_hash, provided_password):
+    """
+    Verify a password against a stored hash.
+    Supports both legacy SHA-256 (plain hex) and new pbkdf2 hashes for migration.
+    """
+    if stored_hash and stored_hash.startswith("pbkdf2:"):
+        return check_password_hash(stored_hash, provided_password)
+    else:
+        # Legacy SHA-256 — accept and flag for upgrade
+        import hashlib
+        return stored_hash == hashlib.sha256(provided_password.encode()).hexdigest()
 
 # ─────────────────────────────────────────
 # Rate limiting
@@ -2693,8 +2707,8 @@ def login():
             db = get_jen_db()
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, username, role, session_timeout FROM users WHERE username=%s AND password=%s",
-                    (username, hash_password(password))
+                    "SELECT id, username, role, session_timeout, password FROM users WHERE username=%s",
+                    (username,)
                 )
                 row = cur.fetchone()
             db.close()
@@ -2703,7 +2717,21 @@ def login():
             flash("Database error. Please try again.", "error")
             return render_template("login.html", jen_version=JEN_VERSION, prefill_username=username)
 
-        if row:
+        if row and verify_password(row["password"], password):
+            # Upgrade legacy SHA-256 hash to pbkdf2 on successful login
+            if row["password"] and not row["password"].startswith("pbkdf2:"):
+                try:
+                    db = get_jen_db()
+                    with db.cursor() as cur:
+                        cur.execute("UPDATE users SET password=%s WHERE id=%s",
+                                    (hash_password(password), row["id"]))
+                    db.commit()
+                    db.close()
+                    logger.info(f"Upgraded password hash for user {username} to pbkdf2")
+                except Exception as e:
+                    logger.error(f"Password hash upgrade error: {e}")
+            clear_login_attempts(ip, username)
+            user = User(row["id"], row["username"], row["role"], row["session_timeout"])
             clear_login_attempts(ip, username)
             user = User(row["id"], row["username"], row["role"], row["session_timeout"])
 
@@ -3811,10 +3839,10 @@ def settings_alerts():
             for ch in channels:
                 if isinstance(ch.get("config"), str):
                     try: ch["config"] = json.loads(ch["config"])
-                    except: ch["config"] = {}
+                    except (json.JSONDecodeError, ValueError): ch["config"] = {}
                 if isinstance(ch.get("alert_types"), str):
                     try: ch["alert_types"] = json.loads(ch["alert_types"])
-                    except: ch["alert_types"] = []
+                    except (json.JSONDecodeError, ValueError): ch["alert_types"] = []
             cur.execute("SELECT alert_type, template_text FROM alert_templates")
             for row in cur.fetchall():
                 templates[row["alert_type"]] = row["template_text"]
@@ -5237,9 +5265,10 @@ def change_password():
     try:
         db = get_jen_db()
         with db.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE id=%s AND password=%s",
-                        (current_user.id, hash_password(current_pw)))
-            if not cur.fetchone():
+            cur.execute("SELECT id, password FROM users WHERE id=%s",
+                        (current_user.id,))
+            row = cur.fetchone()
+            if not row or not verify_password(row["password"], current_pw):
                 flash("Current password is incorrect.", "error")
                 db.close()
                 return redirect(url_for("users"))

@@ -6,6 +6,5 @@ jen.config
 __pycache__/
 *.pyc
 .git/
-static/favicon.ico
 /etc/jen/
 static/icons/custom/
