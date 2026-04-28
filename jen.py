@@ -44,7 +44,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.6.7"
+JEN_VERSION = "2.7.4"
 
 # ─────────────────────────────────────────
 # App setup

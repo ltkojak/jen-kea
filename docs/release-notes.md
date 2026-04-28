@@ -2,6 +2,20 @@
 
 ---
 
+## Version 2.7.0 — April 2026
+
+### Professional Installer Overhaul
+
+Complete rewrite of `install.sh` and `uninstall.sh` with a BBS/ANSI terminal aesthetic.
+
+**install.sh flags:** `--upgrade`, `--configure`, `--repair`, `--unattended`, `--docker`
+
+Fresh install wizard covers: Kea API (with live connection test), Kea DB, Jen DB, admin password, subnets, SSH, DDNS (Technitium/Pi-hole/AdGuard/SSH), ports. Upgrade mode shows version transition and prompts before proceeding. Post-install summary in a bordered ANSI box.
+
+**uninstall.sh:** Three-level removal — app only / app + config / full wipe. Full wipe requires typing `DELETE`. SSL certs, SSH keys, and backups preserved by default.
+
+---
+
 ## Version 2.6.2 — April 2026
 
 ### Code Modularization — Phase 2 (Complete)

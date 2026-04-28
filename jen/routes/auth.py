@@ -26,6 +26,7 @@ from jen.config import init_extensions_from_config, load_config
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+from jen.models.user import User
 import jen.services.kea as __kea
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp

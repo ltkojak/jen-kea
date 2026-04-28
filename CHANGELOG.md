@@ -1,5 +1,58 @@
 # Changelog
 
+## [2.7.4] - 2026-04-29
+
+### Fixed
+- Login 500 error: `name 'User' is not defined` in `auth.py` — `User` class was used directly but never imported from `jen.models.user`. Added `from jen.models.user import User`.
+- Login error: `Data too long for column 'password'` — werkzeug 3.x changed its default hash method from `pbkdf2:sha256` (103 chars) to `scrypt` (162 chars), exceeding the `VARCHAR(256)` column. Widened schema to `VARCHAR(512)` and added a startup migration that ALTERs the column on existing installations automatically.
+
+## [2.7.3] - 2026-04-29
+
+### Fixed
+- Upgrade mode version transition arrow `→` was thin and hard to read in terminal fonts. Replaced with `==>` in bold cyan between yellow old version and bold green new version, making the transition clearly visible.
+
+## [2.7.2] - 2026-04-29
+
+### Fixed
+- Existing version showed `v—` or `unknown` — `run.py` only imports `JEN_VERSION` from the `jen` package, it doesn't define it, so using it as the version source always returned empty. Installer now reads `jen/__init__.py` as the canonical source (falling back to `jen.py` for pre-2.6 installs). Version pattern tightened to `"[0-9]+\.[0-9]+\.[0-9]+"` to avoid matching non-version strings.
+- Blank line before `[OK] Keeping existing configuration` was inserted into the wrong location in two of the three code paths (inside a `case` pattern and before a `&&` continuation), causing a bash syntax error. Fixed all three paths correctly.
+
+## [2.7.1] - 2026-04-29
+
+### Fixed
+- Box borders misaligned — ANSI escape codes inflate raw string length causing manual space padding to land in the wrong place. Replaced all hand-padded box lines with a `_box_line()` helper that measures visible character width (stripping ANSI, handling UTF-8 multibyte chars) and pads to exactly 54 inner chars. All box lines now render at exactly 58 visible characters regardless of content or colour codes.
+- `vunknown` in upgrade mode banner — version detection regex included the surrounding quotes but `tr -d '"'` wasn't stripping a leading `v` that appeared in some grep outputs. Added `v` to the tr delete set.
+- `prompt_yn` now loops on invalid input — only `y`, `Y`, `yes`, `n`, `N`, `no`, or Enter (uses default) are accepted. Any other character re-prompts with a message.
+- Config mode choice now loops on invalid input — only `1`, `2`, `3`, or Enter (defaults to `1`) are accepted. Any other input shows an error and re-prompts.
+- Added blank line before `[OK] Keeping existing configuration` so it doesn't appear smashed against the menu.
+
+## [2.7.0] - 2026-04-29
+
+### Changed — Professional Installer Overhaul
+
+Complete rewrite of `install.sh` and `uninstall.sh`.
+
+**install.sh — new features:**
+
+- BBS/ANSI terminal aesthetic — teal block banner, spinner animations, coloured status indicators, bordered summary box
+- Auto-detects fresh install vs upgrade — no flags needed for the common case
+- Flag system: `--upgrade` (non-interactive upgrade), `--configure` (re-run wizard only), `--repair` (reinstall files, keep config), `--unattended` (fully silent for CI/CD), `--docker` (Docker path)
+- Fresh install wizard: live connection tests against Kea API, Kea DB, and Jen DB with pass/fail shown inline; admin password set during install (no more default `admin/admin`)
+- DDNS wizard covers all four providers: Technitium, Pi-hole, AdGuard, SSH/Bind9
+- Spinner animations on slow operations (apt-get, pip, connection tests, file copy)
+- Post-install summary in a bordered ANSI box: URL, login, config path, log command, next steps
+- Upgrade mode shows version transition (e.g. `2.6.7 → 2.7.0`)
+- Repair mode reinstalls files and restarts service without touching config
+
+**uninstall.sh — new features:**
+
+- Matching BBS/ANSI aesthetic with red theme
+- Shows all installed components and their paths before asking anything
+- Three-level removal: app only (default) / app + config / full wipe
+- Full wipe requires typing `DELETE` to confirm
+- Preserves SSL certs, SSH keys, and backups by default so reinstall is painless
+- Detects installed version and shows current service status
+
 ## [2.6.7] - 2026-04-29
 
 ### Fixed — Offline audit pass (2.6.x close-out)

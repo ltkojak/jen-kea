@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.6.7"
+JEN_VERSION = "2.7.4"
 
 # ── Login manager (module-level so decorators can reference it) ───────────────
 login_manager = LoginManager()

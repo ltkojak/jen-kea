@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Internet Management Console for ISC Kea DHCP"
-LABEL version="2.6.7"
+LABEL version="2.7.4"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1

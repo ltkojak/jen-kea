@@ -61,7 +61,7 @@ def init_jen_db() -> None:
                 CREATE TABLE IF NOT EXISTS users (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     username VARCHAR(100) UNIQUE NOT NULL,
-                    password VARCHAR(256) NOT NULL,
+                    password VARCHAR(512) NOT NULL,
                     role ENUM('admin','viewer') NOT NULL DEFAULT 'viewer',
                     session_timeout INT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -326,6 +326,17 @@ def init_jen_db() -> None:
                           json.dumps({"token": token, "chat_id": chat_id}),
                           json.dumps(alert_types)))
                     print("Migrated legacy Telegram settings to alert_channels table.")
+
+        # ── Migration: widen password column for werkzeug 3.x scrypt hashes ─
+        with db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM users LIKE 'password'")
+            col = cur.fetchone()
+            if col and 'varchar(256)' in str(col.get('Type', '')).lower():
+                cur.execute(
+                    "ALTER TABLE users MODIFY COLUMN password VARCHAR(512) NOT NULL"
+                )
+                db.commit()
+                logger.info("Migration: widened users.password to VARCHAR(512)")
 
         db.commit()
     finally:
