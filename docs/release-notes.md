@@ -2,6 +2,75 @@
 
 ---
 
+## Version 2.6.2 — April 2026
+
+### Code Modularization — Phase 2 (Complete)
+
+All 104 routes migrated from the `jen.py` monolith into 14 Flask Blueprint modules. The service entry point changes from `jen.py` to `run.py`.
+
+**No changes to any feature, URL, API, or configuration.**
+
+**Entry point change:** The systemd service now runs `python3 /opt/jen/run.py`. This is handled automatically by the installer — no manual changes needed.
+
+**14 route blueprints created:**
+
+| Blueprint | Routes |
+|---|---|
+| `api.py` | REST API v1 endpoints, API key management |
+| `auth.py` | Login, logout |
+| `dashboard.py` | Dashboard, stats, Prometheus metrics |
+| `ddns.py` | DDNS status page |
+| `devices.py` | Device inventory |
+| `leases.py` | Leases, IP map |
+| `mfa_routes.py` | MFA enrollment, verification, trusted devices |
+| `reports.py` | Reports |
+| `reservations.py` | Reservations, bulk operations |
+| `search.py` | Global search, saved searches |
+| `servers.py` | Kea server management |
+| `settings.py` | All Settings pages |
+| `subnets.py` | Subnet view and editing |
+| `users.py` | User management, profile |
+
+With this release, the `jen/` package is complete. `jen.py` is retained for reference but is no longer executed. All future development happens in the modular package.
+
+---
+
+## Version 2.6.1 — April 2026
+
+### Fixed
+- `install.sh` was not copying the `jen/` package directory or `run.py` to `/opt/jen/` — the modularization introduced in 2.6.0 would have been silently absent on all installs and upgrades
+- Backup and rollback updated to include the `jen/` package
+- Post-install verification now confirms all 9 package modules import correctly
+
+---
+
+## Version 2.6.0 — April 2026
+
+### Code Modularization — Phase 1
+
+This release introduces the `jen/` Python package alongside the existing `jen.py` monolith. All behaviour is identical — this is a structural refactor that sets up the foundation for route blueprint migration in 2.7.x and the full 3.0 rewrite.
+
+**No changes to any feature, UI, API, or configuration.**
+
+**New package layout:**
+
+| Module | Contents |
+|---|---|
+| `jen/extensions.py` | Shared state: cfg, KEA_SERVERS, SUBNET_MAP, all globals |
+| `jen/config.py` | Config loading, writing, subnet map parsing |
+| `jen/models/db.py` | Database connections, schema init, migrations |
+| `jen/models/user.py` | User model, password hashing, audit logging |
+| `jen/services/kea.py` | Kea API, HA detection, active server routing |
+| `jen/services/alerts.py` | Alert channels, templates, background monitor |
+| `jen/services/fingerprint.py` | OUI database, device classification, icons |
+| `jen/services/mfa.py` | TOTP, backup codes, trusted devices |
+| `jen/services/auth.py` | Input validators, rate limiting |
+| `run.py` | New entry point |
+
+**For operators:** Nothing changes. Install and upgrade work exactly as before. The service still runs `python3 /opt/jen/jen.py`.
+
+---
+
 ## Version 2.5.10 — April 2026
 
 ### Documentation

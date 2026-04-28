@@ -35,7 +35,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="2.5.10"
+JEN_VERSION="2.6.7"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"
@@ -525,8 +525,14 @@ backup_existing() {
         success "Backed up jen.py to ${BACKUP_DIR}/jen.py.${BACKUP_TS}.bak"
     fi
 
+    # Back up jen/ package if it exists
+    if [[ -d "$INSTALL_DIR/jen" ]]; then
+        cp -r "$INSTALL_DIR/jen" "${BACKUP_DIR}/jen.${BACKUP_TS}.bak"
+    fi
+
     ROLLBACK_JEN="${BACKUP_DIR}/jen.py.${BACKUP_TS}.bak"
-    export ROLLBACK_JEN
+    ROLLBACK_PKG="${BACKUP_DIR}/jen.${BACKUP_TS}.bak"
+    export ROLLBACK_JEN ROLLBACK_PKG
 }
 
 # ─────────────────────────────────────────
@@ -536,6 +542,10 @@ rollback() {
     if [[ -n "${ROLLBACK_JEN:-}" && -f "$ROLLBACK_JEN" ]]; then
         warn "Rolling back to previous jen.py..."
         cp "$ROLLBACK_JEN" "$INSTALL_DIR/jen.py"
+        if [[ -n "${ROLLBACK_PKG:-}" && -d "$ROLLBACK_PKG" ]]; then
+            rm -rf "$INSTALL_DIR/jen"
+            cp -r "$ROLLBACK_PKG" "$INSTALL_DIR/jen"
+        fi
         systemctl restart jen 2>/dev/null || true
         warn "Rollback complete. Previous version restored."
     fi
@@ -556,6 +566,18 @@ install_files() {
     # Copy application files
     cp "$SCRIPT_DIR/jen.py" "$INSTALL_DIR/jen.py"
     success "Installed jen.py"
+
+    # Copy jen/ package (modular code introduced in v2.6.0)
+    if [ -d "$SCRIPT_DIR/jen" ]; then
+        mkdir -p "$INSTALL_DIR/jen"
+        cp -r "$SCRIPT_DIR/jen/." "$INSTALL_DIR/jen/"
+        success "Installed jen/ package ($(find "$INSTALL_DIR/jen" -name '*.py' | wc -l) modules)"
+    fi
+
+    # Copy run.py entry point (used from v2.7.x onwards)
+    if [ -f "$SCRIPT_DIR/run.py" ]; then
+        cp "$SCRIPT_DIR/run.py" "$INSTALL_DIR/run.py"
+    fi
 
     cp -r "$SCRIPT_DIR/templates/." "$INSTALL_DIR/templates/"
     success "Installed templates ($(ls "$SCRIPT_DIR/templates/" | wc -l) files)"
@@ -656,6 +678,43 @@ else:
         warn "Rolling back installation..."
         # Rollback is handled by the outer error trap
         exit 1
+    fi
+
+    # Verify jen/ package modules imported cleanly
+    if [[ -d "$INSTALL_DIR/jen" ]]; then
+        MODULE_CHECK=$(python3 -c "
+import sys
+sys.path.insert(0, '$INSTALL_DIR')
+errors = []
+modules = [
+    'jen.extensions',
+    'jen.config',
+    'jen.models.db',
+    'jen.models.user',
+    'jen.services.kea',
+    'jen.services.alerts',
+    'jen.services.fingerprint',
+    'jen.services.mfa',
+    'jen.services.auth',
+]
+for m in modules:
+    try:
+        __import__(m)
+    except ImportError as e:
+        errors.append(f'{m}: {e}')
+    except Exception:
+        pass  # runtime errors (e.g. no config file) are expected at install time
+if errors:
+    for e in errors: print(e)
+    sys.exit(1)
+else:
+    print(len(modules))
+" 2>&1)
+        if [[ $? -eq 0 ]]; then
+            success "Package: jen/ — $MODULE_CHECK modules verified ✓"
+        else
+            warn "Package: jen/ module check had issues (non-fatal):\n$MODULE_CHECK"
+        fi
     fi
 
     # Get port from config

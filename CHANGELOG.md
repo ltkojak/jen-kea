@@ -1,5 +1,104 @@
 # Changelog
 
+## [2.6.7] - 2026-04-29
+
+### Fixed — Offline audit pass (2.6.x close-out)
+Full static analysis of all 14 blueprints before declaring 2.6.x complete. Found and fixed 8 issues:
+
+- `mfa_routes.py`: `load_user()` called bare — the login_manager user loader isn't directly importable from blueprints. Added a local `_load_user()` helper that queries the DB directly, identical logic to the registered loader.
+- `dashboard.py`, `devices.py`, `leases.py`, `reservations.py`: `DEVICE_TYPE_DISPLAY` used but never imported from `jen.services.fingerprint`. Added explicit import alongside the `__fp` alias in each file.
+
+**2.6.x is now complete.** All 14 blueprints pass a full targeted audit: zero bare `cfg`, zero unnamespaced `url_for`, zero missing service constant imports, zero missing wrapper functions, all 14 blueprints and 33 templates syntax-valid.
+
+## [2.6.6] - 2026-04-29
+
+### Fixed
+- Settings → Alerts 500 error: `DEFAULT_TEMPLATES` and `ALERT_TYPE_LABELS` used in `settings.py` but never imported from `jen.services.alerts` — added explicit import
+- Alert background thread error: `__get_global_setting` called in `alerts.py` but the lazy wrapper function was never defined — added missing wrapper
+
+## [2.6.5] - 2026-04-29
+
+### Fixed — Full blueprint audit pass
+Complete audit of all 13 route blueprints identified 154 issues in two categories:
+
+**Bare `cfg` references (46):** `cfg` was used directly in `ddns.py`, `servers.py`, `settings.py`, and `dashboard.py` instead of `extensions.cfg`. These caused 500 errors on Servers, DDNS, Settings → Alerts, and Settings → Infrastructure pages.
+
+**Unnamespaced `url_for` calls (108):** All `url_for('endpoint')` calls used pre-blueprint bare names. Flask blueprints require `url_for('blueprint.endpoint')`. Fixed across all 13 blueprints — `auth`, `dashboard`, `devices`, `leases`, `mfa_routes`, `reports`, `reservations`, `search`, `servers`, `settings`, `subnets`, `users`.
+
+Note: `subnets.py` contains a local variable also named `cfg` (the Kea config-get result dict) — those `.get()` calls are correct as-is and were not changed.
+
+## [2.6.4] - 2026-04-29
+
+### Fixed
+- Navigation sub-tabs completely missing after blueprint migration — all `request.endpoint` checks in `base.html` used bare endpoint names (e.g. `'leases'`) but Flask blueprints namespace endpoints as `blueprint.function` (e.g. `'leases.leases'`). Updated all 20+ endpoint checks throughout the template.
+
+## [2.6.3] - 2026-04-29
+
+### Fixed
+- `get_manufacturer_icon_url` and `DEVICE_TYPE_DISPLAY` not resolved in dashboard, leases, reservations, and devices blueprints — the automated transformation script missed these because they appear as keyword argument values rather than standalone calls
+- `get_global_setting` not resolved in `alerts.py` background thread — the lazy wrapper was defined but the calls still used the bare name
+
+## [2.6.2] - 2026-04-28
+
+### Changed — Code Modularization (Phase 2 — Complete)
+All 104 routes migrated from `jen.py` into 14 Flask Blueprint modules under `jen/routes/`. The `jen.service` systemd unit now runs `run.py` instead of `jen.py`. `jen.py` is retained as a compatibility reference but is no longer the entry point.
+
+**14 route blueprints:**
+- `jen/routes/api.py` — REST API v1 + API key management
+- `jen/routes/auth.py` — login, logout
+- `jen/routes/dashboard.py` — dashboard, stats, metrics, Prometheus
+- `jen/routes/ddns.py` — DDNS status page
+- `jen/routes/devices.py` — device inventory
+- `jen/routes/leases.py` — leases, IP map
+- `jen/routes/mfa_routes.py` — MFA enrollment and verification
+- `jen/routes/reports.py` — reports
+- `jen/routes/reservations.py` — reservations including bulk operations
+- `jen/routes/search.py` — global search and saved searches
+- `jen/routes/servers.py` — Kea server management
+- `jen/routes/settings.py` — all Settings pages
+- `jen/routes/subnets.py` — subnet view and editing
+- `jen/routes/users.py` — user management and profile
+
+**Entry point change:**
+`ExecStart=/usr/bin/python3 /opt/jen/run.py` (was `jen.py`)
+
+**No behaviour changes.** All routes, URLs, and features are identical.
+
+## [2.6.1] - 2026-04-28
+
+### Fixed
+- `install.sh` was not copying the new `jen/` package directory or `run.py` to `/opt/jen/` — the modularization would have been silently missing on all installs
+- Backup now also snapshots the `jen/` package before upgrading so rollback can restore it
+- Rollback now also restores the `jen/` package alongside `jen.py`
+
+### Added
+- Post-install verification now imports all 9 `jen/` package modules and reports success or any import issues
+
+## [2.6.0] - 2026-04-28
+
+### Changed — Code Modularization (Phase 1)
+`jen.py` remains the functional monolith and is fully intact. A parallel `jen/` package has been introduced alongside it with all business logic extracted into proper modules. No behaviour changes — this is a structural refactor only.
+
+**New package structure:**
+- `jen/__init__.py` — application factory (`create_app()`)
+- `jen/extensions.py` — shared state hub (cfg, KEA_SERVERS, SUBNET_MAP, all globals)
+- `jen/config.py` — config loading, writing, subnet map parsing
+- `jen/models/db.py` — database connections and schema init/migrations
+- `jen/models/user.py` — User model, password hashing, audit logging, global settings
+- `jen/services/kea.py` — Kea API communication, HA detection, active server routing
+- `jen/services/alerts.py` — alert channels, templates, check_alerts background loop
+- `jen/services/fingerprint.py` — OUI database, device classification, manufacturer icons
+- `jen/services/mfa.py` — TOTP, backup codes, trusted devices
+- `jen/services/auth.py` — input validators, login rate limiting
+- `jen/routes/` — blueprint directory (empty in 2.6.x, populated in 2.7.x)
+- `run.py` — new entry point (loads monolith via compatibility shim for 2.6.x)
+
+**Why this approach:**
+The `extensions.py` singleton pattern means all modules share the same global state without circular imports. Any module that writes `extensions.KEA_SERVERS = new_value` has that change visible to every other module immediately, because Python module objects are singletons.
+
+**What's next (2.7.x):**
+Routes will be migrated from `jen.py` into Blueprint modules one section at a time. Once complete, `jen.py` becomes `run.py` calling `create_app()` and the monolith is retired.
+
 ## [2.5.10] - 2026-04-28
 
 ### Added
