@@ -332,3 +332,61 @@ sudo systemctl status isc-kea-dhcp4-server
 | Kea DHCP | systemd journal | `sudo journalctl -u isc-kea-dhcp4-server -f` |
 | Kea Control Agent | systemd journal | `sudo journalctl -u isc-kea-ctrl-agent -f` |
 | DDNS updates | File | `tail -f /var/log/kea/kea-ddns-technitium.log` |
+
+---
+
+## High Availability
+
+### Active node not being detected correctly
+
+Jen uses `ha-heartbeat` to identify the active node. Check:
+
+1. Both servers are reachable from Jen (test API URLs manually)
+2. HA mode is set in **Settings → Infrastructure → High Availability** and matches `ha-mode` in `kea-dhcp4.conf`
+3. The `role` field is set correctly for each server — the active node must have `role = primary`
+4. Kea HA is actually running — check `systemctl status isc-kea-dhcp4-server` on both nodes
+
+If `ha-heartbeat` isn't supported by your Kea version, Jen falls back to the first reachable server.
+
+### HA failover alerts not firing
+
+1. Confirm an alert channel is configured with the **HA failover / state change** alert type enabled
+2. Check the Jen logs for `ha-heartbeat` errors: `sudo journalctl -u jen -n 50 --no-pager`
+3. HA state monitoring only runs when multiple servers are configured — single server setups don't query `ha-heartbeat`
+
+### Servers page shows "HA mode not configured" warning
+
+Go to **Settings → Infrastructure → High Availability** and set the HA mode to match your Kea configuration. If you're not running HA, remove the extra server from **Additional Servers** to clear the warning.
+
+---
+
+## Mobile
+
+### Pages are slow to respond on iPhone
+
+If tapping requires two taps or navigation is delayed, you are running a version before 2.5.7. Upgrade to v2.5.7 or later.
+
+### Hamburger menu not opening
+
+Ensure JavaScript is enabled in Safari. The hamburger toggle requires JS.
+
+### Table data is hard to read on iPhone
+
+Tables reflow into per-row cards on iPhone as of v2.5.4. If you're seeing a wide horizontal table, you may be on an older version or have a browser zoom level set that exceeds the mobile breakpoint.
+
+---
+
+## Alert Channels
+
+### ntfy alerts not arriving
+
+1. Confirm the ntfy server URL is correct (include `https://` or `http://`)
+2. Test the channel using the **Test** button in Settings → Alerts — check the response message
+3. For self-hosted ntfy, ensure the Jen server can reach your ntfy instance on the configured port
+4. For protected topics, confirm the access token is correct
+
+### Discord alerts not arriving
+
+1. Confirm the webhook URL is valid — it should start with `https://discord.com/api/webhooks/`
+2. Test the channel using the **Test** button
+3. Check that the Discord channel the webhook points to still exists and hasn't been deleted

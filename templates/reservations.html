@@ -96,30 +96,30 @@ function saveCurrentFilter() {
 
 <div class="card" style="padding:0;">
 <div class="table-wrap">
-<table class="sortable">
+<table class="sortable mobile-cards">
     <thead><tr>
         <th><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile"><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th>DNS Override</th>
-        <th>Notes</th>
-        {% if current_user.role == 'admin' %}<th>Actions</th>{% endif %}
+        <th class="hide-tablet">DNS Override</th>
+        <th class="hide-tablet">Notes</th>
+        {% if current_user.role == 'admin' %}<th></th>{% endif %}
     </tr></thead>
     <tbody>
     {% for h in hosts %}
     <tr>
-        <td class="mono">{{ h.ip }}</td>
-        <td style="white-space:nowrap;">
+        <td data-label="IP" class="mono">{{ h.ip }}</td>
+        <td data-label="Hostname" style="white-space:nowrap;">
             {{ h.hostname or '—' }}
             {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
         </td>
-        <td class="mono">{{ h.mac }}</td>
-        <td><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
-        <td class="mono" style="color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
-        <td style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
+        <td data-label="MAC" class="mono hide-mobile">{{ h.mac }}</td>
+        <td data-label="Subnet"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
+        <td data-label="DNS" class="mono hide-tablet" style="color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
+        <td data-label="Notes" class="hide-tablet" style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
         {% if current_user.role == 'admin' %}
-        <td style="white-space:nowrap;">
+        <td data-label="">
             <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary" title="Edit">✏</a>
             <form method="POST" action="/reservations/delete/{{ h.host_id }}" style="display:inline;" onsubmit="return confirm('Delete reservation for {{ h.ip }}?')">
                 <button type="submit" class="btn btn-sm btn-danger" title="Delete">✕</button>

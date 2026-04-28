@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{% block title %}Jen{% endblock %} — Jen</title>
     <link rel="icon" href="/favicon.ico">
     <style>
@@ -23,20 +23,39 @@
         a { color: var(--primary); text-decoration: none; }
         a:hover { text-decoration: underline; }
 
+        /* ── Fix iOS 300ms double-tap delay on ALL interactive elements ── */
+        a, button, .btn, input, select, textarea, label,
+        th, td, .section-tab, .nav a.nav-link, .pagination a,
+        .nav-avatar, .theme-toggle, [onclick], [role="button"] {
+            touch-action: manipulation;
+        }
+
         /* Nav */
         .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; height: 48px; gap: 4px; position: sticky; top: 0; z-index: 100; }
-        .nav-brand { color: var(--primary); font-weight: 700; font-size: 16px; margin-right: 16px; text-decoration: none; }
+        .nav-brand { color: var(--primary); font-weight: 700; font-size: 16px; margin-right: 16px; text-decoration: none; flex-shrink: 0; }
         .nav-brand span { color: var(--text-muted); font-size: 11px; font-weight: 400; display: block; }
-        .nav a.nav-link { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; text-decoration: none; }
+        .nav a.nav-link { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; text-decoration: none; white-space: nowrap; }
         .nav a.nav-link:hover, .nav a.nav-link.active { background: var(--surface2); color: var(--text); text-decoration: none; }
-        .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+        .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
         .kea-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .kea-up { background: var(--success); box-shadow: 0 0 6px var(--success); }
         .kea-down { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 
-        /* Section sub-tabs (used by Management, Network, Settings) */
-        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: 48px; z-index: 99; }
-        .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; }
+        /* Hamburger — hidden on desktop */
+        .nav-hamburger { display: none; background: none; border: none; color: var(--text); font-size: 22px; cursor: pointer; padding: 8px; line-height: 1; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+        /* Mobile nav drawer */
+        .nav-mobile-drawer { display: none; position: fixed; top: 48px; left: 0; right: 0; background: var(--surface); border-bottom: 2px solid var(--border); z-index: 98; transform: translateY(-110%); transition: transform 0.22s ease; padding: 6px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+        .nav-mobile-drawer.open { transform: translateY(0); }
+        .nav-mobile-drawer a { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: var(--text); font-size: 15px; border-bottom: 1px solid var(--border); text-decoration: none; min-height: 52px; touch-action: manipulation; }
+        .nav-mobile-drawer a:last-child { border-bottom: none; }
+        .nav-mobile-drawer a.active { color: var(--primary); background: var(--surface2); }
+        .nav-mobile-drawer a:active { background: var(--surface2); }
+
+        /* Section sub-tabs */
+        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: 48px; z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .section-tabs::-webkit-scrollbar { display: none; }
+        .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; }
         .section-tab:hover { color: var(--text); text-decoration: none; }
         .section-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 
@@ -52,7 +71,7 @@
         .card-title { font-weight: 600; font-size: 14px; }
 
         /* Tables */
-        .table-wrap { overflow-x: auto; }
+        .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
         th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
         td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
@@ -104,8 +123,8 @@
         .util-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
 
         /* Pagination */
-        .pagination { display: flex; align-items: center; gap: 6px; margin-top: 16px; }
-        .pagination a, .pagination span { padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--border); font-size: 12px; }
+        .pagination { display: flex; align-items: center; gap: 6px; margin-top: 16px; flex-wrap: wrap; }
+        .pagination a, .pagination span { padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--border); font-size: 12px; display: inline-flex; align-items: center; min-height: 32px; }
         .pagination a { color: var(--text); }
         .pagination a:hover { background: var(--surface2); text-decoration: none; }
         .pagination .current { background: var(--primary); color: #fff; border-color: var(--primary); }
@@ -128,70 +147,118 @@
         .theme-toggle { background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); padding: 4px 8px; cursor: pointer; font-size: 13px; }
         .theme-toggle:hover { color: var(--text); }
 
-        /* Sortable indicator */
+        /* Sortable */
         th.sort-asc::after { content: ' ↑'; color: var(--primary); }
         th.sort-desc::after { content: ' ↓'; color: var(--primary); }
 
-        /* IP Map */
-        .ip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 4px; }
-        .ip-cell { padding: 5px 8px; border-radius: 4px; font-size: 11px; font-family: monospace; text-align: center; border: 1px solid var(--border); cursor: default; }
-        .ip-free { background: var(--surface2); color: var(--text-muted); }
-        .ip-dynamic { background: #1a2a3a; color: var(--primary); border-color: #00b4d833; }
-        .ip-reserved { background: #1a3a1a; color: var(--success); border-color: #2ecc7133; }
-        .ip-cell:hover { opacity: 0.8; }
+        /* Action bar */
+        .action-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 
-        /* User avatar dropdown */
-        .nav-dd-toggle { display:none; }
-        .nav-dropdown { position:relative; display:inline-block; }
-        .nav-dd-toggle:checked ~ .nav-dropdown-content { display:block; }
+        /* Nav dropdown */
+        .nav-dropdown { position: relative; }
+        .nav-dropdown input[type=checkbox] { display: none; }
         .nav-dropdown-content { display:none; position:absolute; top:calc(100% + 6px); left:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); min-width:180px; box-shadow:0 8px 24px rgba(0,0,0,0.4); z-index:200; overflow:hidden; }
-        .nav-dropdown-right { left:auto; right:0; }
-        .nav-dropdown-content a { display:block; padding:8px 14px; color:var(--text-muted); font-size:13px; text-decoration:none; }
-        .nav-dropdown-content a:hover { background:var(--surface2); color:var(--text); }
-        .nav-dropdown-divider { height:1px; background:var(--border); margin:4px 0; }
-        .nav-dropdown-header { padding:10px 14px 6px; }
+        .nav-dropdown input:checked ~ .nav-dropdown-content { display: block; }
+        .nav-dropdown-content a { display: block; padding: 10px 14px; color: var(--text); font-size: 13px; }
+        .nav-dropdown-content a:hover { background: var(--surface2); text-decoration: none; }
+        .nav-avatar-wrap .nav-dropdown-content { min-width:200px; right: 0; left: auto; }
         .nav-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#0077b6,#00b4d8); color:#fff; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
-        .nav-avatar:hover { opacity:0.9; }
-        .nav-avatar-wrap .nav-dropdown-content { min-width:200px; }
 
-        /* Settings sub-tabs (legacy, kept for compat) */
-        .settings-tabs { display:flex; gap:2px; margin-bottom:24px; border-bottom:2px solid var(--border); }
-        .settings-tab { padding:8px 18px; font-size:13px; font-weight:500; color:var(--text-muted); border-radius:6px 6px 0 0; text-decoration:none; border:1px solid transparent; border-bottom:none; transition:all 0.15s; }
-        .settings-tab:hover { color:var(--text); background:var(--surface2); text-decoration:none; }
-        .settings-tab.active { color:var(--primary); background:var(--surface); border-color:var(--border); margin-bottom:-2px; border-bottom:2px solid var(--surface); }
+        /* ── iPad (769–1024px) ── */
+        @media (max-width: 1024px) and (min-width: 769px) {
+            .hide-tablet { display: none !important; }
+            .container { padding: 16px; }
+            .stat-grid { grid-template-columns: repeat(2, 1fr); }
+        }
 
-        /* Responsive */
+        /* ── Mobile (≤768px) ── */
         @media (max-width: 768px) {
-            .container { padding: 12px 10px; }
-            .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
-            .stat-card { padding: 14px; }
-            .stat-value { font-size: 28px; }
+            /* Nav */
+            .nav { padding: 0 12px; }
+            .nav-links { display: none !important; }
+            .nav-search { display: none !important; }
+            .nav-hamburger { display: flex; }
+            .nav-right { gap: 8px; }
+            .theme-toggle { display: none; }
+            .nav-mobile-drawer { display: block; }
+
+            /* Layout */
+            .container { padding: 10px 12px; }
+            .page-header { margin-bottom: 14px; }
+            .page-header h1 { font-size: 18px; }
+
+            /* Cards */
             .card { padding: 14px; }
             .card-header { flex-wrap: wrap; gap: 8px; }
-            .filter-bar { gap: 6px; }
-            .filter-bar select, .filter-bar input { min-width: 0; flex: 1; }
-            .btn { padding: 8px 12px; font-size: 13px; }
-            .btn-sm { padding: 6px 10px; }
+
+            /* Stat grid */
+            .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+            .stat-card { padding: 14px; }
+            .stat-value { font-size: 28px; }
+
+            /* Forms — 16px prevents iOS auto-zoom on input focus */
+            .form-row { grid-template-columns: 1fr; gap: 12px; }
+            .filter-bar { gap: 8px; }
+            .filter-bar select, .filter-bar input, input[type=text], input[type=password],
+            input[type=email], input[type=number], select, textarea { font-size: 16px; min-width: 0; }
+            .filter-bar select, .filter-bar input { flex: 1; }
+
+            /* Buttons — 44px minimum tap target */
+            .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; }
+            .btn-sm { min-height: 38px; padding: 8px 12px; font-size: 13px; }
+
+            /* Section tabs */
+            .section-tabs { padding: 0 12px; }
+            .section-tab { padding: 10px 12px; font-size: 12px; min-height: 44px; }
+
+            /* Pagination */
+            .pagination a, .pagination span { min-height: 44px; padding: 10px 14px; font-size: 13px; }
+
+            /* Action bar */
+            .action-bar { gap: 8px; }
+
+            /* Table card reflow for mobile-cards class */
+            table.mobile-cards thead { display: none; }
+            table.mobile-cards, table.mobile-cards tbody,
+            table.mobile-cards tr, table.mobile-cards td { display: block; width: 100%; }
+            table.mobile-cards tbody tr {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                margin-bottom: 10px;
+                padding: 10px 14px;
+            }
+            table.mobile-cards tbody tr:last-child { margin-bottom: 0; }
+            table.mobile-cards tbody td {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 7px 0;
+                border-bottom: 1px solid var(--border);
+                font-size: 13px;
+                min-height: 38px;
+                border-left: none; border-right: none;
+            }
+            table.mobile-cards tbody td:last-child { border-bottom: none; padding-bottom: 2px; }
+            table.mobile-cards tbody td::before {
+                content: attr(data-label);
+                font-size: 11px; font-weight: 600; color: var(--text-muted);
+                text-transform: uppercase; letter-spacing: 0.4px;
+                flex-shrink: 0; margin-right: 12px;
+            }
+            table.mobile-cards tbody td[data-label=""] { justify-content: flex-end; }
+            table.mobile-cards tbody td[data-label=""]::before { display: none; }
+            table.mobile-cards tbody td.no-label::before { display: none; }
+
             .hide-mobile { display: none !important; }
-            .action-bar { flex-wrap: wrap; gap: 6px; }
-            .form-row { grid-template-columns: 1fr; }
-            td { padding: 12px 10px; }
-            th { padding: 10px; font-size: 10px; }
-            .page-header h1 { font-size: 18px; }
-            .pagination { flex-wrap: wrap; }
-            .section-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-            .section-tab { padding: 10px 12px; font-size: 12px; }
-        }
-        @media (max-width: 480px) {
-            .stat-grid { grid-template-columns: 1fr; }
         }
 
-        /* Nav scrolls horizontally on small screens */
-        @media (max-width: 768px) {
-            .nav { overflow-x: auto; -webkit-overflow-scrolling: touch; gap: 2px; padding: 0 10px; }
-            .nav-brand { margin-right: 8px; white-space: nowrap; }
-            .nav a.nav-link { padding: 6px 8px; font-size: 12px; white-space: nowrap; }
-            .nav-search { display: none !important; }
+        /* ── Extra small (≤480px) ── */
+        @media (max-width: 480px) {
+            .stat-grid { grid-template-columns: 1fr; }
+            .btn { width: 100%; justify-content: center; }
+            .btn-sm { width: auto; }
+            .action-bar .btn { width: auto; }
         }
     </style>
 </head>
@@ -209,8 +276,8 @@
     </a>
 
     {% if current_user.is_authenticated %}
-    <!-- Desktop nav — flat links, no dropdowns -->
-    <div style="display:flex;align-items:center;gap:2px;flex:1;">
+    <!-- Desktop nav links — hidden on mobile -->
+    <div class="nav-links" style="display:flex;align-items:center;gap:2px;flex:1;">
         <a href="/" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
         <a href="/leases" class="nav-link {% if request.endpoint in ['leases','ipmap','reservations','add_reservation','edit_reservation','devices','reports'] %}active{% endif %}">📋 Management</a>
         <a href="/subnets" class="nav-link {% if request.endpoint in ['subnets','edit_subnet','ddns','servers'] %}active{% endif %}">🌐 Network</a>
@@ -220,10 +287,10 @@
         <a href="/about" class="nav-link {% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
     </div>
 
-    <div class="nav-right" style="display:flex;align-items:center;gap:8px;">
+    <div class="nav-right">
         <span class="kea-status" id="kea-indicator" title="Kea status"></span>
         <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
-        <!-- User avatar dropdown (kept as-is) -->
+        <!-- User avatar dropdown -->
         <div class="nav-dropdown nav-avatar-wrap">
             <input type="checkbox" id="dd-avatar" class="nav-dd-toggle">
             <label for="dd-avatar" class="nav-avatar" style="cursor:pointer;">
@@ -265,9 +332,26 @@
         </form>
     </div>
 
+    <!-- Hamburger button — only visible on mobile -->
+    {% if current_user.is_authenticated %}
+    <button class="nav-hamburger" id="nav-hamburger" aria-label="Open menu" aria-expanded="false">☰</button>
+    {% endif %}
 
     {% endif %}
 </nav>
+
+<!-- Mobile nav drawer — slides down on hamburger tap -->
+{% if current_user.is_authenticated %}
+<div class="nav-mobile-drawer" id="nav-mobile-drawer">
+    <a href="/" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
+    <a href="/leases" class="{% if request.endpoint in ['leases','ipmap','reservations','add_reservation','edit_reservation','devices','reports'] %}active{% endif %}">📋 Management</a>
+    <a href="/subnets" class="{% if request.endpoint in ['subnets','edit_subnet','ddns','servers'] %}active{% endif %}">🌐 Network</a>
+    {% if current_user.role == 'admin' %}
+    <a href="/settings/system" class="{% if request.endpoint in ['settings_system','settings_alerts','settings_infrastructure','users','audit_log','api_keys','api_docs','settings_icons'] %}active{% endif %}">⚙️ Settings</a>
+    {% endif %}
+    <a href="/about" class="{% if request.endpoint == 'about' %}active{% endif %}">ℹ️ About</a>
+</div>
+{% endif %}
 
 <!-- Section sub-tab bars — shown contextually -->
 {% if current_user.is_authenticated %}
@@ -414,12 +498,52 @@ function sortTable(table, col, th) {
         if (routes[kbBuffer]) { window.location.href = routes[kbBuffer]; kbBuffer = ''; }
     });
 
-    // Instant navigation on touch for all nav links (prevents iOS 300ms delay)
-    document.querySelectorAll('.nav a.nav-link').forEach(function(a) {
+    // Hamburger menu toggle
+    var hamburger = document.getElementById('nav-hamburger');
+    var drawer = document.getElementById('nav-mobile-drawer');
+    if (hamburger && drawer) {
+        hamburger.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var open = drawer.classList.toggle('open');
+            hamburger.textContent = open ? '✕' : '☰';
+            hamburger.setAttribute('aria-expanded', open);
+        });
+        // Navigate immediately on touchstart — eliminates iOS 300ms delay on drawer links
+        drawer.querySelectorAll('a').forEach(function(a) {
+            a.addEventListener('touchstart', function(e) {
+                var href = this.getAttribute('href');
+                if (href && href !== '#') {
+                    e.preventDefault();
+                    drawer.classList.remove('open');
+                    hamburger.textContent = '☰';
+                    window.location.href = href;
+                }
+            }, { passive: false });
+            // Also close drawer on regular click (desktop/fallback)
+            a.addEventListener('click', function() {
+                drawer.classList.remove('open');
+                hamburger.textContent = '☰';
+                hamburger.setAttribute('aria-expanded', false);
+            });
+        });
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#nav-hamburger') && !e.target.closest('#nav-mobile-drawer')) {
+                drawer.classList.remove('open');
+                hamburger.textContent = '☰';
+                hamburger.setAttribute('aria-expanded', false);
+            }
+        });
+    }
+
+    // Instant navigation on touchstart for all anchor links — eliminates iOS 300ms delay
+    document.querySelectorAll('a[href]').forEach(function(a) {
         a.addEventListener('touchstart', function(e) {
             var href = this.getAttribute('href');
-            if (href && href !== '#') window.location.href = href;
-        }, { passive: true });
+            if (href && href !== '#' && !href.startsWith('javascript') && !href.startsWith('mailto')) {
+                e.preventDefault();
+                window.location.href = href;
+            }
+        }, { passive: false });
     });
 })();
 </script>

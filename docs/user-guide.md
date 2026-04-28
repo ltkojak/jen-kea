@@ -285,3 +285,44 @@ Go to **Settings → Icons** to manage the brand logos used in device fingerprin
 - **Custom icons** — upload your own SVG to override any bundled icon or add a new manufacturer. Custom icons take priority over bundled ones and survive upgrades.
 
 To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and select an SVG file (max 100KB). The name must match the manufacturer key used in Jen's OUI database. See Settings → Icons for the list of available name keys.
+
+---
+
+## Mobile Access
+
+Jen is fully usable on iPhone and iPad.
+
+### iPhone
+The navigation bar collapses to a hamburger (☰) menu button. Tap it to open the navigation drawer showing Dashboard, Management, Network, Settings, and About. Tapping a section navigates there and reveals the section sub-tabs below the nav bar — the same sub-tabs you see on desktop. All table data reflows into per-row cards on iPhone so there is no horizontal scrolling.
+
+### iPad
+The full desktop navigation is shown. Some lower-priority columns (MAC addresses, timestamps) are hidden on narrower iPad screens to keep tables readable — they are still available on desktop.
+
+### Double-tap
+All interactive elements respond to a single tap. If you previously experienced a delay before navigation, upgrade to v2.5.7 or later.
+
+---
+
+## Alert Channels — ntfy and Discord
+
+### ntfy
+[ntfy](https://ntfy.sh) delivers push notifications to any device with the ntfy app installed.
+
+To add an ntfy channel: go to **Settings → Alerts → Add Channel**, choose **ntfy**, enter your server URL (use `https://ntfy.sh` for the public server or your self-hosted URL), topic name, and optional access token and priority.
+
+### Discord
+To add a Discord channel: go to your Discord server → **Server Settings → Integrations → Webhooks → New Webhook**, copy the webhook URL, then go to **Settings → Alerts → Add Channel**, choose **Discord**, and paste the URL.
+
+---
+
+## Kea Servers and HA
+
+The **Network → Servers** page shows the status of all configured Kea servers. In a High Availability setup it shows:
+
+- Which node is currently **⚡ ACTIVE**
+- The HA mode (hot-standby, load-balancing, passive-backup)
+- The HA state of each node (hot-standby, syncing, partner-down, etc.)
+
+If multiple servers are configured but HA mode is not set, the page shows a warning with a link to configure it.
+
+Configure HA in **Settings → Infrastructure → High Availability**.

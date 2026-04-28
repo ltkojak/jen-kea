@@ -77,30 +77,30 @@ function saveCurrentFilter() {
 
 <div class="card" style="padding:0;">
 <div class="table-wrap">
-<table class="sortable">
+<table class="sortable mobile-cards">
     <thead><tr>
         <th><a href="?sort=ip&dir={{ 'asc' if sort=='ip' and direction=='desc' else 'desc' if sort=='ip' else 'asc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=hostname&dir={{ 'asc' if sort=='hostname' and direction=='desc' else 'desc' if sort=='hostname' else 'asc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=mac&dir={{ 'asc' if sort=='mac' and direction=='desc' else 'desc' if sort=='mac' else 'asc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile"><a href="?sort=mac&dir={{ 'asc' if sort=='mac' and direction=='desc' else 'desc' if sort=='mac' else 'asc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=subnet&dir={{ 'asc' if sort=='subnet' and direction=='desc' else 'desc' if sort=='subnet' else 'asc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=obtained&dir={{ 'asc' if sort=='obtained' and direction=='desc' else 'desc' if sort=='obtained' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired' if show_expired else 'Obtained' }}{% if sort=='obtained' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=expires&dir={{ 'asc' if sort=='expires' and direction=='desc' else 'desc' if sort=='expires' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired At' if show_expired else 'Expires' }}{% if sort=='expires' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        {% if not show_expired and current_user.role == 'admin' %}<th>Actions</th>{% endif %}
+        <th class="hide-mobile"><a href="?sort=obtained&dir={{ 'asc' if sort=='obtained' and direction=='desc' else 'desc' if sort=='obtained' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired' if show_expired else 'Obtained' }}{% if sort=='obtained' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-tablet"><a href="?sort=expires&dir={{ 'asc' if sort=='expires' and direction=='desc' else 'desc' if sort=='expires' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired At' if show_expired else 'Expires' }}{% if sort=='expires' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        {% if not show_expired and current_user.role == 'admin' %}<th></th>{% endif %}
     </tr></thead>
     <tbody>
     {% for l in leases %}
     <tr>
-        <td class="mono">{{ l.ip }}</td>
-        <td style="white-space:nowrap;">
+        <td data-label="IP" class="mono">{{ l.ip }}</td>
+        <td data-label="Hostname" style="white-space:nowrap;">
             {{ l.hostname or '—' }}
             {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
         </td>
-        <td class="mono">{{ l.mac }}</td>
-        <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-        <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%Y-%m-%d %H:%M') if l.obtained else '—' }}</td>
-        <td class="mono" style="color:var(--text-muted);">{{ l.expire.strftime('%Y-%m-%d %H:%M') if l.expire else '—' }}</td>
+        <td data-label="MAC" class="mono hide-mobile">{{ l.mac }}</td>
+        <td data-label="Subnet"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+        <td data-label="{{ 'Expired' if show_expired else 'Obtained' }}" class="mono hide-mobile" style="color:var(--text-muted);">{{ l.obtained.strftime('%Y-%m-%d %H:%M') if l.obtained else '—' }}</td>
+        <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire.strftime('%Y-%m-%d %H:%M') if l.expire else '—' }}</td>
         {% if not show_expired and current_user.role == 'admin' %}
-        <td style="white-space:nowrap;">
+        <td data-label="">
             <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
                class="btn btn-sm btn-success" title="Reserve this IP">📌</a>
             <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return confirm('Release lease for {{ l.ip }}?')">

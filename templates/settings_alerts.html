@@ -58,8 +58,8 @@ var JEN_CHANNELS = {
                     {% elif ch.channel_type == 'discord' %}🎮
                     {% elif ch.channel_type == 'ntfy' %}🔔
                     {% elif ch.channel_type == 'webhook' %}🔗
+                    {% else %}📣
                     {% endif %}
-                    {% else %}🔗{% endif %}
                 </span>
                 <div>
                     <strong>{{ ch.channel_name }}</strong>

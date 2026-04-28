@@ -1,5 +1,58 @@
 # Changelog
 
+## [2.5.10] - 2026-04-28
+
+### Added
+- Servers page warning when multiple servers configured but `ha_mode` not set — shows alert with direct link to Settings → Infrastructure → High Availability
+
+### Improved
+- `install.sh` template validation: replaced file count check with full Jinja parse validation — broken templates now cause installer rollback rather than silent bad install
+
+### Updated
+- `docs/user-guide.md` — Mobile Access, ntfy/Discord channels, and Kea Servers/HA sections added
+- `docs/faq.md` — Mobile, High Availability, and DDNS Providers FAQ sections added
+- `docs/troubleshooting.md` — HA troubleshooting, Mobile troubleshooting, and Alert Channels sections added
+
+## [2.5.9] - 2026-04-28
+
+### Fixed
+- `settings_alerts.html` had a stray `{% else %}🔗{% endif %}` fragment left over from before ntfy/discord channel types were added — caused a Jinja template parse error on the Alert Settings page. All 33 templates now validated clean.
+
+## [2.5.8] - 2026-04-28
+
+### Fixed
+- Servers page crashed with "Encountered unknown tag 'endif'" — the HA state reference card and a duplicate `{% block scripts %}` / `{% endblock %}` were appended outside the content block during the 2.5.x rewrite, causing Jinja to fail parsing the template. Removed the duplicate block and restored correct template structure.
+
+## [2.5.7] - 2026-04-28
+
+### Fixed
+- Sub-tab links (Management, Network, Settings section tabs) had iOS 300ms tap delay. Applied global `touchstart` instant navigation to every `<a href>` on every page — covers sub-tabs, pagination, sort headers, action links, and anything else that navigates. Replaces the per-group whack-a-mole approach with one fix that covers everything.
+
+## [2.5.6] - 2026-04-28
+
+### Fixed
+- Mobile hamburger drawer showed 9 expanded individual page links instead of matching the desktop nav's 5 grouped items (Dashboard, Management, Network, Settings, About). Drawer now mirrors the desktop exactly — tapping Management lands on Leases and the Management sub-tabs (Leases, Reservations, Devices) appear below, same as desktop. Active state detection matches desktop grouping.
+
+## [2.5.5] - 2026-04-28
+
+### Fixed
+- Hamburger drawer links had a noticeable delay before navigating on iOS — `touch-action: manipulation` CSS fixes `click` events but not `href` navigation. Fixed by adding `touchstart` listeners on drawer links that call `e.preventDefault()` and navigate immediately via `window.location.href`, bypassing the 300ms delay entirely.
+
+## [2.5.4] - 2026-04-28
+
+### Fixed
+- iOS/mobile double-tap required on all interactive elements — root cause was missing `touch-action: manipulation`. Applied globally to all buttons, links, inputs, selects, labels, table cells, and anything with `onclick`. Single tap now fires immediately on all interactive elements across the entire app.
+- Nav on iPhone was a horizontally-scrolling bar of tiny links — replaced with hamburger (☰) menu that opens a full-width drawer with large tap targets (52px minimum). Desktop nav unchanged.
+
+### Added
+- Three distinct responsive breakpoints: desktop (>1024px full layout), iPad (769–1024px, hides low-priority columns), iPhone (≤768px, hamburger nav + table card reflow)
+- `mobile-cards` CSS class: on iPhone, data tables reflow into individual cards per row showing field labels, eliminating horizontal scrolling on Leases, Reservations, and Devices pages
+- `hide-mobile` and `hide-tablet` column classes: MAC addresses, timestamps, and other secondary data hidden on small screens but available via card label on mobile
+- `viewport-fit=cover` for iPhone notch/Dynamic Island safe area support
+- All form inputs use `font-size: 16px` on mobile to prevent iOS auto-zoom on focus
+- Minimum 44px tap targets on all buttons and pagination controls (Apple HIG guideline)
+- Scrollbar-hidden section tabs for clean tab overflow on mobile
+
 ## [2.5.3] - 2026-04-27
 
 ### Added

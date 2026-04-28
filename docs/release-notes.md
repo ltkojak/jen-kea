@@ -2,6 +2,43 @@
 
 ---
 
+## Version 2.5.10 — April 2026
+
+### Documentation
+- `docs/user-guide.md` — added Mobile Access, ntfy/Discord alert channels, and Kea Servers/HA sections
+- `docs/faq.md` — added Mobile, High Availability, and DDNS Providers FAQ sections
+- `docs/troubleshooting.md` — added HA troubleshooting, Mobile troubleshooting, and Alert Channels sections
+
+### Added
+- Servers page shows a warning when multiple servers are configured but HA mode is not set, with a direct link to configure it
+
+### Improved
+- `install.sh` template validation upgraded from file count to full Jinja parse check — broken templates now cause installer to fail and roll back rather than silently installing a broken version
+
+---
+
+## Version 2.5.4 — April 2026
+
+### Mobile Experience Overhaul
+
+**Root cause of double-tap fixed.** iOS Safari adds a 300ms delay before firing click events unless the element explicitly opts out. The fix is `touch-action: manipulation` — now applied globally to every interactive element in the app. Single tap works everywhere.
+
+**Three distinct layouts.** Jen now detects and adapts to three screen contexts:
+
+- **Desktop (>1024px)** — unchanged full layout
+- **iPad (769–1024px)** — full table layout with low-priority columns hidden (MAC addresses, timestamps), saving space without losing important data
+- **iPhone (≤768px)** — hamburger nav, tables reflow into per-row cards, all buttons minimum 44px tap target
+
+**Hamburger nav on iPhone.** The previous horizontally-scrolling nav bar of tiny links is replaced with a ☰ button that opens a full-width drawer showing all navigation destinations with large, easy-to-tap rows. Closes automatically on navigation or outside tap. Desktop nav is completely unchanged.
+
+**Table card reflow.** On iPhone, the Leases, Reservations, and Devices tables reflow into individual cards. Each row becomes a card showing field labels (IP, Hostname, Subnet, Type, Actions) — no more horizontal scrolling to find the action buttons.
+
+**iOS form zoom prevented.** All form inputs use 16px font size on mobile, which prevents iOS from auto-zooming the viewport when an input is focused.
+
+**Safe area support.** `viewport-fit=cover` added for proper content insets on iPhone notch and Dynamic Island devices.
+
+---
+
 ## Version 2.5.3 — April 2026
 
 ### Default Favicon

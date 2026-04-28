@@ -35,7 +35,7 @@ prompt()  { echo -e "${YELLOW}▶${NC}  $*"; }
 # ─────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────
-JEN_VERSION="2.5.3"
+JEN_VERSION="2.5.10"
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 SERVICE_FILE="/etc/systemd/system/jen.service"
@@ -633,12 +633,29 @@ verify_install() {
         warn "Config: $CONFIG_FILE not found — Jen may not start correctly."
     fi
 
-    # Check templates
-    TEMPLATE_COUNT=$(ls "$INSTALL_DIR/templates/"*.html 2>/dev/null | wc -l)
-    if [[ $TEMPLATE_COUNT -gt 10 ]]; then
-        success "Templates: $TEMPLATE_COUNT files ✓"
+    # Validate templates (Jinja parse check)
+    TEMPLATE_ERRORS=$(python3 -c "
+from jinja2 import Environment, FileSystemLoader
+import os, sys
+env = Environment(loader=FileSystemLoader('$INSTALL_DIR/templates'))
+errors = []
+for t in os.listdir('$INSTALL_DIR/templates'):
+    if t.endswith('.html'):
+        try: env.get_template(t)
+        except Exception as e: errors.append(f'{t}: {e}')
+if errors:
+    for e in errors: print(e)
+    sys.exit(1)
+else:
+    print(len([f for f in os.listdir('$INSTALL_DIR/templates') if f.endswith('.html')]))
+" 2>&1)
+    if [[ $? -eq 0 ]]; then
+        success "Templates: $TEMPLATE_ERRORS files validated ✓"
     else
-        warn "Templates: only $TEMPLATE_COUNT found — expected 15."
+        error "Template validation failed:\n$TEMPLATE_ERRORS"
+        warn "Rolling back installation..."
+        # Rollback is handled by the outer error trap
+        exit 1
     fi
 
     # Get port from config

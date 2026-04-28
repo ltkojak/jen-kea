@@ -19,6 +19,12 @@
         {% endif %}{% endfor %}
     </div>
 </div>
+{% elif not single_server and not ha_mode %}
+<div class="alert alert-warning">
+    ⚠️ <strong>HA mode not configured.</strong>
+    Multiple servers are defined but HA mode is not set — Jen will always use Server 1 for config and subnet editing.
+    <a href="/settings/infrastructure" style="color:var(--warning);text-decoration:underline;margin-left:8px;">Configure HA →</a>
+</div>
 {% endif %}
 
 {% if single_server %}
@@ -128,26 +134,6 @@
         <div><span class="badge badge-dynamic">waiting</span><br><span style="color:var(--text-muted);font-size:12px;">Starting up, waiting for partner sync</span></div>
         <div><span class="badge badge-dynamic">syncing</span><br><span style="color:var(--text-muted);font-size:12px;">Synchronizing lease database with partner</span></div>
         <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span style="color:var(--text-muted);font-size:12px;">HA terminated — manual intervention required</span></div>
-    </div>
-</div>
-{% endif %}
-
-{% endblock %}
-{% block scripts %}
-// Pass ha_mode to template
-const HA_MODE = {{ ha_mode|tojson if ha_mode else '""' }};
-// Auto-refresh server status every 30 seconds
-setInterval(function() { location.reload(); }, 30000);
-{% endblock %}
-<div class="card">
-    <div class="card-header"><span class="card-title">ℹ️ HA State Reference</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;font-size:13px;">
-        <div><span class="badge badge-reserved">hot-standby</span><br><span style="color:var(--text-muted);font-size:12px;">Normal HA operation — primary active, standby ready</span></div>
-        <div><span class="badge badge-production">load-balancing</span><br><span style="color:var(--text-muted);font-size:12px;">Both servers handling leases</span></div>
-        <div><span class="badge badge-dynamic">partner-down</span><br><span style="color:var(--text-muted);font-size:12px;">Partner unreachable — server operating alone</span></div>
-        <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span style="color:var(--text-muted);font-size:12px;">HA terminated — manual intervention required</span></div>
-        <div><span class="badge badge-dynamic">waiting</span><br><span style="color:var(--text-muted);font-size:12px;">Server starting up, waiting for partner</span></div>
-        <div><span class="badge badge-dynamic">syncing</span><br><span style="color:var(--text-muted);font-size:12px;">Synchronizing lease database with partner</span></div>
     </div>
 </div>
 {% endif %}

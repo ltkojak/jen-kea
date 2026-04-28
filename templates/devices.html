@@ -53,34 +53,34 @@
 
 <div class="card" style="padding:0;">
 <div class="table-wrap">
-<table class="sortable">
+<table class="sortable mobile-cards">
     <thead><tr>
         {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') %}
-        <th><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile"><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=device_name&dir={{ 'desc' if sort=='device_name' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Device Name{% if sort=='device_name' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Owner{% if sort=='owner' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-tablet"><a href="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Owner{% if sort=='owner' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=last_ip&dir={{ 'desc' if sort=='last_ip' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last IP{% if sort=='last_ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile"><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th>Type</th>
-        <th><a href="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">First Seen{% if sort=='first_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last Seen{% if sort=='last_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th>Status</th>
-        <th>Actions</th>
+        <th class="hide-mobile"><a href="?sort=first_seen&dir={{ 'desc' if sort=='first_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">First Seen{% if sort=='first_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-tablet"><a href="?sort=last_seen&dir={{ 'desc' if sort=='last_seen' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Last Seen{% if sort=='last_seen' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile">Status</th>
+        <th></th>
     </tr></thead>
     <tbody>
     {% for d in devices %}
     <tr id="dev-row-{{ d.id }}">
-        <td class="mono">{{ d.mac }}</td>
-        <td>
+        <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
+        <td data-label="Name">
             <span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span>
         </td>
-        <td>
+        <td data-label="Owner" class="hide-tablet">
             <span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span>
         </td>
-        <td class="mono">{{ d.last_ip or '—' }}</td>
-        <td style="white-space:nowrap;">{{ d.last_hostname or '—' }}</td>
-        <td>
+        <td data-label="IP" class="mono">{{ d.last_ip or '—' }}</td>
+        <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname or '—' }}</td>
+        <td data-label="Subnet" class="hide-mobile">
             {% if d.subnet_name %}
             <span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>
             {% else %}—{% endif %}
@@ -108,13 +108,13 @@
             <span style="color:var(--text-muted);font-size:11px;">—</span>
             {% endif %}
         </td>
-        <td class="mono" style="color:var(--text-muted);">
+        <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">
             {{ d.first_seen.strftime('%Y-%m-%d') if d.first_seen else '—' }}
         </td>
-        <td class="mono" style="{% if d.is_stale %}color:var(--warning);{% endif %}">
+        <td data-label="Last Seen" class="mono hide-tablet" style="{% if d.is_stale %}color:var(--warning);{% endif %}">
             {{ d.last_seen.strftime('%Y-%m-%d %H:%M') if d.last_seen else '—' }}
         </td>
-        <td>
+        <td data-label="Status" class="hide-mobile">
             {% if d.is_stale %}
             <span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">⚠ Stale</span>
             {% elif d.has_reservation %}
@@ -123,8 +123,8 @@
             <span class="badge badge-dynamic">● Dynamic</span>
             {% endif %}
         </td>
-        <td>
-            <div style="display:flex;gap:4px;">
+        <td data-label="">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
                 {% if current_user.role == 'admin' %}
                 <button class="btn btn-sm btn-secondary edit-btn"
     data-id="{{ d.id }}"

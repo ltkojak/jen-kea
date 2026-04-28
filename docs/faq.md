@@ -229,3 +229,42 @@ Use one of your backup codes. Each code works once. After using one, generate a 
 ### Can MFA be required for all users?
 
 Yes. Go to **Settings → System → MFA Policy** and set it to "Required for All". Users without MFA enrolled will be forced to enrol on their next login.
+
+---
+
+## Mobile
+
+### Does Jen work on iPhone and iPad?
+Yes. On iPhone the navigation collapses to a hamburger menu and tables reflow into per-row cards. On iPad the full desktop layout is shown with some secondary columns hidden on narrower screens.
+
+### Everything requires two taps on my iPhone
+This was a bug in versions before 2.5.7 caused by iOS's 300ms tap delay. Upgrade to v2.5.7 or later — all interactive elements now respond on the first tap.
+
+---
+
+## High Availability
+
+### Does Jen support Kea HA?
+Yes, as of v2.5.0. Add your standby server in **Settings → Infrastructure → Additional Servers** and configure HA mode in **Settings → Infrastructure → High Availability**. Jen automatically routes config and subnet editing commands to the active node.
+
+### What HA modes does Jen support?
+Hot-standby, load-balancing, and passive-backup — matching Kea's supported HA modes.
+
+### How does Jen know which node is active?
+Jen queries `ha-heartbeat` on all configured servers every 10 seconds (cached) and selects the primary node in `hot-standby`, `load-balancing`, or `partner-down` state. Falls back to the first reachable server if no active node is identified.
+
+### Will Jen alert me on a failover?
+Yes — enable the **HA failover / state change** alert type on any alert channel. Jen fires this alert any time a server's HA state changes.
+
+### I added a second server but forgot to set HA mode — what happens?
+Jen will show a warning on the Servers page and will always use Server 1 for config and subnet editing. Set HA mode in **Settings → Infrastructure → High Availability** to enable automatic active node routing.
+
+---
+
+## DDNS Providers
+
+### Which DNS providers does Jen support?
+Technitium DNS, Pi-hole (v5 and v6), AdGuard Home, and any DNS server reachable via SSH (Bind9, Unbound, etc.). Configure in **Settings → Infrastructure → DDNS Configuration**.
+
+### I don't use Technitium — can I still use the DDNS log viewer?
+Yes. Set the DNS provider to **DNS via SSH** or **None** — the log viewer works regardless of DNS provider since it just reads the Kea DDNS log file over SSH.
