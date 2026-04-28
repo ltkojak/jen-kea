@@ -146,6 +146,7 @@ def settings_system():
     return render_template("settings_system.html",
                            ssl_configured=__config.ssl_configured(), cert_info=cert_info,
                            has_favicon=os.path.exists(extensions.FAVICON_PATH),
+                           http_port=extensions.HTTP_PORT,
                            https_port=extensions.HTTPS_PORT, ssh_pub_key=ssh_pub_key,
                            ssh_configured=bool(ssh_pub_key),
                            kea_ssh_host=extensions.KEA_SSH_HOST, kea_ssh_user=extensions.KEA_SSH_USER,
@@ -470,7 +471,10 @@ def settings_infrastructure():
     restart_pending = __user.get_global_setting("restart_pending", "false") == "true"
     return render_template("settings_infrastructure.html", infra=infra, kea_up=kea_up,
                            ssh_pub_key=ssh_pub_key, ssh_configured=bool(ssh_pub_key),
-                           restart_pending=restart_pending)
+                           restart_pending=restart_pending,
+                           http_port=extensions.HTTP_PORT,
+                           https_port=extensions.HTTPS_PORT,
+                           ssl_configured=__config.ssl_configured())
 
 @bp.route("/settings/infrastructure/save-kea", methods=["POST"])
 @login_required
@@ -699,6 +703,53 @@ def restart_jen():
         subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
     threading.Thread(target=do_restart, daemon=True).start()
     return redirect(url_for('settings.settings_infrastructure'))
+
+
+@bp.route("/settings/save-ports", methods=["POST"])
+@login_required
+@_admin_required
+def save_ports():
+    ssl_on = __config.ssl_configured()
+    try:
+        http_port  = int(request.form.get("http_port",  str(extensions.HTTP_PORT)))
+        https_port = int(request.form.get("https_port", str(extensions.HTTPS_PORT)))
+    except ValueError:
+        flash("Ports must be valid numbers.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    if not (1024 <= http_port <= 65535):
+        flash("HTTP port must be between 1024 and 65535.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    if ssl_on and not (1024 <= https_port <= 65535):
+        flash("HTTPS port must be between 1024 and 65535.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    if ssl_on and http_port == https_port:
+        flash("HTTP and HTTPS ports must be different.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    __config.write_config_value("server", "http_port", str(http_port))
+    extensions.HTTP_PORT = http_port
+
+    if ssl_on:
+        __config.write_config_value("server", "https_port", str(https_port))
+        extensions.HTTPS_PORT = https_port
+        msg = f"Ports updated — HTTP: {http_port} (redirect), HTTPS: {https_port}. Restarting Jen..."
+    else:
+        msg = f"HTTP port updated to {http_port}. Restarting Jen..."
+
+    __user.audit("SAVE_PORTS", "settings",
+                 f"Ports updated to HTTP:{http_port} HTTPS:{https_port} by {current_user.username}")
+    flash(msg, "success")
+
+    def do_restart():
+        import time; time.sleep(2)
+        subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+    threading.Thread(target=do_restart, daemon=True).start()
+
+    return redirect(url_for('settings.settings_infrastructure'))
+
 
 @bp.route("/settings/generate-ssh-key", methods=["POST"])
 @login_required

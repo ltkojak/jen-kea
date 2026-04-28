@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.7.5] - 2026-04-29
+
+### Added
+- **Settings → Infrastructure → Server Ports** card — change HTTP and HTTPS ports from the UI without editing jen.config manually. Behaviour adapts to SSL state:
+  - **HTTP only:** HTTP port field editable, HTTPS port field disabled with a note to configure SSL first
+  - **HTTPS enabled:** both HTTP (redirect) and HTTPS port fields editable
+  - Saving triggers an automatic Jen restart (port changes require rebinding the server socket)
+  - Validation: ports must be 1024–65535 and HTTP ≠ HTTPS when SSL is active
+
+### Fixed
+- `save_ports` route was redirecting to Settings → System instead of Settings → Infrastructure where the form now lives
+
 ## [2.7.4] - 2026-04-29
 
 ### Fixed

@@ -91,7 +91,7 @@
     <div class="card-header">
         <span class="card-title">🔒 SSL Certificate</span>
         {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
-        {% else %}<span class="badge" style="background:#2a2a1a;color:var(--warning);">HTTP Only — port 5050</span>{% endif %}
+        {% else %}<span class="badge" style="background:#2a2a1a;color:var(--warning);">HTTP Only — port {{ http_port }}</span>{% endif %}
     </div>
     {% if ssl_configured and cert_info %}
     <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
@@ -129,6 +129,38 @@
     {% endif %}
     <form method="POST" action="/settings/generate-ssh-key" onsubmit="return confirm('{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}')">
         <button type="submit" class="btn btn-primary">{% if ssh_configured %}🔄 Regenerate Key{% else %}🔑 Generate SSH Key{% endif %}</button>
+    </form>
+</div>
+
+<!-- Server Ports -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">🔌 Server Ports</span>
+        <span class="badge badge-dynamic">Restart required on change</span>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Change the ports Jen listens on. Jen will restart automatically after saving.
+        {% if ssl_configured %}HTTP traffic is forwarded to HTTPS automatically.{% endif %}
+    </p>
+    <form method="POST" action="/settings/save-ports"
+          onsubmit="return confirm('Changing ports will restart Jen. You may need to update any bookmarks or firewall rules. Continue?')">
+        <div class="form-row" style="max-width:400px;">
+            <div class="form-group">
+                <label>HTTP Port</label>
+                <input type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" required>
+                <div class="form-hint">{% if ssl_configured %}Used for redirect to HTTPS{% else %}Jen listens here{% endif %}</div>
+            </div>
+            {% if ssl_configured %}
+            <div class="form-group">
+                <label>HTTPS Port</label>
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" required>
+                <div class="form-hint">Jen listens here (SSL active)</div>
+            </div>
+            {% else %}
+            <input type="hidden" name="https_port" value="{{ https_port }}">
+            {% endif %}
+        </div>
+        <button type="submit" class="btn btn-primary">💾 Save Ports</button>
     </form>
 </div>
 
