@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.8.1] - 2026-04-29
+
+### Fixed
+- Login delay of 2-3 seconds — root cause was werkzeug 3.x raising the default `pbkdf2:sha256` iteration count from 260,000 to 1,000,000. `hash_password()` in `jen/models/user.py` was calling `generate_password_hash(p, method="pbkdf2:sha256")` without pinning iterations, so werkzeug 3.x silently used 1M iterations. Pinned to `pbkdf2:sha256:260000` — meets NIST SP 800-132 minimum and keeps login under 200ms.
+- Added transparent rehash on login: users whose passwords were stored at 1M iterations (hashed between 2.7.4 and 2.8.0) are automatically upgraded to 260K on their next successful login — no action required.
+
+## [2.8.0] - 2026-04-29
+
+### Changed
+- **`jen.py` retired** — moved to `legacy/jen.py` with an explanatory header. No longer copied to `/opt/jen/jen.py` on install. The entry point has been `run.py` since 2.6.0; the monolith is kept in `legacy/` for reference only.
+- **Backup and rollback updated** — now backs up and restores `run.py` instead of `jen.py`.
+- **Version detection updated** — installer checks `legacy/jen.py` as a final fallback for very old pre-2.6 installations.
+
+### Fixed — Docker
+- `Dockerfile` was copying `jen.py` only — missing `run.py`, `jen/` package, and `werkzeug` pip package. Fixed all three.
+- `CMD` was `python3 /opt/jen/jen.py` — updated to `python3 /opt/jen/run.py`.
+- Both `docker-compose.yml` files now use `env_file: .env` — no more hardcoded environment variables in compose files.
+- Healthcheck in compose files now correctly tries both HTTP and HTTPS.
+
+### Added — Docker
+- Full environment variable support in `run.py` — Docker users can configure Jen entirely via `.env` without mounting a `jen.config`. If `JEN_KEA_API_URL` is set, `run.py` auto-generates `/etc/jen/jen.config` from env vars on first start.
+- `.env.example` expanded to cover all configurable values: Kea API, Kea DB, Jen DB, ports, SSH, DDNS provider, subnet map (`JEN_SUBNETS=1=Production,10.0.0.0/24;30=IoT,10.30.0.0/24`).
+- Both compose files updated with clear Option A (env vars) / Option B (mounted config) comments.
+
+### Verified
+- Full smoke test of all 14 blueprints — every `render_template` call references an existing template, every `url_for` call references a valid namespaced endpoint, all `flash` categories valid.
+
 ## [2.7.5] - 2026-04-29
 
 ### Added

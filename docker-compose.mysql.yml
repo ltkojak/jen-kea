@@ -1,26 +1,22 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Jen - The Internet Management Console
-# Docker Compose — Bundled MySQL for Jen DB
+# Jen - The Kea DHCP Management Console
+# Docker Compose — Bundled MariaDB
 #
-# Use this when you want Docker to manage the Jen database locally.
+# Use when you want Docker to manage the Jen database locally.
 # The Kea database still connects to your external Kea server.
 #
-# Usage:
-#   cp jen.config.example jen.config
-#   # Edit jen.config — set [jen_db] host to: jen-mysql
+# Quick start:
+#   cp .env.example .env
+#   # Edit .env — set JEN_DB_HOST=jen-mysql
 #   docker compose -f docker-compose.mysql.yml up -d
 #
-# Note: jen.config [jen_db] section should be:
-#   host     = jen-mysql
-#   user     = jen
-#   password = (match JEN_MYSQL_PASSWORD below)
-#   database = jen
+# Important: In .env, set JEN_DB_HOST=jen-mysql
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
   jen:
     build: .
-    image: jen-dhcp:2.7.5
+    image: jen-dhcp:2.8.1
     container_name: jen
     restart: unless-stopped
     ports:
@@ -28,14 +24,21 @@ services:
       - "${HTTPS_PORT:-8443}:8443"
     volumes:
       - jen-config:/etc/jen
-      - ./jen.config:/etc/jen/jen.config:ro
-      # Persistent custom brand icons — survives container updates
       - jen-icons:/opt/jen/static/icons/custom
-    environment:
-      - PYTHONUNBUFFERED=1
+      # Option B: mount your own jen.config (uncomment to use)
+      # - ./jen.config:/etc/jen/jen.config:ro
+    env_file:
+      - .env
     depends_on:
       jen-mysql:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5050/",
+             "||", "curl", "-skf", "https://localhost:8443/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     networks:
       - jen-network
 
@@ -44,10 +47,10 @@ services:
     container_name: jen-mysql
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme_root}
       MARIADB_DATABASE: jen
       MARIADB_USER: jen
-      MARIADB_PASSWORD: ${JEN_MYSQL_PASSWORD:-jen_password}
+      MARIADB_PASSWORD: ${JEN_MYSQL_PASSWORD:-changeme_jen}
     volumes:
       - jen-mysql-data:/var/lib/mysql
     healthcheck:
@@ -58,7 +61,6 @@ services:
       start_period: 30s
     networks:
       - jen-network
-    # Not exposed externally — only accessible to jen container
     expose:
       - "3306"
 

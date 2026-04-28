@@ -105,6 +105,18 @@ def login():
                     logger.info(f"Upgraded password hash for user {username} to pbkdf2")
                 except Exception as e:
                     logger.error(f"Password hash upgrade error: {e}")
+            # Rehash if stored at slow iteration count (werkzeug 3.x 1M default)
+            elif __user.needs_rehash(row["password"]):
+                try:
+                    db = __db.get_jen_db()
+                    with db.cursor() as cur:
+                        cur.execute("UPDATE users SET password=%s WHERE id=%s",
+                                    (__user.hash_password(password), row["id"]))
+                    db.commit()
+                    db.close()
+                    logger.info(f"Rehashed password for user {username} to 260K iterations")
+                except Exception as e:
+                    logger.error(f"Password rehash error: {e}")
             __auth.clear_login_attempts(ip, username)
             user = User(row["id"], row["username"], row["role"], row["session_timeout"])
             __auth.clear_login_attempts(ip, username)

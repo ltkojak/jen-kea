@@ -1,17 +1,17 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Jen - The Internet Management Console
+# Jen - The Kea DHCP Management Console
 # Dockerfile
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
-LABEL description="Jen - The Internet Management Console for ISC Kea DHCP"
-LABEL version="2.7.5"
+LABEL description="Jen - The Kea DHCP Management Console"
+LABEL version="2.8.1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install dependencies
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -25,9 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pymysql \
         requests \
         pyotp \
-        qrcode[pil] \
+        "qrcode[pil]" \
         authlib \
         cryptography \
+        werkzeug \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,24 +43,25 @@ RUN mkdir -p /opt/jen/static/icons/brands \
              /etc/jen/ssl /etc/jen/ssh /etc/jen/backups
 
 # Copy application files
-COPY jen.py /opt/jen/jen.py
-COPY templates/ /opt/jen/templates/
-COPY static/ /opt/jen/static/
+COPY jen.py        /opt/jen/jen.py
+COPY run.py        /opt/jen/run.py
+COPY jen/          /opt/jen/jen/
+COPY templates/    /opt/jen/templates/
+COPY static/       /opt/jen/static/
 
 # Set permissions
 RUN chown -R www-data:www-data /opt/jen /etc/jen
 
-# Config volume — persists jen.config, ssl, ssh keys, backups
-# Custom icons volume — persists user-uploaded brand icons across container updates
+# Volumes — persist config, certs, SSH keys, backups, and custom icons
 VOLUME ["/etc/jen", "/opt/jen/static/icons/custom"]
 
 # Expose ports
 EXPOSE 5050 8443
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+# Health check — tries HTTP first, falls back to HTTPS
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -sf http://localhost:5050/ || curl -skf https://localhost:8443/ || exit 1
 
 USER www-data
 
-CMD ["python3", "/opt/jen/jen.py"]
+CMD ["python3", "/opt/jen/run.py"]

@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="2.7.5"
+JEN_VERSION="2.8.1"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -201,13 +201,13 @@ require_root() {
 
 # ── Detect existing install ───────────────────────────────────────────────────
 detect_existing() {
-    if [[ -f "$INSTALL_DIR/run.py" ]] || [[ -f "$INSTALL_DIR/jen.py" ]]; then
+    if [[ -f "$INSTALL_DIR/run.py" ]] || [[ -f "$INSTALL_DIR/jen.py" ]] || [[ -d "$INSTALL_DIR/jen" ]]; then
         IS_UPGRADE=true
-        # Version is defined in jen/__init__.py (2.6.x+) or jen.py (pre-2.6)
-        # run.py only imports it, so never use run.py as version source
+        # Version is defined in jen/__init__.py (2.6.x+), jen.py (pre-2.6), or legacy/jen.py
         local ver_file=""
         if   [[ -f "$INSTALL_DIR/jen/__init__.py" ]]; then ver_file="$INSTALL_DIR/jen/__init__.py"
         elif [[ -f "$INSTALL_DIR/jen.py"          ]]; then ver_file="$INSTALL_DIR/jen.py"
+        elif [[ -f "$INSTALL_DIR/legacy/jen.py"   ]]; then ver_file="$INSTALL_DIR/legacy/jen.py"
         fi
         if [[ -n "$ver_file" ]]; then
             EXISTING_VERSION=$(grep -m1 'JEN_VERSION' "$ver_file" 2>/dev/null                 | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' || echo "unknown")
@@ -646,9 +646,9 @@ backup_existing() {
     mkdir -p "$BACKUP_DIR"
     local ts; ts=$(date +%Y%m%d_%H%M%S)
 
-    if [[ -f "$INSTALL_DIR/jen.py" ]]; then
-        cp "$INSTALL_DIR/jen.py" "${BACKUP_DIR}/jen.py.${ts}.bak"
-        ok "Backed up jen.py"
+    if [[ -f "$INSTALL_DIR/run.py" ]]; then
+        cp "$INSTALL_DIR/run.py" "${BACKUP_DIR}/run.py.${ts}.bak"
+        ok "Backed up run.py"
     fi
 
     if [[ -d "$INSTALL_DIR/jen" ]]; then
@@ -656,7 +656,7 @@ backup_existing() {
         ok "Backed up jen/ package"
     fi
 
-    ROLLBACK_JEN="${BACKUP_DIR}/jen.py.${ts}.bak"
+    ROLLBACK_JEN="${BACKUP_DIR}/run.py.${ts}.bak"
     ROLLBACK_PKG="${BACKUP_DIR}/jen.${ts}.bak"
     export ROLLBACK_JEN ROLLBACK_PKG
     blank
@@ -667,7 +667,7 @@ rollback() {
     [[ -z "${ROLLBACK_JEN:-}" ]] && return
     [[ -f "$ROLLBACK_JEN" ]] || return
     warn "Rolling back to previous installation..."
-    cp "$ROLLBACK_JEN" "$INSTALL_DIR/jen.py"
+    cp "$ROLLBACK_JEN" "$INSTALL_DIR/run.py"
     if [[ -n "${ROLLBACK_PKG:-}" && -d "$ROLLBACK_PKG" ]]; then
         rm -rf "$INSTALL_DIR/jen"
         cp -r "$ROLLBACK_PKG" "$INSTALL_DIR/jen"
@@ -689,10 +689,14 @@ install_files() {
              "$CONFIG_DIR/ssl" "$CONFIG_DIR/ssh"
 
     spinner_start "Installing application files..."
-    cp "$SCRIPT_DIR/jen.py"  "$INSTALL_DIR/jen.py"
     cp "$SCRIPT_DIR/run.py"  "$INSTALL_DIR/run.py"
+    # Copy legacy monolith for reference (not executed)
+    if [[ -f "$SCRIPT_DIR/legacy/jen.py" ]]; then
+        mkdir -p "$INSTALL_DIR/legacy"
+        cp "$SCRIPT_DIR/legacy/jen.py" "$INSTALL_DIR/legacy/jen.py"
+    fi
     spinner_stop
-    ok "Installed jen.py + run.py"
+    ok "Installed run.py"
 
     if [[ -d "$SCRIPT_DIR/jen" ]]; then
         spinner_start "Installing jen/ package..."

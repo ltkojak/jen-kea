@@ -1,19 +1,26 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# Jen - The Internet Management Console
-# Docker Compose — External MySQL for Jen DB
+# Jen - The Kea DHCP Management Console
+# Docker Compose — External MySQL
 #
-# Use this when you want to connect Jen to an existing external MySQL server
-# for both the Kea database and the Jen database.
+# Use when connecting Jen to an existing MySQL/MariaDB server.
 #
-# Usage:
-#   cp jen.config.example jen.config   # edit with your values
+# Quick start:
+#   cp .env.example .env
+#   # Edit .env with your Kea and database details
 #   docker compose up -d
+#
+# Config options (choose one):
+#   A) Environment variables (recommended for Docker):
+#      Fill in JEN_* vars in .env — config is auto-generated on first start
+#
+#   B) Mount your own jen.config:
+#      Uncomment the jen.config volume line below and comment out env_file
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
   jen:
     build: .
-    image: jen-dhcp:2.7.5
+    image: jen-dhcp:2.8.1
     container_name: jen
     restart: unless-stopped
     ports:
@@ -22,18 +29,19 @@ services:
     volumes:
       # Persistent config, certs, SSH keys, and backups
       - jen-config:/etc/jen
-      # Mount your jen.config directly (recommended for easy editing)
-      - ./jen.config:/etc/jen/jen.config:ro
       # Persistent custom brand icons — survives container updates
       - jen-icons:/opt/jen/static/icons/custom
-    environment:
-      - PYTHONUNBUFFERED=1
+      # Option B: mount your own jen.config (uncomment to use)
+      # - ./jen.config:/etc/jen/jen.config:ro
+    env_file:
+      - .env
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:5050/"]
+      test: ["CMD", "curl", "-sf", "http://localhost:5050/",
+             "||", "curl", "-skf", "https://localhost:8443/"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 20s
     networks:
       - jen-network
 

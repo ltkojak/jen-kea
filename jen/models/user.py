@@ -25,20 +25,46 @@ class User(UserMixin):
 
 
 def hash_password(p: str) -> str:
-    """Hash a password using werkzeug pbkdf2-sha256 (salted, iterated)."""
-    return generate_password_hash(p, method="pbkdf2:sha256")
+    """
+    Hash a password using pbkdf2:sha256 with 260,000 iterations.
+
+    Iteration count is explicitly pinned rather than using werkzeug's default
+    because werkzeug 3.x raised the default from 260,000 to 1,000,000, making
+    login take 2-3 seconds on typical homelab hardware. 260,000 meets the NIST
+    SP 800-132 minimum and keeps login sub-200ms.
+
+    check_password_hash reads parameters from the stored hash, so existing
+    hashes at any iteration count continue to verify correctly.
+    """
+    return generate_password_hash(p, method="pbkdf2:sha256:260000")
 
 
 def verify_password(stored_hash: str, provided_password: str) -> bool:
     """
     Verify a password against a stored hash.
-    Supports both legacy plain SHA-256 (hex) hashes and new pbkdf2 hashes
-    so existing users are migrated transparently on next login.
+    Supports:
+      - pbkdf2:sha256 hashes at any iteration count (werkzeug 2.x and 3.x)
+      - Legacy plain SHA-256 hex hashes (pre-2.5.2)
+    check_password_hash reads cost parameters from the stored hash, so
+    hashes at any iteration count verify correctly without migration.
     """
     if stored_hash and stored_hash.startswith("pbkdf2:"):
         return check_password_hash(stored_hash, provided_password)
     # Legacy SHA-256 — accept and flag for upgrade
     return stored_hash == hashlib.sha256(provided_password.encode()).hexdigest()
+
+
+def needs_rehash(stored_hash: str) -> bool:
+    """
+    Return True if the stored hash should be upgraded to the current
+    cost parameters (e.g. was hashed at 1M iterations, now using 260K).
+    werkzeug's check_needs_rehash compares stored params to the method string.
+    """
+    try:
+        from werkzeug.security import check_needs_rehash
+        return check_needs_rehash(stored_hash, method="pbkdf2:sha256:260000")
+    except Exception:
+        return False
 
 
 def get_global_setting(key: str, default=None):
