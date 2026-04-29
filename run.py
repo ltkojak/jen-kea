@@ -143,6 +143,13 @@ def main():
     if ssl_configured():
         print(f"Jen v{JEN_VERSION} — HTTPS:{HTTPS_PORT}  HTTP redirect:{HTTP_PORT}")
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        # Enforce TLS 1.2 minimum, prefer TLS 1.3
+        ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        # Session resumption — reduces handshake to 1 round trip on repeat connections
+        ssl_ctx.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3
+        ssl_ctx.set_ciphers(
+            "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
+        )
         cert = extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) \
                else extensions.SSL_CERT
         ssl_ctx.load_cert_chain(cert, extensions.SSL_KEY)

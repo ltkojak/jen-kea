@@ -10,6 +10,11 @@ import re
 
 logger = logging.getLogger(__name__)
 
+# ── Compiled validation patterns ──────────────────────────────────────────────
+MAC_RE  = re.compile(r'^([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}$')
+HOST_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?'
+                     r'(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$')
+
 
 def __get_jen_db():
     from jen.models.db import get_jen_db
@@ -78,26 +83,33 @@ def get_rate_limit_settings():
     }
 
 def record_login_attempt(ip, username):
-    try:
-        db = __get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
-            # Clean up old attempts beyond the maximum useful window (24h)
-            cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
-        db.commit()
-        db.close()
-    except Exception as e:
-        logger.error(f"Rate limit record error: {e}")
+    """Fire-and-forget — don't block the response."""
+    import threading
+    def _record():
+        try:
+            db = __get_jen_db()
+            with db.cursor() as cur:
+                cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
+                cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.error(f"Rate limit record error: {e}")
+    threading.Thread(target=_record, daemon=True).start()
 
 def clear_login_attempts(ip, username):
-    try:
-        db = __get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
-        db.commit()
-        db.close()
-    except Exception as e:
-        logger.error(f"Rate limit clear error: {e}")
+    """Fire-and-forget — don't block the login response."""
+    import threading
+    def _clear():
+        try:
+            db = __get_jen_db()
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
+            db.commit()
+            db.close()
+        except Exception as e:
+            logger.error(f"Rate limit clear error: {e}")
+    threading.Thread(target=_clear, daemon=True).start()
 
 def is_locked_out(ip, username):
     rl = get_rate_limit_settings()

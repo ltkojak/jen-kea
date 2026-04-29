@@ -126,17 +126,19 @@
             {% for s in server_statuses %}
             <tr>
                 <td class="mono">{{ s.server.get('name', s.server.get('url','?')) }}</td>
-                <td>
-                    {% if s.up %}
+                <td id="srv-status-{{ s.server.get('id', loop.index) }}">
+                    {% if s.up is none %}
+                    <span style="color:var(--text-muted);">● Checking...</span>
+                    {% elif s.up %}
                     <span style="color:var(--success);">● Online</span>
                     {% else %}
                     <span style="color:var(--danger);">● Offline</span>
                     {% endif %}
                 </td>
-                <td style="color:var(--text-muted);font-size:12px;">
-                    {% if s.ha_state %}{{ s.ha_state }}{% elif s.up %}primary{% else %}—{% endif %}
+                <td style="color:var(--text-muted);font-size:12px;" id="srv-ha-{{ s.server.get('id', loop.index) }}">
+                    {% if s.ha_state %}{{ s.ha_state }}{% elif s.up is not none and s.up %}primary{% else %}—{% endif %}
                 </td>
-                <td style="color:var(--text-muted);font-size:12px;">{{ s.version or '—' }}</td>
+                <td style="color:var(--text-muted);font-size:12px;" id="srv-ver-{{ s.server.get('id', loop.index) }}">{{ s.version or '—' }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -215,6 +217,21 @@ function updateStats() {
             if (keaDot) {
                 keaDot.style.background = data.kea_up ? 'var(--success)' : 'var(--danger)';
                 keaDot.title = data.kea_up ? 'Kea: Online' : 'Kea: Unreachable';
+            }
+            // Update server status rows
+            if (data.servers) {
+                data.servers.forEach(function(srv) {
+                    var statusEl = document.getElementById('srv-status-' + srv.id);
+                    var haEl     = document.getElementById('srv-ha-'     + srv.id);
+                    var verEl    = document.getElementById('srv-ver-'    + srv.id);
+                    if (statusEl) {
+                        statusEl.innerHTML = srv.up
+                            ? '<span style="color:var(--success);">● Online</span>'
+                            : '<span style="color:var(--danger);">● Offline</span>';
+                    }
+                    if (haEl)  haEl.textContent  = srv.ha_state || (srv.up ? srv.role || '—' : '—');
+                    if (verEl) verEl.textContent  = srv.version  || '—';
+                });
             }
         })
         .catch(() => { if (dot) dot.style.background = 'var(--danger)'; });

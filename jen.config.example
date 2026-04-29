@@ -1,5 +1,5 @@
 # Jen - The Internet Management Console
-# Version 2.8.1 Configuration File
+# Version 3.0.2 Configuration File
 #
 # Copy this file to /etc/jen/jen.config and fill in your values.
 # This file is gitignored — never commit jen.config with real credentials.

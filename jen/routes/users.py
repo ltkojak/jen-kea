@@ -270,6 +270,7 @@ def upload_avatar():
             db.close()
             flash("Profile picture updated.", "success")
             __user.audit("UPDATE_AVATAR", "user", current_user.username)
+            session.pop("_avatar_url", None)  # invalidate avatar cache
         except Exception as e:
             flash(f"Error saving avatar: {str(e)}", "error")
     elif data_url == "":
@@ -281,6 +282,7 @@ def upload_avatar():
             db.commit()
             db.close()
             flash("Profile picture removed.", "success")
+            session.pop("_avatar_url", None)  # invalidate avatar cache
         except Exception as e:
             flash(f"Error removing avatar: {str(e)}", "error")
     return redirect(url_for('users.user_profile'))
@@ -313,6 +315,7 @@ def change_password():
                         (__user.hash_password(new_pw), current_user.id))
         db.commit()
         db.close()
+        session.pop("_user_cache", None)
         flash("Password changed successfully.", "success")
         __user.audit("CHANGE_PASSWORD", current_user.username, "Password changed")
     except Exception as e:
@@ -334,6 +337,7 @@ def set_user_timeout(user_id):
             cur.execute("UPDATE users SET session_timeout=%s WHERE id=%s", (timeout_val, user_id))
         db.commit()
         db.close()
+        session.pop("_user_cache", None)
         flash("Session timeout updated.", "success")
     except Exception as e:
         flash(f"Error updating timeout: {str(e)}", "error")

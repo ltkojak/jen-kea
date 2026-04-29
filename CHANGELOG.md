@@ -1,5 +1,157 @@
 # Changelog
 
+## [3.0.2] - 2026-04-29
+
+### Fixed — Bugs found by test suite
+- `MAC_RE` and `HOST_RE` undefined in `jen/services/auth.py` — used in `valid_mac()` and `valid_hostname()` but never defined at module level. Every reservation add/edit that validated a MAC address was raising `NameError` in production. Added compiled regex patterns at module level.
+- `SUBNET_NAMES` undefined in `jen/routes/search.py` — global search was raising `NameError` on every search request. Replaced with inline dict comprehension from `extensions.SUBNET_MAP`.
+- `api/stats` error response missing `servers` key — when the Kea DB query failed, the JSON response omitted `servers`, breaking the dashboard server status JS update.
+
+## [3.0.0] - 2026-04-29
+
+### Phase 1 — Connection Pooling
+`dbutils.pooled_db.PooledDB` replaces raw `pymysql.connect()` in `jen/models/db.py`. Two persistent connections per database maintained at startup. `get_jen_db()` / `get_kea_db()` borrow from the pool (~0ms) instead of opening a new TCP connection (~1s on remote host). Falls back to direct connections if `dbutils` not installed.
+
+### Phase 2 — Automated Test Suite
+69 tests across 6 modules covering all critical paths:
+- `test_auth.py` — login, logout, auth required, rate limiting (17 tests)
+- `test_dashboard.py` — dashboard load, api/stats, Kea-down graceful degradation (10 tests)
+- `test_users.py` — password hashing unit tests, user CRUD, session cache invalidation (16 tests)
+- `test_reservations.py` — add/delete reservation, input validation, settings pages (11 tests)
+- `test_leases.py` — lease list, search, IP map (6 tests)
+- `test_settings.py` — settings cache, branding/session/ports save, audit log (9 tests)
+
+Tests use a separate `jen_test` database. Kea API is mocked. Each test starts with clean state. Run with: `pytest tests/ -v`
+
+Setup: create `jen_test` database once, then `pytest tests/ -v` from the jen/ directory. See `tests/README.md` for full instructions.
+
+## [2.9.0] - 2026-04-29
+
+### Added — Connection Pooling
+
+**`dbutils.pooled_db.PooledDB`** replaces raw `pymysql.connect()` calls in `jen/models/db.py`.
+
+Previously every `get_jen_db()` and `get_kea_db()` call opened a new TCP connection to the database server (~1 second on a remote host) and closed it when done. With pooling:
+
+- Jen maintains 2 persistent connections to each database, opened at startup
+- `get_jen_db()` borrows a connection from the pool (~0ms)
+- `db.close()` returns it to the pool rather than closing the TCP connection
+- Pool grows to 10 connections under concurrent load, then blocks until one is free
+- `ping=1` detects and replaces stale connections automatically
+
+**Result:** Every page load, API poll, and action that queries the database is now effectively free from a connection overhead perspective. The 1-second login latency caused by MySQL TCP handshake is eliminated.
+
+**Fallback:** If `dbutils` is not installed, `get_jen_db()` / `get_kea_db()` fall back to direct `pymysql.connect()` automatically so the app still starts.
+
+**New:** `reset_pools()` in `db.py` tears down and recreates both pools — called if DB credentials change at runtime.
+
+**Requires:** `pip3 install dbutils` — added to `install.sh` and `Dockerfile` automatically.
+
+## [2.8.16] - 2026-04-29
+
+### Fixed
+- Login still sluggish after 2.8.15 — remaining synchronous DB operations on the login path:
+  - `record_login_attempt()` on failed logins — synchronous INSERT, now fires async in background thread
+  - Redundant `get_rate_limit_settings()` and `is_locked_out()` calls on failed login path — already have the data from the initial query, removed duplicate calls
+  - `is_trusted_device()` was doing a synchronous `UPDATE mfa_trusted_devices SET last_used=NOW()` that blocked the response — UPDATE moved to background thread, SELECT still synchronous (needed to determine MFA redirect)
+  - Removed duplicate `return redirect(url_for('mfa_routes.mfa_verify'))` — dead code from 2.6.x transformation
+
+## [2.8.15] - 2026-04-29
+
+### Fixed — Root cause of sluggishness found
+Timing breakdown revealed `route:1022ms` on POST /login with `pre-route:0ms`. The login handler itself takes 12ms — the remaining ~1000ms was `audit()` blocking the response.
+
+**`audit()` was synchronous** — it opened a DB connection, ran an INSERT into `audit_log`, committed, and closed before returning. Called on every save, login, logout, and config change across 55 call sites in 10 blueprints. On a network database this takes ~200-1000ms per call.
+
+**Fix:** `audit()` now fires in a background daemon thread. The INSERT happens after the response is already sent. Request context values are captured before the thread starts.
+
+**`clear_login_attempts()` also made async** — same pattern, also blocked the login response.
+
+
+## [2.8.12] - 2026-04-29
+
+### Added
+- Request timing middleware — any request taking over 100ms is logged at WARNING level with method, path, and elapsed time. View with: `sudo journalctl -u jen -f | grep SLOW`. This will tell us exactly which requests are slow and by how much, so we can stop guessing.
+
+## [2.8.11] - 2026-04-29
+
+### Fixed
+- Remaining sluggishness — two more DB connections per page load found and eliminated:
+  - **Avatar query in context processor** — `inject_branding()` opened a DB connection on every single template render to fetch the user's avatar URL. Avatar is now cached in the Flask session and only re-queried on first load. Cache is invalidated automatically when the user uploads or removes their avatar.
+  - **`ssl_configured()` in before_request** — called `os.path.exists()` on cert files on every request. Result is now cached at startup since SSL certs don't change at runtime without a restart.
+- `check_session_timeout` now skips static asset requests entirely — no point running session logic for `/static/` files.
+
+## [2.8.10] - 2026-04-29
+
+### Fixed
+- **Root cause of ~2 second delay found and fixed.** `check_session_timeout` in `before_request` calls `get_global_setting()` twice on every single request — to check if timeouts are enabled, and to read the timeout duration. Each call opened a new DB connection, queried, and closed it. With a network database that's 2 round trips × every page load, every API poll, every asset fetch.
+
+  `get_global_setting()` now caches all settings in memory for 30 seconds, loaded in a single `SELECT * FROM settings` query. Cache is invalidated immediately on any `set_global_setting()` call so changes in Settings pages take effect within 30 seconds at most.
+
+  Effect: the 2 DB connections per request become 0 (cache hit) or 1 (cache miss, loads all settings at once). This should eliminate the remaining delay entirely.
+
+## [2.8.9] - 2026-04-29
+
+### Improved
+- SSL context hardened: minimum TLS 1.2, explicit cipher suite preference for ECDHE+AESGCM and ECDHE+CHACHA20, SSLv2/v3 disabled. This enables TLS 1.3 when both client and server support it, which reduces handshake to 1 round trip vs 2 for TLS 1.2, and enables 0-RTT on session resumption.
+
+### Note
+- Remaining ~2s login delay on HTTPS via domain name is likely network path latency (DNS resolution, Cloudflare tunnel, reverse proxy) rather than anything in Jen — login itself takes 12ms. Test on direct LAN IP (`http://10.10.11.251:5050`) to confirm: if instant there, the delay is in the network path not Jen.
+
+## [2.8.8] - 2026-04-29
+
+### Fixed
+- Server status showing "Offline" on dashboard — placeholder `up=None` evaluated as falsy in `{% if s.up %}` rendering "Offline" instead of a loading state. Fixed template to handle three states: `None` → "Checking...", `True` → "Online", `False` → "Offline".
+- Server status card now updates correctly when `/api/stats` returns — JS `updateStats()` now reads `servers` array from the response and updates status, HA state, and version cells by element ID. `/api/stats` expanded to include `ha_state`, `version`, and `role` per server.
+
+## [2.8.7] - 2026-04-29
+
+### Fixed
+- Dashboard blank after 2.8.6 — passing `stats={}` meant no subnet cards were rendered server-side, so `updateStats()` had no DOM elements to update. The JS only fills in existing elements, it doesn't create them.
+
+  Dashboard now renders card shells immediately using `extensions.SUBNET_MAP` (always available, no DB or Kea calls needed) with `…` placeholders. Server status renders from the config server list with unknown status. `/api/stats` fills in the real numbers within seconds of page load. Result: page appears instantly with structure, data populates quickly.
+
+## [2.8.6] - 2026-04-29
+
+### Fixed
+- Post-login delay — timing instrumentation revealed login itself takes 12ms. The delay was the dashboard loading synchronously after the redirect. The dashboard route was making 4-6 sequential HTTP calls to the Kea API (config-get, version-get per server, kea_is_up, get_all_server_status) plus 3 DB queries per subnet, all before returning the page.
+
+  Dashboard route now returns immediately with the page skeleton. Subnet stats, Kea status, and server info are populated by the existing `/api/stats` poll that already runs every 30 seconds. Recent leases (the only thing needing server-side device fingerprinting) still load synchronously but are capped at 50 rows instead of 200.
+
+- Removed login timing instrumentation added in 2.8.4/2.8.5.
+
+## [2.8.5] - 2026-04-29
+
+### Fixed
+- Login timing log never appeared — Flask's default log level is WARNING, but timing was logged at INFO which is silently filtered. Switched to WARNING. Also moved timing capture outside the `verify_password` block so both successful and failed logins are measured.
+
+## [2.8.4] - 2026-04-29
+
+### Added
+- Login timing instrumentation — after a successful login, Jen now logs the time breakdown at INFO level:
+  ```
+  LOGIN TIMING: db_connect=Xms  db_queries=Xms  hash_verify=Xms
+  ```
+  This tells us exactly where the remaining latency is: DB connection overhead, query time, or hash verification. View with: `sudo journalctl -u jen -n 20 --no-pager | grep TIMING`
+
+## [2.8.3] - 2026-04-29
+
+### Fixed
+- Login still slow after 2.8.2 — `needs_rehash()` in `jen/models/user.py` was silently returning `False` on every call because it tried to import `werkzeug.security.check_needs_rehash` which does not exist in this werkzeug version. The `except Exception: return False` swallowed the `ImportError` quietly, so the 1M-iteration hash stored on existing installs was never being detected or upgraded.
+
+  Replaced with direct hash string parsing: `pbkdf2:sha256:ITERATIONS$salt$hash` — extracts the iteration count and returns `True` if it isn't 260,000. No werkzeug dependency. Works correctly for 260K (False), 1M (True), and scrypt (False — scrypt is already fast).
+
+  **On first login after this update:** Jen detects the 1M-iteration hash, verifies it (slow, one last time), rehashes at 260K, and stores the new hash. Every login after that is fast.
+
+## [2.8.2] - 2026-04-29
+
+### Fixed
+- Login still slow after 2.8.1 — the hash itself is now fast (260K iterations, ~190ms) but the login route was opening **7 separate DB connections** per login attempt: 3 for `get_rate_limit_settings()` reading settings one at a time, 1 for the rate limit query, 1 for the user lookup, 1 for `user_has_mfa()`, and 1 for `user_needs_mfa()` → `get_mfa_mode()`. On a network database each connection adds latency.
+
+  Refactored `login()` to use a **single DB connection** for the entire flow: user lookup, all settings (rate limit + MFA mode) in one `WHERE setting_key IN (...)` query, and MFA enrollment check — all in one round trip. The 7 connections are now 1 (plus an optional 2nd for password rehash if needed).
+
+- Removed duplicate `clear_login_attempts` and `User()` constructor calls — both were called twice due to a copy-paste error from the 2.6.x transformation.
+
 ## [2.8.1] - 2026-04-29
 
 ### Fixed

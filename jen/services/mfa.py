@@ -118,10 +118,20 @@ def is_trusted_device(user_id, request):
                 AND (expires_at IS NULL OR expires_at > NOW())
             """, (user_id, token_hash))
             row = cur.fetchone()
-            if row:
-                cur.execute("UPDATE mfa_trusted_devices SET last_used=NOW() WHERE id=%s", (row["id"],))
-                db.commit()
         db.close()
+        if row:
+            # Update last_used async — don't block the login response
+            import threading
+            def _update(rid):
+                try:
+                    db2 = __get_jen_db()
+                    with db2.cursor() as cur2:
+                        cur2.execute("UPDATE mfa_trusted_devices SET last_used=NOW() WHERE id=%s", (rid,))
+                    db2.commit()
+                    db2.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_update, args=(row["id"],), daemon=True).start()
         return bool(row)
     except Exception:
         return False

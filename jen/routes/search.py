@@ -128,10 +128,11 @@ def global_search():
             flash(f"Search error: {str(e)}", "error")
 
     total = sum(len(v) for v in results.values())
+    subnet_names = {sid: info["name"] for sid, info in extensions.SUBNET_MAP.items()}
     return render_template("search_results.html",
                            q=q, results=results, total=total,
                            subnet_map=extensions.SUBNET_MAP,
-                           subnet_names=SUBNET_NAMES)
+                           subnet_names=subnet_names)
 
 # ─────────────────────────────────────────
 # MFA Routes

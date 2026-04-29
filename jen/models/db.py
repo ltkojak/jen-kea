@@ -2,13 +2,19 @@
 jen/models/db.py
 ────────────────
 Database connection helpers and schema initialisation.
-All connection parameters come from jen.extensions so this
-module never reads config files directly.
+
+Connection pooling via dbutils.pooled_db.PooledDB keeps a small number of
+TCP connections open permanently so requests reuse existing connections
+instead of paying the ~1s TCP + MySQL handshake cost on every request.
+
+Pool is initialised lazily on first use so startup doesn't block if the
+DB is temporarily unavailable.
 """
 
 import json
 import logging
 import os
+import threading
 
 import pymysql
 import pymysql.cursors
@@ -17,29 +23,126 @@ from jen import extensions
 
 logger = logging.getLogger(__name__)
 
+# ── Connection pools ──────────────────────────────────────────────────────────
+# Initialised once on first use. Thread-safe — PooledDB handles locking.
+
+_jen_pool  = None
+_kea_pool  = None
+_pool_lock = threading.Lock()
+
+_POOL_MIN  = 2   # connections kept open permanently
+_POOL_MAX  = 10  # maximum concurrent connections
+
+
+def _make_jen_pool():
+    """Create the Jen DB connection pool."""
+    from dbutils.pooled_db import PooledDB
+    return PooledDB(
+        creator      = pymysql,
+        mincached    = _POOL_MIN,
+        maxcached    = _POOL_MAX,
+        maxconnections = _POOL_MAX,
+        blocking     = True,          # wait for a connection rather than raise
+        ping         = 1,             # ping before use to detect stale connections
+        host         = extensions.JEN_DB_HOST,
+        user         = extensions.JEN_DB_USER,
+        password     = extensions.JEN_DB_PASS,
+        database     = extensions.JEN_DB_NAME,
+        cursorclass  = pymysql.cursors.DictCursor,
+        connect_timeout = 10,
+        charset      = "utf8mb4",
+    )
+
+
+def _make_kea_pool():
+    """Create the Kea DB connection pool."""
+    from dbutils.pooled_db import PooledDB
+    return PooledDB(
+        creator      = pymysql,
+        mincached    = _POOL_MIN,
+        maxcached    = _POOL_MAX,
+        maxconnections = _POOL_MAX,
+        blocking     = True,
+        ping         = 1,
+        host         = extensions.KEA_DB_HOST,
+        user         = extensions.KEA_DB_USER,
+        password     = extensions.KEA_DB_PASS,
+        database     = extensions.KEA_DB_NAME,
+        cursorclass  = pymysql.cursors.DictCursor,
+        connect_timeout = 10,
+        charset      = "utf8mb4",
+    )
+
 
 def get_jen_db() -> pymysql.connections.Connection:
-    """Return a new PyMySQL connection to the Jen database."""
-    return pymysql.connect(
-        host=extensions.JEN_DB_HOST,
-        user=extensions.JEN_DB_USER,
-        password=extensions.JEN_DB_PASS,
-        database=extensions.JEN_DB_NAME,
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=5,
-    )
+    """
+    Return a pooled connection to the Jen database.
+    On first call the pool is created and TCP connections are established.
+    Subsequent calls return an already-open connection from the pool (~0ms).
+    Caller must call db.close() to return the connection to the pool.
+    """
+    global _jen_pool
+    if _jen_pool is None:
+        with _pool_lock:
+            if _jen_pool is None:           # double-checked locking
+                try:
+                    _jen_pool = _make_jen_pool()
+                    logger.info("Jen DB connection pool initialised")
+                except Exception as e:
+                    logger.error(f"Failed to create Jen DB pool: {e}")
+                    # Fall back to direct connection if dbutils unavailable
+                    return pymysql.connect(
+                        host=extensions.JEN_DB_HOST,
+                        user=extensions.JEN_DB_USER,
+                        password=extensions.JEN_DB_PASS,
+                        database=extensions.JEN_DB_NAME,
+                        cursorclass=pymysql.cursors.DictCursor,
+                        connect_timeout=10,
+                    )
+    return _jen_pool.connection()
 
 
 def get_kea_db() -> pymysql.connections.Connection:
-    """Return a new PyMySQL connection to the Kea database."""
-    return pymysql.connect(
-        host=extensions.KEA_DB_HOST,
-        user=extensions.KEA_DB_USER,
-        password=extensions.KEA_DB_PASS,
-        database=extensions.KEA_DB_NAME,
-        cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=5,
-    )
+    """
+    Return a pooled connection to the Kea database.
+    Falls back to a direct connection if the pool is unavailable.
+    """
+    global _kea_pool
+    if _kea_pool is None:
+        with _pool_lock:
+            if _kea_pool is None:
+                try:
+                    _kea_pool = _make_kea_pool()
+                    logger.info("Kea DB connection pool initialised")
+                except Exception as e:
+                    logger.error(f"Failed to create Kea DB pool: {e}")
+                    return pymysql.connect(
+                        host=extensions.KEA_DB_HOST,
+                        user=extensions.KEA_DB_USER,
+                        password=extensions.KEA_DB_PASS,
+                        database=extensions.KEA_DB_NAME,
+                        cursorclass=pymysql.cursors.DictCursor,
+                        connect_timeout=10,
+                    )
+    return _kea_pool.connection()
+
+
+def reset_pools() -> None:
+    """
+    Tear down and recreate both connection pools.
+    Called after config changes that update DB credentials or host.
+    """
+    global _jen_pool, _kea_pool
+    with _pool_lock:
+        if _jen_pool is not None:
+            try: _jen_pool._idle_cache.clear()
+            except Exception: pass
+            _jen_pool = None
+        if _kea_pool is not None:
+            try: _kea_pool._idle_cache.clear()
+            except Exception: pass
+            _kea_pool = None
+    logger.info("DB connection pools reset")
 
 
 def init_jen_db() -> None:

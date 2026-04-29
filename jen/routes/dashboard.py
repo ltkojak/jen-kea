@@ -67,54 +67,29 @@ def dashboard():
         hours = 0.5
     if hours not in (0.5, 1, 4, 8, 12, 24):
         hours = 0.5
-    # hours_str must exactly match the option values in the template (no trailing .0)
     hours_str = str(int(hours)) if hours == int(hours) else str(hours)
 
-    stats = {}
-    recent = []
-    # First fetch Kea config so we know pool sizes AND lease lifetimes
-    pool_sizes = {}
-    default_lifetime = 86400
-    try:
-        result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
-        if result.get("result") == 0:
-            cfg = result["arguments"]["Dhcp4"]
-            default_lifetime = extensions.cfg.get("valid-lifetime", 86400)
-            for s in extensions.cfg.get("subnet4", []):
-                sid = str(s["id"])
-                for pool in s.get("pools", []):
-                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                    if "-" in p:
-                        start, end = [x.strip() for x in p.split("-")]
-                        pool_sizes[sid] = __ip_to_int(end) - __ip_to_int(start) + 1
-    except Exception:
-        pass
+    # Build skeleton stats from SUBNET_MAP — cards render immediately with
+    # placeholder zeros. /api/stats fills in real numbers async via updateStats().
+    stats = {
+        sid: {"active": "…", "dynamic": "…", "reservations": "…",
+              "name": info["name"], "cidr": info["cidr"]}
+        for sid, info in extensions.SUBNET_MAP.items()
+    }
 
+    # Server statuses — cheap (no Kea API calls), just the config list
+    server_statuses = [
+        {"server": s, "up": None, "ha_state": None, "ha_partner": None, "version": ""}
+        for s in extensions.KEA_SERVERS
+    ]
+
+    # Recent leases — single DB query, no Kea API calls
+    recent = []
+    device_info = {}
     try:
         db = __db.get_kea_db()
+        window_seconds = int(hours * 3600)
         with db.cursor() as cur:
-            for subnet_id, info in extensions.SUBNET_MAP.items():
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                active = cur.fetchone()["cnt"]
-                cur.execute("""
-                    SELECT COUNT(*) as cnt FROM lease4 l
-                    WHERE l.state=0 AND l.subnet_id=%s
-                    AND NOT EXISTS (
-                        SELECT 1 FROM hosts h
-                        WHERE h.dhcp4_subnet_id=%s AND h.dhcp_identifier=l.hwaddr
-                    )
-                """, (subnet_id, subnet_id))
-                dynamic = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                reserved = cur.fetchone()["cnt"]
-                stats[subnet_id] = {"active": active, "dynamic": dynamic,
-                                    "reservations": reserved,
-                                    "name": info["name"], "cidr": info["cidr"]}
-
-            # issued_at = expire - valid_lifetime (valid_lifetime is stored per-lease in Kea)
-            # expire is a TIMESTAMP column, so use INTERVAL arithmetic not UNIX_TIMESTAMP()
-            window_seconds = int(hours * 3600)
-            logger.info(f"Dashboard: hours={hours}, window={window_seconds}s")
             cur.execute("""
                 SELECT inet_ntoa(l.address) AS ip, l.hostname,
                        HEX(l.hwaddr) AS mac_hex, l.subnet_id,
@@ -124,37 +99,24 @@ def dashboard():
                   AND l.expire > NOW()
                   AND (l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)
                 ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
-                LIMIT 200
+                LIMIT 50
             """, (window_seconds,))
             for row in cur.fetchall():
                 mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                 sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
                 recent.append({"ip": row["ip"], "hostname": row["hostname"] or "",
                                 "mac": mac, "subnet_id": row["subnet_id"],
-                                "subnet_name": sname,
-                                "obtained": row["obtained"]})
+                                "subnet_name": sname, "obtained": row["obtained"]})
         db.close()
+        mac_list = [l["mac"] for l in recent if l.get("mac")]
+        device_info = __fp.get_device_info_map(mac_list)
     except Exception as e:
-        logger.error(f"Dashboard DB error: {e}")
-        flash(f"Could not load dashboard data: {str(e)}", "error")
-    kea_up = __kea.kea_is_up()
-    server_statuses = []
-    try:
-        server_statuses = __kea.get_all_server_status()
-        for s in server_statuses:
-            if s["up"]:
-                ver = __kea.kea_command("version-get", server=s["server"])
-                s["version"] = ver.get("arguments", {}).get("extended", ver.get("text", ""))
-                s["version"] = s["version"].splitlines()[0] if s["version"] else ""
-            else:
-                s["version"] = ""
-    except Exception:
-        pass
-    mac_list = [l["mac"] for l in recent if l.get("mac")]
-    device_info = __fp.get_device_info_map(mac_list)
-    return render_template("dashboard.html", stats=stats, recent=recent,
-                           kea_up=kea_up, subnet_map=extensions.SUBNET_MAP,
-                           pool_sizes=pool_sizes, hours=hours_str,
+        logger.error(f"Dashboard recent leases error: {e}")
+
+    return render_template("dashboard.html",
+                           stats=stats, recent=recent,
+                           kea_up=None, subnet_map=extensions.SUBNET_MAP,
+                           pool_sizes={}, hours=hours_str,
                            server_statuses=server_statuses,
                            device_info=device_info,
                            get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
@@ -268,8 +230,26 @@ def api_stats():
             kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
             kea_version = kea_version.splitlines()[0] if kea_version else ""
         server_statuses = [{
-            "id": s["id"], "name": s["name"], "up": __kea.kea_is_up(server=s), "role": s["role"]
+            "id":       s["id"],
+            "name":     s["name"],
+            "up":       __kea.kea_is_up(server=s),
+            "role":     s.get("role", "primary"),
+            "ha_state": None,
+            "version":  "",
         } for s in extensions.KEA_SERVERS]
+        # Add HA state and version for online servers
+        for srv in server_statuses:
+            if srv["up"]:
+                if len(extensions.KEA_SERVERS) > 1:
+                    ha = __kea.kea_command("ha-heartbeat",
+                                          server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"]))
+                    if ha.get("result") == 0:
+                        srv["ha_state"] = ha.get("arguments", {}).get("state", "")
+                ver = __kea.kea_command("version-get",
+                                        server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"]))
+                if ver.get("result") == 0:
+                    v = ver.get("arguments", {}).get("extended", ver.get("text", ""))
+                    srv["version"] = v.splitlines()[0] if v else ""
         return jsonify({
             "subnets": stats,
             "pool_sizes": pool_sizes,
@@ -278,7 +258,8 @@ def api_stats():
             "servers": server_statuses,
         })
     except Exception as e:
-        return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False, "error": str(e)})
+        return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False,
+                        "servers": [], "error": str(e)})
 
 @bp.route("/metrics")
 def prometheus_metrics():

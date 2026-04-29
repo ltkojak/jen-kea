@@ -24,7 +24,16 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "2.8.1"
+JEN_VERSION = "3.0.2"
+
+# Cache ssl_configured result — cert files don't change at runtime
+_ssl_configured_cache: bool | None = None
+
+def _ssl_configured_cached() -> bool:
+    global _ssl_configured_cache
+    if _ssl_configured_cache is None:
+        _ssl_configured_cache = ssl_configured()
+    return _ssl_configured_cache
 
 # ── Login manager (module-level so decorators can reference it) ───────────────
 login_manager = LoginManager()
@@ -52,6 +61,28 @@ def create_app() -> Flask:
 
     @login_manager.user_loader
     def load_user(user_id):
+        from flask import g as _g
+
+        # Fast path: check g cache first (within same request)
+        cached = getattr(_g, '_cached_user', None)
+        if cached is not None and str(cached.id) == str(user_id):
+            return cached
+
+        # Fast path: reconstruct from session data if available
+        # This avoids a DB round trip on every authenticated request.
+        # Session is signed with SECRET_KEY so it can't be tampered with.
+        sess_user = session.get('_user_cache')
+        if sess_user and str(sess_user.get('id')) == str(user_id):
+            user = User(
+                sess_user['id'], sess_user['username'],
+                sess_user['role'], sess_user.get('session_timeout')
+            )
+            _g._cached_user = user
+            try: _g._route_start = __import__('time').time()
+            except: pass
+            return user
+
+        # Slow path: DB lookup (only on first login or if session cache missing)
         from jen.models.db import get_jen_db
         try:
             db = get_jen_db()
@@ -63,44 +94,79 @@ def create_app() -> Flask:
                 row = cur.fetchone()
             db.close()
             if row:
-                return User(row["id"], row["username"],
+                user = User(row["id"], row["username"],
                             row["role"], row["session_timeout"])
+                # Cache in session for future requests (no DB hit)
+                session['_user_cache'] = {
+                    'id': row["id"], 'username': row["username"],
+                    'role': row["role"], 'session_timeout': row["session_timeout"]
+                }
+                _g._cached_user = user
+                try: _g._route_start = __import__('time').time()
+                except: pass
+                return user
         except Exception as e:
             logger.error(f"load_user error: {e}")
         return None
 
     # ── Middleware ────────────────────────────────────────────────────────────
     @app.before_request
+    def _time_request_start():
+        import time
+        from flask import g
+        g._request_start = time.time()
+        g._after_load_user = time.time()  # overwritten by load_user
+
+    @app.after_request
+    def _time_request_end(response):
+        import time
+        from flask import g
+        if hasattr(g, '_request_start') and not request.path.startswith('/static/'):
+            elapsed = (time.time() - g._request_start) * 1000
+            if elapsed > 500:
+                import logging
+                logging.getLogger('jen.timing').warning(
+                    f"SLOW {elapsed:.0f}ms  {request.method} {request.path}"
+                )
+        return response
+
+    @app.before_request
     def check_session_timeout():
-        if current_user.is_authenticated:
-            if get_global_setting("session_timeout_enabled", "true") == "false":
-                session["last_active"] = datetime.now(timezone.utc).isoformat()
-                return
-            timeout = current_user.session_timeout or int(
-                get_global_setting("session_timeout_minutes", "60")
-            )
-            if int(timeout) == 0:
-                session["last_active"] = datetime.now(timezone.utc).isoformat()
-                return
-            now  = datetime.now(timezone.utc)
-            last = session.get("last_active")
-            if not last:
+        if not current_user.is_authenticated:
+            return
+        # Skip static assets entirely
+        if request.path.startswith('/static/'):
+            return
+        if get_global_setting("session_timeout_enabled", "true") == "false":
+            session["last_active"] = datetime.now(timezone.utc).isoformat()
+            return
+        timeout = current_user.session_timeout or int(
+            get_global_setting("session_timeout_minutes", "60")
+        )
+        if int(timeout) == 0:
+            session["last_active"] = datetime.now(timezone.utc).isoformat()
+            return
+        now  = datetime.now(timezone.utc)
+        last = session.get("last_active")
+        if not last:
+            session["last_active"] = now.isoformat()
+        else:
+            try:
+                elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60
+                if elapsed > int(timeout):
+                    logout_user()
+                    flash("Session expired. Please log in again.", "error")
+                    return redirect(url_for("auth.login"))
+            except Exception:
+                pass
+            if not request.path.startswith("/api/") and request.path != "/metrics":
                 session["last_active"] = now.isoformat()
-            else:
-                try:
-                    elapsed = (now - datetime.fromisoformat(last)).total_seconds() / 60
-                    if elapsed > int(timeout):
-                        logout_user()
-                        flash("Session expired. Please log in again.", "error")
-                        return redirect(url_for("auth.login"))
-                except Exception:
-                    pass
-                if not request.path.startswith("/api/") and request.path != "/metrics":
-                    session["last_active"] = now.isoformat()
 
     @app.before_request
     def redirect_to_https():
-        if ssl_configured() and not request.is_secure:
+        if request.is_secure:
+            return
+        if _ssl_configured_cached() and not request.is_secure:
             host = request.host.split(":")[0]
             return redirect(
                 f"https://{host}:{extensions.HTTPS_PORT}{request.path}",
@@ -110,21 +176,24 @@ def create_app() -> Flask:
     # ── Context processor ─────────────────────────────────────────────────────
     @app.context_processor
     def inject_branding():
-        from jen.models.db import get_jen_db
-        avatar_url  = None
+        avatar_url   = None
         nav_logo_url = None
         if current_user and current_user.is_authenticated:
-            try:
-                db = get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("SELECT avatar_url FROM users WHERE id=%s",
-                                (current_user.id,))
-                    row = cur.fetchone()
-                    if row:
-                        avatar_url = row.get("avatar_url")
-                db.close()
-            except Exception:
-                pass
+            # Cache avatar in session — only query DB when not yet cached
+            avatar_url = session.get("_avatar_url", "__unset__")
+            if avatar_url == "__unset__":
+                try:
+                    from jen.models.db import get_jen_db
+                    db = get_jen_db()
+                    with db.cursor() as cur:
+                        cur.execute("SELECT avatar_url FROM users WHERE id=%s",
+                                    (current_user.id,))
+                        row = cur.fetchone()
+                        avatar_url = row.get("avatar_url") if row else None
+                    db.close()
+                except Exception:
+                    avatar_url = None
+                session["_avatar_url"] = avatar_url
         nav_logo_path = extensions.NAV_LOGO_PATH
         for ext in ("png", "svg", "jpg", "jpeg", "webp"):
             path = f"{nav_logo_path}.{ext}"
@@ -132,11 +201,11 @@ def create_app() -> Flask:
                 nav_logo_url = f"/static/nav_logo.{ext}?v={int(os.path.getmtime(path))}"
                 break
         return {
-            "branding_name":      "Jen",
-            "branding_nav_color": get_global_setting("branding_nav_color", ""),
-            "branding_nav_logo":  nav_logo_url,
+            "branding_name":       "Jen",
+            "branding_nav_color":  get_global_setting("branding_nav_color", ""),
+            "branding_nav_logo":   nav_logo_url,
             "current_user_avatar": avatar_url,
-            "jen_version":        JEN_VERSION,
+            "jen_version":         JEN_VERSION,
         }
 
     # ── Error handlers ────────────────────────────────────────────────────────
