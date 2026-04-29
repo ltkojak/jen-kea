@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.1.0] - 2026-04-29
+
+### Phase 3 — HTMX
+
+HTMX 1.9.12 added for partial page updates. Served locally from `/static/js/htmx.min.js` — works fully offline, no CDN dependency. Downloaded automatically during install if internet is available.
+
+**Reservations page:**
+- Delete button now removes just the row — no full page reload, no scroll position reset
+- Filter form (subnet, search) updates the table body live — 400ms debounce on typing, instant on select change
+- Both features degrade gracefully: delete falls back to form POST, filter falls back to GET on submit
+
+**Leases page:**
+- Filter form (subnet, minutes, search) updates the table body live — 400ms debounce on typing
+- Changing subnet or time window is instant, no full page reload
+
+**Devices page:**
+- Already had JavaScript modal editing — no HTMX needed, behaviour unchanged
+
 ## [3.0.2] - 2026-04-29
 
 ### Fixed — Bugs found by test suite

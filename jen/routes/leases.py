@@ -138,12 +138,17 @@ def leases():
     # Fetch device fingerprint info for all MACs on this page
     mac_list = [l["mac"] for l in leases_list if l.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
-    return render_template("leases.html", leases=leases_list, page=page, pages=pages,
-                           total=total, subnet_filter=subnet_filter, minutes=minutes,
-                           search=search, show_expired=show_expired, subnet_map=extensions.SUBNET_MAP,
-                           sort=sort, direction=direction, device_info=device_info,
-                           get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-                           device_type_display=__fp.DEVICE_TYPE_DISPLAY)
+    template_vars = dict(
+        leases=leases_list, page=page, pages=pages, total=total,
+        subnet_filter=subnet_filter, minutes=minutes, search=search,
+        show_expired=show_expired, subnet_map=extensions.SUBNET_MAP,
+        sort=sort, direction=direction, device_info=device_info,
+        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY
+    )
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_lease_rows.html", **template_vars), 200
+    return render_template("leases.html", **template_vars)
 
 @bp.route("/leases/delete-stale", methods=["POST"])
 @login_required

@@ -1,0 +1,26 @@
+{# Partial template — rendered for both initial page load and HTMX swaps #}
+{# Used by: reservations.html (full page) and reservations.reservation_row (HTMX) #}
+{% from '_device_badge.html' import device_badge %}
+<tr id="reservation-{{ h.host_id }}">
+    <td data-label="IP" class="mono">{{ h.ip }}</td>
+    <td data-label="Hostname" style="white-space:nowrap;">
+        {{ h.hostname or '—' }}
+        {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
+    </td>
+    <td data-label="MAC" class="mono hide-mobile">{{ h.mac }}</td>
+    <td data-label="Subnet"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
+    <td data-label="DNS" class="mono hide-tablet" style="color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
+    <td data-label="Notes" class="hide-tablet" style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
+    {% if current_user.role == 'admin' %}
+    <td data-label="">
+        <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary" title="Edit">✏</a>
+        <button class="btn btn-sm btn-danger"
+                title="Delete"
+                hx-post="/reservations/delete/{{ h.host_id }}"
+                hx-target="#reservation-{{ h.host_id }}"
+                hx-swap="outerHTML swap:300ms"
+                hx-confirm="Delete reservation for {{ h.ip }}?"
+                hx-indicator="#reservation-{{ h.host_id }}">✕</button>
+    </td>
+    {% endif %}
+</tr>

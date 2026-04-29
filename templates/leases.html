@@ -8,14 +8,19 @@
 </div>
 
 <div class="filter-bar">
-    <form method="GET" style="display:contents;">
-        <select name="subnet" onchange="this.form.submit()">
+    <form method="GET" style="display:contents;"
+          hx-get="/leases"
+          hx-target="#leases-table-body"
+          hx-swap="innerHTML"
+          hx-trigger="change from:select, input delay:400ms"
+          hx-push-url="true">
+        <select name="subnet">
             <option value="all" {% if subnet_filter=='all' %}selected{% endif %}>All Subnets</option>
             {% for sid, info in subnet_map.items() %}
             <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <select name="minutes" onchange="this.form.submit()">
+        <select name="minutes">
             <option value="" {% if not minutes %}selected{% endif %}>All time</option>
             <option value="5" {% if minutes=='5' %}selected{% endif %}>Last 5 min</option>
             <option value="15" {% if minutes=='15' %}selected{% endif %}>Last 15 min</option>
@@ -87,7 +92,7 @@ function saveCurrentFilter() {
         <th class="hide-tablet"><a href="?sort=expires&dir={{ 'asc' if sort=='expires' and direction=='desc' else 'desc' if sort=='expires' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired At' if show_expired else 'Expires' }}{% if sort=='expires' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         {% if not show_expired and current_user.role == 'admin' %}<th></th>{% endif %}
     </tr></thead>
-    <tbody>
+    <tbody id="leases-table-body">
     {% for l in leases %}
     <tr>
         <td data-label="IP" class="mono">{{ l.ip }}</td>

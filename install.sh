@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.0.2"
+JEN_VERSION="3.1.0"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -725,6 +725,28 @@ install_files() {
     cp "$SCRIPT_DIR/jen-sudoers" "$SUDOERS_FILE"
     chmod 440 "$SUDOERS_FILE"
     ok "Installed sudoers entry"
+
+    # Download HTMX for local serving (works offline after install)
+    local htmx_path="$INSTALL_DIR/static/js/htmx.min.js"
+    if [[ ! -f "$htmx_path" ]] || [[ ! -s "$htmx_path" ]]; then
+        spinner_start "Downloading HTMX..."
+        mkdir -p "$INSTALL_DIR/static/js"
+        if curl -sf --connect-timeout 10             "https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"             -o "$htmx_path" 2>/dev/null; then
+            spinner_stop
+            ok "Downloaded HTMX  ${DIM}($(wc -c < "$htmx_path") bytes)${NC}"
+        else
+            spinner_stop
+            # Try to copy from source if bundled
+            if [[ -f "$SCRIPT_DIR/static/js/htmx.min.js" ]] &&                [[ -s "$SCRIPT_DIR/static/js/htmx.min.js" ]]; then
+                cp "$SCRIPT_DIR/static/js/htmx.min.js" "$htmx_path"
+                ok "Installed HTMX from package"
+            else
+                warn "Could not download HTMX — interactive table features will be disabled"
+            fi
+        fi
+    else
+        ok "HTMX already installed"
+    fi
 
     spinner_start "Setting permissions..."
     chown -R "$JEN_USER:$JEN_USER" "$INSTALL_DIR" "$CONFIG_DIR"

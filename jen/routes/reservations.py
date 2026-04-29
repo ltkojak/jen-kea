@@ -126,13 +126,23 @@ def reservations():
     stale_days = int(__user.get_global_setting("stale_device_days", "30"))
     mac_list = [h["mac"] for h in hosts if h.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
-    return render_template("reservations.html", hosts=hosts,
-                           subnet_filter=subnet_filter, search=search,
-                           subnet_map=extensions.SUBNET_MAP, page=page, pages=pages,
-                           total=total, stale_days=stale_days,
-                           sort=sort, direction=direction, device_info=device_info,
-                           get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-                           device_type_display=__fp.DEVICE_TYPE_DISPLAY)
+    template_vars = dict(
+        hosts=hosts, subnet_filter=subnet_filter, search=search,
+        subnet_map=extensions.SUBNET_MAP, page=page, pages=pages,
+        total=total, stale_days=stale_days, sort=sort, direction=direction,
+        device_info=device_info,
+        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY
+    )
+    # HTMX filter request — return just the table rows
+    if request.headers.get("HX-Request") == "true":
+        from flask import render_template as _rt
+        rows_html = "".join(
+            _rt("_reservation_row.html", h=h, **template_vars)
+            for h in hosts
+        ) if hosts else '<tr id="no-reservations"><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No reservations found.</td></tr>'
+        return rows_html, 200
+    return render_template("reservations.html", **template_vars)
 
 @bp.route("/reservations/add")
 @login_required
@@ -263,6 +273,7 @@ def edit_reservation_post(host_id):
 @login_required
 @_admin_required
 def delete_reservation(host_id):
+    is_htmx = request.headers.get("HX-Request") == "true"
     try:
         db = __db.get_kea_db()
         with db.cursor() as cur:
@@ -276,12 +287,19 @@ def delete_reservation(host_id):
                     with jdb.cursor() as jcur:
                         jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
                     jdb.commit(); jdb.close()
-                    flash(f"Reservation {host['ip']} deleted.", "success")
                     __user.audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
+                    if is_htmx:
+                        # Return empty string — HTMX swaps row with nothing (removes it)
+                        return "", 200
+                    flash(f"Reservation {host['ip']} deleted.", "success")
                 else:
+                    if is_htmx:
+                        return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Kea error: {result.get("text")}</td></tr>', 422
                     flash(f"Kea error: {result.get('text')}", "error")
         db.close()
     except Exception as e:
+        if is_htmx:
+            return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Error: {str(e)}</td></tr>', 500
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for('reservations.reservations'))
 
