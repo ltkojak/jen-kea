@@ -7,7 +7,8 @@
         <h1>📊 Dashboard</h1>
         <p>Live overview of your DHCP infrastructure</p>
     </div>
-    <div style="display:flex;align-items:center;gap:8px;">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <span id="last-updated" style="font-size:11px;color:var(--text-muted);"></span>
         <button class="btn btn-secondary btn-sm" onclick="toggleCustomize()">⚙️ Customize</button>
         <span style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
         <select id="refreshInterval" style="width:auto;font-size:12px;padding:4px 8px;" onchange="setRefreshInterval(this.value)">
@@ -18,7 +19,7 @@
             <option value="30000" selected>30s</option>
             <option value="60000">60s</option>
         </select>
-        <span id="refreshDot" style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block;"></span>
+        <span id="refreshDot" style="width:8px;height:8px;border-radius:50%;background:var(--success);display:inline-block;" title="Kea: checking..."></span>
     </div>
 </div>
 
@@ -28,6 +29,8 @@
     <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Choose which widgets to show. Changes are saved to your account.</p>
     <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-subnet_stats"> Subnet Statistics</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-totals"> Total Summary</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-lease_history_chart"> Utilization History (7 days)</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-recent_leases"> Recently Issued Leases</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-server_status"> Server Status</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
@@ -39,7 +42,7 @@
 <div id="dash-subnet_stats">
     <div class="stat-grid">
     {% for subnet_id, s in stats.items() %}
-    <div class="stat-card">
+    <div class="stat-card" onclick="window.location='/leases?subnet={{ subnet_id }}'" style="cursor:pointer;" title="View leases for {{ s.name }}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div style="flex:1;">
                 <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
@@ -58,23 +61,80 @@
     </div>
 </div>
 
+<!-- Total summary widget -->
+<div id="dash-totals" style="display:none;">
+    <div class="card" style="padding:16px 20px;">
+        <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Total Active</div>
+                <div style="font-size:24px;font-weight:700;color:var(--primary);" id="total-active">—</div>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Dynamic</div>
+                <div style="font-size:24px;font-weight:700;" id="total-dynamic">—</div>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reserved</div>
+                <div style="font-size:24px;font-weight:700;" id="total-reserved">—</div>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Pool Used</div>
+                <div style="font-size:24px;font-weight:700;" id="total-pct">—</div>
+            </div>
+            <div style="flex:1;min-width:200px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length }} subnet{{ 's' if stats|length != 1 else '' }}</div>
+                <div class="util-bar">
+                    <div class="util-fill" id="total-util-fill" style="width:0%;transition:width 0.5s ease;background:var(--primary);"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Utilization history chart widget -->
+<div id="dash-lease_history_chart" style="display:none;">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">📈 Utilization History</span>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <select id="history-days" onchange="loadHistory()" style="width:auto;font-size:12px;padding:4px 8px;">
+                    <option value="1">Last 24h</option>
+                    <option value="7" selected>Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                </select>
+            </div>
+        </div>
+        <div id="history-charts" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:4px 0;">
+            {% for subnet_id, s in stats.items() %}
+            <div>
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">{{ s.name }}</div>
+                <canvas id="chart-{{ subnet_id }}" height="60" style="width:100%;"></canvas>
+            </div>
+            {% endfor %}
+        </div>
+        <p id="history-loading" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading history...</p>
+        <p id="history-empty" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;display:none;">No history yet — data is collected every 30 minutes.</p>
+    </div>
+</div>
+
 <!-- Recently issued leases widget -->
 <div id="dash-recent_leases">
     <div class="card">
         <div class="card-header">
             <span class="card-title">🕐 Recently Issued Leases</span>
-            <form method="GET" action="/" style="display:flex;gap:8px;align-items:center;">
-                <select name="hours" onchange="this.form.submit()" style="width:auto;">
-                    <option value="0.5" {% if hours=='0.5' %}selected{% endif %}>Last 30 min</option>
-                    <option value="1"   {% if hours=='1'   %}selected{% endif %}>Last 1 hour</option>
-                    <option value="4"   {% if hours=='4'   %}selected{% endif %}>Last 4 hours</option>
-                    <option value="8"   {% if hours=='8'   %}selected{% endif %}>Last 8 hours</option>
-                    <option value="12"  {% if hours=='12'  %}selected{% endif %}>Last 12 hours</option>
-                    <option value="24"  {% if hours=='24'  %}selected{% endif %}>Last 24 hours</option>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <select id="recent-hours" onchange="loadRecentLeases()" style="width:auto;">
+                    <option value="0.5">Last 30 min</option>
+                    <option value="1">Last 1 hour</option>
+                    <option value="4">Last 4 hours</option>
+                    <option value="8">Last 8 hours</option>
+                    <option value="12">Last 12 hours</option>
+                    <option value="24">Last 24 hours</option>
                 </select>
                 <a href="/leases" class="btn btn-sm btn-secondary">View All</a>
-            </form>
+            </div>
         </div>
+        <div id="recent-leases-body">
         {% if recent %}
         <div class="table-wrap">
         <table class="sortable">
@@ -104,6 +164,7 @@
         {% else %}
         <div style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</div>
         {% endif %}
+        </div>
     </div>
 </div>
 
@@ -152,73 +213,248 @@
 <!-- Alert summary widget -->
 <div id="dash-alert_summary" style="display:none;">
     <div class="card">
-        <div class="card-header"><span class="card-title">🔔 Alert Summary</span></div>
-        <p style="color:var(--text-muted);font-size:13px;">No recent alerts.</p>
+        <div class="card-header">
+            <span class="card-title">🔔 Alert Summary</span>
+            <a href="/settings/alerts" class="btn btn-sm btn-secondary">Configure</a>
+        </div>
+        <div id="alert-summary-body">
+            <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading...</p>
+        </div>
     </div>
 </div>
 
 {% endblock %}
 {% block scripts %}
 const POOL_SIZES = {{ pool_sizes | tojson }};
+const SUBNET_IDS = {{ stats.keys()|list|tojson }};
 let refreshTimer = null;
+let historyCharts = {};
 
-function toggleCustomize() {
-    var p = document.getElementById('dash-customize');
-    p.style.display = p.style.display === 'none' ? 'block' : 'none';
-}
+// ── Sparkline renderer (no library — pure Canvas 2D) ─────────────────────────
+function drawSparkline(canvasId, points, color) {
+    var canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    // Wait for layout — canvas inside CSS grid may have offsetWidth=0 on first paint
+    var w = canvas.offsetWidth || (canvas.parentElement && canvas.parentElement.offsetWidth) || 0;
+    if (w < 10) {
+        requestAnimationFrame(function() { drawSparkline(canvasId, points, color); });
+        return;
+    }
+    var h = canvas.height;
+    canvas.width = w;
+    ctx.clearRect(0, 0, w, h);
+    if (!points || points.length < 2) {
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-muted') || '#666';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No data yet', w/2, h/2 + 4);
+        return;
+    }
+    ctx.clearRect(0, 0, w, h);
 
-function applyDashPrefs(widgets) {
-    ['subnet_stats','recent_leases','server_status','alert_summary'].forEach(function(w) {
-        var el = document.getElementById('dash-' + w);
-        if (el) el.style.display = widgets.includes(w) ? '' : 'none';
+    var vals = points.map(function(p) { return p.pct; });
+    var max  = Math.max(100, Math.max.apply(null, vals));
+    var min  = 0;
+    var range = max - min || 1;
+
+    // Fill
+    ctx.beginPath();
+    var step = w / (points.length - 1);
+    ctx.moveTo(0, h - ((vals[0] - min) / range) * (h - 8) - 4);
+    vals.forEach(function(v, i) {
+        ctx.lineTo(i * step, h - ((v - min) / range) * (h - 8) - 4);
     });
+    ctx.lineTo(w, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+    ctx.fillStyle = color + '22';
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(0, h - ((vals[0] - min) / range) * (h - 8) - 4);
+    vals.forEach(function(v, i) {
+        ctx.lineTo(i * step, h - ((v - min) / range) * (h - 8) - 4);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Current value dot
+    var last = vals[vals.length - 1];
+    var lx = w - 1;
+    var ly = h - ((last - min) / range) * (h - 8) - 4;
+    ctx.beginPath();
+    ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
 }
 
-function saveDashPrefs() {
-    var widgets = ['subnet_stats','recent_leases','server_status','alert_summary']
-        .filter(function(w) { var el = document.getElementById('w-' + w); return el && el.checked; });
-    fetch('/api/dashboard/save-prefs', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({widgets: widgets})
-    }).then(r => r.json()).then(function(d) {
-        if (d.ok) {
-            applyDashPrefs(widgets);
-            document.getElementById('dash-customize').style.display = 'none';
-        }
-    }).catch(function(e) { console.error('Save prefs failed:', e); });
+// ── History charts ────────────────────────────────────────────────────────────
+function loadHistory() {
+    var days = document.getElementById('history-days');
+    var d = days ? days.value : 7;
+    var loading = document.getElementById('history-loading');
+    var empty   = document.getElementById('history-empty');
+    if (loading) loading.style.display = '';
+    if (empty)   empty.style.display = 'none';
+
+    fetch('/api/lease-history?days=' + d)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (loading) loading.style.display = 'none';
+            var hasData = false;
+            SUBNET_IDS.forEach(function(sid) {
+                var points = data.history[String(sid)];
+                if (points && points.length > 1) hasData = true;
+            });
+            if (!hasData && empty) { empty.style.display = ''; return; }
+            // Defer drawing until CSS grid has laid out (offsetWidth=0 before paint)
+            requestAnimationFrame(function() {
+                setTimeout(function() {
+                    SUBNET_IDS.forEach(function(sid) {
+                        var points = data.history[String(sid)];
+                        if (points && points.length > 1) {
+                            var pct = points[points.length-1].pct;
+                            var color = pct >= 90 ? 'var(--danger)' :
+                                        pct >= 75 ? 'var(--warning)' : 'var(--primary)';
+                            drawSparkline('chart-' + sid, points, color);
+                            var label = document.getElementById('chart-label-' + sid);
+                            if (label) label.textContent = pct + '% · ' + points[points.length-1].d + ' dynamic';
+                        }
+                    });
+                }, 80);
+            });
+        })
+        .catch(function() {
+            if (loading) loading.style.display = 'none';
+        });
 }
 
+// ── Recent leases ────────────────────────────────────────────────────────────
+function loadRecentLeases() {
+    var sel = document.getElementById('recent-hours');
+    var hours = sel ? sel.value : '0.5';
+    var body = document.getElementById('recent-leases-body');
+    if (!body) return;
+    body.style.opacity = '0.5';
+    fetch('/api/recent-leases?hours=' + hours)
+        .then(function(r) { return r.text(); })
+        .then(function(html) {
+            body.innerHTML = html;
+            body.style.opacity = '1';
+        })
+        .catch(function() { body.style.opacity = '1'; });
+}
+
+// ── Alert summary ─────────────────────────────────────────────────────────────
+function loadAlertSummary() {
+    var body = document.getElementById('alert-summary-body');
+    if (!body) return;
+    fetch('/api/alert-summary')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.alerts || data.alerts.length === 0) {
+                body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No alerts in the log yet.</p>';
+                return;
+            }
+            var icons = {
+                'kea_down': '🔴', 'kea_up': '🟢',
+                'new_lease': '📋', 'utilization_high': '⚠️',
+                'daily_summary': '📊', 'unknown_device': '❓'
+            };
+            var html = '<table style="width:100%;">';
+            data.alerts.forEach(function(a) {
+                var icon = icons[a.type] || '🔔';
+                var statusColor = a.status === 'sent' ? 'var(--success)' : 'var(--danger)';
+                html += '<tr>' +
+                    '<td style="width:28px;font-size:16px;">' + icon + '</td>' +
+                    '<td style="font-size:12px;color:var(--text-muted);">' + (a.sent_at || '') + '</td>' +
+                    '<td style="font-size:12px;">' + (a.type || '').replace(/_/g,' ') + '</td>' +
+                    '<td style="font-size:11px;color:' + statusColor + ';">' + (a.status || '') + '</td>' +
+                    '</tr>';
+            });
+            html += '</table>';
+            body.innerHTML = html;
+        })
+        .catch(function() {
+            body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Could not load alerts.</p>';
+        });
+}
+
+// ── Update stats (polls /api/stats) ──────────────────────────────────────────
 function updateStats() {
     var dot = document.getElementById('refreshDot');
     if (dot) dot.style.background = 'var(--warning)';
     fetch('/api/stats')
-        .then(r => r.json())
-        .then(data => {
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
             if (dot) dot.style.background = 'var(--success)';
+
+            // Last updated timestamp
+            var lu = document.getElementById('last-updated');
+            if (lu) {
+                var now = new Date();
+                lu.textContent = 'Updated ' + now.toLocaleTimeString();
+            }
+
             if (!data.subnets) return;
-            Object.keys(data.subnets).forEach(id => {
+
+            // Per-subnet cards
+            var totalActive = 0, totalDynamic = 0, totalReserved = 0;
+            var totalPool = 0;
+            Object.keys(data.subnets).forEach(function(id) {
                 var s = data.subnets[id];
+                totalActive   += s.active   || 0;
+                totalDynamic  += s.dynamic  || 0;
+                totalReserved += s.reservations || 0;
+
                 var activeEl = document.getElementById('stat-active-' + id);
-                var metaEl   = document.getElementById('stat-meta-' + id);
-                var utilEl   = document.getElementById('util-' + id);
-                var pctEl    = document.getElementById('util-pct-' + id);
+                var metaEl   = document.getElementById('stat-meta-'   + id);
+                var utilEl   = document.getElementById('util-'        + id);
+                var pctEl    = document.getElementById('util-pct-'    + id);
                 if (activeEl) activeEl.textContent = s.active;
                 if (metaEl)   metaEl.textContent = 'Active leases · ' + s.dynamic + ' dynamic · ' + s.reservations + ' reserved';
+
                 var poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
+                totalPool += poolSize;
                 if (poolSize > 0 && utilEl) {
                     var pct = Math.min(100, Math.round(s.dynamic / poolSize * 100));
                     utilEl.style.width = pct + '%';
-                    utilEl.style.background = pct >= 90 ? 'var(--danger)' : pct >= 75 ? 'var(--warning)' : 'var(--primary)';
+                    utilEl.style.background = pct >= 90 ? 'var(--danger)' :
+                                              pct >= 75 ? 'var(--warning)' : 'var(--primary)';
                     if (pctEl) pctEl.textContent = pct + '% of pool (' + s.dynamic + '/' + poolSize + ')';
                 }
             });
+
+            // Totals widget
+            var ta = document.getElementById('total-active');
+            var td = document.getElementById('total-dynamic');
+            var tr = document.getElementById('total-reserved');
+            var tp = document.getElementById('total-pct');
+            var tf = document.getElementById('total-util-fill');
+            if (ta) ta.textContent = totalActive;
+            if (td) td.textContent = totalDynamic;
+            if (tr) tr.textContent = totalReserved;
+            if (totalPool > 0) {
+                var totalPct = Math.min(100, Math.round(totalDynamic / totalPool * 100));
+                if (tp) tp.textContent = totalPct + '%';
+                if (tf) {
+                    tf.style.width = totalPct + '%';
+                    tf.style.background = totalPct >= 90 ? 'var(--danger)' :
+                                          totalPct >= 75 ? 'var(--warning)' : 'var(--primary)';
+                }
+            }
+
+            // Kea dot
             var keaDot = document.getElementById('kea-status-dot');
             if (keaDot) {
                 keaDot.style.background = data.kea_up ? 'var(--success)' : 'var(--danger)';
                 keaDot.title = data.kea_up ? 'Kea: Online' : 'Kea: Unreachable';
             }
-            // Update server status rows
+
+            // Server status rows
             if (data.servers) {
                 data.servers.forEach(function(srv) {
                     var statusEl = document.getElementById('srv-status-' + srv.id);
@@ -229,14 +465,53 @@ function updateStats() {
                             ? '<span style="color:var(--success);">● Online</span>'
                             : '<span style="color:var(--danger);">● Offline</span>';
                     }
-                    if (haEl)  haEl.textContent  = srv.ha_state || (srv.up ? srv.role || '—' : '—');
-                    if (verEl) verEl.textContent  = srv.version  || '—';
+                    if (haEl)  haEl.textContent = srv.ha_state || (srv.up ? srv.role || '—' : '—');
+                    if (verEl) verEl.textContent = srv.version  || '—';
                 });
             }
         })
-        .catch(() => { if (dot) dot.style.background = 'var(--danger)'; });
+        .catch(function() { if (dot) dot.style.background = 'var(--danger)'; });
 }
 
+// ── Dashboard preferences ─────────────────────────────────────────────────────
+var ALL_WIDGETS = ['subnet_stats','totals','lease_history_chart','recent_leases','server_status','alert_summary'];
+
+function toggleCustomize() {
+    var p = document.getElementById('dash-customize');
+    p.style.display = p.style.display === 'none' ? 'block' : 'none';
+}
+
+function applyDashPrefs(widgets) {
+    ALL_WIDGETS.forEach(function(w) {
+        var el = document.getElementById('dash-' + w);
+        if (el) el.style.display = widgets.includes(w) ? '' : 'none';
+        var cb = document.getElementById('w-' + w);
+        if (cb) cb.checked = widgets.includes(w);
+    });
+    // Load data for newly visible widgets
+    if (widgets.includes('lease_history_chart')) loadHistory();
+    if (widgets.includes('alert_summary'))       loadAlertSummary();
+}
+
+function saveDashPrefs() {
+    var widgets = ALL_WIDGETS.filter(function(w) {
+        var el = document.getElementById('w-' + w);
+        return el && el.checked;
+    });
+    fetch('/api/dashboard/save-prefs', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({widgets: widgets})
+    }).then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.ok) {
+            applyDashPrefs(widgets);
+            document.getElementById('dash-customize').style.display = 'none';
+        }
+    }).catch(function(e) { console.error('Save prefs failed:', e); });
+}
+
+// ── Auto-refresh ──────────────────────────────────────────────────────────────
 function setRefreshInterval(ms) {
     if (refreshTimer) clearInterval(refreshTimer);
     localStorage.setItem('jen-refresh-interval', ms);
@@ -249,22 +524,23 @@ function setRefreshInterval(ms) {
     }
 }
 
+// ── Init ──────────────────────────────────────────────────────────────────────
 (function() {
-    fetch('/api/dashboard/get-prefs').then(r => r.json()).then(function(d) {
-        var all = ['subnet_stats','recent_leases','server_status','alert_summary'];
-        all.forEach(function(w) {
-            var el = document.getElementById('w-' + w);
-            if (el) el.checked = d.widgets.includes(w);
+    // Load preferences and apply
+    fetch('/api/dashboard/get-prefs')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { applyDashPrefs(d.widgets); })
+        .catch(function() {
+            applyDashPrefs(['subnet_stats','recent_leases','server_status']);
         });
-        applyDashPrefs(d.widgets);
-    }).catch(function() {
-        applyDashPrefs(['subnet_stats','recent_leases','server_status','alert_summary']);
-    });
 
+    // Restore refresh interval
     var saved = localStorage.getItem('jen-refresh-interval') || '30000';
     var sel = document.getElementById('refreshInterval');
     if (sel) { sel.value = saved; if (!sel.value) sel.value = '30000'; }
     setRefreshInterval(saved);
+
+    // Initial data load
     updateStats();
 })();
 {% endblock %}

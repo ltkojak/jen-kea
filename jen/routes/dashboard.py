@@ -113,14 +113,18 @@ def dashboard():
     except Exception as e:
         logger.error(f"Dashboard recent leases error: {e}")
 
-    return render_template("dashboard.html",
-                           stats=stats, recent=recent,
-                           kea_up=None, subnet_map=extensions.SUBNET_MAP,
-                           pool_sizes={}, hours=hours_str,
-                           server_statuses=server_statuses,
-                           device_info=device_info,
-                           get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-                           device_type_display=__fp.DEVICE_TYPE_DISPLAY)
+    template_vars = dict(
+        stats=stats, recent=recent, kea_up=None,
+        subnet_map=extensions.SUBNET_MAP, pool_sizes={},
+        hours=hours_str, server_statuses=server_statuses,
+        device_info=device_info,
+        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY
+    )
+    # HTMX time window change — return just the recent leases rows
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_recent_leases_rows.html", **template_vars), 200
+    return render_template("dashboard.html", **template_vars)
 
 # ─────────────────────────────────────────
 # Leases
@@ -151,8 +155,11 @@ def api_saved_searches():
 def save_dashboard_prefs():
     import json
     widgets = request.json.get("widgets", ["subnet_stats", "recent_leases"])
-    valid = {"subnet_stats", "recent_leases", "top_devices", "alert_summary", "server_status"}
+    valid = {"subnet_stats", "recent_leases", "top_devices", "alert_summary",
+             "server_status", "lease_history_chart", "totals"}
     widgets = [w for w in widgets if w in valid]
+    if not widgets:
+        widgets = ["subnet_stats", "totals", "recent_leases", "server_status"]
     try:
         db = __db.get_jen_db()
         with db.cursor() as cur:
@@ -176,10 +183,10 @@ def get_dashboard_prefs():
             cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=%s", (current_user.id,))
             row = cur.fetchone()
         db.close()
-        widgets = json.loads(row["widgets"]) if row else ["subnet_stats", "recent_leases"]
+        widgets = json.loads(row["widgets"]) if row else ["subnet_stats", "totals", "recent_leases", "server_status"]
         return jsonify({"widgets": widgets})
     except Exception:
-        return jsonify({"widgets": ["subnet_stats", "recent_leases"]})
+        return jsonify({"widgets": ["subnet_stats", "totals", "recent_leases", "server_status"]})
 
 # ─────────────────────────────────────────
 # Global Search
@@ -260,6 +267,143 @@ def api_stats():
     except Exception as e:
         return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False,
                         "servers": [], "error": str(e)})
+
+
+@bp.route("/api/lease-history")
+@login_required
+def api_lease_history():
+    """
+    Return 7-day utilization history for all subnets.
+    Used by sparkline charts on subnet stat cards.
+    Returns hourly buckets (or closest snapshot) for each subnet.
+    """
+    days = min(int(request.args.get("days", 7)), 90)
+    subnet_id = request.args.get("subnet")
+    try:
+        db = __db.get_jen_db()
+        with db.cursor() as cur:
+            if subnet_id:
+                cur.execute("""
+                    SELECT subnet_id,
+                           DATE_FORMAT(snapshot_time, '%Y-%m-%d %H:00:00') AS hour,
+                           AVG(dynamic_leases) AS dynamic,
+                           AVG(active_leases)  AS active,
+                           MAX(pool_size)      AS pool_size
+                    FROM lease_history
+                    WHERE subnet_id=%s
+                      AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    GROUP BY subnet_id, hour
+                    ORDER BY hour ASC
+                """, (subnet_id, days))
+            else:
+                cur.execute("""
+                    SELECT subnet_id,
+                           DATE_FORMAT(snapshot_time, '%Y-%m-%d %H:00:00') AS hour,
+                           AVG(dynamic_leases) AS dynamic,
+                           AVG(active_leases)  AS active,
+                           MAX(pool_size)      AS pool_size
+                    FROM lease_history
+                    WHERE snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                    GROUP BY subnet_id, hour
+                    ORDER BY subnet_id, hour ASC
+                """, (days,))
+            rows = cur.fetchall()
+        db.close()
+
+        # Group by subnet_id
+        history = {}
+        for row in rows:
+            sid = str(row["subnet_id"])
+            if sid not in history:
+                history[sid] = []
+            pool = row["pool_size"] or 0
+            dynamic = float(row["dynamic"] or 0)
+            history[sid].append({
+                "t":    row["hour"],
+                "d":    round(dynamic, 1),
+                "a":    round(float(row["active"] or 0), 1),
+                "pct":  round(dynamic / pool * 100, 1) if pool > 0 else 0,
+                "pool": pool,
+            })
+        return jsonify({"history": history, "days": days})
+    except Exception as e:
+        return jsonify({"history": {}, "error": str(e)})
+
+
+@bp.route("/api/alert-summary")
+@login_required
+def api_alert_summary():
+    """Recent alerts for the dashboard alert summary widget."""
+    try:
+        db = __db.get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT alert_type, channel_type, message, status, sent_at
+                FROM alert_log
+                ORDER BY sent_at DESC
+                LIMIT 10
+            """)
+            rows = cur.fetchall()
+        db.close()
+        alerts = []
+        for row in rows:
+            alerts.append({
+                "type":    row["alert_type"],
+                "channel": row["channel_type"],
+                "message": row["message"],
+                "status":  row["status"],
+                "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M") if row["sent_at"] else "",
+            })
+        return jsonify({"alerts": alerts})
+    except Exception as e:
+        return jsonify({"alerts": [], "error": str(e)})
+
+@bp.route("/api/recent-leases")
+@login_required
+def api_recent_leases():
+    """Recent leases for dashboard widget — returns HTML fragment."""
+    from jen.services.fingerprint import get_device_info_map, get_manufacturer_icon_url, DEVICE_TYPE_DISPLAY
+    try:
+        hours = float(request.args.get("hours", "0.5"))
+    except ValueError:
+        hours = 0.5
+    if hours not in (0.5, 1, 4, 8, 12, 24):
+        hours = 0.5
+
+    recent = []
+    device_info = {}
+    try:
+        db = __db.get_kea_db()
+        window_seconds = int(hours * 3600)
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT inet_ntoa(l.address) AS ip, l.hostname,
+                       HEX(l.hwaddr) AS mac_hex, l.subnet_id,
+                       (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
+                FROM lease4 l
+                WHERE l.state=0
+                  AND l.expire > NOW()
+                  AND (l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)
+                ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
+                LIMIT 50
+            """, (window_seconds,))
+            for row in cur.fetchall():
+                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
+                recent.append({"ip": row["ip"], "hostname": row["hostname"] or "",
+                                "mac": mac, "subnet_id": row["subnet_id"],
+                                "subnet_name": sname, "obtained": row["obtained"]})
+        db.close()
+        mac_list = [l["mac"] for l in recent if l.get("mac")]
+        device_info = get_device_info_map(mac_list)
+    except Exception as e:
+        logger.error(f"Recent leases error: {e}")
+
+    return render_template("_recent_leases.html",
+                           recent=recent, device_info=device_info,
+                           get_manufacturer_icon_url=get_manufacturer_icon_url,
+                           device_type_display=DEVICE_TYPE_DISPLAY)
+
 
 @bp.route("/metrics")
 def prometheus_metrics():

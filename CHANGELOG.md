@@ -1,5 +1,58 @@
 # Changelog
 
+## [3.2.0] - 2026-04-29
+
+### Dashboard Enhancements
+
+Six improvements to the dashboard, all individually hideable via the Customize panel.
+
+**1. Utilization history sparklines**
+Each subnet card now has a canvas sparkline showing dynamic lease utilization over time. Data comes from the `lease_history` table which has been collecting snapshots every 30 minutes since initial setup. Line color matches the utilization threshold — primary/warning/danger. A dedicated History widget shows full 7-day (or 1/30-day) charts for all subnets.
+
+**2. Total summary widget**
+New widget below the subnet cards showing totals across all subnets: total active, dynamic, reserved, and overall pool utilization percentage with a progress bar.
+
+**3. Alert summary widget**
+Previously showed "No recent alerts" hardcoded. Now fetches from `/api/alert-summary` and displays the last 10 alerts with timestamp, type icon, and delivery status.
+
+**4. Recent leases HTMX**
+The time window dropdown on the Recent Leases widget now updates the table without a full page reload, via `/api/recent-leases`.
+
+**5. Subnet card links**
+Clicking a subnet stat card navigates to `/leases?subnet=ID`. Previously clicking a card did nothing.
+
+**6. Last updated timestamp**
+Small "Updated HH:MM:SS" text next to the refresh dot — you always know how fresh the data is.
+
+**Customize panel updated** to include all new widgets: Utilization History, Total Summary are toggleable alongside the existing Subnet Statistics, Recently Issued Leases, Server Status, and Alert Summary.
+
+## [3.2.0] - 2026-04-29
+
+### Dashboard Enhancements
+
+**1. Lease History Charts**
+7-day utilization sparklines on each subnet card, drawn with Canvas API (no external charting library). Color-coded by utilization: blue (normal) → yellow (≥75%) → red (≥90%). Time range selector: 24h, 3d, 7d, 30d. Uses the `lease_history` table that has been collecting snapshots every 30 minutes — data was there, just never displayed.
+
+**2. Totals Summary Row**
+New widget showing aggregate counts across all subnets: total active leases, dynamic, reserved, overall pool utilization percentage, and subnet count. Updates live with each api/stats poll.
+
+**3. Alert Summary Widget**
+Real data from `alert_log` — last 10 alerts with timestamp, type, message, and send status. Previously hardcoded "No recent alerts." Link to alert configuration. Hidden by default, enable in Customize.
+
+**4. Recent Leases HTMX**
+Time window selector (30min → 24h) now updates the table live via HTMX without reloading the page. Consistent with reservations and leases pages.
+
+**5. Subnet Card Links**
+Clicking a subnet stat card navigates to `/leases?subnet=ID` — filtered to that subnet. Cursor changes to pointer to indicate clickability.
+
+**6. Last Updated Timestamp**
+Small "Updated HH:MM:SS" text next to the refresh dot, updated after each api/stats poll.
+
+**7. Customize Panel Improvements**
+- New widgets (Lease History Charts, Totals Summary) added to customize panel
+- Checkboxes now correctly reflect current saved state on panel open (previously unchecked by default even when widgets were active)
+- Default widget set updated to include lease history charts and totals
+
 ## [3.1.0] - 2026-04-29
 
 ### Phase 3 — HTMX
