@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import logging
+import requests
 import os
 import re
 import secrets
@@ -336,17 +337,17 @@ def test_alert_channel(channel_id):
         ctype = channel["channel_type"]
         test_msg = f"🔔 <b>Jen Test</b>\nTest message from channel: {channel['channel_name']}"
         if ctype == "telegram":
-            ok = _send_telegram_channel(test_msg, config)
+            ok = __alerts._send_telegram_channel(test_msg, config)
         elif ctype == "email":
-            ok = _send_email_channel(test_msg, "test", config)
+            ok = __alerts._send_email_channel(test_msg, "test", config)
         elif ctype == "slack":
-            ok = _send_slack_channel(test_msg, config)
+            ok = __alerts._send_slack_channel(test_msg, config)
         elif ctype == "webhook":
-            ok = _send_webhook_channel(test_msg, "test", config)
+            ok = __alerts._send_webhook_channel(test_msg, "test", config)
         elif ctype == "ntfy":
-            ok = _send_ntfy_channel(test_msg, config)
+            ok = __alerts._send_ntfy_channel(test_msg, config)
         elif ctype == "discord":
-            ok = _send_discord_channel(test_msg, config)
+            ok = __alerts._send_discord_channel(test_msg, config)
         else:
             ok = False
         if ok:

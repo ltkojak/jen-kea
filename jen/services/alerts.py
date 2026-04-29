@@ -5,10 +5,13 @@ Alert channel management: templates, sending, and the background
 check_alerts loop that monitors Kea health and HA state.
 """
 
+import json
 import logging
 import re
 import threading
 import time
+
+import requests
 
 from jen import extensions
 

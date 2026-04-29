@@ -231,16 +231,19 @@ let refreshTimer = null;
 let historyCharts = {};
 
 // ── Sparkline renderer (no library — pure Canvas 2D) ─────────────────────────
-function drawSparkline(canvasId, points, color) {
+function drawSparkline(canvasId, points, color, _attempt) {
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
-    var ctx = canvas.getContext('2d');
-    // Wait for layout — canvas inside CSS grid may have offsetWidth=0 on first paint
-    var w = canvas.offsetWidth || (canvas.parentElement && canvas.parentElement.offsetWidth) || 0;
+    var w = canvas.getBoundingClientRect().width ||
+            (canvas.parentElement && canvas.parentElement.getBoundingClientRect().width) || 0;
     if (w < 10) {
-        requestAnimationFrame(function() { drawSparkline(canvasId, points, color); });
+        // Widget may be hidden or not yet laid out — retry up to 20 times
+        var attempt = (_attempt || 0) + 1;
+        if (attempt > 20) return;
+        setTimeout(function() { drawSparkline(canvasId, points, color, attempt); }, 100);
         return;
     }
+    var ctx = canvas.getContext('2d');
     var h = canvas.height;
     canvas.width = w;
     ctx.clearRect(0, 0, w, h);
@@ -311,21 +314,22 @@ function loadHistory() {
             });
             if (!hasData && empty) { empty.style.display = ''; return; }
             // Defer drawing until CSS grid has laid out (offsetWidth=0 before paint)
-            requestAnimationFrame(function() {
-                setTimeout(function() {
-                    SUBNET_IDS.forEach(function(sid) {
-                        var points = data.history[String(sid)];
-                        if (points && points.length > 1) {
-                            var pct = points[points.length-1].pct;
-                            var color = pct >= 90 ? 'var(--danger)' :
-                                        pct >= 75 ? 'var(--warning)' : 'var(--primary)';
-                            drawSparkline('chart-' + sid, points, color);
-                            var label = document.getElementById('chart-label-' + sid);
-                            if (label) label.textContent = pct + '% · ' + points[points.length-1].d + ' dynamic';
-                        }
-                    });
-                }, 80);
-            });
+            // Store data globally so resize can redraw
+            window._jenHistoryData = data.history;
+            window._jenSubnetIds   = SUBNET_IDS;
+            setTimeout(function() {
+                SUBNET_IDS.forEach(function(sid) {
+                    var points = data.history[String(sid)];
+                    if (points && points.length > 1) {
+                        var pct = points[points.length-1].pct;
+                        var color = pct >= 90 ? 'var(--danger)' :
+                                    pct >= 75 ? 'var(--warning)' : 'var(--primary)';
+                        drawSparkline('chart-' + sid, points, color);
+                        var label = document.getElementById('chart-label-' + sid);
+                        if (label) label.textContent = pct + '% utilization · ' + points[points.length-1].d + ' dynamic';
+                    }
+                });
+            }, 200);
         })
         .catch(function() {
             if (loading) loading.style.display = 'none';
@@ -362,17 +366,25 @@ function loadAlertSummary() {
             var icons = {
                 'kea_down': '🔴', 'kea_up': '🟢',
                 'new_lease': '📋', 'utilization_high': '⚠️',
-                'daily_summary': '📊', 'unknown_device': '❓'
+                'daily_summary': '📊', 'unknown_device': '❓',
+                'new_device': '🆕'
             };
-            var html = '<table style="width:100%;">';
+            var allFailed = data.alerts.every(function(a) { return a.status !== 'sent'; });
+            var html = '';
+            if (allFailed) {
+                html += '<div style="background:var(--surface2);border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--warning);">' +
+                        '⚠️ All recent alerts failed to send — check your notification channel configuration. ' +
+                        '<a href="/settings/alerts" style="color:var(--primary);">Configure →</a></div>';
+            }
+            html += '<table style="width:100%;">';
             data.alerts.forEach(function(a) {
                 var icon = icons[a.type] || '🔔';
                 var statusColor = a.status === 'sent' ? 'var(--success)' : 'var(--danger)';
                 html += '<tr>' +
-                    '<td style="width:28px;font-size:16px;">' + icon + '</td>' +
-                    '<td style="font-size:12px;color:var(--text-muted);">' + (a.sent_at || '') + '</td>' +
-                    '<td style="font-size:12px;">' + (a.type || '').replace(/_/g,' ') + '</td>' +
-                    '<td style="font-size:11px;color:' + statusColor + ';">' + (a.status || '') + '</td>' +
+                    '<td style="width:28px;font-size:16px;padding:3px 0;">' + icon + '</td>' +
+                    '<td style="font-size:12px;color:var(--text-muted);padding:3px 8px;">' + (a.sent_at || '') + '</td>' +
+                    '<td style="font-size:12px;padding:3px 8px;">' + (a.type || '').replace(/_/g,' ') + '</td>' +
+                    '<td style="font-size:11px;color:' + statusColor + ';padding:3px 0;">' + (a.status || '') + '</td>' +
                     '</tr>';
             });
             html += '</table>';
