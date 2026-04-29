@@ -59,7 +59,7 @@ FLUSH PRIVILEGES;
 ### Method 1 — Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v3.2.4.tar.gz
+tar xzf jen-v3.2.6.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -99,7 +99,7 @@ docker compose -f docker-compose.mysql.yml up -d
 sudo apt install -y python3-pip mariadb-client-core openssh-client
 sudo pip3 install flask flask-login pymysql requests --break-system-packages
 
-tar xzf jen-v3.2.4.tar.gz
+tar xzf jen-v3.2.6.tar.gz
 cd jen
 sudo mkdir -p /opt/jen /opt/jen/static /etc/jen /etc/jen/ssl /etc/jen/ssh
 sudo cp jen.py /opt/jen/jen.py

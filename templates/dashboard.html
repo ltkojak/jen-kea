@@ -231,66 +231,85 @@ let refreshTimer = null;
 let historyCharts = {};
 
 // ── Sparkline renderer (no library — pure Canvas 2D) ─────────────────────────
-function drawSparkline(canvasId, points, color, _attempt) {
+// Resolve CSS variable to actual color value for canvas use
+function resolveCssColor(cssVar) {
+    // cssVar may be 'var(--primary)' or already a hex like '#00b4d8'
+    if (!cssVar.startsWith('var(')) return cssVar;
+    var name = cssVar.replace('var(', '').replace(')', '').trim();
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#00b4d8';
+}
+
+// Map utilization % to a resolved canvas-ready color
+function utilColor(pct) {
+    if (pct >= 90) return resolveCssColor('var(--danger)')  || '#e74c3c';
+    if (pct >= 75) return resolveCssColor('var(--warning)') || '#f39c12';
+    return          resolveCssColor('var(--primary)')        || '#00b4d8';
+}
+
+function drawSparkline(canvasId, points, _unused, _attempt) {
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
     var w = canvas.getBoundingClientRect().width ||
             (canvas.parentElement && canvas.parentElement.getBoundingClientRect().width) || 0;
     if (w < 10) {
-        // Widget may be hidden or not yet laid out — retry up to 20 times
         var attempt = (_attempt || 0) + 1;
         if (attempt > 20) return;
-        setTimeout(function() { drawSparkline(canvasId, points, color, attempt); }, 100);
+        setTimeout(function() { drawSparkline(canvasId, points, _unused, attempt); }, 100);
         return;
     }
     var ctx = canvas.getContext('2d');
     var h = canvas.height;
     canvas.width = w;
     ctx.clearRect(0, 0, w, h);
+
     if (!points || points.length < 2) {
-        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-muted') || '#666';
+        ctx.fillStyle = resolveCssColor('var(--text-muted)') || '#666';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('No data yet', w/2, h/2 + 4);
         return;
     }
-    ctx.clearRect(0, 0, w, h);
 
-    var vals = points.map(function(p) { return p.pct; });
-    var max  = Math.max(100, Math.max.apply(null, vals));
-    var min  = 0;
-    var range = max - min || 1;
+    var vals  = points.map(function(p) { return p.pct; });
+    var max   = Math.max(100, Math.max.apply(null, vals));
+    var range = max || 1;
+    var step  = w / Math.max(points.length - 1, 1);
+    var pad   = 4;
 
-    // Fill
+    function yPos(v) { return h - pad - (v / range) * (h - pad * 2); }
+
+    // Determine color from latest utilization
+    var latestPct = vals[vals.length - 1];
+    var lineColor = utilColor(latestPct);
+
+    // Fill area under line
     ctx.beginPath();
-    var step = w / (points.length - 1);
-    ctx.moveTo(0, h - ((vals[0] - min) / range) * (h - 8) - 4);
-    vals.forEach(function(v, i) {
-        ctx.lineTo(i * step, h - ((v - min) / range) * (h - 8) - 4);
-    });
+    ctx.moveTo(0, yPos(vals[0]));
+    vals.forEach(function(v, i) { ctx.lineTo(i * step, yPos(v)); });
     ctx.lineTo(w, h);
     ctx.lineTo(0, h);
     ctx.closePath();
-    ctx.fillStyle = color + '22';
+    // Semi-transparent fill — convert hex to rgba
+    var r = parseInt(lineColor.slice(1,3)||'0',16);
+    var g = parseInt(lineColor.slice(3,5)||'0',16);
+    var b = parseInt(lineColor.slice(5,7)||'0',16);
+    ctx.fillStyle = 'rgba(' + r + ',' + g + ',' + b + ',0.15)';
     ctx.fill();
 
     // Line
     ctx.beginPath();
-    ctx.moveTo(0, h - ((vals[0] - min) / range) * (h - 8) - 4);
-    vals.forEach(function(v, i) {
-        ctx.lineTo(i * step, h - ((v - min) / range) * (h - 8) - 4);
-    });
-    ctx.strokeStyle = color;
+    ctx.moveTo(0, yPos(vals[0]));
+    vals.forEach(function(v, i) { ctx.lineTo(i * step, yPos(v)); });
+    ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Current value dot
-    var last = vals[vals.length - 1];
-    var lx = w - 1;
-    var ly = h - ((last - min) / range) * (h - 8) - 4;
+    // Latest value dot
+    var lx = (vals.length - 1) * step;
+    var ly = yPos(vals[vals.length - 1]);
     ctx.beginPath();
     ctx.arc(lx, ly, 3, 0, Math.PI * 2);
-    ctx.fillStyle = color;
+    ctx.fillStyle = lineColor;
     ctx.fill();
 }
 
@@ -322,9 +341,7 @@ function loadHistory() {
                     var points = data.history[String(sid)];
                     if (points && points.length > 1) {
                         var pct = points[points.length-1].pct;
-                        var color = pct >= 90 ? 'var(--danger)' :
-                                    pct >= 75 ? 'var(--warning)' : 'var(--primary)';
-                        drawSparkline('chart-' + sid, points, color);
+                        drawSparkline('chart-' + sid, points, null);
                         var label = document.getElementById('chart-label-' + sid);
                         if (label) label.textContent = pct + '% utilization · ' + points[points.length-1].d + ' dynamic';
                     }

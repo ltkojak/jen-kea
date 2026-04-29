@@ -285,7 +285,7 @@ def api_lease_history():
             if subnet_id:
                 cur.execute("""
                     SELECT subnet_id,
-                           DATE_FORMAT(snapshot_time, '%Y-%m-%d %H:00:00') AS hour,
+                           DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                            AVG(dynamic_leases) AS dynamic,
                            AVG(active_leases)  AS active,
                            MAX(pool_size)      AS pool_size
@@ -298,7 +298,7 @@ def api_lease_history():
             else:
                 cur.execute("""
                     SELECT subnet_id,
-                           DATE_FORMAT(snapshot_time, '%Y-%m-%d %H:00:00') AS hour,
+                           DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                            AVG(dynamic_leases) AS dynamic,
                            AVG(active_leases)  AS active,
                            MAX(pool_size)      AS pool_size
