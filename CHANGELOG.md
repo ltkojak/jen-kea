@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.3.12] - 2026-04-30
+
+### Mobile Section Tabs — Actual Root Cause Fixed
+
+3.3.11's CSS-only fix (`touch-action: pan-x`) didn't work because a global JS `touchstart` handler on all `a[href]` elements was calling `e.preventDefault()` on every touch event — including horizontal swipes — and immediately navigating. This completely blocked the scroll container from ever receiving the horizontal gesture, making CSS `touch-action` irrelevant.
+
+**Fix:** Replaced the `touchstart`-based instant navigation with a three-event pattern: `touchstart` records the start position, `touchmove` sets a `didScroll` flag if horizontal movement exceeds vertical by more than 6px, and `touchend` only navigates if `didScroll` is false. Horizontal swipes now pass through to the scroll container correctly. Tap navigation still works with effectively zero perceptible delay.
+
+## [3.3.11] - 2026-04-30
+
+### Mobile Section Tabs — Horizontal Scroll Fix
+
+The Settings page section sub-tabs (System / Alerts / Infrastructure / Users / Audit Log / API Keys / API Docs / Icons) extend off-screen on mobile. The container had `overflow-x: auto` for scrolling, but on iOS the swipe gesture was being captured by the tab `<a>` links as a tap rather than passing through to the container as a horizontal scroll — meaning users couldn't reach the rightmost tabs.
+
+**Fix:** Added `touch-action: pan-x` to the `.section-tabs` container which explicitly tells iOS the horizontal swipe gesture should be interpreted as scroll, not tap. Added `overscroll-behavior-x: contain` so horizontal scroll on tabs doesn't bleed into back/forward gestures. Added `-webkit-touch-callout: none` to individual tabs to prevent long-press menus from interfering.
+
 ## [3.3.10] - 2026-04-30
 
 ### Mobile Nav — ACTUAL Root Cause Found

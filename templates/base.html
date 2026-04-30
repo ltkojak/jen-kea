@@ -59,9 +59,9 @@
         .nav-mobile-drawer a:active { background: var(--surface2); }
 
         /* Section sub-tabs */
-        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; touch-action: pan-x; overscroll-behavior-x: contain; }
         .section-tabs::-webkit-scrollbar { display: none; }
-        .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; }
+        .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; -webkit-touch-callout: none; }
         .section-tab:hover { color: var(--text); text-decoration: none; }
         .section-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 
@@ -562,9 +562,22 @@ function sortTable(table, col, th) {
         });
     }
 
-    // Instant navigation on touchstart for all anchor links — eliminates iOS 300ms delay
+    // Instant navigation on touchstart for all anchor links — but NOT if the link is
+    // inside a horizontally-scrollable container AND the gesture is a horizontal swipe.
     document.querySelectorAll('a[href]').forEach(function(a) {
+        var touchStartX = 0, touchStartY = 0, didScroll = false;
         a.addEventListener('touchstart', function(e) {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            didScroll = false;
+        }, { passive: true });
+        a.addEventListener('touchmove', function(e) {
+            var dx = Math.abs(e.touches[0].clientX - touchStartX);
+            var dy = Math.abs(e.touches[0].clientY - touchStartY);
+            if (dx > dy && dx > 6) { didScroll = true; } // horizontal swipe detected
+        }, { passive: true });
+        a.addEventListener('touchend', function(e) {
+            if (didScroll) return; // was a scroll, not a tap — don't navigate
             var href = this.getAttribute('href');
             if (href && href !== '#' && !href.startsWith('javascript') && !href.startsWith('mailto')) {
                 e.preventDefault();
