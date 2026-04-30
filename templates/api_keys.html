@@ -52,10 +52,10 @@
             <td><strong>{{ k.name }}</strong></td>
             <td class="mono" style="color:var(--text-muted);">{{ k.key_prefix }}…</td>
             <td style="color:var(--text-muted);font-size:12px;">
-                {{ k.created_at.strftime('%Y-%m-%d') if k.created_at else '—' }}
+                {{ k.created_at|utcdate }}
                 {% if k.created_by_name %}<span style="color:var(--text-muted);"> by {{ k.created_by_name }}</span>{% endif %}
             </td>
-            <td style="color:var(--text-muted);font-size:12px;">{{ k.last_used.strftime('%Y-%m-%d %H:%M') if k.last_used else 'Never' }}</td>
+            <td style="color:var(--text-muted);font-size:12px;">{{ k.last_used|utcfmt if k.last_used else 'Never' }}</td>
             <td>
                 {% if k.active %}
                 <span style="color:var(--success);font-size:12px;">● Active</span>

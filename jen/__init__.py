@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.2.7"
+JEN_VERSION = "3.2.9"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -53,6 +53,37 @@ def create_app() -> Flask:
                 static_folder="/opt/jen/static",
                 template_folder="/opt/jen/templates")
     app.secret_key = _load_secret_key()
+
+    # ── Jinja filters ─────────────────────────────────────────────────────────
+    @app.template_filter('utcfmt')
+    def utcfmt_filter(value, fmt='%Y-%m-%d %H:%M'):
+        """Format a datetime as UTC, appending ' UTC' suffix for clarity."""
+        if not value:
+            return '—'
+        try:
+            return value.strftime(fmt) + ' UTC'
+        except Exception:
+            return str(value)
+
+    @app.template_filter('utcdate')
+    def utcdate_filter(value):
+        """Format a datetime as date only (no time, no UTC suffix needed)."""
+        if not value:
+            return '—'
+        try:
+            return value.strftime('%Y-%m-%d')
+        except Exception:
+            return str(value)
+
+    @app.template_filter('utctime')
+    def utctime_filter(value):
+        """Format a datetime as time only with UTC suffix."""
+        if not value:
+            return '—'
+        try:
+            return value.strftime('%H:%M:%S') + ' UTC'
+        except Exception:
+            return str(value)
 
     # ── Login manager ─────────────────────────────────────────────────────────
     login_manager.init_app(app)

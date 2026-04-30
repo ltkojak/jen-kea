@@ -21,9 +21,9 @@
         {% for d in devices %}
         <tr>
             <td>{{ d.device_name or 'Unknown Device' }}</td>
-            <td class="mono" style="font-size:12px;">{{ d.created_at.strftime('%Y-%m-%d') if d.created_at else '—' }}</td>
-            <td class="mono" style="font-size:12px;">{{ d.last_used.strftime('%Y-%m-%d %H:%M') if d.last_used else '—' }}</td>
-            <td style="color:var(--text-muted);font-size:12px;">{{ d.expires_at.strftime('%Y-%m-%d') if d.expires_at else 'Never' }}</td>
+            <td class="mono" style="font-size:12px;">{{ d.created_at|utcdate }}</td>
+            <td class="mono" style="font-size:12px;">{{ d.last_used|utcfmt }}</td>
+            <td style="color:var(--text-muted);font-size:12px;">{{ d.expires_at|utcdate if d.expires_at else 'Never' }}</td>
             <td>
                 <form method="POST" action="/mfa/revoke-device/{{ d.id }}" style="display:inline;">
                     <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Revoke this trusted device?')">Revoke</button>

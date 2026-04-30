@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.2.7"
+JEN_VERSION="3.2.9"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -811,6 +811,9 @@ verify_install() {
 from jinja2 import Environment, FileSystemLoader
 import os, sys
 env = Environment(loader=FileSystemLoader('$INSTALL_DIR/templates'))
+# Register custom filters used by Jen so validation doesn't false-fail
+for f in ['utcfmt','utcdate','utctime']:
+    env.filters[f] = lambda v, fmt=None: v
 errors = []
 for t in os.listdir('$INSTALL_DIR/templates'):
     if t.endswith('.html'):

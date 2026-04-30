@@ -155,7 +155,7 @@
                 </td>
                 <td class="mono">{{ l.mac }}</td>
                 <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-                <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%H:%M:%S') if l.obtained else '—' }}</td>
+                <td class="mono" style="color:var(--text-muted);">{{ l.obtained|utctime }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -424,11 +424,14 @@ function updateStats() {
         .then(function(data) {
             if (dot) dot.style.background = 'var(--success)';
 
-            // Last updated timestamp
+            // Last updated timestamp — show UTC for consistency
             var lu = document.getElementById('last-updated');
             if (lu) {
                 var now = new Date();
-                lu.textContent = 'Updated ' + now.toLocaleTimeString();
+                var hh = String(now.getUTCHours()).padStart(2,'0');
+                var mm = String(now.getUTCMinutes()).padStart(2,'0');
+                var ss = String(now.getUTCSeconds()).padStart(2,'0');
+                lu.textContent = 'Updated ' + hh + ':' + mm + ':' + ss + ' UTC';
             }
 
             if (!data.subnets) return;

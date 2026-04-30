@@ -8,7 +8,7 @@
     </td>
     <td class="mono">{{ l.mac }}</td>
     <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-    <td class="mono" style="color:var(--text-muted);">{{ l.obtained.strftime('%H:%M:%S') if l.obtained else '—' }}</td>
+    <td class="mono" style="color:var(--text-muted);">{{ l.obtained|utctime }}</td>
 </tr>
 {% else %}
 <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</td></tr>

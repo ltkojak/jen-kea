@@ -23,7 +23,7 @@
         <td><strong>{{ s.name }}</strong></td>
         <td><span class="badge badge-dynamic">{{ s.page }}</span></td>
         <td class="mono hide-mobile" style="font-size:11px;color:var(--text-muted);">{{ s.params[:80] }}{% if s.params|length > 80 %}…{% endif %}</td>
-        <td style="color:var(--text-muted);font-size:12px;">{{ s.created_at.strftime('%Y-%m-%d') if s.created_at else '—' }}</td>
+        <td style="color:var(--text-muted);font-size:12px;">{{ s.created_at|utcdate }}</td>
         <td style="display:flex;gap:6px;">
             <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">▶ Load</a>
             <form method="POST" action="/saved-searches/delete/{{ s.id }}" style="display:inline;"

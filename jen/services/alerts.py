@@ -588,7 +588,7 @@ def check_alerts():
             # ── Daily summary ──
             import datetime as dt
             summary_time = __get_global_setting("daily_summary_time", "07:00")
-            now = dt.datetime.now()
+            now = dt.datetime.now(dt.timezone.utc)
             today = now.date()
             try:
                 h, m = [int(x) for x in summary_time.split(":")]

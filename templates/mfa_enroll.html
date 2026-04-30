@@ -14,7 +14,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
         <div>
             <strong>🔢 {{ m.name }}</strong>
-            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ m.created_at.strftime('%Y-%m-%d') if m.created_at else '' }} · Last used {{ m.last_used.strftime('%Y-%m-%d') if m.last_used else 'never' }}</div>
+            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ m.created_at|utcdate if m.created_at else '' }} · Last used {{ m.last_used|utcdate if m.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="action" value="remove_totp"><input type="hidden" name="mfa_id" value="{{ m.id }}">
             <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove this authenticator?')">Remove</button>
@@ -25,7 +25,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
         <div>
             <strong>🔑 {{ p.name }}</strong>
-            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ p.created_at.strftime('%Y-%m-%d') if p.created_at else '' }} · Last used {{ p.last_used.strftime('%Y-%m-%d') if p.last_used else 'never' }}</div>
+            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ p.created_at|utcdate if p.created_at else '' }} · Last used {{ p.last_used|utcdate if p.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="action" value="remove_passkey"><input type="hidden" name="cred_id" value="{{ p.id }}">
             <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove this passkey?')">Remove</button>

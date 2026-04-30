@@ -353,7 +353,7 @@ def api_alert_summary():
                 "message": row["message"],
                 "status":  row["status"],
                 "error":   row["error"] or "",
-                "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M") if row["sent_at"] else "",
+                "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M UTC") if row["sent_at"] else "",
             })
         return jsonify({"alerts": alerts})
     except Exception as e:

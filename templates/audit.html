@@ -19,7 +19,7 @@
     <tbody>
     {% for log in logs %}
     <tr>
-        <td class="mono" style="font-size:12px;color:var(--text-muted);white-space:nowrap;">{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td class="mono" style="font-size:12px;color:var(--text-muted);white-space:nowrap;">{{ log.created_at|utcfmt('%Y-%m-%d %H:%M:%S') }}</td>
         <td><strong>{{ log.username }}</strong></td>
         <td><span class="badge {% if 'DELETE' in log.action %}badge-admin{% elif 'ADD' in log.action %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ log.action }}</span></td>
         <td class="mono" style="font-size:12px;">{{ log.entity }}</td>

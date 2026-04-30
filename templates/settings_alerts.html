@@ -330,7 +330,7 @@ var JEN_CHANNELS = {
         {% for a in recent_alerts %}
         <tr style="border-top:1px solid var(--border);">
             <td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">
-                {{ a.sent_at.strftime('%Y-%m-%d %H:%M') if a.sent_at else '—' }}
+                {{ a.sent_at|utcfmt }}
             </td>
             <td style="padding:6px 8px;">{{ a.alert_type or '—' }}</td>
             <td style="padding:6px 8px;color:var(--text-muted);">{{ a.channel_type or '—' }}</td>

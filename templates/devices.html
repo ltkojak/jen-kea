@@ -109,10 +109,10 @@
             {% endif %}
         </td>
         <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">
-            {{ d.first_seen.strftime('%Y-%m-%d') if d.first_seen else '—' }}
+            {{ d.first_seen|utcdate }}
         </td>
         <td data-label="Last Seen" class="mono hide-tablet" style="{% if d.is_stale %}color:var(--warning);{% endif %}">
-            {{ d.last_seen.strftime('%Y-%m-%d %H:%M') if d.last_seen else '—' }}
+            {{ d.last_seen|utcfmt }}
         </td>
         <td data-label="Status" class="hide-mobile">
             {% if d.is_stale %}

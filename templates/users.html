@@ -24,7 +24,7 @@
                 <button type="submit" class="btn btn-sm btn-secondary">Set</button>
             </form>
         </td>
-        <td style="font-size:12px;color:var(--text-muted);">{{ u.created_at.strftime('%Y-%m-%d') if u.created_at else '—' }}</td>
+        <td style="font-size:12px;color:var(--text-muted);">{{ u.created_at|utcdate }}</td>
         <td>
             {% if u.id != current_user.id %}
             <form method="POST" action="/users/delete/{{ u.id }}" onsubmit="return confirm('Delete user {{ u.username }}?')">
