@@ -1,5 +1,63 @@
 # Changelog
 
+## [3.3.10] - 2026-04-30
+
+### Mobile Nav — ACTUAL Root Cause Found
+
+After many failed attempts at this clipping bug, the diagnostic screenshots from 3.3.9 finally revealed the real cause: **the mobile navigation drawer was being rendered ALWAYS VISIBLE on mobile, sitting above the nav bar**, not the nav being clipped by the iOS status bar.
+
+The drawer used `transform: translateY(-110%)` to hide itself off-screen at the top, then `transform: translateY(0)` (via `.open` class) to slide it down. On iOS WebKit (Brave, Edge, possibly Safari), `translateY(-110%)` on a `position: fixed` element with `height: auto` was being computed as `translateY(0)` — meaning the drawer was sitting visible at the top of every page load. When the mobile media query also set `display: block` on the drawer (originally to enable the slide animation), this guaranteed the drawer stayed visible. The "clipped Jen logo" appearance was actually the drawer overlapping the nav bar from above.
+
+**Fix:** Replaced the transform-based hide/show with simple `display: none` (default) / `display: block` (when `.open` class is added). The slide-down animation is gone but the drawer now reliably hides on every iOS browser. Removed the `display: block` override from the mobile media query that was forcing the drawer visible. Reverted the 50px hardcoded padding-top floor and section-tabs/drawer top calc inflation from 3.3.9 — those weren't fixing anything since the actual problem was elsewhere. Standard `env(safe-area-inset-top)` on nav padding-top is sufficient.
+
+Added `max-height: calc(100vh - 120px); overflow-y: auto` on the drawer so it scrolls if it has more items than fit on screen.
+
+## [3.3.9] - 2026-04-30
+
+### Mobile Nav — Hardcoded iOS Status Bar Clearance
+
+3.3.8's `env(safe-area-inset-top)` approach didn't fix the mobile nav clipping. Hypothesis: Brave/Edge on iOS aren't returning the expected value from `env(safe-area-inset-top)` — possibly because `viewport-fit=cover` engagement varies by browser, or iOS reports 0 for that var when the page is in a non-fullscreen state.
+
+**Fix:** Use `max(50px, calc(... + env(safe-area-inset-top)))` on the mobile nav padding-top. The hardcoded 50px guarantees clearance under the iOS status bar / Dynamic Island regardless of what `env()` returns. On browsers/devices where `env()` works correctly, the larger value wins (e.g., on a 14 Pro the inset can be 59px). Section sub-tabs and mobile drawer top offsets updated to dock under the now-taller mobile nav.
+
+## [3.3.8] - 2026-04-30
+
+### Mobile Nav Clipping — Real Fix
+
+Diagnostic build 3.3.7 confirmed templates were deploying correctly. The screenshots revealed the actual bug: when a flow element above the sticky nav was removed (or when scrolling under iOS's collapsing browser chrome), the sticky nav would slide up *under* the iOS status bar overlay instead of docking below it. This is because the body's `padding-top: env(safe-area-inset-top)` was being respected at scroll position 0 but not when sticky positioning recomputed during scroll/layout changes.
+
+**Fix:** Moved the `env(safe-area-inset-top/left/right)` from `body { padding }` to `.nav { padding-top/left/right }`. The nav now owns its own status-bar protection — its content edge always sits below the inset regardless of sticky behavior, scroll state, or surrounding flow changes. Section sub-tabs and mobile drawer top offsets updated to `calc(56px + env(safe-area-inset-top))` to dock correctly under the now-taller nav.
+
+**Diagnostic artifacts removed:** the red deploy-verification banner and the purple debug nav background from 3.3.7 are gone.
+
+## [3.3.7] - 2026-04-30
+
+### DIAGNOSTIC BUILD — Mobile Nav Clipping Investigation
+
+This is a **forensic diagnostic build** to determine why nav clipping fixes haven't taken effect on iOS. After three rounds of CSS changes (3.3.3 re-issues + 3.3.5) the same vertical-stacked clipped logo persists, despite the markup being restructured to side-by-side. This build adds:
+
+- A bright **red banner across the top** that says "v3.3.7 DEPLOYED — if you see this banner, the new template IS loading. Tap to dismiss." If this doesn't appear, the new HTML isn't being served (caching, install issue, Docker volume override, etc).
+- A bright **purple background on the mobile nav** (only at viewport ≤768px) so we can see at a glance whether the new CSS is applying.
+
+Once we confirm whether the new template is reaching the browser, the actual fix can be applied in the next version. The red banner and purple nav will be removed in 3.3.8.
+
+> 3.3.6 was skipped (reserved for the failed re-issue we converted to a real version bump).
+
+## [3.3.5] - 2026-04-30
+
+### Mobile Nav Layout Fix
+
+Bumped mobile nav `min-height` from 48px to 56px and added vertical padding to give the branding logo column room to breathe. The previous fixed 48px nav height was clipping the top of taller branded logos when stacked with the version label below. Section sub-tabs and mobile drawer top offsets updated to match (48px → 56px).
+
+> Note: 3.3.4 was skipped. Two prior in-place re-issues of 3.3.3 didn't resolve the mobile nav clipping fully, so we're moving forward with a real version bump.
+
+## [3.3.3] - 2026-04-30
+
+### Mobile Fixes
+
+- **iOS safe-area inset support.** On iPhones with a notch or Dynamic Island, the Jen logo and version badge at the top of the nav bar were being clipped by the status bar. Added `env(safe-area-inset-top/left/right)` padding to the body so the nav now sits below the system UI cleanly. The mobile drawer's fixed `top` was also updated to `calc(48px + env(safe-area-inset-top))` so it docks correctly under the nav. Issue was reported on iOS Safari/Brave at viewport widths under 768px.
+- **Mobile nav drawer z-index.** The Dashboard link in the hamburger menu was being hidden by section sub-tabs (Subnets/Servers/DDNS, Leases/Reservations/Devices, etc) on pages other than the dashboard itself. The drawer had `z-index: 98` and the section tabs had `z-index: 99`, so the tabs rendered on top of the drawer's first item. Drawer bumped to `z-index: 101`.
+
 ## [3.2.0] - 2026-04-29
 
 ### Dashboard Enhancements

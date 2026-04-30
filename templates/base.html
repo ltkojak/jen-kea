@@ -33,9 +33,13 @@
         }
 
         /* Nav */
-        .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; height: 48px; gap: 4px; position: sticky; top: 0; z-index: 100; }
+        .nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 6px 20px; padding-top: calc(6px + env(safe-area-inset-top)); padding-left: calc(20px + env(safe-area-inset-left)); padding-right: calc(20px + env(safe-area-inset-right)); display: flex; align-items: center; min-height: 56px; gap: 4px; position: sticky; top: 0; z-index: 100; }
         .nav-brand { color: var(--primary); font-weight: 700; font-size: 16px; margin-right: 16px; text-decoration: none; flex-shrink: 0; }
         .nav-brand span { color: var(--text-muted); font-size: 11px; font-weight: 400; display: block; }
+        /* Branding logo: side-by-side with version label, strict height containment */
+        .nav-brand-logo-wrap { display: inline-flex; align-items: center; gap: 6px; height: 32px; line-height: 1; vertical-align: middle; }
+        .nav-brand-logo { height: 28px; width: auto; max-width: 120px; display: block; object-fit: contain; }
+        .nav-brand-version { color: var(--text-muted); font-size: 11px; font-weight: 400; display: inline-block; white-space: nowrap; }
         .nav a.nav-link { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; text-decoration: none; white-space: nowrap; }
         .nav a.nav-link:hover, .nav a.nav-link.active { background: var(--surface2); color: var(--text); text-decoration: none; }
         .nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
@@ -46,16 +50,16 @@
         /* Hamburger — hidden on desktop */
         .nav-hamburger { display: none; background: none; border: none; color: var(--text); font-size: 22px; cursor: pointer; padding: 8px; line-height: 1; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 
-        /* Mobile nav drawer */
-        .nav-mobile-drawer { display: none; position: fixed; top: 48px; left: 0; right: 0; background: var(--surface); border-bottom: 2px solid var(--border); z-index: 98; transform: translateY(-110%); transition: transform 0.22s ease; padding: 6px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
-        .nav-mobile-drawer.open { transform: translateY(0); }
+        /* Mobile nav drawer — display none/block (transform-based hiding had iOS WebKit issues) */
+        .nav-mobile-drawer { display: none; position: fixed; top: calc(56px + env(safe-area-inset-top)); left: 0; right: 0; background: var(--surface); border-bottom: 2px solid var(--border); z-index: 101; padding: 6px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.5); max-height: calc(100vh - 120px); overflow-y: auto; }
+        .nav-mobile-drawer.open { display: block; }
         .nav-mobile-drawer a { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: var(--text); font-size: 15px; border-bottom: 1px solid var(--border); text-decoration: none; min-height: 52px; touch-action: manipulation; }
         .nav-mobile-drawer a:last-child { border-bottom: none; }
         .nav-mobile-drawer a.active { color: var(--primary); background: var(--surface2); }
         .nav-mobile-drawer a:active { background: var(--surface2); }
 
         /* Section sub-tabs */
-        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: 48px; z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
         .section-tabs::-webkit-scrollbar { display: none; }
         .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; }
         .section-tab:hover { color: var(--text); text-decoration: none; }
@@ -185,14 +189,14 @@
             }
             .page-header-controls .btn { width: auto; }
 
-            /* Nav */
-            .nav { padding: 0 12px; }
+            /* Nav — preserve safe-area-inset on mobile too */
+            .nav { padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
             .nav-links { display: none !important; }
             .nav-search { display: none !important; }
             .nav-hamburger { display: flex; }
             .nav-right { gap: 8px; }
             .theme-toggle { display: none; }
-            .nav-mobile-drawer { display: block; }
+            /* Mobile drawer top is set in base rule; mobile-specific overrides not needed since display:none/block correctly hides it */
             /* Show dashboard shortcut icon in mobile nav bar */
             .nav-mobile-dashboard { display: inline-flex !important; font-size: 18px; padding: 4px 8px; }
 
@@ -283,10 +287,10 @@
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
         {% if branding_nav_logo %}
-        <div style="display:flex;flex-direction:column;align-items:center;line-height:1;">
-            <img src="{{ branding_nav_logo }}" alt="Jen" style="max-height:28px;max-width:140px;vertical-align:middle;">
-            <span style="display:block;">v{{ jen_version }}</span>
-        </div>
+        <span class="nav-brand-logo-wrap">
+            <img src="{{ branding_nav_logo }}" alt="Jen" class="nav-brand-logo">
+            <span class="nav-brand-version">v{{ jen_version }}</span>
+        </span>
         {% else %}
         {{ branding_name }} <span>v{{ jen_version }}</span>
         {% endif %}
