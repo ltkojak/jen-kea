@@ -199,6 +199,23 @@ def settings_alerts():
         db.close()
     except Exception as e:
         flash(f"Error loading alert settings: {e}", "error")
+
+    # Recent alert log with error details
+    recent_alerts = []
+    try:
+        db = __db.get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT alert_type, channel_type, status, error, sent_at
+                FROM alert_log
+                ORDER BY sent_at DESC
+                LIMIT 20
+            """)
+            recent_alerts = cur.fetchall()
+        db.close()
+    except Exception:
+        pass
+
     summary_time = __user.get_global_setting("daily_summary_time", "07:00")
     pool_exhaustion_free = __user.get_global_setting("pool_exhaustion_free", "5")
     threshold_pct = __user.get_global_setting("alert_threshold_pct", "80")
@@ -208,7 +225,8 @@ def settings_alerts():
                            alert_type_labels=ALERT_TYPE_LABELS,
                            summary_time=summary_time,
                            pool_exhaustion_free=pool_exhaustion_free,
-                           threshold_pct=threshold_pct)
+                           threshold_pct=threshold_pct,
+                           recent_alerts=recent_alerts)
 
 @bp.route("/settings/alerts/save-channel", methods=["POST"])
 @login_required

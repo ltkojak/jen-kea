@@ -396,12 +396,15 @@ function loadAlertSummary() {
             html += '<table style="width:100%;">';
             data.alerts.forEach(function(a) {
                 var icon = icons[a.type] || '🔔';
-                var statusColor = a.status === 'sent' ? 'var(--success)' : 'var(--danger)';
+                var ok = a.status === 'sent' || a.status === 'ok';
+                var statusColor = ok ? 'var(--success)' : 'var(--danger)';
+                var errorTip = a.error ? ' title="' + a.error.replace(/"/g, '&quot;') + '"' : '';
                 html += '<tr>' +
                     '<td style="width:28px;font-size:16px;padding:3px 0;">' + icon + '</td>' +
-                    '<td style="font-size:12px;color:var(--text-muted);padding:3px 8px;">' + (a.sent_at || '') + '</td>' +
+                    '<td style="font-size:12px;color:var(--text-muted);padding:3px 8px;white-space:nowrap;">' + (a.sent_at || '') + '</td>' +
                     '<td style="font-size:12px;padding:3px 8px;">' + (a.type || '').replace(/_/g,' ') + '</td>' +
-                    '<td style="font-size:11px;color:' + statusColor + ';padding:3px 0;">' + (a.status || '') + '</td>' +
+                    '<td style="font-size:11px;color:' + statusColor + ';padding:3px 0;cursor:' + (a.error ? 'help' : 'default') + ';"' + errorTip + '>' +
+                    (ok ? '✓' : '✗') + ' ' + (a.status || '') + (a.error ? ' ⓘ' : '') + '</td>' +
                     '</tr>';
             });
             html += '</table>';

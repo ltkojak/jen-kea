@@ -402,6 +402,19 @@ def check_alerts():
     last_snapshot_time = 0
     last_ha_states = {}  # server_id -> last known HA state
 
+    # Seed known_macs from devices table so restarts don't
+    # flood with "new device" alerts for every known device
+    try:
+        jdb = __get_jen_db()
+        with jdb.cursor() as jcur:
+            jcur.execute("SELECT mac FROM devices")
+            for row in jcur.fetchall():
+                known_macs.add(row["mac"].lower())
+        jdb.close()
+        logger.info(f"Seeded {len(known_macs)} known MACs from devices table")
+    except Exception as e:
+        logger.warning(f"Could not seed known_macs from devices: {e}")
+
     while True:
         try:
             # ── Kea up/down — check all servers ──
@@ -489,12 +502,15 @@ def check_alerts():
                             subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
                             send_alert("new_lease", ip=row["ip"], mac=mac,
                                       hostname=row["hostname"] or "(none)", subnet=subnet_name)
-                            # Unknown device alert
+                            # New device alert — only fire for MACs truly never
+                            # seen before (not in devices table, not just unknown
+                            # since last restart)
                             if mac not in known_macs:
                                 send_alert("new_device", ip=row["ip"], mac=mac,
                                           hostname=row["hostname"] or "(none)", subnet=subnet_name)
+                                known_macs.add(mac)  # prevent repeat alerts this session
 
-                        # Update known MACs
+                        # Update known MACs from all current leases
                         for row in all_leases:
                             known_macs.add(__format_mac(row["hwaddr"]))
 

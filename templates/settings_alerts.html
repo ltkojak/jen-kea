@@ -309,6 +309,52 @@ var JEN_CHANNELS = {
     </div>
 </div>
 
+
+<!-- Recent Alert Log -->
+<div class="card" style="margin-top:24px;">
+    <div class="card-header">
+        <span class="card-title">📋 Recent Alert Log</span>
+        <span style="font-size:12px;color:var(--text-muted);">Last 20 alerts — shows delivery status and any errors</span>
+    </div>
+    {% if recent_alerts %}
+    <div class="table-wrap">
+    <table style="width:100%;font-size:12px;">
+        <thead><tr>
+            <th style="text-align:left;padding:6px 8px;">Time</th>
+            <th style="text-align:left;padding:6px 8px;">Type</th>
+            <th style="text-align:left;padding:6px 8px;">Channel</th>
+            <th style="text-align:left;padding:6px 8px;">Status</th>
+            <th style="text-align:left;padding:6px 8px;">Error</th>
+        </tr></thead>
+        <tbody>
+        {% for a in recent_alerts %}
+        <tr style="border-top:1px solid var(--border);">
+            <td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">
+                {{ a.sent_at.strftime('%Y-%m-%d %H:%M') if a.sent_at else '—' }}
+            </td>
+            <td style="padding:6px 8px;">{{ a.alert_type or '—' }}</td>
+            <td style="padding:6px 8px;color:var(--text-muted);">{{ a.channel_type or '—' }}</td>
+            <td style="padding:6px 8px;">
+                {% if a.status == 'ok' or a.status == 'sent' %}
+                <span style="color:var(--success);">✓ {{ a.status }}</span>
+                {% else %}
+                <span style="color:var(--danger);">✗ {{ a.status }}</span>
+                {% endif %}
+            </td>
+            <td style="padding:6px 8px;color:var(--danger);font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ a.error or '' }}">
+                {{ a.error or '' }}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px;">
+        No alerts have been sent yet.
+    </p>
+    {% endif %}
+</div>
 {% endblock %}
 {% block scripts %}
 const ALERT_TYPE_LABELS = {{ alert_type_labels | tojson }};

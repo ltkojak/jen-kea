@@ -338,7 +338,7 @@ def api_alert_summary():
         db = __db.get_jen_db()
         with db.cursor() as cur:
             cur.execute("""
-                SELECT alert_type, channel_type, message, status, sent_at
+                SELECT alert_type, channel_type, message, status, error, sent_at
                 FROM alert_log
                 ORDER BY sent_at DESC
                 LIMIT 10
@@ -352,6 +352,7 @@ def api_alert_summary():
                 "channel": row["channel_type"],
                 "message": row["message"],
                 "status":  row["status"],
+                "error":   row["error"] or "",
                 "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M") if row["sent_at"] else "",
             })
         return jsonify({"alerts": alerts})
