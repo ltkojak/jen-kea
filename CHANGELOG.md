@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.3.15] - 2026-05-03
+
+### Installer Banner Fix + UX Improvements
+
+**Installer banner overflow:** The version/copyright lines in `install.sh`'s ASCII box banner used hardcoded space padding. As the version number grew (e.g. `3.3.14` vs `3.3.3`), the extra character pushed the right `║` border out of alignment. Fixed by switching those two lines from hardcoded `echo -e` with manual padding to `_box_line` calls, which dynamically calculate visible string length (stripping ANSI codes) and pad to exactly 54 chars. The box will stay aligned for any version string going forward.
+
+**Installer restart warning:** Added an explicit warning line before the Jen service restart during upgrades: "Jen web UI will be briefly unreachable during restart (~3s)". Previously the service restarted silently during the spinner, which could be confusing.
+
+**Edit Subnet co-location warning:** Updated the warning banner on the Edit Subnet page to note that if Jen runs on the same host as Kea, the Jen web UI may also briefly drop when Kea is restarted. This is relevant for single-server homelabs where Jen and Kea share a host.
+
+**Audit finding — false alarm on unprotected DB calls:** Initial audit flagged `mfa_routes.py` and `reservations.py` as having more DB calls than try blocks. Deeper analysis confirmed all DB calls are actually protected — the discrepancy was from nested try blocks and import statements being counted as DB calls. No code changes needed.
+
 ## [3.3.14] - 2026-05-03
 
 ### Missing paramiko Dependency

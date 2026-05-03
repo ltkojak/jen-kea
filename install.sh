@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.3.14"
+JEN_VERSION="3.3.15"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -169,13 +169,12 @@ show_banner() {
     echo -e "  ${C}║${NC}${B}                                                      ${NC}${C}║${NC}"
     echo -e "  ${C}║${NC}  ${BG_T}${B}  J E N  ${NC}  ${B}The Kea DHCP Management Console${NC}          ${C}║${NC}"
     echo -e "  ${C}║${NC}${B}                                                      ${NC}${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${DIM}Version ${JEN_VERSION}   •   github.com/ltkojak/jen-kea${NC}      ${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${DIM}GPLv3 — Copyright (C) 2026 Matthew Thibodeau${NC}        ${C}║${NC}"
+    _box_line "  ${DIM}Version ${JEN_VERSION}   •   github.com/ltkojak/jen-kea${NC}"
+    _box_line "  ${DIM}GPLv3 — Copyright (C) 2026 Matthew Thibodeau${NC}"
     echo -e "  ${C}║${NC}${B}                                                      ${NC}${C}║${NC}"
     echo -e "  ${C}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
-
 # ── Mode banner ───────────────────────────────────────────────────────────────
 show_mode_banner() {
     if   [[ "$MODE_REPAIR"    == "true" ]]; then
@@ -765,6 +764,8 @@ start_service() {
     systemctl daemon-reload
 
     if [[ "$IS_UPGRADE" == "true" || "$MODE_REPAIR" == "true" ]]; then
+        warn "Jen web UI will be briefly unreachable during restart (~3s)"
+        blank
         spinner_start "Restarting Jen service..."
         systemctl restart jen
     else

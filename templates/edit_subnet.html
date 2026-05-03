@@ -6,7 +6,7 @@
     <p>{{ subnet.name }} — {{ subnet.subnet }}</p>
 </div>
 
-<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. Leave any field blank to keep its current value unchanged.</div>
+<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop. Leave any field blank to keep its current value unchanged.</div>
 
 <div class="card" style="max-width:640px;">
     <form method="POST" onsubmit="return confirm('Apply changes and restart Kea DHCP?')">
