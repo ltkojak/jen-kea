@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.3.14] - 2026-05-03
+
+### Missing paramiko Dependency
+
+`paramiko` (SSH library used by the edit-subnet feature to connect to Kea servers) was not included in `install.sh`'s dependency list. This caused a "No module named 'paramiko'" error on the Subnets page whenever an edit was attempted. Added `paramiko` to both the package detection loop and the `pip3 install` command in `install.sh`.
+
+## [3.3.13] - 2026-05-03
+
+### Edit Subnet — Three Bugs Fixed
+
+**Bug 1 — Changes not being applied:** The POST handler was reading `request.form.get("config")` (a raw config blob that was never in the form) and trying to set `s['subnet']` with it. The individual fields (`pool`, `valid_lifetime`, etc.) sent by the form were never read. Nothing was ever written to the Kea config. Rewrote the POST handler to correctly read each form field and patch only those fields in the config.
+
+**Bug 2 — Fields showing blank:** The GET route passed `extensions.SUBNET_MAP[subnet_id]` which only contains `name`, `cidr`, `subnet` — no pools, timers, or options. The template tried to render `subnet.pools`, `subnet.valid_lifetime`, `subnet.options` which were all missing. Added `_get_subnet_kea_data()` helper that calls `config-get` on the active Kea server and extracts the current pool, timers, and option-data (routers, DNS) for the subnet. These are passed to the template as the `kea` context object.
+
+**Bug 3 — All fields required:** Added "leave blank to keep current" logic. The POST handler now checks each field individually — if it's an empty string, that field is skipped entirely in the config update script. Only provided fields are written. If no fields have values, reports "nothing to change" without restarting Kea. Pool format is validated before SSH is attempted.
+
+Also fixed the systemctl restart command to try both `kea-dhcp4-server` and `isc-kea-dhcp4-server` service names for broader compatibility.
+
 ## [3.3.12] - 2026-04-30
 
 ### Mobile Section Tabs — Actual Root Cause Fixed

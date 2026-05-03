@@ -5,45 +5,56 @@
     <h1>✏️ Edit Subnet</h1>
     <p>{{ subnet.name }} — {{ subnet.subnet }}</p>
 </div>
-<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your-kea-server and restart the Kea service. Kea will be briefly unavailable during restart.</div>
-<div class="card" style="max-width:600px;">
-    <form method="POST" onsubmit="return confirm('Apply changes and restart Kea DHCP? Leases will be briefly interrupted.')">
+
+<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. Leave any field blank to keep its current value unchanged.</div>
+
+<div class="card" style="max-width:640px;">
+    <form method="POST" onsubmit="return confirm('Apply changes and restart Kea DHCP?')">
+
         <div class="form-group">
             <label>Address Pool</label>
-            <input type="text" name="pool" value="{{ subnet.pools[0] if subnet.pools else '' }}" placeholder="x.x.x.1-x.x.x.250" style="font-family:monospace;">
-            <div class="form-hint">Format: start-end e.g. x.x.x.1-x.x.x.250</div>
+            <input type="text" name="pool" value="{{ kea.pool_str }}"
+                   placeholder="x.x.x.1-x.x.x.250" style="font-family:monospace;">
+            <div class="form-hint">Format: start–end &nbsp;·&nbsp; Leave blank to keep current value</div>
         </div>
+
         <div class="form-row">
             <div class="form-group">
                 <label>Valid Lifetime (seconds)</label>
-                <input type="number" name="valid_lifetime" value="{{ subnet.valid_lifetime or '' }}" placeholder="e.g. 86400">
-                <div class="form-hint">86400 = 1 day, 604800 = 7 days</div>
+                <input type="number" name="valid_lifetime" value="{{ kea.valid_lifetime }}"
+                       placeholder="e.g. 86400" min="60">
+                <div class="form-hint">86400 = 1 day &nbsp;·&nbsp; 604800 = 7 days</div>
             </div>
             <div class="form-group">
                 <label>Renew Timer / T1 (seconds)</label>
-                <input type="number" name="renew_timer" value="{{ subnet.renew_timer or '' }}">
+                <input type="number" name="renew_timer" value="{{ kea.renew_timer }}"
+                       placeholder="e.g. 43200" min="0">
+                <div class="form-hint">Typically ½ of valid lifetime</div>
             </div>
             <div class="form-group">
                 <label>Rebind Timer / T2 (seconds)</label>
-                <input type="number" name="rebind_timer" value="{{ subnet.rebind_timer or '' }}">
+                <input type="number" name="rebind_timer" value="{{ kea.rebind_timer }}"
+                       placeholder="e.g. 75600" min="0">
+                <div class="form-hint">Typically ⅞ of valid lifetime</div>
             </div>
         </div>
+
         <div class="form-row">
-            {% for opt in subnet.options %}
-            {% if opt.name == 'routers' %}
             <div class="form-group">
                 <label>Router / Gateway</label>
-                <input type="text" name="routers" value="{{ opt.data }}">
+                <input type="text" name="routers" value="{{ kea.routers }}"
+                       placeholder="e.g. 10.0.0.1" style="font-family:monospace;">
+                <div class="form-hint">Leave blank to keep current value</div>
             </div>
-            {% elif opt.name == 'domain-name-servers' %}
             <div class="form-group">
                 <label>DNS Servers</label>
-                <input type="text" name="dns_servers" value="{{ opt.data }}">
+                <input type="text" name="dns_servers" value="{{ kea.dns_servers }}"
+                       placeholder="e.g. 1.1.1.1, 8.8.8.8" style="font-family:monospace;">
+                <div class="form-hint">Comma-separated &nbsp;·&nbsp; Leave blank to keep current value</div>
             </div>
-            {% endif %}
-            {% endfor %}
         </div>
-        <div style="display:flex;gap:8px;">
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
             <button type="submit" class="btn btn-danger">⚡ Apply & Restart Kea</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>

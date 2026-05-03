@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.3.12"
+JEN_VERSION="3.3.14"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -310,15 +310,15 @@ install_dependencies() {
     fi
 
     local missing_py=()
-    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode authlib jinja2 werkzeug; do
+    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode authlib jinja2 werkzeug paramiko; do
         python3 -c "import ${pkg}" 2>/dev/null || missing_py+=("${pkg/-/_}")
     done
 
     if [[ ${#missing_py[@]} -gt 0 ]]; then
         spinner_start "Installing Python packages..."
-        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib \
+        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko \
             --break-system-packages 2>/dev/null || \
-        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib
+        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko
         spinner_stop
         ok "Python packages installed"
     else
