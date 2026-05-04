@@ -1,16 +1,26 @@
 {% from '_device_badge.html' import device_badge %}
 {% for l in leases %}
 <tr>
-    <td data-label="IP" class="mono"><a href="/leases?q={{ l.ip }}">{{ l.ip }}</a></td>
+    <td data-label="IP" class="mono"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
     <td data-label="Hostname" style="white-space:nowrap;">
         {{ l.hostname or '—' }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
     <td data-label="MAC" class="mono hide-mobile">{{ l.mac }}</td>
-    <td data-label="Subnet" class="hide-tablet"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-    <td data-label="Obtained" class="hide-tablet" style="color:var(--text-muted);">{{ l.obtained }}</td>
-    <td data-label="Expires" style="color:{% if l.expired %}var(--danger){% else %}var(--text-muted){% endif %};">{{ l.expires }}</td>
+    <td data-label="Subnet"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+    <td data-label="{{ 'Expired' if show_expired else 'Obtained' }}" class="mono hide-mobile" style="color:var(--text-muted);">{{ l.obtained|utcfmt }}</td>
+    <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire|utcfmt }}</td>
+    {% if not show_expired and current_user.role == 'admin' %}
+    <td data-label="">
+        <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
+           class="btn btn-sm btn-success" title="Reserve this IP">📌</a>
+        <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return confirm('Release lease for {{ l.ip }}?')">
+            <input type="hidden" name="ip" value="{{ l.ip }}">
+            <button type="submit" class="btn btn-sm btn-danger" title="Release lease">✕</button>
+        </form>
+    </td>
+    {% endif %}
 </tr>
 {% else %}
-<tr><td colspan="6" style="text-align:center;padding:32px;color:var(--text-muted);">No leases found.</td></tr>
+<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No leases found.</td></tr>
 {% endfor %}

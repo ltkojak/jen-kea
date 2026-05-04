@@ -1,5 +1,39 @@
 # Changelog
 
+## [3.4.0] - 2026-05-04
+
+### Database Management (new feature)
+
+New top-level **🗄️ Database** menu item — visible to admins only, hidden entirely from viewers.
+
+**Every operation clearly identifies which database it operates on** — Jen (🟢 green, users/settings/devices/audit) or Kea (🟡 yellow, reservations/options/leases). The target host and database name are displayed on every screen.
+
+**Export** — Download a compressed `.json.gz` export of either database. Jen exports are table-selectable (users, devices, settings, alerts, audit log, API keys, MFA data, etc.). Kea offers two clearly-labelled export types: Reservations (hosts + dhcp4_options, permanent — the one you want) and Active Leases (lease4, transient — rarely needed). Export files include a metadata header with Jen version, schema version, export timestamp, and table list.
+
+**Import / Restore** — Upload an export file. Jen reads the metadata header first and shows exactly what's in the file (tables and row counts) before touching anything. Schema version mismatches are detected and warned. Jen and Kea exports are automatically identified — you cannot accidentally import the wrong file into the wrong database. Import runs in a full transaction — rolls back completely on any failure. Jen imports support table selection and replace vs. merge mode. Kea imports support skip vs. overwrite duplicate handling.
+
+**Scheduled Backups** — Configure daily or weekly automatic backups with retention count (keep last N). Backups saved to `/opt/jen/backups/` with `chmod 600`. APScheduler runs in-process — no cron required. The Backups tab shows all stored backups with database label, size, date, and per-file Download and Delete buttons.
+
+**Migration Wizard** — Three-step UI to copy a database to a new server. Step 1: choose Jen or Kea. Step 2: enter target credentials with a live connection test. Step 3: confirm and run. Progress streams to the browser in real-time via SSE. On any failure, the target database is rolled back and all created tables are dropped — leaving the target completely clean. Row counts are verified after copy before committing.
+
+**Pre-upgrade backup prompt** — The installer now asks "Create a database backup before upgrading? [Y/n]" before applying any upgrade. Backups saved to `/opt/jen/backups/` with version stamp in filename.
+
+**New dependencies:** `apscheduler<4` (scheduled backup engine), `paramiko` (already added in 3.3.14).
+
+**New DB table:** `backup_schedule` (singleton row, stores schedule config, last run time and status).
+
+**New files:** `jen/routes/database.py`, `jen/services/dbexport.py`, `jen/services/scheduler.py`, `templates/database.html`, `templates/database_import_confirm.html`, `templates/database_migrate.html`.
+
+## [3.3.16] - 2026-05-04
+
+### Leases — Action Buttons Disappear on Search
+
+**Bug:** After typing in the leases search box, the green 📌 (Reserve) and red ✕ (Release) action buttons disappeared from all rows. They stayed gone even after clearing the typed text — the only recovery was hitting the Clear button which does a full page reload.
+
+**Root cause:** The search box uses HTMX for live filtering (`hx-get="/leases"`, `hx-target="#leases-table-body"`, `hx-swap="innerHTML"`). When typing, HTMX swaps in `_lease_rows.html` — but that partial template was missing the entire action buttons column. It only rendered IP, hostname, MAC, subnet, obtained, and expires columns. The full `leases.html` had the correct row markup inline, but HTMX bypassed that and used the incomplete partial. Once the partial replaced the rows, clearing the search box triggered another HTMX fetch (not a full reload), which also used the incomplete partial — so buttons stayed gone.
+
+**Fix:** Rewrote `_lease_rows.html` to include all columns plus the action buttons column with the same `show_expired` / `current_user.role == 'admin'` guards as the full template. Also replaced the duplicate inline row loop in `leases.html` with `{% include '_lease_rows.html' %}` so both the initial page load and HTMX swaps share a single source of truth — this kind of drift between the partial and the full template can't happen again.
+
 ## [3.3.15] - 2026-05-03
 
 ### Installer Banner Fix + UX Improvements

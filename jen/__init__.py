@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.3.15"
+JEN_VERSION = "3.4.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -274,6 +274,10 @@ def create_app() -> Flask:
     from jen.models.db import init_jen_db
     init_jen_db()
 
+    # ── Backup scheduler ──────────────────────────────────────────────────────
+    from jen.services.scheduler import start_scheduler
+    start_scheduler(app)
+
     return app
 
 
@@ -293,6 +297,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.api       import bp as api_bp
     from jen.routes.auth      import bp as auth_bp
     from jen.routes.dashboard import bp as dashboard_bp
+    from jen.routes.database  import bp as database_bp
     from jen.routes.ddns      import bp as ddns_bp
     from jen.routes.devices   import bp as devices_bp
     from jen.routes.leases    import bp as leases_bp
@@ -306,7 +311,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.users     import bp as users_bp
 
     for blueprint in [
-        api_bp, auth_bp, dashboard_bp, ddns_bp, devices_bp,
+        api_bp, auth_bp, dashboard_bp, database_bp, ddns_bp, devices_bp,
         leases_bp, mfa_bp, reports_bp, reservations_bp, search_bp,
         servers_bp, settings_bp, subnets_bp, users_bp,
     ]:

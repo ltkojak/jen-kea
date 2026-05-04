@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.3.15"
+JEN_VERSION="3.4.0"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -309,15 +309,15 @@ install_dependencies() {
     fi
 
     local missing_py=()
-    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode authlib jinja2 werkzeug paramiko; do
+    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode authlib jinja2 werkzeug paramiko apscheduler; do
         python3 -c "import ${pkg}" 2>/dev/null || missing_py+=("${pkg/-/_}")
     done
 
     if [[ ${#missing_py[@]} -gt 0 ]]; then
         spinner_start "Installing Python packages..."
-        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko \
+        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko "apscheduler<4" \
             --break-system-packages 2>/dev/null || \
-        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko
+        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko "apscheduler<4"
         spinner_stop
         ok "Python packages installed"
     else
@@ -1116,6 +1116,49 @@ main() {
         blank
         [[ "$(prompt_yn "Upgrade to Jen v${JEN_VERSION}?" "y")" == "n" ]] && \
             { info "Upgrade cancelled."; exit 0; }
+        blank
+        if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
+            spinner_start "Backing up Jen and Kea databases..."
+            mkdir -p /opt/jen/backups
+            if python3 -c "
+import sys, json, gzip, datetime, pymysql, pymysql.cursors, configparser
+cfg = configparser.ConfigParser()
+cfg.read('/etc/jen/jen.config')
+ts = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H%M%S')
+errors = []
+for which in ['jen','kea']:
+    try:
+        h = cfg.get(which+'_db' if which=='jen' else 'kea_db','host',fallback='')
+        u = cfg.get(which+'_db' if which=='jen' else 'kea_db','user',fallback='')
+        p = cfg.get(which+'_db' if which=='jen' else 'kea_db','password',fallback='')
+        d = cfg.get(which+'_db' if which=='jen' else 'kea_db','database',fallback=which)
+        conn = pymysql.connect(host=h,user=u,password=p,database=d,cursorclass=pymysql.cursors.DictCursor,connect_timeout=5)
+        with conn.cursor() as cur:
+            cur.execute('SHOW TABLES')
+            tables = [list(r.values())[0] for r in cur.fetchall()]
+        data = {}
+        for tbl in tables:
+            with conn.cursor() as cur:
+                cur.execute(f'SELECT * FROM \`{tbl}\`')
+                rows = cur.fetchall()
+            data[tbl] = [{k: str(v) if hasattr(v,'isoformat') else v for k,v in r.items()} for r in rows]
+        conn.close()
+        payload = {'_meta':{'database':which,'exported_at':ts,'jen_export_version':1,'tables':tables},'data':data}
+        fname = f'/opt/jen/backups/{which}-pre-upgrade-${JEN_VERSION}-{ts}.json.gz'
+        with gzip.open(fname,'wt',encoding='utf-8') as f:
+            json.dump(payload,f,default=str)
+        import os; os.chmod(fname,0o600)
+        print(f'ok:{which}:{fname}')
+    except Exception as e:
+        print(f'fail:{which}:{e}', file=sys.stderr)
+" 2>/tmp/jen_backup_err; then
+                spinner_stop
+                ok "Pre-upgrade backups saved to /opt/jen/backups/"
+            else
+                spinner_stop
+                warn "Pre-upgrade backup failed (non-fatal) — check /tmp/jen_backup_err"
+            fi
+        fi
     fi
 
     preflight_checks

@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% block title %}Database Management{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>🗄️ Database Management</h1>
+    <p>Export, import, back up, and migrate your Jen and Kea databases. All operations require admin access and are fully logged.</p>
+</div>
+
+<!-- DB identity banner — always visible so user knows what they're working with -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
+    <div class="card" style="border-left:4px solid var(--primary);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <span style="font-size:22px;">🟢</span>
+            <span style="font-size:16px;font-weight:700;color:var(--primary);">Jen Database</span>
+        </div>
+        <div style="font-family:monospace;font-size:13px;color:var(--text-muted);">
+            <div>Host: <strong style="color:var(--text);">{{ jen_db_host }}</strong></div>
+            <div>DB:&nbsp;&nbsp;<strong style="color:var(--text);">{{ jen_db_name }}</strong></div>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Users, devices, settings, alerts, audit log, API keys</div>
+    </div>
+    <div class="card" style="border-left:4px solid var(--warning);">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+            <span style="font-size:22px;">🟡</span>
+            <span style="font-size:16px;font-weight:700;color:var(--warning);">Kea Database</span>
+        </div>
+        <div style="font-family:monospace;font-size:13px;color:var(--text-muted);">
+            <div>Host: <strong style="color:var(--text);">{{ kea_db_host }}</strong></div>
+            <div>DB:&nbsp;&nbsp;<strong style="color:var(--text);">{{ kea_db_name }}</strong></div>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Reservations (hosts), DHCP options, active leases</div>
+    </div>
+</div>
+
+<!-- Tab nav -->
+<div class="section-tabs" style="margin-bottom:24px;">
+    <a href="#export"   class="section-tab active" onclick="showTab('export',this)">📤 Export</a>
+    <a href="#import"   class="section-tab"         onclick="showTab('import',this)">📥 Import</a>
+    <a href="#backups"  class="section-tab"         onclick="showTab('backups',this)">💾 Backups</a>
+    <a href="#schedule" class="section-tab"         onclick="showTab('schedule',this)">🕐 Schedule</a>
+    <a href="#migrate"  class="section-tab"         onclick="showTab('migrate',this)">🔀 Migrate</a>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- EXPORT TAB                                                                  -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-export">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+
+    <!-- Jen Export -->
+    <div class="card">
+        <div class="card-header">
+            <h3>📤 Export <span style="color:var(--primary);font-weight:800;">Jen Database</span></h3>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+            Exports data from <strong>{{ jen_db_host }} / {{ jen_db_name }}</strong> to a compressed JSON file you can download, restore, or archive.
+        </p>
+        <form method="POST" action="/database/export/jen">
+            <div style="margin-bottom:12px;">
+                <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Select Tables</label>
+                <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
+                    <label style="font-size:12px;cursor:pointer;"><input type="checkbox" onchange="toggleAll('jen-tables',this)" checked> <strong>All</strong></label>
+                </div>
+                <div id="jen-tables" style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                    {% for tbl, desc in jen_tables.items() %}
+                    <label style="font-size:12px;cursor:pointer;display:flex;align-items:flex-start;gap:5px;" title="{{ desc }}">
+                        <input type="checkbox" name="tables" value="{{ tbl }}" checked style="margin-top:2px;">
+                        <span><code style="font-size:11px;">{{ tbl }}</code><br><span style="color:var(--text-muted);font-size:10px;">{{ desc[:45] }}{% if desc|length > 45 %}…{% endif %}</span></span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%;">⬇️ Download Jen Export</button>
+        </form>
+    </div>
+
+    <!-- Kea Export -->
+    <div class="card">
+        <div class="card-header">
+            <h3>📤 Export <span style="color:var(--warning);font-weight:800;">Kea Database</span></h3>
+        </div>
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+            Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong>. Choose what to export — reservations and leases are different things.
+        </p>
+        <form method="POST" action="/database/export/kea">
+            {% for grp_id, grp in kea_groups.items() %}
+            <div class="card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" onclick="document.getElementById('kea-grp-{{ grp_id }}').checked=true;highlightKea('{{ grp_id }}');" id="kea-card-{{ grp_id }}">
+                <label style="cursor:pointer;display:flex;align-items:flex-start;gap:10px;">
+                    <input type="radio" name="group" value="{{ grp_id }}" id="kea-grp-{{ grp_id }}"
+                           {% if loop.first %}checked{% endif %} style="margin-top:3px;">
+                    <div>
+                        <div style="font-weight:600;font-size:13px;">{{ grp.label }}</div>
+                        <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">{{ grp.description }}</div>
+                        <div style="margin-top:5px;">
+                            {% for t in grp.tables %}<code style="font-size:11px;background:var(--surface);padding:1px 5px;border-radius:3px;margin-right:4px;">{{ t }}</code>{% endfor %}
+                        </div>
+                    </div>
+                </label>
+            </div>
+            {% endfor %}
+            <div class="alert alert-warning" style="font-size:12px;margin-bottom:12px;">
+                ⚠️ Kea exports may contain MAC addresses, IP assignments, and hostnames for your entire network. Store securely.
+            </div>
+            <button type="submit" class="btn btn-warning" style="width:100%;color:#000;">⬇️ Download Kea Export</button>
+        </form>
+    </div>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- IMPORT TAB                                                                  -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-import" style="display:none;">
+<div class="card">
+    <div class="card-header">
+        <h3>📥 Import / Restore</h3>
+    </div>
+    <div class="alert alert-danger" style="margin-bottom:18px;">
+        ⛔ <strong>Destructive operation.</strong> Importing will replace existing data in the selected tables. This cannot be undone. Make a backup first.
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Upload a Jen export file (<code>.json.gz</code>). Jen will read the file, show you exactly what's in it, and ask you to confirm before touching any data.
+        The file header identifies whether it's a <strong style="color:var(--primary);">Jen</strong> or <strong style="color:var(--warning);">Kea</strong> export — you cannot accidentally import the wrong one.
+    </p>
+    <form method="POST" action="/database/import/inspect" enctype="multipart/form-data">
+        <div class="form-group">
+            <label>Export File</label>
+            <input type="file" name="file" accept=".json,.json.gz,.gz" required style="width:100%;">
+            <div class="form-hint">Must be a file exported from Jen's Database page. Files from other tools are not supported.</div>
+        </div>
+        <button type="submit" class="btn btn-secondary" style="margin-top:8px;">🔍 Inspect File &amp; Continue</button>
+    </form>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- BACKUPS TAB                                                                  -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-backups" style="display:none;">
+<!-- Manual backup -->
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><h3>💾 Run Backup Now</h3></div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Saves a backup to <code>/opt/jen/backups/</code> immediately. Files are compressed and readable only by the jen service user.</p>
+    <form method="POST" action="/database/backup/now" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+        <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="jen" checked> <span style="color:var(--primary);font-weight:600;">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
+        <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="kea" checked> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
+        <button type="submit" class="btn btn-primary">💾 Back Up Now</button>
+    </form>
+</div>
+
+<!-- Backup list -->
+<div class="card">
+    <div class="card-header"><h3>📁 Stored Backups <span style="font-weight:400;font-size:13px;color:var(--text-muted);">— /opt/jen/backups/</span></h3></div>
+    {% if backups %}
+    <table class="table">
+        <thead><tr>
+            <th>Database</th>
+            <th>Filename</th>
+            <th>Exported At</th>
+            <th>Size</th>
+            <th>Tables</th>
+            <th></th>
+        </tr></thead>
+        <tbody>
+        {% for b in backups %}
+        <tr>
+            <td>
+                {% if b.db == 'JEN' %}
+                <span style="color:var(--primary);font-weight:700;">🟢 Jen</span>
+                {% elif b.db == 'KEA' %}
+                <span style="color:var(--warning);font-weight:700;">🟡 Kea</span>
+                {% else %}
+                <span style="color:var(--text-muted);">{{ b.db }}</span>
+                {% endif %}
+            </td>
+            <td><code style="font-size:11px;">{{ b.filename }}</code></td>
+            <td style="color:var(--text-muted);font-size:12px;">{{ b.exported_at or b.modified }}</td>
+            <td style="color:var(--text-muted);font-size:12px;">{{ b.size_kb }} KB</td>
+            <td style="font-size:11px;color:var(--text-muted);">{{ b.tables | join(', ') if b.tables else '—' }}</td>
+            <td style="white-space:nowrap;">
+                <a href="/database/backup/download/{{ b.filename }}" class="btn btn-sm btn-secondary">⬇️</a>
+                <form method="POST" action="/database/backup/delete/{{ b.filename }}" style="display:inline;" onsubmit="return confirm('Delete backup {{ b.filename }}?')">
+                    <button class="btn btn-sm btn-danger">✕</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No backups yet. Run one manually above or configure a schedule.</div>
+    {% endif %}
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- SCHEDULE TAB                                                                 -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-schedule" style="display:none;">
+<div class="card" style="max-width:560px;">
+    <div class="card-header"><h3>🕐 Scheduled Backups</h3></div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Automatic backups are saved to <code>/opt/jen/backups/</code> and rotated by retention count.
+        {% if schedule and schedule.last_run %}
+        <br>Last run: <strong>{{ schedule.last_run }}</strong> — {{ schedule.last_status or 'no status' }}
+        {% endif %}
+    </p>
+    <form method="POST" action="/database/schedule">
+        <div class="form-group">
+            <label style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:14px;">
+                <input type="checkbox" name="enabled" {% if schedule and schedule.enabled %}checked{% endif %}>
+                <strong>Enable scheduled backups</strong>
+            </label>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Frequency</label>
+                <select name="frequency">
+                    <option value="daily"  {% if not schedule or schedule.frequency == 'daily'  %}selected{% endif %}>Daily</option>
+                    <option value="weekly" {% if schedule and schedule.frequency == 'weekly' %}selected{% endif %}>Weekly (Sundays)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Time (UTC hour)</label>
+                <select name="hour">
+                    {% for h in range(24) %}
+                    <option value="{{ h }}" {% if schedule and schedule.hour == h %}selected{% endif %}>{{ '%02d:00'|format(h) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Keep last N backups</label>
+                <input type="number" name="keep_count" value="{{ schedule.keep_count if schedule else 7 }}" min="1" max="30">
+            </div>
+        </div>
+        <div class="form-group">
+            <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Include</label>
+            <div style="display:flex;gap:20px;margin-top:6px;">
+                <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include_jen" {% if not schedule or schedule.include_jen %}checked{% endif %}> <span style="color:var(--primary);font-weight:600;">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
+                <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include_kea" {% if not schedule or schedule.include_kea %}checked{% endif %}> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">💾 Save Schedule</button>
+    </form>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<!-- MIGRATE TAB                                                                  -->
+<!-- ══════════════════════════════════════════════════════════════════════════ -->
+<div id="tab-migrate" style="display:none;">
+<div class="card">
+    <div class="card-header"><h3>🔀 Migrate to New Server</h3></div>
+    <div class="alert alert-warning" style="margin-bottom:18px;">
+        ⚠️ Migration copies data to a new database server. The source is never modified. If migration fails at any point, the target is rolled back and left clean. Progress is shown in real-time below.
+    </div>
+    <a href="/database/migrate" class="btn btn-primary">🔀 Open Migration Wizard</a>
+</div>
+</div>
+
+<script>
+function showTab(name, el) {
+    ['export','import','backups','schedule','migrate'].forEach(function(t) {
+        document.getElementById('tab-'+t).style.display = t === name ? '' : 'none';
+    });
+    document.querySelectorAll('.section-tab').forEach(function(a) { a.classList.remove('active'); });
+    if (el) el.classList.add('active');
+    return false;
+}
+function toggleAll(groupId, cb) {
+    document.querySelectorAll('#'+groupId+' input[type=checkbox]').forEach(function(c) { c.checked = cb.checked; });
+}
+function highlightKea(grp) {
+    document.querySelectorAll('[id^="kea-card-"]').forEach(function(c) {
+        c.style.borderColor = c.id === 'kea-card-'+grp ? 'var(--primary)' : '';
+    });
+}
+// Open to hash if present
+(function(){
+    var h = window.location.hash.replace('#','');
+    if (h) {
+        var tab = document.querySelector('[href="#'+h+'"]');
+        if (tab) showTab(h, tab);
+    }
+})();
+</script>
+{% endblock %}

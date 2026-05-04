@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Confirm Import{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📥 Confirm Import</h1>
+    <p>Review what's in this file before anything is changed.</p>
+</div>
+
+<!-- Big clear DB label -->
+<div class="card" style="border-left:6px solid {% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};margin-bottom:20px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:32px;">{% if meta.database == 'jen' %}🟢{% else %}🟡{% endif %}</span>
+        <div>
+            <div style="font-size:18px;font-weight:700;color:{% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};">
+                This is a <strong>{{ meta.database | upper }} DATABASE</strong> export
+            </div>
+            <div style="font-size:13px;color:var(--text-muted);margin-top:4px;">
+                Exported from Jen v{{ meta.jen_app_version }} on {{ meta.exported_at[:19].replace('T',' ') if meta.exported_at else 'unknown date' }} UTC
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Schema version check -->
+{% if meta.jen_export_version and meta.jen_export_version > 1 %}
+<div class="alert alert-danger" style="margin-bottom:16px;">
+    ⚠️ This export was created with a newer schema version ({{ meta.jen_export_version }}). Importing may cause data issues. Upgrade Jen before importing.
+</div>
+{% endif %}
+
+<!-- Contents -->
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><h3>File Contents</h3></div>
+    <table class="table">
+        <thead><tr><th>Table</th><th>Rows</th><th>Description</th></tr></thead>
+        <tbody>
+        {% for tbl, count in data_summary.items() %}
+        <tr>
+            <td><code>{{ tbl }}</code></td>
+            <td>{{ count }}</td>
+            <td style="font-size:12px;color:var(--text-muted);">
+                {% if meta.database == 'jen' %}
+                {{ jen_tables.get(tbl, '') }}
+                {% else %}
+                {% if tbl == 'hosts' %}Kea host reservations (permanent)
+                {% elif tbl == 'dhcp4_options' %}Per-host DHCP option overrides
+                {% elif tbl == 'lease4' %}Active dynamic leases
+                {% endif %}
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<form method="POST" action="/database/import/confirm">
+    <input type="hidden" name="tmp_path" value="{{ tmp_path }}">
+
+    {% if meta.database == 'jen' %}
+    <!-- Jen options -->
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><h3>🟢 Jen Import Options</h3></div>
+        <div class="form-group">
+            <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Tables to Restore</label>
+            <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                {% for tbl in data_summary %}
+                <label style="font-size:12px;cursor:pointer;">
+                    <input type="checkbox" name="tables" value="{{ tbl }}" checked>
+                    <code>{{ tbl }}</code>
+                    {% if tbl == 'users' %}<span style="color:var(--danger);font-size:10px;"> ⚠️ will overwrite accounts</span>{% endif %}
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Import Mode</label>
+            <select name="mode">
+                <option value="replace">Replace — clear table then insert (recommended)</option>
+                <option value="merge">Merge — insert only, skip duplicates</option>
+            </select>
+            <div class="form-hint">Replace mode clears each selected table before inserting. Merge mode uses INSERT IGNORE — existing rows are kept.</div>
+        </div>
+    </div>
+
+    {% else %}
+    <!-- Kea options -->
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><h3>🟡 Kea Import Options</h3></div>
+        <div class="form-group">
+            <label>Duplicate Handling</label>
+            <select name="duplicate_mode">
+                <option value="skip">Skip — keep existing rows if duplicate key (safe)</option>
+                <option value="overwrite">Overwrite — replace existing rows (REPLACE INTO)</option>
+            </select>
+            <div class="form-hint">For reservations, "skip" is safest — it won't alter existing reservations that may have been modified since the export.</div>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="alert alert-danger" style="margin-bottom:16px;">
+        ⛔ <strong>Final warning:</strong> Importing will modify live data. The operation runs in a transaction — if anything fails it rolls back completely. But if it succeeds, the change is permanent. Make sure you have a backup.
+    </div>
+
+    <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-danger"
+                onclick="return confirm('Proceed with import into the {{ meta.database | upper }} database? This will modify live data.')">
+            ⚡ Confirm Import into {{ meta.database | upper }} Database
+        </button>
+        <a href="/database#import" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}

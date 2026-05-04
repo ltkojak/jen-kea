@@ -367,6 +367,19 @@ def init_jen_db() -> None:
                     INDEX idx_hash (key_hash)
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS backup_schedule (
+                    id INT PRIMARY KEY DEFAULT 1,
+                    enabled TINYINT(1) DEFAULT 0,
+                    frequency ENUM('daily','weekly') DEFAULT 'daily',
+                    hour INT DEFAULT 2,
+                    keep_count INT DEFAULT 7,
+                    include_jen TINYINT(1) DEFAULT 1,
+                    include_kea TINYINT(1) DEFAULT 1,
+                    last_run DATETIME DEFAULT NULL,
+                    last_status VARCHAR(255) DEFAULT NULL
+                )
+            """)
 
             # ── Default admin user ─────────────────────────────────────────
             cur.execute("SELECT COUNT(*) as cnt FROM users")

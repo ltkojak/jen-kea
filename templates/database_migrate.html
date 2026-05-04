@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}Database Migration Wizard{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔀 Database Migration Wizard</h1>
+    <p>Copy a database to a new server. Source is never modified. Target is rolled back if anything fails.</p>
+</div>
+
+<!-- Step 1: Choose DB -->
+<div class="card" style="margin-bottom:20px;" id="step1">
+    <div class="card-header"><h3>Step 1 — Choose Database to Migrate</h3></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-jen" onclick="selectDB('jen')">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <input type="radio" name="which" value="jen" id="radio-jen" onchange="selectDB('jen')">
+                <div>
+                    <div style="font-weight:700;color:var(--primary);font-size:15px;">🟢 Jen Database</div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
+                        Source: <code>{{ jen_db_host }} / {{ jen_db_name }}</code>
+                    </div>
+                    <div style="font-size:12px;color:var(--text-muted);">Users, devices, settings, audit log, API keys…</div>
+                </div>
+            </div>
+        </div>
+        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-kea" onclick="selectDB('kea')">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <input type="radio" name="which" value="kea" id="radio-kea" onchange="selectDB('kea')">
+                <div>
+                    <div style="font-weight:700;color:var(--warning);font-size:15px;">🟡 Kea Database</div>
+                    <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
+                        Source: <code>{{ kea_db_host }} / {{ kea_db_name }}</code>
+                    </div>
+                    <div style="font-size:12px;color:var(--text-muted);">Reservations, DHCP options, active leases…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Jen table selection -->
+    <div id="jen-options" style="display:none;margin-top:16px;">
+        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Tables to Migrate</label>
+        <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;">
+            <label style="font-size:12px;cursor:pointer;"><input type="checkbox" onchange="toggleAll('jen-mig-tables',this)" checked> <strong>All</strong></label>
+        </div>
+        <div id="jen-mig-tables" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:6px;">
+            {% for tbl in jen_tables %}
+            <label style="font-size:12px;cursor:pointer;">
+                <input type="checkbox" class="jen-tbl" name="tables" value="{{ tbl }}" checked>
+                <code>{{ tbl }}</code>
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Kea group selection -->
+    <div id="kea-options" style="display:none;margin-top:16px;">
+        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">What to Migrate</label>
+        <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            {% for grp_id, grp in kea_groups.items() %}
+            <label class="card" style="background:var(--surface2);cursor:pointer;">
+                <input type="radio" name="kea_group" value="{{ grp_id }}" {% if loop.first %}checked{% endif %}>
+                <div style="margin-left:8px;">
+                    <div style="font-weight:600;font-size:13px;">{{ grp.label }}</div>
+                    <div style="font-size:12px;color:var(--text-muted);">{{ grp.description }}</div>
+                </div>
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+
+    <button class="btn btn-primary" style="margin-top:16px;" onclick="showStep(2)">Next →</button>
+</div>
+
+<!-- Step 2: Target credentials -->
+<div class="card" style="margin-bottom:20px;display:none;" id="step2">
+    <div class="card-header"><h3>Step 2 — Target Database Credentials</h3></div>
+    <div id="target-db-label" style="font-size:13px;color:var(--text-muted);margin-bottom:14px;"></div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>Host</label>
+            <input type="text" id="t-host" placeholder="192.168.1.100" style="font-family:monospace;">
+        </div>
+        <div class="form-group">
+            <label>Port</label>
+            <input type="number" id="t-port" value="3306" style="font-family:monospace;max-width:90px;">
+        </div>
+    </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" id="t-user" placeholder="jen" style="font-family:monospace;">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="t-pass" placeholder="••••••••">
+        </div>
+        <div class="form-group">
+            <label>Database Name</label>
+            <input type="text" id="t-db" placeholder="jen" style="font-family:monospace;">
+        </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="testConn()">🔌 Test Connection</button>
+        <span id="conn-result" style="font-size:13px;"></span>
+    </div>
+    <div id="conn-info" style="display:none;margin-top:12px;" class="card" style="background:var(--surface2);"></div>
+    <div style="display:flex;gap:10px;margin-top:16px;">
+        <button class="btn btn-secondary" onclick="showStep(1)">← Back</button>
+        <button class="btn btn-primary" id="btn-step3" disabled onclick="showStep(3)">Next →</button>
+    </div>
+</div>
+
+<!-- Step 3: Confirm & Run -->
+<div class="card" style="margin-bottom:20px;display:none;" id="step3">
+    <div class="card-header"><h3>Step 3 — Confirm &amp; Run Migration</h3></div>
+    <div id="migration-summary" style="margin-bottom:16px;"></div>
+    <div class="alert alert-warning" style="margin-bottom:16px;">
+        ⚠️ This will copy data to the target database. The source (<strong>{{ jen_db_host }}</strong> / <strong>{{ kea_db_host }}</strong>) is never touched.
+        If the migration fails at any point, the target is rolled back and left completely clean.
+    </div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;">
+        <button class="btn btn-secondary" onclick="showStep(2)">← Back</button>
+        <button class="btn btn-danger" id="btn-run" onclick="runMigration()">⚡ Start Migration</button>
+    </div>
+
+    <!-- Progress output -->
+    <div id="progress-wrap" style="display:none;">
+        <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px;">Migration Progress</div>
+        <div id="progress-log" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;font-family:monospace;font-size:12px;min-height:120px;max-height:320px;overflow-y:auto;white-space:pre-wrap;"></div>
+        <div id="migration-result" style="margin-top:12px;display:none;"></div>
+    </div>
+</div>
+
+<script>
+var _which = null;
+var _connOk = false;
+
+function selectDB(w) {
+    _which = w;
+    document.getElementById('radio-'+w).checked = true;
+    document.getElementById('card-jen').style.borderColor = w==='jen' ? 'var(--primary)' : 'transparent';
+    document.getElementById('card-kea').style.borderColor = w==='kea' ? 'var(--warning)' : 'transparent';
+    document.getElementById('jen-options').style.display = w==='jen' ? '' : 'none';
+    document.getElementById('kea-options').style.display = w==='kea' ? '' : 'none';
+}
+
+function showStep(n) {
+    if (n===2 && !_which) { alert('Please select a database first.'); return; }
+    [1,2,3].forEach(function(i) {
+        document.getElementById('step'+i).style.display = i===n ? '' : 'none';
+    });
+    if (n===2) {
+        var db = _which==='jen' ? '{{ jen_db_name }}' : '{{ kea_db_name }}';
+        document.getElementById('target-db-label').innerHTML =
+            'Migrating <strong style="color:var(--'+((_which==='jen')?'primary':'warning')+');">'
+            + (_which==='jen'?'🟢 Jen':'🟡 Kea') + ' Database</strong> to a new server. '
+            + 'The source database on <code>' + (_which==='jen'?'{{ jen_db_host }}':'{{ kea_db_host }}') + '</code> is never modified.';
+        if (!document.getElementById('t-db').value) document.getElementById('t-db').value = db;
+    }
+    if (n===3) {
+        var host = document.getElementById('t-host').value;
+        var db   = document.getElementById('t-db').value;
+        var which = _which==='jen' ? '🟢 Jen Database' : '🟡 Kea Database';
+        var src  = _which==='jen' ? '{{ jen_db_host }}/{{ jen_db_name }}' : '{{ kea_db_host }}/{{ kea_db_name }}';
+        document.getElementById('migration-summary').innerHTML =
+            '<div class="card" style="background:var(--surface2);">'
+            + '<strong>Migrating:</strong> ' + which + '<br>'
+            + '<strong>From:</strong> <code>' + src + '</code><br>'
+            + '<strong>To:</strong> <code>' + host + '/' + db + '</code>'
+            + '</div>';
+    }
+}
+
+function testConn() {
+    var host = document.getElementById('t-host').value.trim();
+    var port = document.getElementById('t-port').value.trim() || '3306';
+    var user = document.getElementById('t-user').value.trim();
+    var pw   = document.getElementById('t-pass').value;
+    var db   = document.getElementById('t-db').value.trim();
+    if (!host || !user || !db) { alert('Fill in host, user, and database name.'); return; }
+    var el = document.getElementById('conn-result');
+    el.textContent = '⏳ Testing…'; el.style.color = 'var(--text-muted)';
+    var fd = new FormData();
+    fd.append('host',host); fd.append('port',port); fd.append('user',user);
+    fd.append('password',pw); fd.append('database',db);
+    fetch('/database/migrate/test', {method:'POST', body:fd})
+        .then(function(r){return r.json();})
+        .then(function(d){
+            if (d.ok) {
+                el.textContent = '✅ Connected — MySQL ' + d.info.version + ' — ' + d.info.table_count + ' existing tables';
+                el.style.color = 'var(--success)';
+                _connOk = true;
+                document.getElementById('btn-step3').disabled = false;
+            } else {
+                el.textContent = '❌ ' + d.error;
+                el.style.color = 'var(--danger)';
+                _connOk = false;
+                document.getElementById('btn-step3').disabled = true;
+            }
+        })
+        .catch(function(e){ el.textContent = '❌ ' + e; el.style.color='var(--danger)'; });
+}
+
+function runMigration() {
+    document.getElementById('btn-run').disabled = true;
+    document.getElementById('progress-wrap').style.display = '';
+    var log = document.getElementById('progress-log');
+    log.textContent = '';
+
+    var fd = new FormData();
+    fd.append('which', _which);
+    fd.append('host',  document.getElementById('t-host').value);
+    fd.append('port',  document.getElementById('t-port').value || '3306');
+    fd.append('user',  document.getElementById('t-user').value);
+    fd.append('password', document.getElementById('t-pass').value);
+    fd.append('database', document.getElementById('t-db').value);
+
+    if (_which === 'jen') {
+        document.querySelectorAll('.jen-tbl:checked').forEach(function(cb) { fd.append('tables', cb.value); });
+    } else {
+        var kgrp = document.querySelector('input[name="kea_group"]:checked');
+        if (kgrp) fd.append('kea_group', kgrp.value);
+    }
+
+    // POST to SSE endpoint using fetch + ReadableStream
+    fetch('/database/migrate/run', {method:'POST', body:fd})
+        .then(function(resp) {
+            var reader = resp.body.getReader();
+            var dec = new TextDecoder();
+            var buf = '';
+            function pump() {
+                return reader.read().then(function(r) {
+                    if (r.done) return;
+                    buf += dec.decode(r.value, {stream:true});
+                    var lines = buf.split('\n');
+                    buf = lines.pop();
+                    lines.forEach(function(line) {
+                        if (line.startsWith('event: progress')) return;
+                        if (line.startsWith('data: ')) {
+                            log.textContent += line.slice(6) + '\n';
+                            log.scrollTop = log.scrollHeight;
+                        }
+                        if (line.startsWith('event: done')) {
+                            document.getElementById('migration-result').style.display = '';
+                            document.getElementById('migration-result').innerHTML =
+                                '<div class="alert alert-success">✅ Migration completed successfully. Verify your data on the new server before decommissioning the source.</div>';
+                        }
+                        if (line.startsWith('event: error')) {
+                            document.getElementById('migration-result').style.display = '';
+                            document.getElementById('migration-result').innerHTML =
+                                '<div class="alert alert-danger">❌ Migration failed — target database was rolled back and left clean. See log above.</div>';
+                        }
+                    });
+                    return pump();
+                });
+            }
+            return pump();
+        });
+}
+
+function toggleAll(groupId, cb) {
+    document.querySelectorAll('#'+groupId+' input[type=checkbox]').forEach(function(c) { c.checked = cb.checked; });
+}
+
+// Init
+selectDB('jen');
+showStep(1);
+</script>
+{% endblock %}
