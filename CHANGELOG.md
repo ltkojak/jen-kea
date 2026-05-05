@@ -1,5 +1,30 @@
 # Changelog
 
+## [3.4.3] - 2026-05-05
+
+### Leases — Smarter Action Buttons Based on Reservation Status
+
+Previously every active lease showed a 📌 "Create reservation" button and a ✕ "Release lease" button, regardless of whether that device already had a reservation. This was wrong on both counts:
+
+- **📌 Create reservation** on an already-reserved device would attempt to create a duplicate reservation in Kea, which would error or silently conflict.
+- **✕ Release lease** on a reserved device is pointless — Kea will immediately re-issue the same lease to the same MAC since a reservation exists. The device never actually loses its IP.
+
+**Fix:** The leases route now cross-references the Kea `hosts` table to determine which leases have an existing reservation. It does this in a single batch query (one `WHERE HEX(dhcp_identifier) IN (...)` call against all MACs on the page) rather than per-row, so there's no performance impact.
+
+**New behavior in `_lease_rows.html`:**
+- **Has reservation →** Shows a single 📋 grey button that links to `/reservations?search=<MAC>`, filtered directly to that device's reservation. No create button, no release button.
+- **No reservation →** Shows the 📌 create button and ✕ release button as before.
+
+## [3.4.2] - 2026-05-05
+
+### Devices — HTMX Filter Actually Broken
+
+The HTMX filter on the Devices page wasn't working at all. Two bugs in 3.4.1:
+
+1. **No `<form>` wrapper.** HTMX collects input values by serializing the nearest form ancestor. The filter bar was a `<div>` with HTMX attributes but no `<form>` element — so HTMX fired requests with no query params. Fixed by wrapping the inputs in `<form method="GET" style="display:contents;">` with the HTMX attributes on the form, matching the pattern used on Leases and Reservations.
+
+2. **`type` filter not included.** The type_filter param (used by the device-type badge bar) was missing from the HTMX form entirely, so clicking a type badge then using the search box would silently drop the type filter. Added `<input type="hidden" name="type" value="{{ type_filter }}">`.
+
 ## [3.4.1] - 2026-05-04
 
 ### Leases / Reservations / Devices — Pagination & HTMX Fixes

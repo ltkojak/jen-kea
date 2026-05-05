@@ -17,32 +17,37 @@
 </div>
 
 <!-- Filter bar — HTMX live filtering -->
-<div class="filter-bar"
-     hx-get="/devices"
-     hx-target="#devices-table-body"
-     hx-swap="innerHTML"
-     hx-trigger="change from:select, input delay:400ms"
-     hx-push-url="true">
-    <select name="subnet">
-        <option value="all" {% if subnet_filter == 'all' %}selected{% endif %}>All Subnets</option>
-        {% for sid, info in subnet_map.items() %}
-        <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
-        {% endfor %}
-    </select>
-    <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:200px;">
-    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
-        <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %}>
-        Stale only
-    </label>
-    <select name="per_page" title="Rows per page">
-        <option value="all" {% if per_page == 'all' %}selected{% endif %}>Show all</option>
-        <option value="50"  {% if per_page == '50'  %}selected{% endif %}>50 per page</option>
-        <option value="100" {% if per_page == '100' %}selected{% endif %}>100 per page</option>
-        <option value="250" {% if per_page == '250' %}selected{% endif %}>250 per page</option>
-    </select>
-    <input type="hidden" name="sort" value="{{ sort }}">
-    <input type="hidden" name="dir"  value="{{ direction }}">
-    {% if search or show_stale or subnet_filter != 'all' %}<a href="/devices" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
+<div class="filter-bar">
+    <form method="GET" style="display:contents;"
+          hx-get="/devices"
+          hx-target="#devices-table-body"
+          hx-swap="innerHTML"
+          hx-trigger="change from:select, input delay:400ms"
+          hx-push-url="true">
+        <select name="subnet">
+            <option value="all" {% if subnet_filter == 'all' %}selected{% endif %}>All Subnets</option>
+            {% for sid, info in subnet_map.items() %}
+            <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:200px;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
+            <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %}>
+            Stale only
+        </label>
+        <select name="per_page" title="Rows per page">
+            <option value="all" {% if per_page == 'all' %}selected{% endif %}>Show all</option>
+            <option value="50"  {% if per_page == '50'  %}selected{% endif %}>50 per page</option>
+            <option value="100" {% if per_page == '100' %}selected{% endif %}>100 per page</option>
+            <option value="250" {% if per_page == '250' %}selected{% endif %}>250 per page</option>
+        </select>
+        <input type="hidden" name="sort"   value="{{ sort }}">
+        <input type="hidden" name="dir"    value="{{ direction }}">
+        <input type="hidden" name="type"   value="{{ type_filter }}">
+        {% if search or show_stale or subnet_filter != 'all' %}
+        <a href="/devices" class="btn btn-sm btn-secondary">Clear</a>
+        {% endif %}
+    </form>
 </div>
 
 <!-- Device type filter badges — preserve all current filters -->

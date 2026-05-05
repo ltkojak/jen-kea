@@ -12,12 +12,17 @@
     <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire|utcfmt }}</td>
     {% if not show_expired and current_user.role == 'admin' %}
     <td data-label="">
+        {% if l.has_reservation %}
+        <a href="/reservations?search={{ l.mac }}"
+           class="btn btn-sm btn-secondary" title="Has reservation — view it">📋</a>
+        {% else %}
         <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
-           class="btn btn-sm btn-success" title="Reserve this IP">📌</a>
+           class="btn btn-sm btn-success" title="Create reservation">📌</a>
         <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return confirm('Release lease for {{ l.ip }}?')">
             <input type="hidden" name="ip" value="{{ l.ip }}">
             <button type="submit" class="btn btn-sm btn-danger" title="Release lease">✕</button>
         </form>
+        {% endif %}
     </td>
     {% endif %}
 </tr>

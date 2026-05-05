@@ -143,6 +143,19 @@ def leases():
                                     "subnet_id": row["subnet_id"],
                                     "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
                                     "expired": row.get("state", 0) != 0})
+        # Build set of MACs that have reservations — single query, O(1) lookup per lease
+        reserved_macs = set()
+        if leases_list:
+            mac_hexes = [l["mac"].replace(":", "") for l in leases_list if l.get("mac")]
+            if mac_hexes:
+                placeholders = ",".join(["%s"] * len(mac_hexes))
+                cur.execute(
+                    f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
+                    mac_hexes
+                )
+                reserved_macs = {row["mac_hex"].upper() for row in cur.fetchall()}
+        for l in leases_list:
+            l["has_reservation"] = l["mac"].replace(":", "").upper() in reserved_macs
         db.close()
     except Exception as e:
         flash(f"Could not load leases: {str(e)}", "error")
