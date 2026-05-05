@@ -75,7 +75,7 @@ def export_jen():
         )
     except Exception as e:
         flash(f"Export failed: {e}", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="export"))
 
 
 @bp.route("/database/export/kea", methods=["POST"])
@@ -85,7 +85,7 @@ def export_kea():
     group = request.form.get("group", "reservations")
     if group not in dbexport.KEA_EXPORT_GROUPS:
         flash("Invalid export group.", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="export"))
     try:
         content, filename = dbexport.export_kea(group)
         __user.audit("DB_EXPORT", "kea", f"Exported group: {group}")
@@ -96,7 +96,7 @@ def export_kea():
         )
     except Exception as e:
         flash(f"Kea export failed: {e}", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="export"))
 
 
 # ── Backup download / delete ───────────────────────────────────────────────────
@@ -108,7 +108,7 @@ def download_backup(filename):
     path = os.path.join(dbexport.BACKUP_DIR, safe)
     if not os.path.isfile(path):
         flash("Backup file not found.", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="backups"))
     with open(path, "rb") as f:
         data = f.read()
     __user.audit("DB_BACKUP_DOWNLOAD", safe, "")
@@ -131,7 +131,7 @@ def delete_backup(filename):
         flash(f"Backup '{safe}' deleted.", "success")
     except Exception as e:
         flash(f"Could not delete backup: {e}", "error")
-    return redirect(url_for("database.database"))
+    return redirect(url_for("database.database", tab="backups"))
 
 
 @bp.route("/database/backup/now", methods=["POST"])
@@ -162,7 +162,7 @@ def backup_now():
             results.append(f"❌ Kea backup failed: {e}")
     for r in results:
         flash(r, "success" if r.startswith("✅") else "error")
-    return redirect(url_for("database.database"))
+    return redirect(url_for("database.database", tab="backups"))
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
@@ -174,12 +174,12 @@ def import_inspect():
     f = request.files.get("file")
     if not f:
         flash("No file uploaded.", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="export"))
     file_bytes = f.read()
     meta, data, err = dbexport.parse_import_file(file_bytes)
     if err:
         flash(f"Cannot read file: {err}", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="export"))
     # Store bytes in session-style temp file for the confirm step
     import tempfile, base64
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz",
@@ -204,7 +204,7 @@ def import_confirm():
     tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
     if not tmp_path or not os.path.isfile(tmp_path):
         flash("Import session expired. Please re-upload.", "error")
-        return redirect(url_for("database.database"))
+        return redirect(url_for("database.database", tab="import"))
     with open(tmp_path, "rb") as f:
         file_bytes = f.read()
     os.unlink(tmp_path)
@@ -224,12 +224,12 @@ def import_confirm():
             __user.audit("DB_IMPORT", "kea", f"duplicate_mode={dup}")
         else:
             flash(f"Unknown database type '{db}' in export file.", "error")
-            return redirect(url_for("database.database"))
+            return redirect(url_for("database.database", tab="import"))
         for r in results:
             flash(r, "success" if r.startswith("✅") else "warning")
     except Exception as e:
         flash(f"Import failed: {e}", "error")
-    return redirect(url_for("database.database"))
+    return redirect(url_for("database.database", tab="import"))
 
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
@@ -249,7 +249,7 @@ def save_schedule():
         __user.audit("DB_SCHEDULE", "backup", f"enabled={enabled} freq={frequency} hour={hour}")
     except Exception as e:
         flash(f"Could not save schedule: {e}", "error")
-    return redirect(url_for("database.database"))
+    return redirect(url_for("database.database", tab="schedule"))
 
 
 # ── Migration — SSE progress ───────────────────────────────────────────────────

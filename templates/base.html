@@ -301,11 +301,9 @@
     <div class="nav-links" style="display:flex;align-items:center;gap:2px;flex:1;">
         <a href="/" class="nav-link {% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}">📊 Dashboard</a>
         <a href="/leases" class="nav-link {% if request.endpoint in ['leases.leases','leases.ipmap','reservations.reservations','reservations.add_reservation','reservations.edit_reservation','devices.devices','reports.reports'] %}active{% endif %}">📋 Management</a>
-        {% if current_user.role == 'admin' %}
-        <a href="/database" class="nav-link {% if request.endpoint in ['database.database','database.migrate_page'] %}active{% endif %}">🗄️ Database</a>
-        {% endif %}
         <a href="/subnets" class="nav-link {% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] %}active{% endif %}">🌐 Network</a>
         {% if current_user.role == 'admin' %}
+        <a href="/database" class="nav-link {% if request.endpoint in ['database.database','database.migrate_page'] %}active{% endif %}">🗄️ Database</a>
         <a href="/settings/system" class="nav-link {% if request.endpoint in ['settings.settings_system','settings.settings_alerts','settings.settings_infrastructure','users.users','users.audit_log','api.api_keys','api.api_docs'] %}active{% endif %}">⚙️ Settings</a>
         {% endif %}
         <a href="/about" class="nav-link {% if request.endpoint == 'users.about' %}active{% endif %}">ℹ️ About</a>
@@ -393,6 +391,16 @@
     <a href="/reservations" class="section-tab {% if request.endpoint in ['reservations.reservations','reservations.add_reservation','reservations.edit_reservation'] %}active{% endif %}">📌 Reservations</a>
     <a href="/devices" class="section-tab {% if request.endpoint == 'devices.devices' %}active{% endif %}">📱 Devices</a>
     <a href="/reports" class="section-tab {% if request.endpoint == 'reports.reports' %}active{% endif %}">📈 Reports</a>
+</div>
+{% endif %}
+
+{% if current_user.role == 'admin' and request.endpoint in ['database.database','database.migrate_page'] %}
+<div class="section-tabs">
+    <a href="/database?tab=export"   class="section-tab {% if request.args.get('tab','export') == 'export'   %}active{% endif %}">📤 Export</a>
+    <a href="/database?tab=import"   class="section-tab {% if request.args.get('tab') == 'import'             %}active{% endif %}">📥 Import</a>
+    <a href="/database?tab=backups"  class="section-tab {% if request.args.get('tab') == 'backups'            %}active{% endif %}">💾 Backups</a>
+    <a href="/database?tab=schedule" class="section-tab {% if request.args.get('tab') == 'schedule'           %}active{% endif %}">🕐 Schedule</a>
+    <a href="/database?tab=migrate"  class="section-tab {% if request.args.get('tab') == 'migrate' or request.endpoint == 'database.migrate_page' %}active{% endif %}">🔀 Migrate</a>
 </div>
 {% endif %}
 

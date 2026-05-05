@@ -2,6 +2,8 @@
 {% block title %}Database Management{% endblock %}
 {% block content %}
 
+{% set active_tab = request.args.get('tab', 'export') %}
+
 <div class="page-header">
     <h1>🗄️ Database Management</h1>
     <p>Export, import, back up, and migrate your Jen and Kea databases. All operations require admin access and are fully logged.</p>
@@ -33,19 +35,10 @@
     </div>
 </div>
 
-<!-- Tab nav -->
-<div class="section-tabs" style="margin-bottom:24px;">
-    <a href="#export"   class="section-tab active" onclick="showTab('export',this)">📤 Export</a>
-    <a href="#import"   class="section-tab"         onclick="showTab('import',this)">📥 Import</a>
-    <a href="#backups"  class="section-tab"         onclick="showTab('backups',this)">💾 Backups</a>
-    <a href="#schedule" class="section-tab"         onclick="showTab('schedule',this)">🕐 Schedule</a>
-    <a href="#migrate"  class="section-tab"         onclick="showTab('migrate',this)">🔀 Migrate</a>
-</div>
-
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- EXPORT TAB                                                                  -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
-<div id="tab-export">
+{% if active_tab == 'export' %}
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
 
     <!-- Jen Export -->
@@ -106,12 +99,12 @@
         </form>
     </div>
 </div>
-</div>
+{% endif %}
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- IMPORT TAB                                                                  -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
-<div id="tab-import" style="display:none;">
+{% if active_tab == 'import' %}
 <div class="card">
     <div class="card-header">
         <h3>📥 Import / Restore</h3>
@@ -132,12 +125,12 @@
         <button type="submit" class="btn btn-secondary" style="margin-top:8px;">🔍 Inspect File &amp; Continue</button>
     </form>
 </div>
-</div>
+{% endif %}
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- BACKUPS TAB                                                                  -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
-<div id="tab-backups" style="display:none;">
+{% if active_tab == 'backups' %}
 <!-- Manual backup -->
 <div class="card" style="margin-bottom:20px;">
     <div class="card-header"><h3>💾 Run Backup Now</h3></div>
@@ -192,12 +185,12 @@
     <div style="text-align:center;padding:32px;color:var(--text-muted);">No backups yet. Run one manually above or configure a schedule.</div>
     {% endif %}
 </div>
-</div>
+{% endif %}
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- SCHEDULE TAB                                                                 -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
-<div id="tab-schedule" style="display:none;">
+{% if active_tab == 'schedule' %}
 <div class="card" style="max-width:560px;">
     <div class="card-header"><h3>🕐 Scheduled Backups</h3></div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
@@ -244,12 +237,12 @@
         <button type="submit" class="btn btn-primary">💾 Save Schedule</button>
     </form>
 </div>
-</div>
+{% endif %}
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 <!-- MIGRATE TAB                                                                  -->
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
-<div id="tab-migrate" style="display:none;">
+{% if active_tab == 'migrate' %}
 <div class="card">
     <div class="card-header"><h3>🔀 Migrate to New Server</h3></div>
     <div class="alert alert-warning" style="margin-bottom:18px;">
@@ -257,17 +250,9 @@
     </div>
     <a href="/database/migrate" class="btn btn-primary">🔀 Open Migration Wizard</a>
 </div>
-</div>
+{% endif %}
 
 <script>
-function showTab(name, el) {
-    ['export','import','backups','schedule','migrate'].forEach(function(t) {
-        document.getElementById('tab-'+t).style.display = t === name ? '' : 'none';
-    });
-    document.querySelectorAll('.section-tab').forEach(function(a) { a.classList.remove('active'); });
-    if (el) el.classList.add('active');
-    return false;
-}
 function toggleAll(groupId, cb) {
     document.querySelectorAll('#'+groupId+' input[type=checkbox]').forEach(function(c) { c.checked = cb.checked; });
 }
@@ -276,13 +261,5 @@ function highlightKea(grp) {
         c.style.borderColor = c.id === 'kea-card-'+grp ? 'var(--primary)' : '';
     });
 }
-// Open to hash if present
-(function(){
-    var h = window.location.hash.replace('#','');
-    if (h) {
-        var tab = document.querySelector('[href="#'+h+'"]');
-        if (tab) showTab(h, tab);
-    }
-})();
 </script>
 {% endblock %}

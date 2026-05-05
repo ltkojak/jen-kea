@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.4.7] - 2026-05-06
+
+### Database — Nav Reorder + Standard Section-Tabs
+
+**Nav reorder:** Database moved from between Management and Network to between Network and Settings, matching its role as an infrastructure-level admin tool rather than a day-to-day management function. The order is now: Dashboard | Management | Network | Database | Settings | About.
+
+**Standard section-tabs:** The Database page previously used a custom JavaScript tab switcher (show/hide divs with `display:none`, hash-based routing). Replaced with the same `?tab=` query parameter pattern and `section-tabs` bar in `base.html` used by Management, Network, and Settings. Each tab is a real link (`/database?tab=export`, `/database?tab=import`, etc.) — fully bookmarkable, works with browser back/forward, no JavaScript required for navigation. The section-tabs bar renders from `base.html` like all other sections.
+
+**Post-action redirects:** Each form action (export error, backup, import, schedule save) now redirects back to the correct tab instead of always landing on the export tab.
+
 ## [3.4.6] - 2026-05-06
 
 ### Edit Subnet — Validation + Safe Config Write (Critical Fix)
