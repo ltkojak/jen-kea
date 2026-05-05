@@ -149,11 +149,12 @@ def leases():
             mac_hexes = [l["mac"].replace(":", "") for l in leases_list if l.get("mac")]
             if mac_hexes:
                 placeholders = ",".join(["%s"] * len(mac_hexes))
-                cur.execute(
-                    f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
-                    mac_hexes
-                )
-                reserved_macs = {row["mac_hex"].upper() for row in cur.fetchall()}
+                with db.cursor() as res_cur:
+                    res_cur.execute(
+                        f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
+                        mac_hexes
+                    )
+                    reserved_macs = {row["mac_hex"].upper() for row in res_cur.fetchall()}
         for l in leases_list:
             l["has_reservation"] = l["mac"].replace(":", "").upper() in reserved_macs
         db.close()

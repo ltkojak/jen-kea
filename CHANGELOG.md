@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.4.4] - 2026-05-05
+
+### Leases — "Cursor closed" Error Fix
+
+The reservation lookup added in 3.4.3 caused "Could not load leases: Cursor closed" on every page load. The bug: after the main lease query ran inside a `with db.cursor() as cur:` block, the `with` block exited and closed that cursor. The reservation lookup then called `cur.execute()` on the already-closed cursor — outside the `with` block. Fixed by opening a fresh `with db.cursor() as res_cur:` block for the reservation query.
+
 ## [3.4.3] - 2026-05-05
 
 ### Leases — Smarter Action Buttons Based on Reservation Status
