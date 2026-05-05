@@ -1,5 +1,46 @@
 # Changelog
 
+## [3.4.6] - 2026-05-06
+
+### Edit Subnet — Validation + Safe Config Write (Critical Fix)
+
+**What happened:** Editing VLAN70's DNS servers with a typo (`9.9.9.9,149,112.112.112` — a period replaced with a comma) wrote an invalid value to `kea-dhcp4.conf`. The previous code did no IP address validation and no config testing before restarting Kea. Kea crashed and stayed down in a restart loop until the config was manually repaired.
+
+**Three-layer fix:**
+
+**Layer 1 — Server-side IP validation before SSH.** Before touching anything on the remote server, the POST handler now validates every IP in the router and DNS fields using Python's `ipaddress.IPv4Address`. If any value fails (not a valid IPv4 address), the user gets a flash error with the specific bad value highlighted, and no SSH connection is made. Pool format is also still validated with regex. Timer values are validated as positive integers.
+
+**Layer 2 — Config test before writing.** The remote Python script now writes the new config to a `.jen_tmp` temp file first, then runs `kea-dhcp4 -t <tmpfile>` to validate it. Only if the test passes (exit code 0, no ERROR in output) does it `os.replace()` the temp file into the real config path. If the test fails, the temp file is deleted and the original config is left completely untouched.
+
+**Layer 3 — Only restart after confirmed write.** Kea is only restarted after the remote script returns `ok` (config written and tested). If the script returns `testerror:...`, Kea is NOT restarted and the error message from `kea-dhcp4 -t` is shown in the UI. The original config is never modified.
+
+**Result:** Bad input now causes a friendly error in the UI at step 1. If somehow bad data gets past validation, the `kea-dhcp4 -t` test catches it at step 2. In both cases, Kea stays running on the original config.
+
+## [3.4.5] - 2026-05-06
+
+### Security Audit + DNS Format Normalization
+
+Full audit of the entire codebase prompted by a question about DNS server formatting on the Edit Subnet page.
+
+**DNS server format (non-issue confirmed):** Kea accepts comma-separated values with or without spaces in the `domain-name-servers` option data field. Jen already normalizes DNS input at line 191 of `subnets.py` — `",".join(s.strip() for s in ...)` — stripping spaces before writing to `kea-dhcp4.conf`. The space visible in the UI is just what Kea stored in its config previously. No fix needed.
+
+**🔴 Fixed — Open redirect via `?next=` parameter:** After a successful login requiring MFA, Jen stored `request.args.get("next")` directly into the session without validation. An attacker could craft a URL like `/login?next=https://evil.com` and redirect a victim there after MFA completion. Fixed by validating the `next` param before storing — rejects any value containing `://` or starting with `//` (i.e. anything that looks like an external URL). Only relative paths starting with `/` are accepted.
+
+**🔴 Fixed — `/metrics` endpoint unauthenticated:** The Prometheus metrics endpoint was publicly accessible with no authentication, exposing subnet names, CIDRs, and live lease counts to anyone who could reach the Jen port. Added optional Bearer token protection: set `metrics_token = your-secret` in the `[server]` section of `jen.config` to require `Authorization: Bearer <token>` on all `/metrics` requests. If `metrics_token` is not set, the endpoint remains open (existing behavior, useful for scrapers in trusted networks). Also accepts `?token=` query param for scrapers that don't support custom headers. Documented in `jen.config.example`.
+
+**🟡 Cleaned up — Double `@bp.route` on `remove_trusted_device`:** The function had two `@bp.route` decorators stacked directly. Flask correctly applies `@login_required` to both routes in this pattern, so there was no actual auth gap. Added a `# legacy alias` comment to make the intent clear.
+
+**🟢 Confirmed clean — full audit findings:**
+- All settings routes have `@login_required` + `@_admin_required` — confirmed via automated check
+- All SQL f-strings use parameterized values for user input; f-string interpolation only used for column/table names from internal hardcoded sources (never user input)
+- No `render_template_string` anywhere — no template injection risk
+- No hardcoded credentials in source code
+- Error handler returns generic message, no stack traces
+- File upload paths all use `os.path.basename()` — no path traversal risk
+- API key auth (`_api_auth()`) correctly rejects requests without a valid Bearer token
+- Rate limiting and session timeout both implemented and confirmed working
+- MFA trusted-devices/remove: two routes on one function — Flask applies `@login_required` to both; no auth gap, just clarified with comment
+
 ## [3.4.4] - 2026-05-05
 
 ### Leases — "Cursor closed" Error Fix

@@ -1,5 +1,5 @@
 # Jen - The Internet Management Console
-# Version 3.4.4 Configuration File
+# Version 3.4.6 Configuration File
 #
 # Copy this file to /etc/jen/jen.config and fill in your values.
 # This file is gitignored — never commit jen.config with real credentials.
@@ -37,6 +37,11 @@ database = jen
 [server]
 http_port  = 5050
 https_port = 8443
+
+# Optional: protect the /metrics (Prometheus) endpoint with a Bearer token.
+# If set, scraper must send: Authorization: Bearer <your-token>
+# Leave commented to allow unauthenticated access (e.g. if restricted at proxy level).
+# metrics_token = your-secret-scrape-token
 
 [kea_ssh]
 # SSH connection to Kea server for subnet editing

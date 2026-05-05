@@ -221,7 +221,7 @@ def mfa_trusted_devices():
     return render_template("mfa_trusted_devices.html", devices=devices)
 
 @bp.route("/mfa/trusted-devices/remove/<int:device_id>", methods=["POST"])
-@bp.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])
+@bp.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])  # legacy alias
 @login_required
 def remove_trusted_device(device_id):
     try:

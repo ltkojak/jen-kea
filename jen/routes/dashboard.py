@@ -408,6 +408,19 @@ def api_recent_leases():
 
 @bp.route("/metrics")
 def prometheus_metrics():
+    """
+    Prometheus metrics endpoint. Unauthenticated by design for scraper compatibility.
+    Protect with a Bearer token by setting metrics_token in jen.config [jen] section,
+    or by restricting /metrics at the reverse proxy level.
+    Only exposes aggregate counts — no individual MACs, IPs, or hostnames.
+    """
+    # Optional token protection — set metrics_token in jen.config [jen] to enable
+    expected_token = extensions.cfg.get("server", "metrics_token", fallback="").strip() if extensions.cfg else ""
+    if expected_token:
+        auth = request.headers.get("Authorization", "")
+        token = auth[7:].strip() if auth.startswith("Bearer ") else request.args.get("token", "")
+        if token != expected_token:
+            return Response("Unauthorized\n", status=401, mimetype="text/plain")
     lines = []
     lines.append("# HELP jen_subnet_active_leases Number of active leases per subnet")
     lines.append("# TYPE jen_subnet_active_leases gauge")

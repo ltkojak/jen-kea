@@ -183,17 +183,48 @@ def edit_subnet_post(subnet_id):
         return redirect(url_for('subnets.subnets'))
 
     # Read form fields — empty string means "don't change this field"
-    new_pool         = request.form.get("pool",          "").strip()
-    new_lifetime     = request.form.get("valid_lifetime","").strip()
-    new_renew        = request.form.get("renew_timer",   "").strip()
-    new_rebind       = request.form.get("rebind_timer",  "").strip()
-    new_routers      = request.form.get("routers",       "").strip()
-    new_dns          = request.form.get("dns_servers",   "").strip()
+    new_pool     = request.form.get("pool",          "").strip()
+    new_lifetime = request.form.get("valid_lifetime","").strip()
+    new_renew    = request.form.get("renew_timer",   "").strip()
+    new_rebind   = request.form.get("rebind_timer",  "").strip()
+    new_routers  = ",".join(s.strip() for s in request.form.get("routers",     "").split(",") if s.strip())
+    new_dns      = ",".join(s.strip() for s in request.form.get("dns_servers", "").split(",") if s.strip())
 
-    # Validate pool format if provided
+    # ── Input validation — catch bad data BEFORE touching the config ──────────
+    import ipaddress
+
+    def _valid_ip(addr):
+        try:
+            ipaddress.IPv4Address(addr.strip())
+            return True
+        except Exception:
+            return False
+
     if new_pool and not re.match(r'^\d+\.\d+\.\d+\.\d+\s*-\s*\d+\.\d+\.\d+\.\d+$', new_pool):
-        flash("Invalid pool format. Use start-end e.g. 10.0.0.1-10.0.0.250", "error")
+        flash("Invalid pool format. Use start–end e.g. 10.0.0.1–10.0.0.250", "error")
         return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
+
+    if new_routers:
+        bad = [ip for ip in new_routers.split(",") if not _valid_ip(ip)]
+        if bad:
+            flash(f"Invalid router IP(s): {', '.join(bad)}", "error")
+            return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
+
+    if new_dns:
+        bad = [ip for ip in new_dns.split(",") if not _valid_ip(ip)]
+        if bad:
+            flash(f"Invalid DNS server IP(s): {', '.join(bad)} — enter one IP per entry, comma-separated (e.g. 9.9.9.9,149.112.112.112)", "error")
+            return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
+
+    for t, label in [(new_lifetime, "Valid Lifetime"), (new_renew, "Renew Timer"), (new_rebind, "Rebind Timer")]:
+        if t:
+            try:
+                if int(t) <= 0:
+                    raise ValueError()
+            except ValueError:
+                flash(f"{label} must be a positive integer (seconds).", "error")
+                return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
+    # ─────────────────────────────────────────────────────────────────────────
 
     errors  = []
     results = []
@@ -210,22 +241,29 @@ def edit_subnet_post(subnet_id):
                         username=server.get("ssh_user", extensions.KEA_SSH_USER),
                         key_filename=extensions.SSH_KEY_PATH, timeout=10)
 
-            # Build a Python script that patches only the provided fields
+            kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
+
+            # Build remote script: backup → patch → kea-dhcp4 -t test → write or restore
             script = f"""
-import json, sys
-path = {repr(server.get('kea_conf', '/etc/kea/kea-dhcp4.conf'))}
+import json, sys, shutil, subprocess, os, tempfile
+
+path   = {repr(kea_conf)}
+backup = path + '.jen_backup'
+
+# Make a backup before touching anything
+shutil.copy2(path, backup)
+
 with open(path) as f:
     cfg = json.load(f)
+
 changed = False
 for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
     if s['id'] != {subnet_id}:
         continue
-    # Address pool — only update if provided
     new_pool = {repr(new_pool)}
     if new_pool:
         s['pools'] = [{{'pool': new_pool}}]
         changed = True
-    # Timers — only update if provided
     new_lifetime = {repr(new_lifetime)}
     new_renew    = {repr(new_renew)}
     new_rebind   = {repr(new_rebind)}
@@ -235,7 +273,6 @@ for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
         s['renew-timer'] = int(new_renew); changed = True
     if new_rebind:
         s['rebind-timer'] = int(new_rebind); changed = True
-    # Options — only update if provided
     new_routers = {repr(new_routers)}
     new_dns     = {repr(new_dns)}
     if new_routers or new_dns:
@@ -260,12 +297,33 @@ for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
             changed = True
         s['option-data'] = opts
     break
-if changed:
-    with open(path, 'w') as f:
-        json.dump(cfg, f, indent=2)
-    print('ok')
-else:
+
+if not changed:
     print('nochange')
+    sys.exit(0)
+
+# Write to a temp file first, test it, then move into place
+tmp = path + '.jen_tmp'
+with open(tmp, 'w') as f:
+    json.dump(cfg, f, indent=2)
+
+# Run kea-dhcp4 -t against the temp file
+result = subprocess.run(
+    ['kea-dhcp4', '-t', tmp],
+    capture_output=True, text=True
+)
+combined = result.stdout + result.stderr
+
+if result.returncode != 0 or 'ERROR' in combined:
+    # Config test failed — clean up temp, leave original untouched
+    os.unlink(tmp)
+    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
+    print('testerror:' + ' | '.join(error_lines[:3]))
+    sys.exit(1)
+
+# Config test passed — move temp into place
+os.replace(tmp, path)
+print('ok')
 """
             enc = base64.b64encode(script.encode()).decode()
             _, stdout, stderr = ssh.exec_command(
@@ -276,11 +334,17 @@ else:
 
             if out == "nochange":
                 results.append(f"ℹ️ {server.get('name', server['ssh_host'])}: nothing to change")
-            elif "ok" in out:
-                # Restart Kea and wait briefly
-                _, rs, re_ = ssh.exec_command("sudo systemctl restart kea-dhcp4-server 2>/dev/null || sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done")
+            elif out == "ok":
+                # Config validated — now restart Kea
+                _, rs, re_ = ssh.exec_command(
+                    "sudo systemctl restart kea-dhcp4-server 2>/dev/null || "
+                    "sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done"
+                )
                 rs.read()
-                results.append(f"✅ {server.get('name', server['ssh_host'])}: updated and restarted")
+                results.append(f"✅ {server.get('name', server['ssh_host'])}: config validated, updated and restarted")
+            elif out.startswith("testerror:"):
+                error_detail = out[len("testerror:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
             else:
                 errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
             ssh.close()

@@ -168,7 +168,11 @@ def login():
                 if mfa_enrolled and not __mfa.is_trusted_device(row["id"], request):
                     session["mfa_pending_user_id"]  = row["id"]
                     session["mfa_pending_username"] = username
-                    session["mfa_next"] = request.args.get("next", url_for('dashboard.dashboard'))
+                    # Validate next= — only allow relative paths, never external URLs
+                    _next = request.args.get("next", "")
+                    if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
+                        _next = ""
+                    session["mfa_next"] = _next or url_for('dashboard.dashboard')
                     return redirect(url_for('mfa_routes.mfa_verify'))
                 elif needs_mfa and not mfa_enrolled:
                     # MFA required but not enrolled — force enrollment
