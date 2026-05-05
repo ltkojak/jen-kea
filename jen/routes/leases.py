@@ -69,7 +69,6 @@ def leases():
     direction = request.args.get("dir", "desc")
     if direction not in ("asc", "desc"):
         direction = "desc"
-    # Map sort keys to SQL columns
     sort_map = {
         "ip": "l.address",
         "hostname": "l.hostname",
@@ -79,11 +78,18 @@ def leases():
         "expires": "l.expire",
     }
     sort_col = sort_map.get(sort, "l.expire")
+    # Pagination — default is "all" (no limit). User can opt-in to per-page.
+    per_page_param = request.args.get("per_page", "all")
+    try:
+        per_page = int(per_page_param) if per_page_param != "all" else None
+    except ValueError:
+        per_page = None
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
         page = 1
-    per_page = 50
+    if per_page is None:
+        page = 1   # no pagination = always page 1
     if subnet_filter != "all":
         try:
             if int(subnet_filter) not in extensions.SUBNET_MAP:
@@ -116,7 +122,11 @@ def leases():
             where_str = " AND ".join(where) if where else "1=1"
             cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
             total = cur.fetchone()["cnt"]
-            offset = (page - 1) * per_page
+            if per_page:
+                offset = (page - 1) * per_page
+                limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+            else:
+                limit_clause = ""
             cur.execute(f"""
                 SELECT inet_ntoa(l.address) AS ip, l.hostname,
                        HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
@@ -125,17 +135,18 @@ def leases():
                        l.expire AS expires
                 FROM lease4 l WHERE {where_str}
                 ORDER BY {sort_col} {direction}
-                LIMIT {per_page} OFFSET {offset}
+                {limit_clause}
             """, params)
             for row in cur.fetchall():
                 mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
                 leases_list.append({**row, "mac": mac,
-                                    "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")})
+                                    "subnet_id": row["subnet_id"],
+                                    "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
+                                    "expired": row.get("state", 0) != 0})
         db.close()
     except Exception as e:
         flash(f"Could not load leases: {str(e)}", "error")
-    pages = max(1, (total + per_page - 1) // per_page)
-    # Fetch device fingerprint info for all MACs on this page
+    pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     mac_list = [l["mac"] for l in leases_list if l.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
     template_vars = dict(
@@ -143,6 +154,7 @@ def leases():
         subnet_filter=subnet_filter, minutes=minutes, search=search,
         show_expired=show_expired, subnet_map=extensions.SUBNET_MAP,
         sort=sort, direction=direction, device_info=device_info,
+        per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY
     )

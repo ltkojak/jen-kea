@@ -1,0 +1,55 @@
+{% for d in devices %}
+<tr id="dev-row-{{ d.id }}">
+    <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
+    <td data-label="Name"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
+    <td data-label="Owner" class="hide-tablet"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
+    <td data-label="IP" class="mono">{{ d.last_ip or '—' }}</td>
+    <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname or '—' }}</td>
+    <td data-label="Subnet" class="hide-mobile">
+        {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
+    </td>
+    <td style="white-space:nowrap;">
+        {% set icon_url = get_manufacturer_icon_url(d.manufacturer) if d.manufacturer else None %}
+        {% set type_info = device_type_display.get(d.device_type, ('', '#555555')) %}
+        {% if d.manufacturer and d.manufacturer != 'Unknown' %}
+        <span title="{{ d.manufacturer }}" style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;background:{{ type_info[1] }}22;color:{{ type_info[1] }};border:1px solid {{ type_info[1] }}44;">
+            {% if icon_url %}<img src="{{ icon_url }}" alt="{{ d.manufacturer }}" style="width:13px;height:13px;object-fit:contain;filter:brightness(0) invert(1);opacity:0.85;">
+            {% else %}{{ d.device_icon or '' }}{% endif %}
+            {{ d.manufacturer }}
+        </span>
+        {% else %}<span style="color:var(--text-muted);font-size:11px;">—</span>{% endif %}
+    </td>
+    <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">{{ d.first_seen|utcdate }}</td>
+    <td data-label="Last Seen" class="mono hide-tablet" style="{% if d.is_stale %}color:var(--warning);{% endif %}">{{ d.last_seen|utcfmt }}</td>
+    <td data-label="Status" class="hide-mobile">
+        {% if d.is_stale %}<span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">⚠ Stale</span>
+        {% elif d.has_reservation %}<span class="badge badge-reserved" title="Has static reservation: {{ d.reservation_ip }}">📌 Reserved</span>
+        {% else %}<span class="badge badge-dynamic">● Dynamic</span>{% endif %}
+    </td>
+    <td data-label="">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;">
+            {% if current_user.role == 'admin' %}
+            <button class="btn btn-sm btn-secondary edit-btn"
+                data-id="{{ d.id }}" data-mac="{{ d.mac }}"
+                data-name="{{ d.device_name|e if d.device_name else '' }}"
+                data-owner="{{ d.owner|e if d.owner else '' }}"
+                data-notes="{{ d.notes|e if d.notes else '' }}"
+                data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
+                data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}">✏</button>
+            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return confirm('Remove {{ d.mac }} from inventory?')">
+                <button type="submit" class="btn btn-sm btn-danger">✕</button>
+            </form>
+            {% endif %}
+            {% if not d.has_reservation %}
+            <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="btn btn-sm btn-secondary" title="Create reservation">📌</a>
+            {% endif %}
+        </div>
+    </td>
+</tr>
+{% else %}
+<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">
+    {% if show_stale %}No stale devices found (none inactive for {{ stale_days }}+ days).
+    {% elif search %}No devices matching "{{ search }}".
+    {% else %}No devices in inventory yet. Devices appear automatically as DHCP leases are issued.{% endif %}
+</td></tr>
+{% endfor %}

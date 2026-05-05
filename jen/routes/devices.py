@@ -61,9 +61,17 @@ def __ip_to_int(ip):
 @bp.route("/devices")
 @login_required
 def devices():
+    # Pagination — default is "all". User can opt-in via per_page param.
+    per_page_param = request.args.get("per_page", "all")
+    try:
+        per_page = int(per_page_param) if per_page_param != "all" else None
+    except ValueError:
+        per_page = None
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
+        page = 1
+    if per_page is None:
         page = 1
     search = __auth.sanitize_search(request.args.get("search", "").strip())
     show_stale = request.args.get("stale", "0") == "1"
@@ -85,7 +93,6 @@ def devices():
         "status": "d.last_seen",
     }
     sort_col = sort_map.get(sort, "d.last_seen")
-    per_page = 50
     stale_days = int(__user.get_global_setting("stale_device_days", "30"))
 
     devices_list = []
@@ -115,7 +122,11 @@ def devices():
 
             cur.execute(f"SELECT COUNT(*) as cnt FROM devices d WHERE {where_str}", params)
             total = cur.fetchone()["cnt"]
-            offset = (page - 1) * per_page
+            if per_page:
+                offset = (page - 1) * per_page
+                limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+            else:
+                limit_clause = ""
             cur.execute(f"""
                 SELECT d.id, d.mac, d.device_name, d.owner, d.notes,
                        d.first_seen, d.last_seen, d.last_ip, d.last_hostname, d.last_subnet_id,
@@ -129,11 +140,10 @@ def devices():
                 FROM devices d
                 WHERE {where_str}
                 ORDER BY {sort_col} {direction}
-                LIMIT {per_page} OFFSET {offset}
+                {limit_clause}
             """, params)
             rows = cur.fetchall()
 
-            # Check which MACs have reservations
             with kdb.cursor() as kcur:
                 for row in rows:
                     mac_hex = row["mac"].replace(":", "")
@@ -150,17 +160,22 @@ def devices():
         logger.error(f"Devices error: {e}")
         flash(f"Could not load device inventory: {str(e)}", "error")
 
-    pages = max(1, (total + per_page - 1) // per_page)
+    pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     bundled_icons = sorted([f.replace(".svg","") for f in os.listdir(extensions.ICONS_BUNDLED_DIR) if f.endswith(".svg")]) if os.path.exists(extensions.ICONS_BUNDLED_DIR) else []
     custom_icons = sorted([f.replace(".svg","") for f in os.listdir(extensions.ICONS_CUSTOM_DIR) if f.endswith(".svg")]) if os.path.exists(extensions.ICONS_CUSTOM_DIR) else []
-    return render_template("devices.html", devices=devices_list, page=page, pages=pages,
-                           total=total, search=search, show_stale=show_stale,
-                           stale_days=stale_days, subnet_map=extensions.SUBNET_MAP,
-                           sort=sort, direction=direction,
-                           type_filter=type_filter, subnet_filter=subnet_filter,
-                           device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-                           get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-                           bundled_icons=bundled_icons, custom_icons=custom_icons)
+    template_vars = dict(
+        devices=devices_list, page=page, pages=pages,
+        total=total, search=search, show_stale=show_stale,
+        stale_days=stale_days, subnet_map=extensions.SUBNET_MAP,
+        sort=sort, direction=direction, per_page=per_page_param,
+        type_filter=type_filter, subnet_filter=subnet_filter,
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
+        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
+        bundled_icons=bundled_icons, custom_icons=custom_icons
+    )
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_device_rows.html", **template_vars), 200
+    return render_template("devices.html", **template_vars)
 
 @bp.route("/devices/edit/<int:device_id>", methods=["POST"])
 @login_required

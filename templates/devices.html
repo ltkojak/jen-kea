@@ -16,35 +16,45 @@
     </div>
 </div>
 
-<!-- Filter bar -->
-<div class="filter-bar">
-    <form method="GET" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <select name="subnet" onchange="this.form.submit()">
-            <option value="all" {% if subnet_filter == 'all' %}selected{% endif %}>All Subnets</option>
-            {% for sid, info in subnet_map.items() %}
-            <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
-            {% endfor %}
-        </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:240px;">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
-            <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %} onchange="this.form.submit()">
-            Show stale only ({{ stale_days }}+ days inactive)
-        </label>
-        <button type="submit" class="btn btn-sm btn-primary">Search</button>
-        {% if search or show_stale or subnet_filter != 'all' %}<a href="/devices" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
-    </form>
+<!-- Filter bar — HTMX live filtering -->
+<div class="filter-bar"
+     hx-get="/devices"
+     hx-target="#devices-table-body"
+     hx-swap="innerHTML"
+     hx-trigger="change from:select, input delay:400ms"
+     hx-push-url="true">
+    <select name="subnet">
+        <option value="all" {% if subnet_filter == 'all' %}selected{% endif %}>All Subnets</option>
+        {% for sid, info in subnet_map.items() %}
+        <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
+        {% endfor %}
+    </select>
+    <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:200px;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
+        <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %}>
+        Stale only
+    </label>
+    <select name="per_page" title="Rows per page">
+        <option value="all" {% if per_page == 'all' %}selected{% endif %}>Show all</option>
+        <option value="50"  {% if per_page == '50'  %}selected{% endif %}>50 per page</option>
+        <option value="100" {% if per_page == '100' %}selected{% endif %}>100 per page</option>
+        <option value="250" {% if per_page == '250' %}selected{% endif %}>250 per page</option>
+    </select>
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="dir"  value="{{ direction }}">
+    {% if search or show_stale or subnet_filter != 'all' %}<a href="/devices" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
 </div>
 
-<!-- Device type summary badges -->
+<!-- Device type filter badges — preserve all current filters -->
 <div id="type-filter-bar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
     <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Filter by type:</span>
-    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}" 
-       class="btn btn-sm {% if not request.args.get('type') %}btn-primary{% else %}btn-secondary{% endif %}">All</a>
+    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}&subnet={{ subnet_filter }}&per_page={{ per_page }}&sort={{ sort }}&dir={{ direction }}"
+       class="btn btn-sm {% if not type_filter %}btn-primary{% else %}btn-secondary{% endif %}">All</a>
     {% for type_key, type_info in device_type_display.items() %}
     {% if type_key != 'unknown' %}
-    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}&type={{ type_key }}"
-       class="btn btn-sm {% if request.args.get('type') == type_key %}btn-primary{% else %}btn-secondary{% endif %}"
-       style="{% if request.args.get('type') == type_key %}background:{{ type_info[1] }};{% endif %}">
+    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}&type={{ type_key }}&subnet={{ subnet_filter }}&per_page={{ per_page }}&sort={{ sort }}&dir={{ direction }}"
+       class="btn btn-sm {% if type_filter == type_key %}btn-primary{% else %}btn-secondary{% endif %}"
+       style="{% if type_filter == type_key %}background:{{ type_info[1] }};{% endif %}">
         {{ type_info[0] }}
     </a>
     {% endif %}
@@ -55,7 +65,7 @@
 <div class="table-wrap">
 <table class="sortable mobile-cards">
     <thead><tr>
-        {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') %}
+        {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ subnet_filter ~ '&per_page=' ~ per_page ~ ('&type=' ~ type_filter if type_filter else '') %}
         <th class="hide-mobile"><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th><a href="?sort=device_name&dir={{ 'desc' if sort=='device_name' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Device Name{% if sort=='device_name' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-tablet"><a href="?sort=owner&dir={{ 'desc' if sort=='owner' and direction=='asc' else 'asc' }}{{ base }}" style="color:inherit;text-decoration:none;">Owner{% if sort=='owner' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
@@ -68,89 +78,8 @@
         <th class="hide-mobile">Status</th>
         <th></th>
     </tr></thead>
-    <tbody>
-    {% for d in devices %}
-    <tr id="dev-row-{{ d.id }}">
-        <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
-        <td data-label="Name">
-            <span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span>
-        </td>
-        <td data-label="Owner" class="hide-tablet">
-            <span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span>
-        </td>
-        <td data-label="IP" class="mono">{{ d.last_ip or '—' }}</td>
-        <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname or '—' }}</td>
-        <td data-label="Subnet" class="hide-mobile">
-            {% if d.subnet_name %}
-            <span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>
-            {% else %}—{% endif %}
-        </td>
-        <td style="white-space:nowrap;">
-            {% set icon_url = get_manufacturer_icon_url(d.manufacturer) if d.manufacturer else None %}
-            {% set type_info = device_type_display.get(d.device_type, ('', '#555555')) %}
-            {% if d.manufacturer and d.manufacturer != 'Unknown' %}
-            <span title="{{ d.manufacturer }}" style="
-                display:inline-flex;align-items:center;gap:5px;
-                padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;
-                background:{{ type_info[1] }}22;
-                color:{{ type_info[1] }};
-                border:1px solid {{ type_info[1] }}44;
-            ">
-                {% if icon_url %}
-                <img src="{{ icon_url }}" alt="{{ d.manufacturer }}"
-                     style="width:13px;height:13px;object-fit:contain;filter:brightness(0) invert(1);opacity:0.85;">
-                {% else %}
-                {{ d.device_icon or '' }}
-                {% endif %}
-                {{ d.manufacturer }}
-            </span>
-            {% else %}
-            <span style="color:var(--text-muted);font-size:11px;">—</span>
-            {% endif %}
-        </td>
-        <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">
-            {{ d.first_seen|utcdate }}
-        </td>
-        <td data-label="Last Seen" class="mono hide-tablet" style="{% if d.is_stale %}color:var(--warning);{% endif %}">
-            {{ d.last_seen|utcfmt }}
-        </td>
-        <td data-label="Status" class="hide-mobile">
-            {% if d.is_stale %}
-            <span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">⚠ Stale</span>
-            {% elif d.has_reservation %}
-            <span class="badge badge-reserved" title="Has static reservation: {{ d.reservation_ip }}">📌 Reserved</span>
-            {% else %}
-            <span class="badge badge-dynamic">● Dynamic</span>
-            {% endif %}
-        </td>
-        <td data-label="">
-            <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                {% if current_user.role == 'admin' %}
-                <button class="btn btn-sm btn-secondary edit-btn"
-    data-id="{{ d.id }}"
-    data-mac="{{ d.mac }}"
-    data-name="{{ d.device_name|e if d.device_name else '' }}"
-    data-owner="{{ d.owner|e if d.owner else '' }}"
-    data-notes="{{ d.notes|e if d.notes else '' }}"
-    data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
-    data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}">✏</button>
-                <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return confirm('Remove {{ d.mac }} from inventory?')">
-                    <button type="submit" class="btn btn-sm btn-danger">✕</button>
-                </form>
-                {% endif %}
-                {% if not d.has_reservation %}
-                <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="btn btn-sm btn-secondary" title="Create reservation">📌</a>
-                {% endif %}
-            </div>
-        </td>
-    </tr>
-    {% else %}
-    <tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">
-        {% if show_stale %}No stale devices found (none inactive for {{ stale_days }}+ days).
-        {% elif search %}No devices matching "{{ search }}".
-        {% else %}No devices in inventory yet. Devices appear automatically as DHCP leases are issued.{% endif %}
-    </td></tr>
-    {% endfor %}
+    <tbody id="devices-table-body">
+    {% include '_device_rows.html' %}
     </tbody>
 </table>
 </div>
@@ -158,14 +87,14 @@
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% if page > 1 %}<a href="?page={{ page-1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}&subnet={{ subnet_filter }}">‹ Prev</a>{% endif %}
+    {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ subnet_filter ~ '&per_page=' ~ per_page ~ ('&type=' ~ type_filter if type_filter else '') ~ '&sort=' ~ sort ~ '&dir=' ~ direction %}
+    {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
-    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
-    <a href="?page={{ p }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}&subnet={{ subnet_filter }}">{{ p }}</a>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}<a href="?page={{ p }}{{ base }}">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?page={{ page+1 }}&search={{ search }}&stale={{ '1' if show_stale else '0' }}&sort={{ sort }}&dir={{ direction }}&subnet={{ subnet_filter }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?page={{ page+1 }}{{ base }}">Next ›</a>{% endif %}
 </div>
 {% endif %}
 

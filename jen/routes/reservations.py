@@ -74,11 +74,18 @@ def reservations():
         "subnet": "h.dhcp4_subnet_id",
     }
     sort_col = sort_map.get(sort, "h.ipv4_address")
+    # Pagination — default is "all". User can opt-in via per_page param.
+    per_page_param = request.args.get("per_page", "all")
+    try:
+        per_page = int(per_page_param) if per_page_param != "all" else None
+    except ValueError:
+        per_page = None
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
         page = 1
-    per_page = 50
+    if per_page is None:
+        page = 1
     hosts = []
     total = 0
     try:
@@ -99,7 +106,11 @@ def reservations():
                 params += [s, s, s.replace(":", "")]
             cur.execute(f"SELECT COUNT(*) as cnt FROM hosts h WHERE {' AND '.join(where)}", params)
             total = cur.fetchone()["cnt"]
-            offset = (page - 1) * per_page
+            if per_page:
+                offset = (page - 1) * per_page
+                limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+            else:
+                limit_clause = ""
             cur.execute(f"""
                 SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
                        h.hostname, HEX(h.dhcp_identifier) AS mac_hex,
@@ -107,7 +118,7 @@ def reservations():
                 FROM hosts h
                 WHERE {' AND '.join(where)}
                 ORDER BY {sort_col} {direction}
-                LIMIT {per_page} OFFSET {offset}
+                {limit_clause}
             """, params)
             rows = cur.fetchall()
             with jen_db.cursor() as jcur:
@@ -122,7 +133,7 @@ def reservations():
         jen_db.close()
     except Exception as e:
         flash(f"Could not load reservations: {str(e)}", "error")
-    pages = max(1, (total + per_page - 1) // per_page)
+    pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     stale_days = int(__user.get_global_setting("stale_device_days", "30"))
     mac_list = [h["mac"] for h in hosts if h.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
@@ -130,7 +141,7 @@ def reservations():
         hosts=hosts, subnet_filter=subnet_filter, search=search,
         subnet_map=extensions.SUBNET_MAP, page=page, pages=pages,
         total=total, stale_days=stale_days, sort=sort, direction=direction,
-        device_info=device_info,
+        device_info=device_info, per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY
     )

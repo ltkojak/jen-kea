@@ -44,6 +44,12 @@ function confirmBulk(action) {
             {% endfor %}
         </select>
         <input type="text" name="search" value="{{ search }}" placeholder="Search IP, hostname, MAC...">
+        <select name="per_page" title="Rows per page">
+            <option value="all" {% if per_page == 'all' %}selected{% endif %}>Show all</option>
+            <option value="50"  {% if per_page == '50'  %}selected{% endif %}>50 per page</option>
+            <option value="100" {% if per_page == '100' %}selected{% endif %}>100 per page</option>
+            <option value="250" {% if per_page == '250' %}selected{% endif %}>250 per page</option>
+        </select>
         <button type="submit" class="btn btn-secondary">Filter</button>
         <!-- HTMX handles live filter; submit button retained for no-JS fallback -->
         <a href="/reservations" class="btn btn-secondary">Clear</a>
@@ -125,14 +131,14 @@ function saveCurrentFilter() {
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% if page > 1 %}<a href="?page={{ page-1 }}&subnet={{ subnet_filter }}&search={{ search }}&sort={{ sort }}&dir={{ direction }}">‹ Prev</a>{% endif %}
+    {% set base = '&subnet=' ~ subnet_filter ~ '&search=' ~ search ~ '&sort=' ~ sort ~ '&dir=' ~ direction ~ '&per_page=' ~ per_page %}
+    {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>
-    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}
-    <a href="?page={{ p }}&subnet={{ subnet_filter }}&search={{ search }}&sort={{ sort }}&dir={{ direction }}">{{ p }}</a>
+    {% elif p <= 2 or p >= pages-1 or (p >= page-2 and p <= page+2) %}<a href="?page={{ p }}{{ base }}">{{ p }}</a>
     {% elif p == 3 or p == pages-2 %}<span>…</span>{% endif %}
     {% endfor %}
-    {% if page < pages %}<a href="?page={{ page+1 }}&subnet={{ subnet_filter }}&search={{ search }}&sort={{ sort }}&dir={{ direction }}">Next ›</a>{% endif %}
+    {% if page < pages %}<a href="?page={{ page+1 }}{{ base }}">Next ›</a>{% endif %}
 </div>
 {% endif %}
 {% endblock %}

@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.4.1] - 2026-05-04
+
+### Leases / Reservations / Devices — Pagination & HTMX Fixes
+
+**Filter lost on page change:** Pagination links on all three pages now include all active filter params (subnet, search, sort, direction, per_page, expired/stale flags). Navigating between pages no longer drops any filter.
+
+**Default: no pagination (show all).** Previously all three pages hard-coded `LIMIT 50` regardless. Now the default is no limit — all matching rows are returned. A "Show all / 50 / 100 / 250 per page" selector in the filter bar lets users opt-in to pagination when working with very large datasets. The `per_page` param is preserved through sorting, filtering, and pagination.
+
+**HTMX on Devices page.** Devices was the only one of the three using a plain GET form with `onchange=submit()`. Replaced with the same HTMX live-filter pattern as Leases and Reservations — `hx-get`, `hx-target="#devices-table-body"`, `hx-trigger="change from:select, input delay:400ms"`. Created `_device_rows.html` partial (mirrors the pattern of `_lease_rows.html` and `_reservation_row.html`). Devices now has instant live filtering without page reloads.
+
+**Single source of truth for device rows.** Replaced the inline row loop in `devices.html` with `{% include '_device_rows.html' %}`, same as was done for leases in v3.3.16. The type-filter badge links now preserve all active filters (subnet, stale, per_page, sort, dir).
+
 ## [3.4.0] - 2026-05-04
 
 ### Database Management (new feature)
