@@ -54,7 +54,7 @@ function confirmBulk(action) {
         <!-- HTMX handles live filter; submit button retained for no-JS fallback -->
         <a href="/reservations" class="btn btn-secondary">Clear</a>
     </form>
-    {% if current_user.role == 'admin' %}
+    {% if current_user.role in ('superadmin','admin') %}
     <a href="/reservations/add" class="btn btn-primary">+ Add Reservation</a>
     <a href="/reservations/export" class="btn btn-secondary">⬇ Export CSV</a>
     <label class="btn btn-secondary" style="cursor:pointer;">
@@ -116,7 +116,7 @@ function saveCurrentFilter() {
         <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-tablet">DNS Override</th>
         <th class="hide-tablet">Notes</th>
-        {% if current_user.role == 'admin' %}<th></th>{% endif %}
+        {% if current_user.role in ('superadmin','admin') %}<th></th>{% endif %}
     </tr></thead>
     <tbody id="reservations-table-body">
     {% for h in hosts %}

@@ -347,8 +347,7 @@ def api_v1_reservations():
 @bp.route("/settings/api-keys")
 @login_required
 def api_keys():
-    from jen import admin_required as _ar
-    if current_user.role != "admin":
+    if current_user.role not in ("superadmin", "admin"):
         flash("Admin access required.", "error")
         return redirect(url_for("dashboard.dashboard"))
     keys = []
@@ -371,7 +370,7 @@ def api_keys():
 @bp.route("/settings/api-keys/create", methods=["POST"])
 @login_required
 def api_keys_create():
-    if current_user.role != "admin":
+    if current_user.role not in ("superadmin", "admin"):
         flash("Admin access required.", "error")
         return redirect(url_for("dashboard.dashboard"))
     name = request.form.get("name", "").strip()[:100]
@@ -400,7 +399,7 @@ def api_keys_create():
 @bp.route("/settings/api-keys/revoke/<int:key_id>", methods=["POST"])
 @login_required
 def api_keys_revoke(key_id):
-    if current_user.role != "admin":
+    if current_user.role not in ("superadmin", "admin"):
         flash("Admin access required.", "error")
         return redirect(url_for("dashboard.dashboard"))
     try:
@@ -422,7 +421,7 @@ def api_keys_revoke(key_id):
 @bp.route("/settings/api-keys/delete/<int:key_id>", methods=["POST"])
 @login_required
 def api_keys_delete(key_id):
-    if current_user.role != "admin":
+    if current_user.role not in ("superadmin", "admin"):
         flash("Admin access required.", "error")
         return redirect(url_for("dashboard.dashboard"))
     try:

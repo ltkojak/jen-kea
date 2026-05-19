@@ -596,14 +596,17 @@ def run_scheduled_backup():
     if sched.get("include_jen"):
         try:
             content, fname = export_jen()
-            path = _write_backup(json.loads(gzip.decompress(content).decode()), f"jen-scheduled-{ts}.json.gz")
+            # content is plain JSON bytes — _write_backup handles gzip compression
+            payload = json.loads(content.decode("utf-8"))
+            path = _write_backup(payload, f"jen-scheduled-{ts}.json.gz")
             results.append(f"Jen: {path}")
         except Exception as e:
             results.append(f"Jen: FAILED — {e}")
     if sched.get("include_kea"):
         try:
             content, fname = export_kea("reservations")
-            path = _write_backup(json.loads(gzip.decompress(content).decode()), f"kea-scheduled-{ts}.json.gz")
+            payload = json.loads(content.decode("utf-8"))
+            path = _write_backup(payload, f"kea-scheduled-{ts}.json.gz")
             results.append(f"Kea: {path}")
         except Exception as e:
             results.append(f"Kea: FAILED — {e}")

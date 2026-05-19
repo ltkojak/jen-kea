@@ -31,7 +31,7 @@ def user_needs_mfa(user):
     if mode == "optional":
         return False  # user chooses to enroll
     if mode == "required_admins":
-        return user.role == "admin"
+        return user.role in ("superadmin", "admin")
     if mode == "required_all":
         return True
     return False

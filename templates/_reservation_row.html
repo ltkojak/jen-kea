@@ -11,7 +11,7 @@
     <td data-label="Subnet"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
     <td data-label="DNS" class="mono hide-tablet" style="color:var(--text-muted);">{{ h.dns_override or 'default' }}</td>
     <td data-label="Notes" class="hide-tablet" style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
-    {% if current_user.role == 'admin' %}
+    {% if current_user.role in ('superadmin','admin') %}
     <td data-label="">
         <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary" title="Edit">✏</a>
         <button class="btn btn-sm btn-danger"

@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, g, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -43,14 +43,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -76,7 +68,7 @@ def login():
             with db.cursor() as cur:
                 # User lookup
                 cur.execute(
-                    "SELECT id, username, role, session_timeout, password FROM users WHERE username=%s",
+                    "SELECT id, username, role, session_timeout, password, subnet_access FROM users WHERE username=%s",
                     (username,)
                 )
                 row = cur.fetchone()
@@ -156,33 +148,33 @@ def login():
             # Clear rate limit attempts
             __auth.clear_login_attempts(ip, username)
 
-            user = User(row["id"], row["username"], row["role"], row["session_timeout"])
+            user = User(row["id"], row["username"], row["role"],
+                        row["session_timeout"], row.get("subnet_access"))
 
             # MFA check
             mfa_mode = settings.get("mfa_mode", "off")
             needs_mfa = (
                 mfa_mode == "required_all" or
-                (mfa_mode == "required_admins" and row["role"] == "admin")
+                (mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin"))
             )
             if mfa_enrolled or needs_mfa:
                 if mfa_enrolled and not __mfa.is_trusted_device(row["id"], request):
                     session["mfa_pending_user_id"]  = row["id"]
                     session["mfa_pending_username"] = username
-                    # Validate next= — only allow relative paths, never external URLs
                     _next = request.args.get("next", "")
                     if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
                         _next = ""
                     session["mfa_next"] = _next or url_for('dashboard.dashboard')
                     return redirect(url_for('mfa_routes.mfa_verify'))
                 elif needs_mfa and not mfa_enrolled:
-                    # MFA required but not enrolled — force enrollment
                     session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
                     login_user(user)
                     session["last_active"] = datetime.now(timezone.utc).isoformat()
                     session["_user_cache"] = {
                         "id": user.id, "username": user.username,
-                        "role": user.role, "session_timeout": user.session_timeout
+                        "role": user.role, "session_timeout": user.session_timeout,
+                        "subnet_access": row.get("subnet_access")
                     }
                     flash("MFA is required for your account. Please enroll now.", "warning")
                     return redirect(url_for('mfa_routes.mfa_enroll'))
@@ -191,7 +183,8 @@ def login():
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             session["_user_cache"] = {
                 "id": user.id, "username": user.username,
-                "role": user.role, "session_timeout": user.session_timeout
+                "role": user.role, "session_timeout": user.session_timeout,
+                "subnet_access": row.get("subnet_access")
             }
             __user.audit("LOGIN", "auth", f"User {username} logged in from {ip}")
             return redirect(url_for('dashboard.dashboard'))

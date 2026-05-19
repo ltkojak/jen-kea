@@ -5,6 +5,7 @@ Flask-Login User model, password hashing, and global settings helpers.
 """
 
 import hashlib
+import json
 import logging
 
 from flask_login import UserMixin
@@ -14,14 +15,67 @@ logger = logging.getLogger(__name__)
 
 
 class User(UserMixin):
-    def __init__(self, id, username, role, session_timeout=None):
+    def __init__(self, id, username, role, session_timeout=None, subnet_access=None):
         self.id              = id
         self.username        = username
         self.role            = role
         self.session_timeout = session_timeout
+        # subnet_access: None = all subnets; list of int subnet_ids = restricted
+        if subnet_access is None:
+            self._subnet_access = None
+        elif isinstance(subnet_access, str):
+            try:
+                self._subnet_access = json.loads(subnet_access)
+            except Exception:
+                self._subnet_access = None
+        else:
+            self._subnet_access = subnet_access
 
     def get_id(self):
         return str(self.id)
+
+    # ── Role helpers ──────────────────────────────────────────────────────────
+
+    @property
+    def is_superadmin(self):
+        return self.role == "superadmin"
+
+    @property
+    def is_admin_or_above(self):
+        """True for superadmin and admin — can make changes."""
+        return self.role in ("superadmin", "admin")
+
+    @property
+    def is_viewer(self):
+        return self.role == "viewer"
+
+    # ── Subnet access helpers ─────────────────────────────────────────────────
+
+    @property
+    def all_subnets(self):
+        """True if this user can see all subnets (superadmin or unrestricted)."""
+        return self.is_superadmin or self._subnet_access is None
+
+    def can_access_subnet(self, subnet_id: int) -> bool:
+        """Return True if this user has access to the given subnet_id."""
+        if self.all_subnets:
+            return True
+        return int(subnet_id) in [int(s) for s in (self._subnet_access or [])]
+
+    def filter_subnet_map(self, subnet_map: dict) -> dict:
+        """Return a filtered copy of SUBNET_MAP containing only accessible subnets."""
+        if self.all_subnets:
+            return subnet_map
+        return {k: v for k, v in subnet_map.items() if self.can_access_subnet(k)}
+
+    def accessible_subnet_ids(self, subnet_map: dict) -> list:
+        """Return list of accessible subnet_ids from the given map."""
+        return list(self.filter_subnet_map(subnet_map).keys())
+
+    @property
+    def subnet_access_list(self):
+        """Return the raw subnet_access list, or None for all subnets."""
+        return self._subnet_access
 
 
 def hash_password(p: str) -> str:

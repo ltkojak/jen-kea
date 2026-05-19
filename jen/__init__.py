@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.4.9"
+JEN_VERSION = "3.5.3"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -100,13 +100,12 @@ def create_app() -> Flask:
             return cached
 
         # Fast path: reconstruct from session data if available
-        # This avoids a DB round trip on every authenticated request.
-        # Session is signed with SECRET_KEY so it can't be tampered with.
         sess_user = session.get('_user_cache')
         if sess_user and str(sess_user.get('id')) == str(user_id):
             user = User(
                 sess_user['id'], sess_user['username'],
-                sess_user['role'], sess_user.get('session_timeout')
+                sess_user['role'], sess_user.get('session_timeout'),
+                sess_user.get('subnet_access')
             )
             _g._cached_user = user
             try: _g._route_start = __import__('time').time()
@@ -119,18 +118,19 @@ def create_app() -> Flask:
             db = get_jen_db()
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, username, role, session_timeout FROM users WHERE id=%s",
+                    "SELECT id, username, role, session_timeout, subnet_access FROM users WHERE id=%s",
                     (user_id,)
                 )
                 row = cur.fetchone()
             db.close()
             if row:
                 user = User(row["id"], row["username"],
-                            row["role"], row["session_timeout"])
-                # Cache in session for future requests (no DB hit)
+                            row["role"], row["session_timeout"],
+                            row["subnet_access"])
                 session['_user_cache'] = {
                     'id': row["id"], 'username': row["username"],
-                    'role': row["role"], 'session_timeout': row["session_timeout"]
+                    'role': row["role"], 'session_timeout': row["session_timeout"],
+                    'subnet_access': row["subnet_access"]
                 }
                 _g._cached_user = user
                 try: _g._route_start = __import__('time').time()

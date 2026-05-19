@@ -63,7 +63,7 @@ function previewAvatar(input) {
         <tr><td class="stat-label" style="width:140px;padding:8px 0;">Username</td>
             <td><strong>{{ current_user.username }}</strong></td></tr>
         <tr><td class="stat-label" style="padding:8px 0;">Role</td>
-            <td><span class="badge {% if current_user.role == 'admin' %}badge-admin{% else %}badge-viewer{% endif %}">{{ current_user.role|title }}</span></td></tr>
+            <td><span class="badge {% if current_user.role in ('superadmin','admin') %}badge-admin{% else %}badge-viewer{% endif %}">{{ current_user.role|title }}</span></td></tr>
         <tr><td class="stat-label" style="padding:8px 0;">Jen Version</td>
             <td class="mono" style="font-size:12px;">v{{ jen_version }}</td></tr>
     </table>

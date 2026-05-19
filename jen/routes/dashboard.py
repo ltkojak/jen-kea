@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -43,14 +43,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -69,28 +61,37 @@ def dashboard():
         hours = 0.5
     hours_str = str(int(hours)) if hours == int(hours) else str(hours)
 
-    # Build skeleton stats from SUBNET_MAP — cards render immediately with
-    # placeholder zeros. /api/stats fills in real numbers async via updateStats().
+    # Build skeleton stats — filtered to subnets this user can access
+    accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     stats = {
         sid: {"active": "…", "dynamic": "…", "reservations": "…",
               "name": info["name"], "cidr": info["cidr"]}
-        for sid, info in extensions.SUBNET_MAP.items()
+        for sid, info in accessible_subnet_map.items()
     }
 
-    # Server statuses — cheap (no Kea API calls), just the config list
     server_statuses = [
         {"server": s, "up": None, "ha_state": None, "ha_partner": None, "version": ""}
         for s in extensions.KEA_SERVERS
     ]
 
-    # Recent leases — single DB query, no Kea API calls
     recent = []
     device_info = {}
     try:
         db = __db.get_kea_db()
         window_seconds = int(hours * 3600)
         with db.cursor() as cur:
-            cur.execute("""
+            # Filter recent leases to accessible subnets
+            subnet_clause = ""
+            subnet_params = []
+            if not current_user.all_subnets:
+                ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
+                if ids:
+                    placeholders = ",".join(["%s"] * len(ids))
+                    subnet_clause = f"AND l.subnet_id IN ({placeholders})"
+                    subnet_params = ids
+                else:
+                    subnet_clause = "AND 1=0"
+            cur.execute(f"""
                 SELECT inet_ntoa(l.address) AS ip, l.hostname,
                        HEX(l.hwaddr) AS mac_hex, l.subnet_id,
                        (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
@@ -98,9 +99,10 @@ def dashboard():
                 WHERE l.state=0
                   AND l.expire > NOW()
                   AND (l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)
+                  {subnet_clause}
                 ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
                 LIMIT 50
-            """, (window_seconds,))
+            """, [window_seconds] + subnet_params)
             for row in cur.fetchall():
                 mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                 sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
@@ -115,7 +117,7 @@ def dashboard():
 
     template_vars = dict(
         stats=stats, recent=recent, kea_up=None,
-        subnet_map=extensions.SUBNET_MAP, pool_sizes={},
+        subnet_map=accessible_subnet_map, pool_sizes={},
         hours=hours_str, server_statuses=server_statuses,
         device_info=device_info,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
@@ -197,8 +199,9 @@ def api_stats():
     try:
         db = __db.get_kea_db()
         stats = {}
+        accessible = current_user.filter_subnet_map(extensions.SUBNET_MAP)
         with db.cursor() as cur:
-            for subnet_id, info in extensions.SUBNET_MAP.items():
+            for subnet_id, info in accessible.items():
                 cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                 active = cur.fetchone()["cnt"]
                 cur.execute("""

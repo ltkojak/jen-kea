@@ -13,7 +13,7 @@ import os
 import queue
 import threading
 from datetime import datetime
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, redirect, render_template,
                    request, stream_with_context, url_for)
@@ -29,14 +29,6 @@ bp = Blueprint("database", __name__)
 
 
 # ── Admin guard ───────────────────────────────────────────────────────────────
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────

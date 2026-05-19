@@ -28,7 +28,7 @@
     </td>
     <td data-label="">
         <div style="display:flex;gap:4px;flex-wrap:wrap;">
-            {% if current_user.role == 'admin' %}
+            {% if current_user.role in ('superadmin','admin') %}
             <button class="btn btn-sm btn-secondary edit-btn"
                 data-id="{{ d.id }}" data-mac="{{ d.mac }}"
                 data-name="{{ d.device_name|e if d.device_name else '' }}"

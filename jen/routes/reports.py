@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -42,14 +42,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -70,7 +62,7 @@ def reports():
     try:
         db = __db.get_jen_db()
         with db.cursor() as cur:
-            for subnet_id, info in extensions.SUBNET_MAP.items():
+            for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
                 cur.execute("""
                     SELECT
                         DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:%%i') as ts,
@@ -98,7 +90,7 @@ def reports():
         jdb = __db.get_jen_db()
         with db.cursor() as cur:
             with jdb.cursor() as jcur:
-                for subnet_id, info in extensions.SUBNET_MAP.items():
+                for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
                     cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                     active = cur.fetchone()["cnt"]
                     jcur.execute("""
@@ -130,7 +122,7 @@ def reports():
 
     return render_template("reports.html",
                            history=history, summary=summary, days=days,
-                           subnet_map=extensions.SUBNET_MAP, data_points=data_points,
+                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), data_points=data_points,
                            snapshot_interval=snapshot_interval,
                            retention_days=retention_days)
 

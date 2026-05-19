@@ -48,7 +48,7 @@ function saveNote(id) {
             <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
             <span class="mono" style="font-size:15px;">{{ s.subnet }}</span>
         </div>
-        {% if current_user.role == 'admin' and ssh_ready %}
+        {% if current_user.role in ('superadmin','admin') and ssh_ready %}
         <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
         {% endif %}
     </div>

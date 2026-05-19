@@ -54,8 +54,14 @@ def _run_backup_job(app):
                 return
             # Check not already run today
             last_run = sched.get("last_run")
-            if last_run and hasattr(last_run, "date") and last_run.date() == now.date():
-                return
+            if last_run:
+                try:
+                    lr_date = last_run.date() if hasattr(last_run, "date") else \
+                              datetime.strptime(str(last_run)[:10], "%Y-%m-%d").date()
+                    if lr_date == now.date():
+                        return
+                except Exception:
+                    pass  # Can't parse last_run — allow backup to proceed
             run_scheduled_backup()
         except Exception as e:
             logger.error(f"Scheduled backup error: {e}")

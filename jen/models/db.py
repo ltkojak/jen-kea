@@ -164,7 +164,8 @@ def init_jen_db() -> None:
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     username VARCHAR(100) UNIQUE NOT NULL,
                     password VARCHAR(512) NOT NULL,
-                    role ENUM('admin','viewer') NOT NULL DEFAULT 'viewer',
+                    role ENUM('superadmin','admin','viewer') NOT NULL DEFAULT 'viewer',
+                    subnet_access JSON DEFAULT NULL COMMENT 'NULL = all subnets; JSON array of subnet_ids = restricted',
                     session_timeout INT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -385,10 +386,10 @@ def init_jen_db() -> None:
             cur.execute("SELECT COUNT(*) as cnt FROM users")
             if cur.fetchone()["cnt"] == 0:
                 cur.execute(
-                    "INSERT INTO users (username, password, role) VALUES (%s, %s, 'admin')",
+                    "INSERT INTO users (username, password, role) VALUES (%s, %s, 'superadmin')",
                     ("admin", hash_password("admin"))
                 )
-                print("Created default admin user: admin / admin")
+                print("Created default superadmin user: admin / admin")
 
         # ── Migrations ─────────────────────────────────────────────────────
         with db.cursor() as cur:
@@ -452,6 +453,39 @@ def init_jen_db() -> None:
                 )
                 db.commit()
                 logger.info("Migration: widened users.password to VARCHAR(512)")
+
+        # ── Migration 3.5.0: add superadmin role + subnet_access ───────────
+        with db.cursor() as cur:
+            # Expand role ENUM to include superadmin if not already present
+            cur.execute("SHOW COLUMNS FROM users LIKE 'role'")
+            col = cur.fetchone()
+            if col and 'superadmin' not in str(col.get('Type', '')):
+                cur.execute("""
+                    ALTER TABLE users
+                    MODIFY COLUMN role ENUM('superadmin','admin','viewer')
+                    NOT NULL DEFAULT 'viewer'
+                """)
+                db.commit()
+                logger.info("Migration 3.5.0: expanded role ENUM to include superadmin")
+
+            # Always promote any remaining legacy 'admin' rows → 'superadmin'
+            # This is idempotent and safe to run on every startup
+            cur.execute("UPDATE users SET role='superadmin' WHERE role='admin'")
+            affected = cur.rowcount
+            if affected:
+                db.commit()
+                logger.info(f"Migration 3.5.0: promoted {affected} legacy admin(s) to superadmin")
+
+            # Add subnet_access column if missing
+            cur.execute("SHOW COLUMNS FROM users LIKE 'subnet_access'")
+            if not cur.fetchone():
+                cur.execute("""
+                    ALTER TABLE users
+                    ADD COLUMN subnet_access JSON DEFAULT NULL
+                    COMMENT 'NULL = all subnets; JSON array of subnet_ids = restricted'
+                """)
+                db.commit()
+                logger.info("Migration 3.5.0: added subnet_access column to users")
 
         db.commit()
     finally:

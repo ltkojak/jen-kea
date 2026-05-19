@@ -44,7 +44,7 @@
         {{ '📋 Show Active' if show_expired else '🕐 Show History' }}
     </a>
     <a href="/ipmap" class="btn btn-secondary">🗺️ IP Map</a>
-    {% if current_user.role == 'admin' %}
+    {% if current_user.role in ('superadmin','admin') %}
     <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return confirm('Delete all expired/stale leases from the database?')">
         <button type="submit" class="btn btn-danger btn-sm">🗑️ Delete Stale</button>
     </form>
@@ -96,7 +96,7 @@ function saveCurrentFilter() {
         <th><a href="?sort=subnet&dir={{ 'asc' if sort=='subnet' and direction=='desc' else 'desc' if sort=='subnet' else 'asc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-mobile"><a href="?sort=obtained&dir={{ 'asc' if sort=='obtained' and direction=='desc' else 'desc' if sort=='obtained' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired' if show_expired else 'Obtained' }}{% if sort=='obtained' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th class="hide-tablet"><a href="?sort=expires&dir={{ 'asc' if sort=='expires' and direction=='desc' else 'desc' if sort=='expires' else 'desc' }}&subnet={{ subnet_filter }}&minutes={{ minutes }}&search={{ search }}&expired={{ '1' if show_expired else '0' }}" style="color:inherit;text-decoration:none;">{{ 'Expired At' if show_expired else 'Expires' }}{% if sort=='expires' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        {% if not show_expired and current_user.role == 'admin' %}<th></th>{% endif %}
+        {% if not show_expired and current_user.role in ('superadmin','admin') %}<th></th>{% endif %}
     </tr></thead>
     <tbody id="leases-table-body">
     {% include '_lease_rows.html' %}

@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -43,14 +43,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -94,8 +86,13 @@ def leases():
         try:
             if int(subnet_filter) not in extensions.SUBNET_MAP:
                 subnet_filter = "all"
+            elif not current_user.can_access_subnet(int(subnet_filter)):
+                subnet_filter = "all"
         except ValueError:
             subnet_filter = "all"
+
+    # Build accessible subnet map for this user
+    accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     leases_list = []
     total = 0
     try:
@@ -108,6 +105,10 @@ def leases():
             if subnet_filter != "all":
                 where.append("l.subnet_id=%s")
                 params.append(int(subnet_filter))
+            elif not current_user.all_subnets:
+                # Restrict to accessible subnets
+                from jen.services.access import add_subnet_restriction
+                where, params = add_subnet_restriction(where, params, "l", "subnet_id")
             if minutes:
                 try:
                     mins = int(minutes)
@@ -166,7 +167,7 @@ def leases():
     template_vars = dict(
         leases=leases_list, page=page, pages=pages, total=total,
         subnet_filter=subnet_filter, minutes=minutes, search=search,
-        show_expired=show_expired, subnet_map=extensions.SUBNET_MAP,
+        show_expired=show_expired, subnet_map=accessible_subnet_map,
         sort=sort, direction=direction, device_info=device_info,
         per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
@@ -245,7 +246,7 @@ def ipmap():
     except Exception as e:
         flash(f"Could not load IP map: {str(e)}", "error")
     return render_template("ipmap.html", leases=leases_by_ip, reservations=reservations_by_ip,
-                           subnet_filter=subnet_filter, subnet_map=extensions.SUBNET_MAP, cidr=cidr)
+                           subnet_filter=subnet_filter, subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), cidr=cidr)
 
 # ─────────────────────────────────────────
 # Reservations

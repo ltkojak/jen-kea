@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -43,14 +43,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -88,6 +80,7 @@ def reservations():
         page = 1
     hosts = []
     total = 0
+    accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     try:
         kea_db = __db.get_kea_db()
         jen_db = __db.get_jen_db()
@@ -96,10 +89,17 @@ def reservations():
             params = []
             if subnet_filter != "all":
                 try:
-                    where.append("h.dhcp4_subnet_id=%s")
-                    params.append(int(subnet_filter))
+                    sid = int(subnet_filter)
+                    if current_user.can_access_subnet(sid):
+                        where.append("h.dhcp4_subnet_id=%s")
+                        params.append(sid)
+                    else:
+                        subnet_filter = "all"
                 except ValueError:
                     subnet_filter = "all"
+            if subnet_filter == "all" and not current_user.all_subnets:
+                from jen.services.access import add_subnet_restriction
+                where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
             if search:
                 where.append("(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)")
                 s = f"%{search}%"
@@ -139,13 +139,12 @@ def reservations():
     device_info = __fp.get_device_info_map(mac_list)
     template_vars = dict(
         hosts=hosts, subnet_filter=subnet_filter, search=search,
-        subnet_map=extensions.SUBNET_MAP, page=page, pages=pages,
+        subnet_map=accessible_subnet_map, page=page, pages=pages,
         total=total, stale_days=stale_days, sort=sort, direction=direction,
         device_info=device_info, per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY
     )
-    # HTMX filter request — return just the table rows
     if request.headers.get("HX-Request") == "true":
         from flask import render_template as _rt
         rows_html = "".join(
@@ -165,7 +164,9 @@ def add_reservation():
         "hostname": request.args.get("hostname", ""),
         "subnet_id": request.args.get("subnet_id", ""),
     }
-    return render_template("add_reservation.html", subnet_map=extensions.SUBNET_MAP, prefill=prefill)
+    return render_template("add_reservation.html",
+                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
+                           prefill=prefill)
 
 @bp.route("/reservations/add", methods=["POST"])
 @login_required
@@ -242,7 +243,7 @@ def edit_reservation(host_id):
     except Exception as e:
         flash(f"Error: {str(e)}", "error")
         return redirect(url_for('reservations.reservations'))
-    return render_template("edit_reservation.html", host=host, subnet_map=extensions.SUBNET_MAP)
+    return render_template("edit_reservation.html", host=host, subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP))
 
 @bp.route("/reservations/edit/<int:host_id>", methods=["POST"])
 @login_required

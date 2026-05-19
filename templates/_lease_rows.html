@@ -10,7 +10,7 @@
     <td data-label="Subnet"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
     <td data-label="{{ 'Expired' if show_expired else 'Obtained' }}" class="mono hide-mobile" style="color:var(--text-muted);">{{ l.obtained|utcfmt }}</td>
     <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire|utcfmt }}</td>
-    {% if not show_expired and current_user.role == 'admin' %}
+    {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td data-label="">
         {% if l.has_reservation %}
         <a href="/reservations?search={{ l.mac }}"

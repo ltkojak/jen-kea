@@ -49,7 +49,7 @@
         <tr><td class="stat-label" style="padding:8px 0;">SSH Host</td>
             <td class="mono" style="font-size:12px;">{{ s.server.ssh_host or '—' }}</td></tr>
     </table>
-    {% if current_user.role == 'admin' and s.server.ssh_host %}
+    {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:16px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
               onsubmit="return confirm('Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable.')">
@@ -112,7 +112,7 @@
         <tr><td class="stat-label">SSH</td>
             <td class="mono" style="font-size:11px;">{{ s.server.ssh_host or '—' }}</td></tr>
     </table>
-    {% if current_user.role == 'admin' and s.server.ssh_host %}
+    {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:12px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
               onsubmit="return confirm('Restart Kea on {{ s.server.name }}?')">

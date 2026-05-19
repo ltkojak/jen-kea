@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -43,14 +43,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -97,6 +89,7 @@ def devices():
 
     devices_list = []
     total = 0
+    accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     try:
         db = __db.get_jen_db()
         kdb = __db.get_kea_db()
@@ -114,10 +107,17 @@ def devices():
                 params.append(type_filter)
             if subnet_filter != "all":
                 try:
-                    where.append("d.last_subnet_id=%s")
-                    params.append(int(subnet_filter))
+                    sid = int(subnet_filter)
+                    if current_user.can_access_subnet(sid):
+                        where.append("d.last_subnet_id=%s")
+                        params.append(sid)
+                    else:
+                        subnet_filter = "all"
                 except ValueError:
                     subnet_filter = "all"
+            if subnet_filter == "all" and not current_user.all_subnets:
+                from jen.services.access import add_subnet_restriction
+                where, params = add_subnet_restriction(where, params, "d", "last_subnet_id")
             where_str = " AND ".join(where) if where else "1=1"
 
             cur.execute(f"SELECT COUNT(*) as cnt FROM devices d WHERE {where_str}", params)
@@ -166,7 +166,7 @@ def devices():
     template_vars = dict(
         devices=devices_list, page=page, pages=pages,
         total=total, search=search, show_stale=show_stale,
-        stale_days=stale_days, subnet_map=extensions.SUBNET_MAP,
+        stale_days=stale_days, subnet_map=accessible_subnet_map,
         sort=sort, direction=direction, per_page=per_page_param,
         type_filter=type_filter, subnet_filter=subnet_filter,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,

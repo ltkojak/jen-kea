@@ -3,31 +3,70 @@
 {% block content %}
 <div class="page-header">
     <h1>👤 Users</h1>
+    <p>User management is restricted to SuperAdmins. Admins and Viewers cannot see this page.</p>
 </div>
 
 <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
 
+<!-- User list -->
 <div class="card" style="padding:0;">
 <div class="table-wrap">
 <table>
     <thead><tr>
-        <th>Username</th><th>Role</th><th>Session Timeout</th><th>Created</th><th>Actions</th>
+        <th>Username</th>
+        <th>Role</th>
+        <th>Subnet Access</th>
+        <th>MFA</th>
+        <th>Timeout</th>
+        <th>Actions</th>
     </tr></thead>
     <tbody>
     {% for u in users %}
     <tr>
-        <td><strong>{{ u.username }}</strong> {% if u.id == current_user.id %}<span style="font-size:11px;color:var(--text-muted);">(you)</span>{% endif %}</td>
-        <td><span class="badge badge-{{ u.role }}">{{ u.role }}</span></td>
+        <td>
+            <strong>{{ u.username }}</strong>
+            {% if u.id == current_user.id %}<span style="font-size:11px;color:var(--text-muted);"> (you)</span>{% endif %}
+        </td>
+        <td>
+            <form method="POST" action="/users/set-role/{{ u.id }}" style="display:flex;gap:6px;align-items:center;">
+                <select name="role" style="font-size:12px;padding:3px 6px;" onchange="this.form.submit()"
+                        {% if u.id == current_user.id %}disabled title="Cannot change your own role"{% endif %}>
+                    <option value="superadmin" {% if u.role == 'superadmin' %}selected{% endif %}>⭐ SuperAdmin</option>
+                    <option value="admin"      {% if u.role == 'admin'      %}selected{% endif %}>🔧 Admin</option>
+                    <option value="viewer"     {% if u.role == 'viewer'     %}selected{% endif %}>👁️ Viewer</option>
+                </select>
+            </form>
+        </td>
+        <td>
+            {% if u.role == 'superadmin' %}
+                <span style="font-size:12px;color:var(--text-muted);">All (unrestricted)</span>
+            {% else %}
+            <form method="POST" action="/users/set-subnets/{{ u.id }}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <select name="subnet_ids" multiple style="font-size:11px;padding:3px;min-width:120px;max-height:80px;" title="Ctrl/Cmd+click to select multiple">
+                    <option value="all" {% if u.subnet_ids is none %}selected{% endif %}>All Subnets</option>
+                    {% for sid, info in subnet_map.items() %}
+                    <option value="{{ sid }}" {% if u.subnet_ids and sid in u.subnet_ids %}selected{% endif %}>{{ info.name }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-sm btn-secondary">Save</button>
+            </form>
+            {% endif %}
+        </td>
+        <td style="font-size:12px;">
+            {% if u.mfa_enrolled %}<span style="color:var(--success);">✓ Enrolled</span>
+            {% else %}<span style="color:var(--text-muted);">—</span>{% endif %}
+        </td>
         <td>
             <form method="POST" action="/users/set-timeout/{{ u.id }}" style="display:flex;gap:6px;align-items:center;">
-                <input type="number" name="timeout" value="{{ u.session_timeout or '' }}" placeholder="{{ global_timeout }} (global)" style="width:120px;">
+                <input type="number" name="timeout" value="{{ u.session_timeout or '' }}"
+                       placeholder="{{ global_timeout }}m" style="width:80px;font-size:12px;" min="1" max="1440">
                 <button type="submit" class="btn btn-sm btn-secondary">Set</button>
             </form>
         </td>
-        <td style="font-size:12px;color:var(--text-muted);">{{ u.created_at|utcdate }}</td>
         <td>
             {% if u.id != current_user.id %}
-            <form method="POST" action="/users/delete/{{ u.id }}" onsubmit="return confirm('Delete user {{ u.username }}?')">
+            <form method="POST" action="/users/delete/{{ u.id }}"
+                  onsubmit="return confirm('Delete user {{ u.username }}? This cannot be undone.')">
                 <button type="submit" class="btn btn-sm btn-danger">Delete</button>
             </form>
             {% endif %}
@@ -39,18 +78,37 @@
 </div>
 </div>
 
+<!-- Right panel -->
 <div>
 <div class="card">
     <div class="card-header"><span class="card-title">Add User</span></div>
     <form method="POST" action="/users/add">
-        <div class="form-group"><label>Username</label><input type="text" name="username" required></div>
-        <div class="form-group"><label>Password</label><input type="password" name="password" required></div>
+        <div class="form-group">
+            <label>Username</label>
+            <input type="text" name="username" required autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" name="password" required autocomplete="new-password">
+            <div class="form-hint">Minimum 8 characters</div>
+        </div>
         <div class="form-group">
             <label>Role</label>
-            <select name="role">
-                <option value="viewer">Viewer</option>
-                <option value="admin">Admin</option>
+            <select name="role" id="new-user-role" onchange="toggleSubnetSelect()">
+                <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
+                <option value="admin">🔧 Admin — manage assigned subnets</option>
+                <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
             </select>
+        </div>
+        <div class="form-group" id="new-user-subnets">
+            <label>Subnet Access</label>
+            <select name="subnet_ids" multiple style="min-height:80px;">
+                <option value="all" selected>All Subnets</option>
+                {% for sid, info in subnet_map.items() %}
+                <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                {% endfor %}
+            </select>
+            <div class="form-hint">Hold Ctrl/Cmd to select multiple. Select "All Subnets" for unrestricted access.</div>
         </div>
         <button type="submit" class="btn btn-primary">Add User</button>
     </form>
@@ -65,7 +123,23 @@
         <button type="submit" class="btn btn-primary">Change Password</button>
     </form>
 </div>
+
+<div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
+    <div style="font-weight:600;margin-bottom:8px;">Role Reference</div>
+    <div style="margin-bottom:6px;"><strong style="color:var(--text);">⭐ SuperAdmin</strong> — Full access to all subnets and all settings. Can manage users and assign roles. Cannot be subnet-restricted.</div>
+    <div style="margin-bottom:6px;"><strong style="color:var(--text);">🔧 Admin</strong> — Can create/edit/delete leases, reservations, and devices on their assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
+    <div><strong style="color:var(--text);">👁️ Viewer</strong> — Read-only access to their assigned subnets. Cannot access Settings or Database.</div>
+</div>
 </div>
 
 </div>
+
+<script>
+function toggleSubnetSelect() {
+    var role = document.getElementById('new-user-role').value;
+    document.getElementById('new-user-subnets').style.display =
+        role === 'superadmin' ? 'none' : '';
+}
+toggleSubnetSelect();
+</script>
 {% endblock %}

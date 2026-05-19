@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -42,14 +42,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -128,10 +120,10 @@ def global_search():
             flash(f"Search error: {str(e)}", "error")
 
     total = sum(len(v) for v in results.values())
-    subnet_names = {sid: info["name"] for sid, info in extensions.SUBNET_MAP.items()}
+    subnet_names = {sid: info["name"] for sid, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items()}
     return render_template("search_results.html",
                            q=q, results=results, total=total,
-                           subnet_map=extensions.SUBNET_MAP,
+                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
                            subnet_names=subnet_names)
 
 # ─────────────────────────────────────────

@@ -1,5 +1,98 @@
 # Changelog
 
+## [3.5.3] - 2026-05-19
+
+### Scheduled Database Backups — Silent Failure Fix
+
+Scheduled backups (via APScheduler) were failing silently on every run. The `results` list would show `"Jen: FAILED — BadGzipFile"` / `"Kea: FAILED — BadGzipFile"` in the `last_status` column but the error was swallowed so no flash or log entry appeared in the UI.
+
+**Root cause:** `run_scheduled_backup()` in `dbexport.py` called `gzip.decompress(content)` on the bytes returned by `export_jen()` and `export_kea()`. But those functions return plain JSON bytes — `json.dumps(...).encode("utf-8")`. They are not gzip-compressed. Only `_write_backup()` applies gzip compression when writing to disk. The double-decompress caused `BadGzipFile` immediately. The manual "Back Up Now" button in the Database UI used the correct pattern (`json.loads(content.decode("utf-8"))`) and worked fine — this bug was isolated to the scheduled path.
+
+**Fix:** Removed the `gzip.decompress()` call. Scheduled backups now use the same `json.loads(content.decode("utf-8"))` pattern as the manual backup route.
+
+**Secondary fix:** Made the `last_run` date comparison in `scheduler.py` more robust. The guard that prevents running a backup twice in one day used `hasattr(last_run, "date")` which works for Python `datetime` objects but would silently skip the check if `last_run` was a string. Now handles both `datetime` and string-formatted dates gracefully.
+
+## [3.5.2] - 2026-05-19
+
+### Full Audit of 3.5.x Multi-Tenancy Changes
+
+Complete audit of all access control changes introduced in 3.5.0/3.5.1. Several gaps found and fixed:
+
+**`api.py` — legacy inline role checks:** Four routes in the API key management section (`/settings/api-keys`, create, revoke, delete) used inline `if current_user.role != "admin"` checks instead of the shared `_admin_required` decorator. These blocked superadmin users from accessing API key management. Fixed to `role not in ("superadmin", "admin")`.
+
+**`mfa.py` — MFA required_admins mode excluded superadmin:** The `needs_mfa_for_role()` function checked `user.role == "admin"` when MFA mode is `required_admins`. SuperAdmin users would not be prompted for MFA even with that setting enabled. Fixed to `role in ("superadmin", "admin")`.
+
+**`servers.html` — SSH action buttons excluded superadmin:** Two places in the Servers template conditionally showed restart/sync buttons only for `role == 'admin'`. SuperAdmins couldn't use them. Fixed to `role in ('superadmin', 'admin')`.
+
+**`user_profile.html` — badge logic excluded superadmin:** The role badge on the profile page showed `badge-admin` only for `admin` role, so superadmin got `badge-viewer` styling. Fixed to `role in ('superadmin', 'admin')`.
+
+**Unfiltered `SUBNET_MAP` passed to templates:** Several routes passed the full `extensions.SUBNET_MAP` directly to templates that render subnet dropdowns, meaning restricted users would see all subnets in form selects even if they couldn't access them:
+- `add_reservation` — now passes `filter_subnet_map()`
+- `edit_reservation` — now passes `filter_subnet_map()`
+- `edit_subnet` GET — now passes `filter_subnet_map()` + access check before loading
+- `ipmap` — now passes `filter_subnet_map()`
+- `reports` — now iterates over `filter_subnet_map()` and passes filtered map
+- `search` — now uses `filter_subnet_map()` for subnet name lookup
+
+**Correctly left as full map (intentional):**
+- `about.html` — informational page, no subnet data shown
+- `users.html` — SuperAdmin-only page that needs all subnets for the assignment UI
+- `servers.html` — admin-only page, server list is not subnet-restricted
+
+## [3.5.1] - 2026-05-19
+
+### Fix: Admin→SuperAdmin Migration Not Firing on Existing Installs
+
+The 3.5.0 migration that promotes legacy `admin` users to `superadmin` was gated inside `if 'superadmin' not in ENUM` — meaning it only ran the first time the ENUM was expanded. If the ENUM expansion happened but the UPDATE failed, or if the session cache still held the old role, users would get "SuperAdmin access required" errors when navigating to the Users page.
+
+**Fix:** The `UPDATE users SET role='superadmin' WHERE role='admin'` now runs unconditionally on every startup (it's idempotent — if there's nothing to promote, rowcount=0 and nothing happens). The ENUM expansion is still guarded since `ALTER TABLE` is not idempotent, but the promotion UPDATE always runs.
+
+**If you're seeing "SuperAdmin access required" on 3.5.0:** Either deploy 3.5.1 (which fixes it on restart), or run manually:
+```sql
+UPDATE users SET role='superadmin' WHERE role='admin';
+```
+Then log out and back in to clear the session cache.
+
+## [3.5.0] - 2026-05-19
+
+### Multi-Tenancy — Three-Tier Role System with Subnet-Level Access Control
+
+**New role model:**
+
+| Role | Access |
+|------|--------|
+| ⭐ SuperAdmin | Full access to everything, all subnets, always. Cannot be subnet-restricted. |
+| 🔧 Admin | Full management capability on assigned subnets. Can access Settings, Database, Audit. Cannot manage users or assign roles. |
+| 👁️ Viewer | Read-only access on assigned subnets. Cannot access Settings, Database, or Audit. |
+
+**Migration:** All existing `admin` users are automatically promoted to `superadmin` on first startup. Existing `viewer` users remain as `viewer` with `subnet_access = NULL` (all subnets). Zero manual steps required.
+
+**Subnet access:** `NULL` means all subnets (unrestricted). A JSON array of subnet IDs means restricted to those subnets. SuperAdmins are always unrestricted regardless of the stored value.
+
+**What gets filtered by subnet access:**
+- Leases page — only shows leases in accessible subnets
+- Reservations page — only shows reservations in accessible subnets
+- Devices page — only shows devices last seen in accessible subnets
+- Dashboard — only shows subnet cards for accessible subnets; recent leases filtered
+- Network / Subnets page — only shows accessible subnets
+- `/api/stats` endpoint — only returns stats for accessible subnets
+
+**User Management page** is now SuperAdmin-only. Changes:
+- Role is a live dropdown (change role without a separate form)
+- Subnet access is a multi-select per user (select multiple or "All Subnets")
+- SuperAdmin users show "All (unrestricted)" for subnet access — cannot be restricted
+- Delete protects against deleting the last SuperAdmin
+- Role change protects against demoting the last SuperAdmin
+- Cannot demote your own account from SuperAdmin
+- Role reference card explains the permission matrix
+
+**New route:** `POST /users/set-role/<id>` — SuperAdmin only
+**New route:** `POST /users/set-subnets/<id>` — SuperAdmin only
+
+**Shared access module:** `jen/services/access.py` — replaces the duplicated `_admin_required` decorator that existed in every route file. Now provides `admin_required`, `superadmin_required`, and `add_subnet_restriction()` helper imported by all routes.
+
+**DB migration:** `ALTER TABLE users MODIFY role ENUM('superadmin','admin','viewer')` + `ALTER TABLE users ADD COLUMN subnet_access JSON DEFAULT NULL` — both run automatically on startup via `init_jen_db()`.
+
 ## [3.4.9] - 2026-05-19
 
 ### Dashboard — Alert Summary Banner Always Showing Incorrectly

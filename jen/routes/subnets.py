@@ -14,7 +14,7 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
-from functools import wraps
+from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,
                    render_template, request, send_from_directory,
@@ -42,14 +42,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def _admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def __ip_to_int(ip):
@@ -86,8 +78,9 @@ def subnets():
         pass
     try:
         db = __db.get_kea_db()
+        accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
         with db.cursor() as cur:
-            for subnet_id, info in extensions.SUBNET_MAP.items():
+            for subnet_id, info in accessible_subnet_map.items():
                 cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                 active = cur.fetchone()["cnt"]
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
@@ -167,11 +160,14 @@ def edit_subnet(subnet_id):
     if subnet_id not in extensions.SUBNET_MAP:
         flash("Subnet not found.", "error")
         return redirect(url_for('subnets.subnets'))
+    if not current_user.can_access_subnet(subnet_id):
+        flash("You do not have access to that subnet.", "error")
+        return redirect(url_for('subnets.subnets'))
     kea_data = _get_subnet_kea_data(subnet_id)
     return render_template("edit_subnet.html", subnet_id=subnet_id,
                            subnet=extensions.SUBNET_MAP[subnet_id],
                            kea=kea_data,
-                           subnet_map=extensions.SUBNET_MAP)
+                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP))
 
 
 @bp.route("/subnets/edit/<int:subnet_id>", methods=["POST"])
