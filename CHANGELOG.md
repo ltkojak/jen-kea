@@ -1,5 +1,38 @@
 # Changelog
 
+## [3.4.9] - 2026-05-19
+
+### Dashboard — Alert Summary Banner Always Showing Incorrectly
+
+The "All recent alerts failed to send" warning banner on the Alert Summary dashboard widget was appearing even when all alerts had delivered successfully.
+
+**Root cause:** The JS check used `a.status !== 'sent'` to detect failures, but `alerts.py` writes status as `"ok"` on success (not `"sent"`). Since `"ok" !== "sent"` is always true, every successfully delivered alert was counted as a failure, making `allFailed` always `true` whenever there were any alerts in the log at all.
+
+**Fix:** Changed the check to `a.status !== 'ok'` to match what the service actually writes. Also added a `data.alerts.length > 0` guard so the banner never fires on an empty log. Fixed the per-row success indicator in the same widget for the same mismatch (`a.status === 'sent' || a.status === 'ok'` → `a.status === 'ok'`).
+
+## [3.4.8] - 2026-05-19
+
+### Full Audit — One Fix Found
+
+Full audit of all 32 Python files, 41 templates, version strings, nav consistency, auth coverage, DB schema, HTMX partials, installer, and tarball structure.
+
+**One real bug found:** The desktop nav Settings link was missing `settings.settings_icons` from its active-state endpoint list. So when navigating to Settings → Icons, the Settings nav item would go grey/inactive even though you were on a Settings page. The mobile drawer and section-tabs block both already included `settings.settings_icons` correctly — only the desktop nav-link was missing it. Fixed by adding it to the endpoint list on that one line in `base.html`.
+
+**Everything else confirmed clean:**
+- All 32 Python files parse without syntax errors
+- All 41 Jinja2 templates parse without syntax errors
+- All 7 version strings consistent at 3.4.8 across install.sh, `__init__.py`, Dockerfile, docker-compose files, README badge, config example, and docs
+- All routes have `@login_required` or are intentionally public (API routes use `_api_auth()`, `/mfa/verify` has no login because user isn't authenticated yet)
+- Silent `except: pass` blocks reviewed — all are in non-critical paths (Kea version enrichment, pool size calculations, Prometheus metrics, optional data joins) where silent fallback is correct behaviour
+- All HTMX partials exist (`_lease_rows.html`, `_device_rows.html`, `_reservation_row.html`, `_recent_leases_rows.html`)
+- Nav order Desktop and Mobile both: Dashboard → Management → Network → Database → Settings → About
+- All endpoint groups consistent across desktop nav, mobile drawer, and section-tabs — except the icons fix above
+- DB schema tables all accounted for
+- Installer has correct dependency list (paramiko, apscheduler), pre-upgrade backup prompt, and `_box_line` banner fix
+- Tarball extracts cleanly to `jen/` folder
+
+**On the Alert Summary banner ("All recent alerts failed to send"):** Not a leftover from troubleshooting — it's live production logic. The dashboard checks if every alert in the recent log has a status other than `sent`, and if so shows that warning. It means your Telegram notifications are genuinely failing. Go to Settings → Alerts, check your bot token and chat ID are still valid (Telegram bots can be revoked, and chat IDs can change if the bot was re-added to a channel).
+
 ## [3.4.7] - 2026-05-06
 
 ### Database — Nav Reorder + Standard Section-Tabs

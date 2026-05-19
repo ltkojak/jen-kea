@@ -304,7 +304,7 @@
         <a href="/subnets" class="nav-link {% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] %}active{% endif %}">🌐 Network</a>
         {% if current_user.role == 'admin' %}
         <a href="/database" class="nav-link {% if request.endpoint in ['database.database','database.migrate_page'] %}active{% endif %}">🗄️ Database</a>
-        <a href="/settings/system" class="nav-link {% if request.endpoint in ['settings.settings_system','settings.settings_alerts','settings.settings_infrastructure','users.users','users.audit_log','api.api_keys','api.api_docs'] %}active{% endif %}">⚙️ Settings</a>
+        <a href="/settings/system" class="nav-link {% if request.endpoint in ['settings.settings_system','settings.settings_alerts','settings.settings_infrastructure','users.users','users.audit_log','api.api_keys','api.api_docs','settings.settings_icons'] %}active{% endif %}">⚙️ Settings</a>
         {% endif %}
         <a href="/about" class="nav-link {% if request.endpoint == 'users.about' %}active{% endif %}">ℹ️ About</a>
     </div>
