@@ -165,7 +165,7 @@ def clean_tables(db):
         cur.execute("DELETE FROM alert_log")
         from jen.models.user import hash_password, _invalidate_settings_cache
         cur.execute(
-            "UPDATE users SET password=%s, role='admin', session_timeout=NULL "
+            "UPDATE users SET password=%s, role='superadmin', session_timeout=NULL "
             "WHERE username='admin'",
             (hash_password("admin"),)
         )
@@ -184,7 +184,7 @@ def logged_in_client(client):
     with client.session_transaction() as sess:
         sess["_user_cache"] = {
             "id": 1, "username": "admin",
-            "role": "admin", "session_timeout": None
+            "role": "superadmin", "session_timeout": None
         }
         sess["_user_id"] = "1"
         sess["_fresh"]   = True

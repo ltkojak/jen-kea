@@ -1,14 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Users{% endblock %}
 {% block content %}
-<div class="page-header">
-    <h1>👤 Users</h1>
-    <p>User management is restricted to SuperAdmins. Admins and Viewers cannot see this page.</p>
+
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1>👤 Users</h1>
+        <p>User management is restricted to SuperAdmins.</p>
+    </div>
+    <button class="btn btn-primary" onclick="openAddModal()">＋ Add User</button>
 </div>
 
-<div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
-
-<!-- User list -->
+<!-- User table -->
 <div class="card" style="padding:0;">
 <div class="table-wrap">
 <table>
@@ -18,58 +20,60 @@
         <th>Subnet Access</th>
         <th>MFA</th>
         <th>Timeout</th>
-        <th>Actions</th>
+        <th></th>
     </tr></thead>
     <tbody>
     {% for u in users %}
     <tr>
         <td>
             <strong>{{ u.username }}</strong>
-            {% if u.id == current_user.id %}<span style="font-size:11px;color:var(--text-muted);"> (you)</span>{% endif %}
-        </td>
-        <td>
-            <form method="POST" action="/users/set-role/{{ u.id }}" style="display:flex;gap:6px;align-items:center;">
-                <select name="role" style="font-size:12px;padding:3px 6px;" onchange="this.form.submit()"
-                        {% if u.id == current_user.id %}disabled title="Cannot change your own role"{% endif %}>
-                    <option value="superadmin" {% if u.role == 'superadmin' %}selected{% endif %}>⭐ SuperAdmin</option>
-                    <option value="admin"      {% if u.role == 'admin'      %}selected{% endif %}>🔧 Admin</option>
-                    <option value="viewer"     {% if u.role == 'viewer'     %}selected{% endif %}>👁️ Viewer</option>
-                </select>
-            </form>
+            {% if u.id == current_user.id %}
+            <span style="font-size:11px;color:var(--text-muted);"> (you)</span>
+            {% endif %}
         </td>
         <td>
             {% if u.role == 'superadmin' %}
-                <span style="font-size:12px;color:var(--text-muted);">All (unrestricted)</span>
+            <span style="color:var(--warning);font-weight:600;font-size:12px;">⭐ SuperAdmin</span>
+            {% elif u.role == 'admin' %}
+            <span style="color:var(--primary);font-weight:600;font-size:12px;">🔧 Admin</span>
             {% else %}
-            <form method="POST" action="/users/set-subnets/{{ u.id }}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-                <select name="subnet_ids" multiple style="font-size:11px;padding:3px;min-width:120px;max-height:80px;" title="Ctrl/Cmd+click to select multiple">
-                    <option value="all" {% if u.subnet_ids is none %}selected{% endif %}>All Subnets</option>
-                    {% for sid, info in subnet_map.items() %}
-                    <option value="{{ sid }}" {% if u.subnet_ids and sid in u.subnet_ids %}selected{% endif %}>{{ info.name }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit" class="btn btn-sm btn-secondary">Save</button>
-            </form>
+            <span style="color:var(--text-muted);font-weight:600;font-size:12px;">👁️ Viewer</span>
+            {% endif %}
+        </td>
+        <td style="font-size:12px;color:var(--text-muted);">
+            {% if u.role == 'superadmin' or u.subnet_ids is none %}
+                All subnets
+            {% else %}
+                {% set names = [] %}
+                {% for sid in u.subnet_ids %}
+                    {% if subnet_map[sid] is defined %}
+                        {% set _ = names.append(subnet_map[sid].name) %}
+                    {% endif %}
+                {% endfor %}
+                {{ names | join(', ') or '—' }}
             {% endif %}
         </td>
         <td style="font-size:12px;">
-            {% if u.mfa_enrolled %}<span style="color:var(--success);">✓ Enrolled</span>
-            {% else %}<span style="color:var(--text-muted);">—</span>{% endif %}
-        </td>
-        <td>
-            <form method="POST" action="/users/set-timeout/{{ u.id }}" style="display:flex;gap:6px;align-items:center;">
-                <input type="number" name="timeout" value="{{ u.session_timeout or '' }}"
-                       placeholder="{{ global_timeout }}m" style="width:80px;font-size:12px;" min="1" max="1440">
-                <button type="submit" class="btn btn-sm btn-secondary">Set</button>
-            </form>
-        </td>
-        <td>
-            {% if u.id != current_user.id %}
-            <form method="POST" action="/users/delete/{{ u.id }}"
-                  onsubmit="return confirm('Delete user {{ u.username }}? This cannot be undone.')">
-                <button type="submit" class="btn btn-sm btn-danger">Delete</button>
-            </form>
+            {% if u.mfa_enrolled %}
+            <span style="color:var(--success);">✓ Enrolled</span>
+            {% else %}
+            <span style="color:var(--text-muted);">—</span>
             {% endif %}
+        </td>
+        <td style="font-size:12px;color:var(--text-muted);">
+            {% if u.session_timeout %}{{ u.session_timeout }}m{% else %}{{ global_timeout }}m (global){% endif %}
+        </td>
+        <td>
+            <button class="btn btn-sm btn-secondary"
+                onclick="openEditModal(
+                    {{ u.id }},
+                    '{{ u.username }}',
+                    '{{ u.role }}',
+                    {{ u.subnet_ids | tojson if u.subnet_ids else 'null' }},
+                    {{ u.session_timeout or 'null' }},
+                    {{ 'true' if u.mfa_enrolled else 'false' }},
+                    {{ 'true' if u.id == current_user.id else 'false' }}
+                )">✏️ Edit</button>
         </td>
     </tr>
     {% endfor %}
@@ -78,68 +82,239 @@
 </div>
 </div>
 
-<!-- Right panel -->
-<div>
-<div class="card">
-    <div class="card-header"><span class="card-title">Add User</span></div>
+<!-- Role reference -->
+<div class="card" style="margin-top:16px;background:var(--surface2);font-size:12px;color:var(--text-muted);">
+    <div style="font-weight:600;margin-bottom:8px;color:var(--text);">Role Reference</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+        <div><strong style="color:var(--warning);">⭐ SuperAdmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
+        <div><strong style="color:var(--primary);">🔧 Admin</strong><br>Full management on assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
+        <div><strong style="color:var(--text);">👁️ Viewer</strong><br>Read-only access to assigned subnets. Cannot access Settings or Database.</div>
+    </div>
+</div>
+
+<!-- ── ADD USER MODAL ─────────────────────────────────────────────────── -->
+<div id="add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(480px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <h3 style="margin:0;">＋ Add User</h3>
+        <button onclick="closeModal('add-modal')" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
     <form method="POST" action="/users/add">
         <div class="form-group">
             <label>Username</label>
-            <input type="text" name="username" required autocomplete="off">
+            <input type="text" name="username" required autocomplete="off" style="width:100%;">
         </div>
         <div class="form-group">
             <label>Password</label>
-            <input type="password" name="password" required autocomplete="new-password">
+            <input type="password" name="password" required autocomplete="new-password" style="width:100%;">
             <div class="form-hint">Minimum 8 characters</div>
         </div>
         <div class="form-group">
             <label>Role</label>
-            <select name="role" id="new-user-role" onchange="toggleSubnetSelect()">
+            <select name="role" id="add-role" onchange="toggleAddSubnets()" style="width:100%;">
                 <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
                 <option value="admin">🔧 Admin — manage assigned subnets</option>
                 <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
             </select>
         </div>
-        <div class="form-group" id="new-user-subnets">
+        <div class="form-group" id="add-subnet-group">
             <label>Subnet Access</label>
-            <select name="subnet_ids" multiple style="min-height:80px;">
+            <select name="subnet_ids" multiple style="width:100%;min-height:90px;">
                 <option value="all" selected>All Subnets</option>
                 {% for sid, info in subnet_map.items() %}
                 <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
                 {% endfor %}
             </select>
-            <div class="form-hint">Hold Ctrl/Cmd to select multiple. Select "All Subnets" for unrestricted access.</div>
+            <div class="form-hint">Ctrl/Cmd+click for multiple. "All Subnets" = unrestricted.</div>
         </div>
-        <button type="submit" class="btn btn-primary">Add User</button>
+        <div class="form-group">
+            <label>Session Timeout (minutes)</label>
+            <input type="number" name="timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" style="width:100%;">
+            <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Add User</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('add-modal')">Cancel</button>
+        </div>
     </form>
 </div>
+</div>
 
-<div class="card">
-    <div class="card-header"><span class="card-title">Change My Password</span></div>
-    <form method="POST" action="/users/change-password">
-        <div class="form-group"><label>Current Password</label><input type="password" name="current_password" required></div>
-        <div class="form-group"><label>New Password</label><input type="password" name="new_password" required></div>
-        <div class="form-group"><label>Confirm Password</label><input type="password" name="confirm_password" required></div>
-        <button type="submit" class="btn btn-primary">Change Password</button>
+<!-- ── EDIT USER MODAL ────────────────────────────────────────────────── -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(520px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+        <h3 style="margin:0;">✏️ Edit User: <span id="edit-username-label" style="color:var(--primary);"></span></h3>
+        <button onclick="closeModal('edit-modal')" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+
+    <form id="edit-form" method="POST" action="">
+
+        <!-- Role -->
+        <div class="form-group">
+            <label>Role</label>
+            <select name="role" id="edit-role" onchange="toggleEditSubnets()" style="width:100%;">
+                <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
+                <option value="admin">🔧 Admin — manage assigned subnets</option>
+                <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
+            </select>
+        </div>
+
+        <!-- Subnet Access -->
+        <div class="form-group" id="edit-subnet-group">
+            <label>Subnet Access</label>
+            <select name="subnet_ids" id="edit-subnets" multiple style="width:100%;min-height:90px;">
+                <option value="all">All Subnets</option>
+                {% for sid, info in subnet_map.items() %}
+                <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                {% endfor %}
+            </select>
+            <div class="form-hint">Ctrl/Cmd+click for multiple. "All Subnets" = unrestricted.</div>
+        </div>
+
+        <!-- Timeout -->
+        <div class="form-group">
+            <label>Session Timeout (minutes)</label>
+            <input type="number" name="timeout" id="edit-timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" style="width:100%;">
+            <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
+        </div>
+
+        <hr style="border-color:var(--border);margin:18px 0;">
+
+        <!-- Password reset -->
+        <div style="margin-bottom:14px;">
+            <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Reset Password</label>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Leave blank to keep current password.</div>
+        </div>
+        <div class="form-group">
+            <label>New Password</label>
+            <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" style="width:100%;">
+        </div>
+        <div class="form-group">
+            <label>Confirm New Password</label>
+            <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" style="width:100%;">
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            <button type="button" class="btn btn-secondary" onclick="closeModal('edit-modal')">Cancel</button>
+        </div>
     </form>
-</div>
 
-<div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
-    <div style="font-weight:600;margin-bottom:8px;">Role Reference</div>
-    <div style="margin-bottom:6px;"><strong style="color:var(--text);">⭐ SuperAdmin</strong> — Full access to all subnets and all settings. Can manage users and assign roles. Cannot be subnet-restricted.</div>
-    <div style="margin-bottom:6px;"><strong style="color:var(--text);">🔧 Admin</strong> — Can create/edit/delete leases, reservations, and devices on their assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
-    <div><strong style="color:var(--text);">👁️ Viewer</strong> — Read-only access to their assigned subnets. Cannot access Settings or Database.</div>
-</div>
-</div>
+    <hr style="border-color:var(--border);margin:18px 0;">
 
+    <!-- MFA Reset -->
+    <div style="margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">MFA Management</label>
+    </div>
+    <div id="edit-mfa-status" style="font-size:13px;margin-bottom:10px;"></div>
+    <form id="reset-mfa-form" method="POST" action=""
+          onsubmit="return confirm('Reset MFA for this user? They will need to re-enroll on next login.')">
+        <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">🔐 Reset MFA Enrollment</button>
+    </form>
+
+    <hr style="border-color:var(--border);margin:18px 0;">
+
+    <!-- Delete -->
+    <div id="delete-section">
+        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--danger);">Danger Zone</label>
+        <div style="margin-top:10px;">
+            <form id="delete-form" method="POST" action=""
+                  onsubmit="return confirm('Delete this user? This cannot be undone.')">
+                <button type="submit" class="btn btn-danger">🗑️ Delete User</button>
+            </form>
+        </div>
+    </div>
+</div>
 </div>
 
 <script>
-function toggleSubnetSelect() {
-    var role = document.getElementById('new-user-role').value;
-    document.getElementById('new-user-subnets').style.display =
+var _subnetMap = {{ subnet_map | tojson }};
+
+function openAddModal() {
+    document.getElementById('add-modal').style.display = 'flex';
+    toggleAddSubnets();
+}
+
+function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSelf) {
+    document.getElementById('edit-username-label').textContent = username;
+    document.getElementById('edit-form').action = '/users/edit/' + id;
+    document.getElementById('reset-mfa-form').action = '/users/reset-mfa/' + id;
+    document.getElementById('delete-form').action = '/users/delete/' + id;
+
+    // Set role
+    document.getElementById('edit-role').value = role;
+    toggleEditSubnets();
+
+    // Set subnet selections
+    var sel = document.getElementById('edit-subnets');
+    for (var i = 0; i < sel.options.length; i++) {
+        var opt = sel.options[i];
+        if (!subnetIds) {
+            opt.selected = opt.value === 'all';
+        } else {
+            opt.selected = subnetIds.indexOf(parseInt(opt.value)) !== -1;
+        }
+    }
+
+    // Set timeout
+    var ti = document.getElementById('edit-timeout');
+    ti.value = timeout || '';
+
+    // MFA status
+    var mfaEl = document.getElementById('edit-mfa-status');
+    var mfaBtn = document.getElementById('reset-mfa-btn');
+    if (mfaEnrolled) {
+        mfaEl.innerHTML = '<span style="color:var(--success);">✓ MFA is enrolled.</span> Reset to force re-enrollment.';
+        mfaBtn.disabled = false;
+    } else {
+        mfaEl.innerHTML = '<span style="color:var(--text-muted);">MFA is not enrolled.</span>';
+        mfaBtn.disabled = true;
+    }
+
+    // Hide delete for self
+    document.getElementById('delete-section').style.display = isSelf ? 'none' : '';
+
+    // Disable role change for self
+    document.getElementById('edit-role').disabled = isSelf;
+
+    document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function closeModal(id) {
+    document.getElementById(id).style.display = 'none';
+    // Clear password fields on close
+    if (id === 'edit-modal') {
+        document.getElementById('edit-new-pw').value = '';
+        document.getElementById('edit-confirm-pw').value = '';
+    }
+}
+
+function toggleAddSubnets() {
+    var role = document.getElementById('add-role').value;
+    document.getElementById('add-subnet-group').style.display =
         role === 'superadmin' ? 'none' : '';
 }
-toggleSubnetSelect();
+
+function toggleEditSubnets() {
+    var role = document.getElementById('edit-role').value;
+    document.getElementById('edit-subnet-group').style.display =
+        role === 'superadmin' ? 'none' : '';
+}
+
+// Close modal on backdrop click
+['add-modal','edit-modal'].forEach(function(id) {
+    document.getElementById(id).addEventListener('click', function(e) {
+        if (e.target === this) closeModal(id);
+    });
+});
+
+// Close on Escape
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeModal('add-modal');
+        closeModal('edit-modal');
+    }
+});
 </script>
 {% endblock %}

@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.5.3"
+JEN_VERSION = "3.5.6"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -281,15 +281,6 @@ def create_app() -> Flask:
     return app
 
 
-def admin_required(f):
-    """Decorator — restricts route to admin users."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != "admin":
-            flash("Admin access required.", "error")
-            return redirect(url_for("dashboard.dashboard"))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def _register_blueprints(app: Flask) -> None:

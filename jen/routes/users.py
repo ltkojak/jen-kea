@@ -193,14 +193,17 @@ def add_user():
     username = request.form.get("username", "").strip()[:100]
     password = request.form.get("password", "")
     role = request.form.get("role", "viewer")
-    # Subnet access: None = all, list of ints = restricted
+    timeout_raw = request.form.get("timeout", "").strip()
     subnet_ids_raw = request.form.getlist("subnet_ids")
     subnet_access = None
-    if subnet_ids_raw and "all" not in subnet_ids_raw:
+    if subnet_ids_raw and "all" not in subnet_ids_raw and role != "superadmin":
         try:
             subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
         except Exception:
             subnet_access = None
+    timeout_val = None
+    if timeout_raw and timeout_raw.isdigit() and 1 <= int(timeout_raw) <= 1440:
+        timeout_val = int(timeout_raw)
 
     if not username:
         flash("Username is required.", "error")
@@ -218,8 +221,10 @@ def add_user():
     try:
         db = __db.get_jen_db()
         with db.cursor() as cur:
-            cur.execute("INSERT INTO users (username, password, role, subnet_access) VALUES (%s, %s, %s, %s)",
-                        (username, __user.hash_password(password), role, subnet_access))
+            cur.execute(
+                "INSERT INTO users (username, password, role, subnet_access, session_timeout) VALUES (%s, %s, %s, %s, %s)",
+                (username, __user.hash_password(password), role, subnet_access, timeout_val)
+            )
         db.commit()
         db.close()
         flash(f"User '{username}' created.", "success")
@@ -334,7 +339,7 @@ def change_password():
         __user.audit("CHANGE_PASSWORD", current_user.username, "Password changed")
     except Exception as e:
         flash(f"Error changing password: {str(e)}", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for('users.user_profile'))
 
 @bp.route("/users/set-timeout/<int:user_id>", methods=["POST"])
 @login_required
@@ -434,3 +439,120 @@ def set_user_subnets(user_id):
 # ─────────────────────────────────────────
 # Devices
 # ─────────────────────────────────────────
+
+@bp.route("/users/edit/<int:user_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+def edit_user(user_id):
+    """Unified edit endpoint — handles role, subnets, timeout, and optional password reset."""
+    import json as _json
+
+    role        = request.form.get("role", "viewer")
+    timeout_raw = request.form.get("timeout", "").strip()
+    new_pw      = request.form.get("new_password", "").strip()
+    confirm_pw  = request.form.get("confirm_password", "").strip()
+    subnet_ids_raw = request.form.getlist("subnet_ids")
+
+    # Validate role
+    if role not in ("superadmin", "admin", "viewer"):
+        flash("Invalid role.", "error")
+        return redirect(url_for('users.users'))
+
+    # Validate timeout
+    timeout_val = None
+    if timeout_raw:
+        if not timeout_raw.isdigit() or not (1 <= int(timeout_raw) <= 1440):
+            flash("Timeout must be 1–1440 minutes.", "error")
+            return redirect(url_for('users.users'))
+        timeout_val = int(timeout_raw)
+
+    # Validate password if provided
+    if new_pw:
+        if len(new_pw) < 8:
+            flash("New password must be at least 8 characters.", "error")
+            return redirect(url_for('users.users'))
+        if new_pw != confirm_pw:
+            flash("New passwords do not match.", "error")
+            return redirect(url_for('users.users'))
+
+    # Subnet access
+    if not subnet_ids_raw or "all" in subnet_ids_raw or role == "superadmin":
+        subnet_access = None
+    else:
+        try:
+            subnet_access = _json.dumps([int(s) for s in subnet_ids_raw if s.isdigit()])
+        except Exception:
+            subnet_access = None
+
+    try:
+        db = __db.get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                flash("User not found.", "error")
+                db.close()
+                return redirect(url_for('users.users'))
+
+            # Protect last superadmin from demotion
+            if row["role"] == "superadmin" and role != "superadmin":
+                if user_id == current_user.id:
+                    flash("You cannot demote your own SuperAdmin account.", "error")
+                    db.close()
+                    return redirect(url_for('users.users'))
+                cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
+                if cur.fetchone()["cnt"] <= 1:
+                    flash("Cannot demote the last SuperAdmin account.", "error")
+                    db.close()
+                    return redirect(url_for('users.users'))
+
+            # Apply all changes in one update
+            if new_pw:
+                cur.execute("""
+                    UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s, password=%s
+                    WHERE id=%s
+                """, (role, subnet_access, timeout_val, __user.hash_password(new_pw), user_id))
+                __user.audit("EDIT_USER", row["username"],
+                             f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val} password=reset")
+            else:
+                cur.execute("""
+                    UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s
+                    WHERE id=%s
+                """, (role, subnet_access, timeout_val, user_id))
+                __user.audit("EDIT_USER", row["username"],
+                             f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val}")
+
+        db.commit()
+        db.close()
+        session.pop("_user_cache", None)
+        flash(f"User '{row['username']}' updated.", "success")
+    except Exception as e:
+        flash(f"Error updating user: {str(e)}", "error")
+    return redirect(url_for('users.users'))
+
+
+@bp.route("/users/reset-mfa/<int:user_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+def reset_user_mfa(user_id):
+    """SuperAdmin wipes a user's MFA enrollment so they can re-enroll on next login."""
+    try:
+        db = __db.get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
+            row = cur.fetchone()
+            if not row:
+                flash("User not found.", "error")
+                db.close()
+                return redirect(url_for('users.users'))
+            cur.execute("UPDATE mfa_methods SET enabled=0 WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
+        db.commit()
+        db.close()
+        flash(f"MFA for '{row['username']}' has been reset. They will need to re-enroll.", "success")
+        __user.audit("RESET_MFA", row["username"],
+                     f"MFA reset by {current_user.username}")
+    except Exception as e:
+        flash(f"Error resetting MFA: {str(e)}", "error")
+    return redirect(url_for('users.users'))

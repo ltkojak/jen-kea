@@ -145,7 +145,7 @@ class TestUserManagement:
         """Setting session timeout clears _user_cache from session."""
         with logged_in_client.session_transaction() as sess:
             sess["_user_cache"] = {"id": 1, "username": "admin",
-                                   "role": "admin", "session_timeout": None}
+                                   "role": "superadmin", "session_timeout": None}
         logged_in_client.post("/users/set-timeout/1", data={"session_timeout": "30"})
         with logged_in_client.session_transaction() as sess:
             assert "_user_cache" not in sess

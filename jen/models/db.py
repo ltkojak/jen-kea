@@ -447,12 +447,23 @@ def init_jen_db() -> None:
         with db.cursor() as cur:
             cur.execute("SHOW COLUMNS FROM users LIKE 'password'")
             col = cur.fetchone()
-            if col and 'varchar(256)' in str(col.get('Type', '')).lower():
-                cur.execute(
-                    "ALTER TABLE users MODIFY COLUMN password VARCHAR(512) NOT NULL"
-                )
-                db.commit()
-                logger.info("Migration: widened users.password to VARCHAR(512)")
+            if col:
+                # Widen to TEXT if the column isn't already wide enough
+                # Matches varchar(any size < 512) and char types
+                col_type = str(col.get('Type', '')).lower()
+                needs_widen = False
+                import re as _re
+                m = _re.search(r'varchar\((\d+)\)', col_type)
+                if m and int(m.group(1)) < 512:
+                    needs_widen = True
+                elif 'char' in col_type and 'varchar' not in col_type:
+                    needs_widen = True
+                if needs_widen:
+                    cur.execute(
+                        "ALTER TABLE users MODIFY COLUMN password VARCHAR(512) NOT NULL"
+                    )
+                    db.commit()
+                    logger.info(f"Migration: widened users.password from {col_type} to VARCHAR(512)")
 
         # ── Migration 3.5.0: add superadmin role + subnet_access ───────────
         with db.cursor() as cur:

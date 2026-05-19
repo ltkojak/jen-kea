@@ -65,7 +65,7 @@ class TestLogin:
             cache = sess.get("_user_cache")
         assert cache is not None
         assert cache["username"] == "admin"
-        assert cache["role"] == "admin"
+        assert cache["role"] == "superadmin"
 
     def test_login_sets_last_active(self, client):
         """Successful login sets last_active in session."""

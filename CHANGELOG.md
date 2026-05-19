@@ -1,5 +1,62 @@
 # Changelog
 
+## [3.5.6] - 2026-05-19
+
+### Fix: "Data too long for column 'password'" on Password Reset
+
+Setting a user's password via the new edit modal failed with `(1406, "Data too long for column 'password' at row 1")`. The existing migration to widen the `password` column only matched `varchar(256)` exactly. If your installation had a different initial column size (e.g. `varchar(128)`, `varchar(255)`, or any other size under 512), the migration condition never matched and the column stayed narrow.
+
+werkzeug scrypt hashes are ~162 characters, so any column under 162 causes the error. The migration now parses the actual numeric width from `SHOW COLUMNS` and widens to `VARCHAR(512)` whenever the current width is less than 512, regardless of what the exact original size was.
+
+## [3.5.5] - 2026-05-19
+
+### Users Page — Redesigned with Edit Modal
+
+The user management page was redesigned from a cluttered inline-form table to a clean read-only table with a proper edit modal.
+
+**What changed:**
+
+**Clean table view.** Each row shows Username, Role badge, Subnet access summary, MFA status, and Timeout as read-only values. No inline forms in the table cells.
+
+**Edit button per row.** Opens a modal with all editable fields in one place: role, subnet access, session timeout, password reset, MFA reset, and delete. The modal pre-populates with the user's current values.
+
+**Password reset.** SuperAdmins can now set a new password for any user from the edit modal. Leave the password fields blank to keep the existing password.
+
+**MFA reset.** SuperAdmins can wipe a user's MFA enrollment (methods, backup codes, and trusted devices) from the edit modal. The user will be prompted to re-enroll on next login. The button is disabled if the user has no MFA enrolled.
+
+**"+ Add User" button** in the page header opens a modal — no more right-panel form that competed with the table. The add modal includes username, password, role, subnet access, and session timeout.
+
+**"Change my password" removed** from this page. It lives on the user's own profile page — no reason to have it in two places.
+
+**Unified edit route.** New `POST /users/edit/<id>` handles role + subnets + timeout + optional password in a single form submission. The old `set-role`, `set-subnets`, and `set-timeout` routes still exist for backward compatibility.
+
+**New route:** `POST /users/reset-mfa/<id>` — SuperAdmin only. Disables all MFA methods, deletes backup codes, and deletes trusted devices for the specified user.
+
+## [3.5.4] - 2026-05-19
+
+### Full End-to-End Audit — Two Fixes
+
+Complete audit covering Python syntax (34 files), template syntax (41 files), version string consistency (7 locations), security (SQL injection, open redirect, hardcoded secrets, debug mode, file upload path traversal), permission matrix enforcement, subnet filter coverage, HTMX partials, blueprint registration, DB schema, session cache completeness, and installer integrity.
+
+**🔴 Fix — Stale `admin_required` in `jen/__init__.py`:** A dead `admin_required` decorator from before the shared `access.py` module existed was still sitting in `__init__.py` with the old `role != "admin"` check. It wasn't imported or called by anything (confirmed by grep), so it posed no runtime risk — but it was misleading and would confuse anyone reading the code. Removed.
+
+**🔴 Fix — Test suite uses old `'admin'` role:** The test fixtures in `conftest.py`, `test_auth.py`, `test_users.py`, and `test_reservations.py` were still creating and asserting on `role='admin'` — which no longer exists as the top-level admin role since 3.5.0 promoted all `admin` accounts to `superadmin`. Tests would fail if run. Updated all test role references to `'superadmin'`.
+
+**🟢 All other checks clean:**
+- All 34 Python files and 41 templates parse without errors
+- All 7 version strings consistent at 3.5.4
+- No unprotected routes (all have `@login_required` or intentional public access)
+- All f-string SQL values are hardcoded or `int()`-cast from settings — no user-controlled interpolation
+- Open redirect on `?next=` correctly validates against `://` and `//` prefixes
+- No hardcoded credentials or secrets
+- Flask debug mode not enabled in production path
+- File uploads (favicon, SVG icon, nav logo) all save to hardcoded paths; `icon_name` validated as alphanumeric-only before use in path
+- All 7 data routes confirmed applying `filter_subnet_map()` or `add_subnet_restriction()`
+- SuperAdmin-only decorator used exclusively in `users.py` — correct
+- `subnet_access` included in both the DB query and session cache on login and load_user
+- Scheduled backup `gzip.decompress` fix from 3.5.3 confirmed in place
+- nav endpoint lists consistent (the extra `api.api_keys` count is from the section-tab active-state check on the API Keys tab itself — correct)
+
 ## [3.5.3] - 2026-05-19
 
 ### Scheduled Database Backups — Silent Failure Fix
