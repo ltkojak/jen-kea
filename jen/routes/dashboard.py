@@ -157,8 +157,8 @@ def api_saved_searches():
 def save_dashboard_prefs():
     import json
     widgets = request.json.get("widgets", ["subnet_stats", "recent_leases"])
-    valid = {"subnet_stats", "recent_leases", "top_devices", "alert_summary",
-             "server_status", "lease_history_chart", "totals"}
+    valid = {"subnet_stats", "recent_leases", "top_devices", "lease_sparklines",
+             "alert_summary", "server_status", "lease_history_chart", "totals"}
     widgets = [w for w in widgets if w in valid]
     if not widgets:
         widgets = ["subnet_stats", "totals", "recent_leases", "server_status"]
@@ -333,9 +333,72 @@ def api_lease_history():
         return jsonify({"history": {}, "error": str(e)})
 
 
-@bp.route("/api/alert-summary")
+@bp.route("/api/top-devices")
 @login_required
-def api_alert_summary():
+def api_top_devices():
+    """
+    Top 10 devices by lease activity in the last 30 days.
+    Activity = number of distinct lease records seen in lease_history window.
+    Falls back to most-recently-seen devices from the devices table.
+    """
+    try:
+        accessible = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+        accessible_ids = list(accessible.keys())
+
+        db = __db.get_jen_db()
+        kdb = __db.get_kea_db()
+        devices = []
+
+        with db.cursor() as cur:
+            if not accessible_ids:
+                return jsonify({"devices": []})
+            placeholders = ",".join(["%s"] * len(accessible_ids))
+            # Top devices by how recently active and how many times seen
+            cur.execute(f"""
+                SELECT d.mac, d.device_name, d.last_hostname,
+                       d.last_ip, d.last_subnet_id, d.last_seen,
+                       COALESCE(d.manufacturer_override, d.manufacturer) AS manufacturer,
+                       COALESCE(d.device_type_override, d.device_type) AS device_type,
+                       COALESCE(d.device_icon_override, d.device_icon) AS device_icon,
+                       DATEDIFF(NOW(), d.last_seen) AS days_inactive
+                FROM devices d
+                WHERE d.last_subnet_id IN ({placeholders})
+                  AND d.last_seen >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                ORDER BY d.last_seen DESC
+                LIMIT 10
+            """, accessible_ids)
+            rows = cur.fetchall()
+
+        with kdb.cursor() as kcur:
+            for row in rows:
+                mac_hex = row["mac"].replace(":", "")
+                kcur.execute(
+                    "SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s",
+                    (mac_hex,)
+                )
+                has_reservation = bool(kcur.fetchone())
+                subnet_name = accessible.get(row["last_subnet_id"], {}).get("name", "")
+                devices.append({
+                    "mac":             row["mac"],
+                    "name":            row["device_name"] or row["last_hostname"] or row["mac"],
+                    "hostname":        row["last_hostname"] or "",
+                    "ip":              row["last_ip"] or "",
+                    "subnet":          subnet_name,
+                    "manufacturer":    row["manufacturer"] or "",
+                    "device_type":     row["device_type"] or "",
+                    "device_icon":     row["device_icon"] or "",
+                    "last_seen":       row["last_seen"].isoformat() if row["last_seen"] else "",
+                    "days_inactive":   row["days_inactive"] or 0,
+                    "has_reservation": has_reservation,
+                })
+        db.close()
+        kdb.close()
+        return jsonify({"devices": devices})
+    except Exception as e:
+        return jsonify({"devices": [], "error": str(e)})
+
+
+
     """Recent alerts for the dashboard alert summary widget."""
     try:
         db = __db.get_jen_db()

@@ -1,5 +1,29 @@
 # Changelog
 
+## [3.5.7] - 2026-05-19
+
+### Notification Channels + Dashboard Widgets
+
+**Notification Channels**
+
+**Pushover support added.** Pushover ($5 one-time per platform) is now a supported alert channel — enter your User Key and Application API Token in the channel config. The first line of the alert message is used as the push notification title, the rest as the body.
+
+**Multiple simultaneous channels now work.** The "Add Channel" modal was disabling the channel type selector whenever any channel already existed, making it impossible to add a second channel through the UI. The backend has always supported multiple active channels (it iterates all enabled channels and fires each one). The UI restriction is removed — you can now configure any number of channels simultaneously. For example: ntfy.sh for phone notifications AND Telegram for a group chat.
+
+New channels in this release: Pushover (📲). Existing channels unaffected: Telegram, Slack, ntfy.sh, Discord, Generic Webhook, Email/SMTP.
+
+Test button available per channel (always was, now works across all channel types including Pushover).
+
+**Dashboard Widgets**
+
+Two new optional dashboard widgets — both off by default. Enable them via the ✨ Customize button.
+
+**📈 Lease Sparklines per Subnet (30 days)** — One SVG sparkline card per subnet showing the hourly active lease count trend over the last 30 days. Each card shows the subnet name, CIDR, current active count, and the trend delta (e.g. +3 or -2 vs 30 days ago). Uses the existing `/api/lease-history?days=30` endpoint — no new DB queries. Requires at least one day of lease history snapshots to display data (snapshots are taken every 30 minutes by the background thread).
+
+**📱 Top Active Devices (30 days)** — Table of the 10 most recently active devices on your accessible subnets in the last 30 days. Shows device name/hostname, IP, subnet, last seen timestamp, and manufacturer. Reserved devices are badged with 📌. Respects subnet access control — restricted users only see devices on their assigned subnets. Powered by new `/api/top-devices` endpoint.
+
+**New API endpoint:** `GET /api/top-devices` — returns top 10 recently active devices filtered by the current user's subnet access.
+
 ## [3.5.6] - 2026-05-19
 
 ### Fix: "Data too long for column 'password'" on Password Reset

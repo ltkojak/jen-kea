@@ -57,6 +57,7 @@ var JEN_CHANNELS = {
                     {% elif ch.channel_type == 'slack' %}💬
                     {% elif ch.channel_type == 'discord' %}🎮
                     {% elif ch.channel_type == 'ntfy' %}🔔
+                    {% elif ch.channel_type == 'pushover' %}📲
                     {% elif ch.channel_type == 'webhook' %}🔗
                     {% else %}📣
                     {% endif %}
@@ -142,12 +143,13 @@ var JEN_CHANNELS = {
             <div class="form-row">
                 <div class="form-group">
                     <label>Channel Type</label>
-                    <select name="channel_type" id="channelType" onchange="showChannelFields(this.value)" {% if channels %}disabled{% endif %}>
+                    <select name="channel_type" id="channelType" onchange="showChannelFields(this.value)">
                         <option value="telegram">📱 Telegram</option>
                         <option value="email">📧 Email (SMTP)</option>
                         <option value="slack">💬 Slack Webhook</option>
                         <option value="discord">🎮 Discord Webhook</option>
                         <option value="ntfy">🔔 ntfy</option>
+                        <option value="pushover">📲 Pushover</option>
                         <option value="webhook">🔗 Generic Webhook</option>
                     </select>
                 </div>
@@ -289,6 +291,26 @@ var JEN_CHANNELS = {
                 </div>
             </div>
 
+
+            <!-- Pushover fields -->
+            <div id="fields-pushover" style="display:none;">
+                <div class="alert" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text-muted);margin-bottom:12px;">
+                    Pushover requires a <strong>Pushover account</strong> ($5 one-time per platform). Get your User Key from <a href="https://pushover.net" target="_blank" style="color:var(--primary);">pushover.net</a>, then create an Application to get an API Token.
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>User Key</label>
+                        <input type="text" name="pushover_user_key" placeholder="Your Pushover user key">
+                        <div class="form-hint">Found on your Pushover dashboard</div>
+                    </div>
+                    <div class="form-group">
+                        <label>API Token</label>
+                        <input type="password" name="pushover_api_token" placeholder="Application API token">
+                        <div class="form-hint">Create an Application at pushover.net to get this</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Alert types -->
             <div class="form-group" style="margin-top:16px;">
                 <label>Alert Types to Send</label>
@@ -360,7 +382,7 @@ var JEN_CHANNELS = {
 const ALERT_TYPE_LABELS = {{ alert_type_labels | tojson }};
 
 function showChannelFields(type) {
-    ['telegram','email','slack','webhook','ntfy','discord'].forEach(t => {
+    ['telegram','email','slack','webhook','ntfy','pushover','discord'].forEach(t => {
         const el = document.getElementById('fields-' + t);
         if (el) el.style.display = t === type ? 'block' : 'none';
     });
@@ -421,6 +443,9 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes) {
         const u = document.querySelector('[name=ntfy_url]'); if(u) u.value = cfg.url || 'https://ntfy.sh';
         const t = document.querySelector('[name=ntfy_topic]'); if(t) t.value = cfg.topic || '';
         const p = document.querySelector('[name=ntfy_priority]'); if(p) p.value = cfg.priority || 'default';
+    } else if (ctype === 'pushover') {
+        const pk = document.querySelector('[name=pushover_user_key]'); if(pk) pk.value = cfg.user_key || '';
+        const pt = document.querySelector('[name=pushover_api_token]'); if(pt) pt.value = cfg.api_token || '';
     } else if (ctype === 'discord') {
         const d = document.querySelector('[name=discord_webhook]'); if(d) d.value = cfg.webhook_url || '';
     } else if (ctype === 'email') {

@@ -175,6 +175,8 @@ def send_alert(alert_type, log_result=True, **kwargs):
                 ok = _send_webhook_channel(message, alert_type, config)
             elif ctype == "ntfy":
                 ok = _send_ntfy_channel(message, config)
+            elif ctype == "pushover":
+                ok = _send_pushover_channel(message, config)
             elif ctype == "discord":
                 ok = _send_discord_channel(message, config)
         except Exception as e:
@@ -297,6 +299,35 @@ def _send_ntfy_channel(message, config):
                          headers=headers, timeout=10)
     if resp.status_code not in (200, 201, 204):
         raise Exception(f"ntfy error: HTTP {resp.status_code} — {resp.text[:200]}")
+    return True
+
+
+def _send_pushover_channel(message, config):
+    """Send alert via Pushover."""
+    import re
+    user_key = config.get("user_key", "")
+    api_token = config.get("api_token", "")
+    if not user_key or not api_token:
+        raise Exception("Pushover user key and API token are required")
+    plain = re.sub(r'<[^>]+>', '', message).strip()
+    # Use first line as title, rest as message
+    lines = plain.split('\n', 1)
+    title = lines[0].strip() if lines else "Jen Alert"
+    body  = lines[1].strip() if len(lines) > 1 else plain
+    resp = requests.post(
+        "https://api.pushover.net/1/messages.json",
+        data={
+            "token":   api_token,
+            "user":    user_key,
+            "title":   title,
+            "message": body,
+            "html":    1,
+        },
+        timeout=10
+    )
+    data = resp.json()
+    if data.get("status") != 1:
+        raise Exception(f"Pushover error: {data.get('errors', resp.text)}")
     return True
 
 def _send_discord_channel(message, config):

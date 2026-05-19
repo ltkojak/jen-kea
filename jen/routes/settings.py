@@ -271,6 +271,24 @@ def save_alert_channel():
             "token": request.form.get("ntfy_token", "").strip(),
             "priority": request.form.get("ntfy_priority", "default").strip(),
         }
+    elif channel_type == "pushover":
+        config = {
+            "user_key":  request.form.get("pushover_user_key", "").strip(),
+            "api_token": request.form.get("pushover_api_token", "").strip(),
+        }
+        # Don't overwrite api_token if blank (treat like smtp_pass)
+        if channel_id and not config["api_token"]:
+            try:
+                db = __db.get_jen_db()
+                with db.cursor() as cur:
+                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
+                    row = cur.fetchone()
+                    if row:
+                        existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+                        config["api_token"] = existing.get("api_token", "")
+                db.close()
+            except Exception:
+                pass
     elif channel_type == "discord":
         config = {
             "webhook_url": request.form.get("discord_webhook", "").strip(),

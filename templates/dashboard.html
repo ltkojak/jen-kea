@@ -31,6 +31,8 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-subnet_stats"> Subnet Statistics</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-totals"> Total Summary</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-lease_history_chart"> Utilization History (7 days)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-lease_sparklines"> Lease Sparklines per Subnet (30 days)</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-top_devices"> Top Active Devices (30 days)</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-recent_leases"> Recently Issued Leases</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-server_status"> Server Status</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
@@ -115,6 +117,31 @@
         <p id="history-loading" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading history...</p>
         <p id="history-empty" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;display:none;">No history yet — data is collected every 30 minutes.</p>
     </div>
+</div>
+
+<!-- Lease sparklines per subnet — 30-day view, optional widget off by default -->
+<div id="dash-lease_sparklines" style="display:none;">
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">📈 Lease Trends — 30 Days</span>
+        <span style="font-size:11px;color:var(--text-muted);">Active leases per subnet, hourly snapshots</span>
+    </div>
+    <div id="sparklines-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:4px 0;">
+        <p id="sparklines-loading" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;grid-column:1/-1;">Loading...</p>
+    </div>
+</div>
+</div>
+
+<!-- Top active devices — 30-day, optional widget off by default -->
+<div id="dash-top_devices" style="display:none;">
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">📱 Top Active Devices <span style="font-size:11px;font-weight:400;color:var(--text-muted);">— last 30 days</span></span>
+    </div>
+    <div id="top-devices-container">
+        <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading...</p>
+    </div>
+</div>
 </div>
 
 <!-- Recently issued leases widget -->
@@ -313,6 +340,107 @@ function drawSparkline(canvasId, points, _unused, _attempt) {
     ctx.fill();
 }
 
+// ── Lease Sparklines — 30-day per subnet ─────────────────────────────────────
+function loadSparklines() {
+    var container = document.getElementById('sparklines-container');
+    if (!container) return;
+    fetch('/api/lease-history?days=30')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var loading = document.getElementById('sparklines-loading');
+            if (loading) loading.remove();
+            var history = data.history || {};
+            var subnetMap = {{ subnet_map | tojson }};
+            var hasData = false;
+            Object.keys(subnetMap).forEach(function(sid) {
+                var info = subnetMap[sid];
+                var points = (history[sid] || []).map(function(p) { return p.a; });
+                if (!points.length) return;
+                hasData = true;
+                var max = Math.max.apply(null, points) || 1;
+                var w = 220, h = 48, pad = 2;
+                var xs = points.map(function(_, i) {
+                    return pad + (i / Math.max(points.length - 1, 1)) * (w - pad * 2);
+                });
+                var ys = points.map(function(v) {
+                    return h - pad - (v / max) * (h - pad * 2);
+                });
+                var polyline = xs.map(function(x, i) { return x + ',' + ys[i]; }).join(' ');
+                var current = points[points.length - 1] || 0;
+                var first   = points[0] || 0;
+                var trend   = current - first;
+                var trendStr   = trend > 0 ? '+' + trend : (trend < 0 ? '' + trend : '→');
+                var trendColor = trend > 0 ? 'var(--warning)' : (trend < 0 ? 'var(--success)' : 'var(--text-muted)');
+                var card = document.createElement('div');
+                card.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;';
+                card.innerHTML =
+                    '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">'
+                    + '<span style="font-size:12px;font-weight:600;">' + (info.name || sid) + '</span>'
+                    + '<span style="font-size:11px;color:var(--text-muted);">' + info.cidr + '</span>'
+                    + '</div>'
+                    + '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;display:block;">'
+                    + '<polyline points="' + polyline + '" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
+                    + '</svg>'
+                    + '<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text-muted);">'
+                    + '<span>30d ago</span>'
+                    + '<span style="color:var(--text);font-weight:600;">' + current + ' active now</span>'
+                    + '<span style="color:' + trendColor + ';">' + trendStr + ' trend</span>'
+                    + '</div>';
+                container.appendChild(card);
+            });
+            if (!hasData) {
+                container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;grid-column:1/-1;">No history yet — snapshots are collected every 30 minutes.</p>';
+            }
+        })
+        .catch(function() {
+            var el = document.getElementById('sparklines-loading');
+            if (el) el.textContent = 'Could not load sparkline data.';
+        });
+}
+
+// ── Top Active Devices — 30 days ──────────────────────────────────────────────
+function loadTopDevices() {
+    var container = document.getElementById('top-devices-container');
+    if (!container) return;
+    fetch('/api/top-devices')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var devices = data.devices || [];
+            if (!devices.length) {
+                container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No device activity recorded in the last 30 days.</p>';
+                return;
+            }
+            var html = '<div class="table-wrap"><table style="width:100%;font-size:12px;"><thead><tr>'
+                + '<th>Device</th><th>IP</th><th>Subnet</th><th>Last Seen</th><th>Manufacturer</th>'
+                + '</tr></thead><tbody>';
+            devices.forEach(function(d) {
+                var icon = d.device_icon ? '<span style="margin-right:4px;">' + d.device_icon + '</span>' : '';
+                var name = d.name || d.mac;
+                var badge = d.has_reservation
+                    ? '<span class="badge badge-reserved" style="font-size:10px;margin-left:4px;padding:1px 5px;">📌</span>'
+                    : '';
+                var lastSeen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
+                var mfr = d.manufacturer ? '<span style="color:var(--text-muted);">' + d.manufacturer + '</span>' : '—';
+                html += '<tr>'
+                    + '<td><strong>' + icon + name + '</strong>' + badge
+                    + (d.hostname && d.hostname !== name
+                        ? '<br><span style="color:var(--text-muted);font-size:10px;font-family:monospace;">' + d.hostname + '</span>'
+                        : '')
+                    + '</td>'
+                    + '<td class="mono" style="color:var(--primary);">' + (d.ip || '—') + '</td>'
+                    + '<td>' + (d.subnet || '—') + '</td>'
+                    + '<td style="color:var(--text-muted);white-space:nowrap;">' + lastSeen + '</td>'
+                    + '<td>' + mfr + '</td>'
+                    + '</tr>';
+            });
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        })
+        .catch(function() {
+            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Could not load device data.</p>';
+        });
+}
+
 // ── History charts ────────────────────────────────────────────────────────────
 function loadHistory() {
     var days = document.getElementById('history-days');
@@ -509,7 +637,7 @@ function updateStats() {
 }
 
 // ── Dashboard preferences ─────────────────────────────────────────────────────
-var ALL_WIDGETS = ['subnet_stats','totals','lease_history_chart','recent_leases','server_status','alert_summary'];
+var ALL_WIDGETS = ['subnet_stats','totals','lease_history_chart','lease_sparklines','top_devices','recent_leases','server_status','alert_summary'];
 
 function toggleCustomize() {
     var p = document.getElementById('dash-customize');
@@ -525,6 +653,8 @@ function applyDashPrefs(widgets) {
     });
     // Load data for newly visible widgets
     if (widgets.includes('lease_history_chart')) loadHistory();
+    if (widgets.includes('lease_sparklines'))    loadSparklines();
+    if (widgets.includes('top_devices'))         loadTopDevices();
     if (widgets.includes('alert_summary'))       loadAlertSummary();
 }
 
