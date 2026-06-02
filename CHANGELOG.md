@@ -1,5 +1,77 @@
 # Changelog
 
+## [3.5.16] - 2026-06-02
+
+### Dashboard — Uniform Widget Spacing
+
+The gaps between widget sections were inconsistent — the space between the subnet cards and the totals bar was 16px (from the flex gap) but the gaps below were ~32px because `.card` elements have a global `margin-bottom: 16px` that was stacking on top of the flex gap. Added a CSS rule to zero out `margin-bottom` on elements inside `#dash-widgets` so only the flex `gap: 16px` controls spacing, making all inter-widget gaps identical.
+
+## [3.5.15] - 2026-06-02
+
+### Dashboard — Consistent Gap Between All Widget Sections
+
+Previous attempts only addressed the gap between the three subnet cards within the stat-grid, not the space between the separate widget sections (subnet cards → totals → recently issued leases → server status → alert summary). Each widget was a bare div with no margin, so they all ran together.
+
+Fixed by wrapping all dashboard widgets in a single `display:flex; flex-direction:column; gap:16px` container. This applies a consistent 16px gap between every widget section uniformly — the subnet card grid, totals bar, recent leases, server status, and alert summary all sit visually separated from each other. Removed the now-redundant `margin-bottom` from `.stat-grid` since the flex gap handles all inter-widget spacing.
+
+## [3.5.14] - 2026-06-02
+
+### Dashboard — Fix Card Spacing (Revert 3.5.13 Mistake)
+
+3.5.13 added padding inside the cards instead of space between them, making each card taller and reintroducing the scrollbar. Reverted card padding to original 20px. Gap between cards stays at 20px (up from 16px) which is what actually creates visible separation between them. Container padding reduced from 24px to 20px uniform to recover the vertical space the extra gap consumed.
+
+## [3.5.13] - 2026-06-02
+
+### Dashboard — More Breathing Room Between Subnet Cards
+
+Increased the gap between subnet cards from 16px to 20px, and the internal card padding from `20px` to `22px 24px` (slightly more horizontal). Cards no longer look pressed together on a wide screen with all three subnets visible.
+
+## [3.5.12] - 2026-06-02
+
+### Dashboard — Subnet Card Layout Fix
+
+The dashboard subnet cards were squishing the gateway and DNS rows because the grid minimum column width (280px) was too narrow once the extra row was added. Increased `minmax(280px, 1fr)` to `minmax(340px, 1fr)` so each card has enough room before the grid reflows to fewer columns. Also added `word-break: break-all` and a space-after-comma formatter on DNS values so `9.9.9.9,149.112.112.112` displays as `9.9.9.9, 149.112.112.112` and wraps cleanly if the card is narrow.
+
+## [3.5.11] - 2026-06-02
+
+### Fix: DNS/Gateway missing from Subnets page + Dashboard scroll trim
+
+**Subnets page — DNS and Gateway not showing:** The `kea_subnets` dict built in the subnets list route was parsing timers and pools from Kea config but never parsing `option-data`. So `routers` and `dns_servers` were always empty strings even though the data was there. Fixed by adding the same `option-data` loop that `_get_subnet_kea_data()` (used by the edit page) already had. The dashboard was getting the data correctly via its own config-get enrichment added in 3.5.10 — the subnets page was the only place missing it.
+
+**Dashboard scroll:** The page content was just barely tall enough to trigger a scrollbar with nothing extra to see. Reduced container bottom padding from 24px to 8px, and added `margin-bottom: 0` overrides for the last `.stat-grid` and last `.card` on any page so trailing whitespace doesn't accumulate. The dashboard now fits cleanly without a scrollbar in its default widget configuration.
+
+## [3.5.10] - 2026-06-02
+
+### Subnets — Show Router and DNS Servers (Dashboard + Subnets Page)
+
+Both the dashboard subnet cards and the Network → Subnets page now display the Router/Gateway and DNS Servers for each subnet.
+
+**Dashboard:** Each subnet card now shows a Gateway and DNS row below the pool utilisation bar. The values are fetched from Kea config on page load (same `config-get` call the subnets page uses) and rendered server-side — no extra API round trips. If Kea is unreachable the cards render cleanly without the section.
+
+**Subnets page:** Same information added below the Address Pools section on each card. DNS entries are shown as individual monospace badges (one per server). Gateway shown as a single badge.
+
+Both displays are hidden entirely if a subnet has no router or DNS configured in Kea — clean cards for subnets that don't have those options set.
+
+## [3.5.9] - 2026-06-02
+
+### Edit Subnet — iOS Fix + Current Value Display
+
+**iOS / iPad — Apply & Restart button did nothing:** The form used `onsubmit="return confirm('...')"` which calls the browser's native confirm dialog. iOS Safari suppresses native dialogs in certain WebKit contexts (PWA mode, home screen apps, some embedded views). The dialog fires, iOS blocks it, `confirm()` returns false, and the form never submits — silently.
+
+Fixed by replacing the native dialog with an in-page confirmation panel. Clicking "Apply & Restart Kea" now slides open a panel below the form showing a summary of what will change — no dialog, no popup. Two buttons: "Yes, apply and restart" and "Cancel". Works on iOS, iPad, and desktop.
+
+**Current value always visible:** Each field now shows its current Kea value in the hint text below the input. If a value is not set in the Kea config the hint shows a yellow "Not currently set in Kea config" warning. This makes it immediately obvious when a field (like DNS servers) has never been configured through Kea.
+
+**Change summary before confirming:** The confirmation panel shows a diff of what will actually change — old value struck through, new value highlighted. If no fields were modified it says so rather than submitting a no-op restart.
+
+## [3.5.8] - 2026-05-19
+
+### Fix: Alert Summary Widget "Could not load alerts"
+
+The dashboard Alert Summary widget showed "Could not load alerts" on every page load. The `/api/alert-summary` endpoint was returning 404 — it had no route registered.
+
+When the `api_top_devices` function was inserted into `dashboard.py` in 3.5.7, the str_replace operation accidentally ate the `@bp.route("/api/alert-summary")` decorator and `def api_alert_summary():` line from the function immediately following it. The docstring and body survived intact but the function was unreachable — Flask never registered the route. Fixed by restoring the two missing lines.
+
 ## [3.5.7] - 2026-05-19
 
 ### Notification Channels + Dashboard Widgets

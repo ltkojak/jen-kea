@@ -78,6 +78,24 @@ function saveNote(id) {
         <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;margin-right:6px;">{{ pool }}</span>
         {% endfor %}
     </div>
+    {% if s.routers or s.dns_servers %}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px;">
+        {% if s.routers %}
+        <div>
+            <div class="stat-label" style="margin-bottom:4px;">Router / Gateway</div>
+            <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;">{{ s.routers }}</span>
+        </div>
+        {% endif %}
+        {% if s.dns_servers %}
+        <div>
+            <div class="stat-label" style="margin-bottom:4px;">DNS Servers</div>
+            {% for dns in s.dns_servers.split(',') %}
+            <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;margin-right:4px;margin-bottom:4px;">{{ dns.strip() }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
     {% if s.options %}
     <div>
         <div class="stat-label" style="margin-bottom:8px;">Scope Options</div>

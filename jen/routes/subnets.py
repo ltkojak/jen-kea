@@ -68,11 +68,20 @@ def subnets():
                     pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)
                     if pool_str:
                         pools.append(pool_str)
+                routers = ""
+                dns_servers = ""
+                for opt in s.get("option-data", []):
+                    if opt.get("name") == "routers":
+                        routers = opt.get("data", "")
+                    elif opt.get("name") == "domain-name-servers":
+                        dns_servers = opt.get("data", "")
                 kea_subnets[s["id"]] = {
                     "valid_lifetime": s.get("valid-lifetime", global_lifetime),
                     "renew_timer": s.get("renew-timer", global_renew),
                     "rebind_timer": s.get("rebind-timer", global_rebind),
                     "pools": pools,
+                    "routers": routers,
+                    "dns_servers": dns_servers,
                 }
     except Exception:
         pass
@@ -96,6 +105,8 @@ def subnets():
                     "renew_timer": kea.get("renew_timer", 0),
                     "rebind_timer": kea.get("rebind_timer", 0),
                     "pools": kea.get("pools", []),
+                    "routers": kea.get("routers", ""),
+                    "dns_servers": kea.get("dns_servers", ""),
                 })
         db.close()
     except Exception as e:

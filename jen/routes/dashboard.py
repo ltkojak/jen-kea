@@ -65,9 +65,32 @@ def dashboard():
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     stats = {
         sid: {"active": "…", "dynamic": "…", "reservations": "…",
-              "name": info["name"], "cidr": info["cidr"]}
+              "name": info["name"], "cidr": info["cidr"],
+              "routers": "", "dns_servers": ""}
         for sid, info in accessible_subnet_map.items()
     }
+
+    # Enrich with routers + DNS from Kea config (static values, render server-side)
+    try:
+        kea_cfg = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        kea_subnets = {}
+        if isinstance(kea_cfg, dict) and kea_cfg.get("result") == 0:
+            for s in kea_cfg.get("arguments", {}).get("Dhcp4", {}).get("subnet4", []):
+                sid = s.get("id")
+                routers = ""
+                dns_servers = ""
+                for opt in s.get("option-data", []):
+                    if opt.get("name") == "routers":
+                        routers = opt.get("data", "")
+                    elif opt.get("name") == "domain-name-servers":
+                        dns_servers = opt.get("data", "")
+                kea_subnets[sid] = {"routers": routers, "dns_servers": dns_servers}
+        for sid in stats:
+            if sid in kea_subnets:
+                stats[sid]["routers"]     = kea_subnets[sid]["routers"]
+                stats[sid]["dns_servers"] = kea_subnets[sid]["dns_servers"]
+    except Exception:
+        pass  # Non-fatal — cards still render without gateway/DNS
 
     server_statuses = [
         {"server": s, "up": None, "ha_state": None, "ha_partner": None, "version": ""}
@@ -398,7 +421,9 @@ def api_top_devices():
         return jsonify({"devices": [], "error": str(e)})
 
 
-
+@bp.route("/api/alert-summary")
+@login_required
+def api_alert_summary():
     """Recent alerts for the dashboard alert summary widget."""
     try:
         db = __db.get_jen_db()

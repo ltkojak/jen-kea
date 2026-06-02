@@ -6,58 +6,187 @@
     <p>{{ subnet.name }} — {{ subnet.subnet }}</p>
 </div>
 
-<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop. Leave any field blank to keep its current value unchanged.</div>
+<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop. <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
 
-<div class="card" style="max-width:640px;">
-    <form method="POST" onsubmit="return confirm('Apply changes and restart Kea DHCP?')">
+<div class="card" style="max-width:680px;">
+    <form method="POST" id="edit-subnet-form" onsubmit="return false;">
 
+        <!-- Address Pool -->
         <div class="form-group">
             <label>Address Pool</label>
-            <input type="text" name="pool" value="{{ kea.pool_str }}"
-                   placeholder="x.x.x.1-x.x.x.250" style="font-family:monospace;">
-            <div class="form-hint">Format: start–end &nbsp;·&nbsp; Leave blank to keep current value</div>
+            <input type="text" name="pool" id="f-pool"
+                   value="{{ kea.pool_str }}"
+                   placeholder="x.x.x.1–x.x.x.250" style="font-family:monospace;">
+            {% if kea.pool_str %}
+            <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.pool_str }}</code> &nbsp;·&nbsp; Format: start–end</div>
+            {% else %}
+            <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Format: start–end</div>
+            {% endif %}
         </div>
 
+        <!-- Timers -->
         <div class="form-row">
             <div class="form-group">
                 <label>Valid Lifetime (seconds)</label>
-                <input type="number" name="valid_lifetime" value="{{ kea.valid_lifetime }}"
-                       placeholder="e.g. 86400" min="60">
-                <div class="form-hint">86400 = 1 day &nbsp;·&nbsp; 604800 = 7 days</div>
+                <input type="number" name="valid_lifetime" id="f-lifetime"
+                       value="{{ kea.valid_lifetime }}" placeholder="e.g. 86400" min="60">
+                {% if kea.valid_lifetime %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.valid_lifetime }}</code> ({{ (kea.valid_lifetime | int / 86400) | round(1) }} days)</div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                {% endif %}
             </div>
             <div class="form-group">
                 <label>Renew Timer / T1 (seconds)</label>
-                <input type="number" name="renew_timer" value="{{ kea.renew_timer }}"
-                       placeholder="e.g. 43200" min="0">
-                <div class="form-hint">Typically ½ of valid lifetime</div>
+                <input type="number" name="renew_timer" id="f-renew"
+                       value="{{ kea.renew_timer }}" placeholder="e.g. 43200" min="0">
+                {% if kea.renew_timer %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.renew_timer }}</code> &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
+                {% endif %}
             </div>
             <div class="form-group">
                 <label>Rebind Timer / T2 (seconds)</label>
-                <input type="number" name="rebind_timer" value="{{ kea.rebind_timer }}"
-                       placeholder="e.g. 75600" min="0">
-                <div class="form-hint">Typically ⅞ of valid lifetime</div>
+                <input type="number" name="rebind_timer" id="f-rebind"
+                       value="{{ kea.rebind_timer }}" placeholder="e.g. 75600" min="0">
+                {% if kea.rebind_timer %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.rebind_timer }}</code> &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
+                {% endif %}
             </div>
         </div>
 
+        <!-- Router + DNS -->
         <div class="form-row">
             <div class="form-group">
                 <label>Router / Gateway</label>
-                <input type="text" name="routers" value="{{ kea.routers }}"
+                <input type="text" name="routers" id="f-routers"
+                       value="{{ kea.routers }}"
                        placeholder="e.g. 10.0.0.1" style="font-family:monospace;">
-                <div class="form-hint">Leave blank to keep current value</div>
+                {% if kea.routers %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.routers }}</code></div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config</div>
+                {% endif %}
             </div>
             <div class="form-group">
                 <label>DNS Servers</label>
-                <input type="text" name="dns_servers" value="{{ kea.dns_servers }}"
-                       placeholder="e.g. 1.1.1.1, 8.8.8.8" style="font-family:monospace;">
-                <div class="form-hint">Comma-separated &nbsp;·&nbsp; Spaces around commas are fine &nbsp;·&nbsp; Leave blank to keep current value</div>
+                <input type="text" name="dns_servers" id="f-dns"
+                       value="{{ kea.dns_servers }}"
+                       placeholder="e.g. 1.1.1.1,8.8.8.8" style="font-family:monospace;">
+                {% if kea.dns_servers %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.dns_servers }}</code> &nbsp;·&nbsp; Comma-separated</div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Comma-separated</div>
+                {% endif %}
             </div>
         </div>
 
-        <div style="display:flex;gap:8px;margin-top:8px;">
-            <button type="submit" class="btn btn-danger">⚡ Apply & Restart Kea</button>
+        <div style="display:flex;gap:8px;margin-top:16px;">
+            <button type="button" class="btn btn-danger" onclick="showConfirm()">⚡ Apply &amp; Restart Kea</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
+
+    <!-- In-page confirmation panel — no native dialogs, works on iOS -->
+    <div id="confirm-panel" style="display:none;margin-top:16px;
+         background:var(--surface2);border:1px solid var(--warning);
+         border-radius:var(--radius);padding:16px;">
+        <div style="display:flex;align-items:flex-start;gap:12px;">
+            <span style="font-size:22px;line-height:1;">⚠️</span>
+            <div style="flex:1;">
+                <div style="font-weight:600;margin-bottom:4px;">Apply changes and restart Kea?</div>
+                <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+                    Kea DHCP will be briefly unavailable while it restarts.
+                    Existing leases are not affected. New lease requests will queue.
+                </div>
+                <div id="change-summary" style="font-size:12px;color:var(--text-muted);
+                     background:var(--surface);border-radius:var(--radius);
+                     padding:10px 12px;margin-bottom:14px;font-family:monospace;
+                     line-height:1.8;"></div>
+                <div style="display:flex;gap:8px;">
+                    <button type="button" class="btn btn-danger"
+                            onclick="submitForm()">✅ Yes, apply and restart</button>
+                    <button type="button" class="btn btn-secondary"
+                            onclick="hideConfirm()">✕ Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </div>
+
+<script>
+// Store original values for change summary
+var _orig = {
+    pool:           {{ kea.pool_str | tojson }},
+    valid_lifetime: {{ kea.valid_lifetime | tojson if kea.valid_lifetime else '""' }},
+    renew_timer:    {{ kea.renew_timer | tojson if kea.renew_timer else '""' }},
+    rebind_timer:   {{ kea.rebind_timer | tojson if kea.rebind_timer else '""' }},
+    routers:        {{ kea.routers | tojson }},
+    dns_servers:    {{ kea.dns_servers | tojson }},
+};
+
+var _labels = {
+    pool:           'Address Pool',
+    valid_lifetime: 'Valid Lifetime',
+    renew_timer:    'Renew Timer (T1)',
+    rebind_timer:   'Rebind Timer (T2)',
+    routers:        'Router / Gateway',
+    dns_servers:    'DNS Servers',
+};
+
+var _fields = {
+    pool:           'f-pool',
+    valid_lifetime: 'f-lifetime',
+    renew_timer:    'f-renew',
+    rebind_timer:   'f-rebind',
+    routers:        'f-routers',
+    dns_servers:    'f-dns',
+};
+
+function getChanges() {
+    var changes = [];
+    Object.keys(_fields).forEach(function(key) {
+        var el = document.getElementById(_fields[key]);
+        if (!el) return;
+        var newVal = el.value.trim();
+        var oldVal = String(_orig[key] || '').trim();
+        if (newVal !== oldVal && newVal !== '') {
+            changes.push({
+                label: _labels[key],
+                from:  oldVal || '(not set)',
+                to:    newVal
+            });
+        }
+    });
+    return changes;
+}
+
+function showConfirm() {
+    var changes = getChanges();
+    var summary = document.getElementById('change-summary');
+    if (changes.length === 0) {
+        summary.innerHTML = '<span style="color:var(--text-muted);">No changes detected — all fields match current values.</span>';
+    } else {
+        summary.innerHTML = changes.map(function(c) {
+            return '<div><span style="color:var(--text-muted);">' + c.label + ':</span> '
+                + '<span style="text-decoration:line-through;opacity:.5;">' + c.from + '</span>'
+                + ' → <span style="color:var(--primary);">' + c.to + '</span></div>';
+        }).join('');
+    }
+    document.getElementById('confirm-panel').style.display = '';
+    document.getElementById('confirm-panel').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+function hideConfirm() {
+    document.getElementById('confirm-panel').style.display = 'none';
+}
+
+function submitForm() {
+    document.getElementById('edit-subnet-form').onsubmit = null;
+    document.getElementById('edit-subnet-form').submit();
+}
+</script>
 {% endblock %}

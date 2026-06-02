@@ -41,6 +41,8 @@
 </div>
 
 <!-- Subnet statistics widget -->
+<div id="dash-widgets" style="display:flex;flex-direction:column;gap:16px;">
+
 <div id="dash-subnet_stats">
     <div class="stat-grid">
     {% for subnet_id, s in stats.items() %}
@@ -58,6 +60,22 @@
         <div style="margin-top:4px;">
             <span style="font-size:11px;color:var(--text-muted);" id="util-pct-{{ subnet_id }}"></span>
         </div>
+        {% if s.routers or s.dns_servers %}
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;">
+            {% if s.routers %}
+            <div>
+                <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px;">Gateway</span>
+                <span class="mono" style="font-size:11px;color:var(--text);">{{ s.routers }}</span>
+            </div>
+            {% endif %}
+            {% if s.dns_servers %}
+            <div style="min-width:0;flex:1;">
+                <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px;">DNS</span>
+                <span class="mono" style="font-size:11px;color:var(--text);word-break:break-all;">{{ s.dns_servers.replace(',', ', ') }}</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
     </div>
     {% endfor %}
     </div>
@@ -248,7 +266,9 @@
             <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading...</p>
         </div>
     </div>
-</div>
+</div><!-- #dash-alert_summary -->
+
+</div><!-- #dash-widgets -->
 
 {% endblock %}
 {% block scripts %}
