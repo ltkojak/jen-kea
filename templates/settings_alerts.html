@@ -79,7 +79,7 @@ var JEN_CHANNELS = {
                 <button class="btn btn-sm btn-secondary edit-channel-btn"
                     data-id="{{ ch.id }}"
                     onclick="editChannelFromBtn({{ ch.id }})">✏️ Edit</button>
-                <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" style="display:inline;" onsubmit="return confirm('Delete this alert channel?')">
+                <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete this alert channel?">
                     <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
                 </form>
             </div>
@@ -122,7 +122,7 @@ var JEN_CHANNELS = {
                         <button type="submit" class="btn btn-sm btn-primary">Save</button>
                         <form method="POST" action="/settings/alerts/reset-template" style="display:inline;">
                             <input type="hidden" name="alert_type" value="{{ atype }}">
-                            <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Reset to default template?')">Reset</button>
+                            <button type="submit" class="btn btn-sm btn-secondary" onclick="jenConfirm('Reset to default template?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">Reset</button>
                         </form>
                     </div>
                 </form>

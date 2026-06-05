@@ -1,5 +1,21 @@
 # Changelog
 
+## [3.5.17] - 2026-06-05
+
+### Full Audit Fixes — Security, iOS Compatibility, UX
+
+Five issues found in the full 3.5.16 audit, all fixed in one release.
+
+**🔴 Security — `tmp_path` path traversal in database import:** The import confirm form submitted a base64-encoded file path that the server decoded and opened with no validation. An admin could have encoded any server path (e.g. `/etc/jen/jen.config`) to read it as an import file. Fixed by validating the decoded path starts with `/tmp/jen_import_` before use. Admin-only route, so severity was medium — but worth fixing.
+
+**🟡 iOS/iPad — All native `confirm()` dialogs replaced:** 19 templates were still using `onsubmit="return confirm(...)"` or `onclick="return confirm(...)"`. iOS Safari suppresses native dialogs in certain WebKit contexts (home screen PWA mode, WKWebView), causing destructive buttons to silently do nothing — the same issue that broke the subnet editor in 3.5.9. Fixed by adding a `jenConfirm(message, callback)` function to `base.html` that shows an in-page modal overlay. All 19 call sites replaced — forms use a `data-confirm` attribute with a global handler that also fires after HTMX swaps (for partials like `_device_rows.html`). Affected pages: delete device, release lease, revoke API key, delete backup, confirm import, delete stale leases, remove MFA method, revoke trusted device, delete saved filter, restart Kea, remove SSL certificate, generate SSH key, delete alert channel, reset alert template, delete custom icon, reset MFA, delete user, bulk delete reservations.
+
+**🟡 Devices page — type-filter badges now HTMX:** The device type filter badges (Mobile, IoT, Smart TV, etc.) were plain `<a href>` links causing a full page reload. Clicking "IoT" while a search was active would still trigger a full reload. Replaced with `<button>` elements that update the hidden `type` input in the HTMX filter form and trigger the live filter — consistent with how subnet/search/stale filters already work.
+
+**🟢 Edit Subnet — disable confirm button when nothing changed:** The in-page confirmation panel's "Yes, apply and restart" button is now disabled when no fields have been modified. Prevents accidentally triggering a Kea restart when you open the confirm panel without changing anything.
+
+**🟢 Audit Log Retention:** The audit log had no retention limit and would grow indefinitely. Added a "Keep audit log entries for N days" setting to Settings → System. Defaults to 90 days. Cleanup runs immediately when the setting is saved, and then daily at 00:05 via APScheduler. Set to 0 to keep forever. The current row count is shown on the settings page so you can see how large the log has grown.
+
 ## [3.5.16] - 2026-06-02
 
 ### Dashboard — Uniform Widget Spacing

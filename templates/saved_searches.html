@@ -27,7 +27,7 @@
         <td style="display:flex;gap:6px;">
             <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">▶ Load</a>
             <form method="POST" action="/saved-searches/delete/{{ s.id }}" style="display:inline;"
-                  onsubmit="return confirm('Delete this saved filter?')">
+                  onsubmit="return false;" data-confirm="Delete this saved filter?">
                 <button type="submit" class="btn btn-sm btn-danger">✕</button>
             </form>
         </td>

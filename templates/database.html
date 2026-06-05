@@ -173,7 +173,7 @@
             <td style="font-size:11px;color:var(--text-muted);">{{ b.tables | join(', ') if b.tables else '—' }}</td>
             <td style="white-space:nowrap;">
                 <a href="/database/backup/download/{{ b.filename }}" class="btn btn-sm btn-secondary">⬇️</a>
-                <form method="POST" action="/database/backup/delete/{{ b.filename }}" style="display:inline;" onsubmit="return confirm('Delete backup {{ b.filename }}?')">
+                <form method="POST" action="/database/backup/delete/{{ b.filename }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete backup {{ b.filename }}?">
                     <button class="btn btn-sm btn-danger">✕</button>
                 </form>
             </td>

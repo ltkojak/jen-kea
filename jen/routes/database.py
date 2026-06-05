@@ -194,7 +194,8 @@ def import_inspect():
 def import_confirm():
     import base64, tempfile
     tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
-    if not tmp_path or not os.path.isfile(tmp_path):
+    # Validate path is within the expected temp directory — prevent path traversal
+    if not tmp_path or not tmp_path.startswith("/tmp/jen_import_") or not os.path.isfile(tmp_path):
         flash("Import session expired. Please re-upload.", "error")
         return redirect(url_for("database.database", tab="import"))
     with open(tmp_path, "rb") as f:

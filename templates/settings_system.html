@@ -22,7 +22,7 @@
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
                 <img src="{{ branding.nav_logo }}" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
                 <form method="POST" action="/settings/remove-nav-logo" style="display:inline;">
-                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Remove logo?')">🗑 Remove</button>
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="jenConfirm('Remove logo?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">🗑 Remove</button>
                 </form>
             </div>
             {% endif %}
@@ -99,7 +99,7 @@
         {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono" style="font-size:11px;">{{ cert_info.issuer }}</div></div>{% endif %}
         {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
     </div>
-    <form method="POST" action="/settings/remove-cert" onsubmit="return confirm('Remove SSL certificate? Jen will restart in HTTP mode.')">
+    <form method="POST" action="/settings/remove-cert" onsubmit="return false;" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode.">
         <button type="submit" class="btn btn-danger btn-sm" style="margin-bottom:16px;">🗑️ Remove Certificate</button>
     </form>
     {% endif %}
@@ -127,7 +127,7 @@
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Add to: <code>~/.ssh/authorized_keys</code> on {{ kea_ssh_user }}@{{ kea_ssh_host }}</div>
     {% endif %}
-    <form method="POST" action="/settings/generate-ssh-key" onsubmit="return confirm('{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}')">
+    <form method="POST" action="/settings/generate-ssh-key" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}">
         <button type="submit" class="btn btn-primary">{% if ssh_configured %}🔄 Regenerate Key{% else %}🔑 Generate SSH Key{% endif %}</button>
     </form>
 </div>
@@ -143,7 +143,7 @@
         {% if ssl_configured %}HTTP traffic is forwarded to HTTPS automatically.{% endif %}
     </p>
     <form method="POST" action="/settings/save-ports"
-          onsubmit="return confirm('Changing ports will restart Jen. You may need to update any bookmarks or firewall rules. Continue?')">
+          onsubmit="return false;" data-confirm="Changing ports will restart Jen. You may need to update any bookmarks or firewall rules. Continue?">
         <div class="form-row" style="max-width:400px;">
             <div class="form-group">
                 <label>HTTP Port</label>
@@ -229,10 +229,28 @@
         </div>
         <div style="display:flex;gap:8px;">
             <button type="submit" class="btn btn-primary">Save</button>
-            <form method="POST" action="/settings/clear-lockouts" style="display:inline;" onsubmit="return confirm('Clear all login attempt records? This will unlock all locked accounts.')">
+            <form method="POST" action="/settings/clear-lockouts" style="display:inline;" onsubmit="return false;" data-confirm="Clear all login attempt records? This will unlock all locked accounts.">
                 <button type="submit" class="btn btn-secondary">🔓 Clear All Lockouts</button>
             </form>
         </div>
+    </form>
+</div>
+
+<!-- Audit Log Retention -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">📋 Audit Log Retention</span>
+    </div>
+    <form method="POST" action="/settings/save-audit-retention">
+        <div class="form-row" style="max-width:320px;">
+            <div class="form-group">
+                <label>Keep audit log entries for (days)</label>
+                <input type="number" name="audit_retention_days"
+                       value="{{ audit_retention_days }}" min="7" max="3650">
+                <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries.</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">💾 Save</button>
     </form>
 </div>
 

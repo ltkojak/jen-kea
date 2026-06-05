@@ -30,6 +30,13 @@ def start_scheduler(app):
         replace_existing=True,
         args=[app]
     )
+    _scheduler.add_job(
+        _run_audit_cleanup,
+        CronTrigger(hour=0, minute=5),
+        id="jen_audit_cleanup",
+        replace_existing=True,
+        args=[app]
+    )
     try:
         _scheduler.start()
         logger.info("Backup scheduler started")
@@ -74,3 +81,28 @@ def stop_scheduler():
             _scheduler.shutdown(wait=False)
         except Exception:
             pass
+
+
+def _run_audit_cleanup(app):
+    """Called at 00:05 daily — prune audit_log based on retention setting."""
+    with app.app_context():
+        try:
+            from jen.models import user as __user
+            from jen.models import db as __db
+            days_str = __user.get_global_setting("audit_retention_days", "90")
+            days = int(days_str) if days_str else 90
+            if days <= 0:
+                return  # 0 = keep forever
+            db = __db.get_jen_db()
+            with db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
+                    (days,)
+                )
+                deleted = cur.rowcount
+            db.commit()
+            db.close()
+            if deleted:
+                logger.info(f"Audit log cleanup: removed {deleted} entries older than {days} days")
+        except Exception as e:
+            logger.error(f"Audit log cleanup error: {e}")

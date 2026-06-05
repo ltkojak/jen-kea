@@ -120,7 +120,7 @@
         <div class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;word-break:break-all;border:1px solid var(--border);">{{ ssh_pub_key }}</div>
     </div>
     {% endif %}
-    <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" onsubmit="return confirm('{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}')">
+    <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}">
         <button type="submit" class="btn btn-secondary">{% if ssh_configured %}🔄 Regenerate SSH Key{% else %}🔑 Generate SSH Key{% endif %}</button>
     </form>
 </div>

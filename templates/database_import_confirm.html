@@ -104,7 +104,7 @@
 
     <div style="display:flex;gap:10px;">
         <button type="submit" class="btn btn-danger"
-                onclick="return confirm('Proceed with import into the {{ meta.database | upper }} database? This will modify live data.')">
+                onclick="jenConfirm('Proceed with import into the {{ meta.database | upper }} database? This will modify live data.', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">
             ⚡ Confirm Import into {{ meta.database | upper }} Database
         </button>
         <a href="/database#import" class="btn btn-secondary">Cancel</a>

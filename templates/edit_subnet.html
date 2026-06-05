@@ -176,6 +176,8 @@ function showConfirm() {
                 + ' → <span style="color:var(--primary);">' + c.to + '</span></div>';
         }).join('');
     }
+    var okBtn = document.querySelector('#confirm-panel .btn-danger');
+    if (okBtn) okBtn.disabled = changes.length === 0;
     document.getElementById('confirm-panel').style.display = '';
     document.getElementById('confirm-panel').scrollIntoView({behavior:'smooth', block:'nearest'});
 }

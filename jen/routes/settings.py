@@ -136,6 +136,17 @@ def settings_system():
         "nav_logo": nav_logo_url,
         "nav_color": __user.get_global_setting("branding_nav_color", ""),
     }
+    # Audit log retention
+    audit_retention_days = __user.get_global_setting("audit_retention_days", "90")
+    try:
+        db = __db.get_jen_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM audit_log")
+            audit_log_count = cur.fetchone()["cnt"]
+        db.close()
+    except Exception:
+        audit_log_count = "?"
+
     return render_template("settings_system.html",
                            ssl_configured=__config.ssl_configured(), cert_info=cert_info,
                            has_favicon=os.path.exists(extensions.FAVICON_PATH),
@@ -149,9 +160,40 @@ def settings_system():
                            jen_version=_JEN_VERSION(),
                            kea_version=kea_version,
                            mfa_mode=mfa_mode,
-                           branding=branding)
+                           branding=branding,
+                           audit_retention_days=audit_retention_days,
+                           audit_log_count=audit_log_count)
 
-@bp.route("/settings/system/save-mfa-mode", methods=["POST"])
+@bp.route("/settings/save-audit-retention", methods=["POST"])
+@login_required
+@_admin_required
+def save_audit_retention():
+    days_raw = request.form.get("audit_retention_days", "90").strip()
+    try:
+        days = max(0, int(days_raw))
+    except ValueError:
+        flash("Invalid value — must be a number of days.", "error")
+        return redirect(url_for('settings.settings_system'))
+    __user.set_global_setting("audit_retention_days", str(days))
+    # Run cleanup immediately if retention > 0
+    if days > 0:
+        try:
+            db = __db.get_jen_db()
+            with db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
+                    (days,)
+                )
+                deleted = cur.rowcount
+            db.commit()
+            db.close()
+            flash(f"Audit log retention set to {days} days. {deleted} old entries removed.", "success")
+        except Exception as e:
+            flash(f"Setting saved but cleanup failed: {e}", "warning")
+    else:
+        flash("Audit log retention set to keep forever (0 = no limit).", "success")
+    __user.audit("SETTINGS", "audit_retention", f"retention_days={days}")
+    return redirect(url_for('settings.settings_system'))
 @login_required
 @_admin_required
 def save_mfa_mode():

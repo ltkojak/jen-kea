@@ -45,7 +45,7 @@
     </a>
     <a href="/ipmap" class="btn btn-secondary">🗺️ IP Map</a>
     {% if current_user.role in ('superadmin','admin') %}
-    <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return confirm('Delete all expired/stale leases from the database?')">
+    <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return false;" data-confirm="Delete all expired/stale leases from the database?">
         <button type="submit" class="btn btn-danger btn-sm">🗑️ Delete Stale</button>
     </form>
     {% endif %}

@@ -36,7 +36,7 @@
                 data-notes="{{ d.notes|e if d.notes else '' }}"
                 data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
                 data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}">✏</button>
-            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return confirm('Remove {{ d.mac }} from inventory?')">
+            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?">
                 <button type="submit" class="btn btn-sm btn-danger">✕</button>
             </form>
             {% endif %}

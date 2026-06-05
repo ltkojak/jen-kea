@@ -18,7 +18,7 @@
         {% else %}
         <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
            class="btn btn-sm btn-success" title="Create reservation">📌</a>
-        <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return confirm('Release lease for {{ l.ip }}?')">
+        <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return false;" data-confirm="Release lease for {{ l.ip }}?">
             <input type="hidden" name="ip" value="{{ l.ip }}">
             <button type="submit" class="btn btn-sm btn-danger" title="Release lease">✕</button>
         </form>

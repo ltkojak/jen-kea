@@ -602,5 +602,64 @@ function sortTable(table, col, th) {
     });
 })();
 </script>
+
+<div id="jen-confirm-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:400px;width:90%;box-shadow:0 16px 48px rgba(0,0,0,.5);">
+        <div id="jen-confirm-message" style="font-size:14px;margin-bottom:20px;line-height:1.5;"></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+            <button id="jen-confirm-cancel" class="btn btn-secondary">Cancel</button>
+            <button id="jen-confirm-ok" class="btn btn-danger">Confirm</button>
+        </div>
+    </div>
+</div>
+<script>
+(function() {
+    var overlay = null;
+    function getOverlay() {
+        if (!overlay) overlay = document.getElementById('jen-confirm-overlay');
+        return overlay;
+    }
+    window.jenConfirm = function(message, onConfirm, confirmLabel, isDanger) {
+        var el = getOverlay();
+        el.style.display = 'flex';
+        document.getElementById('jen-confirm-message').textContent = message;
+        var okBtn = document.getElementById('jen-confirm-ok');
+        okBtn.textContent = confirmLabel || 'Confirm';
+        okBtn.className = 'btn ' + (isDanger === false ? 'btn-primary' : 'btn-danger');
+        function cleanup() {
+            el.style.display = 'none';
+            okBtn.onclick = null;
+            document.getElementById('jen-confirm-cancel').onclick = null;
+            el.onclick = null;
+        }
+        okBtn.onclick = function() { cleanup(); onConfirm(); };
+        document.getElementById('jen-confirm-cancel').onclick = cleanup;
+        el.onclick = function(e) { if (e.target === el) cleanup(); };
+        // Escape key
+        function onKey(e) { if (e.key === 'Escape') { cleanup(); document.removeEventListener('keydown', onKey); } }
+        document.addEventListener('keydown', onKey);
+    };
+
+    // Wire up all data-confirm forms on the page
+    function wireConfirmForms() {
+        document.querySelectorAll('form[data-confirm]').forEach(function(form) {
+            if (form._jenConfirmWired) return;
+            form._jenConfirmWired = true;
+            // Find the submit button inside the form
+            var btn = form.querySelector('[type=submit], button:not([type=button])');
+            if (btn) {
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var msg = form.getAttribute('data-confirm');
+                    jenConfirm(msg, function() { form.submit(); });
+                });
+            }
+        });
+    }
+    // Run on DOM ready and after any HTMX swap (for partials like _device_rows)
+    document.addEventListener('DOMContentLoaded', wireConfirmForms);
+    document.addEventListener('htmx:afterSwap', wireConfirmForms);
+})();
+</script>
 </body>
 </html>

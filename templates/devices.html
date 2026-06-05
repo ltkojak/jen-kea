@@ -53,18 +53,39 @@
 <!-- Device type filter badges — preserve all current filters -->
 <div id="type-filter-bar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
     <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Filter by type:</span>
-    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}&subnet={{ subnet_filter }}&per_page={{ per_page }}&sort={{ sort }}&dir={{ direction }}"
-       class="btn btn-sm {% if not type_filter %}btn-primary{% else %}btn-secondary{% endif %}">All</a>
+    <button type="button" onclick="setTypeFilter('')"
+       class="btn btn-sm {% if not type_filter %}btn-primary{% else %}btn-secondary{% endif %}">All</button>
     {% for type_key, type_info in device_type_display.items() %}
     {% if type_key != 'unknown' %}
-    <a href="/devices?search={{ search }}&stale={{ '1' if show_stale else '0' }}&type={{ type_key }}&subnet={{ subnet_filter }}&per_page={{ per_page }}&sort={{ sort }}&dir={{ direction }}"
+    <button type="button" onclick="setTypeFilter('{{ type_key }}')"
        class="btn btn-sm {% if type_filter == type_key %}btn-primary{% else %}btn-secondary{% endif %}"
        style="{% if type_filter == type_key %}background:{{ type_info[1] }};{% endif %}">
         {{ type_info[0] }}
-    </a>
+    </button>
     {% endif %}
     {% endfor %}
 </div>
+<script>
+function setTypeFilter(typeKey) {
+    // Update the hidden type input in the filter form
+    var inp = document.querySelector('form[hx-get="/devices"] input[name="type"]');
+    if (inp) inp.value = typeKey;
+    // Trigger the HTMX request
+    var form = document.querySelector('form[hx-get="/devices"]');
+    if (form) htmx.trigger(form, 'change');
+    // Update badge styles immediately
+    document.querySelectorAll('#type-filter-bar button').forEach(function(btn) {
+        btn.className = btn.className.replace('btn-primary', 'btn-secondary');
+    });
+    // Find the clicked button by matching its onclick
+    document.querySelectorAll('#type-filter-bar button').forEach(function(btn) {
+        var match = btn.getAttribute('onclick') === "setTypeFilter('" + typeKey + "')";
+        if (match || (typeKey === '' && btn.getAttribute('onclick') === "setTypeFilter('')")) {
+            btn.className = btn.className.replace('btn-secondary', 'btn-primary');
+        }
+    });
+}
+</script>
 
 <div class="card" style="padding:0;">
 <div class="table-wrap">

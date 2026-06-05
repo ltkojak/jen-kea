@@ -66,11 +66,11 @@
             <td style="display:flex;gap:6px;">
                 {% if k.active %}
                 <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}">
-                    <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Revoke this key? Any integrations using it will stop working.')">⏸ Revoke</button>
+                    <button type="submit" class="btn btn-sm btn-secondary" onclick="jenConfirm('Revoke this key? Any integrations using it will stop working.', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">⏸ Revoke</button>
                 </form>
                 {% endif %}
                 <form method="POST" action="/settings/api-keys/delete/{{ k.id }}">
-                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this key permanently?')">🗑</button>
+                    <button type="submit" class="btn btn-sm btn-danger" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">🗑</button>
                 </form>
             </td>
         </tr>
