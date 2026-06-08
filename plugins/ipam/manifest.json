@@ -1,0 +1,21 @@
+{
+  "id":           "ipam",
+  "name":         "IPAM Lite",
+  "version":      "0.1.0",
+  "description":  "Full IP address space management. See every IP in each subnet at a glance — available, dynamic lease, reserved, or statically assigned. Track ownership, notes, and assignment history.",
+  "author":       "Matthew Thibodeau",
+  "requires_jen": "3.6.0",
+  "tags":         ["ipam", "addresses", "inventory"],
+  "nav": [
+    {
+      "section":  "network",
+      "label":    "IPAM",
+      "icon":     "📋",
+      "endpoint": "ipam.index"
+    }
+  ],
+  "db_migrations": [
+    "CREATE TABLE IF NOT EXISTS ipam_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL UNIQUE, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+    "CREATE TABLE IF NOT EXISTS ipam_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))"
+  ]
+}

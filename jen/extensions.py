@@ -59,4 +59,8 @@ STATIC_DIR    = "/opt/jen/static"
 ICONS_BUNDLED_DIR = "/opt/jen/static/icons/brands"
 ICONS_CUSTOM_DIR  = "/opt/jen/static/icons/custom"
 NAV_LOGO_PATH = "/opt/jen/static/nav_logo"
+
+# Plugin system
+PLUGIN_DIR     = "/opt/jen/plugins"          # installed plugin directories
+PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 SSH_KEY_PATH  = "/etc/jen/ssh/jen_rsa"

@@ -369,6 +369,18 @@ def init_jen_db() -> None:
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS plugins (
+                    id           VARCHAR(100) PRIMARY KEY,
+                    name         VARCHAR(200) NOT NULL,
+                    version      VARCHAR(50)  NOT NULL,
+                    description  TEXT,
+                    author       VARCHAR(200),
+                    requires_jen VARCHAR(50),
+                    installed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    enabled      TINYINT(1) DEFAULT 1
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS backup_schedule (
                     id INT PRIMARY KEY DEFAULT 1,
                     enabled TINYINT(1) DEFAULT 0,

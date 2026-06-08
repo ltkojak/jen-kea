@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.5.17"
+JEN_VERSION = "3.6.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -270,6 +270,15 @@ def create_app() -> Flask:
     # ── Blueprints ────────────────────────────────────────────────────────────
     _register_blueprints(app)
 
+    # ── Plugin loader — after core blueprints, before DB init ─────────────────
+    from jen.services.plugins import load_plugins, get_nav_items
+    load_plugins(app)
+
+    # ── Plugin nav injection context processor ────────────────────────────────
+    @app.context_processor
+    def inject_plugin_nav():
+        return {"plugin_nav_items": get_nav_items()}
+
     # ── DB init ───────────────────────────────────────────────────────────────
     from jen.models.db import init_jen_db
     init_jen_db()
@@ -293,6 +302,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.devices   import bp as devices_bp
     from jen.routes.leases    import bp as leases_bp
     from jen.routes.mfa_routes import bp as mfa_bp
+    from jen.routes.plugins   import bp as plugins_bp
     from jen.routes.reports   import bp as reports_bp
     from jen.routes.reservations import bp as reservations_bp
     from jen.routes.search    import bp as search_bp
@@ -303,7 +313,7 @@ def _register_blueprints(app: Flask) -> None:
 
     for blueprint in [
         api_bp, auth_bp, dashboard_bp, database_bp, ddns_bp, devices_bp,
-        leases_bp, mfa_bp, reports_bp, reservations_bp, search_bp,
+        leases_bp, mfa_bp, plugins_bp, reports_bp, reservations_bp, search_bp,
         servers_bp, settings_bp, subnets_bp, users_bp,
     ]:
         app.register_blueprint(blueprint)

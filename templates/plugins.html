@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Plugins{% endblock %}
+{% block content %}
+
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1>🧩 Plugins</h1>
+        <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen.</p>
+    </div>
+</div>
+
+{% if installed %}
+<!-- Installed plugins -->
+<div class="card" style="padding:0;">
+    <div class="card-header" style="padding:16px 20px 0;">
+        <span class="card-title">Installed</span>
+    </div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>Plugin</th>
+            <th>Version</th>
+            <th>Status</th>
+            <th>Requires</th>
+            <th>Actions</th>
+        </tr></thead>
+        <tbody>
+        {% for p in installed %}
+        <tr>
+            <td>
+                <strong>{{ p.name }}</strong>
+                <div style="font-size:12px;color:var(--text-muted);">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div>
+            </td>
+            <td style="font-size:13px;">v{{ p.version }}</td>
+            <td>
+                {% if p.enabled %}
+                    {% if p.version_ok %}
+                    <span style="color:var(--success);font-size:12px;">● Enabled</span>
+                    {% else %}
+                    <span style="color:var(--warning);font-size:12px;">⚠ Version mismatch</span>
+                    {% endif %}
+                {% else %}
+                    <span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>
+                {% endif %}
+            </td>
+            <td style="font-size:12px;color:var(--text-muted);">Jen ≥ {{ p.requires_jen or '—' }}</td>
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    {% if p.enabled %}
+                    <form method="POST" action="/settings/plugins/disable/{{ p.id }}">
+                        <button type="submit" class="btn btn-sm btn-secondary">Disable</button>
+                    </form>
+                    {% else %}
+                    <form method="POST" action="/settings/plugins/enable/{{ p.id }}">
+                        <button type="submit" class="btn btn-sm btn-primary">Enable</button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
+                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your data (DB tables) will be preserved.">
+                        <button type="submit" class="btn btn-sm btn-danger">Uninstall</button>
+                    </form>
+                </div>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% else %}
+<div class="card" style="text-align:center;padding:32px;color:var(--text-muted);">
+    <div style="font-size:32px;margin-bottom:12px;">🧩</div>
+    <div style="font-size:14px;">No plugins installed yet. Browse the registry below to find add-ins.</div>
+</div>
+{% endif %}
+
+<!-- Registry -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">Available Plugins</span>
+        <span style="font-size:12px;color:var(--text-muted);">From the Jen plugin registry</span>
+    </div>
+
+    {% if fetch_error %}
+    <div class="alert alert-warning" style="margin-bottom:16px;">
+        ⚠️ Could not reach the plugin registry: {{ fetch_error }}<br>
+        <span style="font-size:12px;">Check your internet connection or try again later.</span>
+    </div>
+    {% endif %}
+
+    {% if registry %}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+    {% for entry in registry %}
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div>
+                <strong style="font-size:14px;">{{ entry.name }}</strong>
+                <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">v{{ entry.version }}</span>
+            </div>
+            {% if not entry.version_ok %}
+            <span style="font-size:11px;background:var(--warning);color:#000;border-radius:4px;padding:2px 6px;">
+                Requires Jen {{ entry.requires_jen }}
+            </span>
+            {% endif %}
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;">{{ entry.description }}</p>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">
+            By {{ entry.author or 'Unknown' }}
+            {% if entry.tags %}
+            &nbsp;·&nbsp;
+            {% for tag in entry.tags %}
+            <span style="background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:3px;">{{ tag }}</span>
+            {% endfor %}
+            {% endif %}
+        </div>
+        {% if entry.installed %}
+        <span style="font-size:12px;color:var(--success);">✓ Installed</span>
+        {% elif entry.version_ok %}
+        <form method="POST" action="/settings/plugins/install/{{ entry.id }}">
+            <button type="submit" class="btn btn-sm btn-primary">⬇ Install</button>
+        </form>
+        {% else %}
+        <span style="font-size:12px;color:var(--text-muted);">Upgrade Jen to install</span>
+        {% endif %}
+    </div>
+    {% endfor %}
+    </div>
+    {% elif not fetch_error %}
+    <p style="color:var(--text-muted);font-size:13px;">No plugins available in the registry.</p>
+    {% endif %}
+</div>
+
+<!-- Info card -->
+<div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
+    <div style="font-weight:600;margin-bottom:8px;color:var(--text);">About Plugins</div>
+    <p style="margin-bottom:6px;">Plugins add optional capabilities to Jen without bloating the core install. Each plugin is a self-contained package with its own routes, templates, and database tables.</p>
+    <p style="margin-bottom:6px;">Installed plugins live in <code>/opt/jen/plugins/</code>. Enabling or disabling a plugin requires a Jen restart to take effect.</p>
+    <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" style="color:var(--primary);">plugin developer guide on GitHub</a>.</p>
+</div>
+
+{% endblock %}
