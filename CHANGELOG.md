@@ -1354,3 +1354,23 @@ Initial public release.
 - Uninstaller
 - Docker support (external MySQL and bundled MySQL modes)
 - Full documentation
+
+## [3.7.0] - 2026-06-09
+
+### Plugin Architecture — Separate Repositories
+
+Plugins now live in their own dedicated GitHub repositories rather than in the `plugins/` subfolder of the main Jen repo.
+
+**What changed:**
+- `plugins/network-discovery/` removed from main repo → now at `github.com/ltkojak/jen-plugin-network-discovery`
+- `plugins/ipam/` removed from main repo → now at `github.com/ltkojak/jen-plugin-ipam`
+- `plugins/registry.json` remains in the main repo — this is correct, the registry is part of Jen core
+- `registry.json` `download_url` values updated to point at the new repos
+
+**Why:** Plugin issues, PRs, release tags, and commit history now live in their own namespace. A bug fix to IPAM gets a tag on the IPAM repo, not a Jen core version bump. Community contributors can submit plugins by opening a PR to `registry.json` pointing at their own repo. The main Jen repo stays lean.
+
+**No user-visible changes.** Install, enable, disable, and update flows are identical. The only difference is where the plugin zip is downloaded from.
+
+**Versioning going forward:**
+- Jen core: `3.7.x` for plugin architecture changes, `4.0` for plugin framework v2
+- Plugins: independently versioned in their own repos
