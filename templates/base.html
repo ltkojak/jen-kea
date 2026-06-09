@@ -435,6 +435,18 @@
 {% endif %}
 
 <div class="container">
+    {% if restart_pending and current_user.is_authenticated and current_user.role in ('superadmin','admin') %}
+    <div style="background:#2a1f00;border:1px solid var(--warning);border-radius:var(--radius);
+                padding:10px 16px;margin-bottom:12px;display:flex;align-items:center;
+                justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <span style="font-size:13px;">
+            ⚠️ <strong>Jen restart required</strong> — changes will not take effect until Jen is restarted.
+        </span>
+        <form method="POST" action="/settings/infrastructure/restart" style="margin:0;">
+            <button type="submit" class="btn btn-sm btn-warning">🔄 Restart Jen Now</button>
+        </form>
+    </div>
+    {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}

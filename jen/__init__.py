@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.6.3"
+JEN_VERSION = "3.6.4"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -209,6 +209,7 @@ def create_app() -> Flask:
     def inject_branding():
         avatar_url   = None
         nav_logo_url = None
+        restart_pending = False
         if current_user and current_user.is_authenticated:
             # Cache avatar in session — only query DB when not yet cached
             avatar_url = session.get("_avatar_url", "__unset__")
@@ -231,12 +232,18 @@ def create_app() -> Flask:
             if os.path.exists(path):
                 nav_logo_url = f"/static/nav_logo.{ext}?v={int(os.path.getmtime(path))}"
                 break
+        if current_user and current_user.is_authenticated:
+            try:
+                restart_pending = get_global_setting("restart_pending", "false") == "true"
+            except Exception:
+                restart_pending = False
         return {
             "branding_name":       "Jen",
             "branding_nav_color":  get_global_setting("branding_nav_color", ""),
             "branding_nav_logo":   nav_logo_url,
             "current_user_avatar": avatar_url,
             "jen_version":         JEN_VERSION,
+            "restart_pending":     restart_pending,
         }
 
     # ── Error handlers ────────────────────────────────────────────────────────

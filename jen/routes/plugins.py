@@ -90,6 +90,7 @@ def install_plugin(plugin_id):
     if ok:
         # Record in plugins DB table
         _record_plugin(entry)
+        __user.set_global_setting("restart_pending", "true")
         __user.audit("PLUGIN_INSTALL", plugin_id,
                      f"Installed {entry.get('name')} v{entry.get('version')}")
         flash(msg, "success")
@@ -121,6 +122,7 @@ def update_plugin(plugin_id):
     ok, msg = __plugins.install_plugin(plugin_id, entry)
     if ok:
         _record_plugin(entry)
+        __user.set_global_setting("restart_pending", "true")
         __user.audit("PLUGIN_UPDATE", plugin_id,
                      f"Updated {entry.get('name')} to v{entry.get('version')}")
         flash(msg, "success")
@@ -136,6 +138,7 @@ def update_plugin(plugin_id):
 @_admin_required
 def enable_plugin(plugin_id):
     __plugins.enable_plugin(plugin_id)
+    __user.set_global_setting("restart_pending", "true")
     __user.audit("PLUGIN_ENABLE", plugin_id, "Plugin enabled")
     flash(f"Plugin '{plugin_id}' enabled. Restart Jen to activate.", "success")
     return redirect(url_for("plugins.plugins_page"))
@@ -146,6 +149,7 @@ def enable_plugin(plugin_id):
 @_admin_required
 def disable_plugin(plugin_id):
     __plugins.disable_plugin(plugin_id)
+    __user.set_global_setting("restart_pending", "true")
     __user.audit("PLUGIN_DISABLE", plugin_id, "Plugin disabled")
     flash(f"Plugin '{plugin_id}' disabled. Restart Jen to deactivate.", "success")
     return redirect(url_for("plugins.plugins_page"))
