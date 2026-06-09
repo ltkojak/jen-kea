@@ -16,3 +16,15 @@
 ## [0.1.0] - 2026-06-05
 
 - Stub plugin for framework testing
+
+## [1.1.0] - 2026-06-09
+
+### Edit modal UX overhaul
+
+- **Single ✏️ button** per row replaces the scattered "+ Note" / "Edit" / "✕" buttons
+- **Context-aware modal** — fields shown depend on the IP's current status:
+  - Dynamic / Reserved: Notes field only (label/owner/status are read-only from Kea). Kea hostname and MAC shown as read-only info.
+  - Available / Static: Status selector (Available ↔ Static), Label, Owner, Notes all editable
+- **Status selector** for available/static IPs — mark an address as Static to designate it as intentionally assigned outside the DHCP pool (router, NAS, printer, etc.)
+- **"Clear all notes"** button in the modal removes the IPAM entry entirely
+- Setting status back to Available with no other fields also clears the entry cleanly

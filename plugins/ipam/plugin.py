@@ -246,12 +246,35 @@ def save_entry(subnet_id):
     label   = request.form.get("label", "").strip()[:100]
     owner   = request.form.get("owner", "").strip()[:100]
     notes   = request.form.get("notes", "").strip()
+    # ipam_status: 'static' = designated static entry, 'available' = clear to available
+    ipam_status = request.form.get("ipam_status", "").strip()
 
     # Validate IP
     try:
         ipaddress.IPv4Address(ip)
     except ValueError:
         flash("Invalid IP address.", "error")
+        return redirect(url_for("ipam.subnet_detail", subnet_id=subnet_id))
+
+    # If status set to available and no other fields — just delete the entry
+    if ipam_status == "available" and not label and not owner and not notes:
+        try:
+            db = _get_jen_db()
+            with db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ipam_static_entries WHERE ip=%s AND subnet_id=%s",
+                    (ip, subnet_id)
+                )
+                cur.execute("""
+                    INSERT INTO ipam_assignment_history
+                        (ip, subnet_id, action, acted_by)
+                    VALUES (%s, %s, 'cleared', %s)
+                """, (ip, subnet_id, current_user.username))
+            db.commit()
+            db.close()
+            flash(f"Entry for {ip} cleared.", "success")
+        except Exception as e:
+            flash(f"Error clearing entry: {e}", "error")
         return redirect(url_for("ipam.subnet_detail", subnet_id=subnet_id))
 
     try:
@@ -267,12 +290,14 @@ def save_entry(subnet_id):
             cur.execute("""
                 INSERT INTO ipam_assignment_history
                     (ip, subnet_id, label, owner, action, acted_by)
-                VALUES (%s, %s, %s, %s, 'note', %s)
-            """, (ip, subnet_id, label, owner, current_user.username))
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (ip, subnet_id, label, owner,
+                  'static' if ipam_status == 'static' else 'note',
+                  current_user.username))
         db.commit()
         db.close()
         flash(f"Entry saved for {ip}.", "success")
-        __user.audit("IPAM_ENTRY", ip, f"label={label} owner={owner}")
+        __user.audit("IPAM_ENTRY", ip, f"label={label} owner={owner} status={ipam_status}")
     except Exception as e:
         flash(f"Error saving entry: {e}", "error")
 

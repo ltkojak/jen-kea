@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.6.4"
+JEN_VERSION="3.6.5"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
