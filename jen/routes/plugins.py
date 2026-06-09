@@ -28,15 +28,33 @@ bp = Blueprint("plugins", __name__)
 @_admin_required
 def plugins_page():
     installed = __plugins.discover_plugins()
-    installed_ids = {p["id"] for p in installed}
+    installed_map = {p["id"]: p for p in installed}
 
     # Fetch registry (non-blocking — show empty list on failure)
     registry, fetch_error = __plugins.fetch_registry()
 
-    # Annotate registry entries with install status
+    # Build a lookup of registry versions for update checks
+    registry_map = {e["id"]: e for e in registry}
+
+    # Annotate installed plugins with update availability and changelog URL
+    from jen.services.plugins import _parse_version
+    for p in installed:
+        reg = registry_map.get(p["id"], {})
+        p["registry_version"] = reg.get("version", "")
+        p["update_available"] = bool(
+            p["registry_version"] and
+            _parse_version(p["registry_version"]) > _parse_version(p["version"])
+        )
+        p["changelog_url"] = reg.get("changelog_url", "")
+
+    # Annotate registry entries with install/update status
     for entry in registry:
-        entry["installed"]   = entry["id"] in installed_ids
-        entry["version_ok"]  = __plugins.jen_version_meets(
+        inst = installed_map.get(entry["id"])
+        entry["installed"]      = inst is not None
+        entry["update_available"] = bool(
+            inst and _parse_version(entry.get("version","")) > _parse_version(inst.get("version",""))
+        )
+        entry["version_ok"]     = __plugins.jen_version_meets(
             entry.get("requires_jen", "0.0.0")
         )
 
@@ -74,6 +92,37 @@ def install_plugin(plugin_id):
         _record_plugin(entry)
         __user.audit("PLUGIN_INSTALL", plugin_id,
                      f"Installed {entry.get('name')} v{entry.get('version')}")
+        flash(msg, "success")
+    else:
+        flash(msg, "error")
+    return redirect(url_for("plugins.plugins_page"))
+
+
+@bp.route("/settings/plugins/update/<plugin_id>", methods=["POST"])
+@login_required
+@_admin_required
+def update_plugin(plugin_id):
+    """Update an installed plugin to the latest registry version."""
+    import re
+    if not re.match(r'^[a-z0-9\-]{1,64}$', plugin_id):
+        flash("Invalid plugin ID.", "error")
+        return redirect(url_for("plugins.plugins_page"))
+
+    registry, err = __plugins.fetch_registry()
+    if err:
+        flash(f"Could not fetch registry: {err}", "error")
+        return redirect(url_for("plugins.plugins_page"))
+
+    entry = next((e for e in registry if e["id"] == plugin_id), None)
+    if not entry:
+        flash(f"Plugin '{plugin_id}' not found in registry.", "error")
+        return redirect(url_for("plugins.plugins_page"))
+
+    ok, msg = __plugins.install_plugin(plugin_id, entry)
+    if ok:
+        _record_plugin(entry)
+        __user.audit("PLUGIN_UPDATE", plugin_id,
+                     f"Updated {entry.get('name')} to v{entry.get('version')}")
         flash(msg, "success")
     else:
         flash(msg, "error")

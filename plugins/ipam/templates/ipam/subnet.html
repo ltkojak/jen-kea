@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}IPAM — {{ subnet.name }}{% endblock %}
+{% block content %}
+
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1>📋 {{ subnet.name }}</h1>
+        <p>{{ subnet.cidr }} · {{ space|length }} addresses</p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;">
+        <a href="{{ url_for('ipam.export_csv', subnet_id=subnet_id) }}" class="btn btn-secondary btn-sm">⬇ Export CSV</a>
+        <a href="{{ url_for('ipam.index') }}" class="btn btn-secondary">← All Subnets</a>
+    </div>
+</div>
+
+<!-- Summary bar -->
+<div class="card">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.available }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Available</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ counts.dynamic }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Dynamic</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--success);">{{ counts.reserved }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Reserved</div>
+        </div>
+        <div style="text-align:center;">
+            <div style="font-size:24px;font-weight:700;color:var(--warning);">{{ counts.static }}</div>
+            <div style="font-size:11px;color:var(--text-muted);">Static / Noted</div>
+        </div>
+        <div style="flex:1;min-width:200px;">
+            <div style="height:10px;border-radius:5px;background:var(--surface2);display:flex;overflow:hidden;">
+                <div style="width:{{ (counts.dynamic / space|length * 100)|round }}%;background:var(--primary);"></div>
+                <div style="width:{{ (counts.reserved / space|length * 100)|round }}%;background:var(--success);"></div>
+                <div style="width:{{ (counts.static / space|length * 100)|round }}%;background:var(--warning);"></div>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                {{ ((counts.dynamic + counts.reserved + counts.static) / space|length * 100)|round }}% utilised
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter tabs -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a href="?filter=all" class="btn btn-sm {% if status_filter == 'all' %}btn-primary{% else %}btn-secondary{% endif %}">All ({{ space|length }})</a>
+        <a href="?filter=available" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}">Available ({{ counts.available }})</a>
+        <a href="?filter=dynamic" class="btn btn-sm {% if status_filter == 'dynamic' %}btn-primary{% else %}btn-secondary{% endif %}">Dynamic ({{ counts.dynamic }})</a>
+        <a href="?filter=reserved" class="btn btn-sm {% if status_filter == 'reserved' %}btn-primary{% else %}btn-secondary{% endif %}">Reserved ({{ counts.reserved }})</a>
+        <a href="?filter=static" class="btn btn-sm {% if status_filter == 'static' %}btn-primary{% else %}btn-secondary{% endif %}">Static ({{ counts.static }})</a>
+    </div>
+</div>
+
+<!-- Address table -->
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table>
+    <thead><tr>
+        <th>IP Address</th>
+        <th>Status</th>
+        <th>Hostname / Label</th>
+        <th>MAC / Owner</th>
+        <th>Notes</th>
+        <th></th>
+    </tr></thead>
+    <tbody>
+    {% for entry in space %}
+    {% if status_filter == 'all' or entry.status == status_filter %}
+    <tr>
+        <td class="mono" style="color:var(--primary);font-weight:600;">{{ entry.ip }}</td>
+        <td>
+            {% if entry.status == 'available' %}
+            <span style="font-size:12px;color:var(--text-muted);">○ Available</span>
+            {% elif entry.status == 'dynamic' %}
+            <span style="font-size:12px;color:var(--primary);">● Dynamic</span>
+            {% elif entry.status == 'reserved' %}
+            <span style="font-size:12px;color:var(--success);">● Reserved</span>
+            {% elif entry.status == 'static' %}
+            <span style="font-size:12px;color:var(--warning);">● Static</span>
+            {% endif %}
+        </td>
+        <td style="font-size:13px;">
+            {{ entry.hostname or entry.label or '—' }}
+        </td>
+        <td style="font-size:12px;color:var(--text-muted);">
+            {{ entry.mac or entry.owner or '—' }}
+        </td>
+        <td style="font-size:12px;color:var(--text-muted);">{{ entry.notes or '—' }}</td>
+        <td>
+            <button class="btn btn-sm btn-secondary"
+                onclick="openNoteModal('{{ entry.ip }}', '{{ entry.label|e }}', '{{ entry.owner|e }}', '{{ entry.notes|replace("'","\\'") }}')">
+                {% if entry.label or entry.owner or entry.notes %}✏️ Edit{% else %}＋ Note{% endif %}
+            </button>
+            {% if entry.label or entry.owner or entry.notes %}
+            <form method="POST" action="{{ url_for('ipam.delete_entry', subnet_id=subnet_id) }}"
+                  style="display:inline;margin-left:4px;"
+                  data-confirm="Remove IPAM note for {{ entry.ip }}?">
+                <input type="hidden" name="ip" value="{{ entry.ip }}">
+                <button type="submit" class="btn btn-sm btn-secondary">✕</button>
+            </form>
+            {% endif %}
+        </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>
+
+<!-- Note modal -->
+<div id="note-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
+     z-index:500;align-items:center;justify-content:center;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            width:min(480px,92vw);padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;">📋 Note for <span id="note-ip" style="color:var(--primary);font-family:monospace;"></span></h3>
+        <button onclick="closeNoteModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;">✕</button>
+    </div>
+    <form method="POST" action="{{ url_for('ipam.save_entry', subnet_id=subnet_id) }}">
+        <input type="hidden" name="ip" id="note-ip-input">
+        <div class="form-group">
+            <label>Label <span style="font-size:11px;color:var(--text-muted);">(e.g. "Router", "NAS", "Printer")</span></label>
+            <input type="text" name="label" id="note-label" maxlength="100" style="width:100%;">
+        </div>
+        <div class="form-group">
+            <label>Owner <span style="font-size:11px;color:var(--text-muted);">(e.g. "Matthew", "IoT devices")</span></label>
+            <input type="text" name="owner" id="note-owner" maxlength="100" style="width:100%;">
+        </div>
+        <div class="form-group">
+            <label>Notes</label>
+            <textarea name="notes" id="note-notes" rows="3" style="width:100%;resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn btn-secondary" onclick="closeNoteModal()">Cancel</button>
+        </div>
+    </form>
+</div>
+</div>
+
+<script>
+function openNoteModal(ip, label, owner, notes) {
+    document.getElementById('note-ip').textContent = ip;
+    document.getElementById('note-ip-input').value = ip;
+    document.getElementById('note-label').value = label;
+    document.getElementById('note-owner').value = owner;
+    document.getElementById('note-notes').value = notes;
+    document.getElementById('note-modal').style.display = 'flex';
+}
+function closeNoteModal() {
+    document.getElementById('note-modal').style.display = 'none';
+}
+document.getElementById('note-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeNoteModal();
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeNoteModal();
+});
+</script>
+
+{% endblock %}

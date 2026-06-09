@@ -2,26 +2,24 @@
 {% block title %}Plugins{% endblock %}
 {% block content %}
 
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
-    <div>
-        <h1>🧩 Plugins</h1>
-        <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen.</p>
-    </div>
+<div class="page-header">
+    <h1>🧩 Plugins</h1>
+    <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen.</p>
 </div>
 
-{% if installed %}
 <!-- Installed plugins -->
+{% if installed %}
 <div class="card" style="padding:0;">
-    <div class="card-header" style="padding:16px 20px 0;">
-        <span class="card-title">Installed</span>
+    <div class="card-header" style="padding:16px 20px 12px;">
+        <span class="card-title">Installed ({{ installed|length }})</span>
     </div>
     <div class="table-wrap">
     <table>
         <thead><tr>
             <th>Plugin</th>
-            <th>Version</th>
+            <th>Installed</th>
+            <th>Latest</th>
             <th>Status</th>
-            <th>Requires</th>
             <th>Actions</th>
         </tr></thead>
         <tbody>
@@ -29,23 +27,46 @@
         <tr>
             <td>
                 <strong>{{ p.name }}</strong>
-                <div style="font-size:12px;color:var(--text-muted);">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div>
-            </td>
-            <td style="font-size:13px;">v{{ p.version }}</td>
-            <td>
-                {% if p.enabled %}
-                    {% if p.version_ok %}
-                    <span style="color:var(--success);font-size:12px;">● Enabled</span>
-                    {% else %}
-                    <span style="color:var(--warning);font-size:12px;">⚠ Version mismatch</span>
-                    {% endif %}
-                {% else %}
-                    <span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+                    {{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}
+                </div>
+                {% if p.changelog_url %}
+                <div style="margin-top:3px;">
+                    <a href="{{ p.changelog_url }}" target="_blank"
+                       style="font-size:11px;color:var(--primary);">📋 Changelog</a>
+                </div>
                 {% endif %}
             </td>
-            <td style="font-size:12px;color:var(--text-muted);">Jen ≥ {{ p.requires_jen or '—' }}</td>
+            <td style="font-size:13px;white-space:nowrap;">
+                v{{ p.version }}
+            </td>
+            <td style="font-size:13px;white-space:nowrap;">
+                {% if p.registry_version %}
+                    {% if p.update_available %}
+                    <span style="color:var(--warning);">v{{ p.registry_version }} ⬆</span>
+                    {% else %}
+                    <span style="color:var(--success);">v{{ p.registry_version }} ✓</span>
+                    {% endif %}
+                {% else %}
+                <span style="color:var(--text-muted);">—</span>
+                {% endif %}
+            </td>
             <td>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                {% if not p.version_ok %}
+                <span style="color:var(--warning);font-size:12px;">⚠ Jen version mismatch</span>
+                {% elif p.enabled %}
+                <span style="color:var(--success);font-size:12px;">● Enabled</span>
+                {% else %}
+                <span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>
+                {% endif %}
+            </td>
+            <td>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                    {% if p.update_available %}
+                    <form method="POST" action="/settings/plugins/update/{{ p.id }}">
+                        <button type="submit" class="btn btn-sm btn-primary">⬆ Update</button>
+                    </form>
+                    {% endif %}
                     {% if p.enabled %}
                     <form method="POST" action="/settings/plugins/disable/{{ p.id }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Disable</button>
@@ -56,7 +77,7 @@
                     </form>
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
-                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your data (DB tables) will be preserved.">
+                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved.">
                         <button type="submit" class="btn btn-sm btn-danger">Uninstall</button>
                     </form>
                 </div>
@@ -68,13 +89,14 @@
     </div>
 </div>
 {% else %}
-<div class="card" style="text-align:center;padding:32px;color:var(--text-muted);">
-    <div style="font-size:32px;margin-bottom:12px;">🧩</div>
-    <div style="font-size:14px;">No plugins installed yet. Browse the registry below to find add-ins.</div>
+<div class="card" style="text-align:center;padding:40px;color:var(--text-muted);">
+    <div style="font-size:36px;margin-bottom:12px;">🧩</div>
+    <div style="font-size:14px;margin-bottom:6px;">No plugins installed yet.</div>
+    <div style="font-size:12px;">Browse the registry below to find add-ins.</div>
 </div>
 {% endif %}
 
-<!-- Registry -->
+<!-- Available from registry -->
 <div class="card">
     <div class="card-header">
         <span class="card-title">Available Plugins</span>
@@ -82,59 +104,86 @@
     </div>
 
     {% if fetch_error %}
-    <div class="alert alert-warning" style="margin-bottom:16px;">
-        ⚠️ Could not reach the plugin registry: {{ fetch_error }}<br>
-        <span style="font-size:12px;">Check your internet connection or try again later.</span>
+    <div style="background:#2a1a0a;border:1px solid var(--warning);border-radius:var(--radius);
+                padding:12px 16px;margin-bottom:16px;font-size:13px;">
+        ⚠️ Could not reach the plugin registry: <strong>{{ fetch_error }}</strong><br>
+        <span style="font-size:12px;color:var(--text-muted);">
+            Check internet connectivity on the Jen host, or try again later.
+            Installed plugins continue to work normally.
+        </span>
     </div>
     {% endif %}
 
     {% if registry %}
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:16px;">
     {% for entry in registry %}
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:18px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-            <div>
-                <strong style="font-size:14px;">{{ entry.name }}</strong>
-                <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">v{{ entry.version }}</span>
-            </div>
+    <div style="background:var(--surface2);border:1px solid
+         {% if entry.update_available %}var(--warning){% else %}var(--border){% endif %};
+         border-radius:var(--radius);padding:18px;position:relative;">
+
+        {% if entry.update_available %}
+        <div style="position:absolute;top:12px;right:12px;background:var(--warning);
+                    color:#000;font-size:10px;font-weight:700;border-radius:4px;
+                    padding:2px 7px;">UPDATE AVAILABLE</div>
+        {% endif %}
+
+        <div style="margin-bottom:6px;padding-right:{% if entry.update_available %}110px{% else %}0{% endif %};">
+            <strong style="font-size:14px;">{{ entry.name }}</strong>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">v{{ entry.version }}</span>
             {% if not entry.version_ok %}
-            <span style="font-size:11px;background:var(--warning);color:#000;border-radius:4px;padding:2px 6px;">
-                Requires Jen {{ entry.requires_jen }}
-            </span>
+            <span style="font-size:10px;background:var(--surface);color:var(--warning);
+                         border:1px solid var(--warning);border-radius:3px;
+                         padding:1px 6px;margin-left:6px;">Requires Jen {{ entry.requires_jen }}</span>
             {% endif %}
         </div>
-        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;">{{ entry.description }}</p>
-        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">
-            By {{ entry.author or 'Unknown' }}
+
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;line-height:1.5;">
+            {{ entry.description }}
+        </p>
+
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px;display:flex;
+                    flex-wrap:wrap;gap:6px;align-items:center;">
+            <span>By {{ entry.author or 'Unknown' }}</span>
             {% if entry.tags %}
-            &nbsp;·&nbsp;
+            <span>·</span>
             {% for tag in entry.tags %}
-            <span style="background:var(--surface);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:3px;">{{ tag }}</span>
+            <span style="background:var(--surface);border:1px solid var(--border);
+                         border-radius:3px;padding:1px 5px;">{{ tag }}</span>
             {% endfor %}
             {% endif %}
+            {% if entry.changelog_url %}
+            <span>·</span>
+            <a href="{{ entry.changelog_url }}" target="_blank"
+               style="color:var(--primary);">📋 Changelog</a>
+            {% endif %}
         </div>
-        {% if entry.installed %}
-        <span style="font-size:12px;color:var(--success);">✓ Installed</span>
+
+        {% if entry.installed and not entry.update_available %}
+        <span style="font-size:12px;color:var(--success);">✓ Installed &amp; up to date</span>
+        {% elif entry.installed and entry.update_available %}
+        <form method="POST" action="/settings/plugins/update/{{ entry.id }}">
+            <button type="submit" class="btn btn-sm btn-primary">⬆ Update to v{{ entry.version }}</button>
+        </form>
         {% elif entry.version_ok %}
         <form method="POST" action="/settings/plugins/install/{{ entry.id }}">
             <button type="submit" class="btn btn-sm btn-primary">⬇ Install</button>
         </form>
         {% else %}
-        <span style="font-size:12px;color:var(--text-muted);">Upgrade Jen to install</span>
+        <span style="font-size:12px;color:var(--text-muted);">Upgrade Jen to v{{ entry.requires_jen }} to install</span>
         {% endif %}
     </div>
     {% endfor %}
     </div>
     {% elif not fetch_error %}
-    <p style="color:var(--text-muted);font-size:13px;">No plugins available in the registry.</p>
+    <p style="color:var(--text-muted);font-size:13px;">No plugins in the registry.</p>
     {% endif %}
 </div>
 
-<!-- Info card -->
+<!-- About -->
 <div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
     <div style="font-weight:600;margin-bottom:8px;color:var(--text);">About Plugins</div>
-    <p style="margin-bottom:6px;">Plugins add optional capabilities to Jen without bloating the core install. Each plugin is a self-contained package with its own routes, templates, and database tables.</p>
-    <p style="margin-bottom:6px;">Installed plugins live in <code>/opt/jen/plugins/</code>. Enabling or disabling a plugin requires a Jen restart to take effect.</p>
+    <p style="margin-bottom:6px;">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. Your data is preserved when a plugin is uninstalled — only the plugin files are removed.</p>
+    <p style="margin-bottom:6px;">Installed plugins live in <code>/opt/jen/plugins/</code>. Enable/disable changes take effect after restarting Jen.</p>
     <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" style="color:var(--primary);">plugin developer guide on GitHub</a>.</p>
 </div>
 

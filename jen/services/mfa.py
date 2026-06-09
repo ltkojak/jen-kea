@@ -9,6 +9,7 @@ import hashlib
 import logging
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,6 @@ def create_trusted_device_token(user_id, remember_days, device_name="Unknown Dev
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires_at = None
     if remember_days and int(remember_days) > 0 and remember_days != "forever":
-        from datetime import timedelta
         expires_at = (datetime.now(timezone.utc) + timedelta(days=int(remember_days))).strftime('%Y-%m-%d %H:%M:%S')
     try:
         db = __get_jen_db()
