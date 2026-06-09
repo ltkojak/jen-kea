@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.7.0"
+JEN_VERSION="3.7.1"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -685,6 +685,7 @@ install_files() {
     mkdir -p "$INSTALL_DIR/templates" "$INSTALL_DIR/static" \
              "$INSTALL_DIR/static/icons/brands" \
              "$INSTALL_DIR/static/icons/custom" \
+             "$INSTALL_DIR/plugins" \
              "$CONFIG_DIR/ssl" "$CONFIG_DIR/ssh"
 
     spinner_start "Installing application files..."

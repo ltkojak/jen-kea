@@ -407,7 +407,7 @@
 </div>
 {% endif %}
 
-{% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] or (plugin_nav_items and request.endpoint in plugin_nav_items|map(attribute='endpoint')|list) or (plugin_nav_items and request.endpoint in plugin_nav_items|map(attribute='endpoint')|list) %}
+{% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] or (plugin_nav_items and request.endpoint in plugin_nav_items|map(attribute='endpoint')|list) %}
 <div class="section-tabs">
     <a href="/subnets" class="section-tab {% if request.endpoint in ['subnets.subnets','subnets.edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
     <a href="/servers" class="section-tab {% if request.endpoint == 'servers.servers' %}active{% endif %}">🖥️ Servers</a>

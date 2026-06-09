@@ -1374,3 +1374,13 @@ Plugins now live in their own dedicated GitHub repositories rather than in the `
 **Versioning going forward:**
 - Jen core: `3.7.x` for plugin architecture changes, `4.0` for plugin framework v2
 - Plugins: independently versioned in their own repos
+
+## [3.7.1] - 2026-06-09
+
+### Full Audit Fixes
+
+Two issues found during full end-to-end audit of 3.7.0:
+
+**🔴 `/opt/jen/plugins/` not created by installer:** The `mkdir -p` block in `install.sh` that creates the Jen directory structure was missing `/opt/jen/plugins/`. On a fresh install, attempting to install a plugin before the directory existed would fail. Fixed by adding `"$INSTALL_DIR/plugins"` to the mkdir block.
+
+**🟡 Duplicate condition on network section-tabs:** The `{% if %}` block controlling when the Network section-tabs bar renders had the plugin endpoint check written twice (`or (plugin_nav_items and ...) or (plugin_nav_items and ...)`). Harmless — the condition evaluated correctly — but redundant. Cleaned up to a single check.
