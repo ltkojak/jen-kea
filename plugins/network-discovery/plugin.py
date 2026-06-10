@@ -17,8 +17,10 @@ from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
 
+import os as _os
 bp = Blueprint("network_discovery", __name__,
                template_folder="templates",
+               root_path=_os.path.dirname(_os.path.abspath(__file__)),
                url_prefix="/network/discovery")
 
 _scan_lock = threading.Lock()
