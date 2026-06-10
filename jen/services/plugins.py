@@ -134,10 +134,8 @@ def _load_plugin(app, manifest: dict) -> bool:
             else:
                 logger.warning(f"Plugin '{plugin_id}' has plugin.py but no register() function")
 
-        # Add plugin template folder to Jinja search path
-        tmpl_dir = os.path.join(path, "templates")
-        if os.path.isdir(tmpl_dir):
-            app.jinja_loader.searchpath.append(tmpl_dir)
+        # Template folder is registered by the blueprint's template_folder param
+        # No need to manually append to searchpath
 
         _loaded_plugins[plugin_id] = manifest
         return True
