@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="3.7.4"
+JEN_VERSION="3.7.5"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -287,10 +287,16 @@ install_dependencies() {
     divider
     blank
 
-    spinner_start "Updating package lists..."
-    apt-get update -qq 2>/dev/null
-    spinner_stop
-    ok "Package lists updated"
+    # Only refresh package lists on fresh installs — on upgrades all deps
+    # are already present and apt-get update just adds unnecessary delay
+    if [[ "$IS_UPGRADE" == "false" ]]; then
+        spinner_start "Updating package lists..."
+        apt-get update -qq 2>/dev/null
+        spinner_stop
+        ok "Package lists updated"
+    else
+        ok "Skipping package list update (upgrade mode)"
+    fi
 
     local pkgs=()
     command -v pip3        &>/dev/null || pkgs+=(python3-pip)
@@ -358,7 +364,6 @@ collect_config() {
         blank
         echo -e "    ${B}1)${NC}  Keep existing config  ${DIM}(recommended)${NC}"
         echo -e "    ${B}2)${NC}  Reconfigure — re-run the setup wizard"
-        echo -e "    ${B}3)${NC}  Skip — continue upgrade without touching config"
         blank
         local choice
         while true; do
@@ -366,11 +371,11 @@ collect_config() {
             read -r choice < /dev/tty
             choice="${choice:-1}"
             case "$choice" in
-                1|3)
+                1)
                     blank
                     ok "Keeping existing configuration"; CONFIGURE=false; return ;;
                 2)   break ;;
-                *)   echo -e "  ${R}  Invalid — please enter 1, 2, or 3.${NC}" > /dev/tty ;;
+                *)   echo -e "  ${R}  Invalid — please enter 1 or 2.${NC}" > /dev/tty ;;
             esac
         done
         warn "This will overwrite your existing configuration."

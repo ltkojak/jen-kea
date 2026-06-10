@@ -1398,3 +1398,13 @@ Kea sometimes stores hostnames with a trailing dot (`tardis.` instead of `tardis
 **GitHub Actions release workflow** (`.github/workflows/release.yml`): Pushing a version tag (e.g. `git tag v3.7.4 && git push origin v3.7.4`) now automatically triggers a GitHub Actions job that builds the release tarball, extracts all matching `3.7.x` entries from `CHANGELOG.md`, and creates a GitHub Release with the tarball attached and the changelog as release notes. No more manual release creation.
 
 **Jen self-update from the UI** (Settings → Infrastructure): A new "Jen Updates" card shows the running version and a "Check for Updates" button. Clicking it hits the GitHub releases API and compares to the running version. If a newer release exists, it shows the version, publish date, a link to the release notes, and an "Update Now" button. Clicking Update downloads the release tarball from GitHub, extracts and installs it over `/opt/jen/`, preserves config/plugins/custom icons, and restarts Jen automatically. SuperAdmin only.
+
+## [3.7.5] - 2026-06-10
+
+### Installer — Three Fixes
+
+**Remove redundant "Skip" option from upgrade config prompt:** The config choice during an upgrade previously offered three options: Keep / Reconfigure / Skip. Options 1 and 3 both did exactly the same thing (set `CONFIGURE=false` and continue). Skip has been removed — it's now a clean 1/2 choice: Keep existing config or Reconfigure.
+
+**Database backup prompt during upgrade:** The installer already backed up application files (`run.py` and `jen/` package) before every upgrade, but never offered to back up the Jen database. Now prompts "Create a Jen database backup before upgrading?" (default yes). Reads connection details from the existing config file and runs `mysqldump` to `/etc/jen/backups/jen-db-TIMESTAMP.sql`. If the dump fails, a warning is shown but the upgrade continues.
+
+**Skip `apt-get update` on upgrades:** On a fresh install, updating the package lists is necessary to find packages. On an upgrade, all dependencies are already installed and the update just adds 15-30 seconds of network delay for no benefit. `apt-get update` is now skipped when `IS_UPGRADE=true`.
