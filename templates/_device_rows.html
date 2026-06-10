@@ -4,7 +4,7 @@
     <td data-label="Name"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
     <td data-label="Owner" class="hide-tablet"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
     <td data-label="IP" class="mono">{{ d.last_ip or '—' }}</td>
-    <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname or '—' }}</td>
+    <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname | hostname or '—' }}</td>
     <td data-label="Subnet" class="hide-mobile">
         {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
     </td>

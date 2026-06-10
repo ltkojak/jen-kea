@@ -31,7 +31,7 @@
         {% for l in results.leases %}
         <tr>
             <td class="mono">{{ l.ip }}</td>
-            <td>{{ l.hostname or '—' }}</td>
+            <td>{{ l.hostname | hostname or '—' }}</td>
             <td class="mono hide-mobile">{{ l.mac }}</td>
             <td>{% set sname = subnet_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) %}
                 <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>

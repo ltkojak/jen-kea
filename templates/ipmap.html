@@ -34,7 +34,7 @@
         {% set ip = prefix + i|string %}
         {% if ip in used %}
         <div class="ip-cell ip-{{ used[ip].type }}" title="{{ ip }}&#10;{{ used[ip].hostname or 'No hostname' }}&#10;{{ used[ip].type }}">
-            .{{ i }}<br><span style="font-size:9px;opacity:0.7;">{{ (used[ip].hostname or '')[:8] }}</span>
+            .{{ i }}<br><span style="font-size:9px;opacity:0.7;">{{ (used[ip].hostname | hostname or '')[:8] }}</span>
         </div>
         {% else %}
         <div class="ip-cell ip-free" title="{{ ip }} — Free">.{{ i }}</div>

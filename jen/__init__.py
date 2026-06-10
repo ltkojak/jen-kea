@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.7.2"
+JEN_VERSION = "3.7.3"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -84,6 +84,13 @@ def create_app() -> Flask:
             return value.strftime('%H:%M:%S') + ' UTC'
         except Exception:
             return str(value)
+
+    @app.template_filter('hostname')
+    def hostname_filter(value):
+        """Strip trailing dots from hostnames (Kea sometimes stores 'tardis.' as FQDN)."""
+        if not value:
+            return value
+        return value.rstrip('.')
 
     # ── Login manager ─────────────────────────────────────────────────────────
     login_manager.init_app(app)

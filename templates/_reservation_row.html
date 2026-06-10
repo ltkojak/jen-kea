@@ -4,7 +4,7 @@
 <tr id="reservation-{{ h.host_id }}">
     <td data-label="IP" class="mono">{{ h.ip }}</td>
     <td data-label="Hostname" style="white-space:nowrap;">
-        {{ h.hostname or '—' }}
+        {{ h.hostname | hostname or '—' }}
         {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
     <td data-label="MAC" class="mono hide-mobile">{{ h.mac }}</td>

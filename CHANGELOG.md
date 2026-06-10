@@ -1384,3 +1384,9 @@ Two issues found during full end-to-end audit of 3.7.0:
 **🔴 `/opt/jen/plugins/` not created by installer:** The `mkdir -p` block in `install.sh` that creates the Jen directory structure was missing `/opt/jen/plugins/`. On a fresh install, attempting to install a plugin before the directory existed would fail. Fixed by adding `"$INSTALL_DIR/plugins"` to the mkdir block.
 
 **🟡 Duplicate condition on network section-tabs:** The `{% if %}` block controlling when the Network section-tabs bar renders had the plugin endpoint check written twice (`or (plugin_nav_items and ...) or (plugin_nav_items and ...)`). Harmless — the condition evaluated correctly — but redundant. Cleaned up to a single check.
+
+## [3.7.3] - 2026-06-10
+
+### Fix: Trailing dot stripped from hostnames
+
+Kea sometimes stores hostnames with a trailing dot (`tardis.` instead of `tardis`) because some DHCP clients send the hostname as a fully-qualified domain name with the root label included — technically valid but visually wrong. Added a `hostname` Jinja filter that strips trailing dots, applied everywhere hostnames are displayed: Leases, Dashboard recent leases, Reservations, Devices, Search results, IP Map, and the top devices JS widget.

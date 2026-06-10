@@ -3,7 +3,7 @@
 <tr>
     <td data-label="IP" class="mono"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
     <td data-label="Hostname" style="white-space:nowrap;">
-        {{ l.hostname or '—' }}
+        {{ l.hostname | hostname or '—' }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
     <td data-label="MAC" class="mono hide-mobile">{{ l.mac }}</td>

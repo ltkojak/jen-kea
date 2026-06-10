@@ -14,7 +14,7 @@
     <tr>
         <td class="mono">{{ l.ip }}</td>
         <td style="white-space:nowrap;">
-            {{ l.hostname or '—' }}
+            {{ l.hostname | hostname or '—' }}
             {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
         </td>
         <td class="mono">{{ l.mac }}</td>
