@@ -10,6 +10,83 @@
 <div class="alert alert-warning">⚠️ Infrastructure changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
 {% endif %}
 
+<!-- Jen Update -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">⬆ Jen Updates</span>
+        <span style="font-size:12px;color:var(--text-muted);">Running v{{ jen_version }}</span>
+    </div>
+    <div id="update-status" style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+        Click "Check for Updates" to see if a newer version is available.
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="checkForUpdates()" id="check-btn">
+            🔍 Check for Updates
+        </button>
+        <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
+              style="display:none;">
+            <input type="hidden" name="asset_url" id="update-asset-url">
+            <input type="hidden" name="version" id="update-version">
+            <button type="submit" class="btn btn-primary" id="update-btn">
+                ⬆ Update Now
+            </button>
+        </form>
+        <a id="release-notes-link" href="#" target="_blank"
+           style="display:none;font-size:12px;color:var(--primary);">
+            📋 Release notes
+        </a>
+    </div>
+</div>
+
+<script>
+function checkForUpdates() {
+    var btn = document.getElementById('check-btn');
+    var status = document.getElementById('update-status');
+    btn.disabled = true;
+    btn.textContent = '⏳ Checking…';
+    status.textContent = 'Contacting GitHub…';
+    status.style.color = 'var(--text-muted)';
+
+    fetch('/settings/infrastructure/check-update')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            btn.disabled = false;
+            btn.textContent = '🔍 Check for Updates';
+
+            if (d.status === 'up_to_date') {
+                status.style.color = 'var(--success)';
+                status.textContent = '✓ You are running the latest version (v' + d.current + ').';
+                document.getElementById('update-form').style.display = 'none';
+                document.getElementById('release-notes-link').style.display = 'none';
+
+            } else if (d.status === 'update_available') {
+                status.style.color = 'var(--warning)';
+                status.textContent = '⬆ Jen v' + d.latest + ' is available (published ' + d.published + '). You are running v' + d.current + '.';
+                document.getElementById('update-asset-url').value = d.asset_url;
+                document.getElementById('update-version').value = d.latest;
+                document.getElementById('update-form').style.display = '';
+                var link = document.getElementById('release-notes-link');
+                link.href = d.release_url;
+                link.style.display = '';
+
+            } else if (d.status === 'no_releases') {
+                status.style.color = 'var(--text-muted)';
+                status.textContent = 'No releases published yet on GitHub.';
+
+            } else {
+                status.style.color = 'var(--danger)';
+                status.textContent = '✗ Could not check for updates: ' + (d.message || 'unknown error');
+            }
+        })
+        .catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = '🔍 Check for Updates';
+            status.style.color = 'var(--danger)';
+            status.textContent = '✗ Network error: ' + e.message;
+        });
+}
+</script>
+
 <!-- Kea API -->
 <div class="card">
     <div class="card-header"><span class="card-title">🔌 Kea Control Agent API</span>

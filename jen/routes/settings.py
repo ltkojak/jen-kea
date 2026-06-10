@@ -1167,3 +1167,140 @@ def save_nav_color():
     __user.audit("BRANDING", "settings", f"Nav color set to '{color}' by {current_user.username}")
     flash("Nav bar color updated." if color else "Nav bar color reset to default.", "success")
     return redirect(url_for('settings.settings_system'))
+
+
+# ── Self-update ───────────────────────────────────────────────────────────────
+
+@bp.route("/settings/infrastructure/check-update")
+@login_required
+@_admin_required
+def check_update():
+    """Check GitHub releases API for a newer version of Jen."""
+    import requests as _req
+    from jen import JEN_VERSION
+    try:
+        resp = _req.get(
+            "https://api.github.com/repos/ltkojak/jen-kea/releases/latest",
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=8
+        )
+        if resp.status_code == 404:
+            return jsonify({"status": "no_releases", "current": JEN_VERSION})
+        if resp.status_code != 200:
+            return jsonify({"status": "error", "message": f"GitHub API returned {resp.status_code}"})
+
+        data = resp.json()
+        latest_tag  = data.get("tag_name", "").lstrip("v")
+        release_url = data.get("html_url", "")
+        published   = data.get("published_at", "")[:10]
+
+        def _ver(v):
+            try: return tuple(int(x) for x in v.split(".")[:3])
+            except: return (0,0,0)
+
+        if _ver(latest_tag) > _ver(JEN_VERSION):
+            # Find the tarball asset
+            asset_url = ""
+            for asset in data.get("assets", []):
+                if asset["name"].endswith(".tar.gz") and "jen-v" in asset["name"]:
+                    asset_url = asset["browser_download_url"]
+                    break
+            return jsonify({
+                "status":      "update_available",
+                "current":     JEN_VERSION,
+                "latest":      latest_tag,
+                "release_url": release_url,
+                "asset_url":   asset_url,
+                "published":   published,
+            })
+        return jsonify({
+            "status":  "up_to_date",
+            "current": JEN_VERSION,
+            "latest":  latest_tag,
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
+@bp.route("/settings/infrastructure/self-update", methods=["POST"])
+@login_required
+@_superadmin_required
+def self_update():
+    """Download latest release tarball and install it, then restart Jen."""
+    import requests as _req
+    import tarfile, shutil, os, tempfile
+
+    asset_url = request.form.get("asset_url", "").strip()
+    expected_version = request.form.get("version", "").strip()
+
+    if not asset_url or not asset_url.startswith("https://github.com/"):
+        flash("Invalid asset URL.", "error")
+        return redirect(url_for("settings.settings_infrastructure"))
+
+    try:
+        # Download tarball
+        resp = _req.get(asset_url, timeout=60, stream=True)
+        if resp.status_code != 200:
+            flash(f"Download failed: HTTP {resp.status_code}", "error")
+            return redirect(url_for("settings.settings_infrastructure"))
+
+        # Write to temp file
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".tar.gz", prefix="jen_update_", dir="/tmp", delete=False
+        )
+        for chunk in resp.iter_content(chunk_size=8192):
+            tmp.write(chunk)
+        tmp.close()
+
+        # Extract to temp dir
+        tmp_dir = tempfile.mkdtemp(prefix="jen_update_", dir="/tmp")
+        with tarfile.open(tmp.name, "r:gz") as tf:
+            # Security: only extract files under jen/ prefix
+            members = [m for m in tf.getmembers()
+                       if m.name.startswith("jen/") and ".." not in m.name]
+            tf.extractall(tmp_dir, members=members)
+
+        extracted = os.path.join(tmp_dir, "jen")
+        if not os.path.isdir(extracted):
+            flash("Update package format invalid.", "error")
+            return redirect(url_for("settings.settings_infrastructure"))
+
+        # Copy application files to /opt/jen/
+        # Preserve: /etc/jen/ (config), /opt/jen/static/icons/custom/, plugins
+        install_dir = "/opt/jen"
+        preserve = ["static/icons/custom", "plugins"]
+
+        for item in os.listdir(extracted):
+            src  = os.path.join(extracted, item)
+            dest = os.path.join(install_dir, item)
+            # Skip preserved directories
+            if any(item == p.split("/")[0] for p in preserve):
+                continue
+            if os.path.isdir(src):
+                if os.path.isdir(dest):
+                    shutil.rmtree(dest)
+                shutil.copytree(src, dest)
+            else:
+                shutil.copy2(src, dest)
+
+        # Cleanup
+        os.unlink(tmp.name)
+        shutil.rmtree(tmp_dir)
+
+        __user.audit("SELF_UPDATE", "jen", f"Updated to v{expected_version}")
+        flash(
+            f"Jen updated to v{expected_version}. Restarting now…",
+            "success"
+        )
+
+        def do_restart():
+            import time
+            time.sleep(2)
+            subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+
+        threading.Thread(target=do_restart, daemon=True).start()
+        return redirect(url_for("settings.settings_infrastructure"))
+
+    except Exception as e:
+        flash(f"Update failed: {e}", "error")
+        return redirect(url_for("settings.settings_infrastructure"))

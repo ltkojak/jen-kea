@@ -1,0 +1,92 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version info
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          SERIES="${MAJOR}.${MINOR}.x"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "series=$SERIES" >> $GITHUB_OUTPUT
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+
+      - name: Build tarball
+        run: |
+          mkdir -p dist
+          # Package the repo contents as jen/ directory
+          git archive --format=tar.gz --prefix=jen/ HEAD \
+            -o dist/jen-v${{ steps.version.outputs.version }}.tar.gz
+          echo "Tarball built: $(ls -lh dist/)"
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          MAJOR="${{ steps.version.outputs.major }}"
+          MINOR="${{ steps.version.outputs.minor }}"
+          SERIES="${{ steps.version.outputs.series }}"
+
+          # Find series title from the first matching entry if it has one
+          # Extract all ## [MAJOR.MINOR.x] entries from CHANGELOG.md
+          python3 << PYEOF
+          import re, sys
+
+          with open('CHANGELOG.md') as f:
+              content = f.read()
+
+          major = '$MAJOR'
+          minor = '$MINOR'
+          version = '$VERSION'
+          series = '$SERIES'
+
+          # Find all entries for this major.minor series
+          pattern = re.compile(
+              r'(## \[' + re.escape(major) + r'\.' + re.escape(minor) + r'\.\d+\].*?)(?=\n## \[|\Z)',
+              re.DOTALL
+          )
+          entries = pattern.findall(content)
+
+          if not entries:
+              notes = f"## Jen v{version}\n\nSee CHANGELOG.md for details."
+          else:
+              # Build release notes: header + all series entries
+              notes = f"# Jen v{version} — {series} Series\n\n"
+              notes += "\n\n---\n\n".join(e.strip() for e in entries)
+
+          # Write to file (avoids shell escaping issues)
+          with open('/tmp/release_notes.md', 'w') as f:
+              f.write(notes)
+
+          print(f"Extracted {len(entries)} changelog entries for {series}")
+          PYEOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Jen v${{ steps.version.outputs.version }}"
+          body_path: /tmp/release_notes.md
+          files: dist/jen-v${{ steps.version.outputs.version }}.tar.gz
+          draft: false
+          prerelease: false
