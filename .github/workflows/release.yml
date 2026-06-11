@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag (e.g. v3.7.5)'
+        required: true
 
 jobs:
   release:
@@ -20,7 +25,12 @@ jobs:
       - name: Extract version info
         id: version
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          # Support both tag push and manual workflow_dispatch
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
           VERSION="${TAG#v}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)

@@ -27,21 +27,25 @@
         {% else %}<span class="badge badge-dynamic">● Dynamic</span>{% endif %}
     </td>
     <td data-label="">
-        <div style="display:flex;gap:4px;flex-wrap:wrap;">
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:nowrap;">
             {% if current_user.role in ('superadmin','admin') %}
-            <button class="btn btn-sm btn-secondary edit-btn"
+            <button class="btn-act btn-act-edit edit-btn"
                 data-id="{{ d.id }}" data-mac="{{ d.mac }}"
                 data-name="{{ d.device_name|e if d.device_name else '' }}"
                 data-owner="{{ d.owner|e if d.owner else '' }}"
                 data-notes="{{ d.notes|e if d.notes else '' }}"
                 data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
-                data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}">✏</button>
-            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?">
-                <button type="submit" class="btn btn-sm btn-danger">✕</button>
-            </form>
+                data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}"
+                title="Edit">✏️</button>
             {% endif %}
             {% if not d.has_reservation %}
-            <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="btn btn-sm btn-secondary" title="Create reservation">📌</a>
+            <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="btn-act btn-act-pin" title="Create reservation">📌</a>
+            {% endif %}
+            {% if current_user.role in ('superadmin','admin') %}
+            <span class="btn-act-divider"></span>
+            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?">
+                <button type="submit" class="btn-act btn-act-del" title="Remove from inventory">✕</button>
+            </form>
             {% endif %}
         </div>
     </td>

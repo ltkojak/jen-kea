@@ -13,14 +13,17 @@
     <td data-label="Notes" class="hide-tablet" style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
     {% if current_user.role in ('superadmin','admin') %}
     <td data-label="">
-        <a href="/reservations/edit/{{ h.host_id }}" class="btn btn-sm btn-secondary" title="Edit">✏</a>
-        <button class="btn btn-sm btn-danger"
+        <div style="display:flex;gap:4px;align-items:center;justify-content:flex-end;">
+        <a href="/reservations/edit/{{ h.host_id }}" class="btn-act btn-act-edit" title="Edit">✏️</a>
+        <span class="btn-act-divider"></span>
+        <button class="btn-act btn-act-del"
                 title="Delete"
                 hx-post="/reservations/delete/{{ h.host_id }}"
                 hx-target="#reservation-{{ h.host_id }}"
                 hx-swap="outerHTML swap:300ms"
                 hx-confirm="Delete reservation for {{ h.ip }}?"
                 hx-indicator="#reservation-{{ h.host_id }}">✕</button>
+        </div>
     </td>
     {% endif %}
 </tr>

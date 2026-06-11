@@ -1408,3 +1408,15 @@ Kea sometimes stores hostnames with a trailing dot (`tardis.` instead of `tardis
 **Database backup prompt during upgrade:** The installer already backed up application files (`run.py` and `jen/` package) before every upgrade, but never offered to back up the Jen database. Now prompts "Create a Jen database backup before upgrading?" (default yes). Reads connection details from the existing config file and runs `mysqldump` to `/etc/jen/backups/jen-db-TIMESTAMP.sql`. If the dump fails, a warning is shown but the upgrade continues.
 
 **Skip `apt-get update` on upgrades:** On a fresh install, updating the package lists is necessary to find packages. On an upgrade, all dependencies are already installed and the update just adds 15-30 seconds of network delay for no benefit. `apt-get update` is now skipped when `IS_UPGRADE=true`.
+
+## [3.7.6] - 2026-06-11
+
+### UI Polish — Unified Action Button System
+
+All row-level action buttons across every page now use a consistent three-button system: ✏️ edit (neutral), 📌 pin/reserve (neutral, green on hover), ✕ delete (red border, always visible as destructive). All three are identical 28×28px buttons. A subtle vertical divider separates constructive actions from the delete button to reduce misclick risk.
+
+Pages updated: Leases, Reservations, Devices, Database backups, API Keys, Saved Searches, Alert Channels, Custom Icons, Plugins, Infrastructure Settings (inline remove buttons), System Settings (logo remove).
+
+The old pattern of mixed `btn-danger` (solid red), `btn-success` (solid green), and `btn-secondary` (grey) row buttons is replaced throughout. Page-level danger buttons (Apply & Restart Kea, Delete Stale, Start Migration, Revoke All) are intentionally left as solid red — those are high-impact actions that should remain prominent.
+
+Three new CSS classes added to `base.html`: `.btn-act`, `.btn-act-edit`, `.btn-act-pin`, `.btn-act-del`, `.btn-act-divider`.

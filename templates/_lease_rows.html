@@ -12,17 +12,20 @@
     <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire|utcfmt }}</td>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td data-label="">
+        <div style="display:flex;gap:4px;align-items:center;justify-content:flex-end;">
         {% if l.has_reservation %}
         <a href="/reservations?search={{ l.mac }}"
-           class="btn btn-sm btn-secondary" title="Has reservation — view it">📋</a>
+           class="btn-act btn-act-pin" title="Has reservation — view it">📋</a>
         {% else %}
         <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
-           class="btn btn-sm btn-success" title="Create reservation">📌</a>
+           class="btn-act btn-act-pin" title="Create reservation">📌</a>
+        <span class="btn-act-divider"></span>
         <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return false;" data-confirm="Release lease for {{ l.ip }}?">
             <input type="hidden" name="ip" value="{{ l.ip }}">
-            <button type="submit" class="btn btn-sm btn-danger" title="Release lease">✕</button>
+            <button type="submit" class="btn-act btn-act-del" title="Release lease">✕</button>
         </form>
         {% endif %}
+        </div>
     </td>
     {% endif %}
 </tr>

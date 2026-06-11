@@ -223,7 +223,7 @@ function checkForUpdates() {
                 <input type="text" name="subnet_cidr[]" value="{{ info.cidr }}">
             </div>
             <div style="padding-bottom:4px;">
-                <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.subnet-row').remove()">✕</button>
+                <button type="button" class="btn-act btn-act-del" onclick="this.closest('.subnet-row').remove()" title="Remove">✕</button>
             </div>
         </div>
         {% endfor %}
@@ -247,7 +247,7 @@ function checkForUpdates() {
     <div class="extra-server-row" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <strong>Server {{ loop.index + 1 }}</strong>
-            <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.extra-server-row').remove()">✕ Remove</button>
+            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.extra-server-row').remove()" title="Remove">✕</button>
         </div>
         <div class="form-row">
             <div class="form-group">
@@ -489,7 +489,7 @@ function addServerRow() {
     row.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <strong>Server ${count}</strong>
-            <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.extra-server-row').remove()">✕ Remove</button>
+            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.extra-server-row').remove()" title="Remove">✕</button>
         </div>
         <div class="form-row">
             <div class="form-group"><label>Server Name</label><input type="text" name="extra_name[]" placeholder="Kea Standby"></div>
@@ -547,7 +547,7 @@ function addSubnetRow() {
             <input type="text" name="subnet_cidr[]" placeholder="192.168.1.0/24">
         </div>
         <div style="padding-bottom:4px;">
-            <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.subnet-row').remove()">✕</button>
+            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.subnet-row').remove()" title="Remove">✕</button>
         </div>`;
     list.appendChild(row);
 }

@@ -76,11 +76,11 @@ var JEN_CHANNELS = {
                 <form method="POST" action="/settings/alerts/test-channel/{{ ch.id }}" style="display:inline;">
                     <button type="submit" class="btn btn-sm btn-secondary">🧪 Test</button>
                 </form>
-                <button class="btn btn-sm btn-secondary edit-channel-btn"
+                <button class="btn-act btn-act-edit edit-channel-btn"
                     data-id="{{ ch.id }}"
                     onclick="editChannelFromBtn({{ ch.id }})">✏️ Edit</button>
                 <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete this alert channel?">
-                    <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+                    <button type="submit" class="btn-act btn-act-del" title="Delete channel">✕</button>
                 </form>
             </div>
         </div>

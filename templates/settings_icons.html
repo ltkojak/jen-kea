@@ -43,7 +43,7 @@
                  style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
             <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
             <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;">
-                <button type="submit" class="btn btn-sm btn-danger"
+                <button type="submit" class="btn-act btn-act-del"
                         onclick="jenConfirm('Delete custom icon {{ icon.name }}?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">✕ Remove</button>
             </form>
         </div>

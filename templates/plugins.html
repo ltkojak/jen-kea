@@ -78,7 +78,7 @@
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
                           data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved.">
-                        <button type="submit" class="btn btn-sm btn-danger">Uninstall</button>
+                        <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin">✕</button>
                     </form>
                 </div>
             </td>

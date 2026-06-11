@@ -70,7 +70,7 @@
                 </form>
                 {% endif %}
                 <form method="POST" action="/settings/api-keys/delete/{{ k.id }}">
-                    <button type="submit" class="btn btn-sm btn-danger" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">🗑</button>
+                    <button type="submit" class="btn-act btn-act-del" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">✕</button>
                 </form>
             </td>
         </tr>

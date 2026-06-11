@@ -92,6 +92,15 @@
         .btn-primary { background: var(--primary); color: #fff; }
         .btn-success { background: var(--success); color: #fff; }
         .btn-danger { background: var(--danger); color: #fff; }
+        /* ── Unified row action buttons ── */
+        .btn-act { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; font-size:13px; transition:background .12s, border-color .12s, color .12s; text-decoration:none; }
+        .btn-act-edit  { background:transparent; border:1px solid var(--border); color:var(--text-muted); }
+        .btn-act-edit:hover  { background:var(--surface2); border-color:var(--text-muted); color:var(--text); }
+        .btn-act-pin   { background:transparent; border:1px solid var(--border); color:var(--text-muted); }
+        .btn-act-pin:hover   { background:#1a2e1f; border-color:#238636; color:#3fb950; }
+        .btn-act-del   { background:transparent; border:1px solid var(--danger); color:var(--danger); font-weight:600; }
+        .btn-act-del:hover   { background:#2d1215; border-color:#f85149; color:#f85149; }
+        .btn-act-divider { width:1px; height:16px; background:var(--border); margin:0 3px; display:inline-block; vertical-align:middle; }
         .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
         .btn-sm { padding: 4px 10px; font-size: 12px; }
         .btn-icon { padding: 5px 8px; }
