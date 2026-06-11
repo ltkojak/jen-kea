@@ -27,6 +27,12 @@
               style="display:none;">
             <input type="hidden" name="asset_url" id="update-asset-url">
             <input type="hidden" name="version" id="update-version">
+            <div style="margin-bottom:10px;">
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+                    <input type="checkbox" name="db_backup" value="1" checked>
+                    Back up database before updating <span style="font-size:11px;color:var(--text-muted);">(recommended)</span>
+                </label>
+            </div>
             <button type="submit" class="btn btn-primary" id="update-btn">
                 ⬆ Update Now
             </button>

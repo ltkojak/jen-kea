@@ -1420,3 +1420,13 @@ Pages updated: Leases, Reservations, Devices, Database backups, API Keys, Saved 
 The old pattern of mixed `btn-danger` (solid red), `btn-success` (solid green), and `btn-secondary` (grey) row buttons is replaced throughout. Page-level danger buttons (Apply & Restart Kea, Delete Stale, Start Migration, Revoke All) are intentionally left as solid red — those are high-impact actions that should remain prominent.
 
 Three new CSS classes added to `base.html`: `.btn-act`, `.btn-act-edit`, `.btn-act-pin`, `.btn-act-del`, `.btn-act-divider`.
+
+## [3.7.7] - 2026-06-11
+
+### Fix: GUI Self-Update Now Works Correctly
+
+Two bugs in the self-update mechanism introduced in 3.7.4:
+
+**File copy permission failure:** The update route ran as `www-data` which has no write access to `/opt/jen/`. Files were being downloaded and extracted correctly but the copy step silently failed because `shutil.copy2()` can't write to root-owned directories. Fixed by generating a temporary shell script and running it via `sudo /bin/bash` (covered by the sudoers entry). The sudoers file is updated to allow `www-data` to run `/tmp/jen_update_install.sh`.
+
+**No database backup:** The GUI update bypassed the DB backup prompt that exists in the shell installer. Fixed by adding a "Back up database before updating" checkbox (checked by default) to the update UI. When checked, a full Jen DB export is written to `/etc/jen/backups/` before any files are touched. If the backup fails, the update is aborted.

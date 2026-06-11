@@ -1,2 +1,2 @@
 www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart jen
-www-data ALL=(ALL) NOPASSWD: /bin/cp -r /tmp/jen_update_* /opt/jen
+www-data ALL=(ALL) NOPASSWD: /bin/bash /tmp/jen_update_install.sh

@@ -1228,23 +1228,38 @@ def check_update():
 def self_update():
     """Download latest release tarball and install it, then restart Jen."""
     import requests as _req
-    import tarfile, shutil, os, tempfile
+    import tarfile, shutil, tempfile
 
-    asset_url = request.form.get("asset_url", "").strip()
+    asset_url        = request.form.get("asset_url", "").strip()
     expected_version = request.form.get("version", "").strip()
+    do_db_backup     = request.form.get("db_backup", "0") == "1"
 
     if not asset_url or not asset_url.startswith("https://github.com/"):
         flash("Invalid asset URL.", "error")
         return redirect(url_for("settings.settings_infrastructure"))
 
     try:
-        # Download tarball
-        resp = _req.get(asset_url, timeout=60, stream=True)
+        # ── Optional DB backup ─────────────────────────────────────────────
+        if do_db_backup:
+            try:
+                from jen.services import dbexport as _dbexport
+                content, fname = _dbexport.export_jen()
+                import json
+                payload = json.loads(content.decode("utf-8"))
+                backup_path = _dbexport._write_backup(
+                    payload, f"jen-pre-update-{expected_version}.json.gz"
+                )
+                flash(f"Database backed up to {backup_path}", "success")
+            except Exception as e:
+                flash(f"Database backup failed: {e} — aborting update.", "error")
+                return redirect(url_for("settings.settings_infrastructure"))
+
+        # ── Download tarball ───────────────────────────────────────────────
+        resp = _req.get(asset_url, timeout=120, stream=True)
         if resp.status_code != 200:
             flash(f"Download failed: HTTP {resp.status_code}", "error")
             return redirect(url_for("settings.settings_infrastructure"))
 
-        # Write to temp file
         tmp = tempfile.NamedTemporaryFile(
             suffix=".tar.gz", prefix="jen_update_", dir="/tmp", delete=False
         )
@@ -1252,46 +1267,60 @@ def self_update():
             tmp.write(chunk)
         tmp.close()
 
-        # Extract to temp dir
-        tmp_dir = tempfile.mkdtemp(prefix="jen_update_", dir="/tmp")
+        # ── Extract to temp dir ────────────────────────────────────────────
+        tmp_dir = tempfile.mkdtemp(prefix="jen_update_extract_", dir="/tmp")
         with tarfile.open(tmp.name, "r:gz") as tf:
-            # Security: only extract files under jen/ prefix
             members = [m for m in tf.getmembers()
                        if m.name.startswith("jen/") and ".." not in m.name]
             tf.extractall(tmp_dir, members=members)
 
         extracted = os.path.join(tmp_dir, "jen")
         if not os.path.isdir(extracted):
-            flash("Update package format invalid.", "error")
+            flash("Update package format invalid — expected jen/ directory in tarball.", "error")
             return redirect(url_for("settings.settings_infrastructure"))
 
-        # Copy application files to /opt/jen/
-        # Preserve: /etc/jen/ (config), /opt/jen/static/icons/custom/, plugins
+        # ── Copy files via privileged helper script ────────────────────────
+        # www-data cannot write to /opt/jen/ directly — use a sudo-allowed
+        # helper script that copies the extracted files safely.
+        helper = "/tmp/jen_update_install.sh"
         install_dir = "/opt/jen"
-        preserve = ["static/icons/custom", "plugins"]
+        preserve = {"static", "plugins"}  # top-level dirs to skip (user data)
 
+        # Build the copy script
+        copy_cmds = []
         for item in os.listdir(extracted):
+            if item in preserve:
+                continue
             src  = os.path.join(extracted, item)
             dest = os.path.join(install_dir, item)
-            # Skip preserved directories
-            if any(item == p.split("/")[0] for p in preserve):
-                continue
             if os.path.isdir(src):
-                if os.path.isdir(dest):
-                    shutil.rmtree(dest)
-                shutil.copytree(src, dest)
+                copy_cmds.append(f'rm -rf "{dest}" && cp -r "{src}" "{dest}"')
             else:
-                shutil.copy2(src, dest)
+                copy_cmds.append(f'cp "{src}" "{dest}"')
+        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}"')
+
+        with open(helper, "w") as f:
+            f.write("#!/bin/bash\nset -e\n")
+            f.write("\n".join(copy_cmds))
+            f.write("\n")
+        os.chmod(helper, 0o755)
+
+        result = subprocess.run(
+            ["/usr/bin/sudo", "/bin/bash", helper],
+            capture_output=True, text=True, timeout=60
+        )
 
         # Cleanup
         os.unlink(tmp.name)
+        os.unlink(helper)
         shutil.rmtree(tmp_dir)
 
+        if result.returncode != 0:
+            flash(f"Update failed during file installation: {result.stderr}", "error")
+            return redirect(url_for("settings.settings_infrastructure"))
+
         __user.audit("SELF_UPDATE", "jen", f"Updated to v{expected_version}")
-        flash(
-            f"Jen updated to v{expected_version}. Restarting now…",
-            "success"
-        )
+        flash(f"Jen updated to v{expected_version}. Restarting now…", "success")
 
         def do_restart():
             import time
