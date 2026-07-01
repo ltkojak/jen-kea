@@ -1444,3 +1444,13 @@ Fixed by adding a `dhcpv4_options` lookup per host in the reservations list quer
 ### Fix: Wrong Table Name Broke Reservations Page (regression from 3.7.8)
 
 The DNS override fix in 3.7.8 queried a table called `dhcpv4_options` with `name='domain-name-servers'` — that table doesn't exist in Kea's schema. The correct table, used correctly everywhere else in this same file, is `dhcp4_options` filtered by `code=6`. This broke the entire Reservations page with "Table 'kea.dhcpv4_options' doesn't exist". Fixed to match the working query pattern already used by `edit_reservation`, CSV export, and dry-run import in the same file.
+
+## [3.7.10] - 2026-07-01
+
+### Fix: Restart After GUI Self-Update Failing Silently
+
+The self-update flow correctly downloaded and installed v3.7.9's files (confirmed on disk) but the automatic restart at the end failed with `Failed to restart jen.service: Interactive authentication required.` — Jen kept running the old process in memory even though the files on disk were updated, so the UI still showed the old version.
+
+Root cause: `subprocess.run(["/usr/bin/systemctl", "restart", "jen"])` was calling `systemctl` directly, not through `sudo`. The `jen-sudoers` NOPASSWD rule for `systemctl restart jen` only takes effect when the command is actually invoked via `sudo` — calling the binary directly as `www-data` has no elevated permission and systemd's polkit layer requires interactive authentication, which fails immediately in a non-interactive web request context. This bug existed in all 5 restart call sites (manual restart button, port change, SSH key generation, plugin restart, self-update) — it just happened to not matter for infrastructure changes since those are edited less often and errors there were easy to miss in the flash message.
+
+Fixed by adding `/usr/bin/sudo` as the first argument to all 5 `subprocess.run()` restart calls. Also corrected the sudoers file itself, which whitelisted `/bin/systemctl` while the code called `/usr/bin/systemctl` — a path mismatch that would have blocked the sudo grant even with the sudo prefix added.

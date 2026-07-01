@@ -771,7 +771,7 @@ def restart_jen():
     def do_restart():
         import time
         time.sleep(2)
-        subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
     threading.Thread(target=do_restart, daemon=True).start()
     return redirect(url_for('settings.settings_infrastructure'))
 
@@ -816,7 +816,7 @@ def save_ports():
 
     def do_restart():
         import time; time.sleep(2)
-        subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
     threading.Thread(target=do_restart, daemon=True).start()
 
     return redirect(url_for('settings.settings_infrastructure'))
@@ -1005,7 +1005,7 @@ def upload_cert():
         __user.audit("UPLOAD_CERT", "settings", "SSL certificate uploaded")
         def restart():
             import time; time.sleep(2)
-            subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+            subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
         threading.Thread(target=restart, daemon=True).start()
     except UnicodeDecodeError:
         flash("Certificate files must be PEM format (text), not DER (binary).", "error")
@@ -1022,7 +1022,7 @@ def remove_cert():
     flash("Certificate removed. Restarting in HTTP mode...", "success")
     def restart():
         import time; time.sleep(2)
-        subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
     threading.Thread(target=restart, daemon=True).start()
     return redirect(url_for('settings.settings'))
 
@@ -1325,7 +1325,7 @@ def self_update():
         def do_restart():
             import time
             time.sleep(2)
-            subprocess.run(["/usr/bin/systemctl", "restart", "jen"])
+            subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
 
         threading.Thread(target=do_restart, daemon=True).start()
         return redirect(url_for("settings.settings_infrastructure"))
