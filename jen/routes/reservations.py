@@ -127,11 +127,7 @@ def reservations():
                     jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
                     note = jcur.fetchone()
                     # Fetch DNS override from Kea options table
-                    cur.execute("""
-                        SELECT formatted_value FROM dhcpv4_options
-                        WHERE host_id=%s AND name='domain-name-servers'
-                        LIMIT 1
-                    """, (row["host_id"],))
+                    cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
                     dns_row = cur.fetchone()
                     hosts.append({**row, "mac": mac,
                                   "notes": note["notes"] if note else "",

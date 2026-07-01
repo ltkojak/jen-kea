@@ -1438,3 +1438,9 @@ Two bugs in the self-update mechanism introduced in 3.7.4:
 The reservations list route fetched hostname and notes for each row but never queried the Kea `dhcpv4_options` table for per-host DNS overrides. Every row showed "default" regardless of whether an override was set.
 
 Fixed by adding a `dhcpv4_options` lookup per host in the reservations list query. The DNS Override column now shows a green "● Override" indicator when an override is set (with the actual DNS value in the tooltip on hover), and "default" in muted grey when none is configured.
+
+## [3.7.9] - 2026-06-29
+
+### Fix: Wrong Table Name Broke Reservations Page (regression from 3.7.8)
+
+The DNS override fix in 3.7.8 queried a table called `dhcpv4_options` with `name='domain-name-servers'` — that table doesn't exist in Kea's schema. The correct table, used correctly everywhere else in this same file, is `dhcp4_options` filtered by `code=6`. This broke the entire Reservations page with "Table 'kea.dhcpv4_options' doesn't exist". Fixed to match the working query pattern already used by `edit_reservation`, CSV export, and dry-run import in the same file.
