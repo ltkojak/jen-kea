@@ -1430,3 +1430,11 @@ Two bugs in the self-update mechanism introduced in 3.7.4:
 **File copy permission failure:** The update route ran as `www-data` which has no write access to `/opt/jen/`. Files were being downloaded and extracted correctly but the copy step silently failed because `shutil.copy2()` can't write to root-owned directories. Fixed by generating a temporary shell script and running it via `sudo /bin/bash` (covered by the sudoers entry). The sudoers file is updated to allow `www-data` to run `/tmp/jen_update_install.sh`.
 
 **No database backup:** The GUI update bypassed the DB backup prompt that exists in the shell installer. Fixed by adding a "Back up database before updating" checkbox (checked by default) to the update UI. When checked, a full Jen DB export is written to `/etc/jen/backups/` before any files are touched. If the backup fails, the update is aborted.
+
+## [3.7.8] - 2026-06-29
+
+### Fix: DNS Override Not Showing in Reservations List
+
+The reservations list route fetched hostname and notes for each row but never queried the Kea `dhcpv4_options` table for per-host DNS overrides. Every row showed "default" regardless of whether an override was set.
+
+Fixed by adding a `dhcpv4_options` lookup per host in the reservations list query. The DNS Override column now shows a green "● Override" indicator when an override is set (with the actual DNS value in the tooltip on hover), and "default" in muted grey when none is configured.
