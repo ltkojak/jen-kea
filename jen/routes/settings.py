@@ -1280,24 +1280,54 @@ def self_update():
             return redirect(url_for("settings.settings_infrastructure"))
 
         # ── Copy files via privileged helper script ────────────────────────
-        # www-data cannot write to /opt/jen/ directly — use a sudo-allowed
-        # helper script that copies the extracted files safely.
+        # www-data cannot write to /opt/jen/, /etc/systemd/, or /etc/sudoers.d/
+        # directly — use a sudo-allowed helper script that copies only the
+        # files the manual installer would touch (jen/, templates/, brand
+        # icons, systemd unit, sudoers entry). Mirrors install.sh's scope —
+        # everything else in the tarball (docs, tests, README, etc.) is
+        # source-repo material, not part of the running install.
         helper = "/tmp/jen_update_install.sh"
         install_dir = "/opt/jen"
-        preserve = {"static", "plugins"}  # top-level dirs to skip (user data)
 
-        # Build the copy script
         copy_cmds = []
-        for item in os.listdir(extracted):
-            if item in preserve:
-                continue
-            src  = os.path.join(extracted, item)
-            dest = os.path.join(install_dir, item)
-            if os.path.isdir(src):
-                copy_cmds.append(f'rm -rf "{dest}" && cp -r "{src}" "{dest}"')
-            else:
-                copy_cmds.append(f'cp "{src}" "{dest}"')
-        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}"')
+
+        # Core application package
+        if os.path.isdir(os.path.join(extracted, "jen")):
+            copy_cmds.append(
+                f'rm -rf "{install_dir}/jen" && cp -r "{extracted}/jen" "{install_dir}/jen"'
+            )
+
+        # Templates
+        if os.path.isdir(os.path.join(extracted, "templates")):
+            copy_cmds.append(
+                f'rm -rf "{install_dir}/templates" && cp -r "{extracted}/templates" "{install_dir}/templates"'
+            )
+
+        # Brand icons only — never touch static/icons/custom (user uploads)
+        # or other static/ subfolders (nav_logo, favicon, generated JS, etc.)
+        brands_src = os.path.join(extracted, "static", "icons", "brands")
+        if os.path.isdir(brands_src):
+            copy_cmds.append(
+                f'mkdir -p "{install_dir}/static/icons/brands" && '
+                f'cp "{brands_src}/"*.svg "{install_dir}/static/icons/brands/" 2>/dev/null || true'
+            )
+
+        # systemd service file — reload daemon after
+        service_src = os.path.join(extracted, "jen.service")
+        if os.path.isfile(service_src):
+            copy_cmds.append(f'cp "{service_src}" /etc/systemd/system/jen.service')
+            copy_cmds.append('systemctl daemon-reload')
+
+        # sudoers entry — validate before installing (visudo -c) to avoid
+        # locking out all sudo access with a malformed file
+        sudoers_src = os.path.join(extracted, "jen-sudoers")
+        if os.path.isfile(sudoers_src):
+            copy_cmds.append(
+                f'visudo -c -f "{sudoers_src}" && '
+                f'cp "{sudoers_src}" /etc/sudoers.d/jen && chmod 440 /etc/sudoers.d/jen'
+            )
+
+        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/templates"')
 
         with open(helper, "w") as f:
             f.write("#!/bin/bash\nset -e\n")
@@ -1328,7 +1358,7 @@ def self_update():
             subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
 
         threading.Thread(target=do_restart, daemon=True).start()
-        return redirect(url_for("settings.settings_infrastructure"))
+        return redirect(url_for("settings.settings_infrastructure", updated=expected_version))
 
     except Exception as e:
         flash(f"Update failed: {e}", "error")

@@ -123,22 +123,29 @@ function startUpdate(evt) {
     title.textContent = 'Updating to v' + version + '…';
     msg.textContent = 'Downloading update package…';
 
-    // Let the form submit normally (full page POST) — the overlay stays up
-    // across the redirect since we intercept the *next* page load below.
-    // Simulate progress messages while the request is in flight.
     setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Installing files…'; }, 2500);
     setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Restarting Jen…'; }, 5500);
 
-    // Mark that an update is in progress so the next page load knows to poll
-    sessionStorage.setItem('jen_update_in_progress', version);
+    // If the server redirects back with an error (no ?updated= param), the
+    // overlay needs to disappear so the error flash message is visible —
+    // handled by the page-load check below, which only keeps the overlay up
+    // when ?updated=X.Y.Z is actually present in the URL.
     return true; // allow normal form submission
 }
 
-// On page load: if we just triggered an update, show the overlay and poll
-// until Jen comes back up, then auto-refresh.
+// On page load: only show the restart-polling overlay if the server
+// confirmed success via ?updated=X.Y.Z in the redirect URL. This avoids
+// showing a false "restarting" overlay when the update actually failed
+// server-side (bad download, DB backup failure, file copy error, etc.) —
+// in those cases an error flash message is shown normally instead.
 (function() {
-    var pending = sessionStorage.getItem('jen_update_in_progress');
+    var params = new URLSearchParams(window.location.search);
+    var pending = params.get('updated');
     if (!pending) return;
+
+    // Clean the query param from the URL so a manual refresh doesn't re-trigger this
+    var cleanUrl = window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
 
     var overlay = document.getElementById('update-overlay');
     var title   = document.getElementById('update-overlay-title');
@@ -156,12 +163,16 @@ function startUpdate(evt) {
                 return r.json();
             })
             .then(function(d) {
-                // Jen responded — check if version actually matches what we expect
-                if (d.current === pending || attempts > 20) {
+                if (d.current === pending) {
                     clearInterval(poll);
                     msg.textContent = 'Update complete — reloading…';
-                    sessionStorage.removeItem('jen_update_in_progress');
                     setTimeout(function() { window.location.reload(); }, 800);
+                } else if (attempts > 25) {
+                    // Jen is up but still reports the old version after ~50s —
+                    // something is wrong (restart may not have taken effect)
+                    clearInterval(poll);
+                    title.textContent = 'Update may not have completed';
+                    msg.textContent = 'Jen restarted but still reports v' + d.current + '. Check manually or view logs.';
                 }
             })
             .catch(function() {
