@@ -142,7 +142,7 @@ def create_trusted_device_token(user_id, remember_days, device_name="Unknown Dev
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires_at = None
-    if remember_days and int(remember_days) > 0 and remember_days != "forever":
+    if remember_days and remember_days != "forever" and int(remember_days) > 0:
         expires_at = (datetime.now(timezone.utc) + timedelta(days=int(remember_days))).strftime('%Y-%m-%d %H:%M:%S')
     try:
         db = __get_jen_db()

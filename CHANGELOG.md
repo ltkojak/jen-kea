@@ -1454,3 +1454,13 @@ The self-update flow correctly downloaded and installed v3.7.9's files (confirme
 Root cause: `subprocess.run(["/usr/bin/systemctl", "restart", "jen"])` was calling `systemctl` directly, not through `sudo`. The `jen-sudoers` NOPASSWD rule for `systemctl restart jen` only takes effect when the command is actually invoked via `sudo` — calling the binary directly as `www-data` has no elevated permission and systemd's polkit layer requires interactive authentication, which fails immediately in a non-interactive web request context. This bug existed in all 5 restart call sites (manual restart button, port change, SSH key generation, plugin restart, self-update) — it just happened to not matter for infrastructure changes since those are edited less often and errors there were easy to miss in the flash message.
 
 Fixed by adding `/usr/bin/sudo` as the first argument to all 5 `subprocess.run()` restart calls. Also corrected the sudoers file itself, which whitelisted `/bin/systemctl` while the code called `/usr/bin/systemctl` — a path mismatch that would have blocked the sudo grant even with the sudo prefix added.
+
+## [3.7.11] - 2026-07-15
+
+### Fix: 500 Error on MFA Login When "Remember Forever" Selected
+
+Selecting "Forever" from the Remember Device dropdown during MFA verification caused a 500 error: `invalid literal for int() with base 10: 'forever'`. The login actually succeeded underneath (clicking "Back to Dashboard" landed logged in) but the response crashed before it could redirect.
+
+**Root cause 1** (`jen/services/mfa.py`): `create_trusted_device_token()` checked `int(remember_days) > 0 and remember_days != "forever"` — Python evaluates left to right, so `int("forever")` threw before the `!= "forever"` check ever ran. Fixed by reordering the check to test the string comparison first.
+
+**Root cause 2** (`jen/routes/mfa_routes.py`): The MFA challenge route did `days = int(request.form.get("remember_days", 30))` unconditionally, with no handling for the literal `"forever"` value the dropdown actually submits. Fixed to keep `remember_days` as a string, pass it through as-is, and only convert to int for the cookie `max_age` calculation when it isn't `"forever"` (in which case a 10-year cookie is set instead).
