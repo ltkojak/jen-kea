@@ -23,7 +23,7 @@ Before starting Jen for the first time, work through this checklist:
 
 **Run the installer:**
 ```bash
-tar xzf jen-v3.7.11.tar.gz
+tar xzf jen-v3.7.12.tar.gz
 cd jen
 sudo ./install.sh
 ```

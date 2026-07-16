@@ -1464,3 +1464,13 @@ Selecting "Forever" from the Remember Device dropdown during MFA verification ca
 **Root cause 1** (`jen/services/mfa.py`): `create_trusted_device_token()` checked `int(remember_days) > 0 and remember_days != "forever"` — Python evaluates left to right, so `int("forever")` threw before the `!= "forever"` check ever ran. Fixed by reordering the check to test the string comparison first.
 
 **Root cause 2** (`jen/routes/mfa_routes.py`): The MFA challenge route did `days = int(request.form.get("remember_days", 30))` unconditionally, with no handling for the literal `"forever"` value the dropdown actually submits. Fixed to keep `remember_days` as a string, pass it through as-is, and only convert to int for the cookie `max_age` calculation when it isn't `"forever"` (in which case a 10-year cookie is set instead).
+
+## [3.7.12] - 2026-07-16
+
+### Self-Update UX — Progress Overlay + Auto-Refresh
+
+Two usability gaps in the GUI self-update flow (Settings → Infrastructure):
+
+**No progress feedback during update:** Clicking "Update Now" just sat there while the download/install happened server-side, with no visual indication anything was in progress. Added a full-screen overlay with a spinner and status messages ("Downloading update package…" → "Installing files…" → "Restarting Jen…") that appears the moment the button is clicked.
+
+**No auto-refresh after restart:** After the update completed and Jen restarted, the page showed a static "restarting" flash message but never came back on its own — you had to manually refresh to see the new version. Now the page polls `/settings/infrastructure/check-update` every 2 seconds after triggering an update; once Jen responds again (confirming the restart completed), the page auto-reloads. The overlay persists across the redirect using `sessionStorage` so it stays visible through the brief window where Jen is down mid-restart.

@@ -24,7 +24,7 @@
             🔍 Check for Updates
         </button>
         <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
-              style="display:none;">
+              style="display:none;" onsubmit="return startUpdate(event)">
             <input type="hidden" name="asset_url" id="update-asset-url">
             <input type="hidden" name="version" id="update-version">
             <div style="margin-bottom:10px;">
@@ -43,6 +43,27 @@
         </a>
     </div>
 </div>
+
+<!-- Update progress overlay -->
+<div id="update-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);
+     z-index:2000;align-items:center;justify-content:center;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+                padding:32px 36px;max-width:380px;width:90%;text-align:center;
+                box-shadow:0 16px 48px rgba(0,0,0,.6);">
+        <div id="update-spinner" style="width:36px;height:36px;border:3px solid var(--border);
+             border-top-color:var(--primary);border-radius:50%;margin:0 auto 18px;
+             animation:jen-spin 0.8s linear infinite;"></div>
+        <div id="update-overlay-title" style="font-size:15px;font-weight:600;margin-bottom:6px;">
+            Updating Jen…
+        </div>
+        <div id="update-overlay-msg" style="font-size:13px;color:var(--text-muted);">
+            Downloading update package…
+        </div>
+    </div>
+</div>
+<style>
+@keyframes jen-spin { to { transform: rotate(360deg); } }
+</style>
 
 <script>
 function checkForUpdates() {
@@ -91,6 +112,67 @@ function checkForUpdates() {
             status.textContent = '✗ Network error: ' + e.message;
         });
 }
+
+function startUpdate(evt) {
+    var overlay = document.getElementById('update-overlay');
+    var title   = document.getElementById('update-overlay-title');
+    var msg     = document.getElementById('update-overlay-msg');
+    var version = document.getElementById('update-version').value;
+
+    overlay.style.display = 'flex';
+    title.textContent = 'Updating to v' + version + '…';
+    msg.textContent = 'Downloading update package…';
+
+    // Let the form submit normally (full page POST) — the overlay stays up
+    // across the redirect since we intercept the *next* page load below.
+    // Simulate progress messages while the request is in flight.
+    setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Installing files…'; }, 2500);
+    setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Restarting Jen…'; }, 5500);
+
+    // Mark that an update is in progress so the next page load knows to poll
+    sessionStorage.setItem('jen_update_in_progress', version);
+    return true; // allow normal form submission
+}
+
+// On page load: if we just triggered an update, show the overlay and poll
+// until Jen comes back up, then auto-refresh.
+(function() {
+    var pending = sessionStorage.getItem('jen_update_in_progress');
+    if (!pending) return;
+
+    var overlay = document.getElementById('update-overlay');
+    var title   = document.getElementById('update-overlay-title');
+    var msg     = document.getElementById('update-overlay-msg');
+    overlay.style.display = 'flex';
+    title.textContent = 'Updating to v' + pending + '…';
+    msg.textContent = 'Restarting Jen…';
+
+    var attempts = 0;
+    var poll = setInterval(function() {
+        attempts++;
+        fetch('/settings/infrastructure/check-update', { cache: 'no-store' })
+            .then(function(r) {
+                if (!r.ok) throw new Error('not ready');
+                return r.json();
+            })
+            .then(function(d) {
+                // Jen responded — check if version actually matches what we expect
+                if (d.current === pending || attempts > 20) {
+                    clearInterval(poll);
+                    msg.textContent = 'Update complete — reloading…';
+                    sessionStorage.removeItem('jen_update_in_progress');
+                    setTimeout(function() { window.location.reload(); }, 800);
+                }
+            })
+            .catch(function() {
+                // Still restarting — keep waiting
+                if (attempts > 30) {
+                    clearInterval(poll);
+                    msg.textContent = 'Taking longer than expected — refresh manually if needed.';
+                }
+            });
+    }, 2000);
+})();
 </script>
 
 <!-- Kea API -->
