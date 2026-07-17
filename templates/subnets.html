@@ -32,9 +32,14 @@ function saveNote(id) {
 }
 {% endblock %}
 {% block content %}
-<div class="page-header">
-    <h1>🌐 Subnets & Scope Options</h1>
-    <p>Subnet configuration pulled live from Kea</p>
+<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+    <div>
+        <h1>🌐 Subnets & Scope Options</h1>
+        <p>Subnet configuration pulled live from Kea</p>
+    </div>
+    {% if current_user.role in ('superadmin','admin') %}
+    <a href="/subnets/add" class="btn btn-primary">➕ Add Subnet</a>
+    {% endif %}
 </div>
 
 {% if not ssh_ready %}
@@ -46,10 +51,17 @@ function saveNote(id) {
     <div class="card-header">
         <div style="display:flex;align-items:center;gap:12px;">
             <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
-            <span class="mono" style="font-size:15px;">{{ s.subnet }}</span>
+            <span class="mono" style="font-size:15px;">{{ s.cidr }}</span>
         </div>
         {% if current_user.role in ('superadmin','admin') and ssh_ready %}
-        <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+        <div style="display:flex;gap:8px;">
+            <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+            <form method="POST" action="/subnets/delete/{{ s.id }}" style="display:inline;"
+                  onsubmit="return false;"
+                  data-confirm="Delete subnet '{{ s.name }}' ({{ s.cidr }})? This removes it from Kea's config and restarts Kea. This cannot be undone.">
+                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️ Delete</button>
+            </form>
+        </div>
         {% endif %}
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:16px;">

@@ -164,6 +164,353 @@ def _get_subnet_kea_data(subnet_id):
             "rebind_timer": "", "routers": "", "dns_servers": ""}
 
 
+def _get_kea_subnet_ids():
+    """Return the set of subnet IDs Kea actually has configured right now."""
+    try:
+        result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        if result.get("result") == 0:
+            return {s["id"] for s in result["arguments"]["Dhcp4"].get("subnet4", [])}
+    except Exception:
+        pass
+    return set()
+
+
+@bp.route("/subnets/add")
+@login_required
+@_admin_required
+def add_subnet():
+    existing_ids = _get_kea_subnet_ids() | set(extensions.SUBNET_MAP.keys())
+    suggested_id = max(existing_ids, default=0) + 1
+    ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
+    if not ssh_ready:
+        flash("Subnet creation requires SSH to be configured. Go to Settings → Infrastructure to set it up.", "error")
+        return redirect(url_for('subnets.subnets'))
+    return render_template("add_subnet.html", suggested_id=suggested_id)
+
+
+@bp.route("/subnets/add", methods=["POST"])
+@login_required
+@_admin_required
+def add_subnet_post():
+    import ipaddress
+
+    def _valid_ip(addr):
+        try:
+            ipaddress.IPv4Address(addr.strip())
+            return True
+        except Exception:
+            return False
+
+    new_id     = request.form.get("subnet_id", "").strip()
+    new_name   = request.form.get("name", "").strip()
+    new_cidr   = request.form.get("cidr", "").strip()
+    new_pool   = request.form.get("pool", "").strip()
+    lifetime   = request.form.get("valid_lifetime", "").strip()
+    renew      = request.form.get("renew_timer", "").strip()
+    rebind     = request.form.get("rebind_timer", "").strip()
+    routers    = ",".join(s.strip() for s in request.form.get("routers", "").split(",") if s.strip())
+    dns        = ",".join(s.strip() for s in request.form.get("dns_servers", "").split(",") if s.strip())
+
+    # ── Validation — catch everything before touching Kea or Jen's config ─────
+    if not new_id or not new_id.isdigit() or int(new_id) <= 0:
+        flash("Subnet ID must be a positive whole number.", "error")
+        return redirect(url_for('subnets.add_subnet'))
+    new_id = int(new_id)
+
+    if new_id in extensions.SUBNET_MAP or new_id in _get_kea_subnet_ids():
+        flash(f"Subnet ID {new_id} is already in use.", "error")
+        return redirect(url_for('subnets.add_subnet'))
+
+    if not new_name:
+        flash("A friendly name is required.", "error")
+        return redirect(url_for('subnets.add_subnet'))
+
+    try:
+        network = ipaddress.IPv4Network(new_cidr, strict=True)
+    except Exception:
+        flash(f"Invalid CIDR: {new_cidr} — e.g. 10.10.80.0/24", "error")
+        return redirect(url_for('subnets.add_subnet'))
+
+    # Check for CIDR overlap against every subnet Jen already knows about
+    for sid, info in extensions.SUBNET_MAP.items():
+        try:
+            existing_net = ipaddress.IPv4Network(info["cidr"], strict=False)
+            if network.overlaps(existing_net):
+                flash(f"CIDR {new_cidr} overlaps with existing subnet '{info['name']}' ({info['cidr']}).", "error")
+                return redirect(url_for('subnets.add_subnet'))
+        except Exception:
+            continue
+
+    if not new_pool or not re.match(r'^\d+\.\d+\.\d+\.\d+\s*-\s*\d+\.\d+\.\d+\.\d+$', new_pool):
+        flash("Pool range is required — format: start–end e.g. 10.10.80.50-10.10.80.250", "error")
+        return redirect(url_for('subnets.add_subnet'))
+
+    pool_start, pool_end = [p.strip() for p in new_pool.split("-")]
+    if not _valid_ip(pool_start) or not _valid_ip(pool_end):
+        flash("Pool start/end must be valid IP addresses.", "error")
+        return redirect(url_for('subnets.add_subnet'))
+    if ipaddress.IPv4Address(pool_start) not in network or ipaddress.IPv4Address(pool_end) not in network:
+        flash(f"Pool range must fall within the CIDR {new_cidr}.", "error")
+        return redirect(url_for('subnets.add_subnet'))
+
+    if routers:
+        bad = [ip for ip in routers.split(",") if not _valid_ip(ip)]
+        if bad:
+            flash(f"Invalid router IP(s): {', '.join(bad)}", "error")
+            return redirect(url_for('subnets.add_subnet'))
+
+    if dns:
+        bad = [ip for ip in dns.split(",") if not _valid_ip(ip)]
+        if bad:
+            flash(f"Invalid DNS server IP(s): {', '.join(bad)}", "error")
+            return redirect(url_for('subnets.add_subnet'))
+
+    for t, label in [(lifetime, "Valid Lifetime"), (renew, "Renew Timer"), (rebind, "Rebind Timer")]:
+        if t:
+            try:
+                if int(t) <= 0:
+                    raise ValueError()
+            except ValueError:
+                flash(f"{label} must be a positive integer (seconds).", "error")
+                return redirect(url_for('subnets.add_subnet'))
+    # ─────────────────────────────────────────────────────────────────────────
+
+    errors, results = [], []
+
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        try:
+            import base64
+            import paramiko
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(server["ssh_host"],
+                        username=server.get("ssh_user", extensions.KEA_SSH_USER),
+                        key_filename=extensions.SSH_KEY_PATH, timeout=10)
+
+            kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
+
+            option_data = []
+            if routers:
+                option_data.append({"name": "routers", "code": 3, "space": "dhcp4",
+                                     "csv-format": True, "data": routers})
+            if dns:
+                option_data.append({"name": "domain-name-servers", "code": 6, "space": "dhcp4",
+                                     "csv-format": True, "data": dns})
+
+            new_subnet_block = {
+                "id": new_id,
+                "subnet": new_cidr,
+                "pools": [{"pool": new_pool}],
+                "option-data": option_data,
+            }
+            if lifetime: new_subnet_block["valid-lifetime"] = int(lifetime)
+            if renew:    new_subnet_block["renew-timer"]    = int(renew)
+            if rebind:   new_subnet_block["rebind-timer"]   = int(rebind)
+
+            script = f"""
+import json, sys, shutil, subprocess, os
+
+path   = {repr(kea_conf)}
+backup = path + '.jen_backup'
+shutil.copy2(path, backup)
+
+with open(path) as f:
+    cfg = json.load(f)
+
+new_block = {json.dumps(new_subnet_block)}
+
+if any(s['id'] == {new_id} for s in cfg.get('Dhcp4', {{}}).get('subnet4', [])):
+    print('idexists')
+    sys.exit(1)
+
+cfg.setdefault('Dhcp4', {{}}).setdefault('subnet4', []).append(new_block)
+
+tmp = path + '.jen_tmp'
+with open(tmp, 'w') as f:
+    json.dump(cfg, f, indent=2)
+
+result = subprocess.run(['kea-dhcp4', '-t', tmp], capture_output=True, text=True)
+combined = result.stdout + result.stderr
+
+if result.returncode != 0 or 'ERROR' in combined:
+    os.unlink(tmp)
+    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
+    print('testerror:' + ' | '.join(error_lines[:3]))
+    sys.exit(1)
+
+os.replace(tmp, path)
+print('ok')
+"""
+            enc = base64.b64encode(script.encode()).decode()
+            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+            out = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
+
+            if out == "ok":
+                _, rs, _ = ssh.exec_command(
+                    "sudo systemctl restart kea-dhcp4-server 2>/dev/null || "
+                    "sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done"
+                )
+                rs.read()
+                results.append(f"✅ {server.get('name', server['ssh_host'])}: subnet {new_id} created and Kea restarted")
+            elif out == "idexists":
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: subnet ID {new_id} already exists on this server")
+            elif out.startswith("testerror:"):
+                error_detail = out[len("testerror:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
+            else:
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
+            ssh.close()
+        except Exception as e:
+            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+
+    if errors and not results:
+        for e in errors:
+            flash(e, "error")
+        return redirect(url_for('subnets.add_subnet'))
+
+    for r in results:
+        flash(r, "success")
+    for e in errors:
+        flash(e, "error")
+
+    # Register the new subnet with Jen only after Kea accepted it
+    new_map = dict(extensions.SUBNET_MAP)
+    new_map[new_id] = {"name": new_name, "cidr": new_cidr}
+    __config.write_subnets_config(new_map)
+    extensions.SUBNET_MAP = new_map
+
+    __user.audit("ADD_SUBNET", str(new_id), f"name={new_name} cidr={new_cidr} pool={new_pool}")
+    return redirect(url_for('subnets.subnets'))
+
+
+@bp.route("/subnets/delete/<int:subnet_id>", methods=["POST"])
+@login_required
+@_admin_required
+def delete_subnet(subnet_id):
+    if subnet_id not in extensions.SUBNET_MAP:
+        flash("Subnet not found.", "error")
+        return redirect(url_for('subnets.subnets'))
+
+    subnet_name = extensions.SUBNET_MAP[subnet_id]["name"]
+
+    # Block deletion if the subnet still has active leases or reservations —
+    # deleting Kea config out from under live leases would orphan them.
+    try:
+        db = __db.get_kea_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+            active_leases = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+            reservations = cur.fetchone()["cnt"]
+        db.close()
+    except Exception as e:
+        flash(f"Could not verify subnet is safe to delete: {e}", "error")
+        return redirect(url_for('subnets.subnets'))
+
+    if active_leases > 0 or reservations > 0:
+        parts = []
+        if active_leases: parts.append(f"{active_leases} active lease(s)")
+        if reservations:  parts.append(f"{reservations} reservation(s)")
+        flash(f"Cannot delete '{subnet_name}' — it still has {' and '.join(parts)}. "
+              f"Release the leases and remove the reservations first.", "error")
+        return redirect(url_for('subnets.subnets'))
+
+    errors, results = [], []
+
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        try:
+            import base64
+            import paramiko
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(server["ssh_host"],
+                        username=server.get("ssh_user", extensions.KEA_SSH_USER),
+                        key_filename=extensions.SSH_KEY_PATH, timeout=10)
+
+            kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
+
+            script = f"""
+import json, sys, shutil, subprocess, os
+
+path   = {repr(kea_conf)}
+backup = path + '.jen_backup'
+shutil.copy2(path, backup)
+
+with open(path) as f:
+    cfg = json.load(f)
+
+subnets = cfg.get('Dhcp4', {{}}).get('subnet4', [])
+before = len(subnets)
+subnets = [s for s in subnets if s['id'] != {subnet_id}]
+
+if len(subnets) == before:
+    print('notfound')
+    sys.exit(0)
+
+cfg['Dhcp4']['subnet4'] = subnets
+
+tmp = path + '.jen_tmp'
+with open(tmp, 'w') as f:
+    json.dump(cfg, f, indent=2)
+
+result = subprocess.run(['kea-dhcp4', '-t', tmp], capture_output=True, text=True)
+combined = result.stdout + result.stderr
+
+if result.returncode != 0 or 'ERROR' in combined:
+    os.unlink(tmp)
+    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
+    print('testerror:' + ' | '.join(error_lines[:3]))
+    sys.exit(1)
+
+os.replace(tmp, path)
+print('ok')
+"""
+            enc = base64.b64encode(script.encode()).decode()
+            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+            out = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
+
+            if out == "ok":
+                _, rs, _ = ssh.exec_command(
+                    "sudo systemctl restart kea-dhcp4-server 2>/dev/null || "
+                    "sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done"
+                )
+                rs.read()
+                results.append(f"✅ {server.get('name', server['ssh_host'])}: subnet {subnet_id} removed and Kea restarted")
+            elif out == "notfound":
+                results.append(f"ℹ️ {server.get('name', server['ssh_host'])}: subnet {subnet_id} was not in Kea's config")
+            elif out.startswith("testerror:"):
+                error_detail = out[len("testerror:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
+            else:
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
+            ssh.close()
+        except Exception as e:
+            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+
+    for r in results:
+        flash(r, "success")
+    for e in errors:
+        flash(e, "error")
+
+    if errors and not results:
+        return redirect(url_for('subnets.subnets'))
+
+    # Remove from Jen's own subnet map now that Kea no longer has it
+    new_map = dict(extensions.SUBNET_MAP)
+    new_map.pop(subnet_id, None)
+    __config.write_subnets_config(new_map)
+    extensions.SUBNET_MAP = new_map
+
+    __user.audit("DELETE_SUBNET", str(subnet_id), f"name={subnet_name}")
+    return redirect(url_for('subnets.subnets'))
+
+
 @bp.route("/subnets/edit/<int:subnet_id>")
 @login_required
 @_admin_required

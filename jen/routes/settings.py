@@ -628,41 +628,6 @@ def save_infra_ssh():
     __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
     return redirect(url_for('settings.settings_infrastructure'))
 
-@bp.route("/settings/infrastructure/save-subnets", methods=["POST"])
-@login_required
-@_admin_required
-def save_infra_subnets():
-    ids = request.form.getlist("subnet_id[]")
-    names = request.form.getlist("subnet_name[]")
-    cidrs = request.form.getlist("subnet_cidr[]")
-    errors = []
-    new_subnets = {}
-    for sid, name, cidr in zip(ids, names, cidrs):
-        sid = sid.strip()
-        name = name.strip()
-        cidr = cidr.strip()
-        if not sid or not name or not cidr:
-            continue
-        if not sid.isdigit():
-            errors.append(f"Invalid subnet ID: {sid}")
-            continue
-        if not __auth.valid_cidr(cidr):
-            errors.append(f"Invalid CIDR for subnet {sid}: {cidr}")
-            continue
-        new_subnets[int(sid)] = {"name": name, "cidr": cidr}
-    if errors:
-        for e in errors:
-            flash(e, "error")
-        return redirect(url_for('settings.settings_infrastructure'))
-    if not new_subnets:
-        flash("At least one subnet is required.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
-    __config.write_subnets_config(new_subnets)
-    extensions.SUBNET_MAP = new_subnets
-    flash("Subnet map updated successfully.", "success")
-    __user.audit("SAVE_INFRA", "subnets", f"{len(new_subnets)} subnets saved")
-    return redirect(url_for('settings.settings_infrastructure'))
-
 @bp.route("/settings/infrastructure/save-extra-servers", methods=["POST"])
 @login_required
 @_admin_required

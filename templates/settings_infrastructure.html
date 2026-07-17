@@ -303,33 +303,27 @@ function startUpdate(evt) {
 
 <!-- Subnets -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🌐 Subnet Map</span></div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">Maps Kea subnet IDs to friendly names. Must match the <code>id</code> field in kea-dhcp4.conf.</p>
-    <form method="POST" action="/settings/infrastructure/save-subnets">
-        <div id="subnet-list">
+    <div class="card-header"><span class="card-title">🌐 Subnets</span></div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">
+        Subnets are now added, edited, and removed from the
+        <a href="/subnets" style="color:var(--primary);">Network → Subnets</a> page.
+    </p>
+    {% if infra.subnets %}
+    <table>
+        <thead><tr><th>ID</th><th>Name</th><th>CIDR</th></tr></thead>
+        <tbody>
         {% for sid, info in infra.subnets.items() %}
-        <div class="form-row subnet-row" style="align-items:end;margin-bottom:8px;">
-            <div class="form-group" style="margin-bottom:0;">
-                <label>Subnet ID</label>
-                <input type="number" name="subnet_id[]" value="{{ sid }}" min="1">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>Name</label>
-                <input type="text" name="subnet_name[]" value="{{ info.name }}">
-            </div>
-            <div class="form-group" style="margin-bottom:0;">
-                <label>CIDR</label>
-                <input type="text" name="subnet_cidr[]" value="{{ info.cidr }}">
-            </div>
-            <div style="padding-bottom:4px;">
-                <button type="button" class="btn-act btn-act-del" onclick="this.closest('.subnet-row').remove()" title="Remove">✕</button>
-            </div>
-        </div>
+        <tr>
+            <td class="mono">{{ sid }}</td>
+            <td>{{ info.name }}</td>
+            <td class="mono">{{ info.cidr }}</td>
+        </tr>
         {% endfor %}
-        </div>
-        <button type="button" class="btn btn-sm btn-secondary" style="margin-bottom:12px;" onclick="addSubnetRow()">+ Add Subnet</button><br>
-        <button type="submit" class="btn btn-primary">Save Subnets</button>
-    </form>
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:13px;">No subnets configured yet.</p>
+    {% endif %}
 </div>
 
 <!-- Additional Kea Servers -->
@@ -627,27 +621,4 @@ function serializeServers() {
     });
 }
 
-function addSubnetRow() {
-    const list = document.getElementById('subnet-list');
-    const row = document.createElement('div');
-    row.className = 'form-row subnet-row';
-    row.style.cssText = 'align-items:end;margin-bottom:8px;';
-    row.innerHTML = `
-        <div class="form-group" style="margin-bottom:0;">
-            <label>Subnet ID</label>
-            <input type="number" name="subnet_id[]" min="1" placeholder="1">
-        </div>
-        <div class="form-group" style="margin-bottom:0;">
-            <label>Name</label>
-            <input type="text" name="subnet_name[]" placeholder="Production">
-        </div>
-        <div class="form-group" style="margin-bottom:0;">
-            <label>CIDR</label>
-            <input type="text" name="subnet_cidr[]" placeholder="192.168.1.0/24">
-        </div>
-        <div style="padding-bottom:4px;">
-            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.subnet-row').remove()" title="Remove">✕</button>
-        </div>`;
-    list.appendChild(row);
-}
 {% endblock %}

@@ -1504,3 +1504,31 @@ Everything else in this audit checked out clean: Python/template syntax, version
 **Backup code login completely ignored "Remember this device":** The MFA challenge page has two separate login forms — one for authenticator codes, one for backup codes. Only the authenticator form had the "Remember this device" checkbox and duration selector; the backup code form had no such UI at all, and the backend code path for backup-code verification never read `remember_device`/`remember_days` or set a trust cookie, regardless of what was submitted. This meant logging in via backup code could never establish a trusted device, full stop — every backup-code login would always re-prompt for MFA next time. Fixed by adding the same "Remember this device" UI to the backup code form (with distinct element IDs to avoid collision with the authenticator form) and adding matching remember-device logic to the backup-code success path in `mfa_routes.py`.
 
 **Note on the originally reported issue:** the specific re-prompt-via-Authenticator-tab behavior reported alongside these bugs was not reproducible from code alone — the trusted-device check logic (`expires_at IS NULL OR expires_at > NOW()`) and the "forever" cookie duration fix from 3.7.11 both verified correct on inspection. Since the trust cookie is scoped per-browser, re-prompting after using a different browser, device, or after clearing cookies is expected behavior, not a bug. If MFA re-prompts persist unexpectedly on the *same* browser, check Settings → Audit Log filtered to `MFA_VERIFY` to confirm whether a trust was actually established on the prior login (the audit entry includes `trusted=forever` or `trusted=<days>` when successful, absent when "remember" wasn't checked).
+
+## [3.8.0] - 2026-07-17
+
+### Subnet Create & Delete — Full Subnet Lifecycle Management
+
+Jen could previously only edit subnets that already existed in Kea's config. There was no way to create a brand-new subnet, or delete one, from within Jen at all. The "Add Subnet" button that previously lived in Settings → Infrastructure only added a friendly-name mapping inside Jen — it never touched Kea's actual configuration, so a subnet still had to be provisioned manually via SSH before Jen could do anything with it. This release closes that gap.
+
+**➕ Add Subnet** (Network → Subnets → Add Subnet)
+
+A new page for creating a real subnet in Kea from scratch:
+- Subnet ID auto-suggested as the next available unused ID (checked against both Kea's live config and Jen's own subnet map)
+- Friendly name, CIDR, address pool, lease duration, renew/rebind timers, router/gateway, and DNS servers — the same fields Edit Subnet already supports
+- Full validation before anything touches Kea: subnet ID uniqueness, valid CIDR, pool range falls within the CIDR, valid IPs for router/DNS, no CIDR overlap with any existing subnet
+- Same safe-write pattern as Edit Subnet: backup config → append new subnet4 block → validate with `kea-dhcp4 -t` → only write and restart if validation passes, otherwise the original config is left untouched
+- On success, the subnet is also registered in Jen's own name/CIDR mapping automatically — one action instead of two
+
+**🗑️ Delete Subnet** (button on each subnet card)
+
+- Blocked with a clear message if the subnet still has active leases or reservations — deleting Kea config out from under live leases would orphan them, so this is a hard block, not a force-override
+- Once clear, removes the subnet4 block from Kea via the same backup/validate/restart safety path
+- Automatically removes the subnet from Jen's own mapping so it disappears from the UI cleanly
+- Confirmation required before submission, consistent with other destructive actions across Jen
+
+**Consolidation:** The old editable "Subnet Map" form in Settings → Infrastructure is replaced with a simple read-only summary table pointing to Network → Subnets, where subnet creation, editing, and deletion now all live in one place instead of two.
+
+**UI:** Both buttons use a labeled style (icon + text) rather than the compact icon-only buttons used on dense list pages — appropriate given these are low-frequency, high-consequence actions on a page with only a handful of cards, not a scannable table of dozens of rows.
+
+**Also fixed in passing:** the subnet card header referenced a template variable (`s.subnet`) that didn't exist in the data the route actually provided (`s.cidr`) — CIDR was silently not displaying next to the subnet name badge. Corrected to reference the right field.
