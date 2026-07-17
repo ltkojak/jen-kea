@@ -1327,7 +1327,7 @@ def self_update():
                 f'cp "{sudoers_src}" /etc/sudoers.d/jen && chmod 440 /etc/sudoers.d/jen'
             )
 
-        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/templates"')
+        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/templates" "{install_dir}/static/icons/brands" 2>/dev/null || true')
 
         with open(helper, "w") as f:
             f.write("#!/bin/bash\nset -e\n")
