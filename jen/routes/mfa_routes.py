@@ -91,7 +91,20 @@ def mfa_verify():
                 session["last_active"] = datetime.now(timezone.utc).isoformat()
                 session.pop("mfa_pending_user_id", None)
                 session.pop("mfa_pending_username", None)
+                remember = request.form.get("remember_device")
                 next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
+                if remember:
+                    days_raw = request.form.get("remember_days", "30")
+                    device_name = request.user_agent.string[:100] if request.user_agent else "Unknown"
+                    token = __mfa.create_trusted_device_token(pending_id, days_raw, device_name)
+                    resp = redirect(next_url)
+                    if days_raw == "forever":
+                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax")
+                    else:
+                        days = int(days_raw)
+                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax")
+                    __user.audit("MFA_BACKUP_CODE", "auth", f"{pending_username} trusted={days_raw}")
+                    return resp
                 __user.audit("MFA_BACKUP_CODE", "auth", pending_username)
                 return redirect(next_url)
         # Try TOTP
