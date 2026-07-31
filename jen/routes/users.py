@@ -65,21 +65,20 @@ def audit_log():
     logs = []
     total = 0
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            where = []
-            params = []
-            if search:
-                where.append("(username LIKE %s OR action LIKE %s OR entity LIKE %s OR details LIKE %s)")
-                s = f"%{search}%"
-                params += [s, s, s, s]
-            where_str = " WHERE " + " AND ".join(where) if where else ""
-            cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
-            total = cur.fetchone()["cnt"]
-            offset = (page - 1) * per_page
-            cur.execute(f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}", params)
-            logs = cur.fetchall()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                where = []
+                params = []
+                if search:
+                    where.append("(username LIKE %s OR action LIKE %s OR entity LIKE %s OR details LIKE %s)")
+                    s = f"%{search}%"
+                    params += [s, s, s, s]
+                where_str = " WHERE " + " AND ".join(where) if where else ""
+                cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
+                total = cur.fetchone()["cnt"]
+                offset = (page - 1) * per_page
+                cur.execute(f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}", params)
+                logs = cur.fetchall()
     except Exception as e:
         flash(f"Could not load audit log: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page)
@@ -104,12 +103,11 @@ def about():
     except Exception:
         pass
     try:
-        db = __db.get_kea_db()
-        with db.cursor() as cur:
-            for sid in extensions.SUBNET_MAP:
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
-                lease_counts[sid] = cur.fetchone()["cnt"]
-        db.close()
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                for sid in extensions.SUBNET_MAP:
+                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                    lease_counts[sid] = cur.fetchone()["cnt"]
     except Exception:
         pass
     return render_template("about.html", jen_version=_JEN_VERSION(), kea_version=kea_version,
@@ -122,26 +120,25 @@ def about():
 @login_required
 def user_profile():
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s",
-                       (current_user.id,))
-            user_data = cur.fetchone()
-            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1",
-                       (current_user.id,))
-            totp_count = cur.fetchone()["cnt"]
-            cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s",
-                       (current_user.id,))
-            passkey_count = cur.fetchone()["cnt"]
-            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0",
-                       (current_user.id,))
-            backup_count = cur.fetchone()["cnt"]
-            cur.execute("""
-                SELECT COUNT(*) as cnt FROM mfa_trusted_devices
-                WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())
-            """, (current_user.id,))
-            trusted_count = cur.fetchone()["cnt"]
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s",
+                           (current_user.id,))
+                user_data = cur.fetchone()
+                cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1",
+                           (current_user.id,))
+                totp_count = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s",
+                           (current_user.id,))
+                passkey_count = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0",
+                           (current_user.id,))
+                backup_count = cur.fetchone()["cnt"]
+                cur.execute("""
+                    SELECT COUNT(*) as cnt FROM mfa_trusted_devices
+                    WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())
+                """, (current_user.id,))
+                trusted_count = cur.fetchone()["cnt"]
     except Exception as e:
         flash(f"Error loading profile: {str(e)}", "error")
         user_data = None
@@ -162,24 +159,23 @@ def user_profile():
 @_superadmin_required
 def users():
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username")
-            all_users = cur.fetchall()
-            for u in all_users:
-                cur.execute("""
-                    SELECT
-                        (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) +
-                        (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as mfa_count
-                """, (u["id"], u["id"]))
-                u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
-                # Parse subnet_access for display
-                try:
-                    import json as _json
-                    u["subnet_ids"] = _json.loads(u["subnet_access"]) if u["subnet_access"] else None
-                except Exception:
-                    u["subnet_ids"] = None
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username")
+                all_users = cur.fetchall()
+                for u in all_users:
+                    cur.execute("""
+                        SELECT
+                            (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) +
+                            (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as mfa_count
+                    """, (u["id"], u["id"]))
+                    u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
+                    # Parse subnet_access for display
+                    try:
+                        import json as _json
+                        u["subnet_ids"] = _json.loads(u["subnet_access"]) if u["subnet_access"] else None
+                    except Exception:
+                        u["subnet_ids"] = None
     except Exception as e:
         flash(f"Could not load users: {str(e)}", "error")
         all_users = []
@@ -222,14 +218,13 @@ def add_user():
         return redirect(url_for('users.users'))
 
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO users (username, password, role, subnet_access, session_timeout) VALUES (%s, %s, %s, %s, %s)",
-                (username, __user.hash_password(password), role, subnet_access, timeout_val)
-            )
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (username, password, role, subnet_access, session_timeout) VALUES (%s, %s, %s, %s, %s)",
+                    (username, __user.hash_password(password), role, subnet_access, timeout_val)
+                )
+            db.commit()
         flash(f"User '{username}' created.", "success")
         __user.audit("ADD_USER", username, f"Role={role} subnet_access={subnet_access or 'all'}")
     except pymysql.IntegrityError:
@@ -246,24 +241,21 @@ def delete_user(user_id):
         flash("You cannot delete your own account.", "error")
         return redirect(url_for('users.users'))
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                flash("User not found.", "error")
-                db.close()
-                return redirect(url_for('users.users'))
-            # Protect: cannot delete the last superadmin
-            if row["role"] == "superadmin":
-                cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
-                if cur.fetchone()["cnt"] <= 1:
-                    flash("Cannot delete the last SuperAdmin account.", "error")
-                    db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
                     return redirect(url_for('users.users'))
-            cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
-        db.commit()
-        db.close()
+                # Protect: cannot delete the last superadmin
+                if row["role"] == "superadmin":
+                    cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
+                    if cur.fetchone()["cnt"] <= 1:
+                        flash("Cannot delete the last SuperAdmin account.", "error")
+                        return redirect(url_for('users.users'))
+                cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
+            db.commit()
         flash(f"User '{row['username']}' deleted.", "success")
         __user.audit("DELETE_USER", row["username"], "User deleted")
     except Exception as e:
@@ -285,11 +277,10 @@ def upload_avatar():
             flash("Invalid image format.", "error")
             return redirect(url_for('users.user_profile'))
         try:
-            db = __db.get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("UPDATE users SET avatar_url=%s WHERE id=%s", (data_url, current_user.id))
-            db.commit()
-            db.close()
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("UPDATE users SET avatar_url=%s WHERE id=%s", (data_url, current_user.id))
+                db.commit()
             flash("Profile picture updated.", "success")
             __user.audit("UPDATE_AVATAR", "user", current_user.username)
             session.pop("_avatar_url", None)  # invalidate avatar cache
@@ -298,11 +289,10 @@ def upload_avatar():
     elif data_url == "":
         # Remove avatar
         try:
-            db = __db.get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("UPDATE users SET avatar_url=NULL WHERE id=%s", (current_user.id,))
-            db.commit()
-            db.close()
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("UPDATE users SET avatar_url=NULL WHERE id=%s", (current_user.id,))
+                db.commit()
             flash("Profile picture removed.", "success")
             session.pop("_avatar_url", None)  # invalidate avatar cache
         except Exception as e:
@@ -324,19 +314,17 @@ def change_password():
         return redirect(url_for('users.users'))
 
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT id, password FROM users WHERE id=%s",
-                        (current_user.id,))
-            row = cur.fetchone()
-            if not row or not __user.verify_password(row["password"], current_pw):
-                flash("Current password is incorrect.", "error")
-                db.close()
-                return redirect(url_for('users.users'))
-            cur.execute("UPDATE users SET password=%s WHERE id=%s",
-                        (__user.hash_password(new_pw), current_user.id))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT id, password FROM users WHERE id=%s",
+                            (current_user.id,))
+                row = cur.fetchone()
+                if not row or not __user.verify_password(row["password"], current_pw):
+                    flash("Current password is incorrect.", "error")
+                    return redirect(url_for('users.users'))
+                cur.execute("UPDATE users SET password=%s WHERE id=%s",
+                            (__user.hash_password(new_pw), current_user.id))
+            db.commit()
         session.pop("_user_cache", None)
         flash("Password changed successfully.", "success")
         __user.audit("CHANGE_PASSWORD", current_user.username, "Password changed")
@@ -354,11 +342,10 @@ def set_user_timeout(user_id):
         return redirect(url_for('users.users'))
     timeout_val = int(timeout) if timeout.isdigit() else None
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("UPDATE users SET session_timeout=%s WHERE id=%s", (timeout_val, user_id))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("UPDATE users SET session_timeout=%s WHERE id=%s", (timeout_val, user_id))
+            db.commit()
         session.pop("_user_cache", None)
         flash("Session timeout updated.", "success")
     except Exception as e:
@@ -377,24 +364,21 @@ def set_user_role(user_id):
         flash("You cannot demote your own account from SuperAdmin.", "error")
         return redirect(url_for('users.users'))
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                flash("User not found.", "error")
-                db.close()
-                return redirect(url_for('users.users'))
-            # Protect last superadmin
-            if row["role"] == "superadmin" and role != "superadmin":
-                cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
-                if cur.fetchone()["cnt"] <= 1:
-                    flash("Cannot demote the last SuperAdmin account.", "error")
-                    db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
                     return redirect(url_for('users.users'))
-            cur.execute("UPDATE users SET role=%s WHERE id=%s", (role, user_id))
-        db.commit()
-        db.close()
+                # Protect last superadmin
+                if row["role"] == "superadmin" and role != "superadmin":
+                    cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
+                    if cur.fetchone()["cnt"] <= 1:
+                        flash("Cannot demote the last SuperAdmin account.", "error")
+                        return redirect(url_for('users.users'))
+                cur.execute("UPDATE users SET role=%s WHERE id=%s", (role, user_id))
+            db.commit()
         # Invalidate session cache for affected user
         session.pop("_user_cache", None)
         flash(f"Role for '{row['username']}' updated to {role}.", "success")
@@ -419,17 +403,15 @@ def set_user_subnets(user_id):
         except Exception:
             subnet_access = None
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                flash("User not found.", "error")
-                db.close()
-                return redirect(url_for('users.users'))
-            cur.execute("UPDATE users SET subnet_access=%s WHERE id=%s", (subnet_access, user_id))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
+                    return redirect(url_for('users.users'))
+                cur.execute("UPDATE users SET subnet_access=%s WHERE id=%s", (subnet_access, user_id))
+            db.commit()
         session.pop("_user_cache", None)
         label = "all subnets" if subnet_access is None else f"subnets {subnet_access}"
         flash(f"Subnet access for '{row['username']}' set to {label}.", "success")
@@ -488,45 +470,41 @@ def edit_user(user_id):
             subnet_access = None
 
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                flash("User not found.", "error")
-                db.close()
-                return redirect(url_for('users.users'))
-
-            # Protect last superadmin from demotion
-            if row["role"] == "superadmin" and role != "superadmin":
-                if user_id == current_user.id:
-                    flash("You cannot demote your own SuperAdmin account.", "error")
-                    db.close()
-                    return redirect(url_for('users.users'))
-                cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
-                if cur.fetchone()["cnt"] <= 1:
-                    flash("Cannot demote the last SuperAdmin account.", "error")
-                    db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
                     return redirect(url_for('users.users'))
 
-            # Apply all changes in one update
-            if new_pw:
-                cur.execute("""
-                    UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s, password=%s
-                    WHERE id=%s
-                """, (role, subnet_access, timeout_val, __user.hash_password(new_pw), user_id))
-                __user.audit("EDIT_USER", row["username"],
-                             f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val} password=reset")
-            else:
-                cur.execute("""
-                    UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s
-                    WHERE id=%s
-                """, (role, subnet_access, timeout_val, user_id))
-                __user.audit("EDIT_USER", row["username"],
-                             f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val}")
+                # Protect last superadmin from demotion
+                if row["role"] == "superadmin" and role != "superadmin":
+                    if user_id == current_user.id:
+                        flash("You cannot demote your own SuperAdmin account.", "error")
+                        return redirect(url_for('users.users'))
+                    cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
+                    if cur.fetchone()["cnt"] <= 1:
+                        flash("Cannot demote the last SuperAdmin account.", "error")
+                        return redirect(url_for('users.users'))
 
-        db.commit()
-        db.close()
+                # Apply all changes in one update
+                if new_pw:
+                    cur.execute("""
+                        UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s, password=%s
+                        WHERE id=%s
+                    """, (role, subnet_access, timeout_val, __user.hash_password(new_pw), user_id))
+                    __user.audit("EDIT_USER", row["username"],
+                                 f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val} password=reset")
+                else:
+                    cur.execute("""
+                        UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s
+                        WHERE id=%s
+                    """, (role, subnet_access, timeout_val, user_id))
+                    __user.audit("EDIT_USER", row["username"],
+                                 f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val}")
+
+            db.commit()
         session.pop("_user_cache", None)
         flash(f"User '{row['username']}' updated.", "success")
     except Exception as e:
@@ -540,19 +518,17 @@ def edit_user(user_id):
 def reset_user_mfa(user_id):
     """SuperAdmin wipes a user's MFA enrollment so they can re-enroll on next login."""
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
-            row = cur.fetchone()
-            if not row:
-                flash("User not found.", "error")
-                db.close()
-                return redirect(url_for('users.users'))
-            cur.execute("UPDATE mfa_methods SET enabled=0 WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
+                    return redirect(url_for('users.users'))
+                cur.execute("UPDATE mfa_methods SET enabled=0 WHERE user_id=%s", (user_id,))
+                cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
+                cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
+            db.commit()
         flash(f"MFA for '{row['username']}' has been reset. They will need to re-enroll.", "success")
         __user.audit("RESET_MFA", row["username"],
                      f"MFA reset by {current_user.username}")

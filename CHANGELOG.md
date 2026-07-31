@@ -1,5 +1,42 @@
 # Changelog
 
+## [4.1.0] - 2026-07-31
+
+### Connection Context Managers
+
+Second phase of the architecture roadmap (4.0.0 AppConfig → 4.1.0 connection
+lifecycle → 4.2.0 migrations). No user-facing feature changes.
+
+### Changed
+- New `jen_db()` / `kea_db()` context managers in `jen/models/db.py`: commit on
+  clean exit, rollback on exception, and guaranteed return of the connection to
+  the pool on every path — early return, exception, or normal exit. A failed
+  request can no longer leave a half-applied transaction on a pooled connection
+- All 142 hand-managed connection sites across routes, services, and models
+  converted to `with` blocks (131 with-blocks after dual-connection merges).
+  Explicit mid-block `db.commit()` calls are preserved, so commit timing is
+  unchanged; the context manager's final commit is a harmless no-op after them
+- Service modules (alerts, auth, mfa) gained lazy `__jen_db_ctx` / `__kea_db_ctx`
+  wrappers matching their existing circular-import-avoidance pattern
+- Several pre-existing connection leaks on early-return paths fixed as a
+  by-product (e.g. dashboard top-devices with no accessible subnets, API device
+  lookup 404 path)
+- Shadowing local variables named `kea_db` / `jen_db` in search and reservations
+  renamed to `kdb` / `jdb`
+- dbexport's direct (non-pooled) migration/backup connections intentionally
+  left as-is — different lifecycle, out of scope
+
+### Added
+- `tests/test_db_context.py`: 6 unit tests asserting the context manager
+  guarantees with mocked connections — suite grows from 103 to 109 tests
+
+### Developer Notes
+- Conversion was done with a conservative per-function transformer that bailed
+  to manual review on any non-standard shape (early closes, try/finally,
+  non-LIFO dual-connection closes). First transformer draft mis-handled
+  branch-nested early closes; it was caught in review, fully reset, and redone
+  with a corrected termination rule before anything was packaged
+
 ## [4.0.0] - 2026-07-31
 
 ### Configuration Architecture Overhaul — AppConfig

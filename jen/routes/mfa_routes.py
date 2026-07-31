@@ -39,17 +39,16 @@ bp = Blueprint("mfa_routes", __name__)
 
 def _load_user(user_id):
     """Load a user by ID — thin wrapper around the login_manager user loader."""
-    from jen.models.db import get_jen_db
+    from jen.models.db import jen_db
     from jen.models.user import User
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT id, username, role, session_timeout FROM users WHERE id=%s",
-                (user_id,)
-            )
-            row = cur.fetchone()
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, username, role, session_timeout FROM users WHERE id=%s",
+                    (user_id,)
+                )
+                row = cur.fetchone()
         if row:
             return User(row["id"], row["username"], row["role"], row["session_timeout"])
     except Exception as e:
@@ -155,15 +154,14 @@ def mfa_enroll():
                 flash("Invalid verification code. Please try again.", "error")
                 return redirect(url_for('mfa_routes.mfa_enroll'))
             try:
-                db = __db.get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("""INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
-                                   VALUES (%s, 'totp', %s, %s, 1)""",
-                                (current_user.id, secret, device_name))
-                db.commit()
-                # Generate backup codes
-                codes = __mfa.generate_backup_codes(current_user.id)
-                db.close()
+                with __db.jen_db() as db:
+                    with db.cursor() as cur:
+                        cur.execute("""INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
+                                       VALUES (%s, 'totp', %s, %s, 1)""",
+                                    (current_user.id, secret, device_name))
+                    db.commit()
+                    # Generate backup codes
+                    codes = __mfa.generate_backup_codes(current_user.id)
                 __user.audit("MFA_ENROLL", "auth", f"{current_user.username} device={device_name}")
                 flash("Authenticator enrolled successfully!", "success")
                 return render_template("mfa_backup_codes.html", codes=codes)
@@ -173,10 +171,10 @@ def mfa_enroll():
         elif action in ("remove", "remove_totp"):
             method_id = request.form.get("method_id") or request.form.get("mfa_id")
             try:
-                db = __db.get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (method_id, current_user.id))
-                db.commit(); db.close()
+                with __db.jen_db() as db:
+                    with db.cursor() as cur:
+                        cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (method_id, current_user.id))
+                    db.commit()
                 __user.audit("MFA_REMOVE", "auth", f"{current_user.username} method_id={method_id}")
                 flash("Authenticator removed.", "success")
             except Exception as e:
@@ -195,13 +193,12 @@ def mfa_enroll():
     qr.save(buf, format="PNG")
     qr_b64 = base64.b64encode(buf.getvalue()).decode()
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (current_user.id,))
-            methods = cur.fetchall()
-            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,))
-            backup_count = cur.fetchone()["cnt"]
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (current_user.id,))
+                methods = cur.fetchall()
+                cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,))
+                backup_count = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"mfa_enroll fetch error: {e}")
         methods = []; backup_count = 0
@@ -219,13 +216,12 @@ def regenerate_backup_codes():
 @login_required
 def mfa_trusted_devices():
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""SELECT id, device_name, created_at, expires_at, last_used
-                           FROM mfa_trusted_devices WHERE user_id=%s
-                           ORDER BY created_at DESC""", (current_user.id,))
-            devices = cur.fetchall()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("""SELECT id, device_name, created_at, expires_at, last_used
+                               FROM mfa_trusted_devices WHERE user_id=%s
+                               ORDER BY created_at DESC""", (current_user.id,))
+                devices = cur.fetchall()
     except Exception:
         devices = []
     return render_template("mfa_trusted_devices.html", devices=devices)
@@ -235,10 +231,10 @@ def mfa_trusted_devices():
 @login_required
 def remove_trusted_device(device_id):
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE id=%s AND user_id=%s", (device_id, current_user.id))
-        db.commit(); db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM mfa_trusted_devices WHERE id=%s AND user_id=%s", (device_id, current_user.id))
+            db.commit()
         flash("Trusted device removed.", "success")
         __user.audit("REMOVE_TRUSTED_DEVICE", "auth", f"device_id={device_id}")
     except Exception as e:
@@ -249,11 +245,11 @@ def remove_trusted_device(device_id):
 @login_required
 def revoke_all_trusted_devices():
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (current_user.id,))
-            deleted = cur.rowcount
-        db.commit(); db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (current_user.id,))
+                deleted = cur.rowcount
+            db.commit()
         flash(f"All {deleted} trusted device(s) revoked.", "success")
         __user.audit("REVOKE_ALL_TRUSTED_DEVICES", "auth", current_user.username)
     except Exception as e:
@@ -265,12 +261,12 @@ def revoke_all_trusted_devices():
 @_admin_required
 def admin_reset_mfa(user_id):
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
-            cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
-        db.commit(); db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (user_id,))
+                cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
+                cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
+            db.commit()
         flash(f"MFA reset for user ID {user_id}.", "success")
         __user.audit("ADMIN_RESET_MFA", str(user_id), f"Reset by {current_user.username}")
     except Exception as e:

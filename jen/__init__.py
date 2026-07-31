@@ -24,7 +24,7 @@ from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "4.0.0"
+JEN_VERSION = "4.1.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -119,16 +119,15 @@ def create_app() -> Flask:
             return user
 
         # Slow path: DB lookup (only on first login or if session cache missing)
-        from jen.models.db import get_jen_db
+        from jen.models.db import jen_db
         try:
-            db = get_jen_db()
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, username, role, session_timeout, subnet_access FROM users WHERE id=%s",
-                    (user_id,)
-                )
-                row = cur.fetchone()
-            db.close()
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, username, role, session_timeout, subnet_access FROM users WHERE id=%s",
+                        (user_id,)
+                    )
+                    row = cur.fetchone()
             if row:
                 user = User(row["id"], row["username"],
                             row["role"], row["session_timeout"],
@@ -221,14 +220,13 @@ def create_app() -> Flask:
             avatar_url = session.get("_avatar_url", "__unset__")
             if avatar_url == "__unset__":
                 try:
-                    from jen.models.db import get_jen_db
-                    db = get_jen_db()
-                    with db.cursor() as cur:
-                        cur.execute("SELECT avatar_url FROM users WHERE id=%s",
-                                    (current_user.id,))
-                        row = cur.fetchone()
-                        avatar_url = row.get("avatar_url") if row else None
-                    db.close()
+                    from jen.models.db import jen_db
+                    with jen_db() as db:
+                        with db.cursor() as cur:
+                            cur.execute("SELECT avatar_url FROM users WHERE id=%s",
+                                        (current_user.id,))
+                            row = cur.fetchone()
+                            avatar_url = row.get("avatar_url") if row else None
                 except Exception:
                     avatar_url = None
                 session["_avatar_url"] = avatar_url

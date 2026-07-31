@@ -13,7 +13,7 @@ from flask import (Blueprint, jsonify, redirect, render_template,
 from flask_login import current_user, login_required
 
 from jen import extensions
-from jen.models.db import get_jen_db, get_kea_db
+from jen.models.db import get_jen_db, get_kea_db, jen_db, kea_db
 from jen.models.user import audit
 from jen.services.fingerprint import get_device_info_map
 from jen.services.kea import kea_command, kea_is_up, get_active_kea_server
@@ -33,17 +33,16 @@ def _api_auth():
     raw_key  = auth[7:].strip()
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT id, name FROM api_keys WHERE key_hash=%s AND active=1",
-                (key_hash,)
-            )
-            row = cur.fetchone()
-            if row:
-                cur.execute("UPDATE api_keys SET last_used=NOW() WHERE id=%s", (row["id"],))
-                db.commit()
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name FROM api_keys WHERE key_hash=%s AND active=1",
+                    (key_hash,)
+                )
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE api_keys SET last_used=NOW() WHERE id=%s", (row["id"],))
+                    db.commit()
         return row
     except Exception:
         return None
@@ -86,17 +85,16 @@ def api_v1_subnets():
         return api_error("Invalid or missing API key.", 401)
     result = []
     try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            for sid, info in extensions.SUBNET_MAP.items():
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
-                active = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (sid,))
-                reserved = cur.fetchone()["cnt"]
-                result.append({"id": sid, "name": info["name"], "cidr": info["cidr"],
-                                "active_leases": active, "reservations": reserved,
-                                "pool_size": 0, "pools": [], "utilization_pct": 0})
-        db.close()
+        with kea_db() as db:
+            with db.cursor() as cur:
+                for sid, info in extensions.SUBNET_MAP.items():
+                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                    active = cur.fetchone()["cnt"]
+                    cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (sid,))
+                    reserved = cur.fetchone()["cnt"]
+                    result.append({"id": sid, "name": info["name"], "cidr": info["cidr"],
+                                    "active_leases": active, "reservations": reserved,
+                                    "pool_size": 0, "pools": [], "utilization_pct": 0})
         try:
             cfg_result = kea_command("config-get", server=get_active_kea_server())
             if cfg_result.get("result") == 0:
@@ -134,38 +132,37 @@ def api_v1_leases():
         limit = 200
     result = []
     try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            where  = ["l.state=0", "l.expire > NOW()"]
-            params = []
-            if subnet:
-                sid = next((k for k, v in extensions.SUBNET_MAP.items()
-                            if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
-                if sid:
-                    where.append("l.subnet_id=%s")
-                    params.append(sid)
-            if mac:
-                where.append("HEX(l.hwaddr) LIKE %s")
-                params.append("%" + mac + "%")
-            if hostname:
-                where.append("l.hostname LIKE %s")
-                params.append("%" + hostname + "%")
-            cur.execute(
-                "SELECT inet_ntoa(l.address) AS ip, l.hostname, HEX(l.hwaddr) AS mac_hex, "
-                "l.subnet_id, (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
-                "l.expire AS expires, l.valid_lifetime "
-                "FROM lease4 l WHERE " + " AND ".join(where) + " ORDER BY l.expire DESC LIMIT %s",
-                params + [limit]
-            )
-            for row in cur.fetchall():
-                mf = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
-                si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
-                result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
-                                "subnet_id": row["subnet_id"], "subnet_name": si.get("name", ""),
-                                "obtained": row["obtained"].isoformat() if row["obtained"] else None,
-                                "expires":  row["expires"].isoformat()  if row["expires"]  else None,
-                                "valid_lifetime": row["valid_lifetime"]})
-        db.close()
+        with kea_db() as db:
+            with db.cursor() as cur:
+                where  = ["l.state=0", "l.expire > NOW()"]
+                params = []
+                if subnet:
+                    sid = next((k for k, v in extensions.SUBNET_MAP.items()
+                                if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                    if sid:
+                        where.append("l.subnet_id=%s")
+                        params.append(sid)
+                if mac:
+                    where.append("HEX(l.hwaddr) LIKE %s")
+                    params.append("%" + mac + "%")
+                if hostname:
+                    where.append("l.hostname LIKE %s")
+                    params.append("%" + hostname + "%")
+                cur.execute(
+                    "SELECT inet_ntoa(l.address) AS ip, l.hostname, HEX(l.hwaddr) AS mac_hex, "
+                    "l.subnet_id, (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
+                    "l.expire AS expires, l.valid_lifetime "
+                    "FROM lease4 l WHERE " + " AND ".join(where) + " ORDER BY l.expire DESC LIMIT %s",
+                    params + [limit]
+                )
+                for row in cur.fetchall():
+                    mf = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
+                    si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
+                    result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
+                                    "subnet_id": row["subnet_id"], "subnet_name": si.get("name", ""),
+                                    "obtained": row["obtained"].isoformat() if row["obtained"] else None,
+                                    "expires":  row["expires"].isoformat()  if row["expires"]  else None,
+                                    "valid_lifetime": row["valid_lifetime"]})
         di = get_device_info_map([r["mac"] for r in result if r["mac"]])
         for r in result:
             info = di.get(r["mac"], {})
@@ -184,17 +181,16 @@ def api_v1_lease_by_mac(mac):
     if len(mac_clean) != 12:
         return api_error("Invalid MAC address format.", 400)
     try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT inet_ntoa(l.address) AS ip, l.hostname, HEX(l.hwaddr) AS mac_hex, "
-                "l.subnet_id, (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
-                "l.expire AS expires, l.valid_lifetime, l.state "
-                "FROM lease4 l WHERE HEX(l.hwaddr)=%s ORDER BY l.expire DESC LIMIT 1",
-                (mac_clean.upper(),)
-            )
-            row = cur.fetchone()
-        db.close()
+        with kea_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT inet_ntoa(l.address) AS ip, l.hostname, HEX(l.hwaddr) AS mac_hex, "
+                    "l.subnet_id, (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
+                    "l.expire AS expires, l.valid_lifetime, l.state "
+                    "FROM lease4 l WHERE HEX(l.hwaddr)=%s ORDER BY l.expire DESC LIMIT 1",
+                    (mac_clean.upper(),)
+                )
+                row = cur.fetchone()
         if not row:
             return api_error("No lease found for this MAC address.", 404)
         mf     = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
@@ -222,39 +218,38 @@ def api_v1_devices_endpoint():
         limit = 200
     result = []
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            where  = ["1=1"]
-            params = []
-            if mac:
-                where.append("REPLACE(d.mac, ':', '') LIKE %s")
-                params.append("%" + mac + "%")
-            if name:
-                where.append("(d.device_name LIKE %s OR d.last_hostname LIKE %s)")
-                params += ["%" + name + "%", "%" + name + "%"]
-            if subnet:
-                sid = next((k for k, v in extensions.SUBNET_MAP.items()
-                            if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
-                if sid:
-                    where.append("d.last_subnet_id=%s")
-                    params.append(sid)
-            cur.execute(
-                "SELECT d.mac, d.device_name, d.owner, d.last_ip, d.last_hostname, "
-                "d.last_subnet_id, d.first_seen, d.last_seen, "
-                "DATEDIFF(NOW(), d.last_seen) as days_inactive "
-                "FROM devices d WHERE " + " AND ".join(where) + " ORDER BY d.last_seen DESC LIMIT %s",
-                params + [limit]
-            )
-            for row in cur.fetchall():
-                si = extensions.SUBNET_MAP.get(row["last_subnet_id"], {})
-                result.append({"mac": row["mac"], "device_name": row["device_name"] or "",
-                                "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
-                                "last_hostname": row["last_hostname"] or "",
-                                "subnet_name": si.get("name", ""),
-                                "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
-                                "last_seen":  row["last_seen"].isoformat()  if row["last_seen"]  else None,
-                                "days_inactive": row["days_inactive"]})
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                where  = ["1=1"]
+                params = []
+                if mac:
+                    where.append("REPLACE(d.mac, ':', '') LIKE %s")
+                    params.append("%" + mac + "%")
+                if name:
+                    where.append("(d.device_name LIKE %s OR d.last_hostname LIKE %s)")
+                    params += ["%" + name + "%", "%" + name + "%"]
+                if subnet:
+                    sid = next((k for k, v in extensions.SUBNET_MAP.items()
+                                if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                    if sid:
+                        where.append("d.last_subnet_id=%s")
+                        params.append(sid)
+                cur.execute(
+                    "SELECT d.mac, d.device_name, d.owner, d.last_ip, d.last_hostname, "
+                    "d.last_subnet_id, d.first_seen, d.last_seen, "
+                    "DATEDIFF(NOW(), d.last_seen) as days_inactive "
+                    "FROM devices d WHERE " + " AND ".join(where) + " ORDER BY d.last_seen DESC LIMIT %s",
+                    params + [limit]
+                )
+                for row in cur.fetchall():
+                    si = extensions.SUBNET_MAP.get(row["last_subnet_id"], {})
+                    result.append({"mac": row["mac"], "device_name": row["device_name"] or "",
+                                    "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
+                                    "last_hostname": row["last_hostname"] or "",
+                                    "subnet_name": si.get("name", ""),
+                                    "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
+                                    "last_seen":  row["last_seen"].isoformat()  if row["last_seen"]  else None,
+                                    "days_inactive": row["days_inactive"]})
     except Exception as e:
         return api_error(str(e), 500)
     return api_ok({"devices": result, "count": len(result)})
@@ -266,24 +261,21 @@ def api_v1_device_by_mac(mac):
         return api_error("Invalid or missing API key.", 401)
     mac_fmt = mac.lower().replace("-", ":")
     try:
-        db  = get_jen_db()
-        kdb = get_kea_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM devices WHERE mac=%s", (mac_fmt,))
-            row = cur.fetchone()
-        if not row:
-            db.close(); kdb.close()
-            return api_error("Device not found.", 404)
-        mac_clean = mac_fmt.replace(":", "").upper()
-        with kdb.cursor() as kcur:
-            kcur.execute(
-                "SELECT inet_ntoa(address) AS ip, hostname, state, "
-                "(expire - INTERVAL valid_lifetime SECOND) AS obtained, expire AS expires "
-                "FROM lease4 WHERE HEX(hwaddr)=%s ORDER BY expire DESC LIMIT 1",
-                (mac_clean,)
-            )
-            lease = kcur.fetchone()
-        db.close(); kdb.close()
+        with jen_db() as db, kea_db() as kdb:
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM devices WHERE mac=%s", (mac_fmt,))
+                row = cur.fetchone()
+            if not row:
+                return api_error("Device not found.", 404)
+            mac_clean = mac_fmt.replace(":", "").upper()
+            with kdb.cursor() as kcur:
+                kcur.execute(
+                    "SELECT inet_ntoa(address) AS ip, hostname, state, "
+                    "(expire - INTERVAL valid_lifetime SECOND) AS obtained, expire AS expires "
+                    "FROM lease4 WHERE HEX(hwaddr)=%s ORDER BY expire DESC LIMIT 1",
+                    (mac_clean,)
+                )
+                lease = kcur.fetchone()
         si = extensions.SUBNET_MAP.get(row["last_subnet_id"], {})
         result = {"mac": row["mac"], "device_name": row["device_name"] or "",
                   "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
@@ -315,28 +307,27 @@ def api_v1_reservations():
         limit = 200
     result = []
     try:
-        db = get_kea_db()
-        with db.cursor() as cur:
-            where  = ["dhcp4_subnet_id > 0"]
-            params = []
-            if subnet:
-                sid = next((k for k, v in extensions.SUBNET_MAP.items()
-                            if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
-                if sid:
-                    where.append("dhcp4_subnet_id=%s")
-                    params.append(sid)
-            cur.execute(
-                "SELECT inet_ntoa(ipv4_address) AS ip, hostname, "
-                "HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id "
-                "FROM hosts WHERE " + " AND ".join(where) + " ORDER BY ipv4_address LIMIT %s",
-                params + [limit]
-            )
-            for row in cur.fetchall():
-                mf = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
-                si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
-                result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
-                                "subnet_id": row["subnet_id"], "subnet_name": si.get("name", "")})
-        db.close()
+        with kea_db() as db:
+            with db.cursor() as cur:
+                where  = ["dhcp4_subnet_id > 0"]
+                params = []
+                if subnet:
+                    sid = next((k for k, v in extensions.SUBNET_MAP.items()
+                                if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                    if sid:
+                        where.append("dhcp4_subnet_id=%s")
+                        params.append(sid)
+                cur.execute(
+                    "SELECT inet_ntoa(ipv4_address) AS ip, hostname, "
+                    "HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id "
+                    "FROM hosts WHERE " + " AND ".join(where) + " ORDER BY ipv4_address LIMIT %s",
+                    params + [limit]
+                )
+                for row in cur.fetchall():
+                    mf = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
+                    si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
+                    result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
+                                    "subnet_id": row["subnet_id"], "subnet_name": si.get("name", "")})
     except Exception as e:
         return api_error(str(e), 500)
     return api_ok({"reservations": result, "count": len(result)})
@@ -352,16 +343,15 @@ def api_keys():
         return redirect(url_for("dashboard.dashboard"))
     keys = []
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
-                "u.username as created_by_name "
-                "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
-                "ORDER BY k.created_at DESC"
-            )
-            keys = cur.fetchall()
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
+                    "u.username as created_by_name "
+                    "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
+                    "ORDER BY k.created_at DESC"
+                )
+                keys = cur.fetchall()
     except Exception as e:
         flash(f"Could not load API keys: {e}", "error")
     return render_template("api_keys.html", keys=keys)
@@ -380,13 +370,13 @@ def api_keys_create():
     raw_key  = "jen_" + secrets.token_hex(24)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES (%s,%s,%s,%s)",
-                (name, key_hash, raw_key[:8], current_user.id)
-            )
-        db.commit(); db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES (%s,%s,%s,%s)",
+                    (name, key_hash, raw_key[:8], current_user.id)
+                )
+            db.commit()
         audit("API_KEY_CREATE", "api_keys", f"Key '{name}' created by {current_user.username}")
         session["new_api_key"]      = raw_key
         session["new_api_key_name"] = name
@@ -403,16 +393,15 @@ def api_keys_revoke(key_id):
         flash("Admin access required.", "error")
         return redirect(url_for("dashboard.dashboard"))
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
-            row = cur.fetchone()
-            if row:
-                cur.execute("UPDATE api_keys SET active=0 WHERE id=%s", (key_id,))
-                db.commit()
-                audit("API_KEY_REVOKE", "api_keys", f"Key '{row['name']}' revoked")
-                flash(f"API key '{row['name']}' revoked.", "success")
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE api_keys SET active=0 WHERE id=%s", (key_id,))
+                    db.commit()
+                    audit("API_KEY_REVOKE", "api_keys", f"Key '{row['name']}' revoked")
+                    flash(f"API key '{row['name']}' revoked.", "success")
     except Exception as e:
         flash(f"Error revoking key: {e}", "error")
     return redirect(url_for("api.api_keys"))
@@ -425,16 +414,15 @@ def api_keys_delete(key_id):
         flash("Admin access required.", "error")
         return redirect(url_for("dashboard.dashboard"))
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
-            row = cur.fetchone()
-            if row:
-                cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
-                db.commit()
-                audit("API_KEY_DELETE", "api_keys", f"Key '{row['name']}' deleted")
-                flash(f"API key '{row['name']}' deleted.", "success")
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
+                    db.commit()
+                    audit("API_KEY_DELETE", "api_keys", f"Key '{row['name']}' deleted")
+                    flash(f"API key '{row['name']}' deleted.", "success")
     except Exception as e:
         flash(f"Error deleting key: {e}", "error")
     return redirect(url_for("api.api_keys"))
@@ -445,14 +433,13 @@ def api_keys_delete(key_id):
 def api_docs():
     keys = []
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, key_prefix FROM api_keys WHERE active=1 "
-                "ORDER BY created_at DESC LIMIT 10"
-            )
-            keys = cur.fetchall()
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, key_prefix FROM api_keys WHERE active=1 "
+                    "ORDER BY created_at DESC LIMIT 10"
+                )
+                keys = cur.fetchall()
     except Exception:
         pass
     return render_template("api_docs.html", keys=keys,

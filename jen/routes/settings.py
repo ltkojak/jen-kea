@@ -105,13 +105,12 @@ def settings_system():
 
     # Get current lockout counts for admin visibility
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(DISTINCT ip_address) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
-            rl_active_ips = cur.fetchone()["cnt"]
-            cur.execute("SELECT COUNT(*) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
-            rl_attempts_1h = cur.fetchone()["cnt"]
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT COUNT(DISTINCT ip_address) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
+                rl_active_ips = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
+                rl_attempts_1h = cur.fetchone()["cnt"]
     except Exception:
         rl_active_ips = 0
         rl_attempts_1h = 0
@@ -139,11 +138,10 @@ def settings_system():
     # Audit log retention
     audit_retention_days = __user.get_global_setting("audit_retention_days", "90")
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) as cnt FROM audit_log")
-            audit_log_count = cur.fetchone()["cnt"]
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT COUNT(*) as cnt FROM audit_log")
+                audit_log_count = cur.fetchone()["cnt"]
     except Exception:
         audit_log_count = "?"
 
@@ -178,15 +176,14 @@ def save_audit_retention():
     # Run cleanup immediately if retention > 0
     if days > 0:
         try:
-            db = __db.get_jen_db()
-            with db.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
-                    (days,)
-                )
-                deleted = cur.rowcount
-            db.commit()
-            db.close()
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
+                        (days,)
+                    )
+                    deleted = cur.rowcount
+                db.commit()
             flash(f"Audit log retention set to {days} days. {deleted} old entries removed.", "success")
         except Exception as e:
             flash(f"Setting saved but cleanup failed: {e}", "warning")
@@ -215,38 +212,36 @@ def settings_alerts():
     channels = []
     templates = {}
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM alert_channels ORDER BY channel_type, channel_name")
-            channels = cur.fetchall()
-            # Parse JSON fields
-            for ch in channels:
-                if isinstance(ch.get("config"), str):
-                    try: ch["config"] = json.loads(ch["config"])
-                    except (json.JSONDecodeError, ValueError): ch["config"] = {}
-                if isinstance(ch.get("alert_types"), str):
-                    try: ch["alert_types"] = json.loads(ch["alert_types"])
-                    except (json.JSONDecodeError, ValueError): ch["alert_types"] = []
-            cur.execute("SELECT alert_type, template_text FROM alert_templates")
-            for row in cur.fetchall():
-                templates[row["alert_type"]] = row["template_text"]
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM alert_channels ORDER BY channel_type, channel_name")
+                channels = cur.fetchall()
+                # Parse JSON fields
+                for ch in channels:
+                    if isinstance(ch.get("config"), str):
+                        try: ch["config"] = json.loads(ch["config"])
+                        except (json.JSONDecodeError, ValueError): ch["config"] = {}
+                    if isinstance(ch.get("alert_types"), str):
+                        try: ch["alert_types"] = json.loads(ch["alert_types"])
+                        except (json.JSONDecodeError, ValueError): ch["alert_types"] = []
+                cur.execute("SELECT alert_type, template_text FROM alert_templates")
+                for row in cur.fetchall():
+                    templates[row["alert_type"]] = row["template_text"]
     except Exception as e:
         flash(f"Error loading alert settings: {e}", "error")
 
     # Recent alert log with error details
     recent_alerts = []
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                SELECT alert_type, channel_type, status, error, sent_at
-                FROM alert_log
-                ORDER BY sent_at DESC
-                LIMIT 20
-            """)
-            recent_alerts = cur.fetchall()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("""
+                    SELECT alert_type, channel_type, status, error, sent_at
+                    FROM alert_log
+                    ORDER BY sent_at DESC
+                    LIMIT 20
+                """)
+                recent_alerts = cur.fetchall()
     except Exception:
         pass
 
@@ -321,14 +316,13 @@ def save_alert_channel():
         # Don't overwrite api_token if blank (treat like smtp_pass)
         if channel_id and not config["api_token"]:
             try:
-                db = __db.get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
-                    row = cur.fetchone()
-                    if row:
-                        existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
-                        config["api_token"] = existing.get("api_token", "")
-                db.close()
+                with __db.jen_db() as db:
+                    with db.cursor() as cur:
+                        cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
+                        row = cur.fetchone()
+                        if row:
+                            existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+                            config["api_token"] = existing.get("api_token", "")
             except Exception:
                 pass
     elif channel_type == "discord":
@@ -339,32 +333,30 @@ def save_alert_channel():
     # Don't overwrite password if blank
     if channel_id and channel_type == "email" and not config["smtp_pass"]:
         try:
-            db = __db.get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
-                row = cur.fetchone()
-                if row:
-                    existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
-                    config["smtp_pass"] = existing.get("smtp_pass", "")
-            db.close()
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
+                    row = cur.fetchone()
+                    if row:
+                        existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
+                        config["smtp_pass"] = existing.get("smtp_pass", "")
         except Exception:
             pass
 
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            if channel_id:
-                cur.execute("""
-                    UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s
-                    WHERE id=%s
-                """, (channel_name, enabled, json.dumps(config), json.dumps(alert_types), channel_id))
-            else:
-                cur.execute("""
-                    INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (channel_type, channel_name, enabled, json.dumps(config), json.dumps(alert_types)))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                if channel_id:
+                    cur.execute("""
+                        UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s
+                        WHERE id=%s
+                    """, (channel_name, enabled, json.dumps(config), json.dumps(alert_types), channel_id))
+                else:
+                    cur.execute("""
+                        INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (channel_type, channel_name, enabled, json.dumps(config), json.dumps(alert_types)))
+            db.commit()
         flash(f"Alert channel '{channel_name}' saved.", "success")
         __user.audit("SAVE_ALERT_CHANNEL", channel_name, f"type={channel_type} enabled={enabled}")
     except Exception as e:
@@ -376,13 +368,12 @@ def save_alert_channel():
 @_admin_required
 def delete_alert_channel(channel_id):
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT channel_name FROM alert_channels WHERE id=%s", (channel_id,))
-            row = cur.fetchone()
-            cur.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT channel_name FROM alert_channels WHERE id=%s", (channel_id,))
+                row = cur.fetchone()
+                cur.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
+            db.commit()
         name = row["channel_name"] if row else str(channel_id)
         flash(f"Alert channel '{name}' deleted.", "success")
         __user.audit("DELETE_ALERT_CHANNEL", str(channel_id), f"name={name}")
@@ -396,11 +387,10 @@ def delete_alert_channel(channel_id):
 def test_alert_channel(channel_id):
     import json
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
-            channel = cur.fetchone()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
+                channel = cur.fetchone()
         if not channel:
             flash("Channel not found.", "error")
             return redirect(url_for('settings.settings_alerts'))
@@ -439,14 +429,13 @@ def save_alert_template():
         flash("Invalid alert type.", "error")
         return redirect(url_for('settings.settings_alerts'))
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                INSERT INTO alert_templates (alert_type, template_text) VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE template_text=%s, updated_at=NOW()
-            """, (alert_type, template_text, template_text))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO alert_templates (alert_type, template_text) VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE template_text=%s, updated_at=NOW()
+                """, (alert_type, template_text, template_text))
+            db.commit()
         flash(f"Template for '{ALERT_TYPE_LABELS.get(alert_type, alert_type)}' saved.", "success")
         __user.audit("SAVE_ALERT_TEMPLATE", alert_type, "Template updated")
     except Exception as e:
@@ -459,11 +448,10 @@ def save_alert_template():
 def reset_alert_template():
     alert_type = request.form.get("alert_type", "").strip()
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM alert_templates WHERE alert_type=%s", (alert_type,))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM alert_templates WHERE alert_type=%s", (alert_type,))
+            db.commit()
         flash("Template reset to default.", "success")
     except Exception as e:
         flash(f"Error: {str(e)}", "error")
@@ -916,11 +904,10 @@ def save_rate_limit():
 @_admin_required
 def clear_lockouts():
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM login_attempts")
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM login_attempts")
+            db.commit()
         flash("All login attempt records cleared.", "success")
         __user.audit("CLEAR_LOCKOUTS", "settings", "All login attempts cleared")
     except Exception as e:

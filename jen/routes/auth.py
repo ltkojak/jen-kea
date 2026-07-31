@@ -64,55 +64,54 @@ def login():
 
         # Single DB connection for the entire login flow
         try:
-            db = __db.get_jen_db()
-            with db.cursor() as cur:
-                # User lookup
-                cur.execute(
-                    "SELECT id, username, role, session_timeout, password, subnet_access FROM users WHERE username=%s",
-                    (username,)
-                )
-                row = cur.fetchone()
-
-                # Rate limit settings (single query)
-                cur.execute(
-                    "SELECT setting_key, setting_value FROM settings "
-                    "WHERE setting_key IN ('rl_max_attempts','rl_lockout_minutes','rl_mode','mfa_mode')"
-                )
-                settings = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
-
-                rl_mode     = settings.get("rl_mode", "both")
-                max_att     = int(settings.get("rl_max_attempts", "10"))
-                lockout_min = int(settings.get("rl_lockout_minutes", "15"))
-
-                locked = False
-                remaining = 0
-                if rl_mode != "off" and max_att > 0:
-                    window = f"DATE_SUB(NOW(), INTERVAL {lockout_min if lockout_min > 0 else 1440} MINUTE)"
-                    count = 0
-                    if rl_mode in ("ip", "both"):
-                        cur.execute(
-                            f"SELECT COUNT(*) as cnt FROM login_attempts "
-                            f"WHERE ip_address=%s AND attempted_at >= {window}", (ip,))
-                        count = max(count, cur.fetchone()["cnt"])
-                    if rl_mode in ("username", "both"):
-                        cur.execute(
-                            f"SELECT COUNT(*) as cnt FROM login_attempts "
-                            f"WHERE username=%s AND attempted_at >= {window}", (username,))
-                        count = max(count, cur.fetchone()["cnt"])
-                    if count >= max_att:
-                        locked = True
-                        remaining = lockout_min if lockout_min > 0 else 999
-
-                mfa_enrolled = False
-                if row:
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    # User lookup
                     cur.execute(
-                        "SELECT (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) + "
-                        "(SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as cnt",
-                        (row["id"], row["id"])
+                        "SELECT id, username, role, session_timeout, password, subnet_access FROM users WHERE username=%s",
+                        (username,)
                     )
-                    mfa_enrolled = cur.fetchone()["cnt"] > 0
+                    row = cur.fetchone()
 
-            db.close()
+                    # Rate limit settings (single query)
+                    cur.execute(
+                        "SELECT setting_key, setting_value FROM settings "
+                        "WHERE setting_key IN ('rl_max_attempts','rl_lockout_minutes','rl_mode','mfa_mode')"
+                    )
+                    settings = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
+
+                    rl_mode     = settings.get("rl_mode", "both")
+                    max_att     = int(settings.get("rl_max_attempts", "10"))
+                    lockout_min = int(settings.get("rl_lockout_minutes", "15"))
+
+                    locked = False
+                    remaining = 0
+                    if rl_mode != "off" and max_att > 0:
+                        window = f"DATE_SUB(NOW(), INTERVAL {lockout_min if lockout_min > 0 else 1440} MINUTE)"
+                        count = 0
+                        if rl_mode in ("ip", "both"):
+                            cur.execute(
+                                f"SELECT COUNT(*) as cnt FROM login_attempts "
+                                f"WHERE ip_address=%s AND attempted_at >= {window}", (ip,))
+                            count = max(count, cur.fetchone()["cnt"])
+                        if rl_mode in ("username", "both"):
+                            cur.execute(
+                                f"SELECT COUNT(*) as cnt FROM login_attempts "
+                                f"WHERE username=%s AND attempted_at >= {window}", (username,))
+                            count = max(count, cur.fetchone()["cnt"])
+                        if count >= max_att:
+                            locked = True
+                            remaining = lockout_min if lockout_min > 0 else 999
+
+                    mfa_enrolled = False
+                    if row:
+                        cur.execute(
+                            "SELECT (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) + "
+                            "(SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as cnt",
+                            (row["id"], row["id"])
+                        )
+                        mfa_enrolled = cur.fetchone()["cnt"] > 0
+
         except Exception as e:
             logger.error(f"Login DB error: {e}")
             flash("Database error. Please try again.", "error")
@@ -136,11 +135,10 @@ def login():
                 _new_hash = __user.hash_password(password)
                 def _rehash(_uid=_uid, _hash=_new_hash):
                     try:
-                        db2 = __db.get_jen_db()
-                        with db2.cursor() as cur:
-                            cur.execute("UPDATE users SET password=%s WHERE id=%s", (_hash, _uid))
-                        db2.commit()
-                        db2.close()
+                        with __db.jen_db() as db2:
+                            with db2.cursor() as cur:
+                                cur.execute("UPDATE users SET password=%s WHERE id=%s", (_hash, _uid))
+                            db2.commit()
                     except Exception as e:
                         logger.error(f"Password rehash error: {e}")
                 threading.Thread(target=_rehash, daemon=True).start()

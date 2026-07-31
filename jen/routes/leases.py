@@ -96,69 +96,68 @@ def leases():
     leases_list = []
     total = 0
     try:
-        db = __db.get_kea_db()
-        with db.cursor() as cur:
-            where = []
-            params = []
-            if not show_expired:
-                where.append("l.state=0")
-            if subnet_filter != "all":
-                where.append("l.subnet_id=%s")
-                params.append(int(subnet_filter))
-            elif not current_user.all_subnets:
-                # Restrict to accessible subnets
-                from jen.services.access import add_subnet_restriction
-                where, params = add_subnet_restriction(where, params, "l", "subnet_id")
-            if minutes:
-                try:
-                    mins = int(minutes)
-                    where.append("FROM_UNIXTIME(l.expire) >= DATE_SUB(NOW(), INTERVAL %s MINUTE)")
-                    params.append(mins)
-                except ValueError:
-                    pass
-            if search:
-                where.append("(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)")
-                s = f"%{search}%"
-                params += [s, s, s.replace(":", "")]
-            where_str = " AND ".join(where) if where else "1=1"
-            cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
-            total = cur.fetchone()["cnt"]
-            if per_page:
-                offset = (page - 1) * per_page
-                limit_clause = f"LIMIT {per_page} OFFSET {offset}"
-            else:
-                limit_clause = ""
-            cur.execute(f"""
-                SELECT inet_ntoa(l.address) AS ip, l.hostname,
-                       HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
-                       l.expire,
-                       (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained,
-                       l.expire AS expires
-                FROM lease4 l WHERE {where_str}
-                ORDER BY {sort_col} {direction}
-                {limit_clause}
-            """, params)
-            for row in cur.fetchall():
-                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                leases_list.append({**row, "mac": mac,
-                                    "subnet_id": row["subnet_id"],
-                                    "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
-                                    "expired": row.get("state", 0) != 0})
-        # Build set of MACs that have reservations — single query, O(1) lookup per lease
-        reserved_macs = set()
-        if leases_list:
-            mac_hexes = [l["mac"].replace(":", "") for l in leases_list if l.get("mac")]
-            if mac_hexes:
-                placeholders = ",".join(["%s"] * len(mac_hexes))
-                with db.cursor() as res_cur:
-                    res_cur.execute(
-                        f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
-                        mac_hexes
-                    )
-                    reserved_macs = {row["mac_hex"].upper() for row in res_cur.fetchall()}
-        for l in leases_list:
-            l["has_reservation"] = l["mac"].replace(":", "").upper() in reserved_macs
-        db.close()
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                where = []
+                params = []
+                if not show_expired:
+                    where.append("l.state=0")
+                if subnet_filter != "all":
+                    where.append("l.subnet_id=%s")
+                    params.append(int(subnet_filter))
+                elif not current_user.all_subnets:
+                    # Restrict to accessible subnets
+                    from jen.services.access import add_subnet_restriction
+                    where, params = add_subnet_restriction(where, params, "l", "subnet_id")
+                if minutes:
+                    try:
+                        mins = int(minutes)
+                        where.append("FROM_UNIXTIME(l.expire) >= DATE_SUB(NOW(), INTERVAL %s MINUTE)")
+                        params.append(mins)
+                    except ValueError:
+                        pass
+                if search:
+                    where.append("(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)")
+                    s = f"%{search}%"
+                    params += [s, s, s.replace(":", "")]
+                where_str = " AND ".join(where) if where else "1=1"
+                cur.execute(f"SELECT COUNT(*) as cnt FROM lease4 l WHERE {where_str}", params)
+                total = cur.fetchone()["cnt"]
+                if per_page:
+                    offset = (page - 1) * per_page
+                    limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+                else:
+                    limit_clause = ""
+                cur.execute(f"""
+                    SELECT inet_ntoa(l.address) AS ip, l.hostname,
+                           HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
+                           l.expire,
+                           (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained,
+                           l.expire AS expires
+                    FROM lease4 l WHERE {where_str}
+                    ORDER BY {sort_col} {direction}
+                    {limit_clause}
+                """, params)
+                for row in cur.fetchall():
+                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                    leases_list.append({**row, "mac": mac,
+                                        "subnet_id": row["subnet_id"],
+                                        "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
+                                        "expired": row.get("state", 0) != 0})
+            # Build set of MACs that have reservations — single query, O(1) lookup per lease
+            reserved_macs = set()
+            if leases_list:
+                mac_hexes = [l["mac"].replace(":", "") for l in leases_list if l.get("mac")]
+                if mac_hexes:
+                    placeholders = ",".join(["%s"] * len(mac_hexes))
+                    with db.cursor() as res_cur:
+                        res_cur.execute(
+                            f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
+                            mac_hexes
+                        )
+                        reserved_macs = {row["mac_hex"].upper() for row in res_cur.fetchall()}
+            for l in leases_list:
+                l["has_reservation"] = l["mac"].replace(":", "").upper() in reserved_macs
     except Exception as e:
         flash(f"Could not load leases: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
@@ -182,12 +181,11 @@ def leases():
 @_admin_required
 def delete_stale_leases():
     try:
-        db = __db.get_kea_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM lease4 WHERE state != 0")
-            deleted = cur.rowcount
-        db.commit()
-        db.close()
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE state != 0")
+                deleted = cur.rowcount
+            db.commit()
         flash(f"Deleted {deleted} expired/stale lease(s).", "success")
         __user.audit("DELETE_STALE_LEASES", "leases", f"Deleted {deleted}")
     except Exception as e:
@@ -203,12 +201,11 @@ def release_lease():
         flash("No IP address specified.", "error")
         return redirect(url_for('leases.leases'))
     try:
-        db = __db.get_kea_db()
-        with db.cursor() as cur:
-            cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
-            affected = cur.rowcount
-        db.commit()
-        db.close()
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
+                affected = cur.rowcount
+            db.commit()
         if affected:
             flash(f"Lease for {ip} released.", "success")
             __user.audit("RELEASE_LEASE", "leases", f"Released {ip} by {current_user.username}")
@@ -232,17 +229,16 @@ def ipmap():
     reservations_by_ip = {}
     cidr = extensions.SUBNET_MAP.get(subnet_filter, {}).get("cidr", "")
     try:
-        db = __db.get_kea_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_filter,))
-            for row in cur.fetchall():
-                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                leases_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "dynamic"}
-            cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_filter,))
-            for row in cur.fetchall():
-                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
-        db.close()
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_filter,))
+                for row in cur.fetchall():
+                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                    leases_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "dynamic"}
+                cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_filter,))
+                for row in cur.fetchall():
+                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                    reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
     except Exception as e:
         flash(f"Could not load IP map: {str(e)}", "error")
     return render_template("ipmap.html", leases=leases_by_ip, reservations=reservations_by_ip,

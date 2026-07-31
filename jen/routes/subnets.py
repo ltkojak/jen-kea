@@ -86,40 +86,38 @@ def subnets():
     except Exception:
         pass
     try:
-        db = __db.get_kea_db()
-        accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
-        with db.cursor() as cur:
-            for subnet_id, info in accessible_subnet_map.items():
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                active = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                reserved = cur.fetchone()["cnt"]
-                kea = kea_subnets.get(subnet_id, {})
-                subnet_data.append({
-                    "id": subnet_id,
-                    "name": info["name"],
-                    "cidr": info["cidr"],
-                    "active": active,
-                    "reserved": reserved,
-                    "valid_lifetime": kea.get("valid_lifetime", 0),
-                    "renew_timer": kea.get("renew_timer", 0),
-                    "rebind_timer": kea.get("rebind_timer", 0),
-                    "pools": kea.get("pools", []),
-                    "routers": kea.get("routers", ""),
-                    "dns_servers": kea.get("dns_servers", ""),
-                })
-        db.close()
+        with __db.kea_db() as db:
+            accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+            with db.cursor() as cur:
+                for subnet_id, info in accessible_subnet_map.items():
+                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    active = cur.fetchone()["cnt"]
+                    cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                    reserved = cur.fetchone()["cnt"]
+                    kea = kea_subnets.get(subnet_id, {})
+                    subnet_data.append({
+                        "id": subnet_id,
+                        "name": info["name"],
+                        "cidr": info["cidr"],
+                        "active": active,
+                        "reserved": reserved,
+                        "valid_lifetime": kea.get("valid_lifetime", 0),
+                        "renew_timer": kea.get("renew_timer", 0),
+                        "rebind_timer": kea.get("rebind_timer", 0),
+                        "pools": kea.get("pools", []),
+                        "routers": kea.get("routers", ""),
+                        "dns_servers": kea.get("dns_servers", ""),
+                    })
     except Exception as e:
         flash(f"Could not load subnet data: {str(e)}", "error")
     ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
     subnet_notes = {}
     try:
-        jdb = __db.get_jen_db()
-        with jdb.cursor() as jcur:
-            jcur.execute("SELECT subnet_id, notes FROM subnet_notes")
-            for row in jcur.fetchall():
-                subnet_notes[row["subnet_id"]] = row["notes"]
-        jdb.close()
+        with __db.jen_db() as jdb:
+            with jdb.cursor() as jcur:
+                jcur.execute("SELECT subnet_id, notes FROM subnet_notes")
+                for row in jcur.fetchall():
+                    subnet_notes[row["subnet_id"]] = row["notes"]
     except Exception:
         pass
     return render_template("subnets.html", subnets=subnet_data, ssh_ready=ssh_ready,
@@ -398,13 +396,12 @@ def delete_subnet(subnet_id):
     # Block deletion if the subnet still has active leases or reservations —
     # deleting Kea config out from under live leases would orphan them.
     try:
-        db = __db.get_kea_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-            active_leases = cur.fetchone()["cnt"]
-            cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-            reservations = cur.fetchone()["cnt"]
-        db.close()
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                active_leases = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                reservations = cur.fetchone()["cnt"]
     except Exception as e:
         flash(f"Could not verify subnet is safe to delete: {e}", "error")
         return redirect(url_for('subnets.subnets'))
@@ -733,14 +730,13 @@ def save_subnet_note():
         return jsonify({"ok": False, "error": "Invalid subnet ID"})
     notes = request.form.get("notes", "").strip()[:1000]
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                INSERT INTO subnet_notes (subnet_id, notes) VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE notes=%s, updated_at=NOW()
-            """, (subnet_id, notes, notes))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO subnet_notes (subnet_id, notes) VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE notes=%s, updated_at=NOW()
+                """, (subnet_id, notes, notes))
+            db.commit()
         __user.audit("SAVE_SUBNET_NOTE", str(subnet_id), "Note updated")
         return jsonify({"ok": True})
     except Exception as e:

@@ -23,6 +23,14 @@ def __get_jen_db():
     from jen.models.db import get_jen_db
     return get_jen_db()
 
+def __jen_db_ctx():
+    from jen.models.db import jen_db
+    return jen_db()
+
+def __kea_db_ctx():
+    from jen.models.db import kea_db
+    return kea_db()
+
 def __get_kea_db():
     from jen.models.db import get_kea_db
     return get_kea_db()
@@ -94,11 +102,10 @@ ALERT_TYPE_LABELS = {
 
 def get_alert_template(alert_type):
     try:
-        db = __get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT template_text FROM alert_templates WHERE alert_type=%s", (alert_type,))
-            row = cur.fetchone()
-        db.close()
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT template_text FROM alert_templates WHERE alert_type=%s", (alert_type,))
+                row = cur.fetchone()
         if row and row["template_text"]:
             return row["template_text"]
     except Exception:
@@ -115,11 +122,10 @@ def render_template_str(template, **kwargs):
 def get_active_channels():
     """Get all enabled alert channels."""
     try:
-        db = __get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
-            channels = cur.fetchall()
-        db.close()
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
+                channels = cur.fetchall()
         return channels
     except Exception as e:
         logger.error(f"get_active_channels error: {e}")
@@ -184,14 +190,13 @@ def send_alert(alert_type, log_result=True, **kwargs):
             logger.error(f"Alert send error ({ctype}): {e}")
         if log_result:
             try:
-                db = __get_jen_db()
-                with db.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO alert_log (channel_type, alert_type, message, status, error)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (ctype, alert_type, message[:500], "ok" if ok else "failed", error[:500] if error else None))
-                db.commit()
-                db.close()
+                with __jen_db_ctx() as db:
+                    with db.cursor() as cur:
+                        cur.execute("""
+                            INSERT INTO alert_log (channel_type, alert_type, message, status, error)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (ctype, alert_type, message[:500], "ok" if ok else "failed", error[:500] if error else None))
+                    db.commit()
             except Exception as e:
                 logger.error(f"Alert log error: {e}")
         results.append((ctype, ok, error))
@@ -346,45 +351,43 @@ def take_lease_snapshot():
     """Record current lease counts for all subnets."""
     try:
         retention_days = int(__get_global_setting("history_retention_days", "90"))
-        kdb = __get_kea_db()
-        jdb = __get_jen_db()
+        with __kea_db_ctx() as kdb:
+            with __jen_db_ctx() as jdb:
 
-        # Get pool sizes from Kea config
-        pool_sizes = {}
-        result = __kea_command("config-get", server=__get_active_kea_server())
-        if result.get("result") == 0:
-            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
-                for pool in s.get("pools", []):
-                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                    if "-" in p:
-                        start, end = [x.strip() for x in p.split("-")]
-                        pool_sizes[s["id"]] = ip_to_int(end) - ip_to_int(start) + 1
+                # Get pool sizes from Kea config
+                pool_sizes = {}
+                result = __kea_command("config-get", server=__get_active_kea_server())
+                if result.get("result") == 0:
+                    for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+                        for pool in s.get("pools", []):
+                            p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                            if "-" in p:
+                                start, end = [x.strip() for x in p.split("-")]
+                                pool_sizes[s["id"]] = ip_to_int(end) - ip_to_int(start) + 1
 
-        with kdb.cursor() as kcur:
-            with jdb.cursor() as jcur:
-                for subnet_id, info in extensions.SUBNET_MAP.items():
-                    kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                    active = kcur.fetchone()["cnt"]
-                    kcur.execute("""
-                        SELECT COUNT(*) as cnt FROM lease4 l
-                        LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
-                            AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                        WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
-                    """, (subnet_id,))
-                    dynamic = kcur.fetchone()["cnt"]
-                    kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                    reserved = kcur.fetchone()["cnt"]
-                    pool_size = pool_sizes.get(subnet_id, 0)
-                    jcur.execute("""
-                        INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (subnet_id, active, dynamic, reserved, pool_size))
+                with kdb.cursor() as kcur:
+                    with jdb.cursor() as jcur:
+                        for subnet_id, info in extensions.SUBNET_MAP.items():
+                            kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                            active = kcur.fetchone()["cnt"]
+                            kcur.execute("""
+                                SELECT COUNT(*) as cnt FROM lease4 l
+                                LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
+                                    AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
+                                WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
+                            """, (subnet_id,))
+                            dynamic = kcur.fetchone()["cnt"]
+                            kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                            reserved = kcur.fetchone()["cnt"]
+                            pool_size = pool_sizes.get(subnet_id, 0)
+                            jcur.execute("""
+                                INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (subnet_id, active, dynamic, reserved, pool_size))
 
-                # Purge old history
-                jcur.execute(f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)")
-        jdb.commit()
-        kdb.close()
-        jdb.close()
+                        # Purge old history
+                        jcur.execute(f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)")
+                jdb.commit()
     except Exception as e:
         logger.error(f"Snapshot error: {e}")
 
@@ -392,25 +395,23 @@ def send_daily_summary():
     """Build and send daily summary."""
     try:
         lines = ["<b>Daily Network Summary</b>"]
-        db = __get_kea_db()
-        jdb = __get_jen_db()
-        with db.cursor() as cur:
-            for subnet_id, info in extensions.SUBNET_MAP.items():
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                active = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                reserved = cur.fetchone()["cnt"]
-                lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
-            # New devices in last 24h
-            with jdb.cursor() as jcur:
-                jcur.execute("SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")
-                new_devices = jcur.fetchone()["cnt"]
-                jcur.execute("SELECT COUNT(*) as cnt FROM devices")
-                total_devices = jcur.fetchone()["cnt"]
-        lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
-        lines.append(f"Total known devices: <b>{total_devices}</b>")
-        db.close()
-        jdb.close()
+        with __kea_db_ctx() as db:
+            with __jen_db_ctx() as jdb:
+                with db.cursor() as cur:
+                    for subnet_id, info in extensions.SUBNET_MAP.items():
+                        cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                        active = cur.fetchone()["cnt"]
+                        cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                        reserved = cur.fetchone()["cnt"]
+                        lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
+                    # New devices in last 24h
+                    with jdb.cursor() as jcur:
+                        jcur.execute("SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+                        new_devices = jcur.fetchone()["cnt"]
+                        jcur.execute("SELECT COUNT(*) as cnt FROM devices")
+                        total_devices = jcur.fetchone()["cnt"]
+                lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
+                lines.append(f"Total known devices: <b>{total_devices}</b>")
         summary = "\n".join(lines)
         send_alert("daily_summary", summary=summary)
     except Exception as e:
@@ -435,12 +436,11 @@ def check_alerts():
     # Seed known_macs from devices table so restarts don't
     # flood with "new device" alerts for every known device
     try:
-        jdb = __get_jen_db()
-        with jdb.cursor() as jcur:
-            jcur.execute("SELECT mac FROM devices")
-            for row in jcur.fetchall():
-                known_macs.add(row["mac"].lower())
-        jdb.close()
+        with __jen_db_ctx() as jdb:
+            with jdb.cursor() as jcur:
+                jcur.execute("SELECT mac FROM devices")
+                for row in jcur.fetchall():
+                    known_macs.add(row["mac"].lower())
         logger.info(f"Seeded {len(known_macs)} known MACs from devices table")
     except Exception as e:
         logger.warning(f"Could not seed known_macs from devices: {e}")
@@ -475,8 +475,7 @@ def check_alerts():
             kea_up = any(isinstance(last_kea_status, dict) and v for v in last_kea_status.values()) if isinstance(last_kea_status, dict) else last_kea_status
 
             if kea_up:
-                db = __get_kea_db()
-                try:
+                with __kea_db_ctx() as db:
                     with db.cursor() as cur:
                         # ── Lease tracking ──
                         cur.execute("""
@@ -502,27 +501,26 @@ def check_alerts():
                         """)
                         all_leases = cur.fetchall()
                         try:
-                            jdb = __get_jen_db()
-                            with jdb.cursor() as jcur:
-                                for row in all_leases:
-                                    mac = __format_mac(row["hwaddr"])
-                                    manufacturer, device_type, device_icon = __classify_device(mac, row["hostname"] or "")
-                                    jcur.execute("""
-                                        INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen,
-                                                             manufacturer, device_type, device_icon)
-                                        VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s)
-                                        ON DUPLICATE KEY UPDATE
-                                            last_ip=%s, last_hostname=%s,
-                                            last_subnet_id=%s, last_seen=NOW(),
-                                            manufacturer=IF(manufacturer_override IS NULL, %s, manufacturer),
-                                            device_type=IF(manufacturer_override IS NULL, %s, device_type),
-                                            device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
-                                    """, (mac, row["ip"], row["hostname"], row["subnet_id"],
-                                          manufacturer, device_type, device_icon,
-                                          row["ip"], row["hostname"], row["subnet_id"],
-                                          manufacturer, device_type, device_icon))
-                            jdb.commit()
-                            jdb.close()
+                            with __jen_db_ctx() as jdb:
+                                with jdb.cursor() as jcur:
+                                    for row in all_leases:
+                                        mac = __format_mac(row["hwaddr"])
+                                        manufacturer, device_type, device_icon = __classify_device(mac, row["hostname"] or "")
+                                        jcur.execute("""
+                                            INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen,
+                                                                 manufacturer, device_type, device_icon)
+                                            VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s)
+                                            ON DUPLICATE KEY UPDATE
+                                                last_ip=%s, last_hostname=%s,
+                                                last_subnet_id=%s, last_seen=NOW(),
+                                                manufacturer=IF(manufacturer_override IS NULL, %s, manufacturer),
+                                                device_type=IF(manufacturer_override IS NULL, %s, device_type),
+                                                device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
+                                        """, (mac, row["ip"], row["hostname"], row["subnet_id"],
+                                              manufacturer, device_type, device_icon,
+                                              row["ip"], row["hostname"], row["subnet_id"],
+                                              manufacturer, device_type, device_icon))
+                                jdb.commit()
                         except Exception as e:
                             logger.error(f"Device tracking error: {e}")
 
@@ -582,15 +580,14 @@ def check_alerts():
                         # ── Stale reservation alerts ──
                         try:
                             stale_days = int(__get_global_setting("stale_device_days", "30"))
-                            jdb = __get_jen_db()
-                            with jdb.cursor() as jcur:
-                                jcur.execute(f"""
-                                    SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days
-                                    FROM devices
-                                    WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)
-                                """)
-                                stale_rows = jcur.fetchall()
-                            jdb.close()
+                            with __jen_db_ctx() as jdb:
+                                with jdb.cursor() as jcur:
+                                    jcur.execute(f"""
+                                        SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days
+                                        FROM devices
+                                        WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)
+                                    """)
+                                    stale_rows = jcur.fetchall()
                             for row in stale_rows:
                                 if row["mac"] not in alerted_stale_macs:
                                     # Check if has reservation
@@ -605,8 +602,6 @@ def check_alerts():
                         except Exception as e:
                             logger.error(f"Stale reservation check error: {e}")
 
-                finally:
-                    db.close()
 
             # ── Lease history snapshot ──
             snapshot_interval = int(__get_global_setting("snapshot_interval_minutes", "30")) * 60

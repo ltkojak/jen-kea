@@ -147,14 +147,13 @@ def get_global_setting(key: str, default=None):
     now = time.time()
     if now - _settings_cache_ts > _SETTINGS_CACHE_TTL:
         # Cache expired — reload all settings in one query
-        from jen.models.db import get_jen_db
+        from jen.models.db import jen_db
         try:
-            db = get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("SELECT setting_key, setting_value FROM settings")
-                _settings_cache = {r["setting_key"]: r["setting_value"]
-                                   for r in cur.fetchall()}
-            db.close()
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("SELECT setting_key, setting_value FROM settings")
+                    _settings_cache = {r["setting_key"]: r["setting_value"]
+                                       for r in cur.fetchall()}
             _settings_cache_ts = now
         except Exception as e:
             logger.error(f"get_global_setting cache reload: {e}")
@@ -164,17 +163,16 @@ def get_global_setting(key: str, default=None):
 
 def set_global_setting(key: str, value: str) -> None:
     """Upsert a value in the settings table and invalidate the cache."""
-    from jen.models.db import get_jen_db
+    from jen.models.db import jen_db
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                INSERT INTO settings (setting_key, setting_value)
-                VALUES (%s, %s)
-                ON DUPLICATE KEY UPDATE setting_value=%s
-            """, (key, value, value))
-        db.commit()
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO settings (setting_key, setting_value)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE setting_value=%s
+                """, (key, value, value))
+            db.commit()
         _invalidate_settings_cache()
     except Exception as e:
         logger.error(f"set_global_setting({key}): {e}")
@@ -198,16 +196,15 @@ def audit(action: str, entity: str, details: str = "") -> None:
         user_id, username, ip = None, "system", None
 
     def _write():
-        from jen.models.db import get_jen_db
+        from jen.models.db import jen_db
         try:
-            db = get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO audit_log (user_id, username, action, entity, details, ip_address)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (user_id, username, action, entity, details, ip))
-            db.commit()
-            db.close()
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO audit_log (user_id, username, action, entity, details, ip_address)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (user_id, username, action, entity, details, ip))
+                db.commit()
         except Exception as e:
             logger.error(f"audit({action}, {entity}): {e}")
 

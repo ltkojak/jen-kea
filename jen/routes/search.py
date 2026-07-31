@@ -56,66 +56,64 @@ def global_search():
     results = {"leases": [], "reservations": [], "devices": []}
     if len(q) >= 2:
         try:
-            kea_db = __db.get_kea_db()
-            jen_db = __db.get_jen_db()
-            s = f"%{q}%"
-            s_mac = s.replace(":", "")
+            with __db.kea_db() as kdb:
+                with __db.jen_db() as jdb:
+                    s = f"%{q}%"
+                    s_mac = s.replace(":", "")
 
-            # Search leases
-            with kea_db.cursor() as cur:
-                cur.execute("""
-                    SELECT inet_ntoa(l.address) AS ip,
-                           l.hostname,
-                           HEX(l.hwaddr) AS mac_hex,
-                           l.subnet_id,
-                           l.expire, l.state
-                    FROM lease4 l
-                    WHERE inet_ntoa(l.address) LIKE %s
-                       OR l.hostname LIKE %s
-                       OR HEX(l.hwaddr) LIKE %s
-                    LIMIT 20
-                """, (s, s, s_mac))
-                for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                    results["leases"].append({
-                        "ip": row["ip"], "hostname": row["hostname"] or "",
-                        "mac": mac, "subnet_id": row["subnet_id"]
-                    })
+                    # Search leases
+                    with kdb.cursor() as cur:
+                        cur.execute("""
+                            SELECT inet_ntoa(l.address) AS ip,
+                                   l.hostname,
+                                   HEX(l.hwaddr) AS mac_hex,
+                                   l.subnet_id,
+                                   l.expire, l.state
+                            FROM lease4 l
+                            WHERE inet_ntoa(l.address) LIKE %s
+                               OR l.hostname LIKE %s
+                               OR HEX(l.hwaddr) LIKE %s
+                            LIMIT 20
+                        """, (s, s, s_mac))
+                        for row in cur.fetchall():
+                            mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                            results["leases"].append({
+                                "ip": row["ip"], "hostname": row["hostname"] or "",
+                                "mac": mac, "subnet_id": row["subnet_id"]
+                            })
 
-            # Search reservations
-            with kea_db.cursor() as cur:
-                cur.execute("""
-                    SELECT inet_ntoa(h.ipv4_address) AS ip,
-                           h.hostname,
-                           HEX(h.dhcp_identifier) AS mac_hex,
-                           h.dhcp4_subnet_id AS subnet_id
-                    FROM hosts h
-                    WHERE h.dhcp4_subnet_id > 0
-                      AND (inet_ntoa(h.ipv4_address) LIKE %s
-                           OR h.hostname LIKE %s
-                           OR HEX(h.dhcp_identifier) LIKE %s)
-                    LIMIT 20
-                """, (s, s, s_mac))
-                for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                    results["reservations"].append({
-                        "ip": row["ip"], "hostname": row["hostname"] or "",
-                        "mac": mac, "subnet_id": row["subnet_id"]
-                    })
+                    # Search reservations
+                    with kdb.cursor() as cur:
+                        cur.execute("""
+                            SELECT inet_ntoa(h.ipv4_address) AS ip,
+                                   h.hostname,
+                                   HEX(h.dhcp_identifier) AS mac_hex,
+                                   h.dhcp4_subnet_id AS subnet_id
+                            FROM hosts h
+                            WHERE h.dhcp4_subnet_id > 0
+                              AND (inet_ntoa(h.ipv4_address) LIKE %s
+                                   OR h.hostname LIKE %s
+                                   OR HEX(h.dhcp_identifier) LIKE %s)
+                            LIMIT 20
+                        """, (s, s, s_mac))
+                        for row in cur.fetchall():
+                            mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                            results["reservations"].append({
+                                "ip": row["ip"], "hostname": row["hostname"] or "",
+                                "mac": mac, "subnet_id": row["subnet_id"]
+                            })
 
-            # Search devices
-            with jen_db.cursor() as cur:
-                cur.execute("""
-                    SELECT mac, last_ip, name, owner, notes
-                    FROM devices
-                    WHERE mac LIKE %s OR last_ip LIKE %s
-                       OR name LIKE %s OR owner LIKE %s
-                    LIMIT 20
-                """, (s, s, s, s))
-                results["devices"] = cur.fetchall()
+                    # Search devices
+                    with jdb.cursor() as cur:
+                        cur.execute("""
+                            SELECT mac, last_ip, name, owner, notes
+                            FROM devices
+                            WHERE mac LIKE %s OR last_ip LIKE %s
+                               OR name LIKE %s OR owner LIKE %s
+                            LIMIT 20
+                        """, (s, s, s, s))
+                        results["devices"] = cur.fetchall()
 
-            kea_db.close()
-            jen_db.close()
         except Exception as e:
             flash(f"Search error: {str(e)}", "error")
 
@@ -134,11 +132,10 @@ def global_search():
 @login_required
 def saved_searches():
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY created_at DESC", (current_user.id,))
-            searches = cur.fetchall()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY created_at DESC", (current_user.id,))
+                searches = cur.fetchall()
     except Exception:
         searches = []
     return render_template("saved_searches.html", searches=searches)
@@ -152,17 +149,16 @@ def save_search():
     if not name or not page:
         return jsonify({"error": "Name and page required"}), 400
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            # Max 20 saved searches per user
-            cur.execute("SELECT COUNT(*) as cnt FROM saved_searches WHERE user_id=%s", (current_user.id,))
-            if cur.fetchone()["cnt"] >= 20:
-                cur.execute("""DELETE FROM saved_searches WHERE user_id=%s
-                               ORDER BY created_at ASC LIMIT 1""", (current_user.id,))
-            cur.execute("INSERT INTO saved_searches (user_id, name, page, params) VALUES (%s,%s,%s,%s)",
-                        (current_user.id, name, page, params))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                # Max 20 saved searches per user
+                cur.execute("SELECT COUNT(*) as cnt FROM saved_searches WHERE user_id=%s", (current_user.id,))
+                if cur.fetchone()["cnt"] >= 20:
+                    cur.execute("""DELETE FROM saved_searches WHERE user_id=%s
+                                   ORDER BY created_at ASC LIMIT 1""", (current_user.id,))
+                cur.execute("INSERT INTO saved_searches (user_id, name, page, params) VALUES (%s,%s,%s,%s)",
+                            (current_user.id, name, page, params))
+            db.commit()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -171,11 +167,10 @@ def save_search():
 @login_required
 def delete_saved_search(search_id):
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM saved_searches WHERE id=%s AND user_id=%s", (search_id, current_user.id))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM saved_searches WHERE id=%s AND user_id=%s", (search_id, current_user.id))
+            db.commit()
     except Exception:
         pass
     return redirect(url_for('search.saved_searches'))
@@ -185,14 +180,13 @@ def delete_saved_search(search_id):
 def api_saved_searches():
     page = request.args.get("page", "")
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            if page:
-                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name", (current_user.id, page))
-            else:
-                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
-            searches = cur.fetchall()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                if page:
+                    cur.execute("SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name", (current_user.id, page))
+                else:
+                    cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
+                searches = cur.fetchall()
         return jsonify([dict(s) for s in searches])
     except Exception:
         return jsonify([])

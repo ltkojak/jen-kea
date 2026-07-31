@@ -258,13 +258,12 @@ def _run_plugin_migrations(manifest: dict) -> None:
     if not migrations:
         return
     try:
-        from jen.models.db import get_jen_db
-        db = get_jen_db()
-        with db.cursor() as cur:
-            for sql in migrations:
-                cur.execute(sql)
-        db.commit()
-        db.close()
+        from jen.models.db import jen_db
+        with jen_db() as db:
+            with db.cursor() as cur:
+                for sql in migrations:
+                    cur.execute(sql)
+            db.commit()
         logger.info(f"Plugin '{manifest['id']}' DB migrations applied")
     except Exception as e:
         logger.error(f"Plugin '{manifest['id']}' DB migration failed: {e}")

@@ -20,6 +20,10 @@ def __get_jen_db():
     from jen.models.db import get_jen_db
     return get_jen_db()
 
+def __jen_db_ctx():
+    from jen.models.db import jen_db
+    return jen_db()
+
 def __get_global_setting(key, default=None):
     from jen.models.user import get_global_setting
     return get_global_setting(key, default)
@@ -87,12 +91,11 @@ def record_login_attempt(ip, username):
     import threading
     def _record():
         try:
-            db = __get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
-                cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
-            db.commit()
-            db.close()
+            with __jen_db_ctx() as db:
+                with db.cursor() as cur:
+                    cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
+                    cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+                db.commit()
         except Exception as e:
             logger.error(f"Rate limit record error: {e}")
     threading.Thread(target=_record, daemon=True).start()
@@ -102,11 +105,10 @@ def clear_login_attempts(ip, username):
     import threading
     def _clear():
         try:
-            db = __get_jen_db()
-            with db.cursor() as cur:
-                cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
-            db.commit()
-            db.close()
+            with __jen_db_ctx() as db:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
+                db.commit()
         except Exception as e:
             logger.error(f"Rate limit clear error: {e}")
     threading.Thread(target=_clear, daemon=True).start()
@@ -122,52 +124,50 @@ def is_locked_out(ip, username):
         return False, 0
 
     try:
-        db = __get_jen_db()
-        with db.cursor() as cur:
-            # Rolling window: only count attempts within the lockout period.
-            # This ensures old attempts don't contribute to new lockouts.
-            # If lockout_minutes=0 (permanent lockout), use a 24h detection
-            # window to find the triggering burst, then lock permanently.
-            if lockout_minutes > 0:
-                window = f"DATE_SUB(NOW(), INTERVAL {lockout_minutes} MINUTE)"
-            else:
-                window = "DATE_SUB(NOW(), INTERVAL 1440 MINUTE)"  # 24h rolling window
-
-            count = 0
-            if mode in ("ip", "both"):
-                cur.execute(
-                    f"SELECT COUNT(*) as cnt FROM login_attempts "
-                    f"WHERE ip_address=%s AND attempted_at >= {window}", (ip,))
-                count = max(count, cur.fetchone()["cnt"])
-            if mode in ("username", "both"):
-                cur.execute(
-                    f"SELECT COUNT(*) as cnt FROM login_attempts "
-                    f"WHERE username=%s AND attempted_at >= {window}", (username,))
-                count = max(count, cur.fetchone()["cnt"])
-
-            if count >= max_attempts:
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                # Rolling window: only count attempts within the lockout period.
+                # This ensures old attempts don't contribute to new lockouts.
+                # If lockout_minutes=0 (permanent lockout), use a 24h detection
+                # window to find the triggering burst, then lock permanently.
                 if lockout_minutes > 0:
-                    # Calculate time remaining in the lockout window from
-                    # the FIRST attempt in the current window, not the last.
-                    # Lock expires when the oldest attempt in the window ages out.
-                    field = "ip_address" if mode in ("ip", "both") else "username"
-                    val = ip if mode in ("ip", "both") else username
-                    cur.execute(f"""
-                        SELECT CEIL(
-                            ({lockout_minutes} * 60) -
-                            TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW())
-                        ) as remaining
-                        FROM login_attempts
-                        WHERE {field}=%s AND attempted_at >= {window}
-                    """, (val,))
-                    row = cur.fetchone()
-                    remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
-                    remaining_mins = max(1, (remaining_secs + 59) // 60)
+                    window = f"DATE_SUB(NOW(), INTERVAL {lockout_minutes} MINUTE)"
                 else:
-                    remaining_mins = 999  # permanent until admin clears
-                db.close()
-                return True, remaining_mins
-        db.close()
+                    window = "DATE_SUB(NOW(), INTERVAL 1440 MINUTE)"  # 24h rolling window
+
+                count = 0
+                if mode in ("ip", "both"):
+                    cur.execute(
+                        f"SELECT COUNT(*) as cnt FROM login_attempts "
+                        f"WHERE ip_address=%s AND attempted_at >= {window}", (ip,))
+                    count = max(count, cur.fetchone()["cnt"])
+                if mode in ("username", "both"):
+                    cur.execute(
+                        f"SELECT COUNT(*) as cnt FROM login_attempts "
+                        f"WHERE username=%s AND attempted_at >= {window}", (username,))
+                    count = max(count, cur.fetchone()["cnt"])
+
+                if count >= max_attempts:
+                    if lockout_minutes > 0:
+                        # Calculate time remaining in the lockout window from
+                        # the FIRST attempt in the current window, not the last.
+                        # Lock expires when the oldest attempt in the window ages out.
+                        field = "ip_address" if mode in ("ip", "both") else "username"
+                        val = ip if mode in ("ip", "both") else username
+                        cur.execute(f"""
+                            SELECT CEIL(
+                                ({lockout_minutes} * 60) -
+                                TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW())
+                            ) as remaining
+                            FROM login_attempts
+                            WHERE {field}=%s AND attempted_at >= {window}
+                        """, (val,))
+                        row = cur.fetchone()
+                        remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
+                        remaining_mins = max(1, (remaining_secs + 59) // 60)
+                    else:
+                        remaining_mins = 999  # permanent until admin clears
+                    return True, remaining_mins
         return False, 0
     except Exception as e:
         logger.error(f"Rate limit check error: {e}")

@@ -543,10 +543,13 @@ def migrate_kea(target_host, target_port, target_user, target_password, target_d
             dst.commit()
         except Exception:
             pass
-        src.close(); dst.close()
+        dst.close()
+        src.close()
         raise RuntimeError(f"Kea migration failed — rolled back. Error: {e}")
 
-    src.close(); dst.close()
+    dst.close()
+
+    src.close()
     return results
 
 
@@ -556,22 +559,20 @@ def migrate_kea(target_host, target_port, target_user, target_password, target_d
 
 def get_schedule():
     """Return current backup schedule config from DB."""
-    from jen.models.db import get_jen_db
+    from jen.models.db import jen_db
     try:
-        db = get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM backup_schedule WHERE id=1")
-            row = cur.fetchone()
-        db.close()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM backup_schedule WHERE id=1")
+                row = cur.fetchone()
         return row or {}
     except Exception:
         return {}
 
 
 def save_schedule(enabled, frequency, hour, keep_count, include_jen, include_kea):
-    from jen.models.db import get_jen_db
-    db = get_jen_db()
-    try:
+    from jen.models.db import jen_db
+    with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("""
                 INSERT INTO backup_schedule (id, enabled, frequency, hour, keep_count, include_jen, include_kea)
@@ -582,8 +583,6 @@ def save_schedule(enabled, frequency, hour, keep_count, include_jen, include_kea
             """, (enabled, frequency, hour, keep_count, include_jen, include_kea,
                   enabled, frequency, hour, keep_count, include_jen, include_kea))
         db.commit()
-    finally:
-        db.close()
 
 
 def run_scheduled_backup():
@@ -616,15 +615,12 @@ def run_scheduled_backup():
     _prune_backups(keep)
 
     # Update last_run
-    from jen.models.db import get_jen_db
-    db = get_jen_db()
+    from jen.models.db import jen_db
     status = "; ".join(results)
-    try:
+    with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("UPDATE backup_schedule SET last_run=NOW(), last_status=%s WHERE id=1", (status,))
         db.commit()
-    finally:
-        db.close()
 
 
 def _prune_backups(keep_count):

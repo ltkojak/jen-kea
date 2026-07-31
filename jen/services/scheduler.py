@@ -92,15 +92,14 @@ def _run_audit_cleanup(app):
             days = int(days_str) if days_str else 90
             if days <= 0:
                 return  # 0 = keep forever
-            db = __db.get_jen_db()
-            with db.cursor() as cur:
-                cur.execute(
-                    "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
-                    (days,)
-                )
-                deleted = cur.rowcount
-            db.commit()
-            db.close()
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
+                        (days,)
+                    )
+                    deleted = cur.rowcount
+                db.commit()
             if deleted:
                 logger.info(f"Audit log cleanup: removed {deleted} entries older than {days} days")
         except Exception as e:

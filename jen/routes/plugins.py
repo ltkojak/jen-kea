@@ -191,29 +191,27 @@ def api_registry():
 
 def _record_plugin(entry: dict):
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled)
-                VALUES (%s, %s, %s, %s, %s, %s, 1)
-                ON DUPLICATE KEY UPDATE
-                    name=VALUES(name), version=VALUES(version),
-                    description=VALUES(description), enabled=1
-            """, (entry.get("id"), entry.get("name"), entry.get("version"),
-                  entry.get("description"), entry.get("author"),
-                  entry.get("requires_jen")))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled)
+                    VALUES (%s, %s, %s, %s, %s, %s, 1)
+                    ON DUPLICATE KEY UPDATE
+                        name=VALUES(name), version=VALUES(version),
+                        description=VALUES(description), enabled=1
+                """, (entry.get("id"), entry.get("name"), entry.get("version"),
+                      entry.get("description"), entry.get("author"),
+                      entry.get("requires_jen")))
+            db.commit()
     except Exception as e:
         logger.error(f"Failed to record plugin in DB: {e}")
 
 
 def _remove_plugin_record(plugin_id: str):
     try:
-        db = __db.get_jen_db()
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM plugins WHERE id=%s", (plugin_id,))
-        db.commit()
-        db.close()
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", (plugin_id,))
+            db.commit()
     except Exception as e:
         logger.error(f"Failed to remove plugin record from DB: {e}")

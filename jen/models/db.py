@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import threading
+from contextlib import contextmanager
 
 import pymysql
 import pymysql.cursors
@@ -124,6 +125,53 @@ def get_kea_db() -> pymysql.connections.Connection:
                         connect_timeout=10,
                     )
     return _kea_pool.connection()
+
+
+# ── Context managers (v4.1.0) ─────────────────────────────────────────────────
+# Preferred way to use a connection. Guarantees the connection is returned
+# to the pool on every path (early return, exception, or normal exit),
+# commits on clean exit, and rolls back on exception so a failed request
+# can never leave a half-applied transaction on a pooled connection.
+#
+#     with jen_db() as db:
+#         with db.cursor() as cur:
+#             cur.execute(...)
+#
+# Explicit db.commit() calls inside the block remain valid and are honoured
+# immediately; the final commit on clean exit is then a harmless no-op.
+
+@contextmanager
+def jen_db():
+    """Yield a pooled Jen DB connection; commit/rollback/return automatically."""
+    db = get_jen_db()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
+
+
+@contextmanager
+def kea_db():
+    """Yield a pooled Kea DB connection; commit/rollback/return automatically."""
+    db = get_kea_db()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
 
 
 def reset_pools() -> None:

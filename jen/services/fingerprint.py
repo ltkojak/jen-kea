@@ -1533,44 +1533,43 @@ def get_device_info_map(mac_list: list) -> dict:
         return {}
     result = {}
     try:
-        from jen.models.db import get_jen_db
-        db = get_jen_db()
-        with db.cursor() as cur:
-            placeholders = ",".join(["%s"] * len(normalized))
-            cur.execute(f"""
-                SELECT LOWER(mac) AS mac,
-                       COALESCE(manufacturer_override, manufacturer) AS manufacturer,
-                       COALESCE(device_type_override, device_type) AS device_type,
-                       COALESCE(device_icon_override, device_icon) AS device_icon,
-                       manufacturer_override IS NOT NULL AS is_manual
-                FROM devices WHERE LOWER(mac) IN ({placeholders})
-            """, normalized)
-            for row in cur.fetchall():
-                mfr = row["manufacturer"] or ""
-                dtype = row["device_type"] or "unknown"
-                dicon = row["device_icon"] or "❓"
-                # If there's an icon override that's a valid icon name, use it directly
-                icon_url = None
-                if row["is_manual"] and dicon and len(dicon) > 2:
-                    # dicon might be an icon name (e.g. "appletv") not an emoji
-                    test_custom = f"{extensions.ICONS_CUSTOM_DIR}/{dicon}.svg"
-                    test_bundled = f"{extensions.ICONS_BUNDLED_DIR}/{dicon}.svg"
-                    if os.path.exists(test_custom):
-                        icon_url = f"/static/icons/custom/{dicon}.svg"
-                    elif os.path.exists(test_bundled):
-                        icon_url = f"/static/icons/brands/{dicon}.svg"
+        from jen.models.db import jen_db
+        with jen_db() as db:
+            with db.cursor() as cur:
+                placeholders = ",".join(["%s"] * len(normalized))
+                cur.execute(f"""
+                    SELECT LOWER(mac) AS mac,
+                           COALESCE(manufacturer_override, manufacturer) AS manufacturer,
+                           COALESCE(device_type_override, device_type) AS device_type,
+                           COALESCE(device_icon_override, device_icon) AS device_icon,
+                           manufacturer_override IS NOT NULL AS is_manual
+                    FROM devices WHERE LOWER(mac) IN ({placeholders})
+                """, normalized)
+                for row in cur.fetchall():
+                    mfr = row["manufacturer"] or ""
+                    dtype = row["device_type"] or "unknown"
+                    dicon = row["device_icon"] or "❓"
+                    # If there's an icon override that's a valid icon name, use it directly
+                    icon_url = None
+                    if row["is_manual"] and dicon and len(dicon) > 2:
+                        # dicon might be an icon name (e.g. "appletv") not an emoji
+                        test_custom = f"{extensions.ICONS_CUSTOM_DIR}/{dicon}.svg"
+                        test_bundled = f"{extensions.ICONS_BUNDLED_DIR}/{dicon}.svg"
+                        if os.path.exists(test_custom):
+                            icon_url = f"/static/icons/custom/{dicon}.svg"
+                        elif os.path.exists(test_bundled):
+                            icon_url = f"/static/icons/brands/{dicon}.svg"
+                        else:
+                            icon_url = get_manufacturer_icon_url(mfr)
                     else:
                         icon_url = get_manufacturer_icon_url(mfr)
-                else:
-                    icon_url = get_manufacturer_icon_url(mfr)
-                result[row["mac"]] = {
-                    "manufacturer": mfr,
-                    "device_type": dtype,
-                    "device_icon": dicon,
-                    "icon_url": icon_url,
-                    "is_manual": bool(row["is_manual"]),
-                }
-        db.close()
+                    result[row["mac"]] = {
+                        "manufacturer": mfr,
+                        "device_type": dtype,
+                        "device_icon": dicon,
+                        "icon_url": icon_url,
+                        "is_manual": bool(row["is_manual"]),
+                    }
     except Exception as e:
         logger.error(f"get_device_info_map error: {e}")
     return result
