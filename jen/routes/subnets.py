@@ -743,7 +743,7 @@ def save_subnet_note():
             """, (subnet_id, notes, notes))
         db.commit()
         db.close()
-        __user.audit("SAVE_SUBNET_NOTE", str(subnet_id), f"Note updated")
+        __user.audit("SAVE_SUBNET_NOTE", str(subnet_id), "Note updated")
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})

@@ -169,7 +169,7 @@ def api_saved_searches():
             searches = cur.fetchall()
         db.close()
         return jsonify([dict(s) for s in searches])
-    except Exception as e:
+    except Exception:
         return jsonify([])
 
 # ─────────────────────────────────────────
@@ -255,11 +255,9 @@ def api_stats():
                         start, end = [x.strip() for x in p.split("-")]
                         pool_sizes[str(s["id"])] = __ip_to_int(end) - __ip_to_int(start) + 1
         # Get Kea version
-        kea_up = False
         kea_version = ""
         ver_result = __kea.kea_command("version-get")
         if ver_result.get("result") == 0:
-            kea_up = True
             kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
             kea_version = kea_version.splitlines()[0] if kea_version else ""
         server_statuses = [{

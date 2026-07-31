@@ -252,7 +252,6 @@ def _send_slack_channel(message, config):
     if not webhook_url:
         return False
     import re
-    plain = re.sub(r'<[^>]+>', '', message).replace('\n', '\n')
     # Convert HTML bold to Slack bold
     slack_text = message.replace('<b>', '*').replace('</b>', '*')
     slack_text = re.sub(r'<[^>]+>', '', slack_text)

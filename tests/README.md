@@ -11,7 +11,7 @@ pip3 install pytest --break-system-packages
 ```
 
 ### 2. Create the test database
-Run this once on your MySQL server (`10.10.11.250`):
+Run this once on your MySQL server (`192.0.2.10`):
 ```sql
 CREATE DATABASE jen_test;
 GRANT ALL PRIVILEGES ON jen_test.* TO 'jen'@'%';
@@ -60,5 +60,5 @@ pytest tests/test_auth.py::TestLogin::test_login_success -v
 
 Set environment variables if `/etc/jen/jen.config` is not available:
 ```bash
-JEN_DB_HOST=10.10.11.250 JEN_DB_USER=jen JEN_DB_PASS=yourpass pytest tests/ -v
+JEN_DB_HOST=192.0.2.10 JEN_DB_USER=jen JEN_DB_PASS=yourpass pytest tests/ -v
 ```

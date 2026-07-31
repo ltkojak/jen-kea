@@ -383,8 +383,9 @@ def delete_alert_channel(channel_id):
             cur.execute("DELETE FROM alert_channels WHERE id=%s", (channel_id,))
         db.commit()
         db.close()
-        flash(f"Alert channel deleted.", "success")
-        __user.audit("DELETE_ALERT_CHANNEL", str(channel_id), "")
+        name = row["channel_name"] if row else str(channel_id)
+        flash(f"Alert channel '{name}' deleted.", "success")
+        __user.audit("DELETE_ALERT_CHANNEL", str(channel_id), f"name={name}")
     except Exception as e:
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for('settings.settings_alerts'))
@@ -463,7 +464,7 @@ def reset_alert_template():
             cur.execute("DELETE FROM alert_templates WHERE alert_type=%s", (alert_type,))
         db.commit()
         db.close()
-        flash(f"Template reset to default.", "success")
+        flash("Template reset to default.", "success")
     except Exception as e:
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for('settings.settings_alerts'))
@@ -562,9 +563,10 @@ def save_infra_kea():
     if api_pass:
         __config.write_config_value("kea", "api_pass", api_pass)
     cfg = load_config()
-    extensions.KEA_API_URL = extensions.cfg.get("kea", "api_url")
-    extensions.KEA_API_USER = extensions.cfg.get("kea", "api_user")
-    extensions.KEA_API_PASS = extensions.cfg.get("kea", "api_pass")
+    extensions.cfg = cfg
+    extensions.KEA_API_URL = cfg.get("kea", "api_url")
+    extensions.KEA_API_USER = cfg.get("kea", "api_user")
+    extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user}")
@@ -641,9 +643,13 @@ def save_extra_servers():
     ssh_users = request.form.getlist("extra_ssh_user[]")
     kea_confs = request.form.getlist("extra_kea_conf[]")
 
+    # Work on a fresh copy of the on-disk config so we don't mutate the
+    # live in-memory extensions.cfg before the restart applies changes
+    cfg = load_config()
+
     # Remove all existing extra server sections
     n = 2
-    while extensions.cfg.has_section(f"kea_server_{n}"):
+    while cfg.has_section(f"kea_server_{n}"):
         cfg.remove_section(f"kea_server_{n}")
         n += 1
 
@@ -672,11 +678,12 @@ def save_extra_servers():
         cfg.set(sec, "ssh_user", ssh_user.strip())
         cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
 
-    with open(CONFIG_FILE, 'w') as f:
+    with open(extensions.CONFIG_FILE, 'w') as f:
         cfg.write(f)
 
-    # Reload server list
-    extensions.KEA_SERVERS = __config.load_kea_servers(extensions.cfg)
+    # Reload server list from the freshly written config
+    extensions.cfg = cfg
+    extensions.KEA_SERVERS = __config.load_kea_servers(cfg)
     count = len(extensions.KEA_SERVERS) - 1
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     __user.set_global_setting("restart_pending", "true")

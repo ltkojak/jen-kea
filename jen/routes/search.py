@@ -194,7 +194,7 @@ def api_saved_searches():
             searches = cur.fetchall()
         db.close()
         return jsonify([dict(s) for s in searches])
-    except Exception as e:
+    except Exception:
         return jsonify([])
 
 # ─────────────────────────────────────────

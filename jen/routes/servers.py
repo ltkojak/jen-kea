@@ -84,7 +84,7 @@ def restart_kea_server(server_id):
         flash("SSH not configured for this server.", "error")
         return redirect(url_for('servers.servers'))
     SSH_OPTS = ["-i", extensions.SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
-                "-o", f"UserKnownHostsFile=/etc/jen/ssh/known_hosts"]
+                "-o", "UserKnownHostsFile=/etc/jen/ssh/known_hosts"]
     try:
         result = subprocess.run(
             ["ssh"] + SSH_OPTS + [f"{server['ssh_user']}@{server['ssh_host']}",
@@ -93,7 +93,7 @@ def restart_kea_server(server_id):
         )
         if result.returncode == 0:
             flash(f"Kea restarted on {server['name']}.", "success")
-            __user.audit("RESTART_KEA", server["name"], f"Remote restart via SSH")
+            __user.audit("RESTART_KEA", server["name"], "Remote restart via SSH")
         else:
             flash(f"Restart failed on {server['name']}: {result.stderr.decode()}", "error")
     except Exception as e:

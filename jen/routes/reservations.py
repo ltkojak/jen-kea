@@ -4,6 +4,7 @@ jen/routes/reservations.py
 Reservation management routes including bulk operations.
 """
 
+import csv
 import hashlib
 import io
 import json

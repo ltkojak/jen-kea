@@ -14,6 +14,9 @@ import secrets
 import subprocess
 import threading
 from datetime import datetime, timezone
+
+import pymysql
+
 from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, jsonify, redirect,

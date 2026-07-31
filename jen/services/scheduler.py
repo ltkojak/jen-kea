@@ -75,7 +75,6 @@ def _run_backup_job(app):
 
 
 def stop_scheduler():
-    global _scheduler
     if _scheduler and _scheduler.running:
         try:
             _scheduler.shutdown(wait=False)

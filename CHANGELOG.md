@@ -1,5 +1,207 @@
 # Changelog
 
+## [3.8.1] - 2026-07-31
+
+### Full Audit Fixes
+
+### Fixed
+- Reservations CSV export, CSV import, and bulk export were broken — the `csv` module was never imported in `jen/routes/reservations.py` (NameError caught silently, features non-functional)
+- Saving additional Kea servers (Settings → Infrastructure) always returned a 500 — `save_extra_servers` referenced undefined `cfg` and `CONFIG_FILE`; now loads a fresh config from disk, writes via `extensions.CONFIG_FILE`, and reloads `KEA_SERVERS` from the new config instead of the stale in-memory one
+- Any database error during user creation returned a 500 instead of a friendly message — `except pymysql.IntegrityError` referenced an unimported module, and the NameError raised while evaluating the except clause bypassed the fallback handler
+- Saving Kea API settings re-applied the old in-memory values instead of the freshly saved ones — hot-reload now reads from the newly loaded config and updates `extensions.cfg`
+
+### Changed
+- OUI fingerprint database deduplicated: 68 duplicate MAC prefixes with conflicting vendor values removed (last-wins semantics preserved — runtime behavior verified identical), entries now sorted
+- CHANGELOG reordered consistently newest-first; added 3.6.0 pointer entry (details in RELEASE-3.6.0.md)
+- Internal lab IP addresses in tests/README.md and CHANGELOG.md replaced with RFC 5737 documentation addresses
+- Alert channel delete now shows the channel name in the confirmation message and audit log
+- Dead code cleanup: unused variables, no-op `global` declaration, f-strings without placeholders
+
+### Developer Notes
+- Pre-package Jinja validation must register `hostname` as a no-op filter alongside `utcfmt`/`utcdate`/`utctime` — it's registered in `jen/__init__.py` and used by 7 templates
+
+## [3.8.0] - 2026-07-17
+
+### Subnet Create & Delete — Full Subnet Lifecycle Management
+
+Jen could previously only edit subnets that already existed in Kea's config. There was no way to create a brand-new subnet, or delete one, from within Jen at all. The "Add Subnet" button that previously lived in Settings → Infrastructure only added a friendly-name mapping inside Jen — it never touched Kea's actual configuration, so a subnet still had to be provisioned manually via SSH before Jen could do anything with it. This release closes that gap.
+
+**➕ Add Subnet** (Network → Subnets → Add Subnet)
+
+A new page for creating a real subnet in Kea from scratch:
+- Subnet ID auto-suggested as the next available unused ID (checked against both Kea's live config and Jen's own subnet map)
+- Friendly name, CIDR, address pool, lease duration, renew/rebind timers, router/gateway, and DNS servers — the same fields Edit Subnet already supports
+- Full validation before anything touches Kea: subnet ID uniqueness, valid CIDR, pool range falls within the CIDR, valid IPs for router/DNS, no CIDR overlap with any existing subnet
+- Same safe-write pattern as Edit Subnet: backup config → append new subnet4 block → validate with `kea-dhcp4 -t` → only write and restart if validation passes, otherwise the original config is left untouched
+- On success, the subnet is also registered in Jen's own name/CIDR mapping automatically — one action instead of two
+
+**🗑️ Delete Subnet** (button on each subnet card)
+
+- Blocked with a clear message if the subnet still has active leases or reservations — deleting Kea config out from under live leases would orphan them, so this is a hard block, not a force-override
+- Once clear, removes the subnet4 block from Kea via the same backup/validate/restart safety path
+- Automatically removes the subnet from Jen's own mapping so it disappears from the UI cleanly
+- Confirmation required before submission, consistent with other destructive actions across Jen
+
+**Consolidation:** The old editable "Subnet Map" form in Settings → Infrastructure is replaced with a simple read-only summary table pointing to Network → Subnets, where subnet creation, editing, and deletion now all live in one place instead of two.
+
+**UI:** Both buttons use a labeled style (icon + text) rather than the compact icon-only buttons used on dense list pages — appropriate given these are low-frequency, high-consequence actions on a page with only a handful of cards, not a scannable table of dozens of rows.
+
+**Also fixed in passing:** the subnet card header referenced a template variable (`s.subnet`) that didn't exist in the data the route actually provided (`s.cidr`) — CIDR was silently not displaying next to the subnet name badge. Corrected to reference the right field.
+
+## [3.7.15] - 2026-07-17
+
+### Fix: Unreadable Dropdown Options + Backup Code Login Ignoring "Remember Device"
+
+**Grey/unreadable text in select dropdowns:** Native `<select>` dropdown option lists (e.g. "Remember for: 24 hours / 30 days / 60 days / 90 days / Forever" on the MFA challenge page) rendered with very low contrast — all unselected options appeared grey-on-grey. Root cause: no `color-scheme` CSS property was declared anywhere in the app. Browsers render native form control popups (dropdown lists, date pickers, etc.) using a light-mode default unless the page explicitly declares `color-scheme: dark`. Fixed by adding `color-scheme: dark` / `color-scheme: light` to the theme root in `base.html` (dynamically matching whichever theme is active) and to the three standalone pre-login pages that don't extend `base.html` (`login.html`, `mfa_challenge.html`, `error.html`).
+
+**Backup code login completely ignored "Remember this device":** The MFA challenge page has two separate login forms — one for authenticator codes, one for backup codes. Only the authenticator form had the "Remember this device" checkbox and duration selector; the backup code form had no such UI at all, and the backend code path for backup-code verification never read `remember_device`/`remember_days` or set a trust cookie, regardless of what was submitted. This meant logging in via backup code could never establish a trusted device, full stop — every backup-code login would always re-prompt for MFA next time. Fixed by adding the same "Remember this device" UI to the backup code form (with distinct element IDs to avoid collision with the authenticator form) and adding matching remember-device logic to the backup-code success path in `mfa_routes.py`.
+
+**Note on the originally reported issue:** the specific re-prompt-via-Authenticator-tab behavior reported alongside these bugs was not reproducible from code alone — the trusted-device check logic (`expires_at IS NULL OR expires_at > NOW()`) and the "forever" cookie duration fix from 3.7.11 both verified correct on inspection. Since the trust cookie is scoped per-browser, re-prompting after using a different browser, device, or after clearing cookies is expected behavior, not a bug. If MFA re-prompts persist unexpectedly on the *same* browser, check Settings → Audit Log filtered to `MFA_VERIFY` to confirm whether a trust was actually established on the prior login (the audit entry includes `trusted=forever` or `trusted=<days>` when successful, absent when "remember" wasn't checked).
+
+## [3.7.14] - 2026-07-16
+
+### Audit: Minor Ownership Gap in Self-Update
+
+Full re-audit of the codebase following 3.7.13. Found one small issue: the self-update file-copy helper correctly `chown`'d the `jen/` and `templates/` directories back to `www-data` after installation, but not `static/icons/brands/`. Since the entire helper script runs as root via `sudo`, freshly copied brand icon SVGs would end up root-owned. In practice this is usually harmless since files are typically world-readable by default, but it's inconsistent with how every other installed path is handled and could cause a permission issue depending on umask. Fixed to include brand icons in the ownership fix-up, with a fallback (`|| true`) since the directory may not exist on older installs.
+
+Everything else in this audit checked out clean: Python/template syntax, version consistency, auth coverage on all routes (core + plugins), subnet access control, DB migrations running automatically on every restart (confirming self-update's schema changes will apply), tarball structure consistency between the release workflow and self-update's extraction logic, and the DNS override and unified action button fixes from recent releases all remain stable.
+
+**Known limitation (pre-existing, not introduced by recent work):** Jen does not use CSRF tokens on any form across the application. This is an architectural characteristic of the whole app, not a regression — flagging it here for visibility rather than as something this release addresses.
+
+## [3.7.13] - 2026-07-16
+
+### Full Audit Fixes — Self-Update Scope & Overlay Reliability
+
+Full audit of the codebase following the recent self-update work turned up two real issues, both in the self-update mechanism itself.
+
+**🔴 Self-update silently skipped static assets and system files:** The file-copy step copied everything from the release tarball except `static/` and `plugins/` wholesale. This meant any future release that changed `static/js`, `static/css`, or added brand icons would silently fail to apply via the GUI self-update — only a manual `sudo ./install.sh` would pick those up. It also blindly copied non-runtime repo files (`README.md`, `tests/`, `docs/`, `CHANGELOG.md`, `jen.service`, `jen-sudoers`, etc.) into `/opt/jen/` as inert clutter, while never actually installing `jen.service` to `/etc/systemd/system/` or `jen-sudoers` to `/etc/sudoers.d/` — meaning systemd unit or sudoers changes (like the fix in 3.7.10) would never propagate through self-update, only through the manual installer. Fixed by scoping the self-update copy to exactly what `install.sh` installs: the `jen/` package, `templates/`, brand icons only from `static/icons/brands/` (never touching user-uploaded `static/icons/custom/`), plus proper installation of `jen.service` (with `systemctl daemon-reload`) and `jen-sudoers` (validated with `visudo -c` before installing, to avoid ever locking out sudo with a malformed file).
+
+**🟡 Update progress overlay showed false "Update complete" on failure:** The overlay was triggered by a client-side `sessionStorage` flag set unconditionally before form submission, with no awareness of whether the update actually succeeded server-side. If the update failed (bad download, DB backup failure, file copy error), the overlay would still appear, poll for up to 40 seconds, then falsely report "Update complete — reloading" while the real error flash message sat hidden behind the overlay the entire time. Fixed by only triggering the polling overlay when the server confirms success via a `?updated=X.Y.Z` query parameter on the redirect — error paths redirect without that parameter, so the error flash message displays normally instead of being masked.
+
+## [3.7.12] - 2026-07-16
+
+### Self-Update UX — Progress Overlay + Auto-Refresh
+
+Two usability gaps in the GUI self-update flow (Settings → Infrastructure):
+
+**No progress feedback during update:** Clicking "Update Now" just sat there while the download/install happened server-side, with no visual indication anything was in progress. Added a full-screen overlay with a spinner and status messages ("Downloading update package…" → "Installing files…" → "Restarting Jen…") that appears the moment the button is clicked.
+
+**No auto-refresh after restart:** After the update completed and Jen restarted, the page showed a static "restarting" flash message but never came back on its own — you had to manually refresh to see the new version. Now the page polls `/settings/infrastructure/check-update` every 2 seconds after triggering an update; once Jen responds again (confirming the restart completed), the page auto-reloads. The overlay persists across the redirect using `sessionStorage` so it stays visible through the brief window where Jen is down mid-restart.
+
+## [3.7.11] - 2026-07-15
+
+### Fix: 500 Error on MFA Login When "Remember Forever" Selected
+
+Selecting "Forever" from the Remember Device dropdown during MFA verification caused a 500 error: `invalid literal for int() with base 10: 'forever'`. The login actually succeeded underneath (clicking "Back to Dashboard" landed logged in) but the response crashed before it could redirect.
+
+**Root cause 1** (`jen/services/mfa.py`): `create_trusted_device_token()` checked `int(remember_days) > 0 and remember_days != "forever"` — Python evaluates left to right, so `int("forever")` threw before the `!= "forever"` check ever ran. Fixed by reordering the check to test the string comparison first.
+
+**Root cause 2** (`jen/routes/mfa_routes.py`): The MFA challenge route did `days = int(request.form.get("remember_days", 30))` unconditionally, with no handling for the literal `"forever"` value the dropdown actually submits. Fixed to keep `remember_days` as a string, pass it through as-is, and only convert to int for the cookie `max_age` calculation when it isn't `"forever"` (in which case a 10-year cookie is set instead).
+
+## [3.7.10] - 2026-07-01
+
+### Fix: Restart After GUI Self-Update Failing Silently
+
+The self-update flow correctly downloaded and installed v3.7.9's files (confirmed on disk) but the automatic restart at the end failed with `Failed to restart jen.service: Interactive authentication required.` — Jen kept running the old process in memory even though the files on disk were updated, so the UI still showed the old version.
+
+Root cause: `subprocess.run(["/usr/bin/systemctl", "restart", "jen"])` was calling `systemctl` directly, not through `sudo`. The `jen-sudoers` NOPASSWD rule for `systemctl restart jen` only takes effect when the command is actually invoked via `sudo` — calling the binary directly as `www-data` has no elevated permission and systemd's polkit layer requires interactive authentication, which fails immediately in a non-interactive web request context. This bug existed in all 5 restart call sites (manual restart button, port change, SSH key generation, plugin restart, self-update) — it just happened to not matter for infrastructure changes since those are edited less often and errors there were easy to miss in the flash message.
+
+Fixed by adding `/usr/bin/sudo` as the first argument to all 5 `subprocess.run()` restart calls. Also corrected the sudoers file itself, which whitelisted `/bin/systemctl` while the code called `/usr/bin/systemctl` — a path mismatch that would have blocked the sudo grant even with the sudo prefix added.
+
+## [3.7.9] - 2026-06-29
+
+### Fix: Wrong Table Name Broke Reservations Page (regression from 3.7.8)
+
+The DNS override fix in 3.7.8 queried a table called `dhcpv4_options` with `name='domain-name-servers'` — that table doesn't exist in Kea's schema. The correct table, used correctly everywhere else in this same file, is `dhcp4_options` filtered by `code=6`. This broke the entire Reservations page with "Table 'kea.dhcpv4_options' doesn't exist". Fixed to match the working query pattern already used by `edit_reservation`, CSV export, and dry-run import in the same file.
+
+## [3.7.8] - 2026-06-29
+
+### Fix: DNS Override Not Showing in Reservations List
+
+The reservations list route fetched hostname and notes for each row but never queried the Kea `dhcpv4_options` table for per-host DNS overrides. Every row showed "default" regardless of whether an override was set.
+
+Fixed by adding a `dhcpv4_options` lookup per host in the reservations list query. The DNS Override column now shows a green "● Override" indicator when an override is set (with the actual DNS value in the tooltip on hover), and "default" in muted grey when none is configured.
+
+## [3.7.7] - 2026-06-11
+
+### Fix: GUI Self-Update Now Works Correctly
+
+Two bugs in the self-update mechanism introduced in 3.7.4:
+
+**File copy permission failure:** The update route ran as `www-data` which has no write access to `/opt/jen/`. Files were being downloaded and extracted correctly but the copy step silently failed because `shutil.copy2()` can't write to root-owned directories. Fixed by generating a temporary shell script and running it via `sudo /bin/bash` (covered by the sudoers entry). The sudoers file is updated to allow `www-data` to run `/tmp/jen_update_install.sh`.
+
+**No database backup:** The GUI update bypassed the DB backup prompt that exists in the shell installer. Fixed by adding a "Back up database before updating" checkbox (checked by default) to the update UI. When checked, a full Jen DB export is written to `/etc/jen/backups/` before any files are touched. If the backup fails, the update is aborted.
+
+## [3.7.6] - 2026-06-11
+
+### UI Polish — Unified Action Button System
+
+All row-level action buttons across every page now use a consistent three-button system: ✏️ edit (neutral), 📌 pin/reserve (neutral, green on hover), ✕ delete (red border, always visible as destructive). All three are identical 28×28px buttons. A subtle vertical divider separates constructive actions from the delete button to reduce misclick risk.
+
+Pages updated: Leases, Reservations, Devices, Database backups, API Keys, Saved Searches, Alert Channels, Custom Icons, Plugins, Infrastructure Settings (inline remove buttons), System Settings (logo remove).
+
+The old pattern of mixed `btn-danger` (solid red), `btn-success` (solid green), and `btn-secondary` (grey) row buttons is replaced throughout. Page-level danger buttons (Apply & Restart Kea, Delete Stale, Start Migration, Revoke All) are intentionally left as solid red — those are high-impact actions that should remain prominent.
+
+Three new CSS classes added to `base.html`: `.btn-act`, `.btn-act-edit`, `.btn-act-pin`, `.btn-act-del`, `.btn-act-divider`.
+
+## [3.7.5] - 2026-06-10
+
+### Installer — Three Fixes
+
+**Remove redundant "Skip" option from upgrade config prompt:** The config choice during an upgrade previously offered three options: Keep / Reconfigure / Skip. Options 1 and 3 both did exactly the same thing (set `CONFIGURE=false` and continue). Skip has been removed — it's now a clean 1/2 choice: Keep existing config or Reconfigure.
+
+**Database backup prompt during upgrade:** The installer already backed up application files (`run.py` and `jen/` package) before every upgrade, but never offered to back up the Jen database. Now prompts "Create a Jen database backup before upgrading?" (default yes). Reads connection details from the existing config file and runs `mysqldump` to `/etc/jen/backups/jen-db-TIMESTAMP.sql`. If the dump fails, a warning is shown but the upgrade continues.
+
+**Skip `apt-get update` on upgrades:** On a fresh install, updating the package lists is necessary to find packages. On an upgrade, all dependencies are already installed and the update just adds 15-30 seconds of network delay for no benefit. `apt-get update` is now skipped when `IS_UPGRADE=true`.
+
+## [3.7.4] - 2026-06-10
+
+### GitHub Actions Auto-Release + Jen Self-Update
+
+**GitHub Actions release workflow** (`.github/workflows/release.yml`): Pushing a version tag (e.g. `git tag v3.7.4 && git push origin v3.7.4`) now automatically triggers a GitHub Actions job that builds the release tarball, extracts all matching `3.7.x` entries from `CHANGELOG.md`, and creates a GitHub Release with the tarball attached and the changelog as release notes. No more manual release creation.
+
+**Jen self-update from the UI** (Settings → Infrastructure): A new "Jen Updates" card shows the running version and a "Check for Updates" button. Clicking it hits the GitHub releases API and compares to the running version. If a newer release exists, it shows the version, publish date, a link to the release notes, and an "Update Now" button. Clicking Update downloads the release tarball from GitHub, extracts and installs it over `/opt/jen/`, preserves config/plugins/custom icons, and restarts Jen automatically. SuperAdmin only.
+
+## [3.7.3] - 2026-06-10
+
+### Fix: Trailing dot stripped from hostnames
+
+Kea sometimes stores hostnames with a trailing dot (`tardis.` instead of `tardis`) because some DHCP clients send the hostname as a fully-qualified domain name with the root label included — technically valid but visually wrong. Added a `hostname` Jinja filter that strips trailing dots, applied everywhere hostnames are displayed: Leases, Dashboard recent leases, Reservations, Devices, Search results, IP Map, and the top devices JS widget.
+
+## [3.7.1] - 2026-06-09
+
+### Full Audit Fixes
+
+Two issues found during full end-to-end audit of 3.7.0:
+
+**🔴 `/opt/jen/plugins/` not created by installer:** The `mkdir -p` block in `install.sh` that creates the Jen directory structure was missing `/opt/jen/plugins/`. On a fresh install, attempting to install a plugin before the directory existed would fail. Fixed by adding `"$INSTALL_DIR/plugins"` to the mkdir block.
+
+**🟡 Duplicate condition on network section-tabs:** The `{% if %}` block controlling when the Network section-tabs bar renders had the plugin endpoint check written twice (`or (plugin_nav_items and ...) or (plugin_nav_items and ...)`). Harmless — the condition evaluated correctly — but redundant. Cleaned up to a single check.
+
+## [3.7.0] - 2026-06-09
+
+### Plugin Architecture — Separate Repositories
+
+Plugins now live in their own dedicated GitHub repositories rather than in the `plugins/` subfolder of the main Jen repo.
+
+**What changed:**
+- `plugins/network-discovery/` removed from main repo → now at `github.com/ltkojak/jen-plugin-network-discovery`
+- `plugins/ipam/` removed from main repo → now at `github.com/ltkojak/jen-plugin-ipam`
+- `plugins/registry.json` remains in the main repo — this is correct, the registry is part of Jen core
+- `registry.json` `download_url` values updated to point at the new repos
+
+**Why:** Plugin issues, PRs, release tags, and commit history now live in their own namespace. A bug fix to IPAM gets a tag on the IPAM repo, not a Jen core version bump. Community contributors can submit plugins by opening a PR to `registry.json` pointing at their own repo. The main Jen repo stays lean.
+
+**No user-visible changes.** Install, enable, disable, and update flows are identical. The only difference is where the plugin zip is downloaded from.
+
+**Versioning going forward:**
+- Jen core: `3.7.x` for plugin architecture changes, `4.0` for plugin framework v2
+- Plugins: independently versioned in their own repos
+
+## [3.6.0] - 2026-06-08
+
+Plugin framework and plugin manager. Full details in RELEASE-3.6.0.md.
+
 ## [3.5.17] - 2026-06-05
 
 ### Full Audit Fixes — Security, iOS Compatibility, UX
@@ -531,32 +733,6 @@ Bumped mobile nav `min-height` from 48px to 56px and added vertical padding to g
 
 ### Dashboard Enhancements
 
-Six improvements to the dashboard, all individually hideable via the Customize panel.
-
-**1. Utilization history sparklines**
-Each subnet card now has a canvas sparkline showing dynamic lease utilization over time. Data comes from the `lease_history` table which has been collecting snapshots every 30 minutes since initial setup. Line color matches the utilization threshold — primary/warning/danger. A dedicated History widget shows full 7-day (or 1/30-day) charts for all subnets.
-
-**2. Total summary widget**
-New widget below the subnet cards showing totals across all subnets: total active, dynamic, reserved, and overall pool utilization percentage with a progress bar.
-
-**3. Alert summary widget**
-Previously showed "No recent alerts" hardcoded. Now fetches from `/api/alert-summary` and displays the last 10 alerts with timestamp, type icon, and delivery status.
-
-**4. Recent leases HTMX**
-The time window dropdown on the Recent Leases widget now updates the table without a full page reload, via `/api/recent-leases`.
-
-**5. Subnet card links**
-Clicking a subnet stat card navigates to `/leases?subnet=ID`. Previously clicking a card did nothing.
-
-**6. Last updated timestamp**
-Small "Updated HH:MM:SS" text next to the refresh dot — you always know how fresh the data is.
-
-**Customize panel updated** to include all new widgets: Utilization History, Total Summary are toggleable alongside the existing Subnet Statistics, Recently Issued Leases, Server Status, and Alert Summary.
-
-## [3.2.0] - 2026-04-29
-
-### Dashboard Enhancements
-
 **1. Lease History Charts**
 7-day utilization sparklines on each subnet card, drawn with Canvas API (no external charting library). Color-coded by utilization: blue (normal) → yellow (≥75%) → red (≥90%). Time range selector: 24h, 3d, 7d, 30d. Uses the `lease_history` table that has been collecting snapshots every 30 minutes — data was there, just never displayed.
 
@@ -665,7 +841,6 @@ Timing breakdown revealed `route:1022ms` on POST /login with `pre-route:0ms`. Th
 
 **`clear_login_attempts()` also made async** — same pattern, also blocked the login response.
 
-
 ## [2.8.12] - 2026-04-29
 
 ### Added
@@ -694,7 +869,7 @@ Timing breakdown revealed `route:1022ms` on POST /login with `pre-route:0ms`. Th
 - SSL context hardened: minimum TLS 1.2, explicit cipher suite preference for ECDHE+AESGCM and ECDHE+CHACHA20, SSLv2/v3 disabled. This enables TLS 1.3 when both client and server support it, which reduces handshake to 1 round trip vs 2 for TLS 1.2, and enables 0-RTT on session resumption.
 
 ### Note
-- Remaining ~2s login delay on HTTPS via domain name is likely network path latency (DNS resolution, Cloudflare tunnel, reverse proxy) rather than anything in Jen — login itself takes 12ms. Test on direct LAN IP (`http://10.10.11.251:5050`) to confirm: if instant there, the delay is in the network path not Jen.
+- Remaining ~2s login delay on HTTPS via domain name is likely network path latency (DNS resolution, Cloudflare tunnel, reverse proxy) rather than anything in Jen — login itself takes 12ms. Test on direct LAN IP (`http://192.0.2.11:5050`) to confirm: if instant there, the delay is in the network path not Jen.
 
 ## [2.8.8] - 2026-04-29
 
@@ -1355,180 +1530,3 @@ Initial public release.
 - Docker support (external MySQL and bundled MySQL modes)
 - Full documentation
 
-## [3.7.0] - 2026-06-09
-
-### Plugin Architecture — Separate Repositories
-
-Plugins now live in their own dedicated GitHub repositories rather than in the `plugins/` subfolder of the main Jen repo.
-
-**What changed:**
-- `plugins/network-discovery/` removed from main repo → now at `github.com/ltkojak/jen-plugin-network-discovery`
-- `plugins/ipam/` removed from main repo → now at `github.com/ltkojak/jen-plugin-ipam`
-- `plugins/registry.json` remains in the main repo — this is correct, the registry is part of Jen core
-- `registry.json` `download_url` values updated to point at the new repos
-
-**Why:** Plugin issues, PRs, release tags, and commit history now live in their own namespace. A bug fix to IPAM gets a tag on the IPAM repo, not a Jen core version bump. Community contributors can submit plugins by opening a PR to `registry.json` pointing at their own repo. The main Jen repo stays lean.
-
-**No user-visible changes.** Install, enable, disable, and update flows are identical. The only difference is where the plugin zip is downloaded from.
-
-**Versioning going forward:**
-- Jen core: `3.7.x` for plugin architecture changes, `4.0` for plugin framework v2
-- Plugins: independently versioned in their own repos
-
-## [3.7.1] - 2026-06-09
-
-### Full Audit Fixes
-
-Two issues found during full end-to-end audit of 3.7.0:
-
-**🔴 `/opt/jen/plugins/` not created by installer:** The `mkdir -p` block in `install.sh` that creates the Jen directory structure was missing `/opt/jen/plugins/`. On a fresh install, attempting to install a plugin before the directory existed would fail. Fixed by adding `"$INSTALL_DIR/plugins"` to the mkdir block.
-
-**🟡 Duplicate condition on network section-tabs:** The `{% if %}` block controlling when the Network section-tabs bar renders had the plugin endpoint check written twice (`or (plugin_nav_items and ...) or (plugin_nav_items and ...)`). Harmless — the condition evaluated correctly — but redundant. Cleaned up to a single check.
-
-## [3.7.3] - 2026-06-10
-
-### Fix: Trailing dot stripped from hostnames
-
-Kea sometimes stores hostnames with a trailing dot (`tardis.` instead of `tardis`) because some DHCP clients send the hostname as a fully-qualified domain name with the root label included — technically valid but visually wrong. Added a `hostname` Jinja filter that strips trailing dots, applied everywhere hostnames are displayed: Leases, Dashboard recent leases, Reservations, Devices, Search results, IP Map, and the top devices JS widget.
-
-## [3.7.4] - 2026-06-10
-
-### GitHub Actions Auto-Release + Jen Self-Update
-
-**GitHub Actions release workflow** (`.github/workflows/release.yml`): Pushing a version tag (e.g. `git tag v3.7.4 && git push origin v3.7.4`) now automatically triggers a GitHub Actions job that builds the release tarball, extracts all matching `3.7.x` entries from `CHANGELOG.md`, and creates a GitHub Release with the tarball attached and the changelog as release notes. No more manual release creation.
-
-**Jen self-update from the UI** (Settings → Infrastructure): A new "Jen Updates" card shows the running version and a "Check for Updates" button. Clicking it hits the GitHub releases API and compares to the running version. If a newer release exists, it shows the version, publish date, a link to the release notes, and an "Update Now" button. Clicking Update downloads the release tarball from GitHub, extracts and installs it over `/opt/jen/`, preserves config/plugins/custom icons, and restarts Jen automatically. SuperAdmin only.
-
-## [3.7.5] - 2026-06-10
-
-### Installer — Three Fixes
-
-**Remove redundant "Skip" option from upgrade config prompt:** The config choice during an upgrade previously offered three options: Keep / Reconfigure / Skip. Options 1 and 3 both did exactly the same thing (set `CONFIGURE=false` and continue). Skip has been removed — it's now a clean 1/2 choice: Keep existing config or Reconfigure.
-
-**Database backup prompt during upgrade:** The installer already backed up application files (`run.py` and `jen/` package) before every upgrade, but never offered to back up the Jen database. Now prompts "Create a Jen database backup before upgrading?" (default yes). Reads connection details from the existing config file and runs `mysqldump` to `/etc/jen/backups/jen-db-TIMESTAMP.sql`. If the dump fails, a warning is shown but the upgrade continues.
-
-**Skip `apt-get update` on upgrades:** On a fresh install, updating the package lists is necessary to find packages. On an upgrade, all dependencies are already installed and the update just adds 15-30 seconds of network delay for no benefit. `apt-get update` is now skipped when `IS_UPGRADE=true`.
-
-## [3.7.6] - 2026-06-11
-
-### UI Polish — Unified Action Button System
-
-All row-level action buttons across every page now use a consistent three-button system: ✏️ edit (neutral), 📌 pin/reserve (neutral, green on hover), ✕ delete (red border, always visible as destructive). All three are identical 28×28px buttons. A subtle vertical divider separates constructive actions from the delete button to reduce misclick risk.
-
-Pages updated: Leases, Reservations, Devices, Database backups, API Keys, Saved Searches, Alert Channels, Custom Icons, Plugins, Infrastructure Settings (inline remove buttons), System Settings (logo remove).
-
-The old pattern of mixed `btn-danger` (solid red), `btn-success` (solid green), and `btn-secondary` (grey) row buttons is replaced throughout. Page-level danger buttons (Apply & Restart Kea, Delete Stale, Start Migration, Revoke All) are intentionally left as solid red — those are high-impact actions that should remain prominent.
-
-Three new CSS classes added to `base.html`: `.btn-act`, `.btn-act-edit`, `.btn-act-pin`, `.btn-act-del`, `.btn-act-divider`.
-
-## [3.7.7] - 2026-06-11
-
-### Fix: GUI Self-Update Now Works Correctly
-
-Two bugs in the self-update mechanism introduced in 3.7.4:
-
-**File copy permission failure:** The update route ran as `www-data` which has no write access to `/opt/jen/`. Files were being downloaded and extracted correctly but the copy step silently failed because `shutil.copy2()` can't write to root-owned directories. Fixed by generating a temporary shell script and running it via `sudo /bin/bash` (covered by the sudoers entry). The sudoers file is updated to allow `www-data` to run `/tmp/jen_update_install.sh`.
-
-**No database backup:** The GUI update bypassed the DB backup prompt that exists in the shell installer. Fixed by adding a "Back up database before updating" checkbox (checked by default) to the update UI. When checked, a full Jen DB export is written to `/etc/jen/backups/` before any files are touched. If the backup fails, the update is aborted.
-
-## [3.7.8] - 2026-06-29
-
-### Fix: DNS Override Not Showing in Reservations List
-
-The reservations list route fetched hostname and notes for each row but never queried the Kea `dhcpv4_options` table for per-host DNS overrides. Every row showed "default" regardless of whether an override was set.
-
-Fixed by adding a `dhcpv4_options` lookup per host in the reservations list query. The DNS Override column now shows a green "● Override" indicator when an override is set (with the actual DNS value in the tooltip on hover), and "default" in muted grey when none is configured.
-
-## [3.7.9] - 2026-06-29
-
-### Fix: Wrong Table Name Broke Reservations Page (regression from 3.7.8)
-
-The DNS override fix in 3.7.8 queried a table called `dhcpv4_options` with `name='domain-name-servers'` — that table doesn't exist in Kea's schema. The correct table, used correctly everywhere else in this same file, is `dhcp4_options` filtered by `code=6`. This broke the entire Reservations page with "Table 'kea.dhcpv4_options' doesn't exist". Fixed to match the working query pattern already used by `edit_reservation`, CSV export, and dry-run import in the same file.
-
-## [3.7.10] - 2026-07-01
-
-### Fix: Restart After GUI Self-Update Failing Silently
-
-The self-update flow correctly downloaded and installed v3.7.9's files (confirmed on disk) but the automatic restart at the end failed with `Failed to restart jen.service: Interactive authentication required.` — Jen kept running the old process in memory even though the files on disk were updated, so the UI still showed the old version.
-
-Root cause: `subprocess.run(["/usr/bin/systemctl", "restart", "jen"])` was calling `systemctl` directly, not through `sudo`. The `jen-sudoers` NOPASSWD rule for `systemctl restart jen` only takes effect when the command is actually invoked via `sudo` — calling the binary directly as `www-data` has no elevated permission and systemd's polkit layer requires interactive authentication, which fails immediately in a non-interactive web request context. This bug existed in all 5 restart call sites (manual restart button, port change, SSH key generation, plugin restart, self-update) — it just happened to not matter for infrastructure changes since those are edited less often and errors there were easy to miss in the flash message.
-
-Fixed by adding `/usr/bin/sudo` as the first argument to all 5 `subprocess.run()` restart calls. Also corrected the sudoers file itself, which whitelisted `/bin/systemctl` while the code called `/usr/bin/systemctl` — a path mismatch that would have blocked the sudo grant even with the sudo prefix added.
-
-## [3.7.11] - 2026-07-15
-
-### Fix: 500 Error on MFA Login When "Remember Forever" Selected
-
-Selecting "Forever" from the Remember Device dropdown during MFA verification caused a 500 error: `invalid literal for int() with base 10: 'forever'`. The login actually succeeded underneath (clicking "Back to Dashboard" landed logged in) but the response crashed before it could redirect.
-
-**Root cause 1** (`jen/services/mfa.py`): `create_trusted_device_token()` checked `int(remember_days) > 0 and remember_days != "forever"` — Python evaluates left to right, so `int("forever")` threw before the `!= "forever"` check ever ran. Fixed by reordering the check to test the string comparison first.
-
-**Root cause 2** (`jen/routes/mfa_routes.py`): The MFA challenge route did `days = int(request.form.get("remember_days", 30))` unconditionally, with no handling for the literal `"forever"` value the dropdown actually submits. Fixed to keep `remember_days` as a string, pass it through as-is, and only convert to int for the cookie `max_age` calculation when it isn't `"forever"` (in which case a 10-year cookie is set instead).
-
-## [3.7.12] - 2026-07-16
-
-### Self-Update UX — Progress Overlay + Auto-Refresh
-
-Two usability gaps in the GUI self-update flow (Settings → Infrastructure):
-
-**No progress feedback during update:** Clicking "Update Now" just sat there while the download/install happened server-side, with no visual indication anything was in progress. Added a full-screen overlay with a spinner and status messages ("Downloading update package…" → "Installing files…" → "Restarting Jen…") that appears the moment the button is clicked.
-
-**No auto-refresh after restart:** After the update completed and Jen restarted, the page showed a static "restarting" flash message but never came back on its own — you had to manually refresh to see the new version. Now the page polls `/settings/infrastructure/check-update` every 2 seconds after triggering an update; once Jen responds again (confirming the restart completed), the page auto-reloads. The overlay persists across the redirect using `sessionStorage` so it stays visible through the brief window where Jen is down mid-restart.
-
-## [3.7.13] - 2026-07-16
-
-### Full Audit Fixes — Self-Update Scope & Overlay Reliability
-
-Full audit of the codebase following the recent self-update work turned up two real issues, both in the self-update mechanism itself.
-
-**🔴 Self-update silently skipped static assets and system files:** The file-copy step copied everything from the release tarball except `static/` and `plugins/` wholesale. This meant any future release that changed `static/js`, `static/css`, or added brand icons would silently fail to apply via the GUI self-update — only a manual `sudo ./install.sh` would pick those up. It also blindly copied non-runtime repo files (`README.md`, `tests/`, `docs/`, `CHANGELOG.md`, `jen.service`, `jen-sudoers`, etc.) into `/opt/jen/` as inert clutter, while never actually installing `jen.service` to `/etc/systemd/system/` or `jen-sudoers` to `/etc/sudoers.d/` — meaning systemd unit or sudoers changes (like the fix in 3.7.10) would never propagate through self-update, only through the manual installer. Fixed by scoping the self-update copy to exactly what `install.sh` installs: the `jen/` package, `templates/`, brand icons only from `static/icons/brands/` (never touching user-uploaded `static/icons/custom/`), plus proper installation of `jen.service` (with `systemctl daemon-reload`) and `jen-sudoers` (validated with `visudo -c` before installing, to avoid ever locking out sudo with a malformed file).
-
-**🟡 Update progress overlay showed false "Update complete" on failure:** The overlay was triggered by a client-side `sessionStorage` flag set unconditionally before form submission, with no awareness of whether the update actually succeeded server-side. If the update failed (bad download, DB backup failure, file copy error), the overlay would still appear, poll for up to 40 seconds, then falsely report "Update complete — reloading" while the real error flash message sat hidden behind the overlay the entire time. Fixed by only triggering the polling overlay when the server confirms success via a `?updated=X.Y.Z` query parameter on the redirect — error paths redirect without that parameter, so the error flash message displays normally instead of being masked.
-
-## [3.7.14] - 2026-07-16
-
-### Audit: Minor Ownership Gap in Self-Update
-
-Full re-audit of the codebase following 3.7.13. Found one small issue: the self-update file-copy helper correctly `chown`'d the `jen/` and `templates/` directories back to `www-data` after installation, but not `static/icons/brands/`. Since the entire helper script runs as root via `sudo`, freshly copied brand icon SVGs would end up root-owned. In practice this is usually harmless since files are typically world-readable by default, but it's inconsistent with how every other installed path is handled and could cause a permission issue depending on umask. Fixed to include brand icons in the ownership fix-up, with a fallback (`|| true`) since the directory may not exist on older installs.
-
-Everything else in this audit checked out clean: Python/template syntax, version consistency, auth coverage on all routes (core + plugins), subnet access control, DB migrations running automatically on every restart (confirming self-update's schema changes will apply), tarball structure consistency between the release workflow and self-update's extraction logic, and the DNS override and unified action button fixes from recent releases all remain stable.
-
-**Known limitation (pre-existing, not introduced by recent work):** Jen does not use CSRF tokens on any form across the application. This is an architectural characteristic of the whole app, not a regression — flagging it here for visibility rather than as something this release addresses.
-
-## [3.7.15] - 2026-07-17
-
-### Fix: Unreadable Dropdown Options + Backup Code Login Ignoring "Remember Device"
-
-**Grey/unreadable text in select dropdowns:** Native `<select>` dropdown option lists (e.g. "Remember for: 24 hours / 30 days / 60 days / 90 days / Forever" on the MFA challenge page) rendered with very low contrast — all unselected options appeared grey-on-grey. Root cause: no `color-scheme` CSS property was declared anywhere in the app. Browsers render native form control popups (dropdown lists, date pickers, etc.) using a light-mode default unless the page explicitly declares `color-scheme: dark`. Fixed by adding `color-scheme: dark` / `color-scheme: light` to the theme root in `base.html` (dynamically matching whichever theme is active) and to the three standalone pre-login pages that don't extend `base.html` (`login.html`, `mfa_challenge.html`, `error.html`).
-
-**Backup code login completely ignored "Remember this device":** The MFA challenge page has two separate login forms — one for authenticator codes, one for backup codes. Only the authenticator form had the "Remember this device" checkbox and duration selector; the backup code form had no such UI at all, and the backend code path for backup-code verification never read `remember_device`/`remember_days` or set a trust cookie, regardless of what was submitted. This meant logging in via backup code could never establish a trusted device, full stop — every backup-code login would always re-prompt for MFA next time. Fixed by adding the same "Remember this device" UI to the backup code form (with distinct element IDs to avoid collision with the authenticator form) and adding matching remember-device logic to the backup-code success path in `mfa_routes.py`.
-
-**Note on the originally reported issue:** the specific re-prompt-via-Authenticator-tab behavior reported alongside these bugs was not reproducible from code alone — the trusted-device check logic (`expires_at IS NULL OR expires_at > NOW()`) and the "forever" cookie duration fix from 3.7.11 both verified correct on inspection. Since the trust cookie is scoped per-browser, re-prompting after using a different browser, device, or after clearing cookies is expected behavior, not a bug. If MFA re-prompts persist unexpectedly on the *same* browser, check Settings → Audit Log filtered to `MFA_VERIFY` to confirm whether a trust was actually established on the prior login (the audit entry includes `trusted=forever` or `trusted=<days>` when successful, absent when "remember" wasn't checked).
-
-## [3.8.0] - 2026-07-17
-
-### Subnet Create & Delete — Full Subnet Lifecycle Management
-
-Jen could previously only edit subnets that already existed in Kea's config. There was no way to create a brand-new subnet, or delete one, from within Jen at all. The "Add Subnet" button that previously lived in Settings → Infrastructure only added a friendly-name mapping inside Jen — it never touched Kea's actual configuration, so a subnet still had to be provisioned manually via SSH before Jen could do anything with it. This release closes that gap.
-
-**➕ Add Subnet** (Network → Subnets → Add Subnet)
-
-A new page for creating a real subnet in Kea from scratch:
-- Subnet ID auto-suggested as the next available unused ID (checked against both Kea's live config and Jen's own subnet map)
-- Friendly name, CIDR, address pool, lease duration, renew/rebind timers, router/gateway, and DNS servers — the same fields Edit Subnet already supports
-- Full validation before anything touches Kea: subnet ID uniqueness, valid CIDR, pool range falls within the CIDR, valid IPs for router/DNS, no CIDR overlap with any existing subnet
-- Same safe-write pattern as Edit Subnet: backup config → append new subnet4 block → validate with `kea-dhcp4 -t` → only write and restart if validation passes, otherwise the original config is left untouched
-- On success, the subnet is also registered in Jen's own name/CIDR mapping automatically — one action instead of two
-
-**🗑️ Delete Subnet** (button on each subnet card)
-
-- Blocked with a clear message if the subnet still has active leases or reservations — deleting Kea config out from under live leases would orphan them, so this is a hard block, not a force-override
-- Once clear, removes the subnet4 block from Kea via the same backup/validate/restart safety path
-- Automatically removes the subnet from Jen's own mapping so it disappears from the UI cleanly
-- Confirmation required before submission, consistent with other destructive actions across Jen
-
-**Consolidation:** The old editable "Subnet Map" form in Settings → Infrastructure is replaced with a simple read-only summary table pointing to Network → Subnets, where subnet creation, editing, and deletion now all live in one place instead of two.
-
-**UI:** Both buttons use a labeled style (icon + text) rather than the compact icon-only buttons used on dense list pages — appropriate given these are low-frequency, high-consequence actions on a page with only a handful of cards, not a scannable table of dozens of rows.
-
-**Also fixed in passing:** the subnet card header referenced a template variable (`s.subnet`) that didn't exist in the data the route actually provided (`s.cidr`) — CIDR was silently not displaying next to the subnet name badge. Corrected to reference the right field.
