@@ -1449,8 +1449,6 @@ MANUFACTURER_ICON_MAP = {
     "Tuya IoT":         "tuya",
 }
 
-extensions.ICONS_BUNDLED_DIR = "/opt/jen/static/icons/brands"
-extensions.ICONS_CUSTOM_DIR  = "/opt/jen/static/icons/custom"
 
 def get_manufacturer_icon_url(manufacturer: str) -> str:
     """

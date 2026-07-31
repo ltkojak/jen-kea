@@ -558,15 +558,10 @@ def save_infra_kea():
     if not api_url:
         flash("API URL is required.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
-    __config.write_config_value("kea", "api_url", api_url)
-    __config.write_config_value("kea", "api_user", api_user)
+    items = [("kea", "api_url", api_url), ("kea", "api_user", api_user)]
     if api_pass:
-        __config.write_config_value("kea", "api_pass", api_pass)
-    cfg = load_config()
-    extensions.cfg = cfg
-    extensions.KEA_API_URL = cfg.get("kea", "api_url")
-    extensions.KEA_API_USER = cfg.get("kea", "api_user")
-    extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
+        items.append(("kea", "api_pass", api_pass))
+    __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user}")
@@ -583,11 +578,11 @@ def save_infra_kea_db():
     if not host or not user or not database:
         flash("Host, username, and database name are required.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
-    __config.write_config_value("kea_db", "host", host)
-    __config.write_config_value("kea_db", "user", user)
+    items = [("kea_db", "host", host), ("kea_db", "user", user),
+             ("kea_db", "database", database)]
     if password:
-        __config.write_config_value("kea_db", "password", password)
-    __config.write_config_value("kea_db", "database", database)
+        items.append(("kea_db", "password", password))
+    __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_db", f"host={host}")
@@ -604,11 +599,11 @@ def save_infra_jen_db():
     if not host or not user or not database:
         flash("Host, username, and database name are required.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
-    __config.write_config_value("jen_db", "host", host)
-    __config.write_config_value("jen_db", "user", user)
+    items = [("jen_db", "host", host), ("jen_db", "user", user),
+             ("jen_db", "database", database)]
     if password:
-        __config.write_config_value("jen_db", "password", password)
-    __config.write_config_value("jen_db", "database", database)
+        items.append(("jen_db", "password", password))
+    __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Jen database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "jen_db", f"host={host}")
@@ -621,10 +616,10 @@ def save_infra_ssh():
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     kea_conf = request.form.get("kea_conf", "").strip()
-    __config.write_config_value("kea_ssh", "host", host)
-    __config.write_config_value("kea_ssh", "user", user)
+    items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
-        __config.write_config_value("kea_ssh", "kea_conf", kea_conf)
+        items.append(("kea_ssh", "kea_conf", kea_conf))
+    __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("SSH settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
@@ -643,47 +638,39 @@ def save_extra_servers():
     ssh_users = request.form.getlist("extra_ssh_user[]")
     kea_confs = request.form.getlist("extra_kea_conf[]")
 
-    # Work on a fresh copy of the on-disk config so we don't mutate the
-    # live in-memory extensions.cfg before the restart applies changes
-    cfg = load_config()
+    def _rewrite_extra_servers(cfg):
+        # Remove all existing extra server sections
+        n = 2
+        while cfg.has_section(f"kea_server_{n}"):
+            cfg.remove_section(f"kea_server_{n}")
+            n += 1
+        # Add new ones
+        for i, (name, role, api_url, api_user, api_pass, ssh_host, ssh_user, kea_conf) in enumerate(
+            zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs), start=2
+        ):
+            if not api_url.strip():
+                continue
+            sec = f"kea_server_{i}"
+            cfg.add_section(sec)
+            cfg.set(sec, "name", name.strip() or f"Kea Server {i}")
+            cfg.set(sec, "role", role.strip() or "standby")
+            cfg.set(sec, "api_url", api_url.strip())
+            cfg.set(sec, "api_user", api_user.strip())
+            if api_pass.strip():
+                cfg.set(sec, "api_pass", api_pass.strip())
+            else:
+                # Preserve existing password from the current config
+                try:
+                    existing_pass = extensions.cfg.get(sec, "api_pass", fallback=extensions.KEA_API_PASS)
+                    cfg.set(sec, "api_pass", existing_pass)
+                except Exception:
+                    cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
+            cfg.set(sec, "ssh_host", ssh_host.strip())
+            cfg.set(sec, "ssh_user", ssh_user.strip())
+            cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
 
-    # Remove all existing extra server sections
-    n = 2
-    while cfg.has_section(f"kea_server_{n}"):
-        cfg.remove_section(f"kea_server_{n}")
-        n += 1
+    __config.app_config.mutate(_rewrite_extra_servers)
 
-    # Add new ones
-    for i, (name, role, api_url, api_user, api_pass, ssh_host, ssh_user, kea_conf) in enumerate(
-        zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs), start=2
-    ):
-        if not api_url.strip():
-            continue
-        sec = f"kea_server_{i}"
-        cfg.add_section(sec)
-        cfg.set(sec, "name", name.strip() or f"Kea Server {i}")
-        cfg.set(sec, "role", role.strip() or "standby")
-        cfg.set(sec, "api_url", api_url.strip())
-        cfg.set(sec, "api_user", api_user.strip())
-        if api_pass.strip():
-            cfg.set(sec, "api_pass", api_pass.strip())
-        else:
-            # Try to preserve existing password
-            try:
-                existing_pass = extensions.cfg.get(sec, "api_pass", fallback=extensions.KEA_API_PASS)
-                cfg.set(sec, "api_pass", existing_pass)
-            except Exception:
-                cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
-        cfg.set(sec, "ssh_host", ssh_host.strip())
-        cfg.set(sec, "ssh_user", ssh_user.strip())
-        cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
-
-    with open(extensions.CONFIG_FILE, 'w') as f:
-        cfg.write(f)
-
-    # Reload server list from the freshly written config
-    extensions.cfg = cfg
-    extensions.KEA_SERVERS = __config.load_kea_servers(cfg)
     count = len(extensions.KEA_SERVERS) - 1
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     __user.set_global_setting("restart_pending", "true")
@@ -700,18 +687,18 @@ def save_infra_ddns():
     api_user = request.form.get("api_user", "").strip()
     api_token = request.form.get("api_token", "").strip()
     forward_zone = request.form.get("forward_zone", "").strip()
+    items = [("ddns", "dns_provider", dns_provider)]
     if log_path:
-        __config.write_config_value("ddns", "log_path", log_path)
-        extensions.DDNS_LOG = log_path
-    __config.write_config_value("ddns", "dns_provider", dns_provider)
+        items.append(("ddns", "log_path", log_path))
     if api_url:
-        __config.write_config_value("ddns", "api_url", api_url)
+        items.append(("ddns", "api_url", api_url))
     if api_user:
-        __config.write_config_value("ddns", "api_user", api_user)
+        items.append(("ddns", "api_user", api_user))
     if api_token:
-        __config.write_config_value("ddns", "api_token", api_token)
+        items.append(("ddns", "api_token", api_token))
     if forward_zone:
-        __config.write_config_value("ddns", "forward_zone", forward_zone)
+        items.append(("ddns", "forward_zone", forward_zone))
+    __config.app_config.write_values(items)
     flash("DDNS settings saved.", "success")
     __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
     return redirect(url_for('settings.settings_infrastructure'))
@@ -723,12 +710,13 @@ def save_ha_settings():
     """Save HA mode for primary Kea server."""
     ha_mode = request.form.get("ha_mode", "").strip()
     server_name = request.form.get("server_name", "").strip()
+    items = []
     if ha_mode in ("hot-standby", "load-balancing", "passive-backup", ""):
-        __config.write_config_value("kea", "ha_mode", ha_mode)
+        items.append(("kea", "ha_mode", ha_mode))
     if server_name:
-        __config.write_config_value("kea", "name", server_name)
-        # Reload server list
-        extensions.KEA_SERVERS = __config.load_kea_servers(extensions.cfg)
+        items.append(("kea", "name", server_name))
+    if items:
+        __config.app_config.write_values(items)
     flash("HA settings saved.", "success")
     __user.audit("SAVE_INFRA", "ha_settings", f"mode={ha_mode}")
     return redirect(url_for('settings.settings_infrastructure'))
@@ -772,12 +760,12 @@ def save_ports():
         flash("HTTP and HTTPS ports must be different.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
 
-    __config.write_config_value("server", "http_port", str(http_port))
-    extensions.HTTP_PORT = http_port
+    items = [("server", "http_port", str(http_port))]
+    if ssl_on:
+        items.append(("server", "https_port", str(https_port)))
+    __config.app_config.write_values(items)
 
     if ssl_on:
-        __config.write_config_value("server", "https_port", str(https_port))
-        extensions.HTTPS_PORT = https_port
         msg = f"Ports updated — HTTP: {http_port} (redirect), HTTPS: {https_port}. Restarting Jen..."
     else:
         msg = f"HTTP port updated to {http_port}. Restarting Jen..."

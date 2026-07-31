@@ -2,14 +2,23 @@
 jen/extensions.py
 ─────────────────
 Shared application state. All modules import from here to avoid
-circular imports. The app factory (jen/__init__.py) initialises
-these at startup; runtime mutations (e.g. reloading KEA_SERVERS
-after a settings save) also go through this module.
+circular imports.
+
+As of v4.0.0, all config-derived globals in this module are assigned
+EXCLUSIVELY by AppConfig.apply() in jen/config.py — the single source
+of truth for configuration. No other code may assign them. To change
+configuration at runtime, use app_config.write_value() /
+write_values() / write_subnets() / mutate(), all of which write to
+disk and re-derive these globals atomically, so the on-disk file and
+in-memory state can never diverge.
 
 CPython module objects are singletons — any module that does
     from jen import extensions
-    extensions.KEA_SERVERS = new_value
-will have that change visible to every other importer immediately.
+    print(extensions.KEA_SERVERS)
+sees the current values immediately after any reload.
+
+(The test suite is the one sanctioned exception: tests/conftest.py
+patches these globals directly to point at the jen_test database.)
 """
 
 import configparser

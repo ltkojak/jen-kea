@@ -1,5 +1,50 @@
 # Changelog
 
+## [4.0.0] - 2026-07-31
+
+### Configuration Architecture Overhaul — AppConfig
+
+Major internal refactor eliminating the global-mutable-config-state design that
+caused the stale-config bug class patched in v3.8.1. No user-facing feature
+changes; the version bump reflects the architectural change.
+
+### Changed
+- New `AppConfig` class in `jen/config.py` is the single source of truth for all
+  configuration: it owns loading, validation, writing, and derivation of every
+  config value. Every write method (`write_value`, `write_values`,
+  `write_subnets`, `mutate`) writes to disk and immediately re-derives all
+  runtime values, so the on-disk file, the parsed config, and the derived
+  globals can never diverge
+- All config-derived globals in `jen/extensions.py` are now assigned exclusively
+  by `AppConfig.apply()` — zero direct assignments remain anywhere in routes,
+  services, or models (previously 14 scattered mutation sites across
+  settings.py, subnets.py, and fingerprint.py)
+- Settings routes (Kea API, Kea DB, Jen DB, SSH, extra servers, DDNS, HA, ports)
+  rewritten to use batched `write_values()` / `mutate()` calls — each save is a
+  single write + reload instead of multiple writes with hand-rolled global updates
+- `save_extra_servers` section rewrite now goes through `app_config.mutate()`
+- Subnet add/delete no longer manually assigns `SUBNET_MAP` — the write reloads it
+- `derive_kea_servers` fallback credentials now come from the parser being
+  derived, not from globals (removes an ordering dependency)
+- Removed redundant import-time path reassignments in `fingerprint.py`
+- Config file path is read dynamically on every operation (never cached) so the
+  test suite can repoint it
+
+### Compatibility
+- `load_config()`, `init_extensions_from_config()`, `write_config_value()`,
+  `write_subnets_config()`, `load_kea_servers()`, `load_subnet_map()` are
+  preserved as thin wrappers delegating to `app_config` — existing callers and
+  plugins are unaffected. Note: `write_config_value()` now reloads after
+  writing (previously it only wrote to disk), which is the intended
+  consistency guarantee
+- All extensions globals remain plain module attributes, so the test suite's
+  direct patching in conftest.py continues to work unchanged
+
+### Added
+- `tests/test_appconfig.py`: 10 tests asserting the consistency guarantees
+  (disk/memory sync after every write path, derived-structure re-derivation,
+  wrapper behavior, validation errors) — suite grows from 93 to 103 tests
+
 ## [3.8.1] - 2026-07-31
 
 ### Full Audit Fixes

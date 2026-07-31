@@ -380,7 +380,6 @@ print('ok')
     new_map = dict(extensions.SUBNET_MAP)
     new_map[new_id] = {"name": new_name, "cidr": new_cidr}
     __config.write_subnets_config(new_map)
-    extensions.SUBNET_MAP = new_map
 
     __user.audit("ADD_SUBNET", str(new_id), f"name={new_name} cidr={new_cidr} pool={new_pool}")
     return redirect(url_for('subnets.subnets'))
@@ -505,7 +504,6 @@ print('ok')
     new_map = dict(extensions.SUBNET_MAP)
     new_map.pop(subnet_id, None)
     __config.write_subnets_config(new_map)
-    extensions.SUBNET_MAP = new_map
 
     __user.audit("DELETE_SUBNET", str(subnet_id), f"name={subnet_name}")
     return redirect(url_for('subnets.subnets'))

@@ -19,12 +19,12 @@ from flask_login import (LoginManager, current_user, login_required,
                          logout_user)
 
 from jen import extensions
-from jen.config import init_extensions_from_config, load_config, ssl_configured
+from jen.config import app_config, ssl_configured
 from jen.models.user import User, audit, get_global_setting
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "3.8.1"
+JEN_VERSION = "4.0.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -45,8 +45,7 @@ def create_app() -> Flask:
     Loads config, initialises all globals, registers every blueprint.
     """
     # ── Config & globals ──────────────────────────────────────────────────────
-    cfg = load_config()
-    init_extensions_from_config(cfg)
+    app_config.reload()
 
     # ── Flask app ─────────────────────────────────────────────────────────────
     app = Flask(__name__,
