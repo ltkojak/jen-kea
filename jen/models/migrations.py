@@ -366,6 +366,16 @@ def _m007_telegram_legacy(db):
         logger.info("Migration 7: migrated legacy Telegram settings to alert_channels")
 
 
+def _m008_trusted_device_metadata(db):
+    """mfa_trusted_devices: store client IP and raw user agent so trusted
+    devices can be identified (friendly name + tooltip) and self-healed."""
+    with db.cursor() as cur:
+        if _column_missing(cur, "mfa_trusted_devices", "ip_address"):
+            cur.execute("ALTER TABLE mfa_trusted_devices ADD COLUMN ip_address VARCHAR(45) DEFAULT NULL")
+        if _column_missing(cur, "mfa_trusted_devices", "user_agent"):
+            cur.execute("ALTER TABLE mfa_trusted_devices ADD COLUMN user_agent TEXT DEFAULT NULL")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -377,6 +387,7 @@ MIGRATIONS = [
     (6, "Superadmin role, one-time legacy admin promotion, subnet_access",
                                                               _m006_superadmin_role),
     (7, "Migrate legacy Telegram settings to alert_channels", _m007_telegram_legacy),
+    (8, "mfa_trusted_devices ip_address + user_agent columns", _m008_trusted_device_metadata),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

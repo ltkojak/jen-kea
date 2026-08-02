@@ -1,5 +1,37 @@
 # Changelog
 
+## [4.3.0] - 2026-08-01
+
+### Trusted Device Identification
+
+Trusted MFA devices now show meaningful names instead of "Unknown" or raw
+user-agent dumps.
+
+### Added
+- Friendly device descriptions built from two sources: the connecting IP is
+  resolved against Jen's own network knowledge (active Kea lease hostname
+  first, then the devices table) and the user agent is parsed into a short
+  label — e.g. "kojak-pc — Windows · Chrome 147" or "iPhone (iOS 18.7) · Safari"
+- New helpers in `jen/services/fingerprint.py`: `friendly_user_agent()`,
+  `client_hostname()`, `describe_client_device()` — hostname lookup is
+  best-effort and never raises during login
+- Migration 8: `mfa_trusted_devices` gains `ip_address` and `user_agent`
+  columns (first real use of the versioned migration system)
+- Trusted Devices page shows the friendly name with the IP as a subline and
+  the full raw user agent as a hover tooltip
+- **Self-healing:** existing rows with empty/"Unknown"/raw-UA names are
+  automatically renamed the next time that device is used to log in —
+  no manual cleanup needed. Deliberate healthy names are never overwritten
+- `tests/test_device_identity.py`: 10 tests for UA parsing (including
+  Edge-vs-Chrome and Safari-vs-Chrome disambiguation) and description
+  format. Suite grows from 117 to 127 tests
+
+### Developer Notes
+- Integration-tested against real MariaDB: migration 8 on an existing v4.2
+  schema (single migration applied), idempotent re-run, hostname resolution
+  from a live lease row, metadata stored at creation, legacy-row self-heal on
+  validation, and healthy-name preservation
+
 ## [4.2.0] - 2026-08-01
 
 ### Versioned Schema Migrations

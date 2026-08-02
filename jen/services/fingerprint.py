@@ -1574,3 +1574,114 @@ def get_device_info_map(mac_list: list) -> dict:
         logger.error(f"get_device_info_map error: {e}")
     return result
 # ─────────────────────────────────────────
+
+
+# ── Client device identification (v4.3.0) ─────────────────────────────────────
+
+def friendly_user_agent(ua: str) -> str:
+    """
+    Parse a raw User-Agent string into a short human-readable description
+    like "iPhone (iOS 18.7) · Safari" or "Windows · Chrome 147".
+    Returns "Unknown device" if the string is empty or unrecognisable.
+    """
+    import re
+    if not ua or not ua.strip():
+        return "Unknown device"
+
+    # ── Platform ──
+    platform = ""
+    m = re.search(r"iPhone OS (\d+)[._](\d+)", ua)
+    if m:
+        platform = f"iPhone (iOS {m.group(1)}.{m.group(2)})"
+    elif "iPhone" in ua:
+        platform = "iPhone"
+    elif re.search(r"iPad", ua):
+        m = re.search(r"CPU OS (\d+)[._](\d+)", ua)
+        platform = f"iPad (iPadOS {m.group(1)}.{m.group(2)})" if m else "iPad"
+    elif "Android" in ua:
+        m = re.search(r"Android (\d+)", ua)
+        platform = f"Android {m.group(1)}" if m else "Android"
+    elif "Windows NT 10.0" in ua:
+        platform = "Windows"
+    elif "Windows" in ua:
+        platform = "Windows"
+    elif "Mac OS X" in ua:
+        platform = "Mac"
+    elif "CrOS" in ua:
+        platform = "ChromeOS"
+    elif "Linux" in ua:
+        platform = "Linux"
+
+    # ── Browser (order matters: Edge/Opera embed "Chrome", Chrome embeds "Safari") ──
+    browser = ""
+    m = re.search(r"Edg(?:e|A|iOS)?/(\d+)", ua)
+    if m:
+        browser = f"Edge {m.group(1)}"
+    else:
+        m = re.search(r"OPR/(\d+)", ua)
+        if m:
+            browser = f"Opera {m.group(1)}"
+        else:
+            m = re.search(r"Firefox/(\d+)", ua)
+            if m:
+                browser = f"Firefox {m.group(1)}"
+            else:
+                m = re.search(r"(?:Chrome|CriOS)/(\d+)", ua)
+                if m:
+                    browser = f"Chrome {m.group(1)}"
+                elif "Safari" in ua:
+                    browser = "Safari"
+
+    if platform and browser:
+        return f"{platform} · {browser}"
+    return platform or browser or "Unknown device"
+
+
+def client_hostname(ip: str) -> str:
+    """
+    Best-effort hostname for a client IP using Jen's own knowledge of the
+    network: the active Kea lease first, then the devices table. Returns ""
+    if nothing is known. Never raises — this runs during login.
+    """
+    if not ip:
+        return ""
+    try:
+        from jen.models.db import kea_db
+        with kea_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT hostname FROM lease4 "
+                    "WHERE inet_ntoa(address)=%s AND state=0 "
+                    "ORDER BY expire DESC LIMIT 1", (ip,))
+                row = cur.fetchone()
+        if row and row.get("hostname"):
+            return str(row["hostname"]).rstrip(".").strip()
+    except Exception:
+        pass
+    try:
+        from jen.models.db import jen_db
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(NULLIF(device_name,''), NULLIF(last_hostname,'')) AS name "
+                    "FROM devices WHERE last_ip=%s "
+                    "ORDER BY last_seen DESC LIMIT 1", (ip,))
+                row = cur.fetchone()
+        if row and row.get("name"):
+            return str(row["name"]).rstrip(".").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def describe_client_device(ip: str, ua: str) -> str:
+    """
+    Full friendly description of a connecting client:
+    "kojak-pc — Windows · Chrome 147" when the hostname is known,
+    otherwise just the parsed user agent.
+    """
+    friendly = friendly_user_agent(ua)
+    hostname = client_hostname(ip)
+    if hostname:
+        return f"{hostname} — {friendly}"[:200]
+    return friendly[:200]

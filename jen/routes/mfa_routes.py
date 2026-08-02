@@ -30,6 +30,7 @@ import jen.services.kea as __kea
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
+import jen.services.fingerprint as __fp
 import jen.services.auth as __auth
 
 
@@ -94,8 +95,11 @@ def mfa_verify():
                 next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
-                    device_name = request.user_agent.string[:100] if request.user_agent else "Unknown"
-                    token = __mfa.create_trusted_device_token(pending_id, days_raw, device_name)
+                    ua = request.user_agent.string if request.user_agent else ""
+                    device_name = __fp.describe_client_device(request.remote_addr, ua)
+                    token = __mfa.create_trusted_device_token(
+                        pending_id, days_raw, device_name,
+                        ip_address=request.remote_addr, user_agent=ua)
                     resp = redirect(next_url)
                     if days_raw == "forever":
                         resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax")
@@ -118,8 +122,11 @@ def mfa_verify():
                 next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
-                    device_name = request.user_agent.string[:100] if request.user_agent else "Unknown"
-                    token = __mfa.create_trusted_device_token(pending_id, days_raw, device_name)
+                    ua = request.user_agent.string if request.user_agent else ""
+                    device_name = __fp.describe_client_device(request.remote_addr, ua)
+                    token = __mfa.create_trusted_device_token(
+                        pending_id, days_raw, device_name,
+                        ip_address=request.remote_addr, user_agent=ua)
                     resp = redirect(next_url)
                     if days_raw == "forever":
                         # No max_age = session-less persistent cookie (10 years)
@@ -218,7 +225,8 @@ def mfa_trusted_devices():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("""SELECT id, device_name, created_at, expires_at, last_used
+                cur.execute("""SELECT id, device_name, created_at, expires_at, last_used,
+                                      ip_address, user_agent
                                FROM mfa_trusted_devices WHERE user_id=%s
                                ORDER BY created_at DESC""", (current_user.id,))
                 devices = cur.fetchall()

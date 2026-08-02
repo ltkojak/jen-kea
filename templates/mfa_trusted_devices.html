@@ -20,7 +20,10 @@
         <tbody>
         {% for d in devices %}
         <tr>
-            <td>{{ d.device_name or 'Unknown Device' }}</td>
+            <td title="{{ d.user_agent or '' }}">
+                <strong>{{ d.device_name or 'Unknown Device' }}</strong>
+                {% if d.ip_address %}<br><small class="mono" style="color:var(--text-muted);">{{ d.ip_address }}</small>{% endif %}
+            </td>
             <td class="mono" style="font-size:12px;">{{ d.created_at|utcdate }}</td>
             <td class="mono" style="font-size:12px;">{{ d.last_used|utcfmt }}</td>
             <td style="color:var(--text-muted);font-size:12px;">{{ d.expires_at|utcdate if d.expires_at else 'Never' }}</td>

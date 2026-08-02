@@ -113,28 +113,51 @@ def is_trusted_device(user_id, request):
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
                 cur.execute("""
-                    SELECT id FROM mfa_trusted_devices
+                    SELECT id, device_name FROM mfa_trusted_devices
                     WHERE user_id=%s AND token_hash=%s
                     AND (expires_at IS NULL OR expires_at > NOW())
                 """, (user_id, token_hash))
                 row = cur.fetchone()
         if row:
-            # Update last_used async — don't block the login response
+            # Capture request data NOW — the thread must not touch `request`.
+            ua = request.user_agent.string if request.user_agent else ""
+            ip = request.remote_addr or ""
+            name = row.get("device_name") or ""
+            # Self-heal legacy rows: empty, "Unknown*", or a raw UA dump.
+            needs_heal = (not name.strip()
+                          or name.strip().lower().startswith("unknown")
+                          or name.startswith("Mozilla/"))
+            new_name = None
+            if needs_heal:
+                from jen.services.fingerprint import describe_client_device
+                new_name = describe_client_device(ip, ua)
+            # Update last_used (and healed metadata) async — don't block login
             import threading
-            def _update(rid):
+            def _update(rid, healed_name, cur_ip, cur_ua):
                 try:
                     with __jen_db_ctx() as db2:
                         with db2.cursor() as cur2:
-                            cur2.execute("UPDATE mfa_trusted_devices SET last_used=NOW() WHERE id=%s", (rid,))
+                            if healed_name:
+                                cur2.execute("""
+                                    UPDATE mfa_trusted_devices
+                                    SET last_used=NOW(), device_name=%s,
+                                        ip_address=%s, user_agent=%s
+                                    WHERE id=%s
+                                """, (healed_name, cur_ip, cur_ua, rid))
+                            else:
+                                cur2.execute(
+                                    "UPDATE mfa_trusted_devices SET last_used=NOW(), ip_address=%s WHERE id=%s",
+                                    (cur_ip, rid))
                         db2.commit()
                 except Exception:
                     pass
-            threading.Thread(target=_update, args=(row["id"],), daemon=True).start()
+            threading.Thread(target=_update, args=(row["id"], new_name, ip, ua), daemon=True).start()
         return bool(row)
     except Exception:
         return False
 
-def create_trusted_device_token(user_id, remember_days, device_name="Unknown Device"):
+def create_trusted_device_token(user_id, remember_days, device_name="Unknown Device",
+                                ip_address=None, user_agent=None):
     import secrets
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -145,9 +168,10 @@ def create_trusted_device_token(user_id, remember_days, device_name="Unknown Dev
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO mfa_trusted_devices (user_id, token_hash, device_name, expires_at)
-                    VALUES (%s, %s, %s, %s)
-                """, (user_id, token_hash, device_name, expires_at))
+                    INSERT INTO mfa_trusted_devices
+                        (user_id, token_hash, device_name, expires_at, ip_address, user_agent)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (user_id, token_hash, device_name, expires_at, ip_address, user_agent))
             db.commit()
     except Exception as e:
         logger.error(f"Trusted device error: {e}")
