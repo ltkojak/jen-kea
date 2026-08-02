@@ -1,5 +1,21 @@
 # Changelog
 
+## [4.3.2] - 2026-08-02
+
+### Documentation Version Sync + Release Guard
+
+### Fixed
+- README Installation and Upgrading sections, and the admin guide, still
+  referenced `jen-v3.8.0.tar.gz` — the release process had only been updating
+  the version badge, not the document bodies, since 3.8.1
+
+### Added
+- `scripts/release_check.sh`: pre-package guard that verifies the release
+  version in `jen/__init__.py` matches `install.sh`, the README badge, the top
+  CHANGELOG entry, and every tarball reference in README.md and
+  docs/admin-guide.md — and fails the release on any stale or missing
+  reference. Run before every package alongside the AST and Jinja checks
+
 ## [4.3.1] - 2026-08-02
 
 ### Trusted Device Heal Resilience + UA Diagnostics
