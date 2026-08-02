@@ -1,5 +1,31 @@
 # Changelog
 
+## [4.3.4] - 2026-08-02
+
+### MFA Method Fixes: Second Authenticator + Last-Used Tracking
+
+### Fixed
+- **A second enrolled TOTP authenticator could never log in.** verify_totp
+  fetched only the FIRST enabled method's secret, so codes from any additional
+  authenticator (e.g. iPhone + Keeper) silently failed verification. All
+  enabled methods are now checked
+- **Enrolled methods always showed "Last used never"** — nothing ever wrote
+  mfa_methods.last_used. Successful verification now stamps the specific
+  method that matched, so the MFA page shows which authenticator was used and
+  when. Tracking failures can never block a valid login
+
+### Added
+- tests/test_mfa_methods.py: 4 tests — second-method verification,
+  correct per-method stamping, first-method regression, wrong-code rejection.
+  Suite grows from 135 to 139 tests
+
+### Developer Notes
+- Verified end-to-end in the live-server harness (login → MFA verify with each
+  authenticator's code via curl) and in-process against MariaDB. An initial
+  false test failure was traced to the harness checker connection's
+  REPEATABLE READ snapshot hiding later writes — fixed with autocommit reads;
+  the application code was correct
+
 ## [4.3.3] - 2026-08-02
 
 ### Root Cause Found: Werkzeug UserAgent Always Falsy

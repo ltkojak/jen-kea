@@ -86,17 +86,33 @@ def verify_backup_code(user_id, code):
         return False
 
 def verify_totp(user_id, code):
+    """
+    Verify a TOTP code against ALL enabled totp methods for the user
+    (v4.3.4: previously only the first method's secret was checked, so a
+    second enrolled authenticator could never log in). On success, stamp
+    last_used on the specific method that matched.
+    """
     try:
         import pyotp
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT secret FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
+                cur.execute("SELECT id, secret FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
                            (user_id,))
-                row = cur.fetchone()
-        if not row:
+                rows = cur.fetchall()
+        if not rows:
             return False
-        totp = pyotp.TOTP(row["secret"])
-        return totp.verify(code.strip(), valid_window=1)
+        code = code.strip()
+        for row in rows:
+            if pyotp.TOTP(row["secret"]).verify(code, valid_window=1):
+                try:
+                    with __jen_db_ctx() as db:
+                        with db.cursor() as cur:
+                            cur.execute("UPDATE mfa_methods SET last_used=NOW() WHERE id=%s", (row["id"],))
+                        db.commit()
+                except Exception:
+                    pass   # tracking failure must never block a valid login
+                return True
+        return False
     except Exception as e:
         logger.error(f"TOTP verify error: {e}")
         return False
