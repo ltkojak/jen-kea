@@ -113,7 +113,7 @@ def is_trusted_device(user_id, request):
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
                 cur.execute("""
-                    SELECT id, device_name FROM mfa_trusted_devices
+                    SELECT id, device_name, user_agent FROM mfa_trusted_devices
                     WHERE user_id=%s AND token_hash=%s
                     AND (expires_at IS NULL OR expires_at > NOW())
                 """, (user_id, token_hash))
@@ -122,15 +122,32 @@ def is_trusted_device(user_id, request):
             # Capture request data NOW — the thread must not touch `request`.
             ua = request.user_agent.string if request.user_agent else ""
             ip = request.remote_addr or ""
+            if not ua:
+                # Diagnostic (v4.3.1): some requests arrive without a UA header
+                # and previously froze healed names at "Unknown device".
+                logger.warning(
+                    f"Trusted-device check from {ip} with no User-Agent header; "
+                    f"headers present: {sorted(k for k, _ in request.headers)}"
+                )
             name = row.get("device_name") or ""
-            # Self-heal legacy rows: empty, "Unknown*", or a raw UA dump.
+            stored_ua = row.get("user_agent") or ""
+            # Self-heal: empty, containing "Unknown", or a raw UA dump anywhere.
             needs_heal = (not name.strip()
-                          or name.strip().lower().startswith("unknown")
-                          or name.startswith("Mozilla/"))
+                          or "unknown" in name.lower()
+                          or "Mozilla/" in name)
             new_name = None
             if needs_heal:
                 from jen.services.fingerprint import describe_client_device
-                new_name = describe_client_device(ip, ua)
+                # Prefer the live UA; fall back to the stored one so rows can
+                # heal even from UA-less requests.
+                heal_ua = ua or stored_ua
+                candidate = describe_client_device(ip, heal_ua)
+                # Never replace an existing name with a worse one.
+                if "unknown" not in candidate.lower() or not name.strip():
+                    new_name = candidate
+            # Only persist a UA when we actually have one — an empty live UA
+            # must not clobber a previously stored good value.
+            persist_ua = ua or stored_ua
             # Update last_used (and healed metadata) async — don't block login
             import threading
             def _update(rid, healed_name, cur_ip, cur_ua):
@@ -151,7 +168,7 @@ def is_trusted_device(user_id, request):
                         db2.commit()
                 except Exception:
                     pass
-            threading.Thread(target=_update, args=(row["id"], new_name, ip, ua), daemon=True).start()
+            threading.Thread(target=_update, args=(row["id"], new_name, ip, persist_ua), daemon=True).start()
         return bool(row)
     except Exception:
         return False

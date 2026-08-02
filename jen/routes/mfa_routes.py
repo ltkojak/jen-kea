@@ -30,7 +30,6 @@ import jen.services.kea as __kea
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
-import jen.services.fingerprint as __fp
 import jen.services.auth as __auth
 
 
@@ -96,6 +95,10 @@ def mfa_verify():
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
                     ua = request.user_agent.string if request.user_agent else ""
+                    if not ua:
+                        logger.warning(
+                            f"Trust creation from {request.remote_addr} with no User-Agent header; "
+                            f"headers present: {sorted(k for k, _ in request.headers)}")
                     device_name = __fp.describe_client_device(request.remote_addr, ua)
                     token = __mfa.create_trusted_device_token(
                         pending_id, days_raw, device_name,
@@ -123,6 +126,10 @@ def mfa_verify():
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
                     ua = request.user_agent.string if request.user_agent else ""
+                    if not ua:
+                        logger.warning(
+                            f"Trust creation from {request.remote_addr} with no User-Agent header; "
+                            f"headers present: {sorted(k for k, _ in request.headers)}")
                     device_name = __fp.describe_client_device(request.remote_addr, ua)
                     token = __mfa.create_trusted_device_token(
                         pending_id, days_raw, device_name,
@@ -230,6 +237,13 @@ def mfa_trusted_devices():
                                FROM mfa_trusted_devices WHERE user_id=%s
                                ORDER BY created_at DESC""", (current_user.id,))
                 devices = cur.fetchall()
+        # Render-time fallback (v4.3.1): if a stored name still says Unknown
+        # but we have a raw UA on file, show the parsed UA instead.
+        for d in devices:
+            name = d.get("device_name") or ""
+            if ("unknown" in name.lower() or not name.strip()) and d.get("user_agent"):
+                d["device_name"] = __fp.describe_client_device(
+                    d.get("ip_address") or "", d["user_agent"])
     except Exception:
         devices = []
     return render_template("mfa_trusted_devices.html", devices=devices)

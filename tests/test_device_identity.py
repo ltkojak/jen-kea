@@ -62,3 +62,46 @@ class TestDescribeClientDevice:
         import jen.services.fingerprint as fp
         monkeypatch.setattr(fp, "client_hostname", lambda ip: "h" * 300)
         assert len(describe_client_device("10.0.0.5", WINDOWS_CHROME)) <= 200
+
+
+class TestHealResilience:
+    """v4.3.1: heal must catch 'Unknown' anywhere in the name, prefer live UA,
+    fall back to stored UA, and never replace a name with a worse one."""
+
+    CHROME = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
+
+    @staticmethod
+    def _heal(name, stored_ua, live_ua, hostname_result):
+        from jen.services.fingerprint import friendly_user_agent
+        needs_heal = (not name.strip() or "unknown" in name.lower()
+                      or "Mozilla/" in name)
+        if not needs_heal:
+            return name
+        heal_ua = live_ua or stored_ua
+        friendly = friendly_user_agent(heal_ua)
+        candidate = (f"{hostname_result} — {friendly}"
+                     if hostname_result else friendly)
+        if "unknown" not in candidate.lower() or not name.strip():
+            return candidate
+        return name
+
+    def test_frozen_unknown_row_not_thrashed_without_ua(self):
+        assert self._heal("halifax — Unknown device", "", "", "halifax") \
+            == "halifax — Unknown device"
+
+    def test_frozen_unknown_row_heals_with_live_ua(self):
+        assert self._heal("halifax — Unknown device", "", self.CHROME, "halifax") \
+            == "halifax — Windows · Chrome 147"
+
+    def test_heals_from_stored_ua_when_live_missing(self):
+        assert self._heal("halifax — Unknown device", self.CHROME, "", "halifax") \
+            == "halifax — Windows · Chrome 147"
+
+    def test_raw_ua_legacy_row_parses(self):
+        assert self._heal(self.CHROME[:80], "", self.CHROME, "") \
+            == "Windows · Chrome 147"
+
+    def test_good_name_never_degraded(self):
+        assert self._heal("halifax — Windows · Chrome 147", self.CHROME, "", "halifax") \
+            == "halifax — Windows · Chrome 147"

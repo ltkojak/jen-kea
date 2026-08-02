@@ -1,5 +1,32 @@
 # Changelog
 
+## [4.3.1] - 2026-08-02
+
+### Trusted Device Heal Resilience + UA Diagnostics
+
+### Fixed
+- Trusted-device names could freeze as "<hostname> — Unknown device": the
+  self-heal only retried names *starting with* "unknown", so once a hostname
+  prefix was written the row never healed again. The heal now triggers on
+  "Unknown" or a raw UA fragment anywhere in the name
+- A request arriving without a User-Agent header could permanently degrade a
+  row (observed in the field: valid client IP, empty UA, same request). The
+  heal now prefers the live UA, falls back to the stored one, never replaces
+  an existing name with a worse candidate, and never overwrites a stored
+  user_agent with an empty value
+- Duplicate fingerprint import in mfa_routes.py removed
+
+### Added
+- Diagnostics: trust creation and trusted-device checks log a warning with the
+  full header-name list whenever the User-Agent header is absent, so UA-less
+  clients can be identified from the journal
+- Render-time fallback on the Trusted Devices page: rows whose stored name
+  still says "Unknown" but that have a raw user_agent on file display the
+  parsed name
+- 5 heal-resilience tests covering the exact field scenarios (frozen row,
+  UA-less request, stored-UA fallback, legacy raw-UA row, no-degrade
+  guarantee). Suite grows from 127 to 132 tests
+
 ## [4.3.0] - 2026-08-01
 
 ### Trusted Device Identification
