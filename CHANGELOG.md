@@ -1,5 +1,52 @@
 # Changelog
 
+## [4.2.0] - 2026-08-01
+
+### Versioned Schema Migrations
+
+Final phase of the architecture roadmap (4.0.0 AppConfig → 4.1.0 connection
+lifecycle → 4.2.0 migrations).
+
+### Fixed
+- **Privilege-escalation bug: deliberate 'admin' users were silently promoted to
+  superadmin on every restart.** The un-gated 3.5.0 legacy migration ran
+  `UPDATE users SET role='superadmin' WHERE role='admin'` at each startup,
+  conflicting with the three-tier RBAC added later, where 'admin' is a valid
+  mid-tier role. The promotion is now version-gated (runs once) and scoped to
+  genuine pre-3.5 schemas (detected by the role ENUM lacking 'superadmin'), so
+  modern installs never have their admins touched. **Note:** any user that was
+  already promoted by this bug remains superadmin — review Settings → Users
+  once after upgrading and demote as needed.
+
+### Changed
+- New `jen/models/migrations.py` owns the entire schema: a `schema_migrations`
+  table records (version, description, applied_at); an ordered registry of 7
+  migrations covers the baseline (all 20 tables, final definitions) plus the
+  historical guarded ALTERs and the legacy Telegram data migration
+- `init_jen_db()` reduced from ~370 lines of inline DDL to: run pending
+  migrations, then seed the default admin if no users exist. New schema changes
+  must be appended as numbered migrations, never added to init
+- Migration failures abort app startup loudly rather than serving a
+  half-migrated schema; every migration is also written idempotently
+  (MySQL DDL auto-commits), so a crash mid-migration recovers cleanly on the
+  next start
+- Self-update flow now applies schema changes automatically: the post-update
+  service restart runs any pending migrations
+- Existing installs adopt the system transparently: on first 4.2.0 start all 7
+  migrations no-op against the current schema and are recorded
+
+### Added
+- `tests/test_migrations.py`: 8 tests — registry integrity, recorded state,
+  idempotent re-run, and an admin-role regression probe proving deliberate
+  'admin' users survive restarts. Suite grows from 109 to 117 tests
+
+### Developer Notes
+- Full integration matrix validated against a real MariaDB instance: fresh
+  install, idempotent re-run, existing-install adoption (deliberate admins
+  preserved), genuine pre-3.5 legacy upgrade (legacy admin promoted, viewer
+  untouched, password widened, columns added, Telegram migrated), crash
+  recovery from a lost version row, and end-to-end init with seeding
+
 ## [4.1.0] - 2026-07-31
 
 ### Connection Context Managers
