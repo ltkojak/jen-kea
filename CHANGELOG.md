@@ -1,5 +1,30 @@
 # Changelog
 
+## [4.3.3] - 2026-08-02
+
+### Root Cause Found: Werkzeug UserAgent Always Falsy
+
+### Fixed
+- **Every trusted device showed "Unknown device" because the User-Agent was
+  never read, on any request, from any client.** The idiom
+  `request.user_agent.string if request.user_agent else ""` is broken on
+  werkzeug 2.1+: `UserAgent.__bool__` keys off the parsed `.browser` field,
+  and werkzeug removed built-in UA parsing — so the object is ALWAYS falsy
+  even with the header present, and the expression always returned "".
+  Reproduced end-to-end in a live server harness (real login → MFA verify →
+  remember-device via curl with a genuine UA: header list showed User-Agent
+  present while the stored value was empty). All three read sites now use
+  `request.headers.get("User-Agent", "")`. Post-fix, the same harness stores
+  "sandboxhost — Windows · Chrome 147" plus the full raw UA
+- Existing "<hostname> — Unknown device" rows self-heal on the next login
+  from each device via the 4.3.1 heal path, which now receives a real UA
+
+### Added
+- 3 regression tests: the falsy-UserAgent trap (fails if upstream ever changes
+  it), the correct direct-header read, and a grep guard asserting
+  `request.user_agent` never reappears anywhere in jen/. Suite grows from
+  132 to 135 tests
+
 ## [4.3.2] - 2026-08-02
 
 ### Documentation Version Sync + Release Guard

@@ -94,7 +94,10 @@ def mfa_verify():
                 next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
-                    ua = request.user_agent.string if request.user_agent else ""
+                    # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
+                    # the parsed .browser field, which is always None without a UA
+                    # parser plugged in — so the object is ALWAYS falsy. (v4.3.3)
+                    ua = request.headers.get("User-Agent", "")
                     if not ua:
                         logger.warning(
                             f"Trust creation from {request.remote_addr} with no User-Agent header; "
@@ -125,7 +128,10 @@ def mfa_verify():
                 next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
-                    ua = request.user_agent.string if request.user_agent else ""
+                    # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
+                    # the parsed .browser field, which is always None without a UA
+                    # parser plugged in — so the object is ALWAYS falsy. (v4.3.3)
+                    ua = request.headers.get("User-Agent", "")
                     if not ua:
                         logger.warning(
                             f"Trust creation from {request.remote_addr} with no User-Agent header; "

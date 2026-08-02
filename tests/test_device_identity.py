@@ -105,3 +105,38 @@ class TestHealResilience:
     def test_good_name_never_degraded(self):
         assert self._heal("halifax — Windows · Chrome 147", self.CHROME, "", "halifax") \
             == "halifax — Windows · Chrome 147"
+
+
+class TestWerkzeugUserAgentTrap:
+    """v4.3.3: werkzeug 2.1+ UserAgent.__bool__ keys off the parsed .browser
+    field, which is always None without a UA-parser plugin — so the object is
+    ALWAYS falsy even when the header is present. The idiom
+    `request.user_agent.string if request.user_agent else ""` therefore
+    silently returns "" for every request. Read the header directly."""
+
+    UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
+
+    def test_useragent_object_is_falsy_despite_header(self):
+        from werkzeug.user_agent import UserAgent
+        ua = UserAgent(self.UA)
+        assert ua.string == self.UA
+        assert not ua, "if this ever becomes truthy, the trap is gone upstream"
+
+    def test_direct_header_read_returns_ua(self):
+        from werkzeug.test import EnvironBuilder
+        from werkzeug.wrappers import Request
+        req = Request(EnvironBuilder(headers={"User-Agent": self.UA}).get_environ())
+        assert req.headers.get("User-Agent", "") == self.UA
+
+    def test_banned_idiom_absent_from_codebase(self):
+        """Grep guard: `request.user_agent` must not appear anywhere in jen/."""
+        import os
+        offenders = []
+        for root, _, files in os.walk("jen"):
+            for f in files:
+                if f.endswith(".py"):
+                    p = os.path.join(root, f)
+                    if "request.user_agent" in open(p).read():
+                        offenders.append(p)
+        assert not offenders, f"banned idiom found in: {offenders}"

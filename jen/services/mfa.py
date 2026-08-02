@@ -120,7 +120,8 @@ def is_trusted_device(user_id, request):
                 row = cur.fetchone()
         if row:
             # Capture request data NOW — the thread must not touch `request`.
-            ua = request.user_agent.string if request.user_agent else ""
+            # werkzeug 2.1+ UserAgent is always falsy (no built-in parsing) — read header directly (v4.3.3)
+            ua = request.headers.get("User-Agent", "")
             ip = request.remote_addr or ""
             if not ua:
                 # Diagnostic (v4.3.1): some requests arrive without a UA header
