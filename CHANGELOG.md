@@ -2,6 +2,20 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.3.6] - 2026-08-04
+
+### Bug Fix: IP Map grid had no layout CSS
+
+### Fixed
+- **IP Map rendered as a single-column list of bare numbers instead of a
+  grid.** `.ip-grid`, `.ip-cell`, `.ip-dynamic`, and `.ip-reserved` were
+  referenced in `ipmap.html` but never had CSS rules defined anywhere in the
+  codebase. This was invisible before v4.3.5 because the page always fell
+  back to "Could not determine pool range from Kea config" — fixing that bug
+  exposed this pre-existing, previously-unreachable one. Added grid layout
+  (`repeat(auto-fill, minmax(56px, 1fr))`) and colored cell states matching
+  the page's own legend (free / dynamic lease / reserved)
+
 ## [4.3.5] - 2026-08-04
 
 ### Bug Fixes: Global Search, IP Map, Devices Filter Bar

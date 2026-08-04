@@ -163,6 +163,15 @@
         .filter-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
         .filter-bar select, .filter-bar input:not([type=checkbox]) { width: auto; min-width: 140px; }
 
+        /* IP Map grid */
+        .ip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 4px; }
+        .ip-cell { position: relative; height: 44px; border-radius: 4px; border: 1px solid var(--border);
+                   background: var(--surface2); display: flex; flex-direction: column; align-items: center;
+                   justify-content: center; font-size: 10px; color: var(--text-muted); overflow: hidden;
+                   cursor: default; }
+        .ip-cell.ip-dynamic { background: #1a2a3a; border-color: #00b4d833; color: var(--primary); }
+        .ip-cell.ip-reserved { background: #1a3a1a; border-color: #2ecc7133; color: var(--success); }
+
         /* Theme toggle */
         .theme-toggle { background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); padding: 4px 8px; cursor: pointer; font-size: 13px; }
         .theme-toggle:hover { color: var(--text); }
