@@ -6,6 +6,7 @@ Lease management routes.
 
 import hashlib
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -215,8 +216,17 @@ def release_lease():
         flash(f"Error releasing lease: {str(e)}", "error")
     return redirect(url_for('leases.leases'))
 
-def _get_pool_range(subnet_id):
-    """Fetch the first pool's start/end IPs from live Kea config for a subnet."""
+MAX_IPMAP_ADDRESSES = 2048  # sanity cap so a misconfigured huge pool can't render tens of thousands of cells
+
+
+def _get_pools(subnet_id):
+    """Fetch ALL pool ranges (start, end) from live Kea config for a subnet.
+
+    A subnet can have more than one pool stanza (very common on larger
+    subnets, e.g. a /23 split into two /24-sized pools) — every pool must be
+    returned, not just the first.
+    """
+    pools = []
     try:
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
@@ -227,10 +237,41 @@ def _get_pool_range(subnet_id):
                         pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)
                         if pool_str and "-" in pool_str:
                             start, end = [x.strip() for x in pool_str.split("-", 1)]
-                            return start, end
+                            pools.append((start, end))
     except Exception:
         pass
-    return None, None
+    return pools
+
+
+def _build_pool_blocks(pools):
+    """Turn [(start, end), ...] into renderable blocks of individual IPs,
+    handling ranges that cross octet boundaries (e.g. 10.0.0.250-10.0.1.10),
+    and capping total size so a bad config can't blow up the page."""
+    blocks = []
+    truncated = False
+    total = 0
+    for start, end in pools:
+        try:
+            start_ip = ipaddress.IPv4Address(start)
+            end_ip = ipaddress.IPv4Address(end)
+        except ValueError:
+            continue
+        if int(end_ip) < int(start_ip):
+            continue
+        remaining_budget = MAX_IPMAP_ADDRESSES - total
+        if remaining_budget <= 0:
+            truncated = True
+            break
+        span = int(end_ip) - int(start_ip) + 1
+        if span > remaining_budget:
+            end_ip = ipaddress.IPv4Address(int(start_ip) + remaining_budget - 1)
+            truncated = True
+        ips = [str(ipaddress.IPv4Address(i)) for i in range(int(start_ip), int(end_ip) + 1)]
+        blocks.append({"start": start, "end": str(end_ip), "ips": ips})
+        total += len(ips)
+        if truncated:
+            break
+    return blocks, truncated
 
 
 @bp.route("/ipmap")
@@ -260,13 +301,15 @@ def ipmap():
     except Exception as e:
         flash(f"Could not load IP map: {str(e)}", "error")
 
-    pool_start, pool_end = _get_pool_range(subnet_filter)
+    pools = _get_pools(subnet_filter)
+    pool_blocks, pool_truncated = _build_pool_blocks(pools)
     used = {}
     used.update(leases_by_ip)
     used.update(reservations_by_ip)  # a reservation on a leased IP shows as "reserved"
 
     return render_template("ipmap.html", leases=leases_by_ip, reservations=reservations_by_ip,
-                           used=used, pool_start=pool_start, pool_end=pool_end,
+                           used=used, pool_blocks=pool_blocks, pool_truncated=pool_truncated,
+                           max_ipmap_addresses=MAX_IPMAP_ADDRESSES,
                            subnet_filter=subnet_filter, subnet_id=subnet_filter,
                            subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), cidr=cidr)
 

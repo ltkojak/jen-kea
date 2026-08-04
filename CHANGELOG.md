@@ -2,6 +2,34 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.3.7] - 2026-08-04
+
+### Bug Fix: IP Map only showed the first Kea pool + README mockup rebuilt
+
+### Fixed
+- **IP Map silently dropped every pool after the first one.** `_get_pool_range()`
+  (added in v4.3.6) `return`ed as soon as it found one pool stanza in the Kea
+  config. Larger subnets — e.g. a `/23` configured as two `/24`-sized pools —
+  only ever showed the first pool's addresses, making a `/23` look like a
+  `/24`. Replaced with `_get_pools()` (collects every pool stanza) and
+  `_build_pool_blocks()` (converts each into its own list of IPs using the
+  `ipaddress` module, so ranges that cross an octet boundary render
+  correctly instead of relying on last-octet-only arithmetic in the
+  template). The map now renders one section per pool when a subnet has more
+  than one, with a cap of 2048 total addresses so a misconfigured huge pool
+  can't blow up the page
+- Added `TestIpMapPoolBlocks` (5 tests) covering multi-pool stanzas,
+  cross-octet ranges, oversized-pool truncation, no-pool, and malformed IP
+  handling — pure logic tests, no DB/Kea connection required. Suite grows
+  from 139 to 144 tests
+
+### Changed
+- **README dashboard preview replaced.** The v4.3.5 mockup was a generic
+  guess at the layout and didn't match the real UI. Rebuilt
+  `docs/images/dashboard-preview.svg` to mirror the actual nav bar, subnet
+  cards, summary strip, recent-leases table, server status, and alert
+  summary — using placeholder IPs/hostnames/MACs only, no real network data
+
 ## [4.3.6] - 2026-08-04
 
 ### Bug Fix: IP Map grid had no layout CSS

@@ -56,6 +56,53 @@ class TestLeases:
         assert r.status_code == 200
 
 
+class TestIpMapPoolBlocks:
+    """Unit tests for leases._build_pool_blocks — pure logic, no DB/Kea needed.
+
+    Regression coverage for the v4.3.6 bug where a subnet with more than one
+    Kea pool stanza (e.g. a /23 split into two /24-sized pools) only ever
+    showed the first pool on the map.
+    """
+
+    def test_multiple_pool_stanzas_all_included(self):
+        from jen.routes.leases import _build_pool_blocks
+        pools = [("10.10.10.50", "10.10.10.250"), ("10.10.11.50", "10.10.11.250")]
+        blocks, truncated = _build_pool_blocks(pools)
+        assert len(blocks) == 2
+        assert blocks[0]["ips"][0] == "10.10.10.50"
+        assert blocks[0]["ips"][-1] == "10.10.10.250"
+        assert blocks[1]["ips"][0] == "10.10.11.50"
+        assert blocks[1]["ips"][-1] == "10.10.11.250"
+        assert not truncated
+
+    def test_pool_crossing_octet_boundary(self):
+        from jen.routes.leases import _build_pool_blocks
+        blocks, truncated = _build_pool_blocks([("10.10.10.250", "10.10.11.5")])
+        assert len(blocks) == 1
+        assert blocks[0]["ips"][0] == "10.10.10.250"
+        assert blocks[0]["ips"][-1] == "10.10.11.5"
+        assert len(blocks[0]["ips"]) == 12
+        assert not truncated
+
+    def test_oversized_pool_is_truncated_not_hung(self):
+        from jen.routes.leases import _build_pool_blocks, MAX_IPMAP_ADDRESSES
+        blocks, truncated = _build_pool_blocks([("10.0.0.0", "10.0.255.255")])
+        assert truncated is True
+        assert sum(len(b["ips"]) for b in blocks) == MAX_IPMAP_ADDRESSES
+
+    def test_no_pools_returns_empty(self):
+        from jen.routes.leases import _build_pool_blocks
+        blocks, truncated = _build_pool_blocks([])
+        assert blocks == []
+        assert truncated is False
+
+    def test_invalid_ip_in_pool_skipped_not_crashed(self):
+        from jen.routes.leases import _build_pool_blocks
+        blocks, truncated = _build_pool_blocks([("not-an-ip", "10.0.0.5"), ("10.0.0.1", "10.0.0.3")])
+        assert len(blocks) == 1
+        assert blocks[0]["start"] == "10.0.0.1"
+
+
 class TestSearch:
     """Global search."""
 
