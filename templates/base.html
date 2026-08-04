@@ -161,7 +161,7 @@
 
         /* Filter bar */
         .filter-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-        .filter-bar select, .filter-bar input { width: auto; min-width: 140px; }
+        .filter-bar select, .filter-bar input:not([type=checkbox]) { width: auto; min-width: 140px; }
 
         /* Theme toggle */
         .theme-toggle { background: none; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); padding: 4px 8px; cursor: pointer; font-size: 13px; }

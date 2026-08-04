@@ -1,5 +1,37 @@
 # Changelog
 
+*Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
+
+## [4.3.5] - 2026-08-04
+
+### Bug Fixes: Global Search, IP Map, Devices Filter Bar
+
+### Fixed
+- **Global Search was completely broken** (`Unknown column 'name' in 'SELECT'`).
+  The devices search query referenced a `name` column that has never existed
+  — the actual column is `device_name`. Query now selects `device_name AS name`
+  so results render correctly without any template changes
+- **IP Map always showed "Could not determine pool range from Kea config,"**
+  even with a valid pool configured. The `/ipmap` route never fetched the pool
+  range or built the `used`/`pool_start`/`pool_end`/`subnet_id` context the
+  template actually reads — those variables were simply never passed. Added a
+  `_get_pool_range()` helper (mirrors the pattern already used in
+  `subnets.py`) that queries live Kea config for the active subnet's pool, and
+  the route now merges leases + reservations into a single `used` map for the
+  grid
+- **Stray, unlabeled checkbox on the Devices page.** The global
+  `.filter-bar input { min-width: 140px }` rule was also being applied to the
+  "Stale only" checkbox, stretching its layout box and shoving the "Stale
+  only" label text out of view. Scoped the rule to exclude
+  `input[type=checkbox]`
+
+### Housekeeping
+- Moved the orphaned `RELEASE-3.3.x.md` … `RELEASE-3.7.x.md` files out of the
+  repo root into `docs/release-history/` with an index. They were unreferenced
+  duplicates of history already captured in this CHANGELOG
+- Added a dashboard preview mockup (`docs/images/dashboard-preview.svg`) to
+  the top of README.md
+
 ## [4.3.4] - 2026-08-02
 
 ### MFA Method Fixes: Second Authenticator + Last-Used Tracking

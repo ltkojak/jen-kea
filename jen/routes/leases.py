@@ -215,6 +215,24 @@ def release_lease():
         flash(f"Error releasing lease: {str(e)}", "error")
     return redirect(url_for('leases.leases'))
 
+def _get_pool_range(subnet_id):
+    """Fetch the first pool's start/end IPs from live Kea config for a subnet."""
+    try:
+        result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        if result.get("result") == 0:
+            cfg = result["arguments"]["Dhcp4"]
+            for s in cfg.get("subnet4", []):
+                if s["id"] == subnet_id:
+                    for p in s.get("pools", []):
+                        pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)
+                        if pool_str and "-" in pool_str:
+                            start, end = [x.strip() for x in pool_str.split("-", 1)]
+                            return start, end
+    except Exception:
+        pass
+    return None, None
+
+
 @bp.route("/ipmap")
 @login_required
 def ipmap():
@@ -241,8 +259,16 @@ def ipmap():
                     reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
     except Exception as e:
         flash(f"Could not load IP map: {str(e)}", "error")
+
+    pool_start, pool_end = _get_pool_range(subnet_filter)
+    used = {}
+    used.update(leases_by_ip)
+    used.update(reservations_by_ip)  # a reservation on a leased IP shows as "reserved"
+
     return render_template("ipmap.html", leases=leases_by_ip, reservations=reservations_by_ip,
-                           subnet_filter=subnet_filter, subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), cidr=cidr)
+                           used=used, pool_start=pool_start, pool_end=pool_end,
+                           subnet_filter=subnet_filter, subnet_id=subnet_filter,
+                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), cidr=cidr)
 
 # ─────────────────────────────────────────
 # Reservations

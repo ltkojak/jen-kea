@@ -1,0 +1,159 @@
+<svg viewBox="0 0 1200 720" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <clipPath id="round"><rect x="0" y="0" width="1200" height="720" rx="10"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <!-- page background -->
+    <rect x="0" y="0" width="1200" height="720" fill="#0d0d0d"/>
+
+    <!-- top nav -->
+    <rect x="0" y="0" width="1200" height="52" fill="#141414"/>
+    <rect x="0" y="51" width="1200" height="1" fill="#2a2a2a"/>
+    <text x="24" y="33" fill="#00b4d8" font-size="19" font-weight="700">🧬 Jen</text>
+    <text x="90" y="33" fill="#666" font-size="12">Kea DHCP Console</text>
+
+    <g font-size="13" fill="#999">
+      <text x="330" y="32" fill="#e0e0e0" font-weight="600">Dashboard</text>
+      <text x="430" y="32">Leases</text>
+      <text x="500" y="32">Reservations</text>
+      <text x="610" y="32">Subnets</text>
+      <text x="685" y="32">Devices</text>
+      <text x="760" y="32">IP Map</text>
+    </g>
+    <rect x="1000" y="14" width="170" height="24" rx="12" fill="#1c1c1c" stroke="#2a2a2a"/>
+    <text x="1016" y="30" fill="#555" font-size="11">🔍 Search…</text>
+
+    <!-- page header -->
+    <text x="24" y="90" fill="#e0e0e0" font-size="22" font-weight="700">📊 Dashboard</text>
+    <text x="24" y="110" fill="#666" font-size="12">Live overview of subnets, leases, and infrastructure health</text>
+    <rect x="1080" y="72" width="96" height="26" rx="6" fill="#122a30" stroke="#00b4d8"/>
+    <text x="1097" y="89" fill="#00b4d8" font-size="11">⟳ Auto 30s</text>
+
+    <!-- stat cards row -->
+    <g>
+      <!-- card template repeated -->
+      <g>
+        <rect x="24" y="130" width="270" height="86" rx="8" fill="#141414" stroke="#2a2a2a"/>
+        <text x="44" y="158" fill="#666" font-size="11">HOME — 10.10.10.0/24</text>
+        <text x="44" y="188" fill="#e0e0e0" font-size="26" font-weight="700">142<tspan fill="#666" font-size="14">/254</tspan></text>
+        <rect x="44" y="198" width="230" height="6" rx="3" fill="#1c1c1c"/>
+        <rect x="44" y="198" width="130" height="6" rx="3" fill="#00b4d8"/>
+      </g>
+      <g>
+        <rect x="310" y="130" width="270" height="86" rx="8" fill="#141414" stroke="#2a2a2a"/>
+        <text x="330" y="158" fill="#666" font-size="11">IOT — 10.10.20.0/24</text>
+        <text x="330" y="188" fill="#e0e0e0" font-size="26" font-weight="700">88<tspan fill="#666" font-size="14">/254</tspan></text>
+        <rect x="330" y="198" width="230" height="6" rx="3" fill="#1c1c1c"/>
+        <rect x="330" y="198" width="80" height="6" rx="3" fill="#2ecc71"/>
+      </g>
+      <g>
+        <rect x="596" y="130" width="270" height="86" rx="8" fill="#141414" stroke="#2a2a2a"/>
+        <text x="616" y="158" fill="#666" font-size="11">GUEST — 10.10.30.0/24</text>
+        <text x="616" y="188" fill="#e0e0e0" font-size="26" font-weight="700">19<tspan fill="#666" font-size="14">/126</tspan></text>
+        <rect x="616" y="198" width="230" height="6" rx="3" fill="#1c1c1c"/>
+        <rect x="616" y="198" width="34" height="6" rx="3" fill="#2ecc71"/>
+      </g>
+      <g>
+        <rect x="882" y="130" width="294" height="86" rx="8" fill="#141414" stroke="#f39c12" stroke-opacity="0.5"/>
+        <text x="902" y="158" fill="#666" font-size="11">SERVERS — 10.10.11.0/25</text>
+        <text x="902" y="188" fill="#e0e0e0" font-size="26" font-weight="700">211<tspan fill="#666" font-size="14">/230</tspan></text>
+        <rect x="902" y="198" width="254" height="6" rx="3" fill="#1c1c1c"/>
+        <rect x="902" y="198" width="235" height="6" rx="3" fill="#f39c12"/>
+      </g>
+    </g>
+
+    <!-- left column: recent leases -->
+    <g>
+      <rect x="24" y="238" width="700" height="330" rx="8" fill="#141414" stroke="#2a2a2a"/>
+      <text x="44" y="266" fill="#e0e0e0" font-size="14" font-weight="600">Recently Issued Leases</text>
+      <text x="640" y="266" fill="#00b4d8" font-size="11">View all →</text>
+      <line x1="44" y1="278" x2="684" y2="278" stroke="#2a2a2a"/>
+
+      <g font-size="11" fill="#666">
+        <text x="44" y="296">IP ADDRESS</text>
+        <text x="200" y="296">HOSTNAME</text>
+        <text x="400" y="296">SUBNET</text>
+        <text x="540" y="296">ISSUED</text>
+      </g>
+      <line x1="44" y1="304" x2="684" y2="304" stroke="#1c1c1c"/>
+
+      <!-- rows -->
+      <g font-size="12" fill="#e0e0e0">
+        <text x="44" y="326">10.10.10.184</text>
+        <text x="200" y="326">pixel-8-pro</text>
+        <text x="400" y="326">HOME</text>
+        <text x="540" y="326" fill="#666">2 min ago</text>
+
+        <text x="44" y="356">10.10.20.041</text>
+        <text x="200" y="356">shelly-plug-3</text>
+        <text x="400" y="356">IOT</text>
+        <text x="540" y="356" fill="#666">6 min ago</text>
+
+        <text x="44" y="386">10.10.10.092</text>
+        <text x="200" y="386">macbook-pro-matt</text>
+        <text x="400" y="386">HOME</text>
+        <text x="540" y="386" fill="#666">14 min ago</text>
+
+        <text x="44" y="416">10.10.30.011</text>
+        <text x="200" y="416">guest-iphone</text>
+        <text x="400" y="416">GUEST</text>
+        <text x="540" y="416" fill="#666">22 min ago</text>
+
+        <text x="44" y="446">10.10.20.077</text>
+        <text x="200" y="446">tplink-hs110</text>
+        <text x="400" y="446">IOT</text>
+        <text x="540" y="446" fill="#666">31 min ago</text>
+
+        <text x="44" y="476">10.10.10.130</text>
+        <text x="200" y="476">steam-deck</text>
+        <text x="400" y="476">HOME</text>
+        <text x="540" y="476" fill="#666">44 min ago</text>
+      </g>
+
+      <!-- little sparkline -->
+      <text x="44" y="520" fill="#666" font-size="11">LEASE ACTIVITY — LAST 24H</text>
+      <polyline points="44,555 104,545 164,552 224,530 284,538 344,510 404,520 464,495 524,505 584,480 644,490 684,470"
+                fill="none" stroke="#00b4d8" stroke-width="2"/>
+    </g>
+
+    <!-- right column: server status + alerts -->
+    <g>
+      <rect x="740" y="238" width="436" height="150" rx="8" fill="#141414" stroke="#2a2a2a"/>
+      <text x="760" y="266" fill="#e0e0e0" font-size="14" font-weight="600">Server Status</text>
+      <line x1="760" y1="278" x2="1156" y2="278" stroke="#2a2a2a"/>
+
+      <circle cx="768" cy="302" r="5" fill="#2ecc71"/>
+      <text x="782" y="307" fill="#e0e0e0" font-size="12">theelders — dhcp4</text>
+      <text x="1050" y="307" fill="#2ecc71" font-size="11">Active / HA</text>
+
+      <circle cx="768" cy="332" r="5" fill="#2ecc71"/>
+      <text x="782" y="337" fill="#e0e0e0" font-size="12">theelders — ctrl-agent</text>
+      <text x="1050" y="337" fill="#2ecc71" font-size="11">Running</text>
+
+      <circle cx="768" cy="362" r="5" fill="#2ecc71"/>
+      <text x="782" y="367" fill="#e0e0e0" font-size="12">MariaDB pool</text>
+      <text x="1050" y="367" fill="#666" font-size="11">6/20 conns</text>
+
+      <rect x="740" y="404" width="436" height="164" rx="8" fill="#141414" stroke="#2a2a2a"/>
+      <text x="760" y="432" fill="#e0e0e0" font-size="14" font-weight="600">Alerts</text>
+      <line x1="760" y1="444" x2="1156" y2="444" stroke="#2a2a2a"/>
+
+      <rect x="760" y="456" width="8" height="8" rx="2" fill="#f39c12"/>
+      <text x="778" y="464" fill="#e0e0e0" font-size="11">SERVERS subnet at 91% utilisation</text>
+
+      <rect x="760" y="484" width="8" height="8" rx="2" fill="#00b4d8"/>
+      <text x="778" y="492" fill="#e0e0e0" font-size="11">3 devices marked stale (14+ days)</text>
+
+      <rect x="760" y="512" width="8" height="8" rx="2" fill="#2ecc71"/>
+      <text x="778" y="520" fill="#e0e0e0" font-size="11">Config backup completed — 03:00</text>
+
+      <rect x="760" y="540" width="8" height="8" rx="2" fill="#00b4d8"/>
+      <text x="778" y="548" fill="#e0e0e0" font-size="11">2 dynamic leases converted to reservations</text>
+    </g>
+
+    <!-- footer strip -->
+    <rect x="0" y="690" width="1200" height="30" fill="#0d0d0d"/>
+    <rect x="0" y="690" width="1200" height="1" fill="#2a2a2a"/>
+    <text x="24" y="709" fill="#444" font-size="10">Jen v4.3.5 — mock preview for illustration, not a live screenshot</text>
+  </g>
+</svg>

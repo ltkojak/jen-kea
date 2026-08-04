@@ -106,10 +106,10 @@ def global_search():
                     # Search devices
                     with jdb.cursor() as cur:
                         cur.execute("""
-                            SELECT mac, last_ip, name, owner, notes
+                            SELECT mac, last_ip, device_name AS name, owner, notes
                             FROM devices
                             WHERE mac LIKE %s OR last_ip LIKE %s
-                               OR name LIKE %s OR owner LIKE %s
+                               OR device_name LIKE %s OR owner LIKE %s
                             LIMIT 20
                         """, (s, s, s, s))
                         results["devices"] = cur.fetchall()
