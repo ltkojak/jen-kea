@@ -2,6 +2,50 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.3.8] - 2026-08-04
+
+### Bug Fixes: Four more missing CSS classes + a subnet config data-loss bug, found by auditing for repeat patterns
+
+### Fixed
+- **🔴 Editing a subnet with more than one Kea pool silently deleted every
+  pool after the first.** `edit_subnet_post()` always rewrote
+  `s['pools']` as a single-item list built from the form's one pool field —
+  regardless of whether the pool was actually changed. Since the edit form
+  only ever pre-fills and exposes the *first* pool
+  (`_get_subnet_kea_data()`'s `pool_str`), submitting the Edit Subnet form
+  for **any** reason on a multi-pool subnet (e.g. just updating DNS servers)
+  would overwrite `kea-dhcp4.conf` with only that one pool, discarding the
+  rest on save. This is the same root cause as the v4.3.7 IP Map bug — a
+  subnet with more than one pool stanza — but here it caused real
+  configuration data loss instead of a display gap. Fixed by threading the
+  subnet's additional pools through a hidden form field and merging them
+  back into `s['pools']` on save instead of discarding them. The edit form
+  now also shows a warning when a subnet has multiple pools, listing which
+  ones are preserved as-is. Added `tests/test_subnets.py` (6 tests) covering
+  multi-pool data collection and the preserve-on-save merge logic
+- **`.alert-danger` was undefined**, used in `database.html`,
+  `database_import_confirm.html`, and `database_migrate.html` — including the
+  "Migration failed — target database was rolled back" message. Aliased to
+  the same styling as `.alert-error`
+- **`.badge-danger` was undefined**, used in `servers.html` for HA state
+  `partner-down` / `terminated` — exactly the states that most need to stand
+  out visually
+- **`.btn-warning` was undefined**, used on the "🔄 Restart Jen Now" button in
+  the nav itself, plus `database.html` and `settings_infrastructure.html`
+- **`.nav-dropdown-header` and `.nav-dropdown-divider` had zero CSS**, so the
+  account dropdown menu (username/role block and its separator lines)
+  rendered with no padding and no visible divider
+
+### Changed
+- **Docker image versions were stuck at `3.8.0`** in `Dockerfile` and both
+  `docker-compose*.yml` files, several releases stale. Synced to `4.3.8` and
+  added checks for all three files to `scripts/release_check.sh` so this
+  can't silently drift again
+- **Housekeeping**: moved a second batch of orphaned, unreferenced release
+  notes (`docs/github-release-2.6.x.md`, `-2.7.x.md`, `-3.1.x.md`,
+  `-3.2.x.md`) into `docs/release-history/` alongside the first batch, and
+  updated its index
+
 ## [4.3.7] - 2026-08-04
 
 ### Bug Fix: IP Map only showed the first Kea pool + README mockup rebuilt

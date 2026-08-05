@@ -22,6 +22,14 @@
             {% else %}
             <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Format: start–end</div>
             {% endif %}
+            {% if kea.pools|length > 1 %}
+            <div class="form-hint" style="color:var(--warning);">
+                ⚠️ This subnet has {{ kea.pools|length }} pools in Kea. Only the first
+                ({{ kea.pools[0] }}) is editable here — the rest
+                ({{ kea.pools[1:]|join(', ') }}) will be preserved as-is when you save.
+            </div>
+            <input type="hidden" name="extra_pools" value="{{ kea.pools[1:]|join('|') }}">
+            {% endif %}
         </div>
 
         <!-- Timers -->

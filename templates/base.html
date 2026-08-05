@@ -94,6 +94,7 @@
         .btn-primary { background: var(--primary); color: #fff; }
         .btn-success { background: var(--success); color: #fff; }
         .btn-danger { background: var(--danger); color: #fff; }
+        .btn-warning { background: var(--warning); color: #1a1a1a; }
         /* ── Unified row action buttons ── */
         .btn-act { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; font-size:13px; transition:background .12s, border-color .12s, color .12s; text-decoration:none; }
         .btn-act-edit  { background:transparent; border:1px solid var(--border); color:var(--text-muted); }
@@ -128,11 +129,12 @@
         .badge-viewer { background: #1a1a2a; color: #7b9dff; }
         .badge-dynamic { background: #1a2a3a; color: var(--primary); }
         .badge-reserved { background: #1a3a1a; color: var(--success); }
+        .badge-danger { background: #2a1a1a; color: var(--danger); }
 
         /* Alerts */
         .alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
         .alert-success { background: #1a3a1a; border: 1px solid #2ecc7133; color: var(--success); }
-        .alert-error { background: #3a1a1a; border: 1px solid #e74c3c33; color: var(--danger); }
+        .alert-error, .alert-danger { background: #3a1a1a; border: 1px solid #e74c3c33; color: var(--danger); }
         .alert-info { background: #1a2a3a; border: 1px solid #00b4d833; color: var(--primary); }
         .alert-warning { background: #2a2a1a; border: 1px solid #f39c1233; color: var(--warning); }
 
@@ -190,6 +192,8 @@
         .nav-dropdown input:checked ~ .nav-dropdown-content { display: block; }
         .nav-dropdown-content a { display: block; padding: 10px 14px; color: var(--text); font-size: 13px; }
         .nav-dropdown-content a:hover { background: var(--surface2); text-decoration: none; }
+        .nav-dropdown-header { padding: 10px 14px; }
+        .nav-dropdown-divider { height: 1px; background: var(--border); margin: 4px 0; }
         .nav-avatar-wrap .nav-dropdown-content { min-width:200px; right: 0; left: auto; }
         .nav-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#0077b6,#00b4d8); color:#fff; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
 

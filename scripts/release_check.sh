@@ -19,6 +19,9 @@ echo "Release version: $VER"
 check install.sh        "JEN_VERSION"        "JEN_VERSION=\"$VER\""
 check README.md         "version badge"      "Version-$VER-blue"
 check CHANGELOG.md      "top entry"          "^## \\[$VER\\]"
+check Dockerfile             "LABEL version"  "LABEL version=\"$VER\""
+check docker-compose.yml     "image tag"      "image: jen-dhcp:$VER"
+check docker-compose.mysql.yml "image tag"    "image: jen-dhcp:$VER"
 
 # No stale tarball references anywhere in living docs
 for f in README.md docs/admin-guide.md; do

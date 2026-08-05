@@ -533,6 +533,7 @@ def edit_subnet_post(subnet_id):
 
     # Read form fields — empty string means "don't change this field"
     new_pool     = request.form.get("pool",          "").strip()
+    extra_pools  = [p.strip() for p in request.form.get("extra_pools", "").split("|") if p.strip()]
     new_lifetime = request.form.get("valid_lifetime","").strip()
     new_renew    = request.form.get("renew_timer",   "").strip()
     new_rebind   = request.form.get("rebind_timer",  "").strip()
@@ -611,7 +612,8 @@ for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
         continue
     new_pool = {repr(new_pool)}
     if new_pool:
-        s['pools'] = [{{'pool': new_pool}}]
+        extra_pools = {repr(extra_pools)}
+        s['pools'] = [{{'pool': new_pool}}] + [{{'pool': p}} for p in extra_pools]
         changed = True
     new_lifetime = {repr(new_lifetime)}
     new_renew    = {repr(new_renew)}
