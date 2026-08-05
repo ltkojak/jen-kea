@@ -59,6 +59,24 @@ KEA_EXPORT_GROUPS = {
     },
 }
 
+KEA_ALL_TABLES = {t for grp in KEA_EXPORT_GROUPS.values() for t in grp["tables"]}
+
+
+def _validate_tables(requested, known):
+    """Filter requested table names down to only those in `known`.
+
+    This is the single choke point protecting every f-string table-name
+    interpolation in this module (SELECT * FROM `{table}`,
+    DELETE FROM `{tbl}`, DROP TABLE IF EXISTS `{tbl}`, etc.) from SQL
+    injection via crafted form data or a maliciously-edited uploaded export
+    file. Anything not in the known whitelist is silently dropped rather than
+    passed through to a query.
+    """
+    if requested is None:
+        return None
+    known_set = set(known)
+    return [t for t in requested if t in known_set]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
@@ -121,6 +139,19 @@ def _table_exists(conn, table):
         return bool(cur.fetchone())
 
 
+def _get_table_columns(conn, table):
+    """Return the real column names for `table` from the live schema.
+
+    `table` must already be validated against a known-table whitelist by the
+    caller (SQL identifiers can't be parameterised with %s). Used to filter
+    untrusted column names — e.g. from an uploaded import file — down to
+    columns that actually exist, before they're interpolated into an INSERT.
+    """
+    with conn.cursor() as cur:
+        cur.execute(f"SHOW COLUMNS FROM `{table}`")
+        return {row["Field"] for row in cur.fetchall()}
+
+
 def _row_count(conn, table):
     if not _table_exists(conn, table):
         return 0
@@ -171,7 +202,7 @@ def export_jen(tables=None):
     tables: list of table names, or None for all.
     Returns (json_bytes, filename).
     """
-    selected = tables if tables else list(JEN_TABLES.keys())
+    selected = _validate_tables(tables, JEN_TABLES) if tables else list(JEN_TABLES.keys())
     conn = _direct_jen_conn()
     payload = {"_meta": _make_metadata("jen", selected), "data": {}}
     try:
@@ -195,6 +226,8 @@ def export_kea(group="reservations"):
     group: 'reservations' or 'leases'
     Returns (json_bytes, filename).
     """
+    if group not in KEA_EXPORT_GROUPS:
+        raise ValueError(f"Unknown export group: {group}")
     grp_cfg  = KEA_EXPORT_GROUPS[group]
     tables   = grp_cfg["tables"]
     conn     = _direct_kea_conn()
@@ -254,7 +287,8 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
     if meta.get("database") != "jen":
         raise ValueError(f"This export is for '{meta.get('database')}' — expected 'jen'. Wrong file?")
 
-    selected = tables_to_restore if tables_to_restore else list(data.keys())
+    selected_raw = tables_to_restore if tables_to_restore else list(data.keys())
+    selected     = _validate_tables(selected_raw, JEN_TABLES)
     results  = []
     conn     = _direct_jen_conn()
     try:
@@ -269,7 +303,11 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
                 if truncate:
                     cur.execute(f"DELETE FROM `{tbl}`")
                 if rows:
-                    cols   = list(rows[0].keys())
+                    real_cols = _get_table_columns(conn, tbl)
+                    cols      = [c for c in rows[0].keys() if c in real_cols]
+                    if not cols:
+                        results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
+                        continue
                     col_str = ", ".join(f"`{c}`" for c in cols)
                     ph_str  = ", ".join(["%s"] * len(cols))
                     cur.executemany(
@@ -304,6 +342,9 @@ def import_kea(file_bytes, duplicate_mode="skip"):
     try:
         conn.begin()
         for tbl in data:
+            if tbl not in KEA_ALL_TABLES:
+                results.append(f"⚠️ {tbl}: not a recognized Kea table — skipped")
+                continue
             rows = data.get(tbl, [])
             if not rows:
                 results.append(f"ℹ️ {tbl}: no rows in export — skipped")
@@ -312,7 +353,11 @@ def import_kea(file_bytes, duplicate_mode="skip"):
                 results.append(f"⚠️ {tbl}: table not found in Kea DB — skipped")
                 continue
             inserted = skipped = 0
-            cols    = list(rows[0].keys())
+            real_cols = _get_table_columns(conn, tbl)
+            cols      = [c for c in rows[0].keys() if c in real_cols]
+            if not cols:
+                results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
+                continue
             col_str = ", ".join(f"`{c}`" for c in cols)
             ph_str  = ", ".join(["%s"] * len(cols))
             verb    = "REPLACE" if duplicate_mode == "overwrite" else "INSERT IGNORE"
@@ -371,7 +416,10 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
             progress_cb(msg)
         logger.info(f"migrate_jen: {msg}")
 
-    selected = tables or list(JEN_TABLES.keys())
+    if tables:
+        selected = _validate_tables(tables, JEN_TABLES) or list(JEN_TABLES.keys())
+    else:
+        selected = list(JEN_TABLES.keys())
     results  = []
 
     _cb(f"Connecting to source Jen DB ({extensions.JEN_DB_HOST}/{extensions.JEN_DB_NAME})...")
@@ -474,6 +522,8 @@ def migrate_kea(target_host, target_port, target_user, target_password, target_d
             progress_cb(msg)
         logger.info(f"migrate_kea: {msg}")
 
+    if group not in KEA_EXPORT_GROUPS:
+        raise ValueError(f"Unknown migration group: {group}")
     tables  = KEA_EXPORT_GROUPS[group]["tables"]
     results = []
 

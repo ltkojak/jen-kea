@@ -2,6 +2,47 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.3.9] - 2026-08-04
+
+### Security Fix: SQL injection via unvalidated table/column names in database export/import/migrate + logo hover cosmetic fix
+
+### Fixed
+- **🔴 SQL injection via table names in `dbexport.py`.** `export_jen()`,
+  `import_jen()`, `import_kea()`, `migrate_jen()`, and `migrate_kea()` all
+  interpolated table names into f-string SQL (`` SELECT * FROM `{table}` ``,
+  `` DELETE FROM `{tbl}` ``, `` DROP TABLE IF EXISTS `{tbl}` ``, etc.) without
+  checking them against the `JEN_TABLES` / `KEA_EXPORT_GROUPS` whitelists
+  already defined in the same file. Table names came from `request.form`
+  (export/migrate — requires admin auth to reach) or directly from an
+  **uploaded file's own JSON keys** (import — the more serious path, since a
+  crafted "export" file could carry an injection payload as a table name).
+  Added `_validate_tables()` as a single choke point and applied it at every
+  call site; `export_kea()`/`migrate_kea()`'s `group` parameter is now also
+  validated against `KEA_EXPORT_GROUPS` before use.
+- **🔴 Same vulnerability, one layer deeper: column names.** `import_jen()`
+  and `import_kea()` also built column lists straight from the *keys of each
+  row* in the uploaded file (`cols = list(rows[0].keys())`) and
+  backtick-interpolated those into the `INSERT` column list — same injection
+  shape, one level down. Added `_get_table_columns()` to fetch the real
+  schema and filter untrusted column names down to ones that actually exist
+  before they're used. (`migrate_jen`/`migrate_kea` were not affected here —
+  their column names come from Jen's own live database, not an uploaded
+  file.)
+  Added `tests/test_dbexport.py` (11 tests) covering the whitelist logic
+  directly, including the exact UNION-injection-shaped payload this closes.
+- **Logo hover underline.** Same root cause as earlier CSS gaps this
+  release cycle: the global `a:hover { text-decoration: underline; }` rule
+  out-specifies `.nav-brand`'s base `text-decoration: none;`, since every
+  *other* nav link already had an explicit `:hover` override and this one
+  didn't. Added `.nav-brand:hover { text-decoration: none; }`.
+
+### Note
+This release does **not** include CSRF protection — a systemic gap found in
+the same audit (no `flask_wtf`, no CSRF token anywhere, no verification on
+any POST route). It's scoped as its own release (4.4.0) given it touches all
+29 form templates plus JS/HTMX calls, rather than being bundled into this
+patch.
+
 ## [4.3.8] - 2026-08-04
 
 ### Bug Fixes: Four more missing CSS classes + a subnet config data-loss bug, found by auditing for repeat patterns
