@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="4.4.2"
+JEN_VERSION="4.4.3"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -315,15 +315,19 @@ install_dependencies() {
     fi
 
     local missing_py=()
-    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode authlib jinja2 werkzeug paramiko apscheduler; do
+    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode PIL authlib jinja2 werkzeug paramiko apscheduler; do
         python3 -c "import ${pkg}" 2>/dev/null || missing_py+=("${pkg/-/_}")
     done
 
     if [[ ${#missing_py[@]} -gt 0 ]]; then
         spinner_start "Installing Python packages..."
-        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko "apscheduler<4" \
+        pip3 install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
+            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
+            "authlib>=1.7.2" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3" \
             --break-system-packages 2>/dev/null || \
-        pip3 install -q flask flask-login pymysql dbutils requests pyotp "qrcode[pil]" authlib paramiko "apscheduler<4"
+        pip3 install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
+            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
+            "authlib>=1.7.2" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3"
         spinner_stop
         ok "Python packages installed"
     else

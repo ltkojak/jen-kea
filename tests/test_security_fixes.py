@@ -249,3 +249,127 @@ class TestRemoteCommandValidators:
         r = logged_in_client.get("/ddns", query_string={"host": "x; touch /tmp/pwned"})
         assert r.status_code == 200
         assert b"invalid hostname" in r.data.lower()
+
+
+class TestDatabaseSuperadminOnly:
+    """/database/* — export/import/migrate/backup. v4.4.2: escalated from
+    admin to superadmin-only, since a full export includes password
+    hashes, MFA secrets, and API key records for every subnet, not just
+    ones a restricted admin is scoped to."""
+
+    def _admin_client(self, client, db):
+        return _restricted_client(client, db, allowed_subnets=None,
+                                   role="admin", username="plainadmin1")
+
+    def test_database_page_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.get("/database", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_export_jen_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.post("/database/export/jen", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_import_confirm_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.post("/database/import/confirm", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_migrate_run_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.post("/database/migrate/run", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_database_page_allowed_for_superadmin(self, logged_in_client):
+        r = logged_in_client.get("/database")
+        assert r.status_code == 200
+        assert b"superadmin access required" not in r.data.lower()
+
+
+class TestPluginsSuperadminOnly:
+    """/settings/plugins/* — install/enable/etc. v4.4.2: escalated from
+    admin to superadmin-only, since installing a plugin runs arbitrary
+    Python with the full privileges of the Jen process."""
+
+    def _admin_client(self, client, db):
+        return _restricted_client(client, db, allowed_subnets=None,
+                                   role="admin", username="plainadmin2")
+
+    def test_plugins_page_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.get("/settings/plugins", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_install_plugin_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.post("/settings/plugins/install/network-discovery", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_enable_plugin_forbidden_for_plain_admin(self, client, db):
+        self._admin_client(client, db)
+        r = client.post("/settings/plugins/enable/network-discovery", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_plugins_page_allowed_for_superadmin(self, logged_in_client):
+        r = logged_in_client.get("/settings/plugins")
+        assert r.status_code == 200
+        assert b"superadmin access required" not in r.data.lower()
+
+
+class TestPluginZipSlip:
+    """jen.services.plugins._safe_extract — Zip Slip protection.
+    A malicious plugin archive must not be able to write files outside
+    its own plugin directory via ../ path traversal or absolute paths."""
+
+    def _make_zip(self, entries):
+        import zipfile, io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name, content in entries.items():
+                zf.writestr(name, content)
+        buf.seek(0)
+        return zipfile.ZipFile(buf)
+
+    def test_rejects_parent_directory_traversal(self, tmp_path):
+        from jen.services.plugins import _safe_extract
+        zf = self._make_zip({"../../../tmp/evil_pwned.txt": "pwned"})
+        dest = tmp_path / "plugin_dest"
+        with pytest.raises(ValueError, match="Unsafe path"):
+            _safe_extract(zf, str(dest))
+        assert not (tmp_path / "tmp" / "evil_pwned.txt").exists()
+
+    def test_rejects_absolute_path(self, tmp_path):
+        from jen.services.plugins import _safe_extract
+        zf = self._make_zip({"/etc/evil_pwned.txt": "pwned"})
+        dest = tmp_path / "plugin_dest"
+        with pytest.raises(ValueError, match="Unsafe path"):
+            _safe_extract(zf, str(dest))
+
+    def test_allows_normal_plugin_contents(self, tmp_path):
+        from jen.services.plugins import _safe_extract
+        zf = self._make_zip({
+            "manifest.json": '{"id": "test-plugin"}',
+            "plugin.py": "def register(app): pass",
+            "templates/index.html": "<h1>hi</h1>",
+        })
+        dest = tmp_path / "plugin_dest"
+        _safe_extract(zf, str(dest))
+        assert (dest / "manifest.json").is_file()
+        assert (dest / "plugin.py").is_file()
+        assert (dest / "templates" / "index.html").is_file()
+
+    def test_install_plugin_rejects_https_only_violation(self, monkeypatch):
+        from jen.services import plugins as plugins_svc
+        ok, msg = plugins_svc.install_plugin("evil-plugin", {
+            "download_url": "http://not-secure.example.com/evil"
+        })
+        assert ok is False
+        assert "https" in msg.lower()

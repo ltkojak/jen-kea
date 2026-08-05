@@ -2,7 +2,11 @@
 jen/routes/database.py
 ──────────────────────
 Database management — export, import, scheduled backup, migration.
-Admin-only. Menu item hidden for non-admin users in base.html.
+SuperAdmin-only (v4.4.2): a subnet-restricted admin has no business
+touching a full-database export/import, since it includes every subnet's
+data plus users, password hashes, MFA secrets, and API key records —
+none of which "assigned subnets only" scoping can meaningfully apply to.
+Menu item hidden for non-superadmin users in base.html.
 """
 
 import gzip
@@ -13,7 +17,7 @@ import os
 import queue
 import threading
 from datetime import datetime
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
+from jen.services.access import superadmin_required as _superadmin_required
 
 from flask import (Blueprint, Response, flash, redirect, render_template,
                    request, stream_with_context, url_for)
@@ -34,7 +38,7 @@ bp = Blueprint("database", __name__)
 # ── Main page ─────────────────────────────────────────────────────────────────
 @bp.route("/database")
 @login_required
-@_admin_required
+@_superadmin_required
 def database():
     backups  = dbexport.list_backups()
     schedule = dbexport.get_schedule()
@@ -54,7 +58,7 @@ def database():
 # ── Export ────────────────────────────────────────────────────────────────────
 @bp.route("/database/export/jen", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def export_jen():
     tables = request.form.getlist("tables") or None
     try:
@@ -72,7 +76,7 @@ def export_jen():
 
 @bp.route("/database/export/kea", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def export_kea():
     group = request.form.get("group", "reservations")
     if group not in dbexport.KEA_EXPORT_GROUPS:
@@ -94,7 +98,7 @@ def export_kea():
 # ── Backup download / delete ───────────────────────────────────────────────────
 @bp.route("/database/backup/download/<path:filename>")
 @login_required
-@_admin_required
+@_superadmin_required
 def download_backup(filename):
     safe = os.path.basename(filename)
     path = os.path.join(dbexport.BACKUP_DIR, safe)
@@ -113,7 +117,7 @@ def download_backup(filename):
 
 @bp.route("/database/backup/delete/<path:filename>", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def delete_backup(filename):
     safe = os.path.basename(filename)
     path = os.path.join(dbexport.BACKUP_DIR, safe)
@@ -128,7 +132,7 @@ def delete_backup(filename):
 
 @bp.route("/database/backup/now", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def backup_now():
     """Run a manual on-demand backup."""
     include = request.form.getlist("include")
@@ -160,7 +164,7 @@ def backup_now():
 # ── Import ────────────────────────────────────────────────────────────────────
 @bp.route("/database/import/inspect", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def import_inspect():
     """Parse uploaded file and return metadata for confirmation page."""
     f = request.files.get("file")
@@ -190,7 +194,7 @@ def import_inspect():
 
 @bp.route("/database/import/confirm", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def import_confirm():
     import base64, tempfile
     tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
@@ -228,7 +232,7 @@ def import_confirm():
 # ── Schedule ──────────────────────────────────────────────────────────────────
 @bp.route("/database/schedule", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def save_schedule():
     enabled     = 1 if request.form.get("enabled") else 0
     frequency   = request.form.get("frequency", "daily")
@@ -248,7 +252,7 @@ def save_schedule():
 # ── Migration — SSE progress ───────────────────────────────────────────────────
 @bp.route("/database/migrate", methods=["GET"])
 @login_required
-@_admin_required
+@_superadmin_required
 def migrate_page():
     return render_template(
         "database_migrate.html",
@@ -263,7 +267,7 @@ def migrate_page():
 
 @bp.route("/database/migrate/test", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def migrate_test():
     host = request.form.get("host", "").strip()
     port = request.form.get("port", "3306").strip() or "3306"
@@ -278,7 +282,7 @@ def migrate_test():
 
 @bp.route("/database/migrate/run", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def migrate_run():
     """SSE endpoint — streams migration progress to the browser."""
     which    = request.form.get("which", "jen")      # "jen" or "kea"

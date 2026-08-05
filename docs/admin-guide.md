@@ -23,7 +23,7 @@ Before starting Jen for the first time, work through this checklist:
 
 **Run the installer:**
 ```bash
-tar xzf jen-v4.4.2.tar.gz
+tar xzf jen-v4.4.3.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -168,8 +168,9 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 
 | Role | Access |
 |---|---|
-| **Admin** | Full access — view and modify everything, manage users, access Settings |
-| **Viewer** | Read-only access to Dashboard, Leases, Reservations, Subnets, DDNS |
+| **SuperAdmin** | Full access to everything, all subnets, always — the only role that can manage users or use Database (export/import/backup/migrate) |
+| **Admin** | Full management on assigned subnets — Settings and Audit Log, but not Database or user management. Can be restricted to specific subnets (**Settings → Users → subnet access**); unrestricted by default |
+| **Viewer** | Read-only access to Dashboard, Leases, Reservations, Subnets, DDNS, scoped to assigned subnets the same way as Admin |
 
 ### Adding Users
 

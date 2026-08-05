@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Kea DHCP Management Console"
-LABEL version="4.4.2"
+LABEL version="4.4.3"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -20,15 +20,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     curl \
     && pip3 install --break-system-packages \
-        flask \
-        flask-login \
-        pymysql \
-        requests \
-        pyotp \
-        "qrcode[pil]" \
-        authlib \
-        cryptography \
-        werkzeug \
+        "flask>=3.1.3" \
+        "flask-login>=0.6.3" \
+        "pymysql>=1.2.0" \
+        "dbutils>=3.1.2" \
+        "requests>=2.33.1" \
+        "pyotp>=2.10.0" \
+        "qrcode[pil]>=8.2" \
+        "pillow>=12.3.0" \
+        "authlib>=1.7.2" \
+        "cryptography>=46.0.6" \
+        "werkzeug>=3.1.7" \
+        "paramiko>=5.0.0" \
+        "apscheduler<4,>=3.11.3" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

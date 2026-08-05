@@ -169,6 +169,22 @@ def disable_plugin(plugin_id: str) -> None:
 
 # ── Install / uninstall ───────────────────────────────────────────────────────
 
+def _safe_extract(zf, dest_dir: str) -> None:
+    """Extract a ZipFile to dest_dir, refusing any member whose resolved
+    path would land outside dest_dir (a.k.a. "Zip Slip") — an entry named
+    e.g. "../../../etc/cron.d/evil" or an absolute path would otherwise
+    let a malicious plugin archive write files anywhere www-data can
+    reach, not just into the plugin's own directory."""
+    dest_dir_real = os.path.realpath(dest_dir)
+    os.makedirs(dest_dir_real, exist_ok=True)
+    for member in zf.infolist():
+        member_path = os.path.realpath(os.path.join(dest_dir_real, member.filename))
+        if member_path != dest_dir_real and \
+                not member_path.startswith(dest_dir_real + os.sep):
+            raise ValueError(f"Unsafe path in plugin archive: {member.filename!r}")
+    zf.extractall(dest_dir_real)
+
+
 def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     """
     Download and install a plugin from its registry entry.
@@ -179,6 +195,8 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     download_url = registry_entry.get("download_url", "").rstrip("/")
     if not download_url:
         return False, "No download URL in registry entry."
+    if not download_url.startswith("https://"):
+        return False, "Refusing to install from a non-HTTPS download URL."
 
     # Expect a zip archive at download_url/plugin.zip
     zip_url = f"{download_url}/plugin.zip"
@@ -196,7 +214,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
         if os.path.isdir(tmp_dest):
             shutil.rmtree(tmp_dest)
         with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
-            zf.extractall(tmp_dest)
+            _safe_extract(zf, tmp_dest)
 
         # Validate manifest exists in extracted content
         mf = os.path.join(tmp_dest, "manifest.json")

@@ -2,6 +2,61 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.3] - 2026-08-05
+
+### Security: database/plugin privilege escalation, Zip Slip, dependency hardening
+
+Second pass of the same audit that produced 4.4.2. Found two more places
+where a subnet-restricted admin (or, for the plugin bug, any admin) could
+reach far past what the role is supposed to allow, plus a real Zip Slip
+vulnerability and a couple of dependency/deployment hygiene gaps.
+
+### Fixed
+- **🔴 Full database export/import/migrate was admin-accessible, not
+  superadmin-only.** `/database/export/jen` returns every table including
+  `users` (password hashes), `mfa_methods`/`mfa_backup_codes`/`mfa_trusted_devices`
+  (MFA secrets), and `api_keys` — none of it scoped to a subnet-restricted
+  admin's assigned subnets, because none of it *can* be. `import_confirm`
+  and `migrate_run` meant that same restricted admin could overwrite all
+  of it, too. All 12 routes in `database.py` now require superadmin;
+  `superadmin_required` was already imported in that file and never
+  used, which is a pretty good sign this was an oversight rather than a
+  choice. Nav links and docs updated to match.
+- **🔴 Zip Slip in the plugin installer.** `install_plugin()` extracted
+  downloaded plugin archives with plain `zipfile.extractall()`, which
+  follows `../` path traversal or absolute paths in archive entries and
+  writes wherever they point — not just into the plugin's own directory.
+  Added `_safe_extract()`, which validates every archive member resolves
+  inside the destination directory before extracting anything.
+- **Plugin install/enable/uninstall was admin-accessible.** Installing a
+  plugin runs arbitrary Python (`register(app)`) with the full privileges
+  of the Jen process itself — DB credentials, sudoers-permitted commands,
+  everything. That's a different category of power than "manage
+  reservations on my assigned subnets," so it now requires superadmin,
+  same as the database fix above. Also added an HTTPS-only check on
+  plugin download URLs as cheap defense in depth.
+- **Unpinned dependencies everywhere.** `Dockerfile` and `install.sh`
+  installed every Python dependency with no version floor. Ran `pip-audit`
+  against the actual resolved set and found `pillow` (pulled in
+  transitively via `qrcode[pil]`) had several known CVEs below 12.2.0/12.3.0
+  — nothing else in Jen's dependency list was affected. All dependencies
+  now pinned to current-clean minimum versions in both files.
+- **Docker image was missing `dbutils`, `apscheduler`, and `paramiko`** —
+  found while fixing the pin above. All three are actually imported by
+  the running app (`dbutils` for connection pooling in every DB call,
+  `apscheduler` for the backup scheduler, `paramiko` for subnet config
+  push over SSH), so a Docker deployment would crash the first time any
+  of those code paths ran. `install.sh` already had all three; the
+  Dockerfile just never did. Fixed, and added an explicit `pillow`/`PIL`
+  check to `install.sh`'s "already present" detection loop, which
+  previously never checked for it at all.
+
+### Added
+- 13 new tests in `tests/test_security_fixes.py`: superadmin enforcement
+  on `database.py` and `plugins.py` routes, and Zip Slip protection
+  (parent-directory traversal, absolute paths, and a normal-contents
+  sanity check).
+
 ## [4.4.2] - 2026-08-05
 
 ### Security: full audit fixes — subnet authorization, MFA brute force, SSH command injection

@@ -8,7 +8,8 @@ Permission matrix
 ─────────────────
 SuperAdmin : full access to everything, all subnets, always
 Admin      : full management capability on assigned subnets only;
-             can access Settings, Database, Audit; cannot manage users
+             can access Settings, Audit; cannot manage users or touch
+             Database (export/import/migrate — v4.4.2, see database.py)
 Viewer     : read-only on assigned subnets; cannot access Settings/DB/Audit
 
 Import decorators from here rather than defining them per-route-file.
