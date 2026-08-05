@@ -53,7 +53,7 @@
 
     <!-- TOTP tab -->
     <div id="tab-totp" {% if not has_totp %}style="display:none"{% endif %}>
-        <form method="POST">
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="totp">
             <div class="form-group">
                 <label>6-digit code from your authenticator app</label>
@@ -83,7 +83,7 @@
 
     <!-- Backup code tab -->
     <div id="tab-backup" {% if has_totp %}style="display:none"{% endif %}>
-        <form method="POST">
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="method" value="backup">
             <div class="form-group">
                 <label>Enter a backup recovery code</label>

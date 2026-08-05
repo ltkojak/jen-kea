@@ -2,6 +2,59 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.0] - 2026-08-05
+
+### Feature: CSRF Protection
+
+Jen had no CSRF protection anywhere — no token, no verification on any
+POST/PUT/PATCH/DELETE route. A malicious page visited by a logged-in admin
+could silently trigger any state-changing action in Jen on their behalf.
+Closes that gap app-wide.
+
+### Added
+- **`jen/services/csrf.py`** — session-bound, `itsdangerous`-signed tokens
+  (already a Flask dependency, no new install required) with a 4-hour
+  expiry. Each session gets a random nonce; the token signs that nonce with
+  a timestamp, so a token can never validate against a different session
+  even if somehow replayed, and expires automatically.
+- **`csrf_token()`** available in every template via the existing branding
+  context processor.
+- **`_csrf_protect()` before_request hook** in `jen/__init__.py`, checking
+  all state-changing methods. Exempts requests carrying an
+  `Authorization: Bearer` header — Jen sets no CORS headers, so a forged
+  cross-site request (form or JS) cannot attach that header, meaning
+  API-key auth isn't vulnerable to CSRF the same way session cookies are.
+  Also respects `WTF_CSRF_ENABLED` (mirroring Flask-WTF's own config key),
+  so the existing test suite's `logged_in_client`-based POST tests needed
+  zero changes.
+- Applied to **all 91 POST forms** across every template (hidden
+  `csrf_token` field), **all 7 JS `fetch()` call sites** (dashboard,
+  database_migrate ×2, devices, leases, reservations, subnets — via
+  `X-CSRFToken` header), and the one HTMX call (via a single `hx-headers`
+  attribute on `<body>` in `base.html`, inherited by any descendant
+  element including partials that don't extend base.html themselves).
+- **`tests/test_csrf.py`** (18 tests) — 10 direct unit tests of the token
+  logic (generation, validation, tampering, expiry, cross-session
+  rejection, Bearer detection) and 8 full integration tests through the
+  real Flask test client and the actual `before_request` hook, including a
+  round trip proving the existing suite is unaffected by default. All 18
+  verified passing against a live database, not just reviewed.
+
+### Fixed
+- **Logo hover underline.** The global `a:hover { text-decoration:
+  underline; }` rule out-specified `.nav-brand`'s base `text-decoration:
+  none;` — every *other* nav link already had an explicit `:hover`
+  override, this one didn't. Added `.nav-brand:hover { text-decoration:
+  none; }`.
+
+### Note on rollout
+This release is packaged but intentionally **not auto-tagged**. Per the
+agreed plan: the full 179-test suite (161 pre-existing + 18 new) passes
+against a live database — but before tagging, do a short live click-through
+(login, a plain form save, an HTMX-driven action, a file upload, and one
+API-key-authenticated request) to confirm real browser/session behavior
+matches what the test client already proved.
+
 ## [4.3.9] - 2026-08-04
 
 ### Security Fix: SQL injection via unvalidated table/column names in database export/import/migrate + logo hover cosmetic fix

@@ -43,7 +43,7 @@
             {% endif %}
             {% if current_user.role in ('superadmin','admin') %}
             <span class="btn-act-divider"></span>
-            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?">
+            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del" title="Remove from inventory">✕</button>
             </form>
             {% endif %}

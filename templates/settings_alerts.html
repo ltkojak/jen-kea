@@ -9,7 +9,7 @@
 <!-- Global alert settings -->
 <div class="card">
     <div class="card-header"><span class="card-title">⚙️ Global Alert Settings</span></div>
-    <form method="POST" action="/settings/alerts/save-global">
+    <form method="POST" action="/settings/alerts/save-global"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Subnet Utilization Threshold %</label>
@@ -73,13 +73,13 @@ var JEN_CHANNELS = {
                 {% endif %}
             </div>
             <div style="display:flex;gap:6px;">
-                <form method="POST" action="/settings/alerts/test-channel/{{ ch.id }}" style="display:inline;">
+                <form method="POST" action="/settings/alerts/test-channel/{{ ch.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-sm btn-secondary">🧪 Test</button>
                 </form>
                 <button class="btn-act btn-act-edit edit-channel-btn"
                     data-id="{{ ch.id }}"
                     onclick="editChannelFromBtn({{ ch.id }})">✏️ Edit</button>
-                <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete this alert channel?">
+                <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete this alert channel?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn-act btn-act-del" title="Delete channel">✕</button>
                 </form>
             </div>
@@ -115,12 +115,12 @@ var JEN_CHANNELS = {
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
             <div style="flex:1;">
                 <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">{{ label }}</div>
-                <form method="POST" action="/settings/alerts/save-template" style="display:flex;gap:8px;align-items:flex-start;">
+                <form method="POST" action="/settings/alerts/save-template" style="display:flex;gap:8px;align-items:flex-start;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="alert_type" value="{{ atype }}">
                     <textarea name="template_text" rows="2" style="flex:1;font-family:monospace;font-size:12px;resize:vertical;">{{ templates.get(atype, default_templates.get(atype, '')) }}</textarea>
                     <div style="display:flex;flex-direction:column;gap:4px;">
                         <button type="submit" class="btn btn-sm btn-primary">Save</button>
-                        <form method="POST" action="/settings/alerts/reset-template" style="display:inline;">
+                        <form method="POST" action="/settings/alerts/reset-template" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="alert_type" value="{{ atype }}">
                             <button type="submit" class="btn btn-sm btn-secondary" onclick="jenConfirm('Reset to default template?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">Reset</button>
                         </form>
@@ -137,7 +137,7 @@ var JEN_CHANNELS = {
 <div id="channelModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 20px;">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:560px;max-width:95vw;">
         <h3 id="modalTitle" style="margin-bottom:20px;">Add Alert Channel</h3>
-        <form method="POST" action="/settings/alerts/save-channel" id="channelForm">
+        <form method="POST" action="/settings/alerts/save-channel" id="channelForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="channel_id" id="channelId">
 
             <div class="form-row">

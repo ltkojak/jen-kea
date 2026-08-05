@@ -99,7 +99,7 @@
         <h3 style="margin:0;">＋ Add User</h3>
         <button onclick="closeModal('add-modal')" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
-    <form method="POST" action="/users/add">
+    <form method="POST" action="/users/add"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Username</label>
             <input type="text" name="username" required autocomplete="off" style="width:100%;">
@@ -148,7 +148,7 @@
         <button onclick="closeModal('edit-modal')" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
-    <form id="edit-form" method="POST" action="">
+    <form id="edit-form" method="POST" action=""><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <!-- Role -->
         <div class="form-group">
@@ -209,7 +209,7 @@
     </div>
     <div id="edit-mfa-status" style="font-size:13px;margin-bottom:10px;"></div>
     <form id="reset-mfa-form" method="POST" action=""
-          onsubmit="return false;" data-confirm="Reset MFA for this user? They will need to re-enroll on next login.">
+          onsubmit="return false;" data-confirm="Reset MFA for this user? They will need to re-enroll on next login."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">🔐 Reset MFA Enrollment</button>
     </form>
 
@@ -220,7 +220,7 @@
         <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--danger);">Danger Zone</label>
         <div style="margin-top:10px;">
             <form id="delete-form" method="POST" action=""
-                  onsubmit="return false;" data-confirm="Delete this user? This cannot be undone.">
+                  onsubmit="return false;" data-confirm="Delete this user? This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger">🗑️ Delete User</button>
             </form>
         </div>

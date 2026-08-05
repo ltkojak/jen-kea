@@ -45,7 +45,7 @@
     </a>
     <a href="/ipmap" class="btn btn-secondary">🗺️ IP Map</a>
     {% if current_user.role in ('superadmin','admin') %}
-    <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return false;" data-confirm="Delete all expired/stale leases from the database?">
+    <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return false;" data-confirm="Delete all expired/stale leases from the database?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm">🗑️ Delete Stale</button>
     </form>
     {% endif %}
@@ -77,7 +77,7 @@ function saveCurrentFilter() {
     var params = window.location.search.replace('?','');
     fetch('/saved-searches/save', {
         method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body:'name='+encodeURIComponent(name)+'&page=leases&params='+encodeURIComponent(params)
     }).then(r => r.json()).then(function(d) {
         if (d.ok) { alert('Filter saved!'); location.reload(); }

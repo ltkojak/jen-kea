@@ -21,10 +21,11 @@ from flask_login import (LoginManager, current_user, login_required,
 from jen import extensions
 from jen.config import app_config, ssl_configured
 from jen.models.user import User, audit, get_global_setting
+from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "4.3.9"
+JEN_VERSION = "4.4.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -209,6 +210,33 @@ def create_app() -> Flask:
                 code=301
             )
 
+    @app.before_request
+    def _csrf_protect():
+        """Reject state-changing requests without a valid CSRF token.
+        Exempt: safe methods, static assets, API-key-authenticated requests
+        (see jen/services/csrf.py for why), and WTF_CSRF_ENABLED=False
+        (used by the test suite, mirroring Flask-WTF's own config key)."""
+        if not app.config.get("WTF_CSRF_ENABLED", True):
+            return
+        if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+            return
+        if request.path.startswith("/static/"):
+            return
+        if csrf_svc.is_api_key_request():
+            return
+        token = csrf_svc.get_submitted_token()
+        if not csrf_svc.validate_csrf_token(app, token):
+            logger.warning(
+                f"CSRF check failed: {request.method} {request.path} "
+                f"from {request.remote_addr}"
+            )
+            from flask import render_template
+            return render_template(
+                "error.html", code=403,
+                message="Your session security token is missing or expired. "
+                        "Please refresh the page and try again."
+            ), 403
+
     # ── Context processor ─────────────────────────────────────────────────────
     @app.context_processor
     def inject_branding():
@@ -248,6 +276,7 @@ def create_app() -> Flask:
             "current_user_avatar": avatar_url,
             "jen_version":         JEN_VERSION,
             "restart_pending":     restart_pending,
+            "csrf_token":          lambda: csrf_svc.generate_csrf_token(app),
         }
 
     # ── Error handlers ────────────────────────────────────────────────────────

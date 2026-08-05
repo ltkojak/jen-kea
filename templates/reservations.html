@@ -65,13 +65,13 @@ function confirmBulk(action) {
     <a href="/reservations/export" class="btn btn-secondary">⬇ Export CSV</a>
     <label class="btn btn-secondary" style="cursor:pointer;">
         ⬆ Import CSV
-        <form id="import-form" method="POST" action="/reservations/import" enctype="multipart/form-data" style="display:none;">
+        <form id="import-form" method="POST" action="/reservations/import" enctype="multipart/form-data" style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('import-form').submit()">
         </form>
     </label>
     <label class="btn btn-secondary" style="cursor:pointer;" title="Preview what would be imported without making changes">
         🔍 Dry-run Import
-        <form id="dryrun-form" method="POST" action="/reservations/import?dry_run=1" enctype="multipart/form-data" style="display:none;">
+        <form id="dryrun-form" method="POST" action="/reservations/import?dry_run=1" enctype="multipart/form-data" style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('dryrun-form').submit()">
         </form>
     </label>
@@ -103,7 +103,7 @@ function saveCurrentFilter() {
     var params = window.location.search.replace('?','');
     fetch('/saved-searches/save', {
         method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
+        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body:'name='+encodeURIComponent(name)+'&page=reservations&params='+encodeURIComponent(params)
     }).then(r => r.json()).then(function(d) {
         if (d.ok) { alert('Filter saved!'); location.reload(); }

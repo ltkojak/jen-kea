@@ -21,7 +21,7 @@
         </div>
         <div style="flex:1;">
             <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">Upload a profile picture (JPG, PNG, GIF, WebP — max 200KB). It will appear in the nav bar.</p>
-            <form method="POST" action="/users/upload-avatar" id="avatar-form">
+            <form method="POST" action="/users/upload-avatar" id="avatar-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="avatar_data_url" id="avatar-data-input">
                 <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;" onchange="previewAvatar(this)">
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -95,7 +95,7 @@ function previewAvatar(input) {
 <!-- Change password -->
 <div class="card">
     <div class="card-header"><span class="card-title">🔑 Change Password</span></div>
-    <form method="POST" action="/users/change-password" style="max-width:400px;">
+    <form method="POST" action="/users/change-password" style="max-width:400px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Current Password</label>
             <input type="password" name="current_password" required>

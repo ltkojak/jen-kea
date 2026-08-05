@@ -20,7 +20,7 @@
     <div class="card-header">
         <span class="card-title">Create New API Key</span>
     </div>
-    <form method="POST" action="/settings/api-keys/create" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+    <form method="POST" action="/settings/api-keys/create" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group" style="margin:0;flex:1;min-width:200px;">
             <label>Key Name</label>
             <input type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
@@ -65,11 +65,11 @@
             </td>
             <td style="display:flex;gap:6px;">
                 {% if k.active %}
-                <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}">
+                <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-sm btn-secondary" onclick="jenConfirm('Revoke this key? Any integrations using it will stop working.', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">⏸ Revoke</button>
                 </form>
                 {% endif %}
-                <form method="POST" action="/settings/api-keys/delete/{{ k.id }}">
+                <form method="POST" action="/settings/api-keys/delete/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn-act btn-act-del" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">✕</button>
                 </form>
             </td>

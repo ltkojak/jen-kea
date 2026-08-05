@@ -52,7 +52,7 @@
     {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:16px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
-              onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable.">
+              onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary">🔄 Restart Kea</button>
         </form>
     </div>
@@ -115,7 +115,7 @@
     {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:12px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
-              onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}?">
+              onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">🔄 Restart</button>
         </form>
     </div>

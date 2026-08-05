@@ -183,7 +183,7 @@ function testConn() {
     var fd = new FormData();
     fd.append('host',host); fd.append('port',port); fd.append('user',user);
     fd.append('password',pw); fd.append('database',db);
-    fetch('/database/migrate/test', {method:'POST', body:fd})
+    fetch('/database/migrate/test', {method:'POST', headers: {'X-CSRFToken': '{{ csrf_token() }}'}, body:fd})
         .then(function(r){return r.json();})
         .then(function(d){
             if (d.ok) {
@@ -223,7 +223,7 @@ function runMigration() {
     }
 
     // POST to SSE endpoint using fetch + ReadableStream
-    fetch('/database/migrate/run', {method:'POST', body:fd})
+    fetch('/database/migrate/run', {method:'POST', headers: {'X-CSRFToken': '{{ csrf_token() }}'}, body:fd})
         .then(function(resp) {
             var reader = resp.body.getReader();
             var dec = new TextDecoder();

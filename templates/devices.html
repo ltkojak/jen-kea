@@ -7,7 +7,7 @@
         <p>All MAC addresses seen on your network — {{ total }} device{{ 's' if total != 1 else '' }} total</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
-        <form method="POST" action="/devices/settings" style="display:flex;align-items:center;gap:8px;">
+        <form method="POST" action="/devices/settings" style="display:flex;align-items:center;gap:8px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <span style="font-size:12px;color:var(--text-muted);">Stale after</span>
             <input type="number" name="stale_days" value="{{ stale_days }}" min="1" max="365" style="width:70px;">
             <span style="font-size:12px;color:var(--text-muted);">days</span>
@@ -276,7 +276,7 @@ function saveDevice() {
     const iconOverride = document.getElementById('editIconOverride') ? document.getElementById('editIconOverride').value : '';
     fetch(`/devices/edit/${editingId}`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body: `device_name=${encodeURIComponent(name)}&owner=${encodeURIComponent(owner)}&notes=${encodeURIComponent(notes)}&type_override=${encodeURIComponent(typeOverride)}&icon_override=${encodeURIComponent(iconOverride)}`
     })
     .then(r => r.json())

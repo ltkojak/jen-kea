@@ -63,21 +63,21 @@
             <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     {% if p.update_available %}
-                    <form method="POST" action="/settings/plugins/update/{{ p.id }}">
+                    <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary">⬆ Update</button>
                     </form>
                     {% endif %}
                     {% if p.enabled %}
-                    <form method="POST" action="/settings/plugins/disable/{{ p.id }}">
+                    <form method="POST" action="/settings/plugins/disable/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Disable</button>
                     </form>
                     {% else %}
-                    <form method="POST" action="/settings/plugins/enable/{{ p.id }}">
+                    <form method="POST" action="/settings/plugins/enable/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary">Enable</button>
                     </form>
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
-                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved.">
+                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin">✕</button>
                     </form>
                 </div>
@@ -161,11 +161,11 @@
         {% if entry.installed and not entry.update_available %}
         <span style="font-size:12px;color:var(--success);">✓ Installed &amp; up to date</span>
         {% elif entry.installed and entry.update_available %}
-        <form method="POST" action="/settings/plugins/update/{{ entry.id }}">
+        <form method="POST" action="/settings/plugins/update/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-primary">⬆ Update to v{{ entry.version }}</button>
         </form>
         {% elif entry.version_ok %}
-        <form method="POST" action="/settings/plugins/install/{{ entry.id }}">
+        <form method="POST" action="/settings/plugins/install/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-primary">⬇ Install</button>
         </form>
         {% else %}

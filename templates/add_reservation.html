@@ -5,7 +5,7 @@
     <h1>📌 Add Reservation</h1>
 </div>
 <div class="card" style="max-width:600px;">
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Subnet *</label>

@@ -20,11 +20,11 @@
         {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono" style="font-size:11px;">{{ cert_info.issuer }}</div></div>{% endif %}
         {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
     </div>
-    <form method="POST" action="/settings/remove-cert" onsubmit="return false;" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode.">
+    <form method="POST" action="/settings/remove-cert" onsubmit="return false;" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm" style="margin-bottom:16px;">🗑️ Remove Certificate</button>
     </form>
     {% endif %}
-    <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data">
+    <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">{% if ssl_configured %}Replace current certificate:{% else %}Upload certificate to enable HTTPS:{% endif %}</div>
         <div class="form-row">
             <div class="form-group"><label>Certificate *</label><input type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
@@ -41,7 +41,7 @@
         <span class="card-title">📱 Telegram Alerts</span>
         {% if telegram.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>{% else %}<span class="badge badge-dynamic">Disabled</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/save-telegram">
+    <form method="POST" action="/settings/save-telegram"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Bot Token</label>
@@ -77,7 +77,7 @@
             <button type="submit" class="btn btn-primary">Save Telegram Settings</button>
         </div>
     </form>
-    <form method="POST" action="/settings/test-telegram" style="margin-top:10px;">
+    <form method="POST" action="/settings/test-telegram" style="margin-top:10px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">📤 Send Test Message</button>
     </form>
 </div>
@@ -95,7 +95,7 @@
     </div>
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Add to: <code>~/.ssh/authorized_keys</code> on {{ kea_ssh_user }}@{{ kea_ssh_host }}</div>
     {% endif %}
-    <form method="POST" action="/settings/generate-ssh-key" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}">
+    <form method="POST" action="/settings/generate-ssh-key" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-primary">{% if ssh_configured %}🔄 Regenerate Key{% else %}🔑 Generate SSH Key{% endif %}</button>
     </form>
 </div>
@@ -107,7 +107,7 @@
         {% if session.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>
         {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/save-session">
+    <form method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Enable Session Timeout</label>
@@ -137,7 +137,7 @@
         <span class="badge badge-reserved">Enabled</span>
         {% endif %}
     </div>
-    <form method="POST" action="/settings/save-rate-limit">
+    <form method="POST" action="/settings/save-rate-limit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Max Failed Attempts</label>
@@ -165,7 +165,7 @@
         </div>
         <div style="display:flex;gap:8px;">
             <button type="submit" class="btn btn-primary">Save</button>
-            <form method="POST" action="/settings/clear-lockouts" style="display:inline;" onsubmit="return false;" data-confirm="Clear all login attempt records? This will unlock all locked accounts.">
+            <form method="POST" action="/settings/clear-lockouts" style="display:inline;" onsubmit="return false;" data-confirm="Clear all login attempt records? This will unlock all locked accounts."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-secondary">🔓 Clear All Lockouts</button>
             </form>
         </div>
@@ -181,12 +181,12 @@
     {% if has_favicon %}
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
         <img src="/favicon.ico" style="width:32px;height:32px;border-radius:4px;background:var(--surface2);padding:2px;">
-        <form method="POST" action="/settings/remove-favicon" style="display:inline;">
+        <form method="POST" action="/settings/remove-favicon" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-danger btn-sm">Remove</button>
         </form>
     </div>
     {% endif %}
-    <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data">
+    <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Upload Favicon</label>
             <input type="file" name="favicon" accept=".ico,.png">

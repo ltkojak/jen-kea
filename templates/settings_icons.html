@@ -17,7 +17,7 @@
         Custom icons take priority over bundled ones. SVG only, max 100KB.
     </p>
     <form method="POST" action="/settings/icons/upload" enctype="multipart/form-data"
-          style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group" style="margin:0;min-width:180px;">
             <label>Icon Name</label>
             <input type="text" name="icon_name" placeholder="e.g. amazon, mydevice" maxlength="50" required>
@@ -42,7 +42,7 @@
             <img src="/static/icons/custom/{{ icon.file }}" alt="{{ icon.name }}"
                  style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
             <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
-            <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;">
+            <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del"
                         onclick="jenConfirm('Delete custom icon {{ icon.name }}?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">✕ Remove</button>
             </form>

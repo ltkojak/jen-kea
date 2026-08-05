@@ -14,7 +14,7 @@ function saveNote(id) {
     const notes = document.getElementById('note-text-' + id).value.trim();
     fetch('/subnets/save-note', {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body: 'subnet_id=' + id + '&notes=' + encodeURIComponent(notes)
     })
     .then(r => r.json())
@@ -58,7 +58,7 @@ function saveNote(id) {
             <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
             <form method="POST" action="/subnets/delete/{{ s.id }}" style="display:inline;"
                   onsubmit="return false;"
-                  data-confirm="Delete subnet '{{ s.name }}' ({{ s.cidr }})? This removes it from Kea's config and restarts Kea. This cannot be undone.">
+                  data-confirm="Delete subnet '{{ s.name }}' ({{ s.cidr }})? This removes it from Kea's config and restarts Kea. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️ Delete</button>
             </form>
         </div>

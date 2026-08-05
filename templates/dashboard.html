@@ -685,7 +685,7 @@ function saveDashPrefs() {
     });
     fetch('/api/dashboard/save-prefs', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}'},
         body: JSON.stringify({widgets: widgets})
     }).then(function(r) { return r.json(); })
       .then(function(d) {

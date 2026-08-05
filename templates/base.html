@@ -311,7 +311,7 @@
         }
     </style>
 </head>
-<body>
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
         {% if branding_nav_logo %}
@@ -468,6 +468,7 @@
             ⚠️ <strong>Jen restart required</strong> — changes will not take effect until Jen is restarted.
         </span>
         <form method="POST" action="/settings/infrastructure/restart" style="margin:0;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-warning">🔄 Restart Jen Now</button>
         </form>
     </div>

@@ -54,7 +54,7 @@
     </table>
 </div>
 
-<form method="POST" action="/database/import/confirm">
+<form method="POST" action="/database/import/confirm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="tmp_path" value="{{ tmp_path }}">
 
     {% if meta.database == 'jen' %}

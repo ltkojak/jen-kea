@@ -49,7 +49,7 @@
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
             Exports data from <strong>{{ jen_db_host }} / {{ jen_db_name }}</strong> to a compressed JSON file you can download, restore, or archive.
         </p>
-        <form method="POST" action="/database/export/jen">
+        <form method="POST" action="/database/export/jen"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div style="margin-bottom:12px;">
                 <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Select Tables</label>
                 <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -76,7 +76,7 @@
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
             Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong>. Choose what to export — reservations and leases are different things.
         </p>
-        <form method="POST" action="/database/export/kea">
+        <form method="POST" action="/database/export/kea"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             {% for grp_id, grp in kea_groups.items() %}
             <div class="card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" onclick="document.getElementById('kea-grp-{{ grp_id }}').checked=true;highlightKea('{{ grp_id }}');" id="kea-card-{{ grp_id }}">
                 <label style="cursor:pointer;display:flex;align-items:flex-start;gap:10px;">
@@ -116,7 +116,7 @@
         Upload a Jen export file (<code>.json.gz</code>). Jen will read the file, show you exactly what's in it, and ask you to confirm before touching any data.
         The file header identifies whether it's a <strong style="color:var(--primary);">Jen</strong> or <strong style="color:var(--warning);">Kea</strong> export — you cannot accidentally import the wrong one.
     </p>
-    <form method="POST" action="/database/import/inspect" enctype="multipart/form-data">
+    <form method="POST" action="/database/import/inspect" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Export File</label>
             <input type="file" name="file" accept=".json,.json.gz,.gz" required style="width:100%;">
@@ -135,7 +135,7 @@
 <div class="card" style="margin-bottom:20px;">
     <div class="card-header"><h3>💾 Run Backup Now</h3></div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Saves a backup to <code>/opt/jen/backups/</code> immediately. Files are compressed and readable only by the jen service user.</p>
-    <form method="POST" action="/database/backup/now" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">
+    <form method="POST" action="/database/backup/now" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="jen" checked> <span style="color:var(--primary);font-weight:600;">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
         <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="kea" checked> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
         <button type="submit" class="btn btn-primary">💾 Back Up Now</button>
@@ -173,7 +173,7 @@
             <td style="font-size:11px;color:var(--text-muted);">{{ b.tables | join(', ') if b.tables else '—' }}</td>
             <td style="white-space:nowrap;">
                 <a href="/database/backup/download/{{ b.filename }}" class="btn-act btn-act-edit" title="Download">⬇️</a>
-                <form method="POST" action="/database/backup/delete/{{ b.filename }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete backup {{ b.filename }}?">
+                <form method="POST" action="/database/backup/delete/{{ b.filename }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete backup {{ b.filename }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="btn-act btn-act-del" title="Delete backup">✕</button>
                 </form>
             </td>
@@ -199,7 +199,7 @@
         <br>Last run: <strong>{{ schedule.last_run }}</strong> — {{ schedule.last_status or 'no status' }}
         {% endif %}
     </p>
-    <form method="POST" action="/database/schedule">
+    <form method="POST" action="/database/schedule"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:14px;">
                 <input type="checkbox" name="enabled" {% if schedule and schedule.enabled %}checked{% endif %}>

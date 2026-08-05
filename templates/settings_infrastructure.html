@@ -7,7 +7,7 @@
 </div>
 
 {% if restart_pending %}
-<div class="alert alert-warning">⚠️ Infrastructure changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
+<div class="alert alert-warning">⚠️ Infrastructure changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
 {% endif %}
 
 <!-- Jen Update -->
@@ -24,7 +24,7 @@
             🔍 Check for Updates
         </button>
         <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
-              style="display:none;" onsubmit="return startUpdate(event)">
+              style="display:none;" onsubmit="return startUpdate(event)"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="asset_url" id="update-asset-url">
             <input type="hidden" name="version" id="update-version">
             <div style="margin-bottom:10px;">
@@ -192,7 +192,7 @@ function startUpdate(evt) {
         {% if kea_up %}<span style="color:var(--success);font-size:12px;">● Connected</span>
         {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/infrastructure/save-kea">
+    <form method="POST" action="/settings/infrastructure/save-kea"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>API URL</label>
@@ -215,7 +215,7 @@ function startUpdate(evt) {
 <!-- Kea Database -->
 <div class="card">
     <div class="card-header"><span class="card-title">🗄️ Kea MySQL Database</span></div>
-    <form method="POST" action="/settings/infrastructure/save-kea-db">
+    <form method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Host</label>
@@ -242,7 +242,7 @@ function startUpdate(evt) {
 <!-- Jen Database -->
 <div class="card">
     <div class="card-header"><span class="card-title">🗄️ Jen MySQL Database</span></div>
-    <form method="POST" action="/settings/infrastructure/save-jen-db">
+    <form method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Host</label>
@@ -273,7 +273,7 @@ function startUpdate(evt) {
         {% if ssh_configured %}<span style="color:var(--success);font-size:12px;">● Key present</span>
         {% else %}<span style="color:var(--warning);font-size:12px;">● No key generated</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/infrastructure/save-ssh">
+    <form method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Kea Server Host</label>
@@ -296,7 +296,7 @@ function startUpdate(evt) {
         <div class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;word-break:break-all;border:1px solid var(--border);">{{ ssh_pub_key }}</div>
     </div>
     {% endif %}
-    <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}">
+    <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">{% if ssh_configured %}🔄 Regenerate SSH Key{% else %}🔑 Generate SSH Key{% endif %}</button>
     </form>
 </div>
@@ -389,7 +389,7 @@ function startUpdate(evt) {
     </div>
     <button type="button" class="btn btn-sm btn-secondary" onclick="addServerRow()" style="margin-bottom:12px;">+ Add Server</button>
     <br>
-    <form method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm">
+    <form method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div id="extra-servers-hidden"></div>
         <button type="submit" class="btn btn-primary" onclick="serializeServers()">Save Additional Servers</button>
     </form>
@@ -402,7 +402,7 @@ function startUpdate(evt) {
         Configure Kea HA mode. When configured, Jen automatically targets the active/primary node for config-get and subnet editing operations.
         Additional HA peer servers are configured in the Additional Servers section below.
     </p>
-    <form method="POST" action="/settings/infrastructure/save-ha">
+    <form method="POST" action="/settings/infrastructure/save-ha"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Primary Server Name</label>
@@ -427,7 +427,7 @@ function startUpdate(evt) {
 <!-- DDNS -->
 <div class="card">
     <div class="card-header"><span class="card-title">🔗 DDNS Configuration</span></div>
-    <form method="POST" action="/settings/infrastructure/save-ddns">
+    <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>Log File Path</label>
@@ -525,7 +525,7 @@ function startUpdate(evt) {
         HTTPS is not configured. SSL certificates can be uploaded in <a href="{{ url_for('settings.settings_system') }}">System Settings</a>.
         {% endif %}
     </p>
-    <form method="POST" action="{{ url_for('settings.save_ports') }}">
+    <form method="POST" action="{{ url_for('settings.save_ports') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             {% if not ssl_configured %}
             <div class="form-group">
