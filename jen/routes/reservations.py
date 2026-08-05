@@ -270,10 +270,27 @@ def edit_reservation_post(host_id):
                 if result.get("result") != 0:
                     flash(f"Kea error: {result.get('text')}", "error")
                     return redirect(url_for('reservations.edit_reservation', host_id=host_id))
+        # Kea's reservation-del + reservation-add churns hosts.host_id — it's an
+        # AUTO_INCREMENT primary key, so the recreated row gets a brand new id
+        # even though ip/mac/subnet are unchanged. Kea does that write over its
+        # own connection (its API, not this process's), so re-querying it needs
+        # a FRESH connection/transaction here too — reusing the one above would
+        # still see the pre-Kea-write snapshot under REPEATABLE READ and could
+        # report the stale host_id even though Kea already committed the new row.
+        with __db.kea_db() as db2:
+            with db2.cursor() as cur2:
+                cur2.execute(
+                    "SELECT host_id FROM hosts WHERE dhcp4_subnet_id=%s AND inet_ntoa(ipv4_address)=%s",
+                    (host["subnet_id"], host["ip"])
+                )
+                new_host_row = cur2.fetchone()
+                new_host_id = new_host_row["host_id"] if new_host_row else host_id
         with __db.jen_db() as jdb:
             with jdb.cursor() as jcur:
+                if new_host_id != host_id:
+                    jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
                 jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
-                             (host_id, notes, notes))
+                             (new_host_id, notes, notes))
             jdb.commit()
         flash("Reservation updated.", "success")
         __user.audit("EDIT_RESERVATION", host["ip"], f"hostname={hostname}")

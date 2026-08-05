@@ -2,6 +2,46 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.1] - 2026-08-05
+
+### Bug Fix: Reservation edits silently orphaned notes + two more hover underlines
+
+Found during live testing of 4.4.0's CSRF rollout. CSRF itself checked out
+clean — login, a plain form POST, and the HTMX delete all worked with no
+false 403s. This is unrelated to CSRF; it's a pre-existing bug this testing
+pass happened to surface.
+
+### Fixed
+- **🔴 Editing a reservation silently orphaned its notes.** `edit_reservation_post()`
+  implements "edit" as Kea `reservation-del` + `reservation-add`. Since
+  `hosts.host_id` is an `AUTO_INCREMENT` primary key, the recreated row gets
+  a brand new id even when ip/mac/subnet are unchanged — but the route was
+  still writing `reservation_notes` against the *old* host_id from the URL.
+  The reservation list always looks notes up by the *current* host_id, so
+  the note became invisible despite a "Reservation updated" success
+  message. (The CSV-import code path in this same file already re-queried
+  the host_id after a Kea write — this one spot just didn't follow that
+  pattern.) Fixed by re-querying the post-edit host_id and writing notes
+  there, cleaning up the orphaned row under the old id.
+  A second, subtler bug turned up while fixing this: the first fix attempt
+  re-queried the new host_id on the *same* already-open database
+  transaction used for the initial lookup — under REPEATABLE READ, that
+  transaction's snapshot predates Kea's own write (Kea updates the table
+  over its own connection, not this process's), so it could still report
+  the stale host_id even after Kea had already committed the new row. Fixed
+  by opening a fresh connection/transaction for the re-query. Added
+  `TestEditReservation::test_notes_survive_host_id_reassignment`, which
+  simulates the real delete-then-reinsert churn (not just a happy-path
+  mock) — it caught the transaction-scoping bug directly before this ever
+  reached a real deployment.
+- **Two more hover-underline gaps**, same root cause as the v4.4.0 logo fix
+  (a global `a:hover { text-decoration: underline; }` out-specifying a
+  class's base `text-decoration: none;` with no explicit `:hover`
+  override): the row action icons (`.btn-act` — edit/pin/delete pencil
+  buttons) and the mobile nav drawer links (`.nav-mobile-drawer a`). Fixed
+  both the same way — an explicit `:hover { text-decoration: none; }`.
+  Audited the rest of the CSS for this exact pattern; nothing else matched.
+
 ## [4.4.0] - 2026-08-05
 
 ### Feature: CSRF Protection

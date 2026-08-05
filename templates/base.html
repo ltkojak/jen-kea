@@ -57,6 +57,7 @@
         .nav-mobile-drawer { display: none; position: fixed; top: calc(56px + env(safe-area-inset-top)); left: 0; right: 0; background: var(--surface); border-bottom: 2px solid var(--border); z-index: 101; padding: 6px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.5); max-height: calc(100vh - 120px); overflow-y: auto; }
         .nav-mobile-drawer.open { display: block; }
         .nav-mobile-drawer a { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: var(--text); font-size: 15px; border-bottom: 1px solid var(--border); text-decoration: none; min-height: 52px; touch-action: manipulation; }
+        .nav-mobile-drawer a:hover { text-decoration: none; }
         .nav-mobile-drawer a:last-child { border-bottom: none; }
         .nav-mobile-drawer a.active { color: var(--primary); background: var(--surface2); }
         .nav-mobile-drawer a:active { background: var(--surface2); }
@@ -98,6 +99,7 @@
         .btn-warning { background: var(--warning); color: #1a1a1a; }
         /* ── Unified row action buttons ── */
         .btn-act { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:5px; cursor:pointer; font-size:13px; transition:background .12s, border-color .12s, color .12s; text-decoration:none; }
+        .btn-act:hover { text-decoration: none; }
         .btn-act-edit  { background:transparent; border:1px solid var(--border); color:var(--text-muted); }
         .btn-act-edit:hover  { background:var(--surface2); border-color:var(--text-muted); color:var(--text); }
         .btn-act-pin   { background:transparent; border:1px solid var(--border); color:var(--text-muted); }

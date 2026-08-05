@@ -105,6 +105,75 @@ class TestAddReservation:
         assert r.status_code == 200
 
 
+class TestEditReservation:
+    """Regression coverage for the v4.4.0 bug where reservation notes got
+    silently orphaned. Kea's reservation-del + reservation-add (how Jen
+    implements "edit") churns hosts.host_id — an AUTO_INCREMENT primary
+    key — even though ip/mac/subnet don't change. The route must write
+    reservation_notes against the new host_id, not the stale one from the
+    URL, or the note becomes invisible on the list page despite a
+    "Reservation updated" success message."""
+
+    def test_notes_survive_host_id_reassignment(self, logged_in_client, db, monkeypatch):
+        from jen.services import kea as kea_svc
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
+                "dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('aabbccddee99'), 0, 1, INET_ATON('10.99.0.50'), 'churn-test')"
+            )
+            old_host_id = cur.lastrowid
+        db.commit()
+
+        def _kea_mock(cmd, *a, **kw):
+            # Simulate what a real Kea server does to the hosts table on
+            # reservation-del/reservation-add: delete-then-reinsert, which
+            # assigns a brand new AUTO_INCREMENT host_id.
+            if "reservation-del" in cmd:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM hosts WHERE host_id=%s", (old_host_id,))
+                db.commit()
+                return {"result": 0, "text": "deleted", "arguments": {}}
+            if "reservation-add" in cmd:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
+                        "dhcp4_subnet_id, ipv4_address, hostname) "
+                        "VALUES (UNHEX('aabbccddee99'), 0, 1, INET_ATON('10.99.0.50'), 'churn-test-renamed')"
+                    )
+                db.commit()
+                return {"result": 0, "text": "added", "arguments": {}}
+            return {"result": 0, "arguments": {}}
+
+        monkeypatch.setattr(kea_svc, "kea_command", _kea_mock)
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: {"id": 1})
+
+        r = logged_in_client.post(
+            f"/reservations/edit/{old_host_id}",
+            data={"hostname": "churn-test-renamed", "notes": "should survive"},
+        )
+        assert r.status_code in (200, 302)
+
+        with db.cursor() as cur:
+            cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", ("10.99.0.50",))
+            row = cur.fetchone()
+        assert row is not None
+        current_host_id = row["host_id"]
+        assert current_host_id != old_host_id, "test setup didn't actually churn the id — mock is wrong"
+
+        with db.cursor() as cur:
+            cur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (current_host_id,))
+            note_row = cur.fetchone()
+        assert note_row is not None, "note was not written under the new host_id — it got orphaned"
+        assert note_row["notes"] == "should survive"
+
+        with db.cursor() as cur:
+            cur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (old_host_id,))
+            stale_row = cur.fetchone()
+        assert stale_row is None, "orphaned note under the old host_id was not cleaned up"
+
+
 class TestDeleteReservation:
     """Delete reservation."""
 
