@@ -2,6 +2,78 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.2] - 2026-08-05
+
+### Security: full audit fixes — subnet authorization, MFA brute force, SSH command injection
+
+A comprehensive security audit turned up several real gaps, ranging from a
+critical command-injection bug reachable by any logged-in user to a
+systemic authorization gap in the subnet-restricted-admin feature. All are
+fixed in this release; nothing here is theoretical.
+
+### Fixed
+- **🔴 Critical: `/ddns?host=` command injection, reachable by any logged-in
+  user.** The DNS lookup box on the DDNS page interpolated its `host`
+  query parameter directly into a command string executed on the remote
+  Kea server over SSH (`dig +short {host} || host {host}`), with zero
+  validation and no admin gate on the route. Any authenticated user —
+  down to the lowest-privilege role — could run arbitrary commands on the
+  Kea server. Fixed by validating the lookup value as a hostname or IP
+  before it's used, and by wrapping it in `shlex.quote()` as defense in
+  depth. New validators: `valid_dns_lookup_host`, `valid_ssh_target`,
+  `valid_unix_username`, `valid_remote_path` (`jen/services/auth.py`).
+- **🔴 Subnet-restricted admins could bypass their subnet restrictions on
+  every mutating reservation/subnet route.** `current_user.can_access_subnet()`
+  was correctly enforced on list/view routes but missing on the routes
+  that actually make changes: `reservations.add_reservation_post`,
+  `edit_reservation`/`edit_reservation_post`, `delete_reservation`,
+  `bulk_delete_reservations`, `import_reservations`, and
+  `subnets.edit_subnet_post`/`delete_subnet` all now check access before
+  acting. `reservations.export_reservations` and `bulk_export_reservations`
+  (reachable by any logged-in user, not just admins) now filter results to
+  the caller's accessible subnets instead of dumping everything.
+  `devices.edit_device`/`delete_device` got the same check against a
+  device's `last_subnet_id`.
+- **No rate limiting on `/mfa/verify`.** Password login has had IP/username
+  rate limiting for a while; the post-password TOTP/backup-code step had
+  none, so a 6-digit TOTP code could be brute-forced with unlimited
+  attempts. Added a dedicated, fixed 10-attempt / 15-minute lockout
+  (new `mfa_attempts` table, migration 9) — deliberately separate from the
+  configurable password rate-limit settings so it can't be disabled or
+  made permanent by a config change, and deliberately never permanent
+  itself, since a lockout that never expires would let an attacker lock a
+  legitimate user out indefinitely just by submitting bad codes.
+- **Admin-configured SSH host/user and DDNS log path were not validated**
+  before being interpolated into remote shell commands. An admin (or a
+  CSRF/phished admin session) could turn "view a log file" into arbitrary
+  command execution on the Kea server. Now validated with the same
+  `valid_ssh_target`/`valid_unix_username`/`valid_remote_path` checks at
+  every save point (`save_infra_ssh`, `save_infra_ddns`, `save_extra_servers`).
+- **Self-update trusted a client-submitted `asset_url`,** checking only
+  that it started with `https://github.com/` — that would accept a release
+  asset from *any* GitHub repo, not just this one. `self_update()` now
+  re-derives the release info itself from the GitHub API, pinned to
+  `ltkojak/jen-kea`, and verifies the submitted version still matches
+  before proceeding. Also added optional SHA256 checksum verification
+  against a `SHA256SUMS` file, which `release.yml` now publishes alongside
+  every tarball.
+- **Session cookie had no `Secure`/`HttpOnly`/`SameSite` flags set.** Added
+  `SESSION_COOKIE_HTTPONLY=True` and `SESSION_COOKIE_SAMESITE="Lax"`
+  unconditionally, and `SESSION_COOKIE_SECURE` tied to whether SSL is
+  actually configured (an unconditional `Secure` flag would silently break
+  login for Jen's plain-HTTP-only deployment mode).
+- **Secret key silently regenerated on every restart if `/etc/jen/secret_key`
+  couldn't be written,** invalidating every session each time with only a
+  quiet log line. Now tries a fallback location under `/opt/jen` before
+  giving up, and logs a loud, explicit `critical` message (not a `warning`)
+  if it ever has to fall back to an ephemeral key.
+
+### Added
+- `tests/test_security_fixes.py` — 20 new tests covering the subnet
+  authorization checks, the MFA lockout (including that it's never
+  permanent), and every new validator.
+- `mfa_attempts` table (migration 9).
+
 ## [4.4.1] - 2026-08-05
 
 ### Bug Fix: Reservation edits silently orphaned notes + two more hover underlines

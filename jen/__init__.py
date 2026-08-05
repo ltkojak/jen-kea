@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "4.4.1"
+JEN_VERSION = "4.4.2"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -53,6 +53,16 @@ def create_app() -> Flask:
                 static_folder="/opt/jen/static",
                 template_folder="/opt/jen/templates")
     app.secret_key = _load_secret_key()
+
+    # ── Session cookie hardening (v4.4.2) ─────────────────────────────────────
+    # SECURE is conditional on SSL actually being configured — Jen supports a
+    # plain-HTTP-only deployment mode, and an unconditional Secure flag would
+    # silently stop the browser from ever sending the cookie back in that mode.
+    # HTTPONLY and SAMESITE are unconditional; there's no legitimate reason for
+    # JS to read this cookie, and Lax still allows normal top-level navigation.
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = _ssl_configured_cached()
 
     # ── Jinja filters ─────────────────────────────────────────────────────────
     @app.template_filter('utcfmt')
@@ -360,19 +370,38 @@ def _register_blueprints(app: Flask) -> None:
 
 
 def _load_secret_key() -> str:
-    key_file = "/etc/jen/secret_key"
-    try:
-        if os.path.exists(key_file):
-            with open(key_file) as f:
-                key = f.read().strip()
-            if len(key) >= 32:
-                return key
-        key = os.urandom(32).hex()
-        os.makedirs("/etc/jen", exist_ok=True)
-        with open(key_file, "w") as f:
-            f.write(key)
-        os.chmod(key_file, 0o640)
-        return key
-    except Exception as e:
-        logger.warning(f"Could not persist secret key: {e}")
-        return os.urandom(32).hex()
+    """Load (or create) the persistent Flask session secret key.
+
+    Tries /etc/jen/secret_key first, then falls back to a location under
+    the app's own install dir if /etc/jen isn't writable (e.g. permissions
+    drift). Only if BOTH fail do we fall back to a purely in-memory random
+    key — and that path logs loudly, because it silently invalidates every
+    session on every single restart, which is a confusing "why do I keep
+    getting logged out" bug for the person running this (v4.4.2).
+    """
+    candidates = ["/etc/jen/secret_key", "/opt/jen/.secret_key"]
+    for key_file in candidates:
+        try:
+            if os.path.exists(key_file):
+                with open(key_file) as f:
+                    key = f.read().strip()
+                if len(key) >= 32:
+                    return key
+            key = os.urandom(32).hex()
+            os.makedirs(os.path.dirname(key_file), exist_ok=True)
+            with open(key_file, "w") as f:
+                f.write(key)
+            os.chmod(key_file, 0o640)
+            return key
+        except Exception as e:
+            logger.warning(f"Could not read/persist secret key at {key_file}: {e}")
+            continue
+
+    logger.critical(
+        "SECRET KEY COULD NOT BE PERSISTED anywhere (%s). Falling back to an "
+        "ephemeral in-memory key — EVERY user will be logged out on the next "
+        "restart of this process, and this will repeat every restart until "
+        "the permissions issue is fixed. Check that www-data can write to "
+        "/etc/jen or /opt/jen.", " or ".join(candidates)
+    )
+    return os.urandom(32).hex()

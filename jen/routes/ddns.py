@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import shlex
 import subprocess
 import threading
 from datetime import datetime, timezone
@@ -65,7 +66,7 @@ def ddns():
                  "-o", "StrictHostKeyChecking=no",
                  "-o", "ConnectTimeout=10",
                  f"{extensions.KEA_SSH_USER}@{extensions.KEA_SSH_HOST}",
-                 f"sudo tail -200 {extensions.DDNS_LOG}"],
+                 f"sudo tail -200 {shlex.quote(extensions.DDNS_LOG)}"],
                 capture_output=True, text=True, timeout=15
             )
             if result.returncode != 0:
@@ -91,9 +92,11 @@ def ddns():
             log_status = "error"
             log_message = f"Could not read DDNS log: {str(e)}"
             logger.error(f"DDNS error: {e}")
-    lookup_host = request.args.get("host", "")
+    lookup_host = request.args.get("host", "").strip()
     lookup_result = ""
-    if lookup_host:
+    if lookup_host and not __auth.valid_dns_lookup_host(lookup_host):
+        lookup_result = "Invalid hostname or IP address."
+    elif lookup_host:
         try:
             dns_provider = extensions.cfg.get("ddns", "dns_provider", fallback="technitium")
             if dns_provider == "technitium":
@@ -164,11 +167,12 @@ def ddns():
                 ssh_host = active.get("ssh_host") or extensions.KEA_SSH_HOST
                 ssh_user = active.get("ssh_user") or extensions.KEA_SSH_USER
                 if ssh_host:
+                    quoted_host = shlex.quote(lookup_host)
                     result = subprocess.run(
                         ["ssh", "-i", extensions.SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
                          "-o", "ConnectTimeout=10",
                          f"{ssh_user}@{ssh_host}",
-                         f"dig +short {lookup_host} 2>/dev/null || host {lookup_host} 2>/dev/null"],
+                         f"dig +short {quoted_host} 2>/dev/null || host {quoted_host} 2>/dev/null"],
                         capture_output=True, text=True, timeout=10
                     )
                     lookup_result = result.stdout.strip() or f"No DNS result for {lookup_host}"

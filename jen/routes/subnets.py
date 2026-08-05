@@ -390,6 +390,9 @@ def delete_subnet(subnet_id):
     if subnet_id not in extensions.SUBNET_MAP:
         flash("Subnet not found.", "error")
         return redirect(url_for('subnets.subnets'))
+    if not current_user.can_access_subnet(subnet_id):
+        flash("You do not have access to that subnet.", "error")
+        return redirect(url_for('subnets.subnets'))
 
     subnet_name = extensions.SUBNET_MAP[subnet_id]["name"]
 
@@ -529,6 +532,9 @@ def edit_subnet(subnet_id):
 def edit_subnet_post(subnet_id):
     if subnet_id not in extensions.SUBNET_MAP:
         flash("Subnet not found.", "error")
+        return redirect(url_for('subnets.subnets'))
+    if not current_user.can_access_subnet(subnet_id):
+        flash("You do not have access to that subnet.", "error")
         return redirect(url_for('subnets.subnets'))
 
     # Read form fields — empty string means "don't change this field"

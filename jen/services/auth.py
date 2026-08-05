@@ -76,6 +76,42 @@ def sanitize_search(search):
     return re.sub(r'[^\w\s\.\:\-]', '', search)[:100]
 
 
+# ── SSH / remote-command target validation (v4.4.2) ───────────────────────────
+# These guard every value that ends up interpolated into a command string
+# executed on a *remote* shell over `ssh user@host "command"` — the local
+# subprocess.run() call itself is always list-args (safe), but the remote
+# side re-parses that command string through its own shell, so anything
+# placed there needs to be validated first. Used for: the DDNS log path,
+# the free-text DNS lookup host a user can submit, and the configured SSH
+# host/user themselves (also guards against a host value like "-oProxyCommand=..."
+# being read as an ssh flag rather than a target).
+UNIX_USERNAME_RE = re.compile(r'^[a-z_][a-z0-9_-]{0,31}$')
+SAFE_REMOTE_PATH_RE = re.compile(r'^/[A-Za-z0-9_./-]+$')
+
+def valid_ssh_target(value):
+    """A hostname or IP, and not something that could be parsed as an ssh flag."""
+    value = (value or "").strip()
+    if not value or value.startswith("-"):
+        return False
+    return valid_hostname(value) or valid_ip(value)
+
+def valid_unix_username(value):
+    value = (value or "").strip()
+    return bool(UNIX_USERNAME_RE.match(value))
+
+def valid_remote_path(value):
+    """Absolute path, no shell metacharacters, whitespace, or quotes."""
+    value = (value or "").strip()
+    return bool(SAFE_REMOTE_PATH_RE.match(value))
+
+def valid_dns_lookup_host(value):
+    """What a user is allowed to type into the DDNS 'look up this host' box."""
+    value = (value or "").strip()
+    if not value or len(value) > 253:
+        return False
+    return valid_hostname(value) or valid_ip(value)
+
+
 # ─────────────────────────────────────────
 # Rate limiting
 # ─────────────────────────────────────────
@@ -172,6 +208,72 @@ def is_locked_out(ip, username):
     except Exception as e:
         logger.error(f"Rate limit check error: {e}")
         return False, 0
+
+# ─────────────────────────────────────────
+# MFA rate limiting
+# ─────────────────────────────────────────
+# Fixed (not admin-configurable) — the post-password TOTP/backup-code step
+# had no throttling at all before v4.4.2. Deliberately separate from the
+# rl_* password-login settings above: an admin turning password rate
+# limiting off (or making it permanent) must not affect this, and this
+# must never be a permanent lockout since it would let an attacker lock
+# a legitimate user out indefinitely just by submitting bad codes.
+MFA_MAX_ATTEMPTS = 10
+MFA_LOCKOUT_MINUTES = 15
+
+def record_mfa_attempt(user_id):
+    """Fire-and-forget — don't block the response."""
+    import threading
+    def _record():
+        try:
+            with __jen_db_ctx() as db:
+                with db.cursor() as cur:
+                    cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (%s)", (user_id,))
+                    cur.execute("DELETE FROM mfa_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+                db.commit()
+        except Exception as e:
+            logger.error(f"MFA rate limit record error: {e}")
+    threading.Thread(target=_record, daemon=True).start()
+
+def clear_mfa_attempts(user_id):
+    """Fire-and-forget — don't block the response."""
+    import threading
+    def _clear():
+        try:
+            with __jen_db_ctx() as db:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM mfa_attempts WHERE user_id=%s", (user_id,))
+                db.commit()
+        except Exception as e:
+            logger.error(f"MFA rate limit clear error: {e}")
+    threading.Thread(target=_clear, daemon=True).start()
+
+def is_mfa_locked_out(user_id):
+    """Returns (locked: bool, remaining_minutes: int). Always a timed
+    lockout — never permanent (see MFA_LOCKOUT_MINUTES note above)."""
+    try:
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM mfa_attempts "
+                    "WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
+                    (user_id, MFA_LOCKOUT_MINUTES)
+                )
+                count = cur.fetchone()["cnt"]
+                if count >= MFA_MAX_ATTEMPTS:
+                    cur.execute(
+                        "SELECT CEIL(%s - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) / 60) as remaining "
+                        "FROM mfa_attempts WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
+                        (MFA_LOCKOUT_MINUTES * 60, user_id, MFA_LOCKOUT_MINUTES)
+                    )
+                    row = cur.fetchone()
+                    remaining = max(1, int(row["remaining"] or 1)) if row else MFA_LOCKOUT_MINUTES
+                    return True, remaining
+        return False, 0
+    except Exception as e:
+        logger.error(f"MFA rate limit check error: {e}")
+        return False, 0
+
 
 # ─────────────────────────────────────────
 # MFA Engine

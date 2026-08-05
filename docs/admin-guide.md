@@ -23,7 +23,7 @@ Before starting Jen for the first time, work through this checklist:
 
 **Run the installer:**
 ```bash
-tar xzf jen-v4.4.1.tar.gz
+tar xzf jen-v4.4.2.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -203,6 +203,10 @@ Go to **Profile → Security → Enable MFA**. Scan the QR code with your authen
 ### Trusted Devices
 
 After successful MFA login, you can choose to trust the device for 30 days. Trusted devices skip MFA on subsequent logins. Manage trusted devices under **Profile → Security → Trusted Devices**.
+
+### MFA Lockout
+
+To prevent brute-forcing a TOTP code or backup code, the MFA verification step locks out after 10 failed attempts for 15 minutes. This is fixed and separate from the login rate limiting below — it isn't affected by that setting and is never permanent, so a locked-out user just needs to wait 15 minutes rather than contact an admin.
 
 ---
 

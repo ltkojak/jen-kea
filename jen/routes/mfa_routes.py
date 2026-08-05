@@ -79,6 +79,11 @@ def mfa_verify():
         if current_user.is_authenticated:
             return redirect(url_for('dashboard.dashboard'))
         return redirect(url_for('auth.login'))
+    locked, remaining = __auth.is_mfa_locked_out(pending_id)
+    if locked:
+        flash(f"Too many failed codes. Try again in {remaining} minute(s).", "error")
+        has_totp = __mfa.user_has_mfa(pending_id) if pending_id else False
+        return render_template("mfa_challenge.html", username=pending_username, has_totp=has_totp)
     if request.method == "POST":
         code = request.form.get("code", "").strip().replace(" ", "")
         # Try backup code first (8 hex chars without dash, or with dash stripped)
@@ -86,6 +91,7 @@ def mfa_verify():
         if __mfa.verify_backup_code(pending_id, clean_code):
             user = _load_user(pending_id)
             if user:
+                __auth.clear_mfa_attempts(pending_id)
                 login_user(user)
                 session["last_active"] = datetime.now(timezone.utc).isoformat()
                 session.pop("mfa_pending_user_id", None)
@@ -120,6 +126,7 @@ def mfa_verify():
         if __mfa.verify_totp(pending_id, code):
             user = _load_user(pending_id)
             if user:
+                __auth.clear_mfa_attempts(pending_id)
                 login_user(user)
                 session["last_active"] = datetime.now(timezone.utc).isoformat()
                 session.pop("mfa_pending_user_id", None)
@@ -151,6 +158,7 @@ def mfa_verify():
                     return resp
                 __user.audit("MFA_VERIFY", "auth", pending_username)
                 return redirect(next_url)
+        __auth.record_mfa_attempt(pending_id)
         flash("Invalid code. Please try again.", "error")
         __user.audit("MFA_FAILED", "auth", pending_username)
     has_totp = __mfa.user_has_mfa(pending_id) if pending_id else False

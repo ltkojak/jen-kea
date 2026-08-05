@@ -185,6 +185,9 @@ def add_reservation_post():
     except ValueError:
         flash("Invalid subnet.", "error")
         return redirect(url_for('reservations.add_reservation'))
+    if not current_user.can_access_subnet(subnet_id):
+        flash("You do not have access to that subnet.", "error")
+        return redirect(url_for('reservations.add_reservation'))
     errors = []
     if not __auth.valid_ip(ip): errors.append(f"Invalid IP: {ip}")
     if not __auth.valid_mac(mac): errors.append(f"Invalid MAC: {mac}")
@@ -232,6 +235,9 @@ def edit_reservation(host_id):
                     if not host:
                         flash("Reservation not found.", "error")
                         return redirect(url_for('reservations.reservations'))
+                    if not current_user.can_access_subnet(host["subnet_id"]):
+                        flash("You do not have access to that subnet.", "error")
+                        return redirect(url_for('reservations.reservations'))
                     mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
                     cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
                     dns_row = cur.fetchone()
@@ -260,6 +266,9 @@ def edit_reservation_post(host_id):
                 host = cur.fetchone()
                 if not host:
                     flash("Reservation not found.", "error")
+                    return redirect(url_for('reservations.reservations'))
+                if not current_user.can_access_subnet(host["subnet_id"]):
+                    flash("You do not have access to that subnet.", "error")
                     return redirect(url_for('reservations.reservations'))
                 mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
                 __kea.kea_command("reservation-del", arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac})
@@ -308,6 +317,11 @@ def delete_reservation(host_id):
             with db.cursor() as cur:
                 cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
                 host = cur.fetchone()
+                if host and not current_user.can_access_subnet(host["subnet_id"]):
+                    if is_htmx:
+                        return '<tr><td colspan="7" style="color:var(--danger);padding:8px;">You do not have access to that subnet.</td></tr>', 403
+                    flash("You do not have access to that subnet.", "error")
+                    return redirect(url_for('reservations.reservations'))
                 if host:
                     mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
                     result = __kea.kea_command("reservation-del", arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac})
@@ -343,6 +357,8 @@ def export_reservations():
                 with db.cursor() as cur:
                     cur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp4_subnet_id > 0 ORDER BY ipv4_address")
                     for row in cur.fetchall():
+                        if not current_user.can_access_subnet(row["subnet_id"]):
+                            continue
                         mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
                         cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
                         dns_row = cur.fetchone()
@@ -385,6 +401,9 @@ def import_reservations():
                     subnet_id = int(subnet_id)
                     if subnet_id not in extensions.SUBNET_MAP:
                         results["errors"].append(f"Row {i}: unknown subnet_id {subnet_id}")
+                        continue
+                    if not current_user.can_access_subnet(subnet_id):
+                        results["errors"].append(f"Row {i}: no access to subnet_id {subnet_id}")
                         continue
                 except (ValueError, TypeError):
                     results["errors"].append(f"Row {i}: invalid subnet_id")
@@ -442,6 +461,9 @@ def bulk_delete_reservations():
                             host_id = int(host_id)
                             cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s", (host_id,))
                             host = cur.fetchone()
+                            if host and not current_user.can_access_subnet(host["dhcp4_subnet_id"]):
+                                errors += 1
+                                continue
                             if host:
                                 mac = __kea.format_mac(host["dhcp_identifier"])
                                 result = __kea.kea_command("reservation-del", arguments={
@@ -489,6 +511,8 @@ def bulk_export_reservations():
                                 FROM hosts h WHERE h.host_id=%s
                             """, (host_id,))
                             row = cur.fetchone()
+                            if row and not current_user.can_access_subnet(row["dhcp4_subnet_id"]):
+                                continue
                             if row:
                                 mac = __kea.format_mac(row["dhcp_identifier"])
                                 cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))

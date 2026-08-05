@@ -187,6 +187,11 @@ def edit_device(device_id):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
+                cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
+                existing = cur.fetchone()
+                if existing and existing.get("last_subnet_id") is not None \
+                        and not current_user.can_access_subnet(existing["last_subnet_id"]):
+                    return jsonify({"ok": False, "error": "You do not have access to that subnet."}), 403
                 if type_override == "auto" or type_override == "":
                     # Clear manual override (but keep icon override if set)
                     if icon_override:
@@ -239,6 +244,12 @@ def delete_device(device_id):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
+                cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
+                existing = cur.fetchone()
+                if existing and existing.get("last_subnet_id") is not None \
+                        and not current_user.can_access_subnet(existing["last_subnet_id"]):
+                    flash("You do not have access to that subnet.", "error")
+                    return redirect(url_for('devices.devices'))
                 cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
             db.commit()
         flash("Device removed from inventory.", "success")

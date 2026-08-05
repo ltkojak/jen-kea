@@ -247,6 +247,13 @@ _BASELINE_TABLES = [
         last_run DATETIME DEFAULT NULL,
         last_status VARCHAR(255) DEFAULT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS mfa_attempts (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user (user_id),
+        INDEX idx_attempted (attempted_at)
+    )""",
 ]
 
 
@@ -376,6 +383,19 @@ def _m008_trusted_device_metadata(db):
             cur.execute("ALTER TABLE mfa_trusted_devices ADD COLUMN user_agent TEXT DEFAULT NULL")
 
 
+def _m009_mfa_attempts(db):
+    """mfa_attempts: brute-force throttling for the post-password TOTP/backup
+    code step, which previously had no rate limiting at all (v4.4.2)."""
+    with db.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS mfa_attempts (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            user_id INT NOT NULL,
+            attempted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_user (user_id),
+            INDEX idx_attempted (attempted_at)
+        )""")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -388,6 +408,7 @@ MIGRATIONS = [
                                                               _m006_superadmin_role),
     (7, "Migrate legacy Telegram settings to alert_channels", _m007_telegram_legacy),
     (8, "mfa_trusted_devices ip_address + user_agent columns", _m008_trusted_device_metadata),
+    (9, "mfa_attempts table for MFA brute-force throttling",   _m009_mfa_attempts),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

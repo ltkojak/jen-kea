@@ -49,6 +49,12 @@ jobs:
             -o dist/jen-v${{ steps.version.outputs.version }}.tar.gz
           echo "Tarball built: $(ls -lh dist/)"
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum jen-v${{ steps.version.outputs.version }}.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
@@ -97,6 +103,8 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "Jen v${{ steps.version.outputs.version }}"
           body_path: /tmp/release_notes.md
-          files: dist/jen-v${{ steps.version.outputs.version }}.tar.gz
+          files: |
+            dist/jen-v${{ steps.version.outputs.version }}.tar.gz
+            dist/SHA256SUMS
           draft: false
           prerelease: false

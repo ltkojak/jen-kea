@@ -604,6 +604,15 @@ def save_infra_ssh():
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     kea_conf = request.form.get("kea_conf", "").strip()
+    if host and not __auth.valid_ssh_target(host):
+        flash("Invalid SSH host — must be a valid hostname or IP address.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+    if user and not __auth.valid_unix_username(user):
+        flash("Invalid SSH user — must be a valid unix username.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+    if kea_conf and not __auth.valid_remote_path(kea_conf):
+        flash("Invalid Kea config path — must be an absolute path with no special characters.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
     items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
         items.append(("kea_ssh", "kea_conf", kea_conf))
@@ -625,6 +634,19 @@ def save_extra_servers():
     ssh_hosts = request.form.getlist("extra_ssh_host[]")
     ssh_users = request.form.getlist("extra_ssh_user[]")
     kea_confs = request.form.getlist("extra_kea_conf[]")
+
+    for h in ssh_hosts:
+        if h.strip() and not __auth.valid_ssh_target(h.strip()):
+            flash(f"Invalid SSH host: {h.strip()}", "error")
+            return redirect(url_for('settings.settings_infrastructure'))
+    for u in ssh_users:
+        if u.strip() and not __auth.valid_unix_username(u.strip()):
+            flash(f"Invalid SSH user: {u.strip()}", "error")
+            return redirect(url_for('settings.settings_infrastructure'))
+    for kc in kea_confs:
+        if kc.strip() and not __auth.valid_remote_path(kc.strip()):
+            flash(f"Invalid Kea config path: {kc.strip()}", "error")
+            return redirect(url_for('settings.settings_infrastructure'))
 
     def _rewrite_extra_servers(cfg):
         # Remove all existing extra server sections
@@ -675,6 +697,9 @@ def save_infra_ddns():
     api_user = request.form.get("api_user", "").strip()
     api_token = request.form.get("api_token", "").strip()
     forward_zone = request.form.get("forward_zone", "").strip()
+    if log_path and not __auth.valid_remote_path(log_path):
+        flash("Invalid log path — must be an absolute path with no special characters.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
     items = [("ddns", "dns_provider", dns_provider)]
     if log_path:
         items.append(("ddns", "log_path", log_path))
@@ -1118,6 +1143,11 @@ def save_nav_color():
 
 # ── Self-update ───────────────────────────────────────────────────────────────
 
+GITHUB_REPO          = "ltkojak/jen-kea"
+GITHUB_RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_ASSET_PREFIX  = f"https://github.com/{GITHUB_REPO}/releases/download/"
+
+
 @bp.route("/settings/infrastructure/check-update")
 @login_required
 @_admin_required
@@ -1127,7 +1157,7 @@ def check_update():
     from jen import JEN_VERSION
     try:
         resp = _req.get(
-            "https://api.github.com/repos/ltkojak/jen-kea/releases/latest",
+            GITHUB_RELEASES_API,
             headers={"Accept": "application/vnd.github+json"},
             timeout=8
         )
@@ -1173,17 +1203,65 @@ def check_update():
 @login_required
 @_superadmin_required
 def self_update():
-    """Download latest release tarball and install it, then restart Jen."""
+    """Download latest release tarball and install it, then restart Jen.
+
+    v4.4.2: previously trusted the client-submitted asset_url/version
+    directly, only checking the URL started with "https://github.com/" —
+    that would accept a release asset from ANY GitHub repo, not just this
+    one. Now the asset URL and version are always re-derived server-side
+    from the GitHub API against the pinned repo, and a SHA256 checksum is
+    verified if the release publishes one (see release.yml).
+    """
     import requests as _req
-    import tarfile, shutil, tempfile
+    import tarfile, shutil, tempfile, hashlib as _hashlib
 
-    asset_url        = request.form.get("asset_url", "").strip()
-    expected_version = request.form.get("version", "").strip()
-    do_db_backup     = request.form.get("db_backup", "0") == "1"
+    submitted_version = request.form.get("version", "").strip()
+    do_db_backup      = request.form.get("db_backup", "0") == "1"
 
-    if not asset_url or not asset_url.startswith("https://github.com/"):
-        flash("Invalid asset URL.", "error")
+    # ── Re-derive the release info from GitHub ourselves — never trust a
+    #    client-submitted asset_url. This is the same lookup check_update()
+    #    does, repeated here so this endpoint has its own authoritative view.
+    try:
+        resp = _req.get(
+            GITHUB_RELEASES_API,
+            headers={"Accept": "application/vnd.github+json"},
+            timeout=8
+        )
+        if resp.status_code != 200:
+            flash(f"Could not verify release: GitHub API returned {resp.status_code}", "error")
+            return redirect(url_for("settings.settings_infrastructure"))
+        data = resp.json()
+    except Exception as e:
+        flash(f"Could not verify release: {e}", "error")
         return redirect(url_for("settings.settings_infrastructure"))
+
+    latest_tag = data.get("tag_name", "").lstrip("v")
+    if submitted_version and submitted_version != latest_tag:
+        flash("The release changed since you checked — please refresh and try again.", "error")
+        return redirect(url_for("settings.settings_infrastructure"))
+    expected_version = latest_tag
+
+    assets = data.get("assets", [])
+    asset_url = ""
+    for asset in assets:
+        if asset["name"].endswith(".tar.gz") and "jen-v" in asset["name"]:
+            asset_url = asset["browser_download_url"]
+            break
+
+    if not asset_url or not asset_url.startswith(GITHUB_ASSET_PREFIX):
+        flash("Invalid or missing release asset URL.", "error")
+        return redirect(url_for("settings.settings_infrastructure"))
+
+    # Optional integrity check — verify against a checksums file if the
+    # release publishes one (SHA256SUMS / checksums.txt). Older releases
+    # built before this existed won't have one; we proceed without blocking
+    # in that case, but log it so it's visible this install is running
+    # without checksum verification.
+    checksum_asset_url = ""
+    for asset in assets:
+        if asset["name"].lower() in ("sha256sums", "sha256sums.txt", "checksums.txt"):
+            checksum_asset_url = asset["browser_download_url"]
+            break
 
     try:
         # ── Optional DB backup ─────────────────────────────────────────────
@@ -1210,9 +1288,33 @@ def self_update():
         tmp = tempfile.NamedTemporaryFile(
             suffix=".tar.gz", prefix="jen_update_", dir="/tmp", delete=False
         )
+        sha256 = _hashlib.sha256()
         for chunk in resp.iter_content(chunk_size=8192):
             tmp.write(chunk)
+            sha256.update(chunk)
         tmp.close()
+
+        if checksum_asset_url:
+            try:
+                cresp = _req.get(checksum_asset_url, timeout=15)
+                tarball_name = asset_url.rsplit("/", 1)[-1]
+                expected_hash = None
+                for line in cresp.text.splitlines():
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1].lstrip("*") == tarball_name:
+                        expected_hash = parts[0].lower()
+                        break
+                if expected_hash and expected_hash != sha256.hexdigest():
+                    os.unlink(tmp.name)
+                    flash("Checksum verification failed — downloaded file does not match "
+                          "the published release checksum. Update aborted.", "error")
+                    return redirect(url_for("settings.settings_infrastructure"))
+                elif not expected_hash:
+                    logger.warning(f"Checksum file present but no entry found for {tarball_name}; proceeding unverified.")
+            except Exception as e:
+                logger.warning(f"Checksum verification error (proceeding unverified): {e}")
+        else:
+            logger.warning(f"No checksum asset published for v{expected_version}; proceeding unverified.")
 
         # ── Extract to temp dir ────────────────────────────────────────────
         tmp_dir = tempfile.mkdtemp(prefix="jen_update_extract_", dir="/tmp")
@@ -1266,9 +1368,14 @@ def self_update():
             copy_cmds.append('systemctl daemon-reload')
 
         # sudoers entry — validate before installing (visudo -c) to avoid
-        # locking out all sudo access with a malformed file
+        # locking out all sudo access with a malformed file. Note: this
+        # grants whatever the release's jen-sudoers file contains; the
+        # checksum/repo-pin checks above establish that it came from the
+        # genuine ltkojak/jen-kea release, but that release is still the
+        # trust boundary here — same as running `install.sh` from it would be.
         sudoers_src = os.path.join(extracted, "jen-sudoers")
-        if os.path.isfile(sudoers_src):
+        sudoers_updated = os.path.isfile(sudoers_src)
+        if sudoers_updated:
             copy_cmds.append(
                 f'visudo -c -f "{sudoers_src}" && '
                 f'cp "{sudoers_src}" /etc/sudoers.d/jen && chmod 440 /etc/sudoers.d/jen'
@@ -1296,7 +1403,8 @@ def self_update():
             flash(f"Update failed during file installation: {result.stderr}", "error")
             return redirect(url_for("settings.settings_infrastructure"))
 
-        __user.audit("SELF_UPDATE", "jen", f"Updated to v{expected_version}")
+        __user.audit("SELF_UPDATE", "jen",
+                     f"Updated to v{expected_version}" + (" (sudoers updated)" if sudoers_updated else ""))
         flash(f"Jen updated to v{expected_version}. Restarting now…", "success")
 
         def do_restart():
