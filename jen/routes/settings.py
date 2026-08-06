@@ -1075,6 +1075,13 @@ def upload_custom_icon():
 @login_required
 @_admin_required
 def delete_custom_icon(name):
+    # Same validation as upload_custom_icon — Flask's default <name>
+    # converter already rejects any segment containing "/" (encoded or
+    # not), so this isn't reachable as a traversal today, but the check
+    # belongs here regardless in case the route ever changes to <path:name>.
+    if not name or not name.replace("-", "").replace("_", "").isalnum():
+        flash("Invalid icon name.", "error")
+        return redirect(url_for('settings.settings_icons'))
     path = f"{extensions.ICONS_CUSTOM_DIR}/{name}.svg"
     if os.path.exists(path):
         os.remove(path)

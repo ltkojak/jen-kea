@@ -75,8 +75,7 @@ def plugins_page():
 @_superadmin_required
 def install_plugin(plugin_id):
     # Validate plugin_id is alphanumeric/hyphen — no path traversal
-    import re
-    if not re.match(r'^[a-z0-9\-]{1,64}$', plugin_id):
+    if not __plugins.valid_plugin_id(plugin_id):
         flash("Invalid plugin ID.", "error")
         return redirect(url_for("plugins.plugins_page"))
 
@@ -108,8 +107,7 @@ def install_plugin(plugin_id):
 @_superadmin_required
 def update_plugin(plugin_id):
     """Update an installed plugin to the latest registry version."""
-    import re
-    if not re.match(r'^[a-z0-9\-]{1,64}$', plugin_id):
+    if not __plugins.valid_plugin_id(plugin_id):
         flash("Invalid plugin ID.", "error")
         return redirect(url_for("plugins.plugins_page"))
 
@@ -141,6 +139,9 @@ def update_plugin(plugin_id):
 @login_required
 @_superadmin_required
 def enable_plugin(plugin_id):
+    if not __plugins.valid_plugin_id(plugin_id):
+        flash("Invalid plugin ID.", "error")
+        return redirect(url_for("plugins.plugins_page"))
     __plugins.enable_plugin(plugin_id)
     __user.set_global_setting("restart_pending", "true")
     __user.audit("PLUGIN_ENABLE", plugin_id, "Plugin enabled")
@@ -152,6 +153,9 @@ def enable_plugin(plugin_id):
 @login_required
 @_superadmin_required
 def disable_plugin(plugin_id):
+    if not __plugins.valid_plugin_id(plugin_id):
+        flash("Invalid plugin ID.", "error")
+        return redirect(url_for("plugins.plugins_page"))
     __plugins.disable_plugin(plugin_id)
     __user.set_global_setting("restart_pending", "true")
     __user.audit("PLUGIN_DISABLE", plugin_id, "Plugin disabled")
@@ -165,6 +169,9 @@ def disable_plugin(plugin_id):
 @login_required
 @_superadmin_required
 def uninstall_plugin(plugin_id):
+    if not __plugins.valid_plugin_id(plugin_id):
+        flash("Invalid plugin ID.", "error")
+        return redirect(url_for("plugins.plugins_page"))
     ok, msg = __plugins.uninstall_plugin(plugin_id)
     if ok:
         _remove_plugin_record(plugin_id)

@@ -294,7 +294,7 @@ def revoke_all_trusted_devices():
 
 @bp.route("/mfa/admin-reset/<int:user_id>", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
 def admin_reset_mfa(user_id):
     try:
         with __db.jen_db() as db:

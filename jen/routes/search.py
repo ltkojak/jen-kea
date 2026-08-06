@@ -61,20 +61,28 @@ def global_search():
                     s = f"%{q}%"
                     s_mac = s.replace(":", "")
 
+                    # Subnet-restricted users only ever see results from
+                    # subnets they're assigned — same rule list/detail views
+                    # already enforce. Applied identically to all three
+                    # result sets below (v4.4.4 — this route previously
+                    # leaked leases/reservations/devices across subnets to
+                    # restricted admins/viewers).
+                    from jen.services.access import add_subnet_restriction
+
                     # Search leases
+                    where, params = ["(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)"], [s, s, s_mac]
+                    where, params = add_subnet_restriction(where, params, "l", "subnet_id")
                     with kdb.cursor() as cur:
-                        cur.execute("""
+                        cur.execute(f"""
                             SELECT inet_ntoa(l.address) AS ip,
                                    l.hostname,
                                    HEX(l.hwaddr) AS mac_hex,
                                    l.subnet_id,
                                    l.expire, l.state
                             FROM lease4 l
-                            WHERE inet_ntoa(l.address) LIKE %s
-                               OR l.hostname LIKE %s
-                               OR HEX(l.hwaddr) LIKE %s
+                            WHERE {' AND '.join(where)}
                             LIMIT 20
-                        """, (s, s, s_mac))
+                        """, params)
                         for row in cur.fetchall():
                             mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                             results["leases"].append({
@@ -83,19 +91,21 @@ def global_search():
                             })
 
                     # Search reservations
+                    where, params = [
+                        "h.dhcp4_subnet_id > 0",
+                        "(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)",
+                    ], [s, s, s_mac]
+                    where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
                     with kdb.cursor() as cur:
-                        cur.execute("""
+                        cur.execute(f"""
                             SELECT inet_ntoa(h.ipv4_address) AS ip,
                                    h.hostname,
                                    HEX(h.dhcp_identifier) AS mac_hex,
                                    h.dhcp4_subnet_id AS subnet_id
                             FROM hosts h
-                            WHERE h.dhcp4_subnet_id > 0
-                              AND (inet_ntoa(h.ipv4_address) LIKE %s
-                                   OR h.hostname LIKE %s
-                                   OR HEX(h.dhcp_identifier) LIKE %s)
+                            WHERE {' AND '.join(where)}
                             LIMIT 20
-                        """, (s, s, s_mac))
+                        """, params)
                         for row in cur.fetchall():
                             mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                             results["reservations"].append({
@@ -103,15 +113,26 @@ def global_search():
                                 "mac": mac, "subnet_id": row["subnet_id"]
                             })
 
-                    # Search devices
+                    # Search devices — devices.last_subnet_id is nullable
+                    # (a device we've never seen a lease/subnet for yet), so
+                    # a restricted user can still find those since they
+                    # can't be attributed to any subnet they lack access to.
+                    where, params = ["(mac LIKE %s OR last_ip LIKE %s OR device_name LIKE %s OR owner LIKE %s)"], [s, s, s, s]
+                    if not current_user.all_subnets:
+                        ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
+                        if ids:
+                            placeholders = ",".join(["%s"] * len(ids))
+                            where.append(f"(last_subnet_id IS NULL OR last_subnet_id IN ({placeholders}))")
+                            params.extend(ids)
+                        else:
+                            where.append("last_subnet_id IS NULL")
                     with jdb.cursor() as cur:
-                        cur.execute("""
-                            SELECT mac, last_ip, device_name AS name, owner, notes
+                        cur.execute(f"""
+                            SELECT mac, last_ip, device_name AS name, owner, notes, last_subnet_id
                             FROM devices
-                            WHERE mac LIKE %s OR last_ip LIKE %s
-                               OR device_name LIKE %s OR owner LIKE %s
+                            WHERE {' AND '.join(where)}
                             LIMIT 20
-                        """, (s, s, s, s))
+                        """, params)
                         results["devices"] = cur.fetchall()
 
         except Exception as e:

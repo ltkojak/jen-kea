@@ -2,6 +2,55 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.4] - 2026-08-06
+
+### Security: full audit, third pass — MFA-reset privilege escalation, subnet leak in search, plugin path hardening
+
+A follow-up audit pass (third in the 4.4.x series) found one more real
+privilege-escalation bug and one real subnet-authorization leak, plus two
+lower-severity hardening items caught along the way.
+
+### Fixed
+- **🔴 A plain admin could strip a superadmin's MFA.** `/mfa/admin-reset/<user_id>`
+  was gated with `@admin_required` instead of `@superadmin_required` — the
+  newer, equivalent route `/users/reset-mfa/<user_id>` already required
+  superadmin, but this older route slipped through. Per the documented
+  permission matrix ("admin... cannot manage users"), a regular admin
+  shouldn't be able to touch another user's MFA at all. Now requires
+  superadmin, matching `/users/reset-mfa/`.
+- **🔴 Global search leaked results across subnet restrictions.** `/search`
+  queried leases, reservations, and devices with no subnet filtering at
+  all, unlike every other list view in Jen (leases, devices, reservations,
+  reports, dashboard). A subnet-restricted admin or viewer could search for
+  an IP/hostname/MAC fragment and get hits from subnets they have no
+  access to. All three result sets now apply the same
+  `add_subnet_restriction()` used elsewhere; devices with no recorded
+  subnet (`last_subnet_id IS NULL`) remain visible since they can't be
+  attributed to a restricted subnet either way.
+- **Plugin enable/disable/uninstall accepted an unvalidated `plugin_id`.**
+  `install_plugin`/`update_plugin` already validated `plugin_id` against
+  `^[a-z0-9\-]{1,64}$` before touching the filesystem; `enable_plugin`,
+  `disable_plugin`, and `uninstall_plugin` (which calls `shutil.rmtree()`)
+  didn't. All plugin lifecycle functions now validate through a single
+  shared `valid_plugin_id()` in `jen/services/plugins.py`, checked at both
+  the route and service layer.
+- **Legacy password verification used a non-constant-time comparison.**
+  `verify_password()`'s fallback path for not-yet-upgraded SHA-256 hashes
+  compared with `==` instead of `secrets.compare_digest()`. The pbkdf2
+  path was already constant-time via werkzeug; this closes the one
+  remaining gap.
+- Minor: `delete_custom_icon` didn't validate its `name` parameter the way
+  `upload_custom_icon` does. Flask's default `<name>` route converter
+  already rejects any path segment containing a slash (encoded or not),
+  so this wasn't reachable as traversal — confirmed by testing both raw
+  and `%2F`-encoded payloads against the actual route — but the check is
+  now there for consistency and in case the route type ever changes.
+
+### Added
+- 8 new tests in `tests/test_security_fixes.py` covering the MFA-reset
+  authorization fix, subnet-filtered search, and plugin_id validation
+  across all four lifecycle functions.
+
 ## [4.4.3] - 2026-08-05
 
 ### Security: database/plugin privilege escalation, Zip Slip, dependency hardening

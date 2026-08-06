@@ -373,3 +373,154 @@ class TestPluginZipSlip:
         })
         assert ok is False
         assert "https" in msg.lower()
+
+
+class TestMfaAdminResetSuperadminOnly:
+    """/mfa/admin-reset/<user_id> — v4.4.4: was @admin_required, letting a
+    plain admin strip MFA from any user including a superadmin. Must match
+    /users/reset-mfa/<user_id>, which was already superadmin-only."""
+
+    def test_forbidden_for_plain_admin(self, client, db):
+        target_client, target_id = _restricted_client(
+            client, db, allowed_subnets=None, role="admin", username="plainadmin3")
+        # Log back in as a *different* plain admin trying to reset target's MFA
+        attacker_client, _ = _restricted_client(
+            client, db, allowed_subnets=None, role="admin", username="plainadmin4")
+        r = attacker_client.post(f"/mfa/admin-reset/{target_id}", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" in r.data.lower()
+
+    def test_allowed_for_superadmin(self, client, db):
+        _, target_id = _restricted_client(
+            client, db, allowed_subnets=None, role="admin", username="plainadmin5")
+        # Switch the same client's session over to the superadmin account.
+        with client.session_transaction() as sess:
+            sess["_user_cache"] = {
+                "id": 1, "username": "admin",
+                "role": "superadmin", "session_timeout": None
+            }
+            sess["_user_id"] = "1"
+            sess["_fresh"] = True
+        r = client.post(f"/mfa/admin-reset/{target_id}", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"superadmin access required" not in r.data.lower()
+
+
+class TestSearchSubnetFiltering:
+    """v4.4.4: /search previously returned leases/reservations/devices
+    from every subnet regardless of the requesting user's subnet_access.
+    Test subnet_map only has subnet 1 (see conftest._patch_extensions);
+    a user restricted to subnet_access=[999] must never see subnet 1's
+    data in search results."""
+
+    def test_reservation_hidden_from_restricted_user(self, client, db, mock_kea):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
+                "dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('aabbccddee06'), 0, 1, INET_ATON('10.99.0.60'), 'searchtarget')"
+            )
+        db.commit()
+
+        _restricted_client(client, db, allowed_subnets=[999])
+        r = client.get("/search?q=searchtarget")
+        assert r.status_code == 200
+        assert b"searchtarget" not in r.data
+
+    def test_reservation_visible_to_unrestricted_user(self, client, db, mock_kea):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
+                "dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('aabbccddee07'), 0, 1, INET_ATON('10.99.0.70'), 'searchtarget2')"
+            )
+        db.commit()
+
+        _restricted_client(client, db, allowed_subnets=None)
+        r = client.get("/search?q=searchtarget2")
+        assert r.status_code == 200
+        assert b"searchtarget2" in r.data
+
+    def test_device_with_no_subnet_stays_visible_to_restricted_user(self, client, db, mock_kea):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO devices (mac, last_ip, device_name, last_subnet_id) "
+                "VALUES ('aa:bb:cc:dd:ee:08', '10.99.0.80', 'unassigned-device', NULL)"
+            )
+        db.commit()
+
+        _restricted_client(client, db, allowed_subnets=[999])
+        r = client.get("/search?q=unassigned-device")
+        assert r.status_code == 200
+        assert b"unassigned-device" in r.data
+
+
+class TestPluginIdValidationOnAllLifecycleFunctions:
+    """v4.4.4: install_plugin/update_plugin validated plugin_id before
+    touching the filesystem; enable_plugin/disable_plugin/uninstall_plugin
+    (which calls shutil.rmtree()) didn't. All four now share one
+    valid_plugin_id() check."""
+
+    def test_valid_plugin_id_accepts_normal_ids(self):
+        from jen.services.plugins import valid_plugin_id
+        assert valid_plugin_id("network-discovery") is True
+        assert valid_plugin_id("ipam-lite") is True
+
+    def test_valid_plugin_id_rejects_traversal(self):
+        from jen.services.plugins import valid_plugin_id
+        assert valid_plugin_id("../../etc/cron.d/evil") is False
+        assert valid_plugin_id("..") is False
+        assert valid_plugin_id("") is False
+        assert valid_plugin_id(None) is False
+
+    def test_uninstall_plugin_rejects_invalid_id_without_touching_disk(self, tmp_path, monkeypatch):
+        from jen.services import plugins as plugins_svc
+        from jen import extensions
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path))
+        ok, msg = plugins_svc.uninstall_plugin("../../evil")
+        assert ok is False
+        assert "invalid" in msg.lower()
+
+    def test_enable_disable_plugin_noop_on_invalid_id(self, tmp_path, monkeypatch):
+        from jen.services import plugins as plugins_svc
+        from jen import extensions
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path))
+        # Should not raise, and should not create anything outside tmp_path.
+        plugins_svc.enable_plugin("../escape")
+        plugins_svc.disable_plugin("../escape")
+        assert list(tmp_path.iterdir()) == []
+
+    def test_enable_plugin_route_rejects_invalid_id_for_superadmin(self, logged_in_client):
+        r = logged_in_client.post("/settings/plugins/enable/../../etc", follow_redirects=True)
+        # Flask's <plugin_id> converter blocks literal slashes, so this
+        # 404s at the routing layer — confirming traversal can't reach the
+        # view at all, which is the other half of this defense.
+        assert r.status_code == 404
+
+
+class TestConstantTimeLegacyPasswordCompare:
+    """v4.4.4: verify_password()'s legacy SHA-256 fallback used == instead
+    of a constant-time comparison."""
+
+    def test_correct_legacy_password_still_verifies(self):
+        import hashlib
+        from jen.models.user import verify_password
+        legacy_hash = hashlib.sha256(b"correcthorse").hexdigest()
+        assert verify_password(legacy_hash, "correcthorse") is True
+
+    def test_wrong_legacy_password_rejected(self):
+        import hashlib
+        from jen.models.user import verify_password
+        legacy_hash = hashlib.sha256(b"correcthorse").hexdigest()
+        assert verify_password(legacy_hash, "wrongpassword") is False
+
+    def test_uses_constant_time_compare(self, monkeypatch):
+        import jen.models.user as user_mod
+        calls = []
+        real_compare = user_mod.secrets.compare_digest
+        def _spy(a, b):
+            calls.append((a, b))
+            return real_compare(a, b)
+        monkeypatch.setattr(user_mod.secrets, "compare_digest", _spy)
+        user_mod.verify_password("deadbeef" * 8, "whatever")
+        assert len(calls) == 1

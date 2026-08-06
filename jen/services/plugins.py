@@ -36,6 +36,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import sys
 from typing import Optional
 
@@ -47,6 +48,18 @@ logger = logging.getLogger(__name__)
 
 # In-memory registry of loaded plugin metadata
 _loaded_plugins: dict[str, dict] = {}
+
+# Every function below that turns a plugin_id into a filesystem path must
+# validate it against this first — a plugin_id is attacker-influenced input
+# (it arrives as a URL path segment) and several of these functions end in
+# os.remove()/shutil.rmtree() against os.path.join(PLUGIN_DIR, plugin_id).
+# install_plugin()/update_plugin() already had this check at the route
+# layer; enable/disable/uninstall didn't (v4.4.4).
+_PLUGIN_ID_RE = re.compile(r'^[a-z0-9\-]{1,64}$')
+
+
+def valid_plugin_id(plugin_id: str) -> bool:
+    return bool(plugin_id) and bool(_PLUGIN_ID_RE.match(plugin_id))
 
 
 # ── Versioning helper ─────────────────────────────────────────────────────────
@@ -156,12 +169,18 @@ def _is_enabled(plugin_id: str) -> bool:
 
 
 def enable_plugin(plugin_id: str) -> None:
+    if not valid_plugin_id(plugin_id):
+        logger.warning(f"enable_plugin: rejected invalid plugin_id {plugin_id!r}")
+        return
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
     if os.path.isdir(path):
         open(_enabled_file(plugin_id), "w").close()
 
 
 def disable_plugin(plugin_id: str) -> None:
+    if not valid_plugin_id(plugin_id):
+        logger.warning(f"disable_plugin: rejected invalid plugin_id {plugin_id!r}")
+        return
     ef = _enabled_file(plugin_id)
     if os.path.isfile(ef):
         os.remove(ef)
@@ -191,6 +210,9 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     Returns (success, message).
     """
     import zipfile, io, shutil
+
+    if not valid_plugin_id(plugin_id):
+        return False, "Invalid plugin ID."
 
     download_url = registry_entry.get("download_url", "").rstrip("/")
     if not download_url:
@@ -257,6 +279,8 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
     """Remove plugin directory. Does not remove DB tables (data preservation)."""
     import shutil
+    if not valid_plugin_id(plugin_id):
+        return False, "Invalid plugin ID."
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
     if not os.path.isdir(path):
         return False, "Plugin not found."

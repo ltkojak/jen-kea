@@ -7,6 +7,7 @@ Flask-Login User model, password hashing, and global settings helpers.
 import hashlib
 import json
 import logging
+import secrets
 
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -104,8 +105,13 @@ def verify_password(stored_hash: str, provided_password: str) -> bool:
     """
     if stored_hash and stored_hash.startswith("pbkdf2:"):
         return check_password_hash(stored_hash, provided_password)
-    # Legacy SHA-256 — accept and flag for upgrade
-    return stored_hash == hashlib.sha256(provided_password.encode()).hexdigest()
+    # Legacy SHA-256 — accept and flag for upgrade. Constant-time compare:
+    # this is a straight string equality check, not a proper KDF, so it's
+    # the one comparison here that's actually timing-attackable.
+    if not stored_hash:
+        return False
+    computed = hashlib.sha256(provided_password.encode()).hexdigest()
+    return secrets.compare_digest(stored_hash, computed)
 
 
 def needs_rehash(stored_hash: str) -> bool:
