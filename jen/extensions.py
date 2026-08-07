@@ -35,11 +35,14 @@ KEA_DB_HOST: str = ""
 KEA_DB_USER: str = ""
 KEA_DB_PASS: str = ""
 KEA_DB_NAME: str = "kea"
+KEA_DB_SSL_CA: str = ""   # v4.4.5 — path to CA cert; empty = plaintext (unchanged default)
 
 JEN_DB_HOST: str = ""
 JEN_DB_USER: str = ""
 JEN_DB_PASS: str = ""
 JEN_DB_NAME: str = "jen"
+JEN_DB_SSL_CA: str = ""  # v4.4.5 — same idea, independent of KEA_DB_SSL_CA
+                          # since jen_db and kea_db can live on different hosts
 
 HTTP_PORT:  int = 5050
 HTTPS_PORT: int = 8443

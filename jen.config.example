@@ -26,6 +26,11 @@ host     = YOUR-KEA-SERVER
 user     = kea
 password = your-kea-db-password
 database = kea
+# ssl_ca = /etc/jen/ssl/mariadb-ca.pem   # optional, v4.4.5+ — enables TLS
+#   for this connection and verifies the server cert against this CA.
+#   Leave commented/blank for plaintext (unchanged default). Needed if
+#   your MariaDB is on a different host than Jen and you want the DB
+#   traffic (leases, MACs, hostnames) encrypted on the wire.
 
 [jen_db]
 # Jen MySQL database (separate from Kea)
@@ -33,6 +38,8 @@ host     = YOUR-DB-SERVER
 user     = jen
 password = your-jen-db-password
 database = jen
+# ssl_ca = /etc/jen/ssl/mariadb-ca.pem   # optional, v4.4.5+ — see kea_db above.
+#   Set independently since jen_db and kea_db can be different hosts/certs.
 
 [server]
 http_port  = 5050

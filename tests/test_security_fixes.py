@@ -14,31 +14,7 @@ import time
 
 import pytest
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────
-def _restricted_client(client, db, allowed_subnets, role="admin", username="restricted1"):
-    """Create a DB user restricted to `allowed_subnets` and log the test
-    client in as that user (bypassing the login form, same pattern as the
-    `logged_in_client` fixture)."""
-    from jen.models.user import hash_password
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO users (username, password, role, subnet_access) VALUES (%s, %s, %s, %s)",
-            (username, hash_password("testpass123"), role, json.dumps(allowed_subnets))
-        )
-        user_id = cur.lastrowid
-    db.commit()
-
-    with client.session_transaction() as sess:
-        sess["_user_cache"] = {
-            "id": user_id, "username": username, "role": role,
-            "session_timeout": None, "subnet_access": allowed_subnets,
-        }
-        sess["_user_id"] = str(user_id)
-        sess["_fresh"] = True
-        sess["last_active"] = __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc).isoformat()
-    return client, user_id
+from tests.conftest import restricted_client as _restricted_client
 
 
 class TestSubnetRestrictionOnMutations:

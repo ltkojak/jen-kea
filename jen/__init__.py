@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "4.4.4"
+JEN_VERSION = "4.4.5"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -175,6 +175,43 @@ def create_app() -> Flask:
                 logging.getLogger('jen.timing').warning(
                     f"SLOW {elapsed:.0f}ms  {request.method} {request.path}"
                 )
+        return response
+
+    @app.after_request
+    def _set_security_headers(response):
+        """v4.4.5 — Jen is a DHCP admin panel; these are unconditional and
+        cheap. Clickjacking (missing X-Frame-Options / frame-ancestors) is
+        a real vector against an admin UI even with CSRF tokens in place,
+        since a real click on a real embedded page bypasses CSRF entirely.
+        HSTS is conditional on SSL actually being configured, same as the
+        SESSION_COOKIE_SECURE flag above — sending it over plain HTTP would
+        be actively wrong, not just useless.
+
+        CSP note: templates use inline <script> blocks, inline style=
+        attributes, and inline onclick/onchange handlers throughout (HTMX +
+        hand-rolled dashboard JS, not a bundler-based frontend). A strict
+        default-src 'self' CSP without 'unsafe-inline' for script-src/
+        style-src would break most pages. This policy is deliberately the
+        weaker-but-safe version: it still blocks loading any script, frame,
+        or object from an external origin (the actual clickjacking/
+        remote-injection threat), it just doesn't harden against inline
+        script execution, which would require a template rewrite to nonces
+        or hashes — worth doing eventually, not safe to ship blind here.
+        """
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+        )
+        if _ssl_configured_cached():
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+            )
         return response
 
     @app.before_request

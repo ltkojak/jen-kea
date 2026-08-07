@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.5] - 2026-08-06
+
+### Hardening: HTTP security headers, opt-in DB TLS, Actions supply-chain pinning, database.py test coverage
+
+A broader audit pass against a general SDLC checklist (application security
+headers, dependency/secrets hygiene, CI/CD pipeline, test coverage,
+database controls) — scoped down to what actually applies to a
+solo-maintained project. Four real gaps closed; none were exploitable bugs
+on their own, all are standard hardening for a self-hosted admin panel
+managing live DHCP infrastructure.
+
+### Added
+- **HTTP security response headers**, set unconditionally via a new
+  `after_request` hook in `jen/__init__.py`: `X-Content-Type-Options:
+  nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, and a
+  `Content-Security-Policy`. The CSP is deliberately the permissive-but-
+  safe version (`script-src`/`style-src` allow `'unsafe-inline'`) rather
+  than a strict one — templates use inline `<script>` blocks, inline
+  `style=` attributes, and inline `onclick`/`onchange` handlers throughout
+  (hand-rolled dashboard JS + HTMX, no bundler), and a strict CSP would
+  have broken most pages. It still blocks loading any script/frame/object
+  from an external origin, which is the actual clickjacking/injection
+  threat for an admin panel. `Strict-Transport-Security` is sent only when
+  SSL is actually configured, same gating as `SESSION_COOKIE_SECURE`.
+- **Opt-in TLS for the jen_db/kea_db MySQL connections.** New `ssl_ca`
+  key under `[jen_db]` and `[kea_db]` in `jen.config` (see updated
+  `jen.config.example`). Empty/unset (the default) is a complete no-op —
+  every existing install keeps working exactly as before. When set, PyMySQL
+  connects with TLS and verifies the server certificate against the given
+  CA, covering the pooled connections, the pool's direct-connection
+  fallback path, and `dbexport`'s direct connections. Independent
+  `ssl_ca` per database since jen_db and kea_db can be on different hosts.
+- **`tests/test_database.py`** — `database.py` (export/import/restore/
+  migrate, the highest blast-radius route file in the app) had zero test
+  coverage of any kind before this release, not even incidental. New
+  tests cover the superadmin-only boundary on every route in the file
+  (not a sample — all of them), the `os.path.basename()` traversal guard
+  on backup download/delete, and the `tmp_path` validation on
+  `/database/import/confirm`.
+- `restricted_client()` helper moved from `test_security_fixes.py` into
+  `conftest.py` so `test_database.py` could reuse it instead of
+  duplicating it; `test_security_fixes.py` now imports it.
+
+### Changed
+- `.github/workflows/release.yml`: `actions/checkout` and
+  `softprops/action-gh-release` pinned to full commit SHAs (with a
+  version comment) instead of the mutable `@v4`/`@v2` tags. Tags can be
+  moved by a compromised maintainer account — this is the same attack
+  class as the real `tj-actions/changed-files` supply-chain incident —
+  and this workflow runs with `contents: write` on every tagged release.
+
 ## [4.4.4] - 2026-08-06
 
 ### Security: full audit, third pass — MFA-reset privilege escalation, subnet leak in search, plugin path hardening

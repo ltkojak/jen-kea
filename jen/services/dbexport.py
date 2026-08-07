@@ -83,6 +83,7 @@ def _validate_tables(requested, known):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _direct_jen_conn():
+    from jen.models.db import _ssl_kwargs
     return pymysql.connect(
         host=extensions.JEN_DB_HOST,
         user=extensions.JEN_DB_USER,
@@ -91,10 +92,12 @@ def _direct_jen_conn():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
     )
 
 
 def _direct_kea_conn():
+    from jen.models.db import _ssl_kwargs
     return pymysql.connect(
         host=extensions.KEA_DB_HOST,
         user=extensions.KEA_DB_USER,
@@ -103,6 +106,7 @@ def _direct_kea_conn():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
     )
 
 

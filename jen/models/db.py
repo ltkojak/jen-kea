@@ -35,6 +35,20 @@ _POOL_MIN  = 2   # connections kept open permanently
 _POOL_MAX  = 10  # maximum concurrent connections
 
 
+def _ssl_kwargs(ca_path: str) -> dict:
+    """v4.4.5 — opt-in TLS for MySQL/MariaDB connections. Empty ca_path
+    (the default) means no ssl= kwarg is passed at all, so this is a
+    no-op for every existing install unless jen_db/ssl_ca or
+    kea_db/ssl_ca is explicitly set in config. PyMySQL treats a
+    present-but-empty ssl dict as "use TLS, verify against system CA
+    store", so this always verifies rather than just encrypting blindly
+    — set ssl_ca to the specific CA if MariaDB is using a self-signed
+    cert, which is the common case for a homelab-issued cert."""
+    if not ca_path:
+        return {}
+    return {"ssl": {"ca": ca_path}}
+
+
 def _make_jen_pool():
     """Create the Jen DB connection pool."""
     from dbutils.pooled_db import PooledDB
@@ -52,6 +66,7 @@ def _make_jen_pool():
         cursorclass  = pymysql.cursors.DictCursor,
         connect_timeout = 10,
         charset      = "utf8mb4",
+        **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
     )
 
 
@@ -72,6 +87,7 @@ def _make_kea_pool():
         cursorclass  = pymysql.cursors.DictCursor,
         connect_timeout = 10,
         charset      = "utf8mb4",
+        **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
     )
 
 
@@ -98,6 +114,7 @@ def get_jen_db() -> pymysql.connections.Connection:
                         database=extensions.JEN_DB_NAME,
                         cursorclass=pymysql.cursors.DictCursor,
                         connect_timeout=10,
+                        **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
                     )
     return _jen_pool.connection()
 
@@ -123,6 +140,7 @@ def get_kea_db() -> pymysql.connections.Connection:
                         database=extensions.KEA_DB_NAME,
                         cursorclass=pymysql.cursors.DictCursor,
                         connect_timeout=10,
+                        **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
                     )
     return _kea_pool.connection()
 

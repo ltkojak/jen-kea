@@ -83,11 +83,13 @@ class AppConfig:
         extensions.KEA_DB_USER = cfg.get("kea_db", "user")
         extensions.KEA_DB_PASS = cfg.get("kea_db", "password")
         extensions.KEA_DB_NAME = cfg.get("kea_db", "database", fallback="kea")
+        extensions.KEA_DB_SSL_CA = cfg.get("kea_db", "ssl_ca", fallback="")
 
         extensions.JEN_DB_HOST = cfg.get("jen_db", "host")
         extensions.JEN_DB_USER = cfg.get("jen_db", "user")
         extensions.JEN_DB_PASS = cfg.get("jen_db", "password")
         extensions.JEN_DB_NAME = cfg.get("jen_db", "database", fallback="jen")
+        extensions.JEN_DB_SSL_CA = cfg.get("jen_db", "ssl_ca", fallback="")
 
         extensions.HTTP_PORT  = cfg.getint("server", "http_port",  fallback=5050)
         extensions.HTTPS_PORT = cfg.getint("server", "https_port", fallback=8443)

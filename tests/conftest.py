@@ -208,3 +208,34 @@ def mock_kea(monkeypatch):
         "server": {"id": 1, "name": "Test Kea"}, "up": True,
         "ha_state": None, "version": "2.4.0", "role": "primary"
     }])
+
+
+# ── Shared test helpers ─────────────────────────────────────────────────────
+# Not a fixture — a plain function, imported directly by test modules that
+# need a non-superadmin (or subnet-restricted) logged-in client. Originally
+# lived only in test_security_fixes.py; moved here in v4.4.5 so
+# test_database.py could reuse it instead of duplicating it.
+def restricted_client(client, db, allowed_subnets, role="admin", username="restricted1"):
+    """Create a DB user restricted to `allowed_subnets` and log the test
+    client in as that user (bypassing the login form, same pattern as the
+    `logged_in_client` fixture)."""
+    import json as _json
+    from datetime import datetime, timezone
+    from jen.models.user import hash_password
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (username, password, role, subnet_access) VALUES (%s, %s, %s, %s)",
+            (username, hash_password("testpass123"), role, _json.dumps(allowed_subnets))
+        )
+        user_id = cur.lastrowid
+    db.commit()
+
+    with client.session_transaction() as sess:
+        sess["_user_cache"] = {
+            "id": user_id, "username": username, "role": role,
+            "session_timeout": None, "subnet_access": allowed_subnets,
+        }
+        sess["_user_id"] = str(user_id)
+        sess["_fresh"] = True
+        sess["last_active"] = datetime.now(timezone.utc).isoformat()
+    return client, user_id
