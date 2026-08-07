@@ -2,6 +2,31 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.6] - 2026-08-07
+
+### Housekeeping: test-only fix — no production code changed
+
+- **`tests/conftest.py`: `client` fixture was `scope="session"`** — a
+  single `test_client()` (and its cookie jar) shared across the entire
+  ~255-test suite run. Any test that logged the shared client into a
+  session via `session_transaction()` left that session active for
+  whichever test happened to run next in the same process, so any test
+  asserting anonymous-access behavior was silently at the mercy of
+  execution order rather than actually testing an unauthenticated
+  request. Found because `tests/test_database.py` (new in 4.4.5) failed
+  when run as part of the full suite but passed cleanly in isolation —
+  isolating it is what exposed the leak, since with nothing running
+  first the shared client's cookie jar was genuinely empty.
+  Fixed by dropping to the (default) function scope, so every test gets
+  its own client with an empty cookie jar. `app` stays session-scoped
+  (rebuilding the Flask app per test would be expensive); `test_client()`
+  itself is cheap to recreate.
+  No application code changed — `/database` and every other
+  `@_superadmin_required` route were independently confirmed to enforce
+  authentication correctly in production via direct `curl` testing before
+  this fix; the bug was entirely in how the test suite simulated
+  requests, not in the routes themselves.
+
 ## [4.4.5] - 2026-08-06
 
 ### Hardening: HTTP security headers, opt-in DB TLS, Actions supply-chain pinning, database.py test coverage

@@ -137,8 +137,17 @@ def app():
     return flask_app
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def client(app):
+    """v4.4.5 fix: this was scope='session' — a single test_client() (and
+    its cookie jar) shared across the entire ~255-test run. Any test that
+    logged the shared client into a session via session_transaction() left
+    that session active for whichever test happened to run next, so tests
+    asserting anonymous-access behavior would silently inherit whatever
+    role the previous test's session was in, depending purely on
+    execution order. Function scope means every test gets its own client
+    with an empty cookie jar. app stays session-scoped (expensive to
+    rebuild); test_client() itself is cheap."""
     return app.test_client()
 
 
