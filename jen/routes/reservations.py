@@ -149,12 +149,13 @@ def reservations():
         device_type_display=__fp.DEVICE_TYPE_DISPLAY
     )
     if request.headers.get("HX-Request") == "true":
-        from flask import render_template as _rt
-        rows_html = "".join(
-            _rt("_reservation_row.html", h=h, **template_vars)
-            for h in hosts
-        ) if hosts else '<tr id="no-reservations"><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No reservations found.</td></tr>'
-        return rows_html, 200
+        # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
+        # leaving the sort-link headers and pagination (rendered outside
+        # the htmx swap target) stuck on stale subnet/search/per_page
+        # values from the last full page load — same class of bug fixed
+        # in leases.py. Rendering the whole results partial keeps
+        # everything in sync with the live filter state.
+        return render_template("_reservations_results.html", **template_vars), 200
     return render_template("reservations.html", **template_vars)
 
 @bp.route("/reservations/add")

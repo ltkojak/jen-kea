@@ -172,7 +172,11 @@ def devices():
         bundled_icons=bundled_icons, custom_icons=custom_icons
     )
     if request.headers.get("HX-Request") == "true":
-        return render_template("_device_rows.html", **template_vars), 200
+        # v4.4.6 fix: same class of bug fixed in leases.py/reservations.py
+        # — headers and pagination live outside the old #devices-table-body
+        # swap target and were going stale on every htmx-driven filter
+        # change. Render the whole results partial instead.
+        return render_template("_devices_results.html", **template_vars), 200
     return render_template("devices.html", **template_vars)
 
 @bp.route("/devices/edit/<int:device_id>", methods=["POST"])

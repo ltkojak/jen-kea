@@ -2,6 +2,63 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.7] - 2026-08-07
+
+### Fixed: filter state silently reset by sort-header/pagination clicks on Leases, Reservations, and Devices
+
+Reported: filtering Leases to a subnet, then clicking the "IP Address"
+column header to sort, silently dropped the subnet filter back to "All
+Subnets." Root cause and scope turned out to be broader than the one
+reported case.
+
+**Root cause:** these three pages use HTMX to live-update results when a
+filter control (subnet dropdown, search box, per-page selector) changes,
+but the HTMX swap target was only `#{page}-table-body` — the `<tbody>`
+rows. The `<thead>` sort-link headers and the `<div class="pagination">`
+links live *outside* that swap target, in HTML from the last full page
+load. Every sort-link and pagination-link `href` had the current
+subnet/search/sort/page values baked in via Jinja at render time — so the
+moment a filter changed via the HTMX-driven controls without a full page
+reload, those baked-in values went stale. Clicking a sort header or a
+page number then navigated using the *old* filter values, silently
+reverting whatever had just been changed. This affected all three pages
+identically — Leases, Reservations, and Devices — since they share the
+same HTMX pattern.
+
+**Fix:** widened the HTMX swap target on all three pages from the bare
+`<tbody>` to a wrapping `<div id="{page}-results">` containing the whole
+table (headers included) and the pagination block, via three new partial
+templates:
+- `templates/_leases_results.html`
+- `templates/_reservations_results.html`
+- `templates/_devices_results.html`
+
+Each route's `HX-Request` branch now renders the full results partial
+instead of just the row-only partial, so the sort headers and pagination
+links are rebuilt with live filter values on every HTMX update, not just
+on a full page load. `jen/routes/leases.py`, `jen/routes/reservations.py`,
+and `jen/routes/devices.py` updated accordingly.
+
+Also fixed while in this code: Leases' and Reservations' sort-header links
+were missing `&per_page=` in their query string (Devices already had it
+correctly) — clicking a sort header on those two pages would additionally
+have reset the rows-per-page selection back to default. Same root cause,
+same fix.
+
+### Verification note
+No live database/Flask app available to run the real test suite or an
+end-to-end browser check for this fix. Verified: Python syntax (AST) on
+all three modified route files, Jinja syntax on all templates including
+the three new partials, and — the part that actually matters here — all
+three new partials render byte-correctly under Jinja's `StrictUndefined`
+mode against representative context matching what each route's
+`template_vars` actually provides. Full-page template rendering outside
+a real Flask request context isn't practical to verify this way (several
+Flask-injected globals aren't reproducible standalone), so this needs a
+real click-through on your end before considering it done — specifically:
+filter to a subnet on each of the three pages, click each sort header,
+and confirm the subnet/search/per-page selections survive.
+
 ## [4.4.6] - 2026-08-07
 
 ### Housekeeping: test-only fix — no production code changed

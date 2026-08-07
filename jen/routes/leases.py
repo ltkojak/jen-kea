@@ -174,7 +174,17 @@ def leases():
         device_type_display=__fp.DEVICE_TYPE_DISPLAY
     )
     if request.headers.get("HX-Request") == "true":
-        return render_template("_lease_rows.html", **template_vars), 200
+        # v4.4.6 fix: previously rendered only _lease_rows.html (the
+        # <tbody> contents), leaving the sort-link headers and pagination
+        # controls — both rendered outside the htmx swap target — stuck
+        # with whatever subnet/minutes/search/per_page values were in the
+        # URL at the last full page load. Any filter change made via the
+        # form's htmx-triggered dropdowns/search box would silently go
+        # stale on those, so clicking a sort header or a page number right
+        # after changing a filter would "revert" it. Rendering the whole
+        # results partial (headers + rows + pagination) keeps everything
+        # in sync with the live filter state on every htmx update.
+        return render_template("_leases_results.html", **template_vars), 200
     return render_template("leases.html", **template_vars)
 
 @bp.route("/leases/delete-stale", methods=["POST"])
