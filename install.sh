@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="4.4.7"
+JEN_VERSION="4.4.8"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -619,20 +619,32 @@ CONFEOF
 
 _set_admin_password() {
     local pass="$1"
-    python3 << PYEOF 2>/dev/null || true
+    # v4.4.8: previously interpolated $pass directly into Python source
+    # inside this heredoc (generate_password_hash('$pass', ...)) — a
+    # password containing a single quote broke the Python syntax outright,
+    # and since stderr is redirected to /dev/null with || true swallowing
+    # the exit code, it failed completely silently: no error shown, no
+    # "Admin password updated" message either, and the password was never
+    # actually set. Passing it via an environment variable and reading it
+    # with os.environ sidesteps quoting entirely — no character in the
+    # password can break the Python source, because it's never embedded
+    # in the source at all.
+    JEN_INSTALL_ADMIN_PASS="$pass" python3 << PYEOF 2>/dev/null || true
+import os
 import sys
 sys.path.insert(0, '$INSTALL_DIR')
 try:
     from werkzeug.security import generate_password_hash
     import pymysql, configparser
-    cfg = configparser.ConfigParser()
+    cfg = configparser.ConfigParser(interpolation=None)
     cfg.read('$CONFIG_FILE')
     db = pymysql.connect(
         host=cfg.get('jen_db','host'), user=cfg.get('jen_db','user'),
         password=cfg.get('jen_db','password'), database=cfg.get('jen_db','database'),
         cursorclass=pymysql.cursors.DictCursor, connect_timeout=5
     )
-    hashed = generate_password_hash('$pass', method='pbkdf2:sha256')
+    pw = os.environ['JEN_INSTALL_ADMIN_PASS']
+    hashed = generate_password_hash(pw, method='pbkdf2:sha256')
     with db.cursor() as cur:
         cur.execute("UPDATE users SET password=%s WHERE username='admin'", (hashed,))
     db.commit(); db.close()

@@ -62,10 +62,8 @@ def ddns():
     else:
         try:
             result = subprocess.run(
-                ["ssh", "-i", extensions.SSH_KEY_PATH,
-                 "-o", "StrictHostKeyChecking=no",
-                 "-o", "ConnectTimeout=10",
-                 f"{extensions.KEA_SSH_USER}@{extensions.KEA_SSH_HOST}",
+                ["ssh"] + __auth.ssh_cli_opts() + ["-o", "ConnectTimeout=10"] +
+                [f"{extensions.KEA_SSH_USER}@{extensions.KEA_SSH_HOST}",
                  f"sudo tail -200 {shlex.quote(extensions.DDNS_LOG)}"],
                 capture_output=True, text=True, timeout=15
             )
@@ -169,9 +167,8 @@ def ddns():
                 if ssh_host:
                     quoted_host = shlex.quote(lookup_host)
                     result = subprocess.run(
-                        ["ssh", "-i", extensions.SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
-                         "-o", "ConnectTimeout=10",
-                         f"{ssh_user}@{ssh_host}",
+                        ["ssh"] + __auth.ssh_cli_opts() + ["-o", "ConnectTimeout=10"] +
+                        [f"{ssh_user}@{ssh_host}",
                          f"dig +short {quoted_host} 2>/dev/null || host {quoted_host} 2>/dev/null"],
                         capture_output=True, text=True, timeout=10
                     )

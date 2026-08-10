@@ -83,11 +83,10 @@ def restart_kea_server(server_id):
     if not server["ssh_host"]:
         flash("SSH not configured for this server.", "error")
         return redirect(url_for('servers.servers'))
-    SSH_OPTS = ["-i", extensions.SSH_KEY_PATH, "-o", "StrictHostKeyChecking=no",
-                "-o", "UserKnownHostsFile=/etc/jen/ssh/known_hosts"]
     try:
         result = subprocess.run(
-            ["ssh"] + SSH_OPTS + [f"{server['ssh_user']}@{server['ssh_host']}",
+            ["ssh"] + __auth.ssh_cli_opts() +
+            [f"{server['ssh_user']}@{server['ssh_host']}",
              "sudo systemctl restart isc-kea-dhcp4-server"],
             capture_output=True, timeout=15
         )
@@ -99,7 +98,3 @@ def restart_kea_server(server_id):
     except Exception as e:
         flash(f"SSH error: {str(e)}", "error")
     return redirect(url_for('servers.servers'))
-
-# ─────────────────────────────────────────
-# Reports
-# ─────────────────────────────────────────

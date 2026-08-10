@@ -282,10 +282,18 @@ def add_subnet_post():
             import base64
             import paramiko
             ssh = paramiko.SSHClient()
+            __auth.paramiko_load_known_hosts(ssh)
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(server["ssh_host"],
                         username=server.get("ssh_user", extensions.KEA_SSH_USER),
                         key_filename=extensions.SSH_KEY_PATH, timeout=10)
+            # Persist any newly-accepted host key (AutoAddPolicy only adds
+            # it in-memory) so the *next* connection actually checks against
+            # it instead of trusting a fresh key blind every single time.
+            try:
+                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
+            except Exception:
+                pass
 
             kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
 
@@ -426,10 +434,18 @@ def delete_subnet(subnet_id):
             import base64
             import paramiko
             ssh = paramiko.SSHClient()
+            __auth.paramiko_load_known_hosts(ssh)
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(server["ssh_host"],
                         username=server.get("ssh_user", extensions.KEA_SSH_USER),
                         key_filename=extensions.SSH_KEY_PATH, timeout=10)
+            # Persist any newly-accepted host key (AutoAddPolicy only adds
+            # it in-memory) so the *next* connection actually checks against
+            # it instead of trusting a fresh key blind every single time.
+            try:
+                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
+            except Exception:
+                pass
 
             kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
 
@@ -592,10 +608,18 @@ def edit_subnet_post(subnet_id):
             import base64
             import paramiko
             ssh = paramiko.SSHClient()
+            __auth.paramiko_load_known_hosts(ssh)
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(server["ssh_host"],
                         username=server.get("ssh_user", extensions.KEA_SSH_USER),
                         key_filename=extensions.SSH_KEY_PATH, timeout=10)
+            # Persist any newly-accepted host key (AutoAddPolicy only adds
+            # it in-memory) so the *next* connection actually checks against
+            # it instead of trusting a fresh key blind every single time.
+            try:
+                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
+            except Exception:
+                pass
 
             kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
 

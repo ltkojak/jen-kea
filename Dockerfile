@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Kea DHCP Management Console"
-LABEL version="4.4.7"
+LABEL version="4.4.8"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -47,7 +47,6 @@ RUN mkdir -p /opt/jen/static/icons/brands \
              /etc/jen/ssl /etc/jen/ssh /etc/jen/backups
 
 # Copy application files
-COPY jen.py        /opt/jen/jen.py
 COPY run.py        /opt/jen/run.py
 COPY jen/          /opt/jen/jen/
 COPY templates/    /opt/jen/templates/

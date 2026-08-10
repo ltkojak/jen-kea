@@ -8,6 +8,8 @@ import ipaddress
 import logging
 import re
 
+from jen import extensions
+
 logger = logging.getLogger(__name__)
 
 # ── Compiled validation patterns ──────────────────────────────────────────────
@@ -278,3 +280,42 @@ def is_mfa_locked_out(user_id):
 # ─────────────────────────────────────────
 # MFA Engine
 # ─────────────────────────────────────────
+
+
+def ssh_cli_opts() -> list:
+    """v4.4.8 — shared SSH option list for every plain `ssh` CLI subprocess
+    call in the app (ddns.py, servers.py). Previously each call site had
+    its own copy of these flags, and two of the three used
+    StrictHostKeyChecking=no with no UserKnownHostsFile at all — meaning
+    every single connection silently trusted whatever host key was
+    presented, with nothing ever persisted to compare against on a later
+    connection. accept-new is the middle ground: still zero setup
+    friction on first connect (same UX as before), but a host key that
+    *changes* after being recorded will now cause the connection to be
+    refused instead of silently accepted, which is the actual MITM
+    protection StrictHostKeyChecking exists for.
+    """
+    import os
+    os.makedirs(os.path.dirname(extensions.SSH_KNOWN_HOSTS), exist_ok=True)
+    return [
+        "-i", extensions.SSH_KEY_PATH,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", f"UserKnownHostsFile={extensions.SSH_KNOWN_HOSTS}",
+    ]
+
+
+def paramiko_load_known_hosts(ssh_client) -> None:
+    """v4.4.8 — pair with paramiko.AutoAddPolicy() so a first connection
+    to a new host is still accepted automatically (same UX as before),
+    but the accepted key is persisted to extensions.SSH_KNOWN_HOSTS and
+    checked on every later connection — previously nothing was ever
+    loaded or saved, so AutoAddPolicy trusted a fresh key on literally
+    every single call, with no memory between connections at all."""
+    import os
+    os.makedirs(os.path.dirname(extensions.SSH_KNOWN_HOSTS), exist_ok=True)
+    if not os.path.exists(extensions.SSH_KNOWN_HOSTS):
+        open(extensions.SSH_KNOWN_HOSTS, "a").close()
+    try:
+        ssh_client.load_host_keys(extensions.SSH_KNOWN_HOSTS)
+    except Exception as e:
+        logger.warning(f"Could not load SSH known_hosts (continuing): {e}")

@@ -2,6 +2,83 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.8] - 2026-08-07
+
+### Security & correctness: findings from actually reading every file not yet opened
+
+Following up on the file-inventory exercise: every route/service file that
+had never been directly read (not grepped, actually read) turned up real
+issues. All fixed, all independently verified rather than just reasoned
+about — this pass had real dependencies installed and used them to
+directly reproduce two of the bugs below before and after the fix, rather
+than trusting static analysis alone.
+
+### Fixed
+- **`jen-sudoers` granted `www-data` passwordless execution as `ALL` users**,
+  not just root. Narrowed both entries to `ALL=(root)`. The underlying
+  design (a predictable `/tmp/jen_update_install.sh` path trusted purely
+  by location, not content) is unchanged and remains a known, accepted
+  trust boundary tied to the self-update flow's checksum verification —
+  this fix removes the unnecessary extra scope, it doesn't change that
+  boundary.
+- **`network-discovery` plugin: `/api/scan-status/<subnet_id>` was missing
+  the subnet-access check** its sibling routes (`/scan/`, `/results/`)
+  already had. A subnet-restricted user could poll it for any subnet_id
+  and learn scan status, host count, and rogue-device count for subnets
+  they don't have access to. Now calls `assert_subnet_access()` like the
+  other two routes.
+- **SSH host-key verification was effectively disabled everywhere Jen
+  connects outbound over SSH** — 6 call sites across `subnets.py` (×3,
+  paramiko `AutoAddPolicy()` with no known_hosts ever loaded or saved,
+  so every connection trusted a fresh key with zero memory of previous
+  connections) and `ddns.py`/`servers.py` (×3, plain `ssh` CLI with
+  `StrictHostKeyChecking=no`, which accepts any key unconditionally,
+  every time). Consolidated into two shared helpers in
+  `jen/services/auth.py`: `ssh_cli_opts()` (switches to
+  `StrictHostKeyChecking=accept-new` — same zero-friction first
+  connection, but a host key that *changes* afterward is now rejected
+  instead of silently accepted) and `paramiko_load_known_hosts()` (loads
+  and, after connecting, saves `/etc/jen/ssh/known_hosts`, so
+  `AutoAddPolicy` becomes real trust-on-first-use instead of trust-every-
+  single-time). New `extensions.SSH_KNOWN_HOSTS` constant.
+- **Docker build was broken** — `Dockerfile` had `COPY jen.py
+  /opt/jen/jen.py`, but no `jen.py` exists at the repo root (confirmed by
+  direct inspection); `docker build .` failed immediately. Leftover from
+  before the v2.6.0 refactor to `run.py` + the `jen/` package. Removed.
+- **`docker-compose.mysql.yml` shipped active default DB passwords**
+  (`changeme_root` / `changeme_jen`) that a user following the documented
+  `cp .env.example .env` quick-start would deploy with unless they
+  specifically edited those two lines. Compose now requires them
+  (`${VAR:?message}` syntax) and refuses to start with a clear error if
+  they're left blank, instead of silently falling back to a known
+  password. `.env.example` updated to match — both fields now blank by
+  default, not pre-filled with a weak value.
+- **A DB or admin password containing a literal `%` broke config loading.**
+  `jen/config.py` instantiated `configparser.ConfigParser()` with default
+  interpolation enabled; a `%` not followed by a valid interpolation
+  pattern raises `InterpolationSyntaxError` when the value is read back.
+  Reproduced directly (a password of `MyP%ssw0rd` threw the exact error)
+  and confirmed the fix (`interpolation=None`) resolves it, in a real
+  Python session, not just by inspection. Jen doesn't use config
+  interpolation anywhere, so there's no downside to disabling it.
+- **A quote character in the admin password broke the interactive
+  installer, silently.** `install.sh`'s `_set_admin_password()`
+  interpolated the raw password directly into a Python heredoc
+  (`generate_password_hash('$pass', ...)`) — a password containing a
+  single quote produced a Python `SyntaxError`, and since stderr was
+  redirected to `/dev/null` with `|| true` swallowing the exit code, the
+  installer printed nothing at all and silently moved on without
+  actually setting the password. Reproduced the exact syntax break and
+  confirmed the fix directly: the password is now passed via an
+  environment variable (`JEN_INSTALL_ADMIN_PASS`) and read with
+  `os.environ` inside the heredoc, so no character in the password can
+  ever reach the Python source itself.
+
+### Housekeeping
+- Removed a dangling `# Reports` section comment with nothing under it at
+  the end of `jen/routes/servers.py` — leftover from when reports moved
+  to their own `reports.py` file.
+
 ## [4.4.7] - 2026-08-07
 
 ### Fixed: filter state silently reset by sort-header/pagination clicks on Leases, Reservations, and Devices

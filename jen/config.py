@@ -48,7 +48,13 @@ class AppConfig:
 
     def load(self) -> configparser.ConfigParser:
         """Read and validate jen.config. Raises on missing required values."""
-        cfg = configparser.ConfigParser()
+        # interpolation=None (v4.4.8): DB/API passwords can legitimately
+        # contain a literal '%' character. With default BasicInterpolation
+        # enabled, configparser treats '%' specially and raises
+        # InterpolationSyntaxError reading such a value back — Jen doesn't
+        # use interpolation anywhere in its own config, so there's no
+        # downside to disabling it outright.
+        cfg = configparser.ConfigParser(interpolation=None)
         if not os.path.exists(self.path):
             raise FileNotFoundError(
                 f"Config file not found: {self.path}\n"
@@ -114,7 +120,7 @@ class AppConfig:
     # ── Writing (every write reloads so memory always matches disk) ──────
 
     def _read_parser(self) -> configparser.ConfigParser:
-        parser = configparser.ConfigParser()
+        parser = configparser.ConfigParser(interpolation=None)
         parser.read(self.path)
         return parser
 

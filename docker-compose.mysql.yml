@@ -16,7 +16,7 @@
 services:
   jen:
     build: .
-    image: jen-dhcp:4.4.7
+    image: jen-dhcp:4.4.8
     container_name: jen
     restart: unless-stopped
     ports:
@@ -47,10 +47,10 @@ services:
     container_name: jen-mysql
     restart: unless-stopped
     environment:
-      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme_root}
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env before running docker compose}
       MARIADB_DATABASE: jen
       MARIADB_USER: jen
-      MARIADB_PASSWORD: ${JEN_MYSQL_PASSWORD:-changeme_jen}
+      MARIADB_PASSWORD: ${JEN_MYSQL_PASSWORD:?Set JEN_MYSQL_PASSWORD in .env before running docker compose}
     volumes:
       - jen-mysql-data:/var/lib/mysql
     healthcheck:

@@ -344,6 +344,9 @@ def results(subnet_id):
 @login_required
 def api_scan_status(subnet_id):
     """Poll endpoint for scan progress."""
+    from jen.services.access import assert_subnet_access
+    if not assert_subnet_access(subnet_id):
+        return jsonify({"error": "Access denied"}), 403
     try:
         db = _get_db()
         with db.cursor() as cur:
