@@ -401,7 +401,15 @@ class TestSearchSubnetFiltering:
         _restricted_client(client, db, allowed_subnets=[999])
         r = client.get("/search?q=searchtarget")
         assert r.status_code == 200
-        assert b"searchtarget" not in r.data
+        # v4.4.9 fix: the original assertion (b"searchtarget" not in r.data)
+        # was always going to be flaky — the search page echoes the query
+        # term back in the input box's value and the "No results found for
+        # X" message regardless of whether anything actually leaked, so the
+        # literal query string is present on every search page by design.
+        # What actually matters is that the leaked row's real data (its IP)
+        # never renders, and that the page correctly reports zero results.
+        assert b"10.99.0.60" not in r.data
+        assert b"No results found" in r.data or b"0 results" in r.data
 
     def test_reservation_visible_to_unrestricted_user(self, client, db, mock_kea):
         with db.cursor() as cur:

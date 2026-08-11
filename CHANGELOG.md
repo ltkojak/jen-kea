@@ -2,6 +2,56 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.10] - 2026-08-09
+
+### Test infrastructure: full suite now passes 255/255
+
+Closes out the `jen_test.hosts` gap that had been blocking six tests
+across every audit round since v4.4.4, plus one flaky test assertion
+found in the process. No production code changed.
+
+### Fixed
+- **`jen_test` was missing the Kea-side schema tables entirely.** `kea_db`
+  and `jen_db` both point at the same single `jen_test` database in
+  tests, but `init_jen_db()` only ever created *Jen's* own tables — in
+  production, `hosts`/`lease4`/`dhcp4_options` come from Kea's own
+  schema installer, not from Jen. `lease4` and `dhcp4_options` had
+  apparently been created manually at some point (tests touching them
+  already passed), but `hosts` never was, which is exactly why every
+  test that needed to `INSERT INTO hosts` failed with `Table
+  'jen_test.hosts' doesn't exist` — six tests, across `test_reservations.py`
+  and `test_security_fixes.py`, every single audit round since v4.4.4.
+  Added `_ensure_kea_schema()` to `tests/conftest.py`: three
+  `CREATE TABLE IF NOT EXISTS` statements matching Kea's real
+  `dhcp4.sql` schema (trimmed to the columns Jen's own queries actually
+  touch), run once per test session alongside the existing
+  `init_jen_db()` call. Idempotent regardless of what's already present,
+  so the test suite is now fully self-contained — no more manual DB
+  setup steps required outside this repo, on any machine.
+- **One flaky test assertion.** `test_reservation_hidden_from_restricted_user`
+  asserted the literal search query string never appeared anywhere in
+  the response — but the search page always echoes the query term back
+  in the input box's value and the "No results found for X" message,
+  regardless of whether anything actually leaked. That assertion was
+  never going to reliably test what it claimed to. Fixed to check the
+  actual leaked data (the target reservation's IP address) is absent,
+  plus a positive check that the page reports zero results.
+
+### Verification note
+Actually installed MariaDB, created a real `jen_test` database, and ran
+the complete `pytest` suite end-to-end in this environment for the
+first time this whole audit series — previous rounds could only verify
+via AST parsing, real imports, and targeted mocked unit tests, since no
+live database was available. This is a meaningfully higher bar of
+verification: **255 passed, 0 failed**, confirming every fix from
+v4.4.4 through v4.4.9 behaves correctly against a real database, not
+just in isolated reasoning. (Also had to symlink the test environment's
+repo location to `/opt/jen` — `create_app()` hardcodes its
+`template_folder` to that production-specific absolute path, which is
+correct for how Jen is actually deployed but meant the templates
+weren't found from an arbitrary checkout location; unrelated to any
+code in this release, just a note for future reference.)
+
 ## [4.4.9] - 2026-08-08
 
 ### Security & correctness: findings from a full file-by-file audit
