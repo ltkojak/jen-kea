@@ -49,7 +49,6 @@ HTTPS_PORT: int = 8443
 
 KEA_SSH_HOST: str = ""
 KEA_SSH_USER: str = ""
-KEA_SSH_KEY:  str = "/etc/jen/ssh/jen_rsa"
 KEA_CONF:     str = "/etc/kea/kea-dhcp4.conf"
 
 # ── Runtime state ────────────────────────────────────────────────────────────

@@ -2,6 +2,119 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.9] - 2026-08-08
+
+### Security & correctness: findings from a full file-by-file audit
+
+This closes out a complete pass through every previously-unread file in
+the codebase, prompted by the missing-`@bp.route` bug found in
+`settings.py`. Two things turned out to be broken features (not
+security bugs on their own), and a real, consistent pattern of subnet-
+authorization gaps showed up on secondary/admin-action endpoints —
+distinct from the primary list views, which were already solid.
+
+### Fixed — broken features
+- **MFA enforcement policy could not be changed through the running
+  application at all.** `save_mfa_mode()` was missing its
+  `@bp.route(...)` decorator entirely — Flask never registered the URL,
+  so the settings form's POST to `/settings/system/save-mfa-mode` was a
+  guaranteed 404 on every attempt. Verified the fix by actually
+  registering the blueprint against a real Flask app and confirming the
+  route now appears in the URL map.
+- **Custom nav-bar logo upload was equally broken**, same root cause —
+  `upload_nav_logo()` was missing its route decorator too. Both were
+  the *only* two instances of this bug anywhere in the app — checked
+  systematically across every route file and both plugins.
+
+### Fixed — subnet-authorization gaps
+A consistent pattern: primary list views (leases, reservations, devices,
+subnets) and the routes fixed in earlier 4.4.x releases were already
+correctly scoped to `current_user`'s accessible subnets. Secondary
+endpoints added since — mostly dashboard widgets and individual admin
+actions — inconsistently inherited that discipline. All of the
+following now use the same `add_subnet_restriction()` / `filter_subnet_map()`
+/ `can_access_subnet()` pattern already used everywhere else:
+
+- `jen/routes/subnets.py`: `save_subnet_note()` had no access check at
+  all — a subnet-restricted admin could write/overwrite notes for any
+  subnet_id.
+- `jen/routes/dashboard.py`: **three** endpoints leaked data across
+  subnet restrictions — `api_lease_history()` (both the specific-subnet
+  and the "all subnets" branches), `api_recent_leases()` (the dashboard
+  widget showing the 50 most recent leases system-wide), and
+  `api_alert_summary()` (alert *message text* can embed subnet names;
+  restricted users now get type/channel/status/timestamp but not the
+  message body, since `alert_log` has no subnet_id column to filter on
+  structurally).
+- `jen/routes/leases.py`: **two unauthorized cross-subnet writes**, more
+  serious than the read-side leaks — `delete_stale_leases()` deleted
+  stale leases across *every* subnet regardless of the acting admin's
+  restrictions (verified the generated SQL directly for restricted/
+  unrestricted/zero-access cases), and `release_lease()` let any admin
+  force-release a lease for any IP with no check it was even in a
+  subnet they manage. Also `ipmap()`: the subnet dropdown correctly
+  only *offered* accessible subnets, but the URL parameter itself
+  wasn't enforced.
+- `plugins/network-discovery/plugin.py`: `/api/scan-status/<subnet_id>`
+  (fixed in 4.4.8, included here for completeness of the pattern).
+
+### Fixed — other real findings
+- **`devices.py`'s `icon_override` field had no validation** before being
+  used to build a filesystem path check in `fingerprint.py` — same class
+  of gap already closed for the sibling icon upload/delete routes.
+  Requires admin access and wasn't independently exploitable (Flask's
+  static file serving already rejects traversal), but now matches the
+  same validation discipline as every other icon-name input.
+- **The `network-discovery` plugin's "rogue device" alert rendered
+  blank and was unreachable from the settings UI** — `rogue_device` was
+  never added to `DEFAULT_TEMPLATES` or `ALERT_TYPE_LABELS` in
+  `alerts.py`. Verified the fix by actually calling
+  `render_template_str()` with the plugin's real arguments and
+  confirming it renders correctly; also confirmed the alerts settings
+  page will now expose it automatically for admins to enable, since
+  that page loops over `ALERT_TYPE_LABELS`.
+- **`ssl_configured()` required `SSL_COMBINED` to exist unconditionally**,
+  but that file is only guaranteed present when certs are uploaded
+  through Jen's own UI. Anyone provisioning certs externally (e.g.
+  mounting Let's Encrypt/cert-manager output into a Docker volume) had
+  valid cert+key files that this check silently rejected, falling back
+  to HTTP-only with no explanation. Now matches `run.py`'s own existing
+  optional treatment of that file.
+- **IPAM plugin**: `save_entry()` now validates the submitted IP is
+  actually within the target subnet's own CIDR before storing it
+  (previously nothing stopped an orphaned, mismatched entry from being
+  created); `_build_address_space()` now caps enumeration at 65,536
+  addresses so a mistyped CIDR (a /8 instead of a /24) can't try to
+  materialize millions of address entries in memory.
+- **Network-discovery plugin's rogue-device detection was IP-only** —
+  a `kea_macs` variable was declared and never populated, so a known
+  device with a MAC in Kea but a renewed/different IP got wrongly
+  flagged "rogue" on every scan. Implemented real MAC-based matching
+  alongside the existing IP match; verified with a direct test that a
+  device with a matching MAC but different IP now correctly resolves
+  as known rather than rogue.
+
+### Housekeeping
+- Removed three more dangling section-header comments with nothing
+  under them in `jen/routes/subnets.py` (same leftover-from-refactor
+  pattern already cleaned up in `servers.py`).
+- Removed the dead, duplicate `KEA_SSH_KEY` constant in
+  `jen/extensions.py` — it was only ever written, never read; the
+  actually-used `SSH_KEY_PATH` now reads directly from config.
+
+### Verification note
+Real dependencies are installed in the audit environment used for this
+release, which allowed genuine verification beyond static analysis for
+several of these: actually registering Flask blueprints and checking
+the resulting URL map (the two missing-route fixes), directly calling
+`add_subnet_restriction()` with mocked restricted/unrestricted/zero-
+access users and inspecting the generated SQL (the `delete_stale_leases`
+fix), directly calling `render_template_str()` with the plugin's real
+arguments (the `rogue_device` fix), and a mocked-DB unit test for the
+MAC cross-referencing fix. Still no live MariaDB available, so the real
+`pytest` suite has not been run against this release — needed on your
+end before considering it fully verified.
+
 ## [4.4.8] - 2026-08-07
 
 ### Security & correctness: findings from actually reading every file not yet opened

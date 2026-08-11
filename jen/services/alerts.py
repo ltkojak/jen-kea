@@ -82,6 +82,7 @@ DEFAULT_TEMPLATES = {
     "stale_reservation":  "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
     "kea_config_changed": "⚙️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
     "daily_summary":      "📊 <b>Daily Summary</b>\n{summary}",
+    "rogue_device":       "🚨 <b>{subject}</b>\n{body}",
 }
 
 ALERT_TYPE_LABELS = {
@@ -98,6 +99,7 @@ ALERT_TYPE_LABELS = {
     "stale_reservation":  "Stale reservation detected",
     "kea_config_changed": "Kea config changed via Jen",
     "daily_summary":      "Daily summary",
+    "rogue_device":       "Rogue device detected (Network Discovery plugin)",
 }
 
 def get_alert_template(alert_type):

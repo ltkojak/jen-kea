@@ -748,10 +748,6 @@ print('ok')
 
     return redirect(url_for('subnets.subnets'))
 
-# ─────────────────────────────────────────
-# DDNS
-# ─────────────────────────────────────────
-
 @bp.route("/subnets/save-note", methods=["POST"])
 @login_required
 @_admin_required
@@ -760,6 +756,8 @@ def save_subnet_note():
         subnet_id = int(request.form.get("subnet_id"))
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid subnet ID"})
+    if not current_user.can_access_subnet(subnet_id):
+        return jsonify({"ok": False, "error": "You do not have access to that subnet."}), 403
     notes = request.form.get("notes", "").strip()[:1000]
     try:
         with __db.jen_db() as db:
@@ -773,7 +771,3 @@ def save_subnet_note():
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
-
-# ─────────────────────────────────────────
-# HA / Multi-server Status
-# ─────────────────────────────────────────

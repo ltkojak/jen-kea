@@ -188,6 +188,15 @@ def edit_device(device_id):
     notes = request.form.get("notes", "").strip()[:1000]
     type_override = request.form.get("type_override", "").strip()
     icon_override = request.form.get("icon_override", "").strip()  # icon name without .svg
+    # v4.4.9: this value is used to build a filesystem path check in
+    # fingerprint.get_device_info_map() — same class of gap already
+    # closed for the sibling icon upload/delete routes elsewhere in
+    # settings.py. Not independently exploitable (requires admin access,
+    # and the actual file-serving is Flask's own static route, which
+    # already rejects traversal), but should match the same validation
+    # discipline as every other icon-name input in the app.
+    if icon_override and not icon_override.replace("-", "").replace("_", "").isalnum():
+        return jsonify({"ok": False, "error": "Invalid icon name."}), 400
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:

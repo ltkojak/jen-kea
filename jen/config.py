@@ -102,9 +102,8 @@ class AppConfig:
 
         extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host",     fallback="")
         extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user",     fallback="")
-        extensions.KEA_SSH_KEY  = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
         extensions.KEA_CONF     = cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf")
-        extensions.SSH_KEY_PATH = extensions.KEA_SSH_KEY
+        extensions.SSH_KEY_PATH = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
 
@@ -267,7 +266,16 @@ def load_subnet_map(cfg: configparser.ConfigParser) -> dict:
 
 
 def ssl_configured() -> bool:
-    """Return True if SSL certificate files are all present."""
-    return all(os.path.exists(p) for p in [
-        extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_COMBINED
-    ])
+    """Return True if a usable SSL certificate + key are present.
+
+    v4.4.9: previously required SSL_COMBINED to exist too — but that
+    file is only guaranteed when certs are uploaded through Jen's own
+    settings UI (upload_cert() always writes it). Anyone provisioning
+    certs externally — mounting Let's Encrypt/cert-manager output into
+    a Docker volume, for instance — would have a valid cert+key pair
+    that this function refused to recognize, silently falling back to
+    HTTP-only with no indication why. run.py already treats
+    SSL_COMBINED as optional (falls back to SSL_CERT if absent); this
+    now matches that.
+    """
+    return os.path.exists(extensions.SSL_CERT) and os.path.exists(extensions.SSL_KEY)

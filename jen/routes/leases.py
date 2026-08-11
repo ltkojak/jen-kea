@@ -191,10 +191,23 @@ def leases():
 @login_required
 @_admin_required
 def delete_stale_leases():
+    # v4.4.9: previously deleted stale leases across every subnet
+    # system-wide regardless of the acting admin's subnet_access — a
+    # subnet-restricted admin clicking this button on their own filtered
+    # view was actually wiping stale leases everywhere, not just their
+    # own subnets. Scoped to accessible subnets, same pattern as every
+    # read-side subnet restriction elsewhere in the app.
+    from jen.services.access import add_subnet_restriction
+    where, params = ["state != 0"], []
+    where, params = add_subnet_restriction(where, params, "", "subnet_id")
+    # add_subnet_restriction prefixes the column with "{table_alias}.",
+    # which is wrong for this unaliased single-table DELETE — strip the
+    # leading "." it leaves behind when table_alias is empty.
+    where = [w.lstrip(".") for w in where]
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
-                cur.execute("DELETE FROM lease4 WHERE state != 0")
+                cur.execute(f"DELETE FROM lease4 WHERE {' AND '.join(where)}", params)
                 deleted = cur.rowcount
             db.commit()
         flash(f"Deleted {deleted} expired/stale lease(s).", "success")
@@ -214,6 +227,17 @@ def release_lease():
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
+                # v4.4.9: check which subnet this IP actually belongs to
+                # before touching it — previously any admin could release
+                # any lease system-wide by IP alone, no subnet check at all.
+                cur.execute("SELECT subnet_id FROM lease4 WHERE inet_ntoa(address)=%s AND state=0", (ip,))
+                row = cur.fetchone()
+                if not row:
+                    flash(f"No active lease found for {ip}.", "warning")
+                    return redirect(url_for('leases.leases'))
+                if not current_user.can_access_subnet(row["subnet_id"]):
+                    flash("You do not have access to that subnet.", "error")
+                    return redirect(url_for('leases.leases'))
                 cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
                 affected = cur.rowcount
             db.commit()
@@ -287,13 +311,19 @@ def _build_pool_blocks(pools):
 @bp.route("/ipmap")
 @login_required
 def ipmap():
-    subnet_filter = request.args.get("subnet", list(extensions.SUBNET_MAP.keys())[0] if extensions.SUBNET_MAP else 1)
+    # v4.4.9: subnet_filter was validated against the full SUBNET_MAP
+    # only — the dropdown UI correctly only offered accessible subnets,
+    # but the URL parameter itself wasn't enforced, so a restricted user
+    # could edit the URL and view leases/reservations for any subnet.
+    accessible_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+    default_subnet = list(accessible_map.keys())[0] if accessible_map else (list(extensions.SUBNET_MAP.keys())[0] if extensions.SUBNET_MAP else 1)
+    subnet_filter = request.args.get("subnet", default_subnet)
     try:
         subnet_filter = int(subnet_filter)
-        if subnet_filter not in extensions.SUBNET_MAP:
-            subnet_filter = list(extensions.SUBNET_MAP.keys())[0]
+        if subnet_filter not in accessible_map:
+            subnet_filter = default_subnet
     except (ValueError, IndexError):
-        subnet_filter = list(extensions.SUBNET_MAP.keys())[0] if extensions.SUBNET_MAP else 1
+        subnet_filter = default_subnet
     leases_by_ip = {}
     reservations_by_ip = {}
     cidr = extensions.SUBNET_MAP.get(subnet_filter, {}).get("cidr", "")

@@ -191,6 +191,8 @@ def save_audit_retention():
         flash("Audit log retention set to keep forever (0 = no limit).", "success")
     __user.audit("SETTINGS", "audit_retention", f"retention_days={days}")
     return redirect(url_for('settings.settings_system'))
+
+@bp.route("/settings/system/save-mfa-mode", methods=["POST"])
 @login_required
 @_admin_required
 def save_mfa_mode():
@@ -1090,6 +1092,8 @@ def delete_custom_icon(name):
     else:
         flash("Icon not found.", "error")
     return redirect(url_for('settings.settings_icons'))
+
+@bp.route("/settings/upload-nav-logo", methods=["POST"])
 @login_required
 @_admin_required
 def upload_nav_logo():

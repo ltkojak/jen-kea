@@ -298,6 +298,20 @@ def api_lease_history():
     """
     days = min(int(request.args.get("days", 7)), 90)
     subnet_id = request.args.get("subnet")
+    # v4.4.9: this endpoint had no subnet-access check at all — a
+    # subnet-restricted user could pass ?subnet=<any_id> for a specific
+    # subnet's history, or omit it entirely and get every subnet's
+    # history ungrouped by access. Both branches now respect
+    # current_user's accessible subnets, same as api_stats()/
+    # api_top_devices() in this same file already do correctly.
+    if subnet_id:
+        try:
+            subnet_id_int = int(subnet_id)
+        except (TypeError, ValueError):
+            return jsonify({"history": {}, "error": "Invalid subnet id"}), 400
+        if not current_user.can_access_subnet(subnet_id_int):
+            return jsonify({"history": {}, "error": "Access denied"}), 403
+    accessible_ids = list(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -314,18 +328,22 @@ def api_lease_history():
                         GROUP BY subnet_id, hour
                         ORDER BY hour ASC
                     """, (subnet_id, days))
-                else:
-                    cur.execute("""
+                elif accessible_ids:
+                    placeholders = ",".join(["%s"] * len(accessible_ids))
+                    cur.execute(f"""
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                                AVG(dynamic_leases) AS dynamic,
                                AVG(active_leases)  AS active,
                                MAX(pool_size)      AS pool_size
                         FROM lease_history
-                        WHERE snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                        WHERE subnet_id IN ({placeholders})
+                          AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                         GROUP BY subnet_id, hour
                         ORDER BY subnet_id, hour ASC
-                    """, (days,))
+                    """, accessible_ids + [days])
+                else:
+                    cur.execute("SELECT 1 FROM DUAL WHERE 1=0")  # no accessible subnets
                 rows = cur.fetchall()
 
         # Group by subnet_id
@@ -424,13 +442,22 @@ def api_alert_summary():
                 """)
                 rows = cur.fetchall()
         alerts = []
+        # v4.4.9: alert_log has no subnet_id column, and message text is
+        # freeform — some alert types (utilization_high, new_lease, etc.)
+        # embed a subnet name directly in the message. Rather than parse
+        # message text to filter it (fragile, and a schema change to add
+        # real subnet_id tracking is a bigger job than this fix), a
+        # subnet-restricted user gets type/channel/status/timestamp but
+        # not the message body itself, which is where any subnet-specific
+        # detail actually lives. Unrestricted users are unaffected.
+        show_message = current_user.all_subnets
         for row in rows:
             alerts.append({
                 "type":    row["alert_type"],
                 "channel": row["channel_type"],
-                "message": row["message"],
+                "message": row["message"] if show_message else "",
                 "status":  row["status"],
-                "error":   row["error"] or "",
+                "error":   row["error"] or "" if show_message else "",
                 "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M UTC") if row["sent_at"] else "",
             })
         return jsonify({"alerts": alerts})
@@ -454,18 +481,23 @@ def api_recent_leases():
     try:
         with __db.kea_db() as db:
             window_seconds = int(hours * 3600)
+            # v4.4.9: this widget had no subnet filtering at all — any
+            # logged-in user saw the 50 most recent leases system-wide,
+            # including subnets they're restricted away from.
+            from jen.services.access import add_subnet_restriction
+            where, params = ["l.state=0", "l.expire > NOW()",
+                              "(l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)"], [window_seconds]
+            where, params = add_subnet_restriction(where, params, "l", "subnet_id")
             with db.cursor() as cur:
-                cur.execute("""
+                cur.execute(f"""
                     SELECT inet_ntoa(l.address) AS ip, l.hostname,
                            HEX(l.hwaddr) AS mac_hex, l.subnet_id,
                            (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
                     FROM lease4 l
-                    WHERE l.state=0
-                      AND l.expire > NOW()
-                      AND (l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)
+                    WHERE {' AND '.join(where)}
                     ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
                     LIMIT 50
-                """, (window_seconds,))
+                """, params)
                 for row in cur.fetchall():
                     mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                     sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))

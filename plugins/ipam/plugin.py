@@ -51,6 +51,18 @@ def _build_address_space(subnet_id: int, cidr: str) -> list:
     except ValueError:
         return []
 
+    # v4.4.9: cap enumeration so a mistyped CIDR (a /8 instead of a /24,
+    # say) can't try to materialize millions of address entries in
+    # memory. A /16 (65,534 hosts) already comfortably covers any real
+    # homelab subnet; anything larger is almost certainly a config typo.
+    MAX_ADDRESS_SPACE = 65536
+    if network.num_addresses > MAX_ADDRESS_SPACE:
+        logger.warning(
+            f"IPAM: subnet {subnet_id} CIDR {cidr} has {network.num_addresses} "
+            f"addresses — exceeds the {MAX_ADDRESS_SPACE} cap, refusing to enumerate."
+        )
+        return []
+
     # All IPs in the pool (skip network and broadcast)
     all_ips = [str(h) for h in network.hosts()]
 
@@ -253,10 +265,24 @@ def save_entry(subnet_id):
 
     # Validate IP
     try:
-        ipaddress.IPv4Address(ip)
+        ip_obj = ipaddress.IPv4Address(ip)
     except ValueError:
         flash("Invalid IP address.", "error")
         return redirect(url_for("ipam.subnet_detail", subnet_id=subnet_id))
+
+    # v4.4.9: confirm the IP actually falls within this subnet's own CIDR
+    # before storing it against subnet_id — previously nothing stopped an
+    # (ip, subnet_id) pair from being stored that didn't correspond to
+    # any real address in that subnet, leaving an orphaned row that never
+    # surfaces anywhere since display always rebuilds the address space
+    # from the subnet's real CIDR.
+    subnet_cidr = _subnet_map().get(subnet_id, {}).get("cidr", "")
+    try:
+        if subnet_cidr and ip_obj not in ipaddress.IPv4Network(subnet_cidr, strict=False):
+            flash(f"{ip} is not within this subnet's address range ({subnet_cidr}).", "error")
+            return redirect(url_for("ipam.subnet_detail", subnet_id=subnet_id))
+    except ValueError:
+        pass  # malformed subnet CIDR — let it through rather than block on a config issue
 
     # If status set to available and no other fields — just delete the entry
     if ipam_status == "available" and not label and not owner and not notes:
