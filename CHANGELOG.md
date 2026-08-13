@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.14] - 2026-08-13
+
+### Housekeeping: five orphaned files removed, and a real gap in the deploy process documented
+
+Found by pulling the actual published `v4.4.13` GitHub archive and
+diffing it against the working tree that built it — the first time
+that check has been done this whole audit series. It surfaced a real
+structural gap: the tarball-based deploy process
+(`tar xzf --strip-components=1 -C .`) can only add or overwrite files,
+never delete one that's no longer in the current tarball but still
+sitting in the working tree from an earlier release. See
+`docs/ARCHITECTURE.md` §5 for the full writeup.
+
+### Removed
+- **`jen.py`** (repo root) — the original pre-2.6.0 monolith. Confirmed
+  byte-identical to `legacy/jen.py` (minus the explanatory "LEGACY
+  FILE — NOT EXECUTED" header), confirmed never copied anywhere during
+  install (`install.sh` only ever copies `legacy/jen.py` to the install
+  destination), confirmed not referenced by the Dockerfile since the
+  v4.4.9 fix. 6,272 lines of dead duplication.
+- **`docs/github-release-2.6.x.md`, `-2.7.x.md`, `-3.1.x.md`, `-3.2.x.md`**
+  — confirmed byte-identical duplicates of the properly-organized copies
+  already living in `docs/release-history/`, which is what
+  `docs/release-history/README.md` actually links to. These four loose
+  copies in bare `docs/` were leftover from before that subfolder
+  existed.
+
+### Documentation
+- `docs/ARCHITECTURE.md` — added the deploy-model gap to the "Known
+  gaps" section, including the practical mitigation (periodically diff
+  the real published archive against the working tree) rather than
+  just noting the problem.
+
 ## [4.4.13] - 2026-08-13
 
 ### The first release to actually publish since v4.4.10

@@ -215,3 +215,19 @@ Documenting these here rather than letting them go unstated:
 - **No professional external security audit.** See `SECURITY.md` for
   the honest framing of what level of scrutiny this project has
   actually had.
+- **The tarball-based deploy model can't delete files.** Every release
+  is deployed via `tar xzf ~/jen-vX.Y.Z.tar.gz --strip-components=1 -C .`
+  extracted on top of an existing checkout — which can only add or
+  overwrite files, never remove one that's no longer in the current
+  tarball but still sitting in the working tree from an earlier release.
+  Discovered concretely in the v4.4.14 cleanup: the top-level `jen.py`
+  monolith (retired at v2.6.0, moved to `legacy/jen.py`) and four
+  `docs/github-release-*.x.md` files (properly relocated to
+  `docs/release-history/` at some point since) had been quietly
+  persisting in the real repository for releases, invisible to every
+  tarball built from a clean working tree that never had them in the
+  first place. There's no automatic detection for this — the practical
+  mitigation is periodically pulling the actual published GitHub
+  archive (`github.com/<repo>/archive/refs/tags/vX.Y.Z.tar.gz`) and
+  diffing it against the working tree that built it, which is how this
+  specific instance was found.
