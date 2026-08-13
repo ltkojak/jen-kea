@@ -2,6 +2,81 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.16] - 2026-08-14
+
+### The self-update mechanism has never updated run.py — likely the most significant bug found this entire audit series
+
+Not a v4.4.15 regression — this bug has existed since the self-update
+feature was built. It only became externally visible now because
+v4.4.15 was the first release in this whole audit series to actually
+change `run.py` itself.
+
+### The bug
+`self_update()`'s generated helper script (the one that copies files
+from a downloaded release into `/opt/jen`) has a `copy_cmds` list that
+included `jen/`, `templates/`, brand icons, the systemd unit, and the
+sudoers file — **but never `run.py`**, the actual file systemd executes
+as the entry point. Every self-update correctly refreshed the `jen/`
+package and correctly reported the new version (`JEN_VERSION`, which
+lives in `jen/__init__.py` — part of the package that *did* get
+updated), giving every appearance of a complete, successful update —
+while `run.py` itself silently stayed frozen at whatever it was from
+the last time `install.sh` was run manually, or a fresh install.
+
+**Impact:** anyone using the "Check for Updates" → "Update Now" button
+as their actual deployment path, rather than manually running
+`install.sh --upgrade`, has had a stale `run.py` this whole time,
+regardless of how many releases they've self-updated through. Any past
+or future change to `run.py` specifically — SSL/TLS configuration,
+port binding, the background scheduler startup call, the
+env-var-to-config generation logic for Docker — would never have
+actually reached a self-updated installation, silently, with the UI
+reporting success and the correct version number throughout.
+
+### How this was found
+A very long, methodical debugging session with the actual production
+user, working from "the logs still look unformatted after the v4.4.15
+logging update" through a sequence of ruled-out hypotheses: Werkzeug
+version (tested 2.3.7, 3.0.1, and the exact 3.0.1 running in
+production — all correct in isolation), the `www-data` user
+specifically, stale `__pycache__` (genuinely stale, genuinely cleared,
+made no difference), non-TTY output, real SSL context, real
+`create_app()` — every single variable, tested individually and
+combined, worked correctly. The actual break was found only by
+checksumming the deployed `/opt/jen/run.py` against the shipped
+release and discovering a hard mismatch (175 lines deployed vs. 186
+shipped) — at which point re-reading `self_update()`'s own file list
+made the gap obvious.
+
+### Fixed
+- `jen/routes/settings.py`'s `self_update()`: `run.py` added to the
+  generated helper script's copy commands and to the post-copy
+  `chown`. One line each, but the actual fix is knowing to look for it
+  — see `tests/test_self_update.py` below for how this is now
+  permanently guarded against.
+- **New: `tests/test_self_update.py`** — `self_update()` had zero test
+  coverage of any kind before this, which is exactly how a bug this
+  fundamental survived indefinitely. The new test builds a real,
+  minimal, valid tarball on the fly, mocks only the network calls
+  (GitHub API response + tarball download), and intercepts the actual
+  generated helper script's file content before cleanup deletes it —
+  then asserts a real `cp ... run.py ... run.py` command is present.
+  Validated the hard way: first draft used a loose substring check
+  (`"run.py" in script`) that passed even against deliberately
+  re-broken code, because the `chown` line also happens to mention
+  `run.py` — caught by actually reverting the fix and confirming the
+  test failed before trusting it, exactly as this whole audit series
+  has tried to do throughout. Tightened to a regex requiring an actual
+  `cp` command, re-verified it now correctly fails against the broken
+  version and passes against the fixed one.
+
+### If you're running a self-updated install
+Manually verify `/opt/jen/run.py` actually matches your git checkout's
+`run.py` after this update — `sha256sum /opt/jen/run.py ~/jen/run.py`
+should show identical hashes. If your checkout is current and the
+hashes still don't match, something else copied it out of sync and is
+worth investigating separately.
+
 ## [4.4.15] - 2026-08-14
 
 ### Tier 2, part 1: real observability — expanded metrics and actual logging configuration

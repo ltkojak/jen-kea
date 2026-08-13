@@ -1357,6 +1357,24 @@ def self_update():
                 f'rm -rf "{install_dir}/jen" && cp -r "{extracted}/jen" "{install_dir}/jen"'
             )
 
+        # Entry point — v4.4.16 fix: this was never in the copy list at
+        # all, on any release before this one. self_update() would
+        # correctly update the jen/ package (imported by run.py), but
+        # run.py itself — the actual file systemd executes — was never
+        # touched. Anyone using the self-update button as their real
+        # deployment path (not `install.sh --upgrade`) has been silently
+        # running a stale run.py since whenever it was last installed
+        # manually, for every release in between, regardless of what
+        # actually changed in run.py itself. Found via the v4.4.15
+        # logging-config rollout: every unit test and manual repro of
+        # jen/logging_config.py passed, because importing it directly
+        # always worked — the bug was entirely that the deployed run.py
+        # never actually called it, since that specific file had quietly
+        # never been part of what self-update installs.
+        run_py_src = os.path.join(extracted, "run.py")
+        if os.path.isfile(run_py_src):
+            copy_cmds.append(f'cp "{run_py_src}" "{install_dir}/run.py"')
+
         # Templates
         if os.path.isdir(os.path.join(extracted, "templates")):
             copy_cmds.append(
@@ -1392,7 +1410,7 @@ def self_update():
                 f'cp "{sudoers_src}" /etc/sudoers.d/jen && chmod 440 /etc/sudoers.d/jen'
             )
 
-        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/templates" "{install_dir}/static/icons/brands" 2>/dev/null || true')
+        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/run.py" "{install_dir}/templates" "{install_dir}/static/icons/brands" 2>/dev/null || true')
 
         with open(helper, "w") as f:
             f.write("#!/bin/bash\nset -e\n")
