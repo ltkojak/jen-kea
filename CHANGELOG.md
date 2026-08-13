@@ -2,6 +2,34 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.13] - 2026-08-13
+
+### The first release to actually publish since v4.4.10
+
+Not new functional content on its own — this tag exists because
+**v4.4.11 never actually became a GitHub Release.** When that tag was
+pushed, `release.yml`'s `test` job (correctly) failed on the
+`/etc/jen` permission bug documented in v4.4.12, so the `needs: test`
+gate correctly blocked `release` from running. The tarball and
+changelog entry for v4.4.11 existed in this repo; the published GitHub
+Release did not — confirmed directly by checking
+`github.com/ltkojak/jen-kea/releases`, which showed v4.4.10 as the
+newest entry even after the v4.4.11 tag was pushed. Jen's own
+"Check for Updates" feature was reporting the truth the whole time —
+there genuinely was nothing newer published to check for.
+
+The v4.4.11 git tag still exists and now permanently points at a
+commit that predates the CI fix, so re-running that tag's workflow
+would just fail the same way again. Rather than force-move an existing
+tag, this cuts a fresh release at current `main` HEAD — which now
+carries v4.4.11's real content (the full Tier-1 maturity-roadmap work:
+CI test gate, bandit/pip-audit scanning, SECURITY.md, ARCHITECTURE.md,
+23 new tests) together with the v4.4.12 CI fix that makes the gate
+itself actually pass on real runners.
+
+Once this tag's `release.yml` run goes green end to end, Jen's
+"Check for Updates" should correctly show v4.4.13 as available.
+
 ## [4.4.12] - 2026-08-13
 
 ### Fixed: the new CI itself was broken on real GitHub Actions runners
