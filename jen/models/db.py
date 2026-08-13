@@ -104,7 +104,7 @@ def get_jen_db() -> pymysql.connections.Connection:
             if _jen_pool is None:           # double-checked locking
                 try:
                     _jen_pool = _make_jen_pool()
-                    logger.warning("Jen DB connection pool initialised (dbutils)")
+                    logger.info("Jen DB connection pool initialised (dbutils)")
                 except Exception as e:
                     logger.warning(f"Jen DB pool failed, using direct connections: {e}")
                     return pymysql.connect(
@@ -130,7 +130,7 @@ def get_kea_db() -> pymysql.connections.Connection:
             if _kea_pool is None:
                 try:
                     _kea_pool = _make_kea_pool()
-                    logger.warning("Kea DB connection pool initialised (dbutils)")
+                    logger.info("Kea DB connection pool initialised (dbutils)")
                 except Exception as e:
                     logger.warning(f"Kea DB pool failed, using direct connections: {e}")
                     return pymysql.connect(

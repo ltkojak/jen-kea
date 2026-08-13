@@ -84,3 +84,66 @@ class TestApiStats:
         assert r.status_code == 200
         data = json.loads(r.data)
         assert data.get("kea_up") is False
+
+
+class TestPrometheusMetrics:
+    """v4.4.15: /metrics expanded from 2 metric families to 7. This
+    endpoint has no auth (by design, for scraper compatibility), so it's
+    reachable with a bare `client` fixture, not `logged_in_client`."""
+
+    def test_unauthenticated_access_allowed(self, client, mock_kea):
+        r = client.get("/metrics")
+        assert r.status_code == 200
+        assert r.mimetype == "text/plain"
+
+    def test_output_is_valid_prometheus_exposition_format(self, client, mock_kea):
+        r = client.get("/metrics")
+        text = r.data.decode()
+        # Every metric line must be preceded by its own HELP and TYPE
+        # comment — this is the actual Prometheus exposition format
+        # contract, not just "doesn't crash".
+        for family in ["jen_subnet_active_leases", "jen_subnet_reserved_hosts",
+                        "jen_subnet_pool_size", "jen_subnet_utilization_ratio",
+                        "jen_alerts_sent_total", "jen_kea_up", "jen_server_up"]:
+            assert f"# HELP {family}" in text, f"missing HELP for {family}"
+            assert f"# TYPE {family}" in text, f"missing TYPE for {family}"
+
+    def test_alerts_sent_total_is_declared_a_counter(self, client, mock_kea):
+        # The one genuinely-monotonic metric here — everything else is a
+        # gauge. Getting this TYPE line wrong would make Grafana's
+        # rate()/increase() panels silently misbehave.
+        r = client.get("/metrics")
+        text = r.data.decode()
+        assert "# TYPE jen_alerts_sent_total counter" in text
+
+    def test_server_up_reflects_mock_kea_server(self, client, mock_kea):
+        r = client.get("/metrics")
+        text = r.data.decode()
+        assert 'jen_server_up{server="Test Kea"} 1' in text
+
+    def test_token_protection_when_configured(self, client, mock_kea, monkeypatch):
+        from jen import extensions
+        import configparser
+        test_cfg = configparser.ConfigParser()
+        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
+        test_cfg["server"] = {"metrics_token": "s3cret"}
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+
+        r_no_token = client.get("/metrics")
+        assert r_no_token.status_code == 401
+
+        r_wrong_token = client.get("/metrics", headers={"Authorization": "Bearer wrong"})
+        assert r_wrong_token.status_code == 401
+
+        r_right_token = client.get("/metrics", headers={"Authorization": "Bearer s3cret"})
+        assert r_right_token.status_code == 200
+
+    def test_survives_kea_down(self, client, monkeypatch):
+        from jen.services import kea as kea_svc
+        monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
+        monkeypatch.setattr(kea_svc, "kea_command",
+                           lambda *a, **kw: {"result": 1, "text": "error"})
+        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
+        r = client.get("/metrics")
+        assert r.status_code == 200
+        assert "jen_kea_up 0" in r.data.decode()

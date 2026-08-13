@@ -40,6 +40,7 @@ from jen import JEN_VERSION, create_app
 from jen import extensions
 from jen.config import ssl_configured
 from jen.services.alerts import check_alerts
+from jen.logging_config import configure_logging
 
 
 def _build_config_from_env():
@@ -129,10 +130,20 @@ forward_zone = {os.environ.get('JEN_DDNS_ZONE', '')}
 
 
 def main():
+    # Configure logging first, from env vars only — create_app() below
+    # logs its own DB pool setup before extensions.cfg is populated, so
+    # this has to happen before create_app() runs, not after. Once
+    # create_app() returns, extensions.cfg is loaded — reconfigure with
+    # it so any file-based [server] log_level/log_format/log_file
+    # settings take effect for everything logged from here on.
+    configure_logging()
+
     # Auto-generate config from env vars if running in Docker
     _build_config_from_env()
 
     app = create_app()
+
+    configure_logging(extensions.cfg)
 
     HTTP_PORT  = extensions.HTTP_PORT
     HTTPS_PORT = extensions.HTTPS_PORT

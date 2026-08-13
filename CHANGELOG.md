@@ -2,6 +2,94 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.15] - 2026-08-14
+
+### Tier 2, part 1: real observability — expanded metrics and actual logging configuration
+
+First two items off the Jen maturity roadmap's Tier 2 list. Both chosen
+specifically because they're additive and don't touch any file that's
+ever had a security bug found in it — `subnets.py`/`servers.py` (the
+config-check UI and HA status view) are intentionally saved for last.
+
+### Added — `/metrics` expanded from 2 metric families to 7
+- `jen_subnet_reserved_hosts` (gauge) — static reservation count per subnet
+- `jen_subnet_pool_size` (gauge) — total pool addresses per subnet
+- `jen_subnet_utilization_ratio` (gauge) — active/pool_size, 0.0–1.0
+- `jen_alerts_sent_total` (**counter**) — cumulative alerts sent, by
+  type and status. Confirmed `alert_log` is never pruned anywhere in
+  the codebase before treating it as a genuine monotonic counter — a
+  fabricated "counter" that occasionally resets would silently break
+  every `rate()`/`increase()` panel built on it in Grafana.
+- `jen_server_up` (gauge) — per-configured-Kea-server reachability, for
+  multi-server/HA visibility beyond the existing aggregate `jen_kea_up`
+
+Pool size and utilization read from the existing `lease_history`
+snapshot table (populated every `snapshot_interval_minutes`, 30min
+default) rather than querying Kea's live config-get API on every
+Prometheus scrape — documented explicitly in the endpoint's docstring,
+since that's a real freshness tradeoff, not an oversight. Everything
+else (active leases, reservation counts, per-server status) is live,
+since freshness matters more than scrape cost for those. This is
+deliberately just *more gauges/counters exposed*, not Jen computing
+"trend" or "rate" values itself — Prometheus's own scrape-and-store
+model already produces a real trend line from repeated gauge scrapes,
+and PromQL's `rate()`/`increase()` already produce a real firing rate
+from a real counter. Six new tests in `tests/test_dashboard.py`,
+including a check that every metric family has both its `HELP` and
+`TYPE` comment lines (the actual Prometheus exposition format
+contract) and that `jen_alerts_sent_total` is specifically declared a
+`counter`, not a `gauge`.
+
+### Added — actual logging configuration (`jen/logging_config.py`)
+Jen had **zero explicit logging configuration anywhere** before this —
+no `logging.basicConfig()`, no handlers, confirmed by grep across the
+whole codebase. In practice this meant every `logger.info(...)` call
+in the app was silently discarded by Python's `lastResort` fallback
+(a bare `StreamHandler(stderr)` that only handles WARNING and above
+when nothing else is configured) — no timestamps, either. The
+workaround visible in `jen/models/db.py`: the two "connection pool
+initialised" messages were logged at `WARNING` specifically so they'd
+actually appear. That workaround is no longer necessary and has been
+reverted to proper `INFO` now that logging is genuinely configured;
+the two "pool failed, using direct connections" messages correctly
+stayed at `WARNING`, since those really are warnings.
+
+- Two output formats: `plain` (default — human-readable, safe for
+  `journalctl -u jen -f`, doesn't change existing operator experience)
+  or `json` (one JSON object per line: timestamp, level, logger name,
+  message, plus any `extra={}` fields — for Loki/ELK/Promtail without
+  a log-parsing regex). Configurable via `[server] log_format` in
+  `jen.config` or `JEN_LOG_FORMAT`.
+- Configurable level (`log_level` / `JEN_LOG_LEVEL`, default `INFO`).
+- Optional rotating file output (`log_file` / `JEN_LOG_FILE`,
+  `log_retention_days` / `JEN_LOG_RETENTION_DAYS`, default 14 days).
+  Stdout/stderr (captured by systemd's journal, which already handles
+  its own rotation via `journald.conf`) remains the default — Jen
+  doesn't need to reinvent log rotation for the common case, the file
+  handler is there for anyone who wants to tail a real file directly
+  instead of using journal export tooling.
+- Wired into `run.py` in two phases: once immediately with env-var
+  fallback only (before `create_app()` runs, since `create_app()`
+  itself logs DB pool setup before `extensions.cfg` is populated), and
+  again with the real loaded config once `create_app()` returns.
+- 11 new tests in `tests/test_logging_config.py`: idempotency (no
+  duplicate handlers on repeated calls — would otherwise print every
+  line 2x/3x), config-vs-env-var priority, and — genuinely exercised,
+  not just asserted — real JSON output actually parses as JSON with
+  the claimed fields, and the optional file handler actually creates
+  and writes to a real file on disk.
+
+### Verification note
+Both features fully verified against the same non-root-user, real-
+MariaDB, real-TCP-connection setup established in v4.4.12 — this is
+now the standing method for anything claimed "verified" in this repo,
+not a one-off. **295 tests passed** (up from 278: 6 new metrics tests
++ 11 new logging tests), run exactly as GitHub's CI runners execute
+them. The metrics endpoint's actual exposition-format output was also
+rendered unmocked once, by hand, to confirm it degrades gracefully
+(`jen_kea_up 0`, no crash) when Kea is genuinely unreachable — not
+just that the test assertions pass.
+
 ## [4.4.14] - 2026-08-13
 
 ### Housekeeping: five orphaned files removed, and a real gap in the deploy process documented

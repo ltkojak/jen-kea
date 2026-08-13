@@ -50,6 +50,20 @@ https_port = 8443
 # Leave commented to allow unauthenticated access (e.g. if restricted at proxy level).
 # metrics_token = your-secret-scrape-token
 
+# Optional: logging configuration (v4.4.15+).
+# log_level defaults to INFO. log_format defaults to "plain" (human-readable,
+# safe for `journalctl -u jen -f`) — set to "json" for one JSON object per
+# line, useful for Loki/ELK/Promtail without a log-parsing regex.
+# log_file is optional; if unset, Jen logs to stdout/stderr only, which
+# systemd's journal already captures and rotates via journald.conf. Set
+# log_file if you want to tail a real file directly instead (e.g. shipping
+# via Promtail without journal export tooling) — log_retention_days
+# controls how many daily rotated files are kept (default 14).
+# log_level = INFO
+# log_format = plain
+# log_file = /var/log/jen/jen.log
+# log_retention_days = 14
+
 [kea_ssh]
 # SSH connection to Kea server for subnet editing
 # Leave host blank to disable subnet editing

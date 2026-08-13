@@ -522,6 +522,20 @@ def prometheus_metrics():
     Protect with a Bearer token by setting metrics_token in jen.config [jen] section,
     or by restricting /metrics at the reverse proxy level.
     Only exposes aggregate counts — no individual MACs, IPs, or hostnames.
+
+    v4.4.15: expanded from 2 metric families to 7. Live-queried metrics
+    (active leases, reservation counts, per-server up/down) cost one
+    cheap COUNT or one Kea API call per subnet/server per scrape — fine
+    at homelab scale, and freshness matters for these. Pool size and
+    utilization instead read the most recent row from lease_history
+    rather than hitting Kea's config-get API on every scrape (which
+    could be every 15s under a typical Prometheus scrape_interval) —
+    that data is only as fresh as the last snapshot
+    (snapshot_interval_minutes, 30min default), which is an explicit,
+    documented tradeoff, not an oversight. All of this is exactly what
+    Prometheus's own scrape-and-store model needs to produce a real
+    trend line in Grafana — Jen doesn't need to compute a "trend"
+    itself, repeated scrapes of a gauge over time already are one.
     """
     # Optional token protection — set metrics_token in jen.config [jen] to enable
     expected_token = extensions.cfg.get("server", "metrics_token", fallback="").strip() if extensions.cfg else ""
@@ -530,21 +544,91 @@ def prometheus_metrics():
         token = auth[7:].strip() if auth.startswith("Bearer ") else request.args.get("token", "")
         if token != expected_token:
             return Response("Unauthorized\n", status=401, mimetype="text/plain")
+
     lines = []
+
+    # ── Active leases per subnet (live) ──────────────────────────────────
     lines.append("# HELP jen_subnet_active_leases Number of active leases per subnet")
     lines.append("# TYPE jen_subnet_active_leases gauge")
+    active_by_subnet = {}
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
                 for subnet_id, info in extensions.SUBNET_MAP.items():
                     cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                     cnt = cur.fetchone()["cnt"]
+                    active_by_subnet[subnet_id] = cnt
                     lines.append(f'jen_subnet_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
     except Exception:
         pass
-    lines.append("# HELP jen_kea_up Whether Kea DHCP is reachable")
+
+    # ── Reservation count per subnet (live) ──────────────────────────────
+    lines.append("# HELP jen_subnet_reserved_hosts Number of static reservations per subnet")
+    lines.append("# TYPE jen_subnet_reserved_hosts gauge")
+    try:
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                for subnet_id, info in extensions.SUBNET_MAP.items():
+                    cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                    cnt = cur.fetchone()["cnt"]
+                    lines.append(f'jen_subnet_reserved_hosts{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+    except Exception:
+        pass
+
+    # ── Pool size + utilization per subnet (from the periodic snapshot,
+    #    NOT live — see docstring) ────────────────────────────────────────
+    lines.append("# HELP jen_subnet_pool_size Total addresses in the subnet's DHCP pool, "
+                 "from the most recent periodic snapshot (see snapshot_interval_minutes)")
+    lines.append("# TYPE jen_subnet_pool_size gauge")
+    lines.append("# HELP jen_subnet_utilization_ratio Active leases / pool size (0.0-1.0), "
+                 "from the most recent periodic snapshot")
+    lines.append("# TYPE jen_subnet_utilization_ratio gauge")
+    try:
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                for subnet_id, info in extensions.SUBNET_MAP.items():
+                    cur.execute("""
+                        SELECT active_leases, pool_size FROM lease_history
+                        WHERE subnet_id=%s ORDER BY snapshot_time DESC LIMIT 1
+                    """, (subnet_id,))
+                    row = cur.fetchone()
+                    if row and row["pool_size"]:
+                        util = row["active_leases"] / row["pool_size"]
+                        lines.append(f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}')
+                        lines.append(f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}')
+    except Exception:
+        pass
+
+    # ── Alerts sent, cumulative — a real Prometheus counter, since
+    #    alert_log is never pruned (confirmed: no DELETE/retention logic
+    #    exists for it anywhere in the codebase) ─────────────────────────
+    lines.append("# HELP jen_alerts_sent_total Cumulative alerts sent, by type and status. "
+                 "A real counter — use rate()/increase() in PromQL for a firing rate.")
+    lines.append("# TYPE jen_alerts_sent_total counter")
+    try:
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT alert_type, status, COUNT(*) as cnt FROM alert_log GROUP BY alert_type, status")
+                for row in cur.fetchall():
+                    atype = str(row["alert_type"]).replace('"', '')
+                    status = str(row["status"]).replace('"', '')
+                    lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {row["cnt"]}')
+    except Exception:
+        pass
+
+    # ── Kea reachability, per-server (live — freshness matters here) ────
+    lines.append("# HELP jen_kea_up Whether Kea DHCP is reachable (aggregate — see jen_server_up for multi-server)")
     lines.append("# TYPE jen_kea_up gauge")
     lines.append(f"jen_kea_up {1 if __kea.kea_is_up() else 0}")
+    lines.append("# HELP jen_server_up Whether a specific configured Kea server is reachable")
+    lines.append("# TYPE jen_server_up gauge")
+    try:
+        for status in __kea.get_all_server_status():
+            name = str(status["server"].get("name", status["server"].get("id", "unknown"))).replace('"', '')
+            lines.append(f'jen_server_up{{server="{name}"}} {1 if status["up"] else 0}')
+    except Exception:
+        pass
+
     return Response("\n".join(lines) + "\n", mimetype="text/plain")
 
 # ─────────────────────────────────────────
