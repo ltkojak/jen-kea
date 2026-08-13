@@ -2,6 +2,63 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.19] - 2026-08-15
+
+### Fixed a real regression from v4.4.18: IPAM disappeared from the menu after updating
+
+Reported directly: after updating to v4.4.18, the IPAM plugin was still
+installed and its data was fine, but it vanished from the navigation
+menu entirely. Root cause was my own change in v4.4.18, and it's worth
+being plain about what went wrong.
+
+### What actually happened
+v4.4.18's `run_plugin_migrations()` correctly started requiring the new
+`{"version": int, "sql": str}` manifest format and rejecting the old
+flat-list-of-SQL-strings format. That part was fine — the problem is
+what I wired that rejection to. `load_plugins()` treated *any* migration
+failure, including a manifest-format mismatch, as a reason to skip
+loading the plugin's blueprint and nav entry entirely, not just skip
+its migrations. The real installed IPAM plugin (from its own separate
+repo, not the copy bundled in jen-kea, and with a schema that had
+diverged further — a third `ipam_subnets` table jen-kea's bundled
+version doesn't even have) was still on the old manifest format, so it
+correctly failed the new validation and then, incorrectly, disappeared
+from the UI entirely — even though its actual tables and data were
+completely unaffected.
+
+### Fixed
+- **Old flat-string manifests are now accepted**, not rejected. Each
+  plain SQL string is treated as an implicit migration numbered by its
+  1-based position in the list — the exact order the pre-4.4.18 runner
+  always executed them in, just now actually tracked going forward.
+  Mixed manifests (some old-format strings, some new-format objects)
+  are accepted too, since a plugin author might migrate one entry at a
+  time rather than all at once.
+- **A migration problem of any kind no longer prevents a plugin from
+  loading.** `load_plugins()` now logs the failure loudly and proceeds
+  to load the plugin's blueprint and nav entry regardless. A schema
+  issue with one table should never be able to take down access to a
+  plugin's otherwise-working functionality — this is a real, general
+  design correction, not just a fix scoped to the format-mismatch case
+  that surfaced it.
+
+### Verification
+Reproduced Matthew's exact real, diverged IPAM manifest content
+(three tables, old format) directly against live MariaDB and confirmed
+it now applies correctly with proper version tracking. 6 new tests in
+`tests/test_plugin_migrations.py` covering old-format acceptance,
+sequential implicit versioning, idempotency, mixed-format manifests,
+the real diverged manifest specifically, and — via a new
+`TestLoadPluginsDoesNotSkipOnMigrationFailure` class — that
+`load_plugins()` genuinely still attempts to load a plugin even when
+its migrations fail outright, not just when the manifest format is the
+issue. Caught and fixed a test-isolation mistake of my own while
+writing these: an early draft reused the `plugin_id` "ipam" already
+touched by an earlier test in the same file, causing a false failure
+from leftover tracked-migration state rather than a real bug — fixed by
+giving the new test its own distinct plugin_id. Full suite:
+**321 passed** (up from 315), run exactly as CI executes them.
+
 ## [4.4.18] - 2026-08-14
 
 ### Tier 2, part 3: plugin migrations finally get the same versioned discipline as core Jen

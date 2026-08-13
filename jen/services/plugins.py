@@ -154,11 +154,20 @@ def load_plugins(app) -> None:
             continue
         mig_ok, mig_msg, mig_count = run_plugin_migrations(plugin)
         if not mig_ok:
+            # v4.4.19: log loudly, but load the plugin anyway. A migration
+            # problem — a manifest-format mismatch, a genuinely broken new
+            # migration — used to also skip the plugin's blueprint and nav
+            # entry entirely, which is a much worse outcome than the
+            # migration issue itself: it makes an already-working plugin's
+            # existing functionality vanish from the UI over a schema
+            # change for a DIFFERENT, possibly-unrelated table. Found this
+            # the hard way — a real installed plugin on the old manifest
+            # format disappeared from the nav after updating Jen, even
+            # though its tables and data were completely fine.
             logger.error(
-                f"Plugin '{plugin['id']}' has a pending migration failure — "
-                f"skipping load: {mig_msg}"
+                f"Plugin '{plugin['id']}' has a migration problem (loading "
+                f"anyway — existing functionality may still work): {mig_msg}"
             )
-            continue
         _load_plugin(app, plugin)
 
 
@@ -385,13 +394,34 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
     if not raw_migrations:
         return True, "", 0
 
-    for m in raw_migrations:
-        if not isinstance(m, dict) or "version" not in m or "sql" not in m:
+    # v4.4.19: normalize the pre-4.4.18 flat-string format instead of
+    # hard-rejecting it. Found the hard way — a real installed plugin
+    # (from its own separate repo, not the copy bundled in jen-kea)
+    # was still on the old format, and rejecting it here meant
+    # load_plugins() skipped the plugin entirely: not just its
+    # migrations, its whole blueprint and nav entry vanished, even
+    # though the plugin's actual data and functionality were fine. A
+    # manifest format change on Jen's side should never make an
+    # already-working plugin disappear from the UI. Each plain string
+    # is treated as an implicit migration numbered by its 1-based
+    # position in the list — exactly the order the old unversioned
+    # runner already executed them in, just now actually tracked.
+    # Mixed manifests (some old-format strings, some new-format dicts)
+    # are accepted too, since a plugin author might migrate one entry
+    # at a time rather than all at once.
+    normalized = []
+    for i, m in enumerate(raw_migrations):
+        if isinstance(m, str):
+            normalized.append({"version": i + 1, "description": "", "sql": m})
+        elif isinstance(m, dict) and "version" in m and "sql" in m:
+            normalized.append(m)
+        else:
             return False, (
                 f"Plugin '{plugin_id}' manifest db_migrations entries must be "
-                f'{{"version": int, "description": str, "sql": str}} objects — '
-                f"got {m!r}"
+                f'either a raw SQL string or a {{"version": int, "sql": str}} '
+                f"object — got {m!r}"
             ), 0
+    raw_migrations = normalized
 
     migrations = sorted(raw_migrations, key=lambda m: m["version"])
     versions = [m["version"] for m in migrations]

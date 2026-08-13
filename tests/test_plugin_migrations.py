@@ -127,13 +127,13 @@ class TestManifestValidation:
         assert count == 0
 
     def test_rejects_old_flat_string_format(self, db):
-        """v4.4.18 changed the manifest format from a flat list of SQL
-        strings to versioned {"version", "description", "sql"} objects
-        — a manifest still in the old format must fail clearly rather
-        than crash with a confusing KeyError."""
+        """v4.4.19 correction: the old flat-string format is now
+        accepted, not rejected — see TestBackwardCompatibility below.
+        Kept as a marker that malformed non-string, non-dict entries
+        are still correctly rejected."""
         manifest = {
-            "id": "old_format_plugin",
-            "db_migrations": ["CREATE TABLE IF NOT EXISTS old_format_plugin_t1 (id INT)"]
+            "id": "genuinely_malformed_plugin",
+            "db_migrations": [12345]  # neither a string nor a valid dict
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is False
@@ -202,3 +202,129 @@ class TestRealShippedManifests:
             ok, msg, count = run_plugin_migrations(manifest)
             assert ok is True
             assert count == 0, f"{path} was not idempotent on second run"
+
+
+class TestBackwardCompatWithOldFlatFormat:
+    """v4.4.19 regression guard — v4.4.18 correctly rejected the old
+    flat-string manifest format, but load_plugins() then skipped the
+    entire plugin (blueprint + nav, not just migrations) whenever that
+    happened. A real installed plugin from its own separate repo, still
+    on the old format, disappeared from the UI entirely even though its
+    tables and data were completely fine. Both halves of that bug are
+    guarded here: old-format manifests must now parse successfully, and
+    a migration failure of any kind must never be load_plugins()'s
+    reason to skip loading a plugin."""
+
+    def test_old_flat_string_format_now_succeeds(self, db):
+        manifest = {
+            "id": "old_format_ok_plugin",
+            "db_migrations": [
+                "CREATE TABLE IF NOT EXISTS old_format_ok_t1 (id INT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS old_format_ok_t2 (id INT PRIMARY KEY)",
+            ]
+        }
+        ok, msg, count = run_plugin_migrations(manifest)
+        assert ok is True
+        assert count == 2
+
+    def test_old_format_strings_get_sequential_implicit_versions(self, db):
+        manifest = {
+            "id": "old_format_versions_plugin",
+            "db_migrations": [
+                "CREATE TABLE IF NOT EXISTS ofv_t1 (id INT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS ofv_t2 (id INT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS ofv_t3 (id INT PRIMARY KEY)",
+            ]
+        }
+        run_plugin_migrations(manifest)
+        assert _plugin_applied_versions("old_format_versions_plugin") == {1, 2, 3}
+
+    def test_old_format_is_idempotent_on_second_run(self, db):
+        manifest = {
+            "id": "old_format_idempotent_plugin",
+            "db_migrations": [
+                "CREATE TABLE IF NOT EXISTS ofi_t1 (id INT PRIMARY KEY)",
+            ]
+        }
+        run_plugin_migrations(manifest)
+        ok, msg, count = run_plugin_migrations(manifest)
+        assert ok is True
+        assert count == 0
+
+    def test_mixed_old_and_new_format_entries_both_work(self, db):
+        manifest = {
+            "id": "mixed_format_plugin",
+            "db_migrations": [
+                "CREATE TABLE IF NOT EXISTS mixed_t1 (id INT PRIMARY KEY)",
+                {"version": 2, "description": "new-format entry",
+                 "sql": "CREATE TABLE IF NOT EXISTS mixed_t2 (id INT PRIMARY KEY)"},
+            ]
+        }
+        ok, msg, count = run_plugin_migrations(manifest)
+        assert ok is True
+        assert count == 2
+
+    def test_matthews_real_diverged_ipam_manifest(self, db):
+        """The actual real-world manifest content that surfaced this bug
+        — three tables, old flat-string format, one table
+        (ipam_subnets) that isn't even in the version jen-kea ships,
+        since the installed plugin comes from its own separate repo.
+        Uses a distinct plugin_id from the "ipam" used elsewhere in this
+        file (TestRealShippedManifests) — plugin_schema_migrations is
+        tracked per plugin_id, and tests in this file share one database
+        across the session, so reusing "ipam" here would see partial
+        state left over from that other test rather than a clean run."""
+        manifest = {
+            "id": "ipam_real_world_diverged",
+            "db_migrations": [
+                "CREATE TABLE IF NOT EXISTS ipamrwd_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+                "CREATE TABLE IF NOT EXISTS ipamrwd_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))",
+                "CREATE TABLE IF NOT EXISTS ipamrwd_subnets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, cidr VARCHAR(18) NOT NULL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+            ]
+        }
+        ok, msg, count = run_plugin_migrations(manifest)
+        assert ok is True, f"real ipam manifest should succeed: {msg}"
+        assert count == 3
+        with db.cursor() as cur:
+            for tbl in ("ipamrwd_static_entries", "ipamrwd_assignment_history", "ipamrwd_subnets"):
+                cur.execute(f"SHOW TABLES LIKE '{tbl}'")
+                assert cur.fetchone() is not None, f"{tbl} was not created"
+
+
+class TestLoadPluginsDoesNotSkipOnMigrationFailure:
+    """The second half of the v4.4.19 fix: even a genuine migration
+    failure (not just an old-format manifest) must not prevent
+    load_plugins() from still attempting to load the plugin's blueprint
+    and nav entry."""
+
+    def test_migration_failure_does_not_prevent_plugin_load(self, db, monkeypatch, app):
+        from jen import extensions
+        from jen.services import plugins as plugins_mod
+
+        fake_manifest = {
+            "id": "broken_migration_plugin",
+            "path": "/tmp/nonexistent_broken_migration_plugin",
+            "enabled": True,
+            "version_ok": True,
+            "db_migrations": [
+                {"version": 1, "description": "broken", "sql": "NOT VALID SQL AT ALL"},
+            ],
+        }
+        monkeypatch.setattr(plugins_mod, "discover_plugins", lambda: [fake_manifest])
+
+        load_attempted = {}
+        def fake_load_plugin(app_arg, manifest):
+            load_attempted["called"] = True
+            load_attempted["plugin_id"] = manifest["id"]
+            return True
+        monkeypatch.setattr(plugins_mod, "_load_plugin", fake_load_plugin)
+
+        plugins_mod.load_plugins(app)
+
+        assert load_attempted.get("called") is True, (
+            "load_plugins() must still attempt to load a plugin even when "
+            "its migrations fail — this is exactly the v4.4.19 regression: "
+            "a migration problem used to skip the whole plugin, hiding an "
+            "otherwise-working plugin's UI over an unrelated schema issue."
+        )
+        assert load_attempted.get("plugin_id") == "broken_migration_plugin"
