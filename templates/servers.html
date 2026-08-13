@@ -7,6 +7,12 @@
 </div>
 
 {% if not single_server and ha_mode %}
+{% if ha_degraded %}
+<div class="alert alert-warning" style="border-color:var(--danger);background:rgba(200,50,50,0.08);">
+    🚨 <strong>This HA pair currently has no working backup.</strong>
+    {{ ha_degraded_reason|capitalize }}. If the active server fails right now, there is nothing to fail over to.
+</div>
+{% endif %}
 <div class="card" style="border-color:rgba(0,180,216,0.4);padding:12px 16px;">
     <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
         <span style="font-size:20px;">🔄</span>
@@ -14,7 +20,7 @@
             <strong>HA Mode: {{ ha_mode|replace('-',' ')|title }}</strong>
             <span style="color:var(--text-muted);margin-left:12px;">Active node commands are routed automatically</span>
         </div>
-        {% for s in statuses %}{% if s.ha_state in ('hot-standby','load-balancing','partner-down') and s.server.role == 'primary' %}
+        {% for s in statuses %}{% if s.is_active %}
         <span class="badge badge-reserved" style="margin-left:auto;">⚡ Active: {{ s.server.name }}</span>
         {% endif %}{% endfor %}
     </div>
@@ -76,7 +82,7 @@
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
         <div>
             <div class="stat-label">{{ s.server.role|upper }}
-                {% if s.ha_state in ('hot-standby','load-balancing','partner-down') and s.server.role == 'primary' %}
+                {% if s.is_active %}
                 <span style="color:var(--primary);margin-left:6px;">⚡ ACTIVE</span>
                 {% endif %}
             </div>

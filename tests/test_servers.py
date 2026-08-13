@@ -98,3 +98,79 @@ class TestRestartRouteBehavior:
             r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
             assert r.status_code == 200
             assert b"failed" in r.data.lower()
+
+
+class TestHaStatusDerivation:
+    """v4.4.17: this whole class exists because a first draft of the
+    active/degraded derivation logic was wrong on the most common real
+    case (healthy hot-standby) — caught only by actually running it
+    against realistic scenarios before shipping, not by inspection.
+    These tests go through the real /servers route end to end, not the
+    derivation logic in isolation, so a future regression in how the
+    route wires kea.get_all_server_status() into the template would
+    also be caught here."""
+
+    def _servers_config(self):
+        return [
+            {"id": 1, "name": "Primary", "ssh_host": "", "ssh_user": "",
+             "api_url": "http://localhost:18000", "api_user": "test",
+             "api_pass": "test", "kea_conf": "", "role": "primary"},
+            {"id": 2, "name": "Standby", "ssh_host": "", "ssh_user": "",
+             "api_url": "http://localhost:18001", "api_user": "test",
+             "api_pass": "test", "kea_conf": "", "role": "standby"},
+        ]
+
+    def test_healthy_hot_standby_only_primary_is_active(self, logged_in_client, monkeypatch):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        cfg = self._servers_config()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", cfg)
+        monkeypatch.setattr(extensions.cfg, "get", lambda section, key, fallback=None:
+                            "hot-standby" if (section, key) == ("kea", "ha_mode") else fallback)
+        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [
+            {"server": cfg[0], "up": True, "ha_state": "hot-standby", "ha_partner": "hot-standby", "version": "2.4.0"},
+            {"server": cfg[1], "up": True, "ha_state": "hot-standby", "ha_partner": "hot-standby", "version": "2.4.0"},
+        ])
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 0, "text": "", "arguments": {}})
+
+        r = logged_in_client.get("/servers")
+        assert r.status_code == 200
+        # Only Primary should carry the ACTIVE marker, not both.
+        assert r.data.count(b"ACTIVE") == 1
+        assert b"no working backup" not in r.data.lower()
+
+    def test_primary_down_standby_active_and_degraded_warning_shown(self, logged_in_client, monkeypatch):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        cfg = self._servers_config()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", cfg)
+        monkeypatch.setattr(extensions.cfg, "get", lambda section, key, fallback=None:
+                            "hot-standby" if (section, key) == ("kea", "ha_mode") else fallback)
+        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [
+            {"server": cfg[0], "up": False, "ha_state": None, "ha_partner": None, "version": ""},
+            {"server": cfg[1], "up": True, "ha_state": "partner-down", "ha_partner": "unavailable", "version": "2.4.0"},
+        ])
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 0, "text": "", "arguments": {}})
+
+        r = logged_in_client.get("/servers")
+        assert r.status_code == 200
+        assert b"no working backup" in r.data.lower()
+        assert r.data.count(b"ACTIVE") == 1  # Standby, not Primary
+
+    def test_load_balancing_both_active_no_warning(self, logged_in_client, monkeypatch):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        cfg = self._servers_config()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", cfg)
+        monkeypatch.setattr(extensions.cfg, "get", lambda section, key, fallback=None:
+                            "load-balancing" if (section, key) == ("kea", "ha_mode") else fallback)
+        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [
+            {"server": cfg[0], "up": True, "ha_state": "load-balancing", "ha_partner": "load-balancing", "version": "2.4.0"},
+            {"server": cfg[1], "up": True, "ha_state": "load-balancing", "ha_partner": "load-balancing", "version": "2.4.0"},
+        ])
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 0, "text": "", "arguments": {}})
+
+        r = logged_in_client.get("/servers")
+        assert r.status_code == 200
+        assert r.data.count(b"ACTIVE") == 2
+        assert b"no working backup" not in r.data.lower()

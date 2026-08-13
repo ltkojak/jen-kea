@@ -2,6 +2,56 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.17] - 2026-08-14
+
+### Tier 2, part 2: HA status view — a real "no backup" warning, and a genuine correctness fix found along the way
+
+Third and second-to-last item off the Jen maturity roadmap's Tier 2 list
+(config-check UI surfacing is the one remaining item, saved for last
+since it's the one touching the actual config-apply path).
+
+### Added
+- **A persistent "this HA pair currently has no working backup" warning**
+  on `/servers`, shown whenever HA mode is configured but no server is
+  currently reporting a healthy `hot-standby`/`load-balancing` state.
+  This is complementary to the existing `ha_failover` alert, not a
+  duplicate of it — that alert only fires once, at the moment of a state
+  *transition*, and says nothing about the current state to someone
+  loading the page hours later. Checked this specifically before
+  building anything: confirmed `ha_failover` genuinely does fire
+  correctly (unlike the `rogue_device` alert bug found and fixed
+  earlier in this series), so this is filling a real, adjacent gap
+  rather than working around a broken alert.
+
+### Fixed
+- **The "⚡ ACTIVE" badge only ever checked `role == 'primary'`** —
+  meaning if the primary genuinely went offline and the standby took
+  over (the entire point of HA), no server would show as active at all,
+  since standby's role is never `'primary'`. The correct rule depends
+  on the actual reported state: `load-balancing` means both nodes serve
+  simultaneously (both active, regardless of role); `hot-standby` means
+  only the primary actually serves while both partners are healthy
+  (standby genuinely idle); `partner-down` means whichever server is
+  reporting it is now serving solo, regardless of its configured role.
+  Caught a mistake in my own first draft of this fix by actually testing
+  it against a realistic "both servers healthy" scenario before
+  shipping: an early version marked *both* nodes active whenever either
+  reported `hot-standby`, which is wrong for the normal, most common
+  case — only found because I ran it, not because I reasoned about it
+  correctly the first time.
+
+### Tests
+Three new tests in `tests/test_servers.py::TestHaStatusDerivation`,
+each going through the real `/servers` route end to end rather than
+testing the derivation logic in isolation — covering healthy
+hot-standby (only primary active, no warning), primary-down-standby-
+took-over (standby active, warning shown), and load-balancing (both
+active, no warning). Validated these are genuine regression guards the
+same way as the self-update test in v4.4.16: reverted the active-role
+fix back to the original `role == 'primary'`-only logic and confirmed
+two of the three tests correctly failed against it, then restored the
+fix and confirmed all three pass again.
+
 ## [4.4.16] - 2026-08-14
 
 ### The self-update mechanism has never updated run.py — likely the most significant bug found this entire audit series
