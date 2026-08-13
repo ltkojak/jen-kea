@@ -207,11 +207,6 @@ Documenting these here rather than letting them go unstated:
   `dhcp4_options`) is the IPv4 schema. Adding IPv6 support would touch
   nearly every query in the app, not be an additive change.
 - **No DNS/BIND9 management.** Jen is DHCP-only.
-- **Plugin migrations aren't versioned.** Unlike core Jen's migration
-  runner (`jen/models/migrations.py` — strictly-ordered, transactional,
-  well-tested), plugins currently apply unversioned flat SQL on install,
-  re-executed each time with silent failure on conflict. This is a
-  known, tracked gap, not an oversight.
 - **No professional external security audit.** See `SECURITY.md` for
   the honest framing of what level of scrutiny this project has
   actually had.

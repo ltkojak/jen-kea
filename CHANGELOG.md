@@ -2,6 +2,76 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.18] - 2026-08-14
+
+### Tier 2, part 3: plugin migrations finally get the same versioned discipline as core Jen
+
+Last of the isolated-subsystem Tier 2 items. Config-check UI surfacing
+is the one remaining item — it touches the actual config-apply path in
+`subnets.py`, so it's staying last, same reasoning as before.
+
+### The bug, precisely
+`_run_plugin_migrations()` re-executed **every** SQL statement in a
+plugin's manifest on **every single install or update**, with no
+tracking of what had already run. A single try/except wrapped the
+whole batch: any one migration failing silently aborted every
+migration after it, logged one error line, and the install/update
+route still reported success to the admin. Every migration shipped
+happened to be `CREATE TABLE IF NOT EXISTS` (naturally idempotent), so
+this was invisible in practice — but any future migration that wasn't
+naturally idempotent (an `ALTER TABLE ADD COLUMN`, a data backfill)
+would have failed loudly on the second install and taken every later
+migration down with it, silently, forever, since nothing ever re-ran
+migrations at Jen startup either — only at install/update time.
+
+### Fixed
+- **New `plugin_schema_migrations` table** — added as core migration
+  10 in `jen/models/migrations.py`, using the exact same versioned,
+  transactional, "abort-loudly-on-failure" discipline core Jen's own
+  schema migrations have used since migration 1. Composite
+  `(plugin_id, version)` key since multiple plugins share the table.
+- **`jen/services/plugins.py`: `run_plugin_migrations()`** replaces
+  `_run_plugin_migrations()`. Each migration is applied and recorded
+  individually — already-applied versions are skipped, a manifest that
+  gains a new migration in a later release only applies the new one,
+  and a failing migration stops that plugin's remaining migrations and
+  returns a real error message identifying which one failed, instead
+  of silently reporting success.
+- **Manifest format changed**: `db_migrations` is now a list of
+  `{"version": int, "description": str, "sql": str}` objects instead
+  of a flat list of SQL strings — the version field is what actually
+  gets tracked. Both shipped plugins (`plugins/ipam`,
+  `plugins/network-discovery`) converted to the new format, SQL content
+  unchanged (verified byte-for-byte via a round-trip check before and
+  after conversion). Both `plugin.zip` archives rebuilt from the
+  updated `manifest.json` — the zip is what `install_plugin()` actually
+  downloads and extracts, so the raw file in the repo alone wouldn't
+  have been enough.
+- **Migrations now also run on every Jen startup** (`load_plugins()`),
+  not just at install/update time — mirrors `init_jen_db()` calling
+  `run_migrations()` on every boot. A manually-copied plugin, or a
+  plugin whose manifest gained a migration in a later release, now
+  catches up automatically on restart rather than only if someone
+  clicks "Update" again.
+- **`install_plugin()` now surfaces a real migration failure** to the
+  admin instead of installing the files and quietly logging an error —
+  "Plugin files installed, but a DB migration failed: ..." with the
+  specific SQL error, rather than a bare success message.
+
+### Tests
+`tests/test_plugin_migrations.py` — new file, 16 tests, zero coverage
+existed before this. Covers tracking/idempotency, failure handling
+(the actual bug), manifest validation (rejects the old flat-string
+format cleanly instead of crashing, rejects duplicate version numbers,
+applies out-of-list-order migrations in correct version order), and
+both real shipped manifests end-to-end against real MariaDB — not
+synthetic data. Validated these are genuine regression guards the same
+way as the two previous instances of this practice (v4.4.16, v4.4.17):
+temporarily swapped in the exact old buggy behavior and confirmed 8 of
+16 tests correctly failed against it (specifically: tracking, failure-
+handling, and manifest-validation tests — the ones actually exercising
+the bug), then restored the fix and confirmed all 16 pass.
+
 ## [4.4.17] - 2026-08-14
 
 ### Tier 2, part 2: HA status view — a real "no backup" warning, and a genuine correctness fix found along the way

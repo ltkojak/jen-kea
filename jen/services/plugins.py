@@ -24,12 +24,33 @@ manifest.json schema
       "endpoint": "network_discovery.index"  # Flask endpoint name from the plugin blueprint
     }
   ],
-  "db_migrations": [                         # optional SQL to run on install
-    "CREATE TABLE IF NOT EXISTS nd_scan_results (...)"
+  "db_migrations": [                         # optional, v4.4.18+ format
+    {
+      "version": 1,                          # int, strictly increasing, never reused
+      "description": "nd_scan_results table",
+      "sql": "CREATE TABLE IF NOT EXISTS nd_scan_results (...)"
+    }
   ]
 }
 
 Plugin DB tables should be prefixed with the plugin id to avoid collisions.
+
+Plugin migrations (v4.4.18+)
+─────────────────────────────
+Each entry in db_migrations is tracked individually in
+plugin_schema_migrations (plugin_id, version) — applied once, recorded,
+and never re-run, the same discipline jen/models/migrations.py has used
+for core Jen's own schema since migration 1. Checked on every Jen
+startup (load_plugins()) as well as at install/update time, so a
+manually-copied plugin or a manifest that gains a new migration in a
+later release both catch up automatically. A failing migration stops
+that plugin's remaining migrations and is surfaced back to the
+install/update caller — it no longer just logs an error and reports
+success anyway. As with core migrations, every migration's SQL must
+still be idempotent (CREATE TABLE IF NOT EXISTS, guarded ALTERs) since
+MySQL/MariaDB DDL auto-commits and can't be rolled back — the tracking
+table only prevents re-running an already-applied migration, it doesn't
+make a non-idempotent statement safe to write in the first place.
 """
 
 import importlib.util
@@ -111,6 +132,16 @@ def load_plugins(app) -> None:
     """
     Load all enabled installed plugins into the Flask app.
     Called from create_app() after core blueprints are registered.
+
+    v4.4.18: also runs any pending DB migrations for each plugin on
+    every startup, not just at install/update time — mirrors
+    jen.models.migrations.run_migrations() being called from
+    init_jen_db() on every boot, for the same reason: a plugin that
+    was manually copied into place (bypassing the install/update UI
+    entirely) still needs its schema caught up, and a plugin whose
+    manifest gained a new migration in a later release should apply it
+    the next time Jen restarts, not only if someone happens to click
+    "Update" again.
     """
     for plugin in discover_plugins():
         if not plugin.get("enabled"):
@@ -119,6 +150,13 @@ def load_plugins(app) -> None:
             logger.warning(
                 f"Plugin '{plugin['id']}' requires Jen {plugin.get('requires_jen')} "
                 f"— skipping (version mismatch)"
+            )
+            continue
+        mig_ok, mig_msg, mig_count = run_plugin_migrations(plugin)
+        if not mig_ok:
+            logger.error(
+                f"Plugin '{plugin['id']}' has a pending migration failure — "
+                f"skipping load: {mig_msg}"
             )
             continue
         _load_plugin(app, plugin)
@@ -263,13 +301,18 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
             shutil.rmtree(dest)
         os.rename(tmp_dest, dest)
 
-        # Run DB migrations
-        _run_plugin_migrations(manifest)
+        # Run DB migrations — surface a real failure to the caller
+        # (previously this just logged an error and pretended the
+        # install succeeded regardless).
+        mig_ok, mig_msg, mig_count = run_plugin_migrations(manifest)
+        if not mig_ok:
+            return False, f"Plugin files installed, but a DB migration failed: {mig_msg}"
 
         # Enable by default on fresh install
         enable_plugin(plugin_id)
 
-        logger.info(f"Plugin '{plugin_id}' v{manifest.get('version')} installed")
+        logger.info(f"Plugin '{plugin_id}' v{manifest.get('version')} installed"
+                   + (f" ({mig_count} migration(s) applied)" if mig_count else ""))
         return True, f"Plugin '{manifest['name']}' v{manifest.get('version')} installed. Restart Jen to activate."
 
     except Exception as e:
@@ -294,21 +337,106 @@ def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
         return False, f"Uninstall failed: {e}"
 
 
-def _run_plugin_migrations(manifest: dict) -> None:
-    """Run any DB migration SQL defined in the plugin manifest."""
-    migrations = manifest.get("db_migrations", [])
-    if not migrations:
-        return
-    try:
-        from jen.models.db import jen_db
-        with jen_db() as db:
-            with db.cursor() as cur:
-                for sql in migrations:
-                    cur.execute(sql)
-            db.commit()
-        logger.info(f"Plugin '{manifest['id']}' DB migrations applied")
-    except Exception as e:
-        logger.error(f"Plugin '{manifest['id']}' DB migration failed: {e}")
+def _plugin_applied_versions(plugin_id: str) -> set:
+    """Return the set of already-applied migration versions for a plugin
+    (empty if the tracking table doesn't exist yet — the very first
+    core migration run creates it, but this stays defensive in case
+    plugin loading is ever reachable before that)."""
+    from jen.models.db import jen_db
+    with jen_db() as db:
+        with db.cursor() as cur:
+            cur.execute("SHOW TABLES LIKE 'plugin_schema_migrations'")
+            if not cur.fetchone():
+                return set()
+            cur.execute(
+                "SELECT version FROM plugin_schema_migrations WHERE plugin_id=%s",
+                (plugin_id,)
+            )
+            return {r["version"] for r in cur.fetchall()}
+
+
+def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
+    """
+    Apply any pending DB migrations from a plugin's manifest, in version
+    order, each recorded in plugin_schema_migrations as it's applied —
+    v4.4.18, replacing the old _run_plugin_migrations() which re-ran
+    every migration in the manifest on every single install/update with
+    no tracking of what had already been applied. Every migration
+    currently shipped happens to be CREATE TABLE IF NOT EXISTS, so that
+    was harmless in practice — but it meant plugin authors were on their
+    own to hand-write idempotent SQL forever, and any single failing
+    statement silently aborted every migration after it with nothing
+    but a log line, no error surfaced anywhere a user would see it.
+
+    manifest["db_migrations"] is a list of
+    {"version": int, "description": str, "sql": str} objects — the
+    version field is what actually gets tracked; unlike core Jen's own
+    MIGRATIONS list (Python functions), plugin migrations stay plain SQL
+    strings from JSON, since that's a much lower bar for a plugin author
+    to write than a Python migration function.
+
+    Returns (success, message, applied_count). Stops at the first
+    failing migration — later ones in the same manifest are not
+    attempted, mirroring core Jen's "a half-migrated schema must never
+    serve requests silently" rule.
+    """
+    plugin_id = manifest["id"]
+    raw_migrations = manifest.get("db_migrations", [])
+    if not raw_migrations:
+        return True, "", 0
+
+    for m in raw_migrations:
+        if not isinstance(m, dict) or "version" not in m or "sql" not in m:
+            return False, (
+                f"Plugin '{plugin_id}' manifest db_migrations entries must be "
+                f'{{"version": int, "description": str, "sql": str}} objects — '
+                f"got {m!r}"
+            ), 0
+
+    migrations = sorted(raw_migrations, key=lambda m: m["version"])
+    versions = [m["version"] for m in migrations]
+    if len(versions) != len(set(versions)):
+        return False, f"Plugin '{plugin_id}' manifest has duplicate migration version numbers.", 0
+    if any(not isinstance(v, int) for v in versions):
+        return False, f"Plugin '{plugin_id}' manifest migration versions must be integers.", 0
+
+    from jen.models.db import jen_db
+    with jen_db() as db:
+        with db.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS plugin_schema_migrations (
+                    plugin_id VARCHAR(100) NOT NULL,
+                    version INT NOT NULL,
+                    description VARCHAR(255) NOT NULL,
+                    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (plugin_id, version)
+                )
+            """)
+
+    applied = _plugin_applied_versions(plugin_id)
+    count = 0
+    for m in migrations:
+        version = m["version"]
+        if version in applied:
+            continue
+        description = m.get("description", "")
+        try:
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute(m["sql"])
+                    cur.execute(
+                        "INSERT INTO plugin_schema_migrations "
+                        "(plugin_id, version, description) VALUES (%s, %s, %s)",
+                        (plugin_id, version, description)
+                    )
+            count += 1
+            logger.info(f"Plugin '{plugin_id}' migration {version} applied: {description}")
+        except Exception as e:
+            msg = f"Plugin '{plugin_id}' migration {version} failed: {e}"
+            logger.error(msg)
+            return False, msg, count
+
+    return True, "", count
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────

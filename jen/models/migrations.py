@@ -396,6 +396,24 @@ def _m009_mfa_attempts(db):
         )""")
 
 
+def _m010_plugin_schema_migrations(db):
+    """plugin_schema_migrations: v4.4.18 — tracking table so plugin DB
+    migrations (jen/services/plugins.py) can finally use the same
+    versioned-and-recorded discipline core Jen has used since migration 1,
+    instead of re-executing every migration from every plugin's manifest
+    on every single install/update with no tracking of what already ran.
+    Composite (plugin_id, version) key since multiple plugins share this
+    one table — mirrors schema_migrations above, just plugin-scoped."""
+    with db.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS plugin_schema_migrations (
+            plugin_id VARCHAR(100) NOT NULL,
+            version INT NOT NULL,
+            description VARCHAR(255) NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (plugin_id, version)
+        )""")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -409,6 +427,7 @@ MIGRATIONS = [
     (7, "Migrate legacy Telegram settings to alert_channels", _m007_telegram_legacy),
     (8, "mfa_trusted_devices ip_address + user_agent columns", _m008_trusted_device_metadata),
     (9, "mfa_attempts table for MFA brute-force throttling",   _m009_mfa_attempts),
+    (10, "plugin_schema_migrations tracking table",            _m010_plugin_schema_migrations),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
