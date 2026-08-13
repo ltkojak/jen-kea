@@ -42,13 +42,27 @@ jobs:
             "cryptography" "werkzeug" pytest
 
       - name: Point /opt/jen at the checkout
-        # create_app() hardcodes template_folder="/opt/jen/templates" — correct
-        # for how Jen is actually deployed, but it means tests need the checkout
-        # reachable at that path regardless of where the runner clones it.
+        # create_app() hardcodes template_folder="/opt/jen/templates" —
+        # correct for how Jen is actually deployed, but it means tests
+        # need the checkout reachable at that path regardless of where the
+        # runner clones it.
         run: |
           sudo mkdir -p /opt/jen
           sudo ln -sf "$GITHUB_WORKSPACE/templates" /opt/jen/templates
           sudo ln -sf "$GITHUB_WORKSPACE/static" /opt/jen/static
+          sudo chown -R "$(whoami)" /opt/jen
+
+      - name: Provision /etc/jen
+        # init_jen_db() unconditionally does os.makedirs("/etc/jen/ssl")
+        # and os.makedirs("/etc/jen/ssh") on startup — fine on a real
+        # deployment (Jen runs as www-data, which owns /etc/jen), but on
+        # a fresh GitHub-hosted runner /etc/jen doesn't exist and the
+        # default non-root "runner" user can't create it under /etc
+        # without sudo. Create it once here and hand over ownership so
+        # nothing later in the run needs sudo for it again.
+        run: |
+          sudo mkdir -p /etc/jen/ssl /etc/jen/ssh
+          sudo chown -R "$(whoami)" /etc/jen
 
       - name: Run test suite
         env:

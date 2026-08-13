@@ -2,6 +2,45 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.12] - 2026-08-13
+
+### Fixed: the new CI itself was broken on real GitHub Actions runners
+
+The `pytest` job added in v4.4.11 passed every local verification —
+including a full run against real MariaDB — and still failed
+immediately on GitHub's actual runners. Root cause: `init_jen_db()`
+unconditionally calls `os.makedirs("/etc/jen/ssl")` and
+`os.makedirs("/etc/jen/ssh")` at startup. On a real Jen deployment this
+is fine (Jen runs as `www-data`, which owns `/etc/jen`). On a
+GitHub-hosted runner, the default `runner` user isn't root and `/etc` is
+root-owned — `PermissionError: [Errno 13] Permission denied: '/etc/jen'`
+on the very first test's setup, cascading into all 278 tests failing at
+setup.
+
+**Why local verification missed this:** every verification run in the
+v4.4.11 audit sandbox was executed as root, which meant `/etc/jen` was
+always writable without ever being explicitly created or checked. The
+bug was invisible under the exact conditions it was tested in.
+
+**Fixed:** `.github/workflows/tests.yml` now explicitly creates and
+`chown`s both `/etc/jen` and `/opt/jen` to the runner user before
+`pytest` runs, with a comment explaining why this step exists and what
+it's compensating for.
+
+**Verification for this fix specifically did not repeat the same
+mistake.** Created a genuine non-root user in the audit sandbox,
+reproduced the exact `PermissionError` from the GitHub Actions log
+under those conditions first, then applied the fix and confirmed
+`278 passed` running as that non-root user — over a real TCP connection
+to MariaDB (`127.0.0.1`, matching how GitHub's `services:` containers
+are actually reached, not a UNIX socket) — with `/etc/jen`, `/opt/jen`,
+and `/tmp` all freshly created for that run, matching what an actual
+GitHub Actions runner starts with. This is meant to be the standing
+practice going forward for anything CI-related: verify under the actual
+execution conditions (user, filesystem state, network topology), not
+just "run it and see it pass" in an environment that happens to differ
+from production in a way that hides the bug.
+
 ## [4.4.11] - 2026-08-13
 
 ### Process maturity: CI test gate, static analysis, dependency scanning, documented threat model, expanded test coverage
