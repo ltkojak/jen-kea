@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # GitHub Actions — the three third-party actions in tests.yml/release.yml
+  # are pinned to commit SHAs (see CHANGELOG v4.4.4 for why: supply-chain
+  # hardening against a moved tag). Dependabot opens a PR to bump the
+  # pinned SHA forward when a new release exists, keeping the "# vN"
+  # comment and the commit in sync.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+# Note: no "pip" entry here. Dependabot's pip ecosystem support needs an
+# actual manifest file (requirements.txt, pyproject.toml) to parse — Jen
+# pins Python dependency versions inline in install.sh instead (a
+# deliberate choice, see CHANGELOG v4.4.3), which Dependabot can't read.
+# pip-audit runs on every CI push instead (.github/workflows/tests.yml)
+# and checks whatever actually gets installed against known CVEs, which
+# covers the same underlying need without requiring a manifest file Jen
+# doesn't otherwise use.

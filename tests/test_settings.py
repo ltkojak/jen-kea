@@ -76,6 +76,89 @@ class TestSystemSettings:
         assert r.status_code == 200
 
 
+class TestMfaModeAndNavLogoRoutesRegression:
+    """v4.4.9 regression guard: both save_mfa_mode() and upload_nav_logo()
+    were missing their @bp.route(...) decorator entirely — Flask never
+    registered the URLs, so every attempt through the UI was a guaranteed
+    404, and the MFA enforcement policy could not be changed through the
+    running application at all. Checked systematically across every route
+    file and both plugins at the time; these were the only two instances.
+    These tests exist specifically to make sure that class of bug (a
+    route silently never being registered, with no startup error) can't
+    silently reappear."""
+
+    def test_save_mfa_mode_route_is_registered(self, logged_in_client):
+        r = logged_in_client.post("/settings/system/save-mfa-mode",
+                                   data={"mfa_mode": "optional"},
+                                   follow_redirects=False)
+        assert r.status_code != 404
+
+    def test_save_mfa_mode_actually_persists(self, logged_in_client):
+        from jen.models.user import get_global_setting
+        r = logged_in_client.post("/settings/system/save-mfa-mode",
+                                   data={"mfa_mode": "required_admins"},
+                                   follow_redirects=True)
+        assert r.status_code == 200
+        assert get_global_setting("mfa_mode") == "required_admins"
+
+    def test_save_mfa_mode_rejects_invalid_value(self, logged_in_client):
+        r = logged_in_client.post("/settings/system/save-mfa-mode",
+                                   data={"mfa_mode": "not_a_real_mode"},
+                                   follow_redirects=True)
+        assert r.status_code == 200
+        assert b"invalid mfa mode" in r.data.lower()
+
+    def test_save_mfa_mode_requires_admin(self, client, db):
+        from tests.conftest import restricted_client as _restricted_client
+        _restricted_client(client, db, allowed_subnets=None, role="viewer",
+                            username="mfamode_viewer1")
+        r = client.post("/settings/system/save-mfa-mode",
+                        data={"mfa_mode": "optional"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"admin access required" in r.data.lower()
+
+    def test_upload_nav_logo_route_is_registered(self, logged_in_client, tmp_path, monkeypatch):
+        from jen import extensions
+        from io import BytesIO
+        # Redirect the logo write path to a tmp dir — don't touch the
+        # real /opt/jen/static path during a test run.
+        monkeypatch.setattr(extensions, "NAV_LOGO_PATH", str(tmp_path / "nav_logo"))
+        monkeypatch.setattr(extensions, "STATIC_DIR", str(tmp_path))
+
+        # Minimal valid 1x1 PNG — generated with PIL and verified valid
+        # rather than hand-typed (a hand-typed attempt at this had a
+        # subtle byte error that would have made the test meaningless).
+        png_bytes = bytes.fromhex(
+            "89504e470d0a1a0a0000000d4948445200000001000000010802000000"
+            "907753de0000000c49444154789c63f8cfc0000003010100c9fe92ef00"
+            "00000049454e44ae426082"
+        )
+        r = logged_in_client.post(
+            "/settings/upload-nav-logo",
+            data={"logo": (BytesIO(png_bytes), "logo.png")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert r.status_code != 404
+        assert b"nav logo updated" in r.data.lower()
+        assert (tmp_path / "nav_logo.png").exists()
+
+    def test_upload_nav_logo_requires_admin(self, client, db):
+        from tests.conftest import restricted_client as _restricted_client
+        from io import BytesIO
+        _restricted_client(client, db, allowed_subnets=None, role="viewer",
+                            username="navlogo_viewer1")
+        r = client.post(
+            "/settings/upload-nav-logo",
+            data={"logo": (BytesIO(b"fake"), "logo.png")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"admin access required" in r.data.lower()
+
+
 class TestAuditLog:
     """Audit logging."""
 

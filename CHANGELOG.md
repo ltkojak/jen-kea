@@ -2,6 +2,101 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.11] - 2026-08-13
+
+### Process maturity: CI test gate, static analysis, dependency scanning, documented threat model, expanded test coverage
+
+The first pass at "Tier 1" of the Jen maturity roadmap (comparing Jen
+against ISC Stork's engineering rigor). None of this is a feature —
+it's the process infrastructure that a project needs regardless of team
+size, and until now Jen had none of it.
+
+### Added
+- **CI now runs the full test suite on every push and PR, and gates every
+  tagged release on it passing.** Previously `release.yml` built and
+  tagged a release with zero automated test verification — confirmed
+  by reading the workflow file directly. New reusable workflow
+  (`.github/workflows/tests.yml`) runs `pytest` against a real MariaDB
+  service container, called by both a new `ci.yml` (every push/PR) and
+  `release.yml` (`release` job now `needs: test`).
+- **Static security analysis in CI.** `bandit` runs against `jen/` and
+  `plugins/` on every push, diffed against `.github/bandit-baseline.json`
+  — a snapshot of the 47 findings that existed at time of writing, each
+  manually traced and confirmed safe (whitelisted table names, int()-cast
+  values, the SSH trust-on-first-use model — see `docs/ARCHITECTURE.md`).
+  New findings introduced after the baseline fail CI; the reviewed
+  backlog doesn't block anything. Verified this actually works, not just
+  configured it: generated the baseline, then injected a fake
+  `shell=True` vulnerability and confirmed bandit still fails CI with
+  the baseline present, before reverting the test injection.
+- **Dependency vulnerability scanning in CI.** `pip-audit` runs against
+  the actual installed dependency set on every push. Verified in a
+  properly isolated virtual environment (not the shared audit sandbox,
+  which had accumulated unrelated packages across a long session and
+  gave a contaminated first result): zero vulnerabilities in any of
+  Jen's actual runtime dependencies at their current floor-pinned
+  versions, once pip itself is upgraded first.
+- **`.github/dependabot.yml`** — watches the GitHub Actions used in these
+  workflows and opens PRs to bump pinned commit SHAs forward. Doesn't
+  include a `pip` ecosystem entry — Dependabot's pip support needs an
+  actual `requirements.txt`/`pyproject.toml` to parse, which Jen
+  deliberately doesn't have (dependencies are pinned inline in
+  `install.sh`); `pip-audit` in CI covers the same underlying need
+  without requiring a manifest file Jen doesn't otherwise use.
+- **`SECURITY.md`** — responsible disclosure process, scope, and an
+  honest statement of what level of security scrutiny this project has
+  actually had (periodic deep-dive audits, not a funded external
+  pentest).
+- **`docs/ARCHITECTURE.md`** — system overview plus five deliberate
+  trust boundaries that previously only lived in CHANGELOG entries and
+  audit conversation history: the self-update sudoers grant, the SSH
+  host-key trust-on-first-use model, the SSH-based config-push design
+  (vs. Kea's native API), API keys being global-scope by design, and
+  why dependencies are floor-pinned rather than exact-pinned. Each
+  documents both the reasoning and what a future change should watch
+  out for.
+- **23 new tests** closing coverage gaps in exactly the files where real
+  bugs were previously found without any test catching them:
+  - `tests/test_servers.py` (new, 8 tests) — full route coverage for
+    `servers.py`, including a regression guard that the restart command
+    uses the hardened `StrictHostKeyChecking=accept-new` and not the
+    old `=no`. Found and fixed a real bug in the test fixtures
+    themselves along the way (incomplete mocked server dicts caused a
+    `KeyError` on the redirect target's render) — confirmed the fix
+    with a live re-run rather than just editing and assuming.
+  - `tests/test_ddns.py` (new, 6 tests) — auth boundary, log-fetch error
+    handling, and the same SSH-hardening regression guard for both SSH
+    call sites in this route. Caught and fixed a test-isolation bug of
+    my own while writing this: an early draft mutated the shared global
+    `extensions.cfg` object directly, which would have leaked a fake
+    config section into every test running afterward; fixed to swap the
+    whole reference via `monkeypatch` instead.
+  - `tests/test_settings.py` (+6 tests) — direct regression guards that
+    `/settings/system/save-mfa-mode` and `/settings/upload-nav-logo`
+    (the two routes found missing their `@bp.route(...)` decorator
+    entirely in the v4.4.9 audit) are actually registered, actually
+    persist/save correctly, and are actually admin-gated. Uses a real,
+    PIL-verified 1x1 PNG for the upload test — an initial hand-typed
+    PNG byte sequence was subtly invalid and would have made the test
+    meaningless; caught by actually decoding it with PIL before trusting it.
+  - `tests/test_subnets.py` (+3 tests) — regression guard for the
+    `save_subnet_note()` missing-access-check fix from v4.4.9.
+
+### Housekeeping
+- Removed a 6th instance of the dangling section-header-comment pattern
+  (`# Audit Log` in `jen/routes/ddns.py`, trailing, nothing under it) —
+  same leftover-from-refactor issue already cleaned up five times
+  across `servers.py` and `subnets.py` in earlier releases.
+
+### Verification note
+Every claim above was checked directly in this environment before being
+written down, not just asserted: bandit and pip-audit were both actually
+run (not just added to a YAML file and assumed correct), the baseline
+mechanism was proven with a live fake-vulnerability injection, and the
+full test suite — 278 tests, up from 255 — was run against a real
+MariaDB instance end to end, including catching and fixing two real
+bugs in the new test code itself along the way.
+
 ## [4.4.10] - 2026-08-09
 
 ### Test infrastructure: full suite now passes 255/255

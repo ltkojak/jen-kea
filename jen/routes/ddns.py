@@ -185,7 +185,3 @@ def ddns():
                            lookup_result=lookup_result, log_status=log_status,
                            log_message=log_message, ddns_log=extensions.DDNS_LOG,
                            dns_provider=extensions.cfg.get("ddns", "dns_provider", fallback="technitium"))
-
-# ─────────────────────────────────────────
-# Audit Log
-# ─────────────────────────────────────────

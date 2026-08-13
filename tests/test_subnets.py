@@ -1,6 +1,38 @@
 import pytest
 
 
+class TestSaveSubnetNoteAccessControl:
+    """v4.4.9: save_subnet_note() had no can_access_subnet() check at
+    all, unlike every sibling route on this page (edit_subnet,
+    edit_subnet_post, delete_subnet all check it) — a subnet-restricted
+    admin could write/overwrite notes for any subnet_id."""
+
+    def test_rejected_for_out_of_scope_subnet(self, client, db):
+        from tests.conftest import restricted_client as _restricted_client
+        _restricted_client(client, db, allowed_subnets=[999], role="admin",
+                            username="subnetnote_restricted1")
+        r = client.post("/subnets/save-note",
+                        data={"subnet_id": "1", "notes": "should not be allowed"})
+        assert r.status_code == 403
+        data = r.get_json()
+        assert data["ok"] is False
+        assert "access" in data["error"].lower()
+
+    def test_allowed_within_scope(self, logged_in_client):
+        r = logged_in_client.post("/subnets/save-note",
+                                  data={"subnet_id": "1", "notes": "allowed note"})
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data["ok"] is True
+
+    def test_rejects_non_integer_subnet_id(self, logged_in_client):
+        r = logged_in_client.post("/subnets/save-note",
+                                  data={"subnet_id": "not-a-number", "notes": "x"})
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data["ok"] is False
+
+
 class TestGetSubnetKeaData:
     """_get_subnet_kea_data() must return ALL of a subnet's pools, not just
     the first — this backs the Edit Subnet form and, until v4.3.8, a bug

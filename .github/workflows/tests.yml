@@ -1,0 +1,116 @@
+name: Tests
+
+# Reusable workflow — called by ci.yml (every push/PR) and release.yml
+# (gates every tagged release). Not meant to be triggered directly.
+on:
+  workflow_call:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: ci_root_pw
+          MARIADB_DATABASE: jen_test
+          MARIADB_USER: jen
+          MARIADB_PASSWORD: ci_jen_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
+            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
+            "authlib>=1.7.2" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3" \
+            "cryptography" "werkzeug" pytest
+
+      - name: Point /opt/jen at the checkout
+        # create_app() hardcodes template_folder="/opt/jen/templates" — correct
+        # for how Jen is actually deployed, but it means tests need the checkout
+        # reachable at that path regardless of where the runner clones it.
+        run: |
+          sudo mkdir -p /opt/jen
+          sudo ln -sf "$GITHUB_WORKSPACE/templates" /opt/jen/templates
+          sudo ln -sf "$GITHUB_WORKSPACE/static" /opt/jen/static
+
+      - name: Run test suite
+        env:
+          JEN_DB_HOST: 127.0.0.1
+          JEN_DB_USER: jen
+          JEN_DB_PASS: ci_jen_pw
+        run: |
+          python3 -m pytest tests/ -v
+
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install bandit
+        run: pip install -q bandit
+
+      - name: Run bandit
+        # -ll: only report medium/high confidence findings — low-confidence
+        # noise isn't worth gating a release over. -r: recursive.
+        # -b: diff against .github/bandit-baseline.json, a snapshot of the
+        # 47 findings that existed as of the v4.4.10 audit series, each
+        # manually traced and verified safe (whitelisted table names,
+        # int()-cast values, trust-on-first-use SSH host-key persistence —
+        # see docs/THREAT_MODEL.md). This means CI only fails on genuinely
+        # NEW findings introduced going forward, not on the already-reviewed
+        # backlog — verified directly: re-running bandit against an injected
+        # fake shell=True call still fails even with the baseline present.
+        run: bandit -r jen/ plugins/ -ll -b .github/bandit-baseline.json
+
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies + pip-audit
+        run: |
+          pip install -q --upgrade pip
+          pip install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
+            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
+            "authlib>=1.7.2" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3" \
+            "cryptography" "werkzeug" pip-audit
+
+      - name: Run pip-audit
+        # Floor-pinned deps (jen/config.py) mean the *installed* version can
+        # be newer than the pin — pip-audit checks what's actually installed,
+        # which is exactly what a real deployment would end up running.
+        # Verified clean in an isolated environment matching this exact
+        # install command: 0 findings against every one of Jen's actual
+        # runtime dependencies, once pip itself is upgraded first (an
+        # outdated bundled pip is a false-positive source here — it's build
+        # tooling, not something Jen's code ever imports at runtime).
+        run: pip-audit

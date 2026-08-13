@@ -11,7 +11,11 @@ on:
         required: true
 
 jobs:
+  test:
+    uses: ./.github/workflows/tests.yml
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
