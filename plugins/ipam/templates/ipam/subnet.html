@@ -168,6 +168,7 @@
     </div>
 
     <form id="edit-form" method="POST" action="{{ url_for('ipam.save_entry', subnet_id=subnet_id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="ip" id="edit-ip-input">
 
         <div id="edit-status-group" class="form-group">
@@ -213,6 +214,7 @@
 <form id="clear-form" method="POST"
       action="{{ url_for('ipam.delete_entry', subnet_id=subnet_id) }}"
       style="display:none;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="ip" id="clear-ip-input">
 </form>
 

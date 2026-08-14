@@ -2,6 +2,64 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.20] - 2026-08-15
+
+### Fixed: every POST form in both bundled plugins was missing its CSRF token
+
+Reported directly: a plain 403 "session security token is missing or
+expired" trying to mark an IPAM address as static — on a session that
+was genuinely valid.
+
+### Root cause
+`csrf_token()` is registered as an app-wide Jinja global via Jen's core
+`context_processor` and is genuinely available inside plugin
+templates. It was simply never called in any POST form in either
+bundled plugin. Five forms total: `edit-form` and `clear-form` in
+`plugins/ipam/templates/ipam/subnet.html`; two scan-trigger forms in
+`plugins/network-discovery/templates/network_discovery/index.html`
+and one in `results.html`. Every submission through any of them hit
+Jen's CSRF middleware and was rejected outright, regardless of session
+validity.
+
+This had no test coverage because the whole suite runs with
+`WTF_CSRF_ENABLED=False` by default (mirroring Flask-WTF's own config
+key) — the right default for testing application logic without CSRF
+noise, but it meant this entire class of bug (a form silently missing
+its token field) had no test surface at all until now.
+
+### Fixed
+- All five forms above: added
+  `<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">`.
+- **New: `tests/test_plugin_template_csrf.py`** — rather than five
+  narrow tests for the five specific forms found, this scans every
+  `<form method="POST">` block in every current *and future* plugin
+  template file and asserts each one contains `csrf_token` before its
+  closing `</form>` — a structural guard for the whole plugin
+  ecosystem, not just the routes that happened to get reported.
+  Validated the detector itself the standard way: reverted one fix,
+  confirmed the test correctly failed with a specific, actionable
+  message identifying exactly which form and file, then restored the
+  fix and confirmed all tests pass.
+
+### Verification
+Reproduced the exact reported 403 end-to-end before touching anything:
+real login, real session, real CSRF middleware enabled (`WTF_CSRF_ENABLED=True`,
+explicitly overriding the test-suite default), a real POST with no
+token confirmed 403, then a token extracted from the real rendered
+page confirmed the fix resolves it. Full suite: **328 passed** (up
+from 321).
+
+### If you're running the IPAM Lite plugin from its separate repo
+**This release does not fix your actual running plugin.** The IPAM
+plugin bundled in this repo (`plugins/ipam/`) is a reference copy —
+production installs typically run the separate, actively-maintained
+`ltkojak/jen-plugin-ipam` repo instead, which has diverged further
+(unmanaged-subnet support, a third database table this bundled copy
+doesn't have) and had the exact same bug, independently confirmed and
+fixed there, released separately as v1.3.2. Install the new
+`plugin.zip` from that release through Jen's Plugins settings page —
+this jen-kea release alone will not reach it.
+
 ## [4.4.19] - 2026-08-15
 
 ### Fixed a real regression from v4.4.18: IPAM disappeared from the menu after updating
