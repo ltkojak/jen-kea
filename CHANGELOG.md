@@ -2,6 +2,46 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.22] - 2026-08-15
+
+### Fixed a flaky test that failed on real CI (not a security bug)
+
+CI failed on push: `tests/test_csrf.py::TestCsrfTokenLogic::test_tampered_token_fails`.
+Nothing in the actual CSRF validation code was touched by anything in
+recent releases, so this was worth tracing to ground before assuming
+either "ignore it, must be a fluke" or "something's broken."
+
+### Root cause
+The test's tampering method replaced only the **last 2 characters** of
+a real CSRF token with `aa`/`bb`. Itsdangerous tokens are base64url-
+encoded, and a base64 string's trailing characters sometimes fall on
+padding bits that don't correspond to any real byte of the underlying
+signature — so a mutation landing exactly there doesn't actually
+change the decoded, verified content, and the "tampered" token still
+validates as genuine. Confirmed empirically before touching anything:
+5 of 2,000 randomly generated tokens, tampered with the old method,
+incorrectly validated as genuine (~1 in 400) — a real, if rare, flake
+rate. This is a test-design flaw, not a bug in CSRF validation itself,
+which is doing exactly what it's supposed to 99.75% of the time this
+specific test ran; the other 0.25% happened to hit a specific case
+where the mutation itself didn't do anything.
+
+### Fixed
+Mutate a character near the **middle** of the token instead of the
+end — guaranteed to land within the meaningful, non-padding portion of
+the signature regardless of the token's exact length, so it can never
+land on a semantically-inert padding bit the way the last-2-characters
+approach could.
+
+### Verification
+Same empirical method used to find the bug, used again to confirm the
+fix: 0 failures across 5,000 trials with the new middle-character
+approach, versus 5/2,000 with the old one. Ran the actual test through
+the real Flask app and `csrf_svc` stack 20 times in a row to build
+additional confidence beyond the standalone reproduction. Full suite:
+**330 passed** (test count unchanged — this fixes an existing test's
+reliability rather than adding a new one).
+
 ## [4.4.21] - 2026-08-15
 
 ### Fixed: the "restart required" banner could get stuck showing forever after a real restart

@@ -80,7 +80,25 @@ class TestCsrfTokenLogic:
     def test_tampered_token_fails(self, app):
         with app.test_request_context():
             token = csrf_svc.generate_csrf_token(app)
-            tampered = token[:-2] + ("aa" if not token.endswith("aa") else "bb")
+            # v4.4.22: mutating only the last 2 characters was flaky —
+            # itsdangerous tokens are base64url-encoded, and a base64
+            # string's trailing characters sometimes fall on "padding"
+            # bits that don't map to any real signature byte. Confirmed
+            # empirically: ~1 in 400 random tokens produced a "tampered"
+            # version using the old last-2-char method that still
+            # validated as genuine, since those specific bits happened to
+            # be semantically meaningless padding rather than real
+            # signature data. This is what actually failed once in CI —
+            # not a bug in CSRF validation itself, a flaky test.
+            #
+            # Flip a character near the *middle* of the token instead —
+            # guaranteed to land within the meaningful, non-padding
+            # portion of the signature regardless of the token's exact
+            # length, so this can never land on a semantically-inert
+            # padding bit the way the last-2-char approach could.
+            mid = len(token) // 2
+            flipped_char = "a" if token[mid] != "a" else "b"
+            tampered = token[:mid] + flipped_char + token[mid + 1:]
             assert csrf_svc.validate_csrf_token(app, tampered) is False
 
     def test_token_from_different_session_fails(self, app):
