@@ -2,6 +2,67 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.23] - 2026-08-15
+
+### The plugin registry version-staleness bug can't happen again — eliminated the duplicate data entirely
+
+Asked directly after fixing the same registry staleness bug twice in a
+row for IPAM: is there a way to stop doing this by hand every release?
+Yes — the actual fix wasn't process discipline, it was removing the
+second copy that needed to stay in sync in the first place.
+
+### The pattern
+`plugins/registry.json`'s embedded `version` field used to be the
+*only* source of truth for whether Jen's Plugins page shows "update
+available." Every real plugin release lived in a separate repo
+(`jen-plugin-ipam`, `jen-plugin-network-discovery`) with its own
+`manifest.json` — meaning every release needed a second, manual commit
+to a completely different repo just to keep the version number
+displayed correctly. It drifted for IPAM more than once.
+
+### Fixed
+`fetch_registry()` (`jen/services/plugins.py`) now live-fetches each
+plugin's own current `manifest.json` from its own repo — the exact
+same `download_url` pattern `install_plugin()` already uses to fetch
+the zip — and overlays the genuinely current `version`, `description`,
+and `db_migrations` onto the registry entry. Deliberately scoped to
+only those three fields: `download_url`, `nav`, and the other
+structural fields are never overlaid, so a plugin's own manifest can't
+redirect where its zip gets downloaded from or inject different nav
+entries through this path — it can only correct its own display data.
+
+Falls back gracefully to the static `registry.json` entry's own
+version if a specific plugin's live fetch fails for any reason
+(network hiccup, that plugin's repo temporarily down) — one plugin's
+connectivity issue doesn't fail the whole Plugins page, and the
+fallback is a plausible, previously-known version rather than nothing
+at all.
+
+`registry.json` itself still exists and still needs `download_url` /
+`nav` / `id` / etc. entries for any newly-added plugin — what's gone
+is the need to remember to also bump `version` there every single
+release from now on.
+
+### Tests
+New `tests/test_plugin_registry.py`, 8 tests — all `requests.get` calls
+mocked, never touches the real network. Covers the overlay itself,
+exact URL construction, per-plugin fetch-failure fallback (both
+connection errors and HTTP error statuses), a mismatched-id manifest
+being correctly rejected rather than trusted, confirmation that
+`download_url`/`nav` are never overlaid even when a manifest tries to
+supply them, the pre-existing main-registry-fetch-failure behavior
+staying unchanged, and multiple plugins each being overlaid
+independently. Caught and fixed a test-isolation bug of my own while
+writing these: an early draft shared one mutable registry-entry object
+across all 8 tests, and since `fetch_registry()` mutates entries in
+place (that's the actual point of the overlay), the first test to run
+silently corrupted the starting state for every test after it — fixed
+by making the fixture a function that returns a fresh copy each call.
+Also ran one real, unmocked check against the actual live
+`jen-plugin-ipam` repo to confirm the URL construction genuinely works
+end to end, not just against mocks. Full suite: **338 passed** (up
+from 330).
+
 ## [4.4.22] - 2026-08-15
 
 ### Fixed a flaky test that failed on real CI (not a security bug)

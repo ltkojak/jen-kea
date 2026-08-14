@@ -473,8 +473,29 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
 
 def fetch_registry(timeout: int = 10) -> tuple[list, Optional[str]]:
     """
-    Fetch the plugin registry from GitHub.
-    Returns (entries, error_message). error_message is None on success.
+    Fetch the plugin registry from GitHub, then overlay each plugin's
+    genuinely current version/description/db_migrations by live-fetching
+    its own manifest.json from its own repo — the same download_url
+    pattern install_plugin() already uses for the zip itself.
+
+    Registry.json's embedded version field used to be the ONLY source of
+    truth for "is an update available," which meant every plugin release
+    required a second, easy-to-forget manual commit syncing that field —
+    it drifted stale for IPAM more than once. Live-fetching eliminates
+    the duplicate data entirely rather than relying on remembering to
+    keep two copies in sync by hand every release.
+
+    Only version/description/db_migrations are overlaid — not
+    download_url, nav, or the other structural fields — so a plugin's
+    own manifest can't redirect where its zip gets downloaded from or
+    what nav entries it injects; it can only correct its own
+    version/description/migration-list display data.
+
+    Falls back to the static registry.json's own embedded version for
+    any single plugin whose live manifest fetch fails (network hiccup,
+    that plugin's repo temporarily unreachable) — better to show a
+    possibly-stale-but-known version than to drop the plugin from the
+    list or fail the whole page over one plugin's connectivity.
     """
     try:
         resp = requests.get(extensions.PLUGIN_REGISTRY_URL, timeout=timeout)
@@ -483,11 +504,33 @@ def fetch_registry(timeout: int = 10) -> tuple[list, Optional[str]]:
         entries = resp.json()
         if not isinstance(entries, list):
             return [], "Registry format invalid (expected a JSON array)."
-        return entries, None
     except requests.Timeout:
         return [], "Registry fetch timed out."
     except Exception as e:
         return [], f"Registry fetch error: {e}"
+
+    for entry in entries:
+        download_url = entry.get("download_url", "").rstrip("/")
+        if not download_url or not download_url.startswith("https://"):
+            continue
+        try:
+            live_resp = requests.get(f"{download_url}/manifest.json", timeout=5)
+            if live_resp.status_code != 200:
+                continue
+            live_manifest = live_resp.json()
+            if live_manifest.get("id") != entry.get("id"):
+                # Doesn't even claim to be this plugin — don't trust it,
+                # keep the static fallback rather than showing whatever
+                # this unexpected manifest says.
+                continue
+            for field in ("version", "description", "db_migrations"):
+                if field in live_manifest:
+                    entry[field] = live_manifest[field]
+        except Exception as e:
+            logger.warning(f"Could not live-fetch manifest for plugin '{entry.get('id')}': {e}")
+            continue  # keep this one plugin's static fallback, others unaffected
+
+    return entries, None
 
 
 def get_loaded_plugins() -> dict:
