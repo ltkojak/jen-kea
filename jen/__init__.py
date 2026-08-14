@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "4.4.20"
+JEN_VERSION = "4.4.21"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -369,6 +369,25 @@ def create_app() -> Flask:
     # ── DB init ───────────────────────────────────────────────────────────────
     from jen.models.db import init_jen_db
     init_jen_db()
+
+    # v4.4.21: clear any pending-restart flag on every startup, not just
+    # when the "Restart Jen Now" button's own route handles it. Found
+    # live: 9 call sites across settings.py and plugins.py set
+    # restart_pending=true (plugin install/enable/disable/uninstall,
+    # several infrastructure settings saves), but only that one button's
+    # route ever cleared it back to false. Any restart triggered another
+    # way — a manual `systemctl restart jen`, the self-update flow, a
+    # server reboot, crash recovery — left the persistent "⚠️ Jen restart
+    # required" banner stuck showing forever, even though a real restart
+    # had just genuinely happened. The app booting at all is definitive
+    # proof whatever restart was pending has now occurred, regardless of
+    # how it was triggered — so clear it here unconditionally rather than
+    # relying on one specific UI action to have been the cause.
+    try:
+        from jen.models.user import set_global_setting
+        set_global_setting("restart_pending", "false")
+    except Exception as e:
+        logger.warning(f"Could not clear restart_pending flag at startup: {e}")
 
     # ── Backup scheduler ──────────────────────────────────────────────────────
     from jen.services.scheduler import start_scheduler

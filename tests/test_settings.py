@@ -9,6 +9,48 @@ import pytest
 from jen.models.user import get_global_setting, set_global_setting, _invalidate_settings_cache
 
 
+class TestRestartPendingClearedOnStartup:
+    """v4.4.21: 9 call sites (settings.py, plugins.py) set
+    restart_pending=true, but before this fix only one specific button's
+    route (restart_jen()) ever cleared it back to false. Any restart
+    triggered another way — manual systemctl restart, self-update, a
+    server reboot — left the persistent "restart required" banner stuck
+    forever. Fixed by clearing the flag unconditionally in create_app()
+    itself, since the app booting at all is proof a restart just
+    happened, regardless of what triggered it."""
+
+    def test_stuck_flag_is_cleared_by_a_fresh_create_app_call(self):
+        from jen.models.user import get_global_setting, set_global_setting
+        # Simulate the exact stuck-forever scenario: some earlier action
+        # (a plugin install, an infrastructure settings save) left the
+        # flag set to true, and — critically — the restart that follows
+        # is NOT triggered through the one specific "Restart Jen Now"
+        # button route.
+        set_global_setting("restart_pending", "true")
+        assert get_global_setting("restart_pending") == "true"
+
+        # create_app() is exactly what runs on every real app startup,
+        # regardless of how that startup was triggered — this is the
+        # actual mechanism being tested, not a mock of it.
+        from jen import create_app
+        create_app()
+
+        assert get_global_setting("restart_pending") == "false", (
+            "restart_pending was still 'true' after a fresh create_app() "
+            "call — the persistent restart-required banner would stay "
+            "stuck showing even after a real restart just happened"
+        )
+
+    def test_clearing_survives_even_without_a_prior_true_value(self):
+        # Edge case: nothing was ever pending — startup shouldn't error
+        # or behave differently just because there was nothing to clear.
+        from jen.models.user import get_global_setting, set_global_setting
+        set_global_setting("restart_pending", "false")
+        from jen import create_app
+        create_app()
+        assert get_global_setting("restart_pending") == "false"
+
+
 class TestSettingsCache:
     """Settings cache — get_global_setting/set_global_setting."""
 

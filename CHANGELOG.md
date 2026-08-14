@@ -2,6 +2,47 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.21] - 2026-08-15
+
+### Fixed: the "restart required" banner could get stuck showing forever after a real restart
+
+Reported directly: after updating a plugin and restarting, the green
+"Jen is restarting..." message just sat there — asked "maybe it's
+restarted??"
+
+### Two different things, only one of them a bug
+That specific green message is a one-time Flask flash notification
+triggered by clicking the amber "⚠️ Jen restart required" banner's own
+"Restart Jen Now" button — expected to disappear on the next page
+load, not a bug, just no auto-refresh to visually confirm completion.
+
+The real, separate bug is in the amber banner itself: 9 call sites
+across `settings.py` and `plugins.py` set `restart_pending=true`
+(every plugin install/enable/disable/uninstall, several infrastructure
+settings saves) — but before this fix, only that one specific button's
+own route ever cleared it back to `false`. Any restart triggered
+another way — a manual `systemctl restart jen`, the self-update flow,
+a server reboot, crash recovery — left the persistent banner stuck
+showing "restart required" indefinitely, even after a real restart had
+genuinely just happened.
+
+### Fixed
+`jen/__init__.py`'s `create_app()` now clears `restart_pending`
+unconditionally right after `init_jen_db()`, on every startup — the
+app booting at all is definitive proof whatever restart was pending
+has now occurred, regardless of what triggered it, so the fix doesn't
+depend on any specific UI action having been the cause.
+
+### Tests
+Two new tests in `tests/test_settings.py::TestRestartPendingClearedOnStartup`.
+The main one directly reproduces the exact stuck-forever scenario —
+sets the flag `true` (simulating an earlier plugin action), then calls
+a fresh `create_app()` (exactly what runs on every real startup,
+regardless of trigger) and confirms the flag clears. Validated the
+standard way: reverted the fix, confirmed the test failed with a
+specific, accurate assertion message, restored the fix, confirmed both
+tests pass. Full suite: **330 passed** (up from 328).
+
 ## [4.4.20] - 2026-08-15
 
 ### Fixed: every POST form in both bundled plugins was missing its CSRF token
