@@ -112,10 +112,11 @@
                 </div>
                 <div id="change-summary" style="font-size:12px;color:var(--text-muted);
                      background:var(--surface);border-radius:var(--radius);
-                     padding:10px 12px;margin-bottom:14px;font-family:monospace;
+                     padding:10px 12px;margin-bottom:10px;font-family:monospace;
                      line-height:1.8;"></div>
+                <div id="validation-summary" style="font-size:12px;margin-bottom:14px;"></div>
                 <div style="display:flex;gap:8px;">
-                    <button type="button" class="btn btn-danger"
+                    <button type="button" class="btn btn-danger" id="apply-btn"
                             onclick="submitForm()">✅ Yes, apply and restart</button>
                     <button type="button" class="btn btn-secondary"
                             onclick="hideConfirm()">✕ Cancel</button>
@@ -172,8 +173,7 @@ function getChanges() {
     return changes;
 }
 
-function showConfirm() {
-    var changes = getChanges();
+function renderChangeSummary(changes) {
     var summary = document.getElementById('change-summary');
     if (changes.length === 0) {
         summary.innerHTML = '<span style="color:var(--text-muted);">No changes detected — all fields match current values.</span>';
@@ -184,10 +184,92 @@ function showConfirm() {
                 + ' → <span style="color:var(--primary);">' + c.to + '</span></div>';
         }).join('');
     }
-    var okBtn = document.querySelector('#confirm-panel .btn-danger');
-    if (okBtn) okBtn.disabled = changes.length === 0;
-    document.getElementById('confirm-panel').style.display = '';
-    document.getElementById('confirm-panel').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+// v4.4.24: "Preview & Validate" — before this, the diff shown here was
+// entirely client-side (comparing against page-load-time values) and
+// never actually ran kea-dhcp4 -t before the user committed to
+// applying. The backend already tested-then-applied atomically on
+// submit, but that test result was invisible until after the restart
+// attempt. Now the confirm panel actually calls the real preview
+// endpoint first, showing the genuine current-vs-new diff and the
+// real per-server config test result before Apply is even clickable.
+async function showConfirm() {
+    var panel   = document.getElementById('confirm-panel');
+    var summary = document.getElementById('change-summary');
+    var valDiv  = document.getElementById('validation-summary');
+    var applyBtn = document.getElementById('apply-btn');
+
+    // Show a client-side diff immediately (fast, no round-trip needed)
+    // while the real preview call is in flight.
+    var clientChanges = getChanges();
+    renderChangeSummary(clientChanges);
+    valDiv.innerHTML = '<span style="color:var(--text-muted);">⏳ Checking configuration against Kea…</span>';
+    applyBtn.disabled = true;
+    panel.style.display = '';
+    panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+
+    if (clientChanges.length === 0) {
+        valDiv.innerHTML = '';
+        applyBtn.disabled = true;
+        return;
+    }
+
+    try {
+        var formEl = document.getElementById('edit-subnet-form');
+        var formData = new FormData(formEl);
+        var resp = await fetch({{ url_for('subnets.edit_subnet_preview', subnet_id=subnet_id) | tojson }}, {
+            method: 'POST',
+            body: formData,
+        });
+        var data = await resp.json();
+
+        if (!resp.ok || !data.ok) {
+            valDiv.innerHTML = '<div style="color:var(--danger);">❌ ' +
+                (data.error || 'Could not validate the configuration.') + '</div>';
+            applyBtn.disabled = true;
+            return;
+        }
+
+        if (data.no_changes) {
+            valDiv.innerHTML = '';
+            applyBtn.disabled = true;
+            return;
+        }
+
+        // Prefer the server's own diff (computed against live Kea data
+        // at preview time) over the client-side one (computed against
+        // whatever was baked into the page at load time) when both are
+        // available — they'll usually agree, but the server's is the
+        // more authoritative source.
+        if (data.diff && data.diff.length) {
+            summary.innerHTML = data.diff.map(function(d) {
+                return '<div><span style="color:var(--text-muted);">' + d.field + ':</span> '
+                    + '<span style="text-decoration:line-through;opacity:.5;">' + d.old + '</span>'
+                    + ' → <span style="color:var(--primary);">' + d.new + '</span></div>';
+            }).join('');
+        }
+
+        if (!data.servers || data.servers.length === 0) {
+            valDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured to validate against.</span>';
+            applyBtn.disabled = false;
+            return;
+        }
+
+        valDiv.innerHTML = data.servers.map(function(s) {
+            var icon = s.ok ? '✅' : '❌';
+            var color = s.ok ? 'var(--success)' : 'var(--danger)';
+            return '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+        }).join('');
+
+        applyBtn.disabled = !data.all_passed;
+        if (!data.all_passed) {
+            valDiv.innerHTML += '<div style="margin-top:8px;color:var(--text-muted);">Fix the error(s) above before applying — Kea would reject this configuration.</div>';
+        }
+    } catch (e) {
+        valDiv.innerHTML = '<div style="color:var(--danger);">❌ Could not reach the server to validate: ' + e.message + '</div>';
+        applyBtn.disabled = true;
+    }
 }
 
 function hideConfirm() {

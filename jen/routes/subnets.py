@@ -162,6 +162,117 @@ def _get_subnet_kea_data(subnet_id):
             "rebind_timer": "", "routers": "", "dns_servers": ""}
 
 
+def _build_subnet_patch_script(subnet_id, kea_conf, new_pool, extra_pools,
+                                new_lifetime, new_renew, new_rebind,
+                                new_routers, new_dns, dry_run=False):
+    """
+    Build the remote Python script that patches subnet_id's config,
+    writes it to a temp file, and runs `kea-dhcp4 -t` against it.
+
+    v4.4.24: extracted from edit_subnet_post() so the same tested,
+    hardened patch-and-validate logic can be reused by the new preview
+    endpoint (dry_run=True — test only, never touch the live config)
+    without duplicating it. edit_subnet_post() itself is unchanged
+    behaviorally: it calls this with dry_run=False, which produces the
+    exact same script it always has.
+
+    dry_run=False (edit_subnet_post's actual apply path, unchanged):
+      test passes  -> os.replace(tmp, path), prints 'ok'
+      test fails   -> os.unlink(tmp), prints 'testerror:...', original
+                       config untouched either way
+    dry_run=True (the new preview endpoint):
+      test passes  -> os.unlink(tmp) (never applied), prints 'preview-ok'
+      test fails   -> os.unlink(tmp), prints 'testerror:...'
+      Live config is never touched in either outcome — the backup
+      step is skipped entirely too, since nothing is ever written to
+      the real path.
+    """
+    if dry_run:
+        backup_step = ""
+        on_pass = "os.unlink(tmp)\nprint('preview-ok')"
+    else:
+        backup_step = "# Make a backup before touching anything\nshutil.copy2(path, backup)\n\n"
+        on_pass = "# Config test passed — move temp into place\nos.replace(tmp, path)\nprint('ok')"
+
+    return f"""
+import json, sys, shutil, subprocess, os, tempfile
+
+path   = {repr(kea_conf)}
+backup = path + '.jen_backup'
+
+{backup_step}with open(path) as f:
+    cfg = json.load(f)
+
+changed = False
+for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
+    if s['id'] != {subnet_id}:
+        continue
+    new_pool = {repr(new_pool)}
+    if new_pool:
+        extra_pools = {repr(extra_pools)}
+        s['pools'] = [{{'pool': new_pool}}] + [{{'pool': p}} for p in extra_pools]
+        changed = True
+    new_lifetime = {repr(new_lifetime)}
+    new_renew    = {repr(new_renew)}
+    new_rebind   = {repr(new_rebind)}
+    if new_lifetime:
+        s['valid-lifetime'] = int(new_lifetime); changed = True
+    if new_renew:
+        s['renew-timer'] = int(new_renew); changed = True
+    if new_rebind:
+        s['rebind-timer'] = int(new_rebind); changed = True
+    new_routers = {repr(new_routers)}
+    new_dns     = {repr(new_dns)}
+    if new_routers or new_dns:
+        opts = s.get('option-data', [])
+        if new_routers:
+            found = False
+            for o in opts:
+                if o.get('name') == 'routers':
+                    o['data'] = new_routers; found = True; break
+            if not found:
+                opts.append({{'name': 'routers', 'code': 3, 'space': 'dhcp4',
+                              'csv-format': True, 'data': new_routers}})
+            changed = True
+        if new_dns:
+            found = False
+            for o in opts:
+                if o.get('name') == 'domain-name-servers':
+                    o['data'] = new_dns; found = True; break
+            if not found:
+                opts.append({{'name': 'domain-name-servers', 'code': 6, 'space': 'dhcp4',
+                              'csv-format': True, 'data': new_dns}})
+            changed = True
+        s['option-data'] = opts
+    break
+
+if not changed:
+    print('nochange')
+    sys.exit(0)
+
+# Write to a temp file first, test it, then move into place
+tmp = path + '.jen_tmp'
+with open(tmp, 'w') as f:
+    json.dump(cfg, f, indent=2)
+
+# Run kea-dhcp4 -t against the temp file
+result = subprocess.run(
+    ['kea-dhcp4', '-t', tmp],
+    capture_output=True, text=True
+)
+combined = result.stdout + result.stderr
+
+if result.returncode != 0 or 'ERROR' in combined:
+    # Config test failed — clean up temp, leave original untouched
+    os.unlink(tmp)
+    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
+    print('testerror:' + ' | '.join(error_lines[:3]))
+    sys.exit(1)
+
+{on_pass}
+"""
+
+
 def _get_kea_subnet_ids():
     """Return the set of subnet IDs Kea actually has configured right now."""
     try:
@@ -542,6 +653,189 @@ def edit_subnet(subnet_id):
                            subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP))
 
 
+def _parse_and_validate_subnet_edit_form(form):
+    """
+    Parse and validate the subnet-edit form fields shared by
+    edit_subnet_post() and the preview endpoint. Returns
+    (fields_dict, None) on success or (None, error_message) on the
+    first validation failure. Deliberately returns rather than
+    flashing/redirecting itself — each caller decides how to present
+    the error (flash+redirect for the real submit, JSON for the
+    preview AJAX call) — so the two callers can't drift out of sync
+    with each other the way the plugin registry version and the CSRF
+    token fields did earlier.
+    """
+    import ipaddress
+
+    new_pool     = form.get("pool",          "").strip()
+    extra_pools  = [p.strip() for p in form.get("extra_pools", "").split("|") if p.strip()]
+    new_lifetime = form.get("valid_lifetime","").strip()
+    new_renew    = form.get("renew_timer",   "").strip()
+    new_rebind   = form.get("rebind_timer",  "").strip()
+    new_routers  = ",".join(s.strip() for s in form.get("routers",     "").split(",") if s.strip())
+    new_dns      = ",".join(s.strip() for s in form.get("dns_servers", "").split(",") if s.strip())
+
+    def _valid_ip(addr):
+        try:
+            ipaddress.IPv4Address(addr.strip())
+            return True
+        except Exception:
+            return False
+
+    if new_pool and not re.match(r'^\d+\.\d+\.\d+\.\d+\s*-\s*\d+\.\d+\.\d+\.\d+$', new_pool):
+        return None, "Invalid pool format. Use start–end e.g. 10.0.0.1–10.0.0.250"
+
+    if new_routers:
+        bad = [ip for ip in new_routers.split(",") if not _valid_ip(ip)]
+        if bad:
+            return None, f"Invalid router IP(s): {', '.join(bad)}"
+
+    if new_dns:
+        bad = [ip for ip in new_dns.split(",") if not _valid_ip(ip)]
+        if bad:
+            return None, f"Invalid DNS server IP(s): {', '.join(bad)} — enter one IP per entry, comma-separated (e.g. 9.9.9.9,149.112.112.112)"
+
+    for t, label in [(new_lifetime, "Valid Lifetime"), (new_renew, "Renew Timer"), (new_rebind, "Rebind Timer")]:
+        if t:
+            try:
+                if int(t) <= 0:
+                    raise ValueError()
+            except ValueError:
+                return None, f"{label} must be a positive integer (seconds)."
+
+    return {
+        "new_pool": new_pool,
+        "extra_pools": extra_pools,
+        "new_lifetime": new_lifetime,
+        "new_renew": new_renew,
+        "new_rebind": new_rebind,
+        "new_routers": new_routers,
+        "new_dns": new_dns,
+    }, None
+
+
+def _compute_subnet_edit_diff(subnet_id, fields):
+    """
+    Build a human-readable list of {field, old, new} for the preview
+    UI — only for fields the user actually submitted a new value for
+    (empty means "don't change", per the same convention the rest of
+    this form already uses), compared against the subnet's current
+    live values from Kea.
+    """
+    current = _get_subnet_kea_data(subnet_id)
+    diff = []
+    if fields["new_pool"]:
+        diff.append({"field": "Primary Pool",
+                      "old": current.get("pool_str") or "(none)",
+                      "new": fields["new_pool"]})
+    if fields["extra_pools"]:
+        old_extra = ", ".join(current.get("pools", [])[1:]) or "(none)"
+        diff.append({"field": "Extra Pools", "old": old_extra,
+                      "new": ", ".join(fields["extra_pools"])})
+    if fields["new_lifetime"]:
+        diff.append({"field": "Valid Lifetime",
+                      "old": str(current.get("valid_lifetime") or "(unset)"),
+                      "new": fields["new_lifetime"]})
+    if fields["new_renew"]:
+        diff.append({"field": "Renew Timer",
+                      "old": str(current.get("renew_timer") or "(unset)"),
+                      "new": fields["new_renew"]})
+    if fields["new_rebind"]:
+        diff.append({"field": "Rebind Timer",
+                      "old": str(current.get("rebind_timer") or "(unset)"),
+                      "new": fields["new_rebind"]})
+    if fields["new_routers"]:
+        diff.append({"field": "Routers",
+                      "old": current.get("routers") or "(unset)",
+                      "new": fields["new_routers"]})
+    if fields["new_dns"]:
+        diff.append({"field": "DNS Servers",
+                      "old": current.get("dns_servers") or "(unset)",
+                      "new": fields["new_dns"]})
+    return diff
+
+
+@bp.route("/subnets/edit/<int:subnet_id>/preview", methods=["POST"])
+@login_required
+@_admin_required
+def edit_subnet_preview(subnet_id):
+    """
+    Dry-run preview for a subnet edit: validates the form (via the
+    exact same function edit_subnet_post() itself uses, so the two
+    can't drift apart), computes a human-readable diff against the
+    subnet's current live config, and runs kea-dhcp4 -t against each
+    configured server WITHOUT ever touching the live config file
+    (dry_run=True in _build_subnet_patch_script() — see there for
+    exactly what that guarantees, verified directly by executing both
+    the pass and fail paths and confirming the original file is
+    byte-identical before and after either way).
+
+    Never applies anything itself — edit_subnet_post() is the only
+    route that ever writes to the live config, completely unchanged,
+    reached only after the user reviews this preview and explicitly
+    submits the real form.
+    """
+    if subnet_id not in extensions.SUBNET_MAP:
+        return jsonify({"ok": False, "error": "Subnet not found."}), 404
+    if not current_user.can_access_subnet(subnet_id):
+        return jsonify({"ok": False, "error": "Access denied."}), 403
+
+    fields, error = _parse_and_validate_subnet_edit_form(request.form)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+
+    if not any(fields.values()):
+        return jsonify({"ok": True, "no_changes": True, "diff": [], "servers": [], "all_passed": True})
+
+    diff = _compute_subnet_edit_diff(subnet_id, fields)
+
+    server_results = []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            import base64
+            import paramiko
+            ssh = paramiko.SSHClient()
+            __auth.paramiko_load_known_hosts(ssh)
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(server["ssh_host"],
+                        username=server.get("ssh_user", extensions.KEA_SSH_USER),
+                        key_filename=extensions.SSH_KEY_PATH, timeout=10)
+            try:
+                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
+            except Exception:
+                pass
+
+            kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
+            script = _build_subnet_patch_script(
+                subnet_id, kea_conf, fields["new_pool"], fields["extra_pools"],
+                fields["new_lifetime"], fields["new_renew"], fields["new_rebind"],
+                fields["new_routers"], fields["new_dns"], dry_run=True,
+            )
+            enc = base64.b64encode(script.encode()).decode()
+            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+            out = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
+            ssh.close()
+
+            if out == "preview-ok":
+                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+            elif out == "nochange":
+                server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
+            elif out.startswith("testerror:"):
+                server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
+            else:
+                server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
+        except Exception as e:
+            server_results.append({"name": name, "ok": False, "message": str(e)})
+
+    all_passed = all(r["ok"] for r in server_results) if server_results else True
+    return jsonify({"ok": True, "no_changes": False, "diff": diff,
+                     "servers": server_results, "all_passed": all_passed})
+
+
 @bp.route("/subnets/edit/<int:subnet_id>", methods=["POST"])
 @login_required
 @_admin_required
@@ -553,50 +847,17 @@ def edit_subnet_post(subnet_id):
         flash("You do not have access to that subnet.", "error")
         return redirect(url_for('subnets.subnets'))
 
-    # Read form fields — empty string means "don't change this field"
-    new_pool     = request.form.get("pool",          "").strip()
-    extra_pools  = [p.strip() for p in request.form.get("extra_pools", "").split("|") if p.strip()]
-    new_lifetime = request.form.get("valid_lifetime","").strip()
-    new_renew    = request.form.get("renew_timer",   "").strip()
-    new_rebind   = request.form.get("rebind_timer",  "").strip()
-    new_routers  = ",".join(s.strip() for s in request.form.get("routers",     "").split(",") if s.strip())
-    new_dns      = ",".join(s.strip() for s in request.form.get("dns_servers", "").split(",") if s.strip())
-
-    # ── Input validation — catch bad data BEFORE touching the config ──────────
-    import ipaddress
-
-    def _valid_ip(addr):
-        try:
-            ipaddress.IPv4Address(addr.strip())
-            return True
-        except Exception:
-            return False
-
-    if new_pool and not re.match(r'^\d+\.\d+\.\d+\.\d+\s*-\s*\d+\.\d+\.\d+\.\d+$', new_pool):
-        flash("Invalid pool format. Use start–end e.g. 10.0.0.1–10.0.0.250", "error")
+    fields, error = _parse_and_validate_subnet_edit_form(request.form)
+    if error:
+        flash(error, "error")
         return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
-
-    if new_routers:
-        bad = [ip for ip in new_routers.split(",") if not _valid_ip(ip)]
-        if bad:
-            flash(f"Invalid router IP(s): {', '.join(bad)}", "error")
-            return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
-
-    if new_dns:
-        bad = [ip for ip in new_dns.split(",") if not _valid_ip(ip)]
-        if bad:
-            flash(f"Invalid DNS server IP(s): {', '.join(bad)} — enter one IP per entry, comma-separated (e.g. 9.9.9.9,149.112.112.112)", "error")
-            return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
-
-    for t, label in [(new_lifetime, "Valid Lifetime"), (new_renew, "Renew Timer"), (new_rebind, "Rebind Timer")]:
-        if t:
-            try:
-                if int(t) <= 0:
-                    raise ValueError()
-            except ValueError:
-                flash(f"{label} must be a positive integer (seconds).", "error")
-                return redirect(url_for('subnets.edit_subnet', subnet_id=subnet_id))
-    # ─────────────────────────────────────────────────────────────────────────
+    new_pool     = fields["new_pool"]
+    extra_pools  = fields["extra_pools"]
+    new_lifetime = fields["new_lifetime"]
+    new_renew    = fields["new_renew"]
+    new_rebind   = fields["new_rebind"]
+    new_routers  = fields["new_routers"]
+    new_dns      = fields["new_dns"]
 
     errors  = []
     results = []
@@ -623,89 +884,11 @@ def edit_subnet_post(subnet_id):
 
             kea_conf = server.get('kea_conf', '/etc/kea/kea-dhcp4.conf')
 
-            # Build remote script: backup → patch → kea-dhcp4 -t test → write or restore
-            script = f"""
-import json, sys, shutil, subprocess, os, tempfile
-
-path   = {repr(kea_conf)}
-backup = path + '.jen_backup'
-
-# Make a backup before touching anything
-shutil.copy2(path, backup)
-
-with open(path) as f:
-    cfg = json.load(f)
-
-changed = False
-for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
-    if s['id'] != {subnet_id}:
-        continue
-    new_pool = {repr(new_pool)}
-    if new_pool:
-        extra_pools = {repr(extra_pools)}
-        s['pools'] = [{{'pool': new_pool}}] + [{{'pool': p}} for p in extra_pools]
-        changed = True
-    new_lifetime = {repr(new_lifetime)}
-    new_renew    = {repr(new_renew)}
-    new_rebind   = {repr(new_rebind)}
-    if new_lifetime:
-        s['valid-lifetime'] = int(new_lifetime); changed = True
-    if new_renew:
-        s['renew-timer'] = int(new_renew); changed = True
-    if new_rebind:
-        s['rebind-timer'] = int(new_rebind); changed = True
-    new_routers = {repr(new_routers)}
-    new_dns     = {repr(new_dns)}
-    if new_routers or new_dns:
-        opts = s.get('option-data', [])
-        if new_routers:
-            found = False
-            for o in opts:
-                if o.get('name') == 'routers':
-                    o['data'] = new_routers; found = True; break
-            if not found:
-                opts.append({{'name': 'routers', 'code': 3, 'space': 'dhcp4',
-                              'csv-format': True, 'data': new_routers}})
-            changed = True
-        if new_dns:
-            found = False
-            for o in opts:
-                if o.get('name') == 'domain-name-servers':
-                    o['data'] = new_dns; found = True; break
-            if not found:
-                opts.append({{'name': 'domain-name-servers', 'code': 6, 'space': 'dhcp4',
-                              'csv-format': True, 'data': new_dns}})
-            changed = True
-        s['option-data'] = opts
-    break
-
-if not changed:
-    print('nochange')
-    sys.exit(0)
-
-# Write to a temp file first, test it, then move into place
-tmp = path + '.jen_tmp'
-with open(tmp, 'w') as f:
-    json.dump(cfg, f, indent=2)
-
-# Run kea-dhcp4 -t against the temp file
-result = subprocess.run(
-    ['kea-dhcp4', '-t', tmp],
-    capture_output=True, text=True
-)
-combined = result.stdout + result.stderr
-
-if result.returncode != 0 or 'ERROR' in combined:
-    # Config test failed — clean up temp, leave original untouched
-    os.unlink(tmp)
-    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
-    print('testerror:' + ' | '.join(error_lines[:3]))
-    sys.exit(1)
-
-# Config test passed — move temp into place
-os.replace(tmp, path)
-print('ok')
-"""
+            script = _build_subnet_patch_script(
+                subnet_id, kea_conf, new_pool, extra_pools,
+                new_lifetime, new_renew, new_rebind, new_routers, new_dns,
+                dry_run=False,
+            )
             enc = base64.b64encode(script.encode()).decode()
             _, stdout, stderr = ssh.exec_command(
                 f"echo {enc} | base64 -d | sudo python3"

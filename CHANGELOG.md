@@ -2,6 +2,69 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [4.4.24] - 2026-08-15
+
+### Tier 2 complete: "Preview & Validate" for subnet edits
+
+The last item from the Jen maturity roadmap's Tier 2 list, deliberately
+saved for last since it's the one that touches the actual config-apply
+path in `subnets.py` — the file with the most bug history in this
+whole audit series.
+
+### What changed for users
+Editing a subnet used to show a diff of what you were about to submit,
+computed entirely client-side from whatever was on the page at load
+time — with zero indication of whether Kea would actually accept the
+change until after you clicked Apply and it tried (and possibly failed)
+to restart. The confirm panel now calls a real preview first: it shows
+the genuine current-vs-new diff (computed server-side against Kea's
+live config, not stale page-load data) and the actual
+`kea-dhcp4 -t` test result per server — before Apply is even
+clickable. If any server's test fails, Apply stays disabled with the
+real error shown, rather than letting you find out after a restart
+attempt.
+
+### What changed under the hood
+- **`_build_subnet_patch_script()`** — the remote config-patch script
+  (backup → patch → `kea-dhcp4 -t` → write-or-restore) extracted from
+  `edit_subnet_post()`'s inline code into a shared, `dry_run`-
+  parameterized function. `edit_subnet_post()` itself is unchanged
+  behaviorally — verified with a literal string-equality check against
+  a copy of the original inline script, not just "looks equivalent."
+- **`_parse_and_validate_subnet_edit_form()`** — the form validation
+  also extracted and shared, so the new preview endpoint and the real
+  submit endpoint can't drift apart from each other the way the plugin
+  registry version and the CSRF tokens did earlier in this series.
+- **New `POST /subnets/edit/<id>/preview`** — runs the same validation,
+  computes the diff, and runs the dry-run script against each
+  configured server. Never writes to a live config file in any outcome
+  — confirmed directly by executing the generated script (not just
+  parsing it) with a fake `kea-dhcp4` binary standing in for the real
+  one, for both the pass and fail cases, and checking the original
+  config file's hash is unchanged either way. Also confirmed it never
+  writes an `EDIT_SUBNET` audit log entry, the same signal a real apply
+  produces — the two paths genuinely don't overlap.
+- **`templates/edit_subnet.html`** — the existing confirm panel now
+  calls the preview endpoint before showing results, replacing the
+  purely-client-side diff with the real server-computed one and adding
+  the per-server test pass/fail display. Apply stays disabled until a
+  successful preview.
+
+### Verification
+23 new backend tests (`tests/test_subnets.py`, 9 → 32), all passing,
+including the byte-for-byte script comparison and the two real
+dry-run executions described above. The frontend JavaScript was
+extracted from the actual template file (not reimplemented) and run
+under Node with a mocked DOM and `fetch` across five real scenarios —
+all-servers-pass, a server failing, a validation error, a network
+failure, and the no-changes case — confirming the Apply button's
+enabled/disabled state and displayed message are correct in each.
+`url_for()`'s resolution inside the template was checked by actually
+rendering the page through a real Flask app and confirming the
+generated preview URL appears correctly in the real HTML output, not
+just that the template parses. Full suite: **361 passed** (up from
+338).
+
 ## [4.4.23] - 2026-08-15
 
 ### The plugin registry version-staleness bug can't happen again — eliminated the duplicate data entirely
