@@ -212,6 +212,82 @@ function startUpdate(evt) {
     </form>
 </div>
 
+<!-- Kea6 API / IPv6 toggle (v5.0 Phase 1) -->
+{% if current_user.role == 'superadmin' %}
+<div class="card">
+    <div class="card-header"><span class="card-title">🌐 Kea6 Control Agent API</span>
+        {% if ipv6_enabled %}<span style="color:var(--success);font-size:12px;">● IPv6 Enabled</span>
+        {% else %}<span style="color:var(--text-muted);font-size:12px;">● IPv6 Disabled</span>{% endif %}
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:14px;">
+        <div>
+            <strong>Enable IPv6 support</strong>
+            <div class="form-hint" style="margin-top:2px;">
+                Off by default. Flipping this SSHes into every Kea server with SSH
+                configured and starts/stops <code>kea-dhcp6-server</code> there —
+                it does not author a <code>kea-dhcp6.conf</code> for you; that must
+                already exist on each server first. Superadmin only.
+            </div>
+        </div>
+        <form method="POST" action="/settings/infrastructure/toggle-ipv6" style="flex-shrink:0;margin-left:16px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if ipv6_enabled %}
+                <input type="hidden" name="enable" value="false">
+                <button type="submit" class="btn btn-sm btn-warning">Disable IPv6</button>
+            {% else %}
+                <input type="hidden" name="enable" value="true">
+                <button type="submit" class="btn btn-sm btn-primary">Enable IPv6</button>
+            {% endif %}
+        </form>
+    </div>
+
+    <div class="form-hint" style="margin-bottom:10px;">
+        Every field below is optional and falls back to the Kea Control Agent API
+        settings above when left blank — the common Kea setup is one Control
+        Agent proxying to both <code>kea-dhcp4</code> and <code>kea-dhcp6</code>.
+        Only fill these in if your v6 deployment genuinely uses a separate
+        CA/port or a separate database.
+    </div>
+    <form method="POST" action="/settings/infrastructure/save-kea6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>API URL</label>
+                <input type="text" name="api_url" value="{{ infra.kea6_api_url }}" placeholder="{{ infra.kea_api_url }} (inherited)">
+            </div>
+            <div class="form-group">
+                <label>API Username</label>
+                <input type="text" name="api_user" value="{{ infra.kea6_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited)">
+            </div>
+            <div class="form-group">
+                <label>API Password</label>
+                <input type="password" name="api_pass" placeholder="(inherited unless set)">
+                <div class="form-hint">Leave blank to inherit the Kea API password above</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>DB Host</label>
+                <input type="text" name="db_host" value="{{ infra.kea6_db_host }}" placeholder="{{ infra.kea_db_host }} (inherited)">
+            </div>
+            <div class="form-group">
+                <label>DB Username</label>
+                <input type="text" name="db_user" value="{{ infra.kea6_db_user }}" placeholder="{{ infra.kea_db_user }} (inherited)">
+            </div>
+            <div class="form-group">
+                <label>DB Password</label>
+                <input type="password" name="db_pass" placeholder="(inherited unless set)">
+            </div>
+            <div class="form-group">
+                <label>DB Name</label>
+                <input type="text" name="db_name" value="{{ infra.kea6_db_name }}" placeholder="{{ infra.kea_db_name }} (inherited)">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Kea6 API</button>
+    </form>
+</div>
+{% endif %}
+
 <!-- Kea Database -->
 <div class="card">
     <div class="card-header"><span class="card-title">🗄️ Kea MySQL Database</span></div>

@@ -107,8 +107,25 @@ class AppConfig:
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
 
+        # v5.0 Phase 1 — IPv6. Every [kea6]/[kea6_db] value falls back to its
+        # v4 counterpart when absent, matching the common same-CA/same-DB Kea
+        # deployment (confirmed against theelders' real kea-ctrl-agent.conf —
+        # see the v5.0 plan doc). Reading these costs a v4-only install
+        # nothing; they're simply never consulted unless ipv6_enabled (a
+        # settings-table flag, not a config value) is true.
+        extensions.KEA6_API_URL  = cfg.get("kea6", "api_url",  fallback=extensions.KEA_API_URL)
+        extensions.KEA6_API_USER = cfg.get("kea6", "api_user", fallback=extensions.KEA_API_USER)
+        extensions.KEA6_API_PASS = cfg.get("kea6", "api_pass", fallback=extensions.KEA_API_PASS)
+
+        extensions.KEA6_DB_HOST = cfg.get("kea6_db", "host",     fallback=extensions.KEA_DB_HOST)
+        extensions.KEA6_DB_USER = cfg.get("kea6_db", "user",     fallback=extensions.KEA_DB_USER)
+        extensions.KEA6_DB_PASS = cfg.get("kea6_db", "password", fallback=extensions.KEA_DB_PASS)
+        extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
+        extensions.KEA6_DB_SSL_CA = cfg.get("kea6_db", "ssl_ca", fallback=extensions.KEA_DB_SSL_CA)
+
         extensions.KEA_SERVERS = self.derive_kea_servers(cfg)
         extensions.SUBNET_MAP  = self.derive_subnet_map(cfg)
+        extensions.SUBNET6_MAP = self.derive_subnet_map(cfg, section="subnets6")
 
     def reload(self) -> configparser.ConfigParser:
         """Load from disk and re-derive everything. The single choke point."""
@@ -211,24 +228,55 @@ class AppConfig:
         return servers
 
     @staticmethod
-    def derive_subnet_map(cfg: configparser.ConfigParser) -> dict:
-        """Parse [subnets] section into {int_id: {"name": str, "cidr": str}}."""
+    def derive_subnet_map(cfg: configparser.ConfigParser, section: str = "subnets") -> dict:
+        """
+        Parse a `[subnets]`-shaped section into {int_id: {"name": str, "cidr": str}}.
+
+        v5.0: also used for the optional `[subnets6]` section (SUBNET6_MAP) —
+        same "id = Friendly Name, CIDR" format, Kea's v6 subnet IDs just live
+        in a separate numbering space from v4's. A v4-only install has no
+        [subnets6] section at all, which is silent and expected here (unlike
+        a missing [subnets], this never warns) — v6 is opt-in, not a
+        misconfiguration.
+
+        [subnets6] entries also accept an optional third field —
+        "id = Name, CIDR, paired_v4_subnet_id" — so the Subnets page (Phase
+        2) can render a paired v4/v6 subnet as one card with two detail
+        blocks (plan doc recommendation: config-driven pairing, not
+        auto-detected by name/VLAN matching, which is too easy to guess
+        wrong). Every entry always carries a "paired_subnet4_id" key so
+        callers don't need a .get() with a default; it's None when unset or
+        when parsing [subnets], which never has a third field.
+        """
         subnet_map = {}
-        if not cfg.has_section("subnets"):
-            logger.warning("No [subnets] section found in config.")
+        if not cfg.has_section(section):
+            if section == "subnets":
+                logger.warning("No [subnets] section found in config.")
             return subnet_map
-        for key, val in cfg.items("subnets"):
+        for key, val in cfg.items(section):
             try:
                 parts = [p.strip() for p in val.split(",")]
-                if len(parts) != 2:
-                    logger.warning(f"Skipping malformed subnet '{key}': expected 'Name, CIDR'")
+                max_parts = 3 if section == "subnets6" else 2
+                if len(parts) < 2 or len(parts) > max_parts:
+                    expected = "Name, CIDR[, paired_v4_subnet_id]" if section == "subnets6" else "Name, CIDR"
+                    logger.warning(f"Skipping malformed subnet '{key}' in [{section}]: expected '{expected}'")
                     continue
-                name, cidr = parts
+                name, cidr = parts[0], parts[1]
                 ipaddress.ip_network(cidr, strict=False)
-                subnet_map[int(key)] = {"name": name, "cidr": cidr}
+                entry = {"name": name, "cidr": cidr}
+                if section == "subnets6":
+                    # Only v6 entries carry this key — v4 SUBNET_MAP keeps
+                    # its exact original two-key shape so nothing downstream
+                    # of the v4 path (templates, other config writers, the
+                    # existing test suite) sees any change at all.
+                    paired_subnet4_id = None
+                    if len(parts) == 3 and parts[2]:
+                        paired_subnet4_id = int(parts[2])
+                    entry["paired_subnet4_id"] = paired_subnet4_id
+                subnet_map[int(key)] = entry
             except ValueError as e:
-                logger.warning(f"Skipping invalid subnet '{key} = {val}': {e}")
-        if not subnet_map:
+                logger.warning(f"Skipping invalid subnet '{key} = {val}' in [{section}]: {e}")
+        if not subnet_map and section == "subnets":
             logger.warning("No valid subnets found in [subnets] config section.")
         return subnet_map
 

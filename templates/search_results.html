@@ -100,4 +100,60 @@
     </div>
 </div>
 {% endif %}
+
+{% if results.leases6 %}
+<div class="card">
+    <div class="card-header"><span class="card-title">📋 IPv6 Leases ({{ results.leases6|length }})</span></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>Address</th>
+            <th>Hostname</th>
+            <th class="hide-mobile">DUID</th>
+            <th>Subnet</th>
+            <th>Action</th>
+        </tr></thead>
+        <tbody>
+        {% for l in results.leases6 %}
+        <tr>
+            <td class="mono">{{ l.address }}</td>
+            <td>{{ l.hostname or '—' }}</td>
+            <td class="mono hide-mobile">{{ l.duid_hex }}</td>
+            <td>{{ subnet6_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) }}</td>
+            <td><a href="/leases?view=v6&search={{ l.address }}" class="btn btn-sm btn-secondary">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+
+{% if results.reservations6 %}
+<div class="card">
+    <div class="card-header"><span class="card-title">📌 IPv6 Reservations ({{ results.reservations6|length }})</span></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr>
+            <th>Hostname</th>
+            <th class="hide-mobile">DUID</th>
+            <th>Addresses</th>
+            <th>Subnet</th>
+            <th>Action</th>
+        </tr></thead>
+        <tbody>
+        {% for r in results.reservations6 %}
+        <tr>
+            <td>{{ r.hostname or '—' }}</td>
+            <td class="mono hide-mobile">{{ r.duid_hex }}</td>
+            <td class="mono">{{ r.addresses|join(', ') }}</td>
+            <td>{{ subnet6_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) }}</td>
+            <td><a href="/reservations?view=v6&search={{ r.duid_hex }}" class="btn btn-sm btn-secondary">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

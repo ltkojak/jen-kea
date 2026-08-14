@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+{% block title %}Edit IPv6 Subnet{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>✏️ Edit IPv6 Subnet</h1>
+    <p>{{ subnet.name }} — {{ subnet.cidr }}</p>
+</div>
+
+<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp6.conf</code> on your Kea server and restart the Kea IPv6 service. Kea will be briefly unavailable during restart. <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
+
+<div class="card" style="max-width:680px;">
+    <form method="POST" id="edit-subnet6-form" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <!-- Address Pool -->
+        <div class="form-group">
+            <label>Address Pool</label>
+            <input type="text" name="pool" id="f-pool"
+                   value="{{ kea.pool_str }}"
+                   placeholder="2001:db8::10-2001:db8::20 or 2001:db8::/64" style="font-family:monospace;">
+            {% if kea.pool_str %}
+            <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.pool_str }}</code> &nbsp;·&nbsp; Range or CIDR</div>
+            {% else %}
+            <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Range or CIDR</div>
+            {% endif %}
+            {% if kea.pools|length > 1 %}
+            <div class="form-hint" style="color:var(--warning);">
+                ⚠️ This subnet has {{ kea.pools|length }} pools in Kea. Only the first
+                ({{ kea.pools[0] }}) is editable here — the rest
+                ({{ kea.pools[1:]|join(', ') }}) will be preserved as-is when you save.
+            </div>
+            <input type="hidden" name="extra_pools" value="{{ kea.pools[1:]|join('|') }}">
+            {% endif %}
+        </div>
+
+        <!-- Timers — v6 has both preferred AND valid lifetime, unlike v4 -->
+        <div class="form-row">
+            <div class="form-group">
+                <label>Preferred Lifetime (seconds)</label>
+                <input type="number" name="preferred_lifetime" id="f-preferred"
+                       value="{{ kea.preferred_lifetime }}" placeholder="e.g. 3600" min="60">
+                {% if kea.preferred_lifetime %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.preferred_lifetime }}</code></div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                {% endif %}
+            </div>
+            <div class="form-group">
+                <label>Valid Lifetime (seconds)</label>
+                <input type="number" name="valid_lifetime" id="f-valid"
+                       value="{{ kea.valid_lifetime }}" placeholder="e.g. 7200" min="60">
+                {% if kea.valid_lifetime %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.valid_lifetime }}</code> &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Renew Timer / T1 (seconds)</label>
+                <input type="number" name="renew_timer" id="f-renew"
+                       value="{{ kea.renew_timer }}" placeholder="e.g. 1000" min="0">
+                {% if kea.renew_timer %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.renew_timer }}</code></div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                {% endif %}
+            </div>
+            <div class="form-group">
+                <label>Rebind Timer / T2 (seconds)</label>
+                <input type="number" name="rebind_timer" id="f-rebind"
+                       value="{{ kea.rebind_timer }}" placeholder="e.g. 2000" min="0">
+                {% if kea.rebind_timer %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.rebind_timer }}</code></div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- DNS only — DHCPv6 has no router option, that's Router Advertisement's job -->
+        <div class="form-group">
+            <label>DNS Servers</label>
+            <input type="text" name="dns_servers" id="f-dns"
+                   value="{{ kea.dns_servers }}"
+                   placeholder="e.g. 2001:4860:4860::8888,2001:4860:4860::8844" style="font-family:monospace;">
+            {% if kea.dns_servers %}
+            <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.dns_servers }}</code> &nbsp;·&nbsp; Comma-separated</div>
+            {% else %}
+            <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Comma-separated</div>
+            {% endif %}
+            <div class="form-hint">No router/gateway field — DHCPv6 doesn't carry a default-gateway option; that comes from Router Advertisement instead.</div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:16px;">
+            <button type="button" class="btn btn-danger" onclick="showConfirm()">⚡ Apply &amp; Restart Kea IPv6</button>
+            <a href="/subnets" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+
+    <!-- In-page confirmation panel — no native dialogs, works on iOS -->
+    <div id="confirm-panel" style="display:none;margin-top:16px;
+         background:var(--surface2);border:1px solid var(--warning);
+         border-radius:var(--radius);padding:16px;">
+        <div style="display:flex;align-items:flex-start;gap:12px;">
+            <span style="font-size:22px;line-height:1;">⚠️</span>
+            <div style="flex:1;">
+                <div style="font-weight:600;margin-bottom:4px;">Apply changes and restart Kea IPv6?</div>
+                <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+                    kea-dhcp6-server will be briefly unavailable while it restarts.
+                    Existing IPv6 leases are not affected. New lease requests will queue.
+                </div>
+                <div id="change-summary" style="font-size:12px;color:var(--text-muted);
+                     background:var(--surface);border-radius:var(--radius);
+                     padding:10px 12px;margin-bottom:10px;font-family:monospace;
+                     line-height:1.8;"></div>
+                <div id="validation-summary" style="font-size:12px;margin-bottom:14px;"></div>
+                <div style="display:flex;gap:8px;">
+                    <button type="button" class="btn btn-danger" id="apply-btn"
+                            onclick="submitForm()">✅ Yes, apply and restart</button>
+                    <button type="button" class="btn btn-secondary"
+                            onclick="hideConfirm()">✕ Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+var _orig = {
+    pool:               {{ kea.pool_str | tojson }},
+    preferred_lifetime: {{ kea.preferred_lifetime | tojson if kea.preferred_lifetime else '""' }},
+    valid_lifetime:     {{ kea.valid_lifetime | tojson if kea.valid_lifetime else '""' }},
+    renew_timer:        {{ kea.renew_timer | tojson if kea.renew_timer else '""' }},
+    rebind_timer:       {{ kea.rebind_timer | tojson if kea.rebind_timer else '""' }},
+    dns_servers:        {{ kea.dns_servers | tojson }},
+};
+
+var _labels = {
+    pool:               'Address Pool',
+    preferred_lifetime: 'Preferred Lifetime',
+    valid_lifetime:     'Valid Lifetime',
+    renew_timer:        'Renew Timer (T1)',
+    rebind_timer:       'Rebind Timer (T2)',
+    dns_servers:        'DNS Servers',
+};
+
+var _fields = {
+    pool:               'f-pool',
+    preferred_lifetime: 'f-preferred',
+    valid_lifetime:     'f-valid',
+    renew_timer:        'f-renew',
+    rebind_timer:       'f-rebind',
+    dns_servers:        'f-dns',
+};
+
+function getChanges() {
+    var changes = [];
+    Object.keys(_fields).forEach(function(key) {
+        var el = document.getElementById(_fields[key]);
+        if (!el) return;
+        var newVal = el.value.trim();
+        var oldVal = String(_orig[key] || '').trim();
+        if (newVal !== oldVal && newVal !== '') {
+            changes.push({ label: _labels[key], from: oldVal || '(not set)', to: newVal });
+        }
+    });
+    return changes;
+}
+
+function renderChangeSummary(changes) {
+    var summary = document.getElementById('change-summary');
+    if (changes.length === 0) {
+        summary.innerHTML = '<span style="color:var(--text-muted);">No changes detected — all fields match current values.</span>';
+    } else {
+        summary.innerHTML = changes.map(function(c) {
+            return '<div><span style="color:var(--text-muted);">' + c.label + ':</span> '
+                + '<span style="text-decoration:line-through;opacity:.5;">' + c.from + '</span>'
+                + ' → <span style="color:var(--primary);">' + c.to + '</span></div>';
+        }).join('');
+    }
+}
+
+// Same "Preview & Validate" pattern as the v4 edit form (v4.4.24) —
+// the confirm panel calls the real dry-run preview endpoint (kea-dhcp6 -t
+// against a temp file, never the live config) before Apply is clickable.
+async function showConfirm() {
+    var panel   = document.getElementById('confirm-panel');
+    var summary = document.getElementById('change-summary');
+    var valDiv  = document.getElementById('validation-summary');
+    var applyBtn = document.getElementById('apply-btn');
+
+    var clientChanges = getChanges();
+    renderChangeSummary(clientChanges);
+    valDiv.innerHTML = '<span style="color:var(--text-muted);">⏳ Checking configuration against Kea…</span>';
+    applyBtn.disabled = true;
+    panel.style.display = '';
+    panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+
+    if (clientChanges.length === 0) {
+        valDiv.innerHTML = '';
+        applyBtn.disabled = true;
+        return;
+    }
+
+    try {
+        var formEl = document.getElementById('edit-subnet6-form');
+        var formData = new FormData(formEl);
+        var resp = await fetch({{ url_for('subnets.edit_subnet6_preview', subnet_id=subnet_id) | tojson }}, {
+            method: 'POST',
+            body: formData,
+        });
+        var data = await resp.json();
+
+        if (!resp.ok || !data.ok) {
+            valDiv.innerHTML = '<div style="color:var(--danger);">❌ ' +
+                (data.error || 'Could not validate the configuration.') + '</div>';
+            applyBtn.disabled = true;
+            return;
+        }
+
+        if (data.no_changes) {
+            valDiv.innerHTML = '';
+            applyBtn.disabled = true;
+            return;
+        }
+
+        if (data.diff && data.diff.length) {
+            summary.innerHTML = data.diff.map(function(d) {
+                return '<div><span style="color:var(--text-muted);">' + d.field + ':</span> '
+                    + '<span style="text-decoration:line-through;opacity:.5;">' + d.old + '</span>'
+                    + ' → <span style="color:var(--primary);">' + d.new + '</span></div>';
+            }).join('');
+        }
+
+        if (!data.servers || data.servers.length === 0) {
+            valDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured to validate against.</span>';
+            applyBtn.disabled = false;
+            return;
+        }
+
+        valDiv.innerHTML = data.servers.map(function(s) {
+            var icon = s.ok ? '✅' : '❌';
+            var color = s.ok ? 'var(--success)' : 'var(--danger)';
+            return '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+        }).join('');
+
+        applyBtn.disabled = !data.all_passed;
+        if (!data.all_passed) {
+            valDiv.innerHTML += '<div style="margin-top:8px;color:var(--text-muted);">Fix the error(s) above before applying — Kea would reject this configuration.</div>';
+        }
+    } catch (e) {
+        valDiv.innerHTML = '<div style="color:var(--danger);">❌ Could not reach the server to validate: ' + e.message + '</div>';
+        applyBtn.disabled = true;
+    }
+}
+
+function hideConfirm() {
+    document.getElementById('confirm-panel').style.display = 'none';
+}
+
+function submitForm() {
+    document.getElementById('edit-subnet6-form').onsubmit = null;
+    document.getElementById('edit-subnet6-form').submit();
+}
+</script>
+{% endblock %}

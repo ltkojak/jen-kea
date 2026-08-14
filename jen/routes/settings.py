@@ -28,6 +28,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 from jen.services.alerts import DEFAULT_TEMPLATES, ALERT_TYPE_LABELS
 import jen.services.fingerprint as __fp
@@ -529,11 +530,24 @@ def settings_infrastructure():
         "server_name": extensions.cfg.get("kea", "name", fallback="Kea Server 1"),
         "subnets": extensions.SUBNET_MAP,
         "extra_servers": extra_servers,
+        # v5.0 Phase 1 — IPv6. kea6_api_url etc. show what's ACTUALLY in
+        # [kea6] (blank if absent), not extensions.KEA6_API_URL (which is
+        # already fallen back to the v4 value) — the settings UI needs to
+        # distinguish "explicitly set" from "inheriting the v4 default" so
+        # it can show the placeholder/fallback text correctly instead of
+        # looking like v6 has its own creds when it doesn't.
+        "kea6_api_url": extensions.cfg.get("kea6", "api_url", fallback=""),
+        "kea6_api_user": extensions.cfg.get("kea6", "api_user", fallback=""),
+        "kea6_db_host": extensions.cfg.get("kea6_db", "host", fallback=""),
+        "kea6_db_user": extensions.cfg.get("kea6_db", "user", fallback=""),
+        "kea6_db_name": extensions.cfg.get("kea6_db", "database", fallback=""),
     }
     restart_pending = __user.get_global_setting("restart_pending", "false") == "true"
+    ipv6_enabled = __kea6.is_ipv6_enabled()
     return render_template("settings_infrastructure.html", infra=infra, kea_up=kea_up,
                            ssh_pub_key=ssh_pub_key, ssh_configured=bool(ssh_pub_key),
                            restart_pending=restart_pending,
+                           ipv6_enabled=ipv6_enabled,
                            http_port=extensions.HTTP_PORT,
                            https_port=extensions.HTTPS_PORT,
                            ssl_configured=__config.ssl_configured())
@@ -576,6 +590,113 @@ def save_infra_kea_db():
     __user.set_global_setting("restart_pending", "true")
     flash("Kea database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_db", f"host={host}")
+    return redirect(url_for('settings.settings_infrastructure'))
+
+@bp.route("/settings/infrastructure/save-kea6", methods=["POST"])
+@login_required
+@_admin_required
+def save_infra_kea6():
+    """
+    v5.0 Phase 1 — [kea6] API connection override. Every field is
+    optional; leaving them blank (or clearing a previously-set value)
+    means Jen falls back to the v4 [kea] connection info at load time
+    (jen/config.py's AppConfig.apply()) — the common same-CA case. This
+    route only ever writes to [kea6]/[kea6_db]; it does not touch the
+    ipv6_enabled display flag or the remote kea-dhcp6-server state — see
+    toggle_ipv6() for that.
+    """
+    api_url = request.form.get("api_url", "").strip()
+    api_user = request.form.get("api_user", "").strip()
+    api_pass = request.form.get("api_pass", "").strip()
+    db_host = request.form.get("db_host", "").strip()
+    db_user = request.form.get("db_user", "").strip()
+    db_pass = request.form.get("db_pass", "").strip()
+    db_name = request.form.get("db_name", "").strip()
+
+    items = []
+    if api_url:
+        items.append(("kea6", "api_url", api_url))
+    if api_user:
+        items.append(("kea6", "api_user", api_user))
+    if api_pass:
+        items.append(("kea6", "api_pass", api_pass))
+    if db_host:
+        items.append(("kea6_db", "host", db_host))
+    if db_user:
+        items.append(("kea6_db", "user", db_user))
+    if db_pass:
+        items.append(("kea6_db", "password", db_pass))
+    if db_name:
+        items.append(("kea6_db", "database", db_name))
+
+    if items:
+        __config.app_config.write_values(items)
+        __user.set_global_setting("restart_pending", "true")
+        flash("Kea6 API settings saved. Restart Jen to apply.", "success")
+        __user.audit("SAVE_INFRA", "kea6_api", f"url={api_url or '(inherits v4)'}")
+    else:
+        flash("No Kea6 values provided — leaving [kea6] as inheriting v4 settings.", "info")
+    return redirect(url_for('settings.settings_infrastructure'))
+
+@bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])
+@login_required
+@_superadmin_required
+def toggle_ipv6():
+    """
+    v5.0 Phase 1 — the IPv6 enable/disable toggle. Superadmin-gated: unlike
+    the other infrastructure save routes (admin-level), this one has real
+    infrastructure side effects — starting/stopping a service across
+    potentially multiple remote machines over SSH+sudo, not a harmless
+    config-file flag flip.
+
+    Two-layer design (see the v5.0 plan doc):
+    1. set_ipv6_service_state() does the actual SSH/systemctl work against
+       every configured server and reports per-server success/failure.
+    2. Only after seeing those results does this route decide whether to
+       flip Jen's own ipv6_enabled DISPLAY flag — so a partial failure
+       across an HA pair never leaves Jen showing v6 as "on" when some
+       servers never actually started serving it.
+
+    Enabling: the flag only flips to true if EVERY server with ssh_host
+    configured succeeded. Any failure (including "no kea-dhcp6.conf on
+    this server") leaves the flag false and the fleet unmodified.
+
+    Disabling: the flag always flips to false — the user's intent is v6
+    off, and Jen should stop showing v6 UI regardless of whether every
+    remote systemctl call succeeded. Any server that failed to actually
+    stop is reported so it's visible, not silently inconsistent.
+    """
+    enable = request.form.get("enable", "").strip() == "true"
+
+    if not any(s.get("ssh_host") for s in extensions.KEA_SERVERS):
+        flash("No Kea server has SSH configured — nothing to enable/disable remotely. "
+              "Configure SSH under Kea Server settings first.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    results = __kea6.set_ipv6_service_state(enable)
+    all_ok = bool(results) and all(r["ok"] for r in results)
+
+    for r in results:
+        flash(f"{'✅' if r['ok'] else '❌'} {r['name']}: {r['message']}",
+              "success" if r["ok"] else "error")
+
+    if enable:
+        if all_ok:
+            __user.set_global_setting("ipv6_enabled", "true")
+            flash("IPv6 support enabled.", "success")
+        else:
+            flash("IPv6 was NOT enabled — at least one server failed. "
+                  "Fix the issue above and try again.", "error")
+    else:
+        __user.set_global_setting("ipv6_enabled", "false")
+        if not all_ok:
+            flash("IPv6 display turned off, but at least one server may still be "
+                  "running kea-dhcp6-server — see errors above.", "error")
+        else:
+            flash("IPv6 support disabled.", "success")
+
+    __user.audit("TOGGLE_IPV6", "ipv6_enabled",
+                 f"enable={enable} all_ok={all_ok} servers={len(results)}")
     return redirect(url_for('settings.settings_infrastructure'))
 
 @bp.route("/settings/infrastructure/save-jen-db", methods=["POST"])

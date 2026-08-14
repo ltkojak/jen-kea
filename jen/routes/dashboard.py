@@ -27,6 +27,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
@@ -48,6 +49,37 @@ def _JEN_VERSION():
 def __ip_to_int(ip):
     parts = ip.split(".")
     return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
+
+
+def _get_ipv6_dashboard_summary():
+    """
+    v5.0 Phase 2 — Dashboard's answer to "genuinely v6-aware stats OR an
+    explicit v4-only label, never a silently-incomplete number" (plan
+    doc). Returns None when v6 is off or unconfigured, in which case the
+    template shows the "(IPv4 only)" label on the existing Total Summary
+    widget instead — every existing dashboard number stays exactly what
+    it always was (a v4 count), just honestly labeled rather than
+    implying it's the whole picture.
+
+    Deliberately a small, separate summary rather than folding v6 counts
+    into the existing total-active/dynamic/reserved/pool-used numbers:
+    those are v4-specific concepts (a single valid_lifetime, a finite
+    pool-of-addresses percentage) that don't have a like-for-like v6
+    equivalent — see the lease6_history schema note from Phase 0 on why
+    NA/PD were kept as separate counts rather than summed into one
+    "leases" figure.
+    """
+    if not __kea6.is_ipv6_enabled() or not extensions.SUBNET6_MAP:
+        return None
+    active = reserved = 0
+    try:
+        for subnet_id in extensions.SUBNET6_MAP:
+            active += len(__kea6.list_lease6(subnet_id=subnet_id))
+            reserved += len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
+    except Exception:
+        return None
+    return {"active": active, "reserved": reserved,
+            "subnet_count": len(extensions.SUBNET6_MAP)}
 
 
 @bp.route("/")
@@ -143,7 +175,8 @@ def dashboard():
         hours=hours_str, server_statuses=server_statuses,
         device_info=device_info,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
+        ipv6_summary=_get_ipv6_dashboard_summary(),
     )
     # HTMX time window change — return just the recent leases rows
     if request.headers.get("HX-Request") == "true":
@@ -628,6 +661,60 @@ def prometheus_metrics():
             lines.append(f'jen_server_up{{server="{name}"}} {1 if status["up"] else 0}')
     except Exception:
         pass
+
+    # ── v5.0 Phase 4 — IPv6 metrics. Deliberately separate metric names
+    #    (jen_subnet6_*, jen_kea6_up) rather than adding a protocol label
+    #    onto the existing v4 gauges — overloading jen_subnet_active_leases
+    #    with an implicit "these are v4-only" assumption would silently
+    #    break every dashboard/alert built against it the moment v6 numbers
+    #    got mixed in. jen_ipv6_enabled is emitted unconditionally (0 or 1)
+    #    so a scraper can tell the difference between "disabled" and
+    #    "no v6 subnets reported anything this scrape" — the subnet-level
+    #    families below are simply absent (not zeroed) when v6 is off,
+    #    matching how a v4-only install produces no v6 series at all today.
+    #
+    #    No jen_subnet6_pool_size/utilization_ratio — same reasoning as the
+    #    lease6_history schema (Phase 0/1): a /64 has no finite "pool size"
+    #    comparable to v4's, so there's nothing honest to report yet.
+    #    active_leases carries a "type" label (IA_NA vs IA_PD) rather than
+    #    summing them into one number, for the same reason.
+    lines.append("# HELP jen_ipv6_enabled Whether IPv6 support is enabled in Jen (not whether kea-dhcp6 itself is reachable — see jen_kea6_up)")
+    lines.append("# TYPE jen_ipv6_enabled gauge")
+    ipv6_on = False
+    try:
+        ipv6_on = __kea6.is_ipv6_enabled()
+    except Exception:
+        pass
+    lines.append(f"jen_ipv6_enabled {1 if ipv6_on else 0}")
+
+    if ipv6_on and extensions.SUBNET6_MAP:
+        lines.append("# HELP jen_subnet6_active_leases Number of active IPv6 leases per subnet, by lease type (IA_NA address vs IA_PD delegated prefix)")
+        lines.append("# TYPE jen_subnet6_active_leases gauge")
+        try:
+            for subnet_id, info in extensions.SUBNET6_MAP.items():
+                by_type = {}
+                for l in __kea6.list_lease6(subnet_id=subnet_id):
+                    by_type[l["lease_type_name"]] = by_type.get(l["lease_type_name"], 0) + 1
+                for type_name, cnt in by_type.items():
+                    lines.append(f'jen_subnet6_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}",type="{type_name}"}} {cnt}')
+        except Exception:
+            pass
+
+        lines.append("# HELP jen_subnet6_reserved_hosts Number of static IPv6 host reservations per subnet")
+        lines.append("# TYPE jen_subnet6_reserved_hosts gauge")
+        try:
+            for subnet_id, info in extensions.SUBNET6_MAP.items():
+                cnt = len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
+                lines.append(f'jen_subnet6_reserved_hosts{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+        except Exception:
+            pass
+
+        lines.append("# HELP jen_kea6_up Whether kea-dhcp6 is reachable")
+        lines.append("# TYPE jen_kea6_up gauge")
+        try:
+            lines.append(f"jen_kea6_up {1 if __kea6.kea6_is_up() else 0}")
+        except Exception:
+            lines.append("jen_kea6_up 0")
 
     return Response("\n".join(lines) + "\n", mimetype="text/plain")
 

@@ -2,6 +2,8 @@
 
 Full IP address space management for Jen. See every IP in each subnet at a glance — available, dynamic DHCP lease, Kea reservation, or statically noted. Add labels, owners, and notes to any address. Replaces Netbox for simple static IP tracking.
 
+> **IPv4 only.** As of Jen v5.0's IPv6 rollout, IPAM Lite covers IPv4 subnets exclusively — full-address-space enumeration doesn't extend to IPv6's /64s (see Jen's `docs/ARCHITECTURE.md` for why). For IPv6 lease and reservation counts, use Jen's own Subnets/Leases/Reservations pages instead. This isn't a bug or a gap to report — it's a deliberate v5.0 scope decision.
+
 ## Requirements
 
 - [Jen](https://github.com/ltkojak/jen-kea) v3.6.0 or later

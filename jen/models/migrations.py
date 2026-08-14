@@ -414,6 +414,45 @@ def _m010_plugin_schema_migrations(db):
         )""")
 
 
+def _m011_lease6_history(db):
+    """lease6_history: v5.0 Phase 1 — IPv6 rollout, first schema piece.
+
+    A deliberately SEPARATE table from lease_history, not columns bolted
+    onto it: v4's single active_leases/dynamic_leases/pool_size model
+    doesn't map onto v6, where IA_NA (address), IA_TA (rare, real), and
+    IA_PD (delegated prefix) are three different, non-comparable
+    quantities. Flattening them into one number or a discriminator column
+    would lose exactly the distinction this table exists to preserve.
+
+    Deliberately NO pool_size-equivalent column: a /64 has no meaningful
+    finite "pool size" the way a v4 /24 does. A real utilization-style view
+    for v6, if ever wanted, is a Phase 2/4 UI decision to make on purpose —
+    not something to bake into the snapshot schema now just because v4 had
+    an analogous column.
+
+    Jen doesn't own lease6/hosts/ipv6_reservations at all (same as lease4
+    today) — no migration needed for those, only for this table, which is
+    Jen's own periodic snapshot data.
+
+    ipv6_enabled defaults to false (settings table, not this migration), so
+    this table stays empty and unreferenced on a v4-only install: nothing
+    ever writes to or reads from it until the toggle is flipped.
+    """
+    with db.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS lease6_history (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            subnet_id INT NOT NULL,
+            snapshot_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            active_na INT DEFAULT 0,
+            active_ta INT DEFAULT 0,
+            active_pd INT DEFAULT 0,
+            reserved_na INT DEFAULT 0,
+            reserved_pd INT DEFAULT 0,
+            INDEX idx_subnet_time (subnet_id, snapshot_time),
+            INDEX idx_time (snapshot_time)
+        )""")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -428,6 +467,7 @@ MIGRATIONS = [
     (8, "mfa_trusted_devices ip_address + user_agent columns", _m008_trusted_device_metadata),
     (9, "mfa_attempts table for MFA brute-force throttling",   _m009_mfa_attempts),
     (10, "plugin_schema_migrations tracking table",            _m010_plugin_schema_migrations),
+    (11, "lease6_history table (v5.0 IPv6 Phase 1)",           _m011_lease6_history),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

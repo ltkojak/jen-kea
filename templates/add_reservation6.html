@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Add IPv6 Reservation{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📌 Add IPv6 Reservation</h1>
+    <p>Reserve an address (IA_NA), a delegated prefix (IA_PD), or both for the same DUID.</p>
+</div>
+<div class="card" style="max-width:600px;">
+    <form method="POST" action="/reservations/add6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Subnet *</label>
+                <select name="subnet_id" required>
+                    {% for sid, info in subnet6_map.items() %}
+                    <option value="{{ sid }}" {% if prefill and prefill.subnet_id|string == sid|string %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>DUID *</label>
+                <input type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required>
+                <div class="form-hint">Hex, with or without colons — Jen normalizes it.</div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Hostname</label>
+            <input type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Address (IA_NA) <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
+                <input type="text" name="address" placeholder="2001:db8::10">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Delegated Prefix (IA_PD) <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
+                <input type="text" name="prefix" placeholder="2001:db8:1:1000::">
+            </div>
+            <div class="form-group">
+                <label>Prefix Length</label>
+                <input type="number" name="prefix_len" min="1" max="128" placeholder="56">
+            </div>
+        </div>
+        <div class="form-hint" style="margin-bottom:14px;">At least one of address or prefix is required — both can be set for a device that needs both.</div>
+        <div style="display:flex;gap:8px;">
+            <button type="submit" class="btn btn-primary">Add Reservation</button>
+            <a href="/reservations?view=v6" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

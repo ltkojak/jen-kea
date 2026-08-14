@@ -90,7 +90,7 @@ jobs:
         # -ll: only report medium/high confidence findings — low-confidence
         # noise isn't worth gating a release over. -r: recursive.
         # -b: diff against .github/bandit-baseline.json, a snapshot of the
-        # 47 findings that existed as of the v4.4.10 audit series, each
+        # 53 findings that existed as of the v5.0 Phase 1 IPv6 work, each
         # manually traced and verified safe (whitelisted table names,
         # int()-cast values, trust-on-first-use SSH host-key persistence —
         # see docs/THREAT_MODEL.md). This means CI only fails on genuinely

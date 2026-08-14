@@ -7,6 +7,10 @@
     <p>IP address space across all subnets.</p>
 </div>
 
+{% if ipv6_enabled %}
+<div class="alert alert-info">ℹ️ IPAM Lite tracks IPv4 addresses only. IPv6 subnets aren't shown here — see <a href="/subnets">Subnets</a> for IPv6 lease/reservation counts.</div>
+{% endif %}
+
 <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;">
 {% for subnet_id, info in subnet_map.items() %}
 {% set s = summaries.get(subnet_id, {}) %}

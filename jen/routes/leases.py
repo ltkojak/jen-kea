@@ -28,6 +28,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
@@ -54,6 +55,10 @@ def __ip_to_int(ip):
 @bp.route("/leases")
 @login_required
 def leases():
+    view_mode = request.args.get("view", "v4")
+    if view_mode == "v6":
+        return _leases_v6()
+
     subnet_filter = request.args.get("subnet", "all")
     minutes = request.args.get("minutes", "")
     search = __auth.sanitize_search(request.args.get("search", "").strip())
@@ -171,7 +176,8 @@ def leases():
         sort=sort, direction=direction, device_info=device_info,
         per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
+        view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,
     )
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
@@ -185,6 +191,60 @@ def leases():
         # results partial (headers + rows + pagination) keeps everything
         # in sync with the live filter state on every htmx update.
         return render_template("_leases_results.html", **template_vars), 200
+    return render_template("leases.html", **template_vars)
+
+
+def _leases_v6():
+    """
+    v5.0 Phase 2 — read-only IPv6 leases view. Deliberately a separate
+    function from the v4 branch above rather than threading v6 through
+    the same code path: the columns (DUID/IAID/lease-type instead of
+    MAC/client-id), the query layer (list_lease6() from jen/services/
+    kea6.py, not raw SQL against lease4), and the sort semantics are
+    different enough that merging them would make both harder to follow.
+    The well-tested v4 path above is completely untouched by this.
+
+    No column-header sorting or numeric pagination yet — Phase 2 is
+    explicitly read-only/basic per the plan; that polish is deferred
+    rather than adding untested complexity here.
+    """
+    if not extensions.SUBNET6_MAP:
+        # Should be unreachable via the UI — the segmented control itself
+        # is hidden whenever SUBNET6_MAP is empty (see leases.html) — but
+        # guard directly in case of a stale bookmark or direct URL hit.
+        flash("No IPv6 subnets are configured.", "error")
+        return redirect(url_for('leases.leases'))
+
+    subnet_filter = request.args.get("subnet", "all")
+    search = __auth.sanitize_search(request.args.get("search", "").strip())
+    show_expired = request.args.get("expired", "0") == "1"
+
+    subnet_id = None
+    if subnet_filter != "all":
+        try:
+            subnet_id = int(subnet_filter)
+            if subnet_id not in extensions.SUBNET6_MAP:
+                subnet_filter = "all"
+                subnet_id = None
+        except ValueError:
+            subnet_filter = "all"
+
+    leases_list = []
+    try:
+        leases_list = __kea6.list_lease6(subnet_id=subnet_id, search=search or None,
+                                         show_expired=show_expired)
+        for l in leases_list:
+            l["subnet_name"] = extensions.SUBNET6_MAP.get(l["subnet_id"], {}).get("name", "")
+    except Exception as e:
+        flash(f"Could not load IPv6 leases: {str(e)}", "error")
+
+    template_vars = dict(
+        leases6=leases_list, total=len(leases_list),
+        subnet_filter=subnet_filter, search=search, show_expired=show_expired,
+        subnet6_map=extensions.SUBNET6_MAP, view_mode="v6",
+    )
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_leases6_results.html", **template_vars), 200
     return render_template("leases.html", **template_vars)
 
 @bp.route("/leases/delete-stale", methods=["POST"])

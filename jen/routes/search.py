@@ -27,6 +27,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
@@ -53,7 +54,8 @@ def __ip_to_int(ip):
 @login_required
 def global_search():
     q = __auth.sanitize_search(request.args.get("q", "").strip())
-    results = {"leases": [], "reservations": [], "devices": []}
+    results = {"leases": [], "reservations": [], "devices": [],
+              "leases6": [], "reservations6": []}
     if len(q) >= 2:
         try:
             with __db.kea_db() as kdb:
@@ -135,15 +137,60 @@ def global_search():
                         """, params)
                         results["devices"] = cur.fetchall()
 
+                    # v5.0 Phase 4 — IPv6 leases/reservations. Only searched
+                    # when v6 is genuinely on (display gate, same as every
+                    # other v6 code path) and there's something configured
+                    # to search. Subnet restriction here follows the v6
+                    # subnet's paired_subnet4_id where one exists (a paired
+                    # v6 subnet IS the same network as its v4 counterpart,
+                    # so a user with access to that v4 subnet should see
+                    # its v6 side too); an UNPAIRED v6 subnet has no v4
+                    # subnet to inherit access from, so it's restricted to
+                    # all_subnets users only rather than guessing.
+                    if __kea6.is_ipv6_enabled() and extensions.SUBNET6_MAP:
+                        if current_user.all_subnets:
+                            searchable_v6_ids = list(extensions.SUBNET6_MAP.keys())
+                        else:
+                            accessible_v4_ids = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+                            searchable_v6_ids = [
+                                sid for sid, info in extensions.SUBNET6_MAP.items()
+                                if info.get("paired_subnet4_id") in accessible_v4_ids
+                            ]
+                        for sid in searchable_v6_ids:
+                            try:
+                                for l in __kea6.list_lease6(subnet_id=sid, search=q)[:20]:
+                                    results["leases6"].append({
+                                        "address": l["address"], "hostname": l["hostname"],
+                                        "duid_hex": l["duid_hex"], "subnet_id": l["subnet_id"],
+                                        "lease_type_name": l["lease_type_name"],
+                                    })
+                            except Exception:
+                                pass
+                        for sid in searchable_v6_ids:
+                            try:
+                                for h in __kea6.get_ipv6_reservations(subnet_id=sid)[:20]:
+                                    ql = q.lower()
+                                    if (ql in (h["hostname"] or "").lower()
+                                            or ql in (h["duid_hex"] or "").lower()
+                                            or any(ql in (r["address"] or "").lower() for r in h["reservations"])):
+                                        results["reservations6"].append({
+                                            "hostname": h["hostname"], "duid_hex": h["duid_hex"],
+                                            "subnet_id": h["subnet_id"],
+                                            "addresses": [r["address"] for r in h["reservations"]],
+                                        })
+                            except Exception:
+                                pass
+
         except Exception as e:
             flash(f"Search error: {str(e)}", "error")
 
     total = sum(len(v) for v in results.values())
     subnet_names = {sid: info["name"] for sid, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items()}
+    subnet6_names = {sid: info["name"] for sid, info in extensions.SUBNET6_MAP.items()}
     return render_template("search_results.html",
                            q=q, results=results, total=total,
                            subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
-                           subnet_names=subnet_names)
+                           subnet_names=subnet_names, subnet6_names=subnet6_names)
 
 # ─────────────────────────────────────────
 # MFA Routes

@@ -1,0 +1,30 @@
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table class="sortable mobile-cards">
+    <thead><tr>
+        <th>Type</th>
+        <th>Address / Prefix</th>
+        <th>Hostname</th>
+        <th class="hide-mobile">DUID</th>
+        <th class="hide-mobile">IAID</th>
+        <th>Subnet</th>
+        <th class="hide-tablet">{{ 'Expired At' if show_expired else 'Expires' }}</th>
+    </tr></thead>
+    <tbody>
+    {% for l in leases6 %}
+    <tr>
+        <td><span class="badge {{ 'badge-dynamic' if l.lease_type == 0 else 'badge-reserved' }}">{{ l.lease_type_name }}</span></td>
+        <td style="font-family:monospace;">{{ l.address }}{% if l.lease_type == 2 %}/{{ l.prefix_len }}{% endif %}</td>
+        <td>{{ l.hostname or '—' }}</td>
+        <td class="hide-mobile" style="font-family:monospace;font-size:12px;">{{ l.duid_hex or '—' }}</td>
+        <td class="hide-mobile">{{ l.iaid }}</td>
+        <td>{{ l.subnet_name or l.subnet_id }}</td>
+        <td class="hide-tablet">{{ l.expire }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">No IPv6 leases found.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>

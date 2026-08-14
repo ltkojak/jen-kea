@@ -90,6 +90,41 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # 30 = IoT, 192.168.30.0/24
 # 70 = VLAN70, 192.168.70.0/24
 
+# ── IPv6 (v5.0, optional) ─────────────────────────────────────────────────
+# Everything below is opt-in and only ever read once "Enable IPv6 support"
+# is turned on in Settings -> Infrastructure (off by default on every
+# install, new and existing). A v4-only install can leave all of this
+# commented out and nothing changes — no new required config, no new
+# required services.
+#
+# Both [kea6] and [kea6_db] are entirely optional: any value left unset
+# falls back to its [kea]/[kea_db] counterpart, since the common Kea setup
+# is one Control Agent proxying to both kea-dhcp4 and kea-dhcp6, and one
+# shared MySQL database. Only uncomment values here if your kea-dhcp6
+# deployment genuinely uses a separate CA/port or a separate database.
+
+# [kea6]
+# api_url  = http://YOUR-KEA-SERVER:8000
+# api_user = kea-api
+# api_pass = your-kea-api-password
+
+# [kea6_db]
+# host     = YOUR-KEA-SERVER
+# user     = kea
+# password = your-kea-db-password
+# database = kea
+# ssl_ca   = /etc/jen/ssl/mariadb-ca.pem
+
+# [subnets6]
+# Format: subnet_id = Friendly Name, CIDR[, paired_v4_subnet_id]   (Kea's
+# own v6 subnet IDs — a separate numbering space from the v4 [subnets]
+# section above; the same integer can validly appear in both sections and
+# refer to different subnets). The optional third field pairs a v6 subnet
+# with its v4 counterpart's [subnets] id so the Subnets page renders them
+# as one card with two detail blocks; leave it off for an unpaired v6
+# subnet, which just renders as its own card.
+# 1 = Production, 2001:db8:1::/64, 1
+
 [ddns]
 # Kea DDNS log file path on the Kea server (read via SSH)
 log_path     = /var/log/kea/kea-ddns.log

@@ -2,6 +2,8 @@
 
 Scan your subnets for devices not in the Kea DHCP lease table. Detects rogue devices, shows discovered hostnames and MAC addresses, and fires alerts through your configured Jen notification channels when unknown devices are found.
 
+> **IPv4 only.** As of Jen v5.0's IPv6 rollout, active scanning (nmap/arp-scan) here only covers IPv4 subnets — there's no IPv6 equivalent of an address-space sweep at homelab scale. IPv6 devices are visible on Jen's own Devices page (read from Kea's lease table directly, not scanned) instead. This isn't a bug or a gap to report — it's a deliberate v5.0 scope decision.
+
 ## Requirements
 
 - [Jen](https://github.com/ltkojak/jen-kea) v3.6.0 or later

@@ -85,6 +85,49 @@ DEFAULT_TEMPLATES = {
     "rogue_device":       "🚨 <b>{subject}</b>\n{body}",
 }
 
+# ── v5.0 Phase 4 — IPv6 alerting: what generalizes, what doesn't ────────────
+#
+# Decision, not an oversight (per the plan doc's explicit "decide whether
+# existing alert types generalize or need v6 variants" checklist item).
+# check_alerts() below is a single v4-lease4/hosts-shaped polling loop;
+# rather than bolt v6 branches onto it, each alert type was evaluated on
+# its own merits:
+#
+# - kea_down / kea_up / ha_failover: ALREADY protocol-agnostic — these
+#   fire on Kea *server* reachability, not on v4 vs v6 leases. No change
+#   needed; jen.services.kea6.kea6_is_up() is the v6-specific reachability
+#   check already surfaced elsewhere (the /metrics jen_kea6_up gauge), and
+#   could feed a v6-specific variant of this alert later if wanted — not
+#   done here since it's a genuinely new feature, not a generalization.
+# - utilization_high / utilization_ok / pool_exhaustion: DELIBERATELY NOT
+#   generalized. Same reasoning as lease6_history's schema (Phase 0/1) and
+#   /metrics' missing jen_subnet6_utilization_ratio (Phase 4): a percentage
+#   of a /64 pool is not a meaningful signal the way it is for a v4 /24 —
+#   "3% used" of 2^64 addresses says nothing useful about exhaustion risk.
+#   A genuinely v6-appropriate exhaustion signal (e.g. delegated-prefix
+#   pool exhaustion, which IS finite) is a real future feature, not this.
+# - new_lease / new_device / stale_reservation: v4-only in this rollout.
+#   All three are built on Jen's `devices` table, which the plan's open
+#   question #2 explicitly keeps v4-only (device correlation across
+#   protocols is out of scope for v5.0 — privacy-extension addresses
+#   rotate, DUID-to-MAC extraction only works for 2 of several DUID
+#   types). A parallel v6 device-tracking loop would be a real, separate
+#   feature, not a small generalization.
+# - reservation_added / reservation_deleted / kea_config_changed: found
+#   during this audit to NOT actually be wired to fire from any v4 route
+#   today (grepped for send_alert() call sites — none exist for these
+#   three types; they're defined here as selectable channel filters but
+#   currently dead). Nothing to generalize to v6 until the v4 wiring
+#   itself exists — adding v6-only alert firing for reservation/subnet
+#   writes here would make v6 MORE instrumented than v4, which is
+#   backwards and worth fixing on the v4 side first, separately.
+# - daily_summary: generalizes cleanly and could include v6 counts as a
+#   real future enhancement — not done here to keep this a documentation
+#   decision, not new report-building work.
+# - rogue_device: Network Discovery plugin only, explicitly documented
+#   elsewhere in this rollout as v4-only for v5.0 (see Phase 4's IPAM/
+#   network-discovery-plugin note).
+
 ALERT_TYPE_LABELS = {
     "kea_down":           "Kea goes down",
     "kea_up":             "Kea comes back up",

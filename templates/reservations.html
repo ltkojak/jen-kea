@@ -36,6 +36,41 @@ function confirmBulk(action) {
     <p>{{ total }} reservation(s)</p>
 </div>
 
+{% if ipv6_enabled and subnet6_map %}
+<div class="segmented-control" style="display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:12px;">
+    <a href="/reservations?view=v4" class="btn btn-sm {{ 'btn-primary' if view_mode != 'v6' else 'btn-secondary' }}" style="border-radius:0;">IPv4</a>
+    <a href="/reservations?view=v6" class="btn btn-sm {{ 'btn-primary' if view_mode == 'v6' else 'btn-secondary' }}" style="border-radius:0;">IPv6</a>
+</div>
+{% endif %}
+
+{% if view_mode == 'v6' %}
+<div class="filter-bar">
+    <form method="GET" style="display:contents;"
+          hx-get="/reservations"
+          hx-target="#reservations-results"
+          hx-swap="innerHTML"
+          hx-trigger="change from:select, input delay:400ms"
+          hx-push-url="true">
+        <input type="hidden" name="view" value="v6">
+        <select name="subnet">
+            <option value="all" {% if subnet_filter=='all' %}selected{% endif %}>All Subnets</option>
+            {% for sid, info in subnet6_map.items() %}
+            <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="search" value="{{ search }}" placeholder="Search address, hostname, DUID...">
+        <button type="submit" class="btn btn-secondary">Filter</button>
+        <a href="/reservations?view=v6" class="btn btn-secondary">Clear</a>
+    {% if current_user.role in ('superadmin','admin') %}
+    <a href="/reservations/add6" class="btn btn-primary">+ Add IPv6 Reservation</a>
+    {% endif %}
+    </form>
+</div>
+<div id="reservations-results">
+{% include '_reservations6_results.html' %}
+</div>
+{% else %}
+
 <div class="filter-bar">
     <form method="GET" style="display:contents;"
           hx-get="/reservations"
@@ -115,4 +150,5 @@ function saveCurrentFilter() {
 <div id="reservations-results">
 {% include '_reservations_results.html' %}
 </div>
+{% endif %}
 {% endblock %}

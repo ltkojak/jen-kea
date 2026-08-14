@@ -27,6 +27,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
@@ -53,6 +54,10 @@ def __ip_to_int(ip):
 @bp.route("/devices")
 @login_required
 def devices():
+    view_mode = request.args.get("view", "v4")
+    if view_mode == "v6":
+        return _devices_v6()
+
     # Pagination — default is "all". User can opt-in via per_page param.
     per_page_param = request.args.get("per_page", "all")
     try:
@@ -169,7 +174,8 @@ def devices():
         type_filter=type_filter, subnet_filter=subnet_filter,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        bundled_icons=bundled_icons, custom_icons=custom_icons
+        bundled_icons=bundled_icons, custom_icons=custom_icons,
+        view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,
     )
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: same class of bug fixed in leases.py/reservations.py
@@ -177,6 +183,54 @@ def devices():
         # swap target and were going stale on every htmx-driven filter
         # change. Render the whole results partial instead.
         return render_template("_devices_results.html", **template_vars), 200
+    return render_template("devices.html", **template_vars)
+
+
+def _devices_v6():
+    """
+    v5.0 Phase 2 — IPv6 devices view. Separate function from the v4 branch
+    above for the same reasons as leases/subnets: different query layer
+    (list_lease6_devices(), which groups by DUID rather than reading
+    Jen's own `devices` tracking table), different columns, and this
+    keeps the well-tested v4 path untouched.
+
+    No device tracking/notes/manual-override editing here — Jen's
+    `devices` table is v4-only (per the plan's open question #2, v4/v6
+    device correlation isn't attempted), so this is a live read straight
+    from lease6 each time, not a persisted inventory. Read-only, matching
+    every other Phase 2 v6 view.
+    """
+    if not extensions.SUBNET6_MAP:
+        flash("No IPv6 subnets are configured.", "error")
+        return redirect(url_for('devices.devices'))
+
+    search = __auth.sanitize_search(request.args.get("search", "").strip())
+    subnet_filter = request.args.get("subnet", "all")
+    subnet_id = None
+    if subnet_filter != "all":
+        try:
+            subnet_id = int(subnet_filter)
+            if subnet_id not in extensions.SUBNET6_MAP:
+                subnet_filter = "all"
+                subnet_id = None
+        except ValueError:
+            subnet_filter = "all"
+
+    devices_list = []
+    try:
+        devices_list = __kea6.list_lease6_devices(subnet_id=subnet_id, search=search or None)
+        for d in devices_list:
+            d["subnet_name"] = extensions.SUBNET6_MAP.get(d["subnet_id"], {}).get("name", "")
+    except Exception as e:
+        flash(f"Could not load IPv6 devices: {str(e)}", "error")
+
+    template_vars = dict(
+        devices6=devices_list, total=len(devices_list),
+        subnet_filter=subnet_filter, search=search,
+        subnet6_map=extensions.SUBNET6_MAP, view_mode="v6",
+    )
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_devices6_results.html", **template_vars), 200
     return render_template("devices.html", **template_vars)
 
 @bp.route("/devices/edit/<int:device_id>", methods=["POST"])

@@ -1,0 +1,46 @@
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table class="sortable mobile-cards">
+    <thead><tr>
+        <th>Hostname</th>
+        <th class="hide-mobile">DUID</th>
+        <th>Reservations</th>
+        <th>Subnet</th>
+        {% if current_user.role in ('superadmin','admin') %}<th></th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for h in hosts6 %}
+    <tr>
+        <td>{{ h.hostname or '—' }}</td>
+        <td class="hide-mobile" style="font-family:monospace;font-size:12px;">{{ h.duid_hex or '—' }}</td>
+        <td>
+            {% for r in h.reservations %}
+            <span class="mono" style="background:var(--surface2);padding:2px 8px;border-radius:4px;font-size:11px;display:inline-block;margin:2px;">
+                {{ r.address }}{% if r.type_name == 'IA_PD' %}/{{ r.prefix_len }}{% endif %}
+                <span style="color:var(--text-muted);">({{ r.type_name }})</span>
+            </span>
+            {% else %}
+            <span style="color:var(--text-muted);font-size:12px;">—</span>
+            {% endfor %}
+        </td>
+        <td>{{ h.subnet_name or h.subnet_id }}</td>
+        {% if current_user.role in ('superadmin','admin') %}
+        <td>
+            <form method="POST" action="/reservations/delete6" style="display:inline;"
+                  onsubmit="return false;"
+                  data-confirm="Delete the IPv6 reservation for DUID {{ h.duid_hex }}? This cannot be undone.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="subnet_id" value="{{ h.subnet_id }}">
+                <input type="hidden" name="duid" value="{{ h.duid_hex }}">
+                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️</button>
+            </form>
+        </td>
+        {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 5 if current_user.role in ('superadmin','admin') else 4 }}" style="text-align:center;color:var(--text-muted);padding:24px;">No IPv6 reservations found.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+</div>

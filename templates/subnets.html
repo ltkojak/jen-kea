@@ -52,6 +52,9 @@ function saveNote(id) {
         <div style="display:flex;align-items:center;gap:12px;">
             <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
             <span class="mono" style="font-size:15px;">{{ s.cidr }}</span>
+            {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
+            <span class="badge badge-production" title="Paired IPv6 subnet">IPv6</span>
+            {% endfor %}
         </div>
         {% if current_user.role in ('superadmin','admin') and ssh_ready %}
         <div style="display:flex;gap:8px;">
@@ -124,6 +127,54 @@ function saveNote(id) {
         </table>
     </div>
     {% endif %}
+    {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <span class="badge badge-production">IPv6</span>
+                <span class="mono" style="font-size:14px;">{{ s6.cidr }}</span>
+            </div>
+            {% if current_user.role in ('superadmin','admin') %}
+            <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+            {% endif %}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">
+            <div>
+                <div class="stat-label">Active Leases</div>
+                <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.active }}</div>
+            </div>
+            <div>
+                <div class="stat-label">Reservations</div>
+                <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.reserved }}</div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+
+{% for s6 in subnets6 if not s6.paired_subnet4_id %}
+<div class="card">
+    <div class="card-header">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <span class="badge badge-production">IPv6</span>
+            <span class="mono" style="font-size:15px;">{{ s6.cidr }}</span>
+            <span style="color:var(--text-muted);font-size:13px;">{{ s6.name }}</span>
+        </div>
+        {% if current_user.role in ('superadmin','admin') %}
+        <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+        {% endif %}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">
+        <div>
+            <div class="stat-label">Active Leases</div>
+            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.active }}</div>
+        </div>
+        <div>
+            <div class="stat-label">Reservations</div>
+            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.reserved }}</div>
+        </div>
+    </div>
 </div>
 {% endfor %}
 {% endblock %}

@@ -27,6 +27,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
@@ -121,7 +122,44 @@ def subnets():
     except Exception:
         pass
     return render_template("subnets.html", subnets=subnet_data, ssh_ready=ssh_ready,
-                           subnet_notes=subnet_notes)
+                           subnet_notes=subnet_notes, subnets6=_get_subnets6_data())
+
+def _get_subnets6_data() -> list:
+    """
+    v5.0 Phase 2 — read-only IPv6 subnet summary for the Subnets page.
+    Deliberately gated on is_ipv6_enabled() rather than only checking
+    whether SUBNET6_MAP is non-empty: an admin who has since disabled v6
+    shouldn't keep seeing v6 cards just because [subnets6] config entries
+    are still on disk — matching the "display gate checked before
+    SUBNET6_MAP is ever populated" principle from Phase 1.
+
+    Each entry carries paired_subnet4_id (from config, see
+    AppConfig.derive_subnet_map) so the template can nest it as a second
+    block on the matching v4 card, or render it standalone when unpaired.
+    No live Kea config-get here (unlike the v4 branch above) — Phase 2 is
+    read-only against Jen's own DB layer; pool/lifetime detail for v6
+    subnets is a Phase 3 write-support item once the v6 config-editing
+    path exists.
+    """
+    if not __kea6.is_ipv6_enabled() or not extensions.SUBNET6_MAP:
+        return []
+    result = []
+    for subnet_id, info in extensions.SUBNET6_MAP.items():
+        try:
+            active = len(__kea6.list_lease6(subnet_id=subnet_id))
+            reserved = len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
+        except Exception:
+            active = reserved = 0
+        result.append({
+            "id": subnet_id,
+            "name": info["name"],
+            "cidr": info["cidr"],
+            "paired_subnet4_id": info.get("paired_subnet4_id"),
+            "active": active,
+            "reserved": reserved,
+        })
+    return result
+
 
 def _get_subnet_kea_data(subnet_id):
     """Fetch current subnet config from Kea for pre-populating the edit form."""
@@ -930,6 +968,243 @@ def edit_subnet_post(subnet_id):
     __user.audit("EDIT_SUBNET", str(subnet_id), ", ".join(changes) if changes else "no changes")
 
     return redirect(url_for('subnets.subnets'))
+
+
+# ── v6 subnet editing (Phase 3) ──────────────────────────────────────────────
+
+def _parse_and_validate_subnet6_edit_form(form):
+    """
+    v5.0 Phase 3 — v6 counterpart of _parse_and_validate_subnet_edit_form().
+    Deliberately a separate function rather than a shared one with a v4/v6
+    branch inside it: the field sets genuinely differ (preferred-lifetime
+    exists only for v6; routers exists only for v4), and a shared function
+    trying to cover both would need per-field "does this apply to this
+    protocol" conditionals scattered through it — harder to read than two
+    small, honest functions.
+    """
+    import ipaddress
+    new_pool       = form.get("pool", "").strip()
+    extra_pools    = [p.strip() for p in form.get("extra_pools", "").split("|") if p.strip()]
+    new_preferred  = form.get("preferred_lifetime", "").strip()
+    new_valid      = form.get("valid_lifetime", "").strip()
+    new_renew      = form.get("renew_timer", "").strip()
+    new_rebind     = form.get("rebind_timer", "").strip()
+    new_dns        = ",".join(s.strip() for s in form.get("dns_servers", "").split(",") if s.strip())
+
+    def _valid_ip6(addr):
+        try:
+            ipaddress.IPv6Address(addr.strip())
+            return True
+        except Exception:
+            return False
+
+    if new_pool:
+        parts = [p.strip() for p in new_pool.split("-")]
+        if len(parts) == 2:
+            if not (_valid_ip6(parts[0]) and _valid_ip6(parts[1])):
+                return None, f"Invalid pool range: {new_pool}"
+        else:
+            # Not a range — must be a valid CIDR (Kea v6 pools also accept
+            # CIDR notation, unlike v4's start-end-only convention).
+            try:
+                ipaddress.IPv6Network(new_pool, strict=False)
+            except ValueError:
+                return None, f"Invalid pool — use a range (2001:db8::10-2001:db8::20) or CIDR (2001:db8::/64): {new_pool}"
+
+    if new_dns:
+        bad = [ip for ip in new_dns.split(",") if not _valid_ip6(ip)]
+        if bad:
+            return None, f"Invalid DNS server address(es): {', '.join(bad)}"
+
+    for t, label in [(new_preferred, "Preferred Lifetime"), (new_valid, "Valid Lifetime"),
+                     (new_renew, "Renew Timer"), (new_rebind, "Rebind Timer")]:
+        if t:
+            try:
+                if int(t) <= 0:
+                    raise ValueError()
+            except ValueError:
+                return None, f"{label} must be a positive integer (seconds)."
+
+    if new_preferred and new_valid:
+        try:
+            if int(new_preferred) > int(new_valid):
+                return None, "Preferred Lifetime cannot exceed Valid Lifetime."
+        except ValueError:
+            pass  # already caught above
+
+    return {
+        "new_pool": new_pool, "extra_pools": extra_pools,
+        "new_preferred": new_preferred, "new_valid": new_valid,
+        "new_renew": new_renew, "new_rebind": new_rebind, "new_dns": new_dns,
+    }, None
+
+
+def _compute_subnet6_edit_diff(subnet_id, fields):
+    """v6 counterpart of _compute_subnet_edit_diff() — only for fields the
+    user actually submitted a new value for, against the subnet's current
+    live Kea config."""
+    current = __kea6.get_subnet6_kea_data(subnet_id)
+    diff = []
+    if fields["new_pool"]:
+        diff.append({"field": "Primary Pool", "old": current.get("pool_str") or "(none)",
+                     "new": fields["new_pool"]})
+    if fields["extra_pools"]:
+        old_extra = ", ".join(current.get("pools", [])[1:]) or "(none)"
+        diff.append({"field": "Extra Pools", "old": old_extra,
+                     "new": ", ".join(fields["extra_pools"])})
+    if fields["new_preferred"]:
+        diff.append({"field": "Preferred Lifetime",
+                     "old": str(current.get("preferred_lifetime") or "(unset)"),
+                     "new": fields["new_preferred"]})
+    if fields["new_valid"]:
+        diff.append({"field": "Valid Lifetime",
+                     "old": str(current.get("valid_lifetime") or "(unset)"),
+                     "new": fields["new_valid"]})
+    if fields["new_renew"]:
+        diff.append({"field": "Renew Timer", "old": str(current.get("renew_timer") or "(unset)"),
+                     "new": fields["new_renew"]})
+    if fields["new_rebind"]:
+        diff.append({"field": "Rebind Timer", "old": str(current.get("rebind_timer") or "(unset)"),
+                     "new": fields["new_rebind"]})
+    if fields["new_dns"]:
+        diff.append({"field": "DNS Servers", "old": current.get("dns_servers") or "(unset)",
+                     "new": fields["new_dns"]})
+    return diff
+
+
+@bp.route("/subnets/edit6/<int:subnet_id>")
+@login_required
+@_admin_required
+def edit_subnet6(subnet_id):
+    if subnet_id not in extensions.SUBNET6_MAP:
+        flash("IPv6 subnet not found.", "error")
+        return redirect(url_for('subnets.subnets'))
+    kea_data = __kea6.get_subnet6_kea_data(subnet_id)
+    return render_template("edit_subnet6.html", subnet_id=subnet_id,
+                           subnet=extensions.SUBNET6_MAP[subnet_id], kea=kea_data)
+
+
+@bp.route("/subnets/edit6/<int:subnet_id>/preview", methods=["POST"])
+@login_required
+@_admin_required
+def edit_subnet6_preview(subnet_id):
+    """Dry-run preview for a v6 subnet edit — same guarantee as the v4
+    preview endpoint: kea-dhcp6 -t runs against a temp file on each
+    configured server, the live kea-dhcp6.conf is never touched under
+    any outcome (dry_run=True in build_subnet6_patch_script())."""
+    if subnet_id not in extensions.SUBNET6_MAP:
+        return jsonify({"ok": False, "error": "IPv6 subnet not found."}), 404
+
+    fields, error = _parse_and_validate_subnet6_edit_form(request.form)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+
+    if not any(fields.values()):
+        return jsonify({"ok": True, "no_changes": True, "diff": [], "servers": [], "all_passed": True})
+
+    diff = _compute_subnet6_edit_diff(subnet_id, fields)
+
+    server_results = []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            import base64
+            ssh = __kea6._connect_ssh(server)
+            try:
+                kea6_conf = __kea6._kea6_conf_path(server)
+                script = __kea6.build_subnet6_patch_script(
+                    subnet_id, kea6_conf, fields["new_pool"], fields["extra_pools"],
+                    fields["new_preferred"], fields["new_valid"], fields["new_renew"],
+                    fields["new_rebind"], fields["new_dns"], dry_run=True,
+                )
+                enc = base64.b64encode(script.encode()).decode()
+                _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+                out = stdout.read().decode().strip()
+                err = stderr.read().decode().strip()
+            finally:
+                ssh.close()
+
+            if out == "preview-ok":
+                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+            elif out == "nochange":
+                server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
+            elif out.startswith("testerror:"):
+                server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
+            else:
+                server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
+        except Exception as e:
+            server_results.append({"name": name, "ok": False, "message": str(e)})
+
+    all_passed = all(r["ok"] for r in server_results) if server_results else True
+    return jsonify({"ok": True, "no_changes": False, "diff": diff,
+                    "servers": server_results, "all_passed": all_passed})
+
+
+@bp.route("/subnets/edit6/<int:subnet_id>", methods=["POST"])
+@login_required
+@_admin_required
+def edit_subnet6_post(subnet_id):
+    if subnet_id not in extensions.SUBNET6_MAP:
+        flash("IPv6 subnet not found.", "error")
+        return redirect(url_for('subnets.subnets'))
+
+    fields, error = _parse_and_validate_subnet6_edit_form(request.form)
+    if error:
+        flash(error, "error")
+        return redirect(url_for('subnets.edit_subnet6', subnet_id=subnet_id))
+
+    errors, results = [], []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        try:
+            import base64
+            ssh = __kea6._connect_ssh(server)
+            kea6_conf = __kea6._kea6_conf_path(server)
+            script = __kea6.build_subnet6_patch_script(
+                subnet_id, kea6_conf, fields["new_pool"], fields["extra_pools"],
+                fields["new_preferred"], fields["new_valid"], fields["new_renew"],
+                fields["new_rebind"], fields["new_dns"], dry_run=False,
+            )
+            enc = base64.b64encode(script.encode()).decode()
+            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+            out = stdout.read().decode().strip()
+            err = stderr.read().decode().strip()
+
+            if out == "nochange":
+                results.append(f"ℹ️ {server.get('name', server['ssh_host'])}: nothing to change")
+            elif out == "ok":
+                # Config validated — restart kea-dhcp6-server (dual-name,
+                # same fallback the v4 restart and the Phase 1 toggle use).
+                out2, err2 = __kea6._dual_name_systemctl(ssh, "restart")
+                results.append(f"✅ {server.get('name', server['ssh_host'])}: config validated, updated and restarted")
+            elif out.startswith("testerror:"):
+                error_detail = out[len("testerror:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
+            else:
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
+            ssh.close()
+        except Exception as e:
+            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+
+    for r in results:
+        flash(r, "success")
+    for e in errors:
+        flash(e, "error")
+
+    changes = []
+    if fields["new_pool"]:      changes.append(f"pool={fields['new_pool']}")
+    if fields["new_preferred"]: changes.append(f"preferred-lifetime={fields['new_preferred']}")
+    if fields["new_valid"]:     changes.append(f"valid-lifetime={fields['new_valid']}")
+    if fields["new_renew"]:     changes.append(f"renew-timer={fields['new_renew']}")
+    if fields["new_rebind"]:    changes.append(f"rebind-timer={fields['new_rebind']}")
+    if fields["new_dns"]:       changes.append(f"dns={fields['new_dns']}")
+    __user.audit("EDIT_SUBNET6", str(subnet_id), ", ".join(changes) if changes else "no changes")
+
+    return redirect(url_for('subnets.subnets'))
+
 
 @bp.route("/subnets/save-note", methods=["POST"])
 @login_required

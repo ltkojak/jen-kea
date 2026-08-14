@@ -28,6 +28,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
@@ -54,6 +55,10 @@ def __ip_to_int(ip):
 @bp.route("/reservations")
 @login_required
 def reservations():
+    view_mode = request.args.get("view", "v4")
+    if view_mode == "v6":
+        return _reservations_v6()
+
     subnet_filter = request.args.get("subnet", "all")
     search = __auth.sanitize_search(request.args.get("search", "").strip())
     sort = request.args.get("sort", "ip")
@@ -146,7 +151,8 @@ def reservations():
         total=total, stale_days=stale_days, sort=sort, direction=direction,
         device_info=device_info, per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY
+        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
+        view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,
     )
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
@@ -156,6 +162,58 @@ def reservations():
         # in leases.py. Rendering the whole results partial keeps
         # everything in sync with the live filter state.
         return render_template("_reservations_results.html", **template_vars), 200
+    return render_template("reservations.html", **template_vars)
+
+
+def _reservations_v6():
+    """
+    v5.0 Phase 2 — read-only IPv6 reservations view. Reuses
+    jen.services.kea6.get_ipv6_reservations() directly, which already
+    returns the real one-to-many shape (a host can carry both an IA_NA
+    address reservation and an IA_PD prefix-delegation reservation at
+    once) — this route just filters by subnet/search and renders it,
+    same read-only pattern as the leases/devices/subnets v6 views.
+    Write support (add/edit v6 reservations) is Phase 3.
+    """
+    if not extensions.SUBNET6_MAP:
+        flash("No IPv6 subnets are configured.", "error")
+        return redirect(url_for('reservations.reservations'))
+
+    search = __auth.sanitize_search(request.args.get("search", "").strip())
+    subnet_filter = request.args.get("subnet", "all")
+    subnet_id = None
+    if subnet_filter != "all":
+        try:
+            subnet_id = int(subnet_filter)
+            if subnet_id not in extensions.SUBNET6_MAP:
+                subnet_filter = "all"
+                subnet_id = None
+        except ValueError:
+            subnet_filter = "all"
+
+    hosts6 = []
+    try:
+        hosts6 = __kea6.get_ipv6_reservations(subnet_id=subnet_id)
+        if search:
+            s = search.lower()
+            hosts6 = [
+                h for h in hosts6
+                if s in (h["hostname"] or "").lower()
+                or s in (h["duid_hex"] or "").lower()
+                or any(s in (r["address"] or "").lower() for r in h["reservations"])
+            ]
+        for h in hosts6:
+            h["subnet_name"] = extensions.SUBNET6_MAP.get(h["subnet_id"], {}).get("name", "")
+    except Exception as e:
+        flash(f"Could not load IPv6 reservations: {str(e)}", "error")
+
+    template_vars = dict(
+        hosts6=hosts6, total=len(hosts6),
+        subnet_filter=subnet_filter, search=search,
+        subnet6_map=extensions.SUBNET6_MAP, view_mode="v6",
+    )
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_reservations6_results.html", **template_vars), 200
     return render_template("reservations.html", **template_vars)
 
 @bp.route("/reservations/add")
@@ -345,6 +403,124 @@ def delete_reservation(host_id):
             return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Error: {str(e)}</td></tr>', 500
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for('reservations.reservations'))
+
+
+# ── v6 write-side (Phase 3) ──────────────────────────────────────────────────
+
+@bp.route("/reservations/add6")
+@login_required
+@_admin_required
+def add_reservation6():
+    """v5.0 Phase 3 — add a v6 host reservation form. Superadmin/admin
+    only, same gating as the v4 add flow."""
+    if not extensions.SUBNET6_MAP:
+        flash("No IPv6 subnets are configured.", "error")
+        return redirect(url_for('reservations.reservations'))
+    prefill = {
+        "duid": request.args.get("duid", ""),
+        "hostname": request.args.get("hostname", ""),
+        "subnet_id": request.args.get("subnet_id", ""),
+    }
+    return render_template("add_reservation6.html",
+                           subnet6_map=current_user.filter_subnet_map(extensions.SUBNET6_MAP),
+                           prefill=prefill)
+
+@bp.route("/reservations/add6", methods=["POST"])
+@login_required
+@_admin_required
+def add_reservation6_post():
+    """
+    v5.0 Phase 3 — write a v6 host reservation via Kea's reservation-add
+    command (host_cmds hook — already required/loaded for the v4 flow
+    this mirrors). Accepts an address (IA_NA), a delegated prefix
+    (IA_PD), or both on the same DUID at once — the genuine one-to-many
+    shape the read side already represents, not retrofitted here.
+    """
+    duid = request.form.get("duid", "").strip()
+    hostname = request.form.get("hostname", "").strip()[:253]
+    address = request.form.get("address", "").strip()
+    prefix = request.form.get("prefix", "").strip()
+    prefix_len_raw = request.form.get("prefix_len", "").strip()
+    try:
+        subnet_id = int(request.form.get("subnet_id", 0))
+    except ValueError:
+        flash("Invalid subnet.", "error")
+        return redirect(url_for('reservations.add_reservation6'))
+    if subnet_id not in extensions.SUBNET6_MAP:
+        flash("Invalid IPv6 subnet.", "error")
+        return redirect(url_for('reservations.add_reservation6'))
+
+    errors = []
+    try:
+        duid_norm = __kea6.normalize_duid(duid)
+    except ValueError as e:
+        duid_norm = None
+        errors.append(str(e))
+    if hostname and not __auth.valid_hostname(hostname):
+        errors.append(f"Invalid hostname: {hostname}")
+    if not address and not prefix:
+        errors.append("Specify an address, a prefix, or both.")
+    if address and not __auth.valid_ip(address):
+        errors.append(f"Invalid address: {address}")
+    prefix_len = None
+    if prefix:
+        if not __auth.valid_ip(prefix):
+            errors.append(f"Invalid prefix: {prefix}")
+        try:
+            prefix_len = int(prefix_len_raw)
+            if not (1 <= prefix_len <= 128):
+                errors.append("Prefix length must be between 1 and 128.")
+        except ValueError:
+            errors.append("Prefix length is required when reserving a prefix.")
+    if errors:
+        for e in errors:
+            flash(e, "error")
+        return redirect(url_for('reservations.add_reservation6'))
+
+    result = __kea6.add_v6_reservation(
+        subnet_id, duid_norm, hostname=hostname,
+        addresses=[address] if address else None,
+        prefix=prefix or None, prefix_len=prefix_len,
+    )
+    if result.get("result") == 0:
+        flash(f"IPv6 reservation added for DUID {duid_norm}.", "success")
+        __user.audit("ADD_RESERVATION6", duid_norm, f"subnet={subnet_id} hostname={hostname}")
+        return redirect(url_for('reservations.reservations', view="v6"))
+    else:
+        flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
+        return redirect(url_for('reservations.add_reservation6'))
+
+@bp.route("/reservations/delete6", methods=["POST"])
+@login_required
+@_admin_required
+def delete_reservation6():
+    """v5.0 Phase 3 — delete a v6 host reservation by subnet + DUID
+    (posted as hidden fields from the reservations page, mirroring the
+    v4 delete flow's host_id-in-URL pattern but keyed differently since
+    v6 reservations don't have a single-column host_id shortcut exposed
+    in the read layer today)."""
+    duid = request.form.get("duid", "").strip()
+    try:
+        subnet_id = int(request.form.get("subnet_id", 0))
+    except ValueError:
+        flash("Invalid subnet.", "error")
+        return redirect(url_for('reservations.reservations', view="v6"))
+    if subnet_id not in extensions.SUBNET6_MAP:
+        flash("Invalid IPv6 subnet.", "error")
+        return redirect(url_for('reservations.reservations', view="v6"))
+    try:
+        duid_norm = __kea6.normalize_duid(duid)
+    except ValueError as e:
+        flash(str(e), "error")
+        return redirect(url_for('reservations.reservations', view="v6"))
+
+    result = __kea6.delete_v6_reservation(subnet_id, duid_norm)
+    if result.get("result") == 0:
+        flash(f"IPv6 reservation deleted for DUID {duid_norm}.", "success")
+        __user.audit("DELETE_RESERVATION6", duid_norm, f"subnet={subnet_id}")
+    else:
+        flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
+    return redirect(url_for('reservations.reservations', view="v6"))
 
 @bp.route("/reservations/export")
 @login_required

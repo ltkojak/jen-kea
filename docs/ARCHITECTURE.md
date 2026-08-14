@@ -199,13 +199,161 @@ realistic, zero-budget equivalent: automated checks that catch
 regressions and known-CVE dependencies going forward, plus a documented
 paper trail for what's already been manually reviewed.
 
-## 5. Known gaps (as of this writing)
+## 5. IPv6 support (v5.0)
+
+v5.0 added IPv6 (DHCPv6) support alongside Jen's existing IPv4 management —
+read-only visibility across every major page, plus write support for
+reservations and subnet pool/timer editing. This section describes what's
+covered, what's deliberately deferred, and the design decisions that keep
+it a genuinely additive change rather than a rewrite.
+
+### 5.1 Off by default, verified off by default
+
+`ipv6_enabled` (a `settings` table key, same pattern as `restart_pending`)
+defaults to `false` on every install — new and existing. Every v6 code
+path is written to check it first: `SUBNET6_MAP` is never populated for
+display, no v6 nav/UI element renders, and no v6 Kea command fires unless
+it's explicitly on. This isn't just a design intention — it's the single
+most heavily tested property in the v6 test suite (`tests/test_kea6.py`,
+`TestZeroBehaviorChange` and equivalents throughout), because a
+regression here would mean every v4-only install silently starts doing
+extra work or showing broken UI on upgrade. `[kea6]`/`[kea6_db]`/
+`[subnets6]` are all optional `jen.config` sections; when absent, every
+v6 connection value falls back to its v4 counterpart at config-load time
+(`jen/config.py`'s `AppConfig.apply()`) rather than requiring separate
+credentials — the common real-world case is one Kea Control Agent
+proxying both `kea-dhcp4` and `kea-dhcp6`, and one shared MySQL database.
+
+### 5.2 Data model
+
+- **`SUBNET6_MAP`** is a fully independent map keyed by Kea's own v6
+  subnet IDs, which do **not** share a numbering space with v4's — the
+  same integer can validly appear in both `[subnets]` and `[subnets6]`
+  and refer to two unrelated subnets. An optional `paired_subnet4_id`
+  field (a third comma-separated value in a `[subnets6]` entry) lets an
+  admin explicitly associate a v6 subnet with its v4 counterpart so the
+  Subnets page renders them as one card with two detail blocks.
+  Deliberately config-driven, not auto-detected by name/VLAN matching —
+  guessing wrong and silently merging two unrelated subnets is worse
+  than requiring one config line.
+- **`hosts` is the same table for v4 and v6** — it gained
+  `dhcp6_subnet_id`/`dhcp6_client_classes` columns alongside its existing
+  v4 columns (this is Kea's own schema, not something Jen added). One
+  `hosts` row (one DUID) can carry both a v4 and a v6 reservation at
+  once.
+- **`ipv6_reservations`** is a genuine one-to-many junction table off
+  `hosts` — a single device can hold both an address (IA_NA) reservation
+  and a delegated-prefix (IA_PD) reservation simultaneously. Every v6
+  reservation read/write path in Jen represents this directly (a device
+  row with a list of reservations), not retrofitted from a
+  one-reservation-per-device assumption inherited from the v4 code.
+- **`lease6`** columns were confirmed directly against Kea's own
+  `dhcpdb_create.mysql` (not assumed from the v4 schema): `address` is
+  `VARCHAR(39)`, not the `INET_ATON` integer v4 uses; `duid` is
+  `VARBINARY` like `hwaddr`; `hwaddr`/`hwtype`/`hwaddr_source` were added
+  in a later Kea schema version so are nullable. MAC display for a v6
+  lease prefers Kea's own populated `hwaddr` when present, falling back
+  to manual DUID-LL/DUID-LLT parsing (`jen/services/kea6.py`,
+  `extract_mac_from_duid()`) only when it isn't — and returns nothing
+  (never a guess) for DUID-EN/DUID-UUID, which have no embedded
+  link-layer address at all.
+- **`lease6_history`** is a separate table from `lease_history`, not
+  columns bolted on: v4's single active/dynamic/pool-size-percentage
+  model doesn't map onto v6, where IA_NA and IA_PD are different,
+  non-comparable quantities and a `/64` pool has no finite "percent
+  used" the way a v4 `/24` does. Active-lease counts are tracked
+  per-type; there's no pool-size or utilization-ratio column, and none
+  of `/metrics`' v6 gauges (`jen_subnet6_*`) attempt one either — this
+  is the same reasoning applied consistently at three separate layers
+  (schema, metrics, alerts — see 5.4).
+
+### 5.3 The enable/disable toggle reaches real infrastructure
+
+Flipping "Enable IPv6 support" (Settings → Infrastructure, superadmin
+only) is two layers, not one: the `ipv6_enabled` display flag above, and
+actual SSH-driven service-state orchestration
+(`jen/services/kea6.py::set_ipv6_service_state()`) that connects to
+every configured Kea server, confirms `kea-dhcp6.conf` genuinely exists
+first (Jen never authors one from nothing), and runs
+`systemctl enable --now kea-dhcp6-server` (with the same dual-name
+fallback to `isc-kea-dhcp6-server` the v4 restart logic already has).
+The display flag only flips to enabled if **every** server succeeds;
+disabling always flips it off regardless of partial SSH failure, since
+"off" is the safe state to fail toward and any server that didn't
+actually stop is surfaced as an error rather than silently trusted.
+
+### 5.4 Write-side: reservations and subnet editing
+
+Both go through the same trust boundary already established for v4
+(§3.3), not a new one:
+
+- **Reservations** use Kea's own `reservation-add`/`reservation-del`
+  commands via the Control Agent API (`host_cmds` hook — the same one
+  the v4 add/edit-reservation flow already requires), not direct SQL
+  writes to `hosts`/`ipv6_reservations`. This keeps Kea's in-memory host
+  cache and the database in sync automatically.
+- **Subnet pool/timer editing** reuses the exact SSH config-push pattern
+  from §3.3 and the v4.4.24 Preview & Validate work: a generated Python
+  script patches `kea-dhcp6.conf`, tests it with `kea-dhcp6 -t` against a
+  temp file, and only replaces the live config (after a backup) if the
+  test passes. The dry-run preview endpoint never writes to the live
+  config under any outcome — this is directly tested
+  (`TestEditSubnet6PreviewRoute`) by asserting the SSH session only ever
+  sees one command (the test), never a second apply/restart call. What's
+  genuinely different from v4: `preferred-lifetime` and `valid-lifetime`
+  are distinct fields (v4 only has one), DNS is delivered via the
+  `dns-servers` option (code 23, space `dhcp6`) rather than v4's
+  `domain-name-servers`, and there's no `routers` field at all — DHCPv6
+  has no default-gateway option; that's Router Advertisement's job,
+  entirely outside Kea.
+
+### 5.5 What's explicitly deferred, and why
+
+Stated plainly rather than left to be discovered mid-implementation:
+
+- **Cross-protocol device correlation.** Jen does not attempt to link "this
+  v6 lease" and "this v4 lease" as the same physical device. Privacy-extension
+  IPv6 addresses rotate, and DUID-to-MAC extraction only works for two
+  of several DUID types (DUID-LL, DUID-LLT — not DUID-EN or DUID-UUID).
+  A wrong automatic correlation is worse than none; v4 and v6 device
+  lists are genuinely separate. `jen/services/kea6.py::list_lease6_devices()`
+  groups v6 leases by DUID (so one device's IA_NA and IA_PD leases
+  collapse into one row) but never cross-references the v4 `devices`
+  table.
+- **No v6 equivalent of the IP Map page.** Full-address-space
+  enumeration doesn't extend to a `/64` — there's nothing meaningful to
+  render. If an address-list view is ever wanted for v6, it would need
+  to be "reservations + active leases only," a genuinely different page,
+  not an extension of the existing one.
+- **IPAM Lite and Network Discovery plugins remain IPv4-only.** Both
+  document this directly in their own README and show an in-app note
+  (gated on `ipv6_enabled`, invisible on v4-only installs) rather than
+  silently producing incomplete results. Full-address-space IPAM and
+  active network scanning don't have a sane v6 equivalent at homelab
+  scale for the same "/64 has no finite space to enumerate" reason as
+  the IP Map.
+- **Alerting stays mostly v4-shaped.** `kea_down`/`kea_up`/`ha_failover`
+  already generalize (they alert on Kea server reachability, not
+  protocol-specific data). Utilization/pool-exhaustion alerts are
+  deliberately **not** ported to v6 — same "/64 percentage is
+  meaningless" reasoning as the schema and metrics decisions above.
+  `new_lease`/`new_device`/`stale_reservation` stay v4-only because
+  they're built on the `devices` table, which cross-protocol correlation
+  concerns (above) keep v4-only. See the comment block above
+  `ALERT_TYPE_LABELS` in `jen/services/alerts.py` for the full per-type
+  reasoning, including the discovery that `reservation_added`,
+  `reservation_deleted`, and `kea_config_changed` aren't actually wired
+  to fire from any v4 route today either — there was nothing to
+  generalize to v6 for those three.
+- **Heavy prefix-delegation topologies.** This covers straightforward
+  dual-stack LANs (address reservations, a delegated-prefix reservation
+  or two) well. A full PD-relay-chain setup is a different, harder
+  problem that would need its own scoping.
+
+## 6. Known gaps (as of this writing)
 
 Documenting these here rather than letting them go unstated:
 
-- **IPv4 only.** Every Kea-side table Jen queries (`lease4`, `hosts`,
-  `dhcp4_options`) is the IPv4 schema. Adding IPv6 support would touch
-  nearly every query in the app, not be an additive change.
 - **No DNS/BIND9 management.** Jen is DHCP-only.
 - **No professional external security audit.** See `SECURITY.md` for
   the honest framing of what level of scrutiny this project has

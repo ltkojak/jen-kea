@@ -2,6 +2,115 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.0.0] - 2026-08-16
+
+### IPv6 (DHCPv6) support
+
+The largest single change in Jen's history — full IPv6 visibility
+across every major page, plus write support for reservations and
+subnet editing, built alongside Jen's existing IPv4 management rather
+than replacing any of it. Ships as `5.0.0`, not a `4.5.x` patch series,
+to signal the scale honestly rather than bury it.
+
+**Off by default, on every install — new and existing.** Nothing about
+this release changes behavior for a v4-only setup: `ipv6_enabled`
+defaults to `false`, `[kea6]`/`[kea6_db]`/`[subnets6]` are optional
+`jen.config` sections that don't need to exist, and every v6 code path
+checks the flag before doing anything. This is the single most heavily
+tested property of this release — see `docs/ARCHITECTURE.md` §5 for the
+full design writeup, including what's deliberately deferred and why.
+
+### What changed for users
+
+- **Settings → Infrastructure**: a new "Kea6 Control Agent API"
+  section with the "Enable IPv6 support" toggle (superadmin only).
+  Flipping it doesn't just change what Jen displays — it SSHes to every
+  configured Kea server, confirms `kea-dhcp6.conf` actually exists, and
+  starts/stops `kea-dhcp6-server` for real.
+- **Leases, Devices, Reservations pages**: a new `IPv4 | IPv6`
+  segmented control, entirely absent (not just disabled) when no IPv6
+  subnets are configured. The Devices view groups leases by DUID so a
+  single device's address and delegated-prefix leases show as one row,
+  and shows a manufacturer icon when the DUID embeds a recoverable MAC
+  (DUID-LL/DUID-LLT) — never a guessed one otherwise.
+- **Subnets page**: v6 subnets tagged and shown either as a second
+  detail block on a paired v4 card (via an optional config-driven
+  `paired_subnet4_id`) or as their own card. Admins get a real "Edit"
+  flow — address pool, preferred/valid lifetime, T1/T2, DNS — with the
+  same dry-run Preview & Validate safety net v4.4.24 established:
+  `kea-dhcp6 -t` runs against every configured server before Apply is
+  even clickable, and the live config is never touched by the preview.
+- **Reservations page**: admins can add or delete a v6 reservation
+  (address, delegated prefix, or both on the same DUID) directly
+  through Kea's own API — no manual JSON editing.
+- **Dashboard**: a genuine IPv6 summary card (active leases,
+  reservations) when enabled; an explicit "(IPv4 only)" label on the
+  existing totals widget when it isn't — never a silently-incomplete
+  number either way.
+- **Global search** now covers IPv6 leases and reservations, respecting
+  the same paired-subnet access rule as everywhere else: a subnet-
+  restricted user sees v6 results only for subnets paired with a v4
+  subnet they already have access to.
+- **`/metrics`** gains `jen_ipv6_enabled`, `jen_subnet6_active_leases`
+  (labeled by IA_NA/IA_PD), `jen_subnet6_reserved_hosts`, and
+  `jen_kea6_up` — separate metric names, not folded into the existing
+  v4 gauges.
+- **IPAM Lite and Network Discovery plugins** now show an in-app note
+  (only when IPv6 is enabled) and document in their own READMEs that
+  they remain IPv4-only for this release — a full-address-space view
+  doesn't have a sane equivalent for a `/64`.
+
+### What changed under the hood
+
+- **`jen/services/kea6.py`** (new) — the entire v6 service layer: Kea
+  API command wrappers, the read layer (`list_lease6()`,
+  `get_ipv6_reservations()`, `list_lease6_devices()`), the write layer
+  (`add_v6_reservation()`/`delete_v6_reservation()`,
+  `build_subnet6_patch_script()`), and the SSH-based service-state
+  orchestration for the enable/disable toggle. `lease6`/`hosts`/
+  `ipv6_reservations` column shapes confirmed directly against Kea's
+  real `dhcpdb_create.mysql`, not assumed from the v4 schema — notably
+  `lease6.address` is `VARCHAR(39)`, not the `INET_ATON` integer v4
+  uses.
+- **`jen/models/db.py`** — `kea6_db()`/`get_kea6_db()`, which reuse the
+  existing `kea_db` connection pool when `[kea6_db]` targets the same
+  database as `[kea_db]` (the common case) rather than always opening a
+  redundant second pool.
+- **`jen/models/migrations.py`** — migration 11, `lease6_history`.
+  Deliberately a separate table from `lease_history`, not columns
+  bolted on: NA/PD counts aren't comparable quantities, and a `/64` has
+  no finite "percent used" the way a v4 `/24` does. Applies
+  automatically on next restart like every other migration in this
+  project's history — no manual step.
+- **`jen.config`** — new optional `[kea6]`, `[kea6_db]`, `[subnets6]`
+  sections. Every `[kea6]`/`[kea6_db]` value falls back to its v4
+  counterpart when absent. `[subnets6]` entries accept an optional
+  third field, `paired_v4_subnet_id`, for the Subnets page pairing.
+- **Test suite**: `tests/test_kea6.py`, ~150 tests covering every layer
+  above — config fallback, the DUID/MAC extraction edge cases (DUID-LL,
+  DUID-LLT, DUID-EN, DUID-UUID), the one-to-many reservation shape, the
+  toggle's all-or-nothing success semantics, and — critically — that
+  the subnet-edit preview endpoint never sends more than one SSH
+  command (the dry-run test), never a second apply/restart call.
+- Found and fixed a real pre-existing test-isolation bug along the way:
+  `tests/conftest.py`'s `_patch_extensions()` predated the `KEA6_*`
+  extensions fields and never reset them, which silently corrupted
+  global state for any test running after one that called
+  `AppConfig.apply()`/`reload()` — invisible until this release's DB
+  connection-pooling logic started comparing `KEA6_DB_HOST` against
+  `KEA_DB_HOST`.
+
+### Known limitation
+
+None of this has been run against a real `kea-dhcp6` process yet —
+everything is built against Kea's confirmed real schema/command formats
+and tested thoroughly with mocked SSH/API layers, but that's not the
+same claim as "verified against live Kea 3.0.3." First deployment
+should test in order: confirm v4-only behavior is unaffected, enable
+the toggle and confirm the SSH orchestration against real service
+names, check the read-only pages, then try one reservation add and one
+subnet-edit dry-run preview before anything real.
+
 ## [4.4.24] - 2026-08-15
 
 ### Tier 2 complete: "Preview & Validate" for subnet edits

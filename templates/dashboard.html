@@ -84,6 +84,11 @@
 <!-- Total summary widget -->
 <div id="dash-totals" style="display:none;">
     <div class="card" style="padding:16px 20px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+            {% if ipv6_summary %}
+            <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">IPv4</span>
+            {% endif %}
+        </div>
         <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
             <div>
                 <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Total Active</div>
@@ -102,14 +107,33 @@
                 <div style="font-size:24px;font-weight:700;" id="total-pct">—</div>
             </div>
             <div style="flex:1;min-width:200px;">
-                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length }} subnet{{ 's' if stats|length != 1 else '' }}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length }} subnet{{ 's' if stats|length != 1 else '' }}{% if not ipv6_summary %} (IPv4 only){% endif %}</div>
                 <div class="util-bar">
                     <div class="util-fill" id="total-util-fill" style="width:0%;transition:width 0.5s ease;background:var(--primary);"></div>
                 </div>
             </div>
         </div>
     </div>
+    {% if ipv6_summary %}
+    <div class="card" style="padding:16px 20px;margin-top:12px;">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">IPv6</div>
+        <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Active Leases</div>
+                <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ ipv6_summary.active }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reservations</div>
+                <div style="font-size:24px;font-weight:700;">{{ ipv6_summary.reserved }}</div>
+            </div>
+            <div style="flex:1;min-width:200px;">
+                <div style="font-size:11px;color:var(--text-muted);">Across {{ ipv6_summary.subnet_count }} IPv6 subnet{{ 's' if ipv6_summary.subnet_count != 1 else '' }} — no pool-utilization percentage yet (v6 pools don't have a comparable finite-size concept to v4)</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 </div>
+
 
 <!-- Utilization history chart widget -->
 <div id="dash-lease_history_chart" style="display:none;">

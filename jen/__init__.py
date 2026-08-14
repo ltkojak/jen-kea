@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "4.4.24"
+JEN_VERSION = "5.0.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -316,6 +316,19 @@ def create_app() -> Flask:
                 restart_pending = get_global_setting("restart_pending", "false") == "true"
             except Exception:
                 restart_pending = False
+        # v5.0 Phase 1 — IPv6 display gate, injected here (not cached on
+        # extensions) so base.html's nav can gate the future v6 nav item
+        # off this alone, matching how restart_pending's banner already
+        # works. Genuinely absent when False, not just hidden-but-present
+        # — templates must wrap the v6 nav item in {% if ipv6_enabled %},
+        # not just style it disabled.
+        ipv6_enabled = False
+        if current_user and current_user.is_authenticated:
+            try:
+                from jen.services.kea6 import is_ipv6_enabled
+                ipv6_enabled = is_ipv6_enabled()
+            except Exception:
+                ipv6_enabled = False
         return {
             "branding_name":       "Jen",
             "branding_nav_color":  get_global_setting("branding_nav_color", ""),
@@ -323,6 +336,7 @@ def create_app() -> Flask:
             "current_user_avatar": avatar_url,
             "jen_version":         JEN_VERSION,
             "restart_pending":     restart_pending,
+            "ipv6_enabled":        ipv6_enabled,
             "csrf_token":          lambda: csrf_svc.generate_csrf_token(app),
         }
 

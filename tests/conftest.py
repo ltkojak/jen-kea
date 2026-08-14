@@ -93,6 +93,41 @@ _KEA_SCHEMA_TABLES = [
         host_id INT UNSIGNED DEFAULT NULL,
         scope_id TINYINT UNSIGNED NOT NULL DEFAULT 0
     )""",
+    # v5.0 Phase 1 — lease6/ipv6_reservations, columns taken directly from
+    # Kea's real dhcpdb_create.mysql (isc-projects/kea), not memory: address
+    # is VARCHAR(39) — NOT the INET_ATON-style INT lease4 uses — duid is
+    # VARBINARY like hwaddr, and hwaddr/hwtype/hwaddr_source were added in a
+    # later ALTER (schema 2.0) so they're nullable here on purpose.
+    """CREATE TABLE IF NOT EXISTS lease6 (
+        address VARCHAR(39) PRIMARY KEY NOT NULL,
+        duid VARBINARY(128),
+        valid_lifetime INT UNSIGNED,
+        expire TIMESTAMP NULL,
+        subnet_id INT UNSIGNED,
+        pref_lifetime INT UNSIGNED,
+        lease_type TINYINT,
+        iaid INT UNSIGNED,
+        prefix_len TINYINT UNSIGNED,
+        fqdn_fwd TINYINT(1) DEFAULT 0,
+        fqdn_rev TINYINT(1) DEFAULT 0,
+        hostname VARCHAR(255),
+        hwaddr VARBINARY(20),
+        hwtype SMALLINT UNSIGNED,
+        hwaddr_source INT UNSIGNED,
+        state INT UNSIGNED DEFAULT 0,
+        user_context TEXT
+    )""",
+    # ipv6_reservations is a real one-to-many junction table off hosts —
+    # type 0=IA_NA (address), 2=IA_PD (delegated prefix); prefix_len is 128
+    # for a plain address reservation, less than 128 for a delegated prefix.
+    """CREATE TABLE IF NOT EXISTS ipv6_reservations (
+        reservation_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        address VARCHAR(39) NOT NULL,
+        prefix_len TINYINT(3) UNSIGNED NOT NULL DEFAULT 128,
+        type TINYINT(4) UNSIGNED NOT NULL DEFAULT 0,
+        dhcp6_iaid INT UNSIGNED DEFAULT NULL,
+        host_id INT UNSIGNED NOT NULL
+    )""",
 ]
 
 
@@ -123,6 +158,25 @@ def _patch_extensions():
     extensions.KEA_API_URL  = "http://localhost:18000"
     extensions.KEA_API_USER = "test"
     extensions.KEA_API_PASS = "test"
+    # v5.0 — KEA6_* must be reset alongside their v4 counterparts. Any test
+    # that calls AppConfig.reload()/apply() against an isolated config (see
+    # tests/test_appconfig.py) writes directly to these extensions globals
+    # (by design — see jen/config.py), and _kea6_targets_same_db() in
+    # jen/models/db.py compares KEA6_DB_HOST against KEA_DB_HOST at
+    # connection time. Resetting only the v4 fields here left KEA6_DB_HOST
+    # stuck on a stale value from whichever isolated-config test last ran,
+    # making the two appear to genuinely differ and triggering a real (and
+    # failing) second connection pool for tests that never touch v6 at
+    # all. Mirroring KEA_* here is correct for the overwhelming common
+    # case this whole fallback exists for.
+    extensions.KEA6_API_URL  = "http://localhost:18000"
+    extensions.KEA6_API_USER = "test"
+    extensions.KEA6_API_PASS = "test"
+    extensions.KEA6_DB_HOST = TEST_DB["host"]
+    extensions.KEA6_DB_USER = TEST_DB["user"]
+    extensions.KEA6_DB_PASS = TEST_DB["password"]
+    extensions.KEA6_DB_NAME = "jen_test"
+    extensions.SUBNET6_MAP = {}
     extensions.KEA_SERVERS  = [{
         "id": 1, "name": "Test Kea", "api_url": "http://localhost:18000",
         "api_user": "test", "api_pass": "test", "ssh_host": "",

@@ -145,6 +145,83 @@ def get_kea_db() -> pymysql.connections.Connection:
     return _kea_pool.connection()
 
 
+# ── Kea6 DB (v5.0 Phase 1) ──────────────────────────────────────────────────
+# lease6/hosts/ipv6_reservations can live in the same MySQL database as
+# lease4/hosts (the common case — [kea6_db] falls back to [kea_db] at
+# config-load time, so extensions.KEA6_DB_HOST already equals
+# extensions.KEA_DB_HOST when [kea6_db] is absent) or a genuinely separate
+# database, since Kea itself supports both. Rather than always opening a
+# second pool to what's frequently the identical host/db, _kea6_targets_same_db()
+# detects the common case and reuses the existing kea_pool — a real second
+# pool is only created when the v6 connection info actually differs.
+
+_kea6_pool = None
+
+
+def _kea6_targets_same_db() -> bool:
+    """True when [kea6_db] is absent/identical to [kea_db] — the common
+    case per Phase 0 research (theelders would run both on one server)."""
+    return (
+        extensions.KEA6_DB_HOST == extensions.KEA_DB_HOST and
+        extensions.KEA6_DB_USER == extensions.KEA_DB_USER and
+        extensions.KEA6_DB_PASS == extensions.KEA_DB_PASS and
+        extensions.KEA6_DB_NAME == extensions.KEA_DB_NAME
+    )
+
+
+def _make_kea6_pool():
+    """Create a distinct Kea6 DB connection pool — only called when the v6
+    connection info genuinely differs from v4's (see _kea6_targets_same_db)."""
+    from dbutils.pooled_db import PooledDB
+    return PooledDB(
+        creator      = pymysql,
+        mincached    = _POOL_MIN,
+        maxcached    = _POOL_MAX,
+        maxconnections = _POOL_MAX,
+        blocking     = True,
+        ping         = 1,
+        host         = extensions.KEA6_DB_HOST,
+        user         = extensions.KEA6_DB_USER,
+        password     = extensions.KEA6_DB_PASS,
+        database     = extensions.KEA6_DB_NAME,
+        cursorclass  = pymysql.cursors.DictCursor,
+        connect_timeout = 10,
+        charset      = "utf8mb4",
+        **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
+    )
+
+
+def get_kea6_db() -> pymysql.connections.Connection:
+    """
+    Return a pooled connection for reading lease6/hosts/ipv6_reservations.
+    Reuses get_kea_db()'s pool when v6 targets the same database as v4
+    (the common case) rather than opening a redundant second pool to the
+    identical host; only creates jen's own kea6_pool when the connection
+    info genuinely differs.
+    """
+    global _kea6_pool
+    if _kea6_targets_same_db():
+        return get_kea_db()
+    if _kea6_pool is None:
+        with _pool_lock:
+            if _kea6_pool is None:
+                try:
+                    _kea6_pool = _make_kea6_pool()
+                    logger.info("Kea6 DB connection pool initialised (dbutils)")
+                except Exception as e:
+                    logger.warning(f"Kea6 DB pool failed, using direct connections: {e}")
+                    return pymysql.connect(
+                        host=extensions.KEA6_DB_HOST,
+                        user=extensions.KEA6_DB_USER,
+                        password=extensions.KEA6_DB_PASS,
+                        database=extensions.KEA6_DB_NAME,
+                        cursorclass=pymysql.cursors.DictCursor,
+                        connect_timeout=10,
+                        **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
+                    )
+    return _kea6_pool.connection()
+
+
 # ── Context managers (v4.1.0) ─────────────────────────────────────────────────
 # Preferred way to use a connection. Guarantees the connection is returned
 # to the pool on every path (early return, exception, or normal exit),
@@ -192,12 +269,35 @@ def kea_db():
         db.close()
 
 
+@contextmanager
+def kea6_db():
+    """
+    Yield a pooled connection for reading lease6/hosts/ipv6_reservations —
+    v5.0 Phase 1. Same commit/rollback/return guarantees as jen_db()/kea_db().
+    Jen never writes through this connection (it doesn't own those tables,
+    same as lease4 today), but the same transactional discipline applies
+    regardless.
+    """
+    db = get_kea6_db()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
+
+
 def reset_pools() -> None:
     """
-    Tear down and recreate both connection pools.
+    Tear down and recreate all connection pools (jen, kea, kea6).
     Called after config changes that update DB credentials or host.
     """
-    global _jen_pool, _kea_pool
+    global _jen_pool, _kea_pool, _kea6_pool
     with _pool_lock:
         if _jen_pool is not None:
             try: _jen_pool._idle_cache.clear()
@@ -207,6 +307,10 @@ def reset_pools() -> None:
             try: _kea_pool._idle_cache.clear()
             except Exception: pass
             _kea_pool = None
+        if _kea6_pool is not None:
+            try: _kea6_pool._idle_cache.clear()
+            except Exception: pass
+            _kea6_pool = None
     logger.info("DB connection pools reset")
 
 
