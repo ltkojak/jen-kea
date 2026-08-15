@@ -184,9 +184,11 @@ def set_ipv6_service_state(enable: bool) -> list:
                 if enable and not _config_exists(ssh, kea6_conf):
                     results.append({
                         "name": name, "ok": False,
-                        "message": f"No {kea6_conf} on this server — Jen doesn't "
-                                   f"author a v6 config from scratch. Create it "
-                                   f"manually first, then retry.",
+                        "message": f"No {kea6_conf} on this server — use "
+                                   f"'Author a starting config' below to generate "
+                                   f"one (pulling interfaces/DB info from your "
+                                   f"existing kea-dhcp4.conf where possible), "
+                                   f"then retry.",
                     })
                     continue
                 out, err = _dual_name_systemctl(ssh, action)

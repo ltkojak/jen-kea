@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Author {{ 'kea-dhcp4.conf' if service == 'dhcp4' else 'kea-dhcp6.conf' }}{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📝 Author a starting {{ 'kea-dhcp4.conf' if service == 'dhcp4' else 'kea-dhcp6.conf' }}</h1>
+    <p>For a Kea install with no config yet on <strong>{{ target_server.name or target_server.ssh_host }}</strong>. This is not for editing an existing subnet — use Subnets → Edit for that.</p>
+</div>
+
+<div class="alert alert-warning">⚠️ This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
+
+{% if detected.found %}
+<div class="alert alert-info">
+    ℹ️ Found an existing <code>{{ 'kea-dhcp6.conf' if service == 'dhcp4' else 'kea-dhcp4.conf' }}</code> on this server — interfaces and database info below were pulled from it rather than guessed. Review and adjust if needed.
+    {% if detected.hooks %}<br>Hooks already loaded there: {{ detected.hooks|join(', ') }} (not automatically carried over — only host_cmds/lease_cmds are added here).{% endif %}
+</div>
+{% elif autodetected_interfaces %}
+<div class="alert alert-info">ℹ️ No sibling Kea config found to pull settings from — interfaces below were autodetected from this server's live network config. Review before continuing.</div>
+{% else %}
+<div class="alert alert-warning">⚠️ No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
+{% endif %}
+
+<div class="card" style="max-width:680px;">
+    <form method="POST" id="author-kea-form" onsubmit="return false;" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Interfaces</label>
+            <input type="text" name="interfaces" id="f-interfaces"
+                   value="{{ (detected.interfaces or autodetected_interfaces)|join(', ') }}"
+                   placeholder="eth0" style="font-family:monospace;">
+            <div class="form-hint">Comma-separated interface names Kea should listen on.</div>
+        </div>
+        <div class="form-group">
+            <label>Control Socket Path</label>
+            <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" style="font-family:monospace;">
+            <div class="form-hint">Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.</div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>DB Host</label>
+                <input type="text" name="db_host" id="f-db-host" value="{{ detected.lease_db_host or default_db.host }}">
+            </div>
+            <div class="form-group">
+                <label>DB Username</label>
+                <input type="text" name="db_user" id="f-db-user" value="{{ default_db.user }}">
+            </div>
+            <div class="form-group">
+                <label>DB Name</label>
+                <input type="text" name="db_name" id="f-db-name" value="{{ detected.lease_db_name or default_db.name }}">
+            </div>
+        </div>
+        <div class="form-hint" style="margin-bottom:14px;">Database password is taken from Jen's own {{ 'Kea' if service == 'dhcp4' else 'Kea6' }} API settings — not re-entered here.</div>
+
+        <div class="form-group">
+            <label>Subnets to include ({{ subnets|length }})</label>
+            <div style="font-size:12px;color:var(--text-muted);">
+                {% for sid, info in subnets.items() %}
+                <div><code>{{ info.cidr }}</code> — {{ info.name }} (id {{ sid }}, full-range pool by default — narrow it later via Subnets → Edit)</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;margin-bottom:14px;">
+            <input type="checkbox" id="f-overwrite" value="true">
+            Overwrite if a config already exists at this path (a backup is taken first)
+        </label>
+
+        <div style="display:flex;gap:8px;">
+            <button type="button" class="btn btn-danger" onclick="showPreview()">🔍 Preview &amp; Validate</button>
+            <a href="/settings/infrastructure" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+
+    <div id="preview-panel" style="display:none;margin-top:16px;background:var(--surface2);border:1px solid var(--warning);border-radius:var(--radius);padding:16px;">
+        <div style="font-weight:600;margin-bottom:8px;">Generated config &amp; validation result</div>
+        <div id="preview-json" style="font-size:11px;background:var(--surface);border-radius:var(--radius);padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;font-family:monospace;margin-bottom:10px;"></div>
+        <div id="preview-servers" style="font-size:12px;margin-bottom:14px;"></div>
+        <div style="display:flex;gap:8px;">
+            <button type="button" class="btn btn-danger" id="apply-btn" onclick="submitForm()" disabled>✅ Write this config</button>
+            <button type="button" class="btn btn-secondary" onclick="document.getElementById('preview-panel').style.display='none';">✕ Cancel</button>
+        </div>
+    </div>
+</div>
+
+<script>
+async function showPreview() {
+    var panel = document.getElementById('preview-panel');
+    var jsonDiv = document.getElementById('preview-json');
+    var serversDiv = document.getElementById('preview-servers');
+    var applyBtn = document.getElementById('apply-btn');
+
+    panel.style.display = '';
+    jsonDiv.textContent = 'Generating and testing…';
+    serversDiv.innerHTML = '';
+    applyBtn.disabled = true;
+    panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+
+    try {
+        var formEl = document.getElementById('author-kea-form');
+        var formData = new FormData(formEl);
+        var resp = await fetch("/settings/infrastructure/author-kea/{{ service }}/preview", {
+            method: 'POST', body: formData,
+        });
+        var data = await resp.json();
+        if (!resp.ok || !data.ok) {
+            jsonDiv.textContent = '';
+            serversDiv.innerHTML = '<div style="color:var(--danger);">❌ ' + (data.error || 'Could not validate.') + '</div>';
+            return;
+        }
+        jsonDiv.textContent = JSON.stringify(data.config, null, 2);
+        if (!data.servers || data.servers.length === 0) {
+            serversDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured.</span>';
+            return;
+        }
+        serversDiv.innerHTML = data.servers.map(function(s) {
+            var icon = s.ok ? '✅' : '❌';
+            var color = s.ok ? 'var(--success)' : 'var(--danger)';
+            return '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+        }).join('');
+        applyBtn.disabled = !data.all_passed;
+        if (!data.all_passed) {
+            serversDiv.innerHTML += '<div style="margin-top:8px;color:var(--text-muted);">Fix the error(s) above before writing — Kea would reject this configuration.</div>';
+        }
+    } catch (e) {
+        jsonDiv.textContent = '';
+        serversDiv.innerHTML = '<div style="color:var(--danger);">❌ Could not reach the server: ' + e.message + '</div>';
+    }
+}
+function submitForm() {
+    var form = document.getElementById('author-kea-form');
+    var hidden = document.createElement('input');
+    hidden.type = 'hidden'; hidden.name = 'allow_overwrite';
+    hidden.value = document.getElementById('f-overwrite').checked ? 'true' : 'false';
+    form.appendChild(hidden);
+    form.onsubmit = null;
+    form.submit();
+}
+</script>
+{% endblock %}

@@ -15,6 +15,7 @@ else in the v5.0 plan depends on this holding.
 """
 
 import configparser
+import json
 
 import pytest
 
@@ -1919,6 +1920,371 @@ class TestPluginIpv6Notes:
     def test_network_discovery_readme_documents_v4_only_scope(self):
         content = open("plugins/network-discovery/README.md").read()
         assert "IPv4 only" in content
+
+
+# ── Kea config authoring (v5.1) ───────────────────────────────────────────────
+
+class TestConfPathFor:
+
+    def test_dhcp4_path(self):
+        from jen.services.kea_authoring import conf_path_for
+        server = {"kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        assert conf_path_for(server, "dhcp4") == "/etc/kea/kea-dhcp4.conf"
+
+    def test_dhcp6_path_derived_from_dhcp4_sibling(self):
+        from jen.services.kea_authoring import conf_path_for
+        server = {"kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        assert conf_path_for(server, "dhcp6") == "/etc/kea/kea-dhcp6.conf"
+
+    def test_falls_back_to_extensions_kea_conf(self, monkeypatch):
+        from jen.services.kea_authoring import conf_path_for
+        monkeypatch.setattr(extensions, "KEA_CONF", "/opt/kea/kea-dhcp4.conf")
+        assert conf_path_for({}, "dhcp6") == "/opt/kea/kea-dhcp6.conf"
+
+
+class TestCaConfPathFor:
+
+    def test_sibling_to_kea_conf_dir(self):
+        from jen.services.kea_authoring import ca_conf_path_for
+        server = {"kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        assert ca_conf_path_for(server) == "/etc/kea/kea-ctrl-agent.conf"
+
+
+class TestReadRemoteJson:
+
+    def test_parses_valid_json(self):
+        from jen.services.kea_authoring import read_remote_json
+        ssh = FakeSSHClient([('{"a": 1}', "")])
+        assert read_remote_json(ssh, "/x") == {"a": 1}
+
+    def test_returns_none_for_missing_file(self):
+        from jen.services.kea_authoring import read_remote_json
+        ssh = FakeSSHClient([("", "")])
+        assert read_remote_json(ssh, "/x") is None
+
+    def test_returns_none_for_invalid_json(self):
+        from jen.services.kea_authoring import read_remote_json
+        ssh = FakeSSHClient([("not json", "")])
+        assert read_remote_json(ssh, "/x") is None
+
+
+class TestDetectCaSocketPath:
+
+    def test_extracts_socket_for_service(self):
+        from jen.services.kea_authoring import detect_ca_socket_path
+        ca_conf = json.dumps({
+            "Control-agent": {"control-sockets": {
+                "dhcp6": {"socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket"},
+            }},
+        })
+        ssh = FakeSSHClient([(ca_conf, "")])
+        result = detect_ca_socket_path(ssh, {"kea_conf": "/etc/kea/kea-dhcp4.conf"}, "dhcp6")
+        assert result == "/run/kea/kea6-ctrl-socket"
+
+    def test_none_when_ca_conf_missing(self):
+        from jen.services.kea_authoring import detect_ca_socket_path
+        ssh = FakeSSHClient([("", "")])
+        assert detect_ca_socket_path(ssh, {"kea_conf": "/etc/kea/kea-dhcp4.conf"}, "dhcp6") is None
+
+    def test_none_when_service_not_mentioned(self):
+        from jen.services.kea_authoring import detect_ca_socket_path
+        ca_conf = json.dumps({"Control-agent": {"control-sockets": {"dhcp4": {"socket-name": "/x"}}}})
+        ssh = FakeSSHClient([(ca_conf, "")])
+        assert detect_ca_socket_path(ssh, {"kea_conf": "/etc/kea/kea-dhcp4.conf"}, "dhcp6") is None
+
+
+class TestDetectSiblingConfig:
+
+    def test_pulls_interfaces_and_db_from_real_v4_config(self):
+        """Core case per direct instruction: authoring v6 when v4 already
+        exists should PULL from it rather than autodetect/ask."""
+        from jen.services.kea_authoring import detect_sibling_config
+        v4_conf = json.dumps({
+            "Dhcp4": {
+                "interfaces-config": {"interfaces": ["eth0"]},
+                "lease-database": {"type": "mysql", "host": "10.10.11.250",
+                                   "user": "kea", "name": "kea"},
+                "hooks-libraries": [{"library": "/usr/lib/kea/hooks/libdhcp_host_cmds.so"}],
+            }
+        })
+        ssh = FakeSSHClient([(v4_conf, "")])
+        result = detect_sibling_config(ssh, {"kea_conf": "/etc/kea/kea-dhcp4.conf"}, "dhcp6")
+        assert result["found"] is True
+        assert result["interfaces"] == ["eth0"]
+        assert result["lease_db_host"] == "10.10.11.250"
+        assert result["lease_db_name"] == "kea"
+        assert result["hooks"] == ["host_cmds"]
+
+    def test_not_found_returns_valid_empty_shape(self):
+        from jen.services.kea_authoring import detect_sibling_config
+        ssh = FakeSSHClient([("", "")])
+        result = detect_sibling_config(ssh, {"kea_conf": "/etc/kea/kea-dhcp4.conf"}, "dhcp6")
+        assert result["found"] is False
+        assert result["interfaces"] == []
+        assert result["hooks"] == []
+
+    def test_never_leaks_password_field(self):
+        """Even if a real config file has a lease-database password in
+        it, detect_sibling_config must not surface it — Jen supplies its
+        own known password when building the new config instead."""
+        from jen.services.kea_authoring import detect_sibling_config
+        v4_conf = json.dumps({"Dhcp4": {"lease-database": {
+            "type": "mysql", "host": "h", "user": "u", "password": "supersecret", "name": "kea"}}})
+        ssh = FakeSSHClient([(v4_conf, "")])
+        result = detect_sibling_config(ssh, {"kea_conf": "/etc/kea/kea-dhcp4.conf"}, "dhcp6")
+        assert "password" not in result
+        assert "supersecret" not in json.dumps(result)
+
+
+class TestAutodetectInterfaces:
+
+    def test_parses_ip_addr_output(self):
+        from jen.services.kea_authoring import autodetect_interfaces
+        ip_output = (
+            "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536\n"
+            "    inet6 ::1/128 scope host\n"
+            "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n"
+            "    inet6 2001:db8::1/64 scope global\n"
+        )
+        ssh = FakeSSHClient([(ip_output, "")])
+        result = autodetect_interfaces(ssh, "dhcp6")
+        assert result == ["eth0"]
+
+    def test_empty_on_ssh_error(self):
+        from jen.services.kea_authoring import autodetect_interfaces
+        class BrokenSSH:
+            def exec_command(self, cmd):
+                raise RuntimeError("connection lost")
+        assert autodetect_interfaces(BrokenSSH(), "dhcp6") == []
+
+
+class TestBuildNewKeaConfig:
+
+    def test_dhcp6_config_shape(self):
+        from jen.services.kea_authoring import build_new_kea_config
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        subnets = {1: {"name": "LAN6", "cidr": "2001:db8::/64"}}
+        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/kea/kea6.sock", subnets)
+        assert "Dhcp6" in cfg
+        section = cfg["Dhcp6"]
+        assert section["interfaces-config"]["interfaces"] == ["eth0"]
+        assert section["control-socket"]["socket-name"] == "/run/kea/kea6.sock"
+        assert section["lease-database"]["password"] == "p"
+        assert section["preferred-lifetime"] == 3000
+        assert section["valid-lifetime"] == 7200
+        assert len(section["subnet6"]) == 1
+        assert section["subnet6"][0]["id"] == 1
+        assert section["subnet6"][0]["subnet"] == "2001:db8::/64"
+
+    def test_dhcp4_config_shape(self):
+        from jen.services.kea_authoring import build_new_kea_config
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        subnets = {1: {"name": "LAN", "cidr": "192.168.1.0/24"}}
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/kea/kea4.sock", subnets)
+        assert "Dhcp4" in cfg
+        assert cfg["Dhcp4"]["valid-lifetime"] == 86400
+        assert len(cfg["Dhcp4"]["subnet4"]) == 1
+
+    def test_always_includes_host_cmds_and_lease_cmds_hooks(self):
+        from jen.services.kea_authoring import build_new_kea_config
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", {})
+        libs = [h["library"] for h in cfg["Dhcp6"]["hooks-libraries"]]
+        assert any("host_cmds" in l for l in libs)
+        assert any("lease_cmds" in l for l in libs)
+
+    def test_never_includes_ha_config(self):
+        """Explicit scope exclusion — must never be silently added."""
+        from jen.services.kea_authoring import build_new_kea_config
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", {})
+        assert "high-availability" not in json.dumps(cfg).lower().replace("-", "").replace(" ", "") \
+            or "high-availability" not in str(cfg.get("Dhcp6", {}).get("hooks-libraries", []))
+        # More direct: no hook library path mentions the HA hook at all.
+        libs = [h["library"] for h in cfg["Dhcp6"]["hooks-libraries"]]
+        assert not any("libdhcp_ha" in l for l in libs)
+
+    def test_pool_spans_whole_v4_cidr(self):
+        from jen.services.kea_authoring import build_new_kea_config
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        subnets = {1: {"name": "LAN", "cidr": "192.168.1.0/24"}}
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/x.sock", subnets)
+        pool = cfg["Dhcp4"]["subnet4"][0]["pools"][0]["pool"]
+        assert pool == "192.168.1.1-192.168.1.254"
+
+    def test_multiple_subnets_all_included_with_matching_ids(self):
+        from jen.services.kea_authoring import build_new_kea_config
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        subnets = {1: {"name": "A", "cidr": "2001:db8:1::/64"},
+                  7: {"name": "B", "cidr": "2001:db8:7::/64"}}
+        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", subnets)
+        ids = {s["id"] for s in cfg["Dhcp6"]["subnet6"]}
+        assert ids == {1, 7}
+
+
+class TestRenderAuthorConfigScript:
+
+    def test_dry_run_never_writes_live_path(self):
+        from jen.services.kea_authoring import render_author_config_script
+        script = render_author_config_script("dhcp6", "/etc/kea/kea-dhcp6.conf",
+                                              {"Dhcp6": {}}, allow_overwrite=False, dry_run=True)
+        assert "os.replace" not in script
+        assert "preview-ok" in script
+        assert "shutil.copy2" not in script
+
+    def test_apply_refuses_overwrite_by_default(self):
+        from jen.services.kea_authoring import render_author_config_script
+        script = render_author_config_script("dhcp6", "/etc/kea/kea-dhcp6.conf",
+                                              {"Dhcp6": {}}, allow_overwrite=False, dry_run=False)
+        assert "'exists'" in script
+        assert "os.path.exists(path) and not False" in script
+
+    def test_apply_with_overwrite_backs_up_first(self):
+        from jen.services.kea_authoring import render_author_config_script
+        script = render_author_config_script("dhcp6", "/etc/kea/kea-dhcp6.conf",
+                                              {"Dhcp6": {}}, allow_overwrite=True, dry_run=False)
+        assert "shutil.copy2" in script
+        assert "os.replace(tmp, path)" in script
+
+    def test_uses_correct_kea_binary_per_service(self):
+        from jen.services.kea_authoring import render_author_config_script
+        script4 = render_author_config_script("dhcp4", "/x", {"Dhcp4": {}}, False, True)
+        script6 = render_author_config_script("dhcp6", "/x", {"Dhcp6": {}}, False, True)
+        assert "'kea-dhcp4'" in script4
+        assert "'kea-dhcp6'" in script6
+
+
+class TestAuthorKeaConfigRoute:
+
+    def test_requires_superadmin(self, client, db):
+        from tests.conftest import restricted_client
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        resp = c.get("/settings/infrastructure/author-kea/dhcp6", follow_redirects=False)
+        assert resp.status_code == 302
+
+    def test_invalid_service_rejected(self, logged_in_client):
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp5", follow_redirects=True)
+        assert b"Invalid service" in resp.data
+
+    def test_no_ssh_configured_redirects(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "solo", "ssh_host": ""}])
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6", follow_redirects=True)
+        assert b"nothing to author against" in resp.data
+
+    def test_no_subnets_configured_redirects(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh",
+                            lambda s: FakeSSHClient([("", ""), ("", "")]))
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6", follow_redirects=True)
+        assert b"No IPv6 subnets are configured" in resp.data
+
+    def test_form_renders_with_detected_values(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "10.10.11.250", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP",
+                            {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
+        v4_conf = json.dumps({"Dhcp4": {
+            "interfaces-config": {"interfaces": ["eth0"]},
+            "lease-database": {"host": "10.10.11.250", "user": "kea", "name": "kea"},
+        }})
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh",
+                            lambda s: FakeSSHClient([(v4_conf, ""), ("", "")]))
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6")
+        assert resp.status_code == 200
+        assert b"eth0" in resp.data
+        assert b"Found an existing" in resp.data
+
+
+class TestAuthorKeaConfigPreviewRoute:
+
+    def test_requires_superadmin(self, client, db):
+        from tests.conftest import restricted_client
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        resp = c.post("/settings/infrastructure/author-kea/dhcp6/preview", data={}, follow_redirects=False)
+        assert resp.status_code == 302
+
+    def test_missing_fields_rejected(self, logged_in_client):
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6/preview", data={})
+        assert resp.status_code == 400
+        assert resp.get_json()["ok"] is False
+
+    def test_never_sends_more_than_one_ssh_command_per_server(self, logged_in_client, monkeypatch):
+        """Same safety-net property as the subnet-edit preview: dry-run
+        only ever tests, never writes/restarts."""
+        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP",
+                            {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
+        fake_ssh = FakeSSHClient([("preview-ok", "")])
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6/preview", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["servers"][0]["ok"] is True
+        assert len(fake_ssh.calls) == 1
+
+
+class TestAuthorKeaConfigPostRoute:
+
+    def test_requires_superadmin(self, client, db):
+        from tests.conftest import restricted_client
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        resp = c.post("/settings/infrastructure/author-kea/dhcp6", data={}, follow_redirects=False)
+        assert resp.status_code == 302
+
+    def test_refuses_to_overwrite_without_explicit_flag(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP",
+                            {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
+        fake_ssh = FakeSSHClient([("exists", "")])
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+        }, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"already exists" in resp.data
+
+    def test_successful_write(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP",
+                            {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
+        fake_ssh = FakeSSHClient([("ok", "")])
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+        }, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"written" in resp.data
+
+    def test_config_test_failure_writes_nothing(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP",
+                            {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
+        fake_ssh = FakeSSHClient([("testerror:bad interface", "")])
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+        }, follow_redirects=True)
+        assert resp.status_code == 200
+        assert b"config test failed, nothing written" in resp.data
+        assert b"bad interface" in resp.data
 
 
 class TestZeroBehaviorChange:

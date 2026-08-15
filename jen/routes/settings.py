@@ -29,6 +29,7 @@ import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_authoring as __authoring
 import jen.services.alerts as __alerts
 from jen.services.alerts import DEFAULT_TEMPLATES, ALERT_TYPE_LABELS
 import jen.services.fingerprint as __fp
@@ -698,6 +699,202 @@ def toggle_ipv6():
     __user.audit("TOGGLE_IPV6", "ipv6_enabled",
                  f"enable={enable} all_ok={all_ok} servers={len(results)}")
     return redirect(url_for('settings.settings_infrastructure'))
+
+
+# ── Author a starting Kea config (v5.1) ──────────────────────────────────────
+#
+# For a genuinely missing kea-dhcp4.conf or kea-dhcp6.conf — NOT the same
+# operation as editing an existing subnet (see jen/services/kea_authoring.py
+# for the full reasoning). Superadmin-only: this writes a whole new config
+# file, a bigger blast radius than a single subnet edit.
+
+def _author_kea_detect(service: str):
+    """Shared detection logic for the GET form and both POST routes below —
+    connects to the first server with ssh_host configured, prefers reading
+    the sibling protocol's real config over autodetecting, and only
+    autodetects live interfaces when there's nothing to inherit from.
+    Returns (target_server, detected, autodetected_interfaces, ca_socket)
+    or (None, ...) if no server has SSH configured at all."""
+    target_server = next((s for s in extensions.KEA_SERVERS if s.get("ssh_host")), None)
+    if not target_server:
+        return None, None, [], None
+    detected = {"found": False, "interfaces": [], "lease_db_type": "",
+               "lease_db_host": "", "lease_db_name": "", "hooks": []}
+    autodetected_interfaces = []
+    ca_socket = None
+    try:
+        ssh = __kea6._connect_ssh(target_server)
+        try:
+            detected = __authoring.detect_sibling_config(ssh, target_server, service)
+            if not detected["found"]:
+                autodetected_interfaces = __authoring.autodetect_interfaces(ssh, service)
+            ca_socket = __authoring.detect_ca_socket_path(ssh, target_server, service)
+        finally:
+            ssh.close()
+    except Exception as e:
+        flash(f"Could not connect to {target_server.get('name', target_server.get('ssh_host'))}: {e}", "error")
+    return target_server, detected, autodetected_interfaces, ca_socket
+
+
+def _author_kea_subnets_and_db(service: str):
+    """Subnet list and default DB connection info come from Jen's own
+    already-authoritative config, never re-typed — the whole point of
+    authoring from within Jen rather than by hand."""
+    if service == "dhcp4":
+        subnets = extensions.SUBNET_MAP
+        db = {"host": extensions.KEA_DB_HOST, "user": extensions.KEA_DB_USER,
+             "password": extensions.KEA_DB_PASS, "name": extensions.KEA_DB_NAME}
+    else:
+        subnets = extensions.SUBNET6_MAP
+        db = {"host": extensions.KEA6_DB_HOST, "user": extensions.KEA6_DB_USER,
+             "password": extensions.KEA6_DB_PASS, "name": extensions.KEA6_DB_NAME}
+    return subnets, db
+
+
+@bp.route("/settings/infrastructure/author-kea/<service>")
+@login_required
+@_superadmin_required
+def author_kea_config(service):
+    if service not in ("dhcp4", "dhcp6"):
+        flash("Invalid service.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    target_server, detected, autodetected_interfaces, ca_socket = _author_kea_detect(service)
+    if not target_server:
+        flash("No Kea server has SSH configured — nothing to author against. "
+              "Configure SSH under Kea Server settings first.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    subnets, default_db = _author_kea_subnets_and_db(service)
+    if not subnets:
+        flash(f"No {'IPv4' if service == 'dhcp4' else 'IPv6'} subnets are configured in Jen yet — "
+              f"add at least one under Subnets before authoring a config.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    conf_path = __authoring.conf_path_for(target_server, service)
+    default_socket = ca_socket or f"/run/kea/kea-{service}-ctrl-socket"
+    return render_template("author_kea_config.html", service=service,
+                           target_server=target_server, conf_path=conf_path,
+                           detected=detected, autodetected_interfaces=autodetected_interfaces,
+                           default_socket=default_socket, subnets=subnets, default_db=default_db)
+
+
+def _author_kea_build_config(service, form):
+    interfaces = [i.strip() for i in form.get("interfaces", "").replace(",", "\n").splitlines() if i.strip()]
+    control_socket_path = form.get("control_socket", "").strip()
+    db_host = form.get("db_host", "").strip()
+    db_user = form.get("db_user", "").strip()
+    db_name = form.get("db_name", "").strip()
+
+    if not interfaces:
+        return None, "At least one interface is required."
+    if not control_socket_path:
+        return None, "Control socket path is required."
+    if not (db_host and db_user and db_name):
+        return None, "Database host, username, and name are required."
+
+    subnets, default_db = _author_kea_subnets_and_db(service)
+    if not subnets:
+        return None, "No subnets configured in Jen for this protocol."
+    lease_db = {"host": db_host, "user": db_user, "name": db_name,
+               "password": default_db["password"]}  # Jen's own stored password — never re-typed in the form
+    config = __authoring.build_new_kea_config(service, interfaces, lease_db,
+                                              control_socket_path, subnets)
+    return config, None
+
+
+@bp.route("/settings/infrastructure/author-kea/<service>/preview", methods=["POST"])
+@login_required
+@_superadmin_required
+def author_kea_config_preview(service):
+    if service not in ("dhcp4", "dhcp6"):
+        return jsonify({"ok": False, "error": "Invalid service."}), 400
+
+    config, error = _author_kea_build_config(service, request.form)
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+
+    server_results = []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            conf_path = __authoring.conf_path_for(server, service)
+            script = __authoring.render_author_config_script(
+                service, conf_path, config, allow_overwrite=False, dry_run=True)
+            ssh = __kea6._connect_ssh(server)
+            try:
+                import base64
+                enc = base64.b64encode(script.encode()).decode()
+                _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+                out = stdout.read().decode().strip()
+                err = stderr.read().decode().strip()
+            finally:
+                ssh.close()
+            if out == "preview-ok":
+                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+            elif out.startswith("testerror:"):
+                server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
+            else:
+                server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
+        except Exception as e:
+            server_results.append({"name": name, "ok": False, "message": str(e)})
+
+    all_passed = all(r["ok"] for r in server_results) if server_results else True
+    return jsonify({"ok": True, "config": config, "servers": server_results, "all_passed": all_passed})
+
+
+@bp.route("/settings/infrastructure/author-kea/<service>", methods=["POST"])
+@login_required
+@_superadmin_required
+def author_kea_config_post(service):
+    if service not in ("dhcp4", "dhcp6"):
+        flash("Invalid service.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    config, error = _author_kea_build_config(service, request.form)
+    if error:
+        flash(error, "error")
+        return redirect(url_for('settings.author_kea_config', service=service))
+
+    allow_overwrite = request.form.get("allow_overwrite", "") == "true"
+    errors, results = [], []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            conf_path = __authoring.conf_path_for(server, service)
+            script = __authoring.render_author_config_script(
+                service, conf_path, config, allow_overwrite=allow_overwrite, dry_run=False)
+            ssh = __kea6._connect_ssh(server)
+            try:
+                import base64
+                enc = base64.b64encode(script.encode()).decode()
+                _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+                out = stdout.read().decode().strip()
+                err = stderr.read().decode().strip()
+            finally:
+                ssh.close()
+            if out == "ok":
+                results.append(f"✅ {name}: {conf_path} written. Enable/restart the service to use it.")
+            elif out == "exists":
+                errors.append(f"❌ {name}: {conf_path} already exists — check \"overwrite\" to replace it.")
+            elif out.startswith("testerror:"):
+                errors.append(f"❌ {name}: config test failed, nothing written. Error: {out[len('testerror:'):]}")
+            else:
+                errors.append(f"❌ {name}: {err or out}")
+        except Exception as e:
+            errors.append(f"❌ {name}: {str(e)}")
+
+    for r in results:
+        flash(r, "success")
+    for e in errors:
+        flash(e, "error")
+    __user.audit("AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(results)+len(errors)}")
+    return redirect(url_for('settings.settings_infrastructure'))
+
 
 @bp.route("/settings/infrastructure/save-jen-db", methods=["POST"])
 @login_required

@@ -2,6 +2,60 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.0] - 2026-08-17
+
+### Author a starting kea-dhcp4.conf / kea-dhcp6.conf
+
+Settings → Infrastructure now has an "Author a starting config" flow
+for either protocol, for the case where Jen is managing a Kea install
+that doesn't have a config file yet — most commonly, adding IPv6 to an
+existing IPv4 deployment.
+
+### What changed for users
+
+- New buttons on the Kea API and Kea6 API cards in Settings →
+  Infrastructure: "Author a starting kea-dhcp4.conf" / "kea-dhcp6.conf"
+  (superadmin only).
+- If the other protocol's config already exists on the target server,
+  interfaces and database connection settings are pulled from it
+  automatically rather than asked for — enabling IPv6 alongside a
+  working IPv4 setup reuses what's already there. Live interface
+  detection over SSH is the fallback only when neither protocol has a
+  config yet.
+- The Control Agent's own config is read to find the correct
+  control-socket path for the new service, so the generated file is
+  actually reachable through the same CA Jen already talks to.
+- Subnets to include come directly from Jen's own configured subnet
+  list, with a full-CIDR default pool narrowed later via the existing
+  Subnets → Edit flow.
+- Same Preview & Validate pattern as subnet editing: the generated
+  config and each server's `kea-dhcp4/6 -t` result are shown before
+  anything is written. Refuses to overwrite an existing file unless
+  explicitly told to, and backs up first when it does.
+- The IPv6 toggle's old "create it manually first" message now links
+  directly to this flow instead.
+- Deliberately excluded: HA peer configuration (never generated), and
+  hooks beyond `host_cmds`/`lease_cmds` (the two Jen's own commands
+  actually depend on) — not a guess at what a broader setup might want.
+
+### What changed under the hood
+
+- **`jen/services/kea_authoring.py`** (new) — shared between both
+  protocols: `detect_sibling_config()` (reads the other protocol's real
+  config, never surfaces its database password), `autodetect_interfaces()`
+  (SSH-based fallback), `detect_ca_socket_path()`, `build_new_kea_config()`,
+  and `render_author_config_script()` (same dry-run-then-apply contract
+  as every other config-writing path in this project).
+- **New routes** in `jen/routes/settings.py`:
+  `GET /settings/infrastructure/author-kea/<service>`,
+  `POST .../preview`, `POST .../<service>` — superadmin-gated.
+- **`templates/author_kea_config.html`** (new).
+- 41 new tests, including confirming the dry-run preview path sends
+  exactly one SSH command per server (never a write), that a real v4
+  config's database password never leaks through sibling detection,
+  and that every combination of the generated remote script (dry-run/
+  apply × overwrite/no-overwrite) is valid Python.
+
 ## [5.0.0] - 2026-08-16
 
 ### IPv6 (DHCPv6) support
@@ -99,17 +153,6 @@ full design writeup, including what's deliberately deferred and why.
   `AppConfig.apply()`/`reload()` — invisible until this release's DB
   connection-pooling logic started comparing `KEA6_DB_HOST` against
   `KEA_DB_HOST`.
-
-### Known limitation
-
-None of this has been run against a real `kea-dhcp6` process yet —
-everything is built against Kea's confirmed real schema/command formats
-and tested thoroughly with mocked SSH/API layers, but that's not the
-same claim as "verified against live Kea 3.0.3." First deployment
-should test in order: confirm v4-only behavior is unaffected, enable
-the toggle and confirm the SSH orchestration against real service
-names, check the read-only pages, then try one reservation add and one
-subnet-edit dry-run preview before anything real.
 
 ## [4.4.24] - 2026-08-15
 

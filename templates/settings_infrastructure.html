@@ -210,6 +210,12 @@ function startUpdate(evt) {
         </div>
         <button type="submit" class="btn btn-primary">Save Kea API</button>
     </form>
+    {% if current_user.role == 'superadmin' %}
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <a href="/settings/infrastructure/author-kea/dhcp4" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp4.conf</a>
+        <span class="form-hint" style="display:block;margin-top:4px;">For a fresh Kea install with no config yet — not for editing an existing one (use Subnets → Edit for that).</span>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Kea6 API / IPv6 toggle (v5.0 Phase 1) -->
@@ -285,6 +291,10 @@ function startUpdate(evt) {
         </div>
         <button type="submit" class="btn btn-primary">Save Kea6 API</button>
     </form>
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp6.conf</a>
+        <span class="form-hint" style="display:block;margin-top:4px;">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
+    </div>
 </div>
 {% endif %}
 
