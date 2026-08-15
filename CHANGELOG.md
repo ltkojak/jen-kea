@@ -2,6 +2,24 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.1] - 2026-08-17
+
+### Fix: "Author a starting config" required subnets that had no way to be added
+
+The wizard shipped in 5.1.0 required at least one subnet to already
+exist in Jen for the target protocol before it would even render the
+form — but authoring a config from scratch is exactly the situation
+where nothing exists there yet, and there was no UI path to add a v6
+subnet ahead of time. The only way through it was hand-editing
+`jen.config` directly.
+
+Subnets are now defined inline in the wizard itself (one per line,
+`id = name, cidr[, paired_v4_subnet_id]` — the same syntax
+`jen.config`'s own `[subnets]`/`[subnets6]` sections already use, and
+pre-filled from any subnets Jen already knows about). On a successful
+write, those subnets are saved into Jen's own config automatically, so
+they show up on the Subnets page from then on without a separate step.
+
 ## [5.1.0] - 2026-08-17
 
 ### Author a starting kea-dhcp4.conf / kea-dhcp6.conf

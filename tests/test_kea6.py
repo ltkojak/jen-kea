@@ -2154,6 +2154,83 @@ class TestRenderAuthorConfigScript:
         assert "'kea-dhcp6'" in script6
 
 
+class TestParseSubnetLines:
+
+    def test_parses_valid_v6_lines(self):
+        from jen.routes.settings import _parse_subnet_lines
+        subnets, error = _parse_subnet_lines(
+            "1 = LAN6, 2001:db8:1::/64\n2 = IoT6, 2001:db8:2::/64", "dhcp6")
+        assert error is None
+        assert subnets[1]["cidr"] == "2001:db8:1::/64"
+        assert subnets[2]["name"] == "IoT6"
+
+    def test_parses_v6_line_with_paired_id(self):
+        from jen.routes.settings import _parse_subnet_lines
+        subnets, error = _parse_subnet_lines("1 = LAN6, 2001:db8::/64, 1", "dhcp6")
+        assert error is None
+        assert subnets[1]["paired_subnet4_id"] == 1
+
+    def test_parses_valid_v4_lines(self):
+        from jen.routes.settings import _parse_subnet_lines
+        subnets, error = _parse_subnet_lines("1 = LAN, 192.168.1.0/24", "dhcp4")
+        assert error is None
+        assert subnets[1]["cidr"] == "192.168.1.0/24"
+
+    def test_empty_input_is_an_error_not_a_silent_empty_config(self):
+        from jen.routes.settings import _parse_subnet_lines
+        subnets, error = _parse_subnet_lines("", "dhcp6")
+        assert subnets is None
+        assert error is not None
+
+    def test_malformed_line_alone_is_an_error(self):
+        """A line that parses as nothing valid must surface an error to
+        the operator, not silently produce an empty subnet dict — that
+        would let 'Apply' proceed with zero subnets defined."""
+        from jen.routes.settings import _parse_subnet_lines
+        subnets, error = _parse_subnet_lines("not a valid line at all", "dhcp6")
+        assert subnets is None
+        assert error is not None
+
+    def test_v4_cidr_rejected_on_v6_form_via_validation(self):
+        from jen.routes.settings import _parse_subnet_lines
+        # Not a v6-vs-v4 format check per se, but a genuinely invalid
+        # CIDR (not parseable at all) must still error, not pass through.
+        subnets, error = _parse_subnet_lines("1 = bad, not-a-cidr", "dhcp6")
+        assert subnets is None
+        assert error is not None
+
+
+class TestSubnetsToLines:
+
+    def test_renders_existing_subnets_as_editable_lines(self):
+        from jen.routes.settings import _subnets_to_lines
+        subnets = {1: {"name": "LAN6", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        lines = _subnets_to_lines(subnets, "dhcp6")
+        assert lines == "1 = LAN6, 2001:db8::/64"
+
+    def test_includes_paired_id_when_present(self):
+        from jen.routes.settings import _subnets_to_lines
+        subnets = {1: {"name": "LAN6", "cidr": "2001:db8::/64", "paired_subnet4_id": 1}}
+        lines = _subnets_to_lines(subnets, "dhcp6")
+        assert lines == "1 = LAN6, 2001:db8::/64, 1"
+
+    def test_empty_map_renders_empty_string(self):
+        from jen.routes.settings import _subnets_to_lines
+        assert _subnets_to_lines({}, "dhcp6") == ""
+
+    def test_round_trips_through_parse(self):
+        """What gets rendered for the textarea must parse back to the
+        exact same subnet dict — the wizard's pre-fill and its own
+        submission must agree on the format."""
+        from jen.routes.settings import _subnets_to_lines, _parse_subnet_lines
+        original = {1: {"name": "LAN6", "cidr": "2001:db8::/64", "paired_subnet4_id": 3}}
+        lines = _subnets_to_lines(original, "dhcp6")
+        parsed, error = _parse_subnet_lines(lines, "dhcp6")
+        assert error is None
+        assert parsed[1]["cidr"] == original[1]["cidr"]
+        assert parsed[1]["paired_subnet4_id"] == original[1]["paired_subnet4_id"]
+
+
 class TestAuthorKeaConfigRoute:
 
     def test_requires_superadmin(self, client, db):
@@ -2171,15 +2248,33 @@ class TestAuthorKeaConfigRoute:
         resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6", follow_redirects=True)
         assert b"nothing to author against" in resp.data
 
-    def test_no_subnets_configured_redirects(self, logged_in_client, monkeypatch):
+    def test_no_existing_subnets_still_renders_form_for_manual_entry(self, logged_in_client, monkeypatch):
+        """The old behavior (hard-block redirect) was the actual bug
+        reported: authoring a config from scratch is exactly the case
+        where nothing exists in Jen yet, so it must not be required
+        as a precondition — the form renders with an empty, editable
+        subnet field instead."""
         server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         import jen.services.kea6 as kea6_module
         monkeypatch.setattr(kea6_module, "_connect_ssh",
                             lambda s: FakeSSHClient([("", ""), ("", "")]))
-        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6", follow_redirects=True)
-        assert b"No IPv6 subnets are configured" in resp.data
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6")
+        assert resp.status_code == 200
+        assert b"Nothing in Jen yet for this protocol" in resp.data
+
+    def test_existing_subnets_prefill_the_textarea(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP",
+                            {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
+        import jen.services.kea6 as kea6_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh",
+                            lambda s: FakeSSHClient([("", ""), ("", "")]))
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6")
+        assert resp.status_code == 200
+        assert b"1 = V6LAN, 2001:db8::/64" in resp.data
 
     def test_form_renders_with_detected_values(self, logged_in_client, monkeypatch):
         server = {"id": 1, "name": "theelders", "ssh_host": "10.10.11.250", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
@@ -2225,6 +2320,7 @@ class TestAuthorKeaConfigPreviewRoute:
         resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6/preview", data={
             "interfaces": "eth0", "control_socket": "/run/kea6.sock",
             "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
         })
         assert resp.status_code == 200
         data = resp.get_json()
@@ -2251,9 +2347,51 @@ class TestAuthorKeaConfigPostRoute:
         resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
             "interfaces": "eth0", "control_socket": "/run/kea6.sock",
             "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
         }, follow_redirects=True)
         assert resp.status_code == 200
         assert b"already exists" in resp.data
+
+    def test_successful_write_persists_subnets_to_jen_config(self, logged_in_client, monkeypatch):
+        """The actual fix: authoring a config with subnets Jen didn't
+        already know about must leave them saved in Jen afterward, not
+        just written into the Kea config file."""
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})  # nothing in Jen yet
+        fake_ssh = FakeSSHClient([("ok", "")])
+        import jen.services.kea6 as kea6_module
+        import jen.routes.settings as settings_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        captured = {}
+        monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config",
+                            lambda d: captured.update(subnets=d))
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
+        }, follow_redirects=True)
+        assert resp.status_code == 200
+        assert captured["subnets"][1]["name"] == "V6LAN"
+        assert captured["subnets"][1]["cidr"] == "2001:db8::/64"
+
+    def test_failed_write_does_not_persist_subnets(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
+        fake_ssh = FakeSSHClient([("testerror:bad", "")])
+        import jen.services.kea6 as kea6_module
+        import jen.routes.settings as settings_module
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        called = {"count": 0}
+        monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config",
+                            lambda d: called.__setitem__("count", called["count"] + 1))
+        logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
+        }, follow_redirects=True)
+        assert called["count"] == 0
 
     def test_successful_write(self, logged_in_client, monkeypatch):
         server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
@@ -2262,10 +2400,13 @@ class TestAuthorKeaConfigPostRoute:
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
         fake_ssh = FakeSSHClient([("ok", "")])
         import jen.services.kea6 as kea6_module
+        import jen.routes.settings as settings_module
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config", lambda d: None)
         resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
             "interfaces": "eth0", "control_socket": "/run/kea6.sock",
             "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
         }, follow_redirects=True)
         assert resp.status_code == 200
         assert b"written" in resp.data
@@ -2281,6 +2422,7 @@ class TestAuthorKeaConfigPostRoute:
         resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
             "interfaces": "eth0", "control_socket": "/run/kea6.sock",
             "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
         }, follow_redirects=True)
         assert resp.status_code == 200
         assert b"config test failed, nothing written" in resp.data

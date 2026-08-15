@@ -178,6 +178,24 @@ class AppConfig:
         if reload:
             self.reload()
 
+    def write_subnets6(self, subnet_dict: dict, reload: bool = True) -> None:
+        """Rewrite the [subnets6] section entirely, then reload. Mirrors
+        write_subnets() above; includes the optional paired_subnet4_id
+        third field when an entry has one set."""
+        parser = self._read_parser()
+        if parser.has_section("subnets6"):
+            parser.remove_section("subnets6")
+        parser.add_section("subnets6")
+        for sid, info in subnet_dict.items():
+            paired = info.get("paired_subnet4_id")
+            line = f"{info['name']}, {info['cidr']}"
+            if paired is not None:
+                line += f", {paired}"
+            parser.set("subnets6", str(sid), line)
+        self._write_parser(parser)
+        if reload:
+            self.reload()
+
     def mutate(self, fn, reload: bool = True) -> None:
         """
         Arbitrary structured edit: load the parser from disk, pass it to
@@ -303,6 +321,10 @@ def write_config_value(section: str, key: str, value: str) -> None:
 
 def write_subnets_config(subnet_dict: dict) -> None:
     app_config.write_subnets(subnet_dict)
+
+
+def write_subnets6_config(subnet_dict: dict) -> None:
+    app_config.write_subnets6(subnet_dict)
 
 
 def load_kea_servers(cfg: configparser.ConfigParser) -> list:

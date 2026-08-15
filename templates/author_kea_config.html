@@ -50,11 +50,12 @@
         <div class="form-hint" style="margin-bottom:14px;">Database password is taken from Jen's own {{ 'Kea' if service == 'dhcp4' else 'Kea6' }} API settings — not re-entered here.</div>
 
         <div class="form-group">
-            <label>Subnets to include ({{ subnets|length }})</label>
-            <div style="font-size:12px;color:var(--text-muted);">
-                {% for sid, info in subnets.items() %}
-                <div><code>{{ info.cidr }}</code> — {{ info.name }} (id {{ sid }}, full-range pool by default — narrow it later via Subnets → Edit)</div>
-                {% endfor %}
+            <label>Subnets to include</label>
+            <textarea name="subnets" id="f-subnets" rows="5" style="font-family:monospace;font-size:12px;" placeholder="1 = LAN, 192.168.1.0/24">{{ subnet_lines }}</textarea>
+            <div class="form-hint">
+                One per line: <code>id = name, cidr{{ ', paired_v4_subnet_id' if service == 'dhcp6' else '' }}</code>{% if service == 'dhcp6' %} — the paired id is optional{% endif %}.
+                {% if has_existing_subnets %}Pre-filled from Jen's existing subnets — edit or add more below.{% else %}Nothing in Jen yet for this protocol — define at least one here; it'll be saved to Jen automatically once the config is written.{% endif %}
+                Each gets a full-range pool by default, narrowed later via Subnets → Edit.
             </div>
         </div>
 

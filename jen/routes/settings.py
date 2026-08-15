@@ -23,7 +23,7 @@ from flask import (Blueprint, Response, flash, jsonify, redirect,
 from flask_login import current_user, login_required, login_user, logout_user
 
 from jen import extensions
-from jen.config import init_extensions_from_config, load_config
+from jen.config import init_extensions_from_config, load_config, AppConfig
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
@@ -737,18 +737,59 @@ def _author_kea_detect(service: str):
 
 
 def _author_kea_subnets_and_db(service: str):
-    """Subnet list and default DB connection info come from Jen's own
-    already-authoritative config, never re-typed — the whole point of
-    authoring from within Jen rather than by hand."""
+    """Default DB connection info comes from Jen's own already-
+    authoritative config, never re-typed. The EXISTING subnet map
+    (possibly empty — that's expected and fine here) is returned too,
+    to pre-fill the wizard's editable subnet list; it is NOT the source
+    of truth for what gets built into the generated config — see
+    _parse_subnet_lines() below for that. Authoring a config from
+    scratch is exactly the case where nothing may exist in Jen yet."""
     if service == "dhcp4":
-        subnets = extensions.SUBNET_MAP
+        existing_subnets = extensions.SUBNET_MAP
         db = {"host": extensions.KEA_DB_HOST, "user": extensions.KEA_DB_USER,
              "password": extensions.KEA_DB_PASS, "name": extensions.KEA_DB_NAME}
     else:
-        subnets = extensions.SUBNET6_MAP
+        existing_subnets = extensions.SUBNET6_MAP
         db = {"host": extensions.KEA6_DB_HOST, "user": extensions.KEA6_DB_USER,
              "password": extensions.KEA6_DB_PASS, "name": extensions.KEA6_DB_NAME}
-    return subnets, db
+    return existing_subnets, db
+
+
+def _subnets_to_lines(subnets: dict, service: str) -> str:
+    """Render Jen's existing subnet map into the same editable line
+    format the wizard's textarea uses (and jen.config's own
+    [subnets]/[subnets6] line syntax) — id = name, cidr[, paired_id]."""
+    lines = []
+    for sid, info in subnets.items():
+        line = f"{sid} = {info['name']}, {info['cidr']}"
+        if service == "dhcp6" and info.get("paired_subnet4_id") is not None:
+            line += f", {info['paired_subnet4_id']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _parse_subnet_lines(text: str, service: str):
+    """
+    Parse the wizard's editable subnet textarea — one subnet per line,
+    `id = name, cidr[, paired_v4_subnet_id]`, the exact same syntax
+    jen.config's own [subnets]/[subnets6] sections already use.
+    Deliberately reuses AppConfig.derive_subnet_map() (already tested
+    against malformed lines, invalid CIDRs, etc. in Phase 1/2) rather
+    than writing new parsing logic — the wizard is just letting the
+    operator define what would otherwise have to be hand-added to
+    jen.config directly. Returns (subnet_dict, error).
+    """
+    import configparser
+    section = "subnets" if service == "dhcp4" else "subnets6"
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(f"[{section}]\n{text}\n")
+    except configparser.Error as e:
+        return None, f"Could not parse subnet list: {e}"
+    subnets = AppConfig.derive_subnet_map(parser, section=section)
+    if not subnets:
+        return None, "At least one subnet is required — one per line, e.g. \"1 = LAN, 192.168.1.0/24\"."
+    return subnets, None
 
 
 @bp.route("/settings/infrastructure/author-kea/<service>")
@@ -765,18 +806,15 @@ def author_kea_config(service):
               "Configure SSH under Kea Server settings first.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
 
-    subnets, default_db = _author_kea_subnets_and_db(service)
-    if not subnets:
-        flash(f"No {'IPv4' if service == 'dhcp4' else 'IPv6'} subnets are configured in Jen yet — "
-              f"add at least one under Subnets before authoring a config.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
-
+    existing_subnets, default_db = _author_kea_subnets_and_db(service)
     conf_path = __authoring.conf_path_for(target_server, service)
     default_socket = ca_socket or f"/run/kea/kea-{service}-ctrl-socket"
+    subnet_lines = _subnets_to_lines(existing_subnets, service)
     return render_template("author_kea_config.html", service=service,
                            target_server=target_server, conf_path=conf_path,
                            detected=detected, autodetected_interfaces=autodetected_interfaces,
-                           default_socket=default_socket, subnets=subnets, default_db=default_db)
+                           default_socket=default_socket, subnet_lines=subnet_lines,
+                           has_existing_subnets=bool(existing_subnets), default_db=default_db)
 
 
 def _author_kea_build_config(service, form):
@@ -787,20 +825,22 @@ def _author_kea_build_config(service, form):
     db_name = form.get("db_name", "").strip()
 
     if not interfaces:
-        return None, "At least one interface is required."
+        return None, None, "At least one interface is required."
     if not control_socket_path:
-        return None, "Control socket path is required."
+        return None, None, "Control socket path is required."
     if not (db_host and db_user and db_name):
-        return None, "Database host, username, and name are required."
+        return None, None, "Database host, username, and name are required."
 
-    subnets, default_db = _author_kea_subnets_and_db(service)
-    if not subnets:
-        return None, "No subnets configured in Jen for this protocol."
+    subnets, error = _parse_subnet_lines(form.get("subnets", ""), service)
+    if error:
+        return None, None, error
+
+    _, default_db = _author_kea_subnets_and_db(service)
     lease_db = {"host": db_host, "user": db_user, "name": db_name,
                "password": default_db["password"]}  # Jen's own stored password — never re-typed in the form
     config = __authoring.build_new_kea_config(service, interfaces, lease_db,
                                               control_socket_path, subnets)
-    return config, None
+    return config, subnets, None
 
 
 @bp.route("/settings/infrastructure/author-kea/<service>/preview", methods=["POST"])
@@ -810,7 +850,7 @@ def author_kea_config_preview(service):
     if service not in ("dhcp4", "dhcp6"):
         return jsonify({"ok": False, "error": "Invalid service."}), 400
 
-    config, error = _author_kea_build_config(service, request.form)
+    config, subnets, error = _author_kea_build_config(service, request.form)
     if error:
         return jsonify({"ok": False, "error": error}), 400
 
@@ -853,7 +893,7 @@ def author_kea_config_post(service):
         flash("Invalid service.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
 
-    config, error = _author_kea_build_config(service, request.form)
+    config, subnets, error = _author_kea_build_config(service, request.form)
     if error:
         flash(error, "error")
         return redirect(url_for('settings.author_kea_config', service=service))
@@ -887,6 +927,22 @@ def author_kea_config_post(service):
                 errors.append(f"❌ {name}: {err or out}")
         except Exception as e:
             errors.append(f"❌ {name}: {str(e)}")
+
+    # Persist the subnets used to author this config into Jen's own
+    # [subnets]/[subnets6] — only when at least one server genuinely
+    # wrote the file. This is what closes the loop this whole flow
+    # exists for: authoring a config from a blank slate must leave Jen
+    # actually able to see/edit those subnets afterward, not just Kea.
+    # Merges with (doesn't replace) any subnets Jen already knew about,
+    # so authoring never silently drops existing entries.
+    if results:
+        existing, _ = _author_kea_subnets_and_db(service)
+        merged = dict(existing)
+        merged.update(subnets)
+        if service == "dhcp4":
+            __config.write_subnets_config(merged)
+        else:
+            __config.write_subnets6_config(merged)
 
     for r in results:
         flash(r, "success")
