@@ -114,7 +114,15 @@ async function showPreview() {
         serversDiv.innerHTML = data.servers.map(function(s) {
             var icon = s.ok ? '✅' : '❌';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
-            return '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+            var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+            if (s.missing_binary) {
+                line += '<div style="margin:4px 0 8px 20px;">' +
+                    '<button type="button" class="btn btn-sm btn-secondary" onclick="installBinary(this, ' +
+                    JSON.stringify(s.missing_binary) + ')">📦 Install ' + s.missing_binary + ' now</button>' +
+                    '<span class="install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span>' +
+                    '</div>';
+            }
+            return line;
         }).join('');
         applyBtn.disabled = !data.all_passed;
         if (!data.all_passed) {
@@ -123,6 +131,33 @@ async function showPreview() {
     } catch (e) {
         jsonDiv.textContent = '';
         serversDiv.innerHTML = '<div style="color:var(--danger);">❌ Could not reach the server: ' + e.message + '</div>';
+    }
+}
+
+async function installBinary(btn, binary) {
+    var statusEl = btn.nextElementSibling;
+    btn.disabled = true;
+    statusEl.textContent = 'Installing ' + binary + ' — this can take a minute…';
+    try {
+        var resp = await fetch("/settings/infrastructure/install-kea-binary/{{ service }}", {
+            method: 'POST',
+            headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
+        });
+        var data = await resp.json();
+        if (data.ok) {
+            statusEl.style.color = 'var(--success)';
+            statusEl.textContent = '✅ Installed — re-running Preview & Validate…';
+            await showPreview();
+        } else {
+            statusEl.style.color = 'var(--danger)';
+            var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
+            statusEl.textContent = '❌ ' + (msg || 'Install failed.');
+            btn.disabled = false;
+        }
+    } catch (e) {
+        statusEl.style.color = 'var(--danger)';
+        statusEl.textContent = '❌ ' + e.message;
+        btn.disabled = false;
     }
 }
 function submitForm() {

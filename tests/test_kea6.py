@@ -265,7 +265,10 @@ class TestLease6HistoryMigration:
 
 class FakeSSHClient:
     """Stand-in for paramiko.SSHClient that records exec_command calls and
-    returns scripted stdout/stderr per call, in order."""
+    returns scripted stdout/stderr per call, in order. Each response is
+    (out, err) or (out, err, exit_status) — exit_status defaults to 0
+    when omitted, for the (large majority of) existing tests that only
+    care about stdout content."""
 
     def __init__(self, responses):
         self._responses = list(responses)
@@ -274,14 +277,28 @@ class FakeSSHClient:
 
     def exec_command(self, cmd):
         self.calls.append(cmd)
-        out, err = self._responses.pop(0) if self._responses else ("", "")
+        resp = self._responses.pop(0) if self._responses else ("", "")
+        if len(resp) == 3:
+            out, err, exit_status = resp
+        else:
+            out, err = resp
+            exit_status = 0
+
+        class _Channel:
+            def __init__(self, status):
+                self._status = status
+            def recv_exit_status(self):
+                return self._status
 
         class _Stream:
-            def __init__(self, text):
+            def __init__(self, text, channel=None):
                 self._text = text
+                self.channel = channel
             def read(self):
                 return self._text.encode()
-        return None, _Stream(out), _Stream(err)
+
+        channel = _Channel(exit_status)
+        return None, _Stream(out, channel), _Stream(err, channel)
 
     def close(self):
         self.closed = True
@@ -2326,6 +2343,219 @@ class TestAuthorKeaConfigPreviewRoute:
         data = resp.get_json()
         assert data["servers"][0]["ok"] is True
         assert len(fake_ssh.calls) == 1
+
+
+# ── Kea binary detection & install (v5.1.2) ──────────────────────────────────
+
+class TestDetectInstalledKeaServices:
+
+    def test_both_present(self):
+        from jen.services.kea_authoring import detect_installed_kea_services
+        ssh = FakeSSHClient([("/usr/sbin/kea-dhcp4\n/usr/sbin/kea-dhcp6\n", "")])
+        result = detect_installed_kea_services(ssh)
+        assert result == {"dhcp4": True, "dhcp6": True}
+
+    def test_only_dhcp4_present(self):
+        from jen.services.kea_authoring import detect_installed_kea_services
+        ssh = FakeSSHClient([("/usr/sbin/kea-dhcp4\n", "")])
+        result = detect_installed_kea_services(ssh)
+        assert result == {"dhcp4": True, "dhcp6": False}
+
+    def test_neither_present(self):
+        from jen.services.kea_authoring import detect_installed_kea_services
+        ssh = FakeSSHClient([("", "")])
+        result = detect_installed_kea_services(ssh)
+        assert result == {"dhcp4": False, "dhcp6": False}
+
+
+class TestInstallKeaService:
+
+    def test_success_returns_ok_and_tail_of_output(self):
+        from jen.services.kea_authoring import install_kea_service
+        output = "\n".join([f"line {i}" for i in range(30)]) + "\nSetting up kea-dhcp6-server ...\n"
+        ssh = FakeSSHClient([(output, "", 0)])
+        ok, tail = install_kea_service(ssh, "dhcp6")
+        assert ok is True
+        assert "Setting up kea-dhcp6-server" in tail
+        # Tail is capped, not the full (potentially huge) apt output.
+        assert len(tail.splitlines()) <= 15
+
+    def test_failure_returns_ok_false(self):
+        from jen.services.kea_authoring import install_kea_service
+        ssh = FakeSSHClient([("E: Unable to locate package kea-dhcp6-server", "", 100)])
+        ok, tail = install_kea_service(ssh, "dhcp6")
+        assert ok is False
+        assert "Unable to locate package" in tail
+
+    def test_ssh_exception_returns_ok_false_not_raise(self):
+        from jen.services.kea_authoring import install_kea_service
+        class BrokenSSH:
+            def exec_command(self, cmd):
+                raise RuntimeError("connection reset")
+        ok, tail = install_kea_service(BrokenSSH(), "dhcp6")
+        assert ok is False
+        assert "connection reset" in tail
+
+    def test_installs_correct_package_name_per_service(self):
+        from jen.services.kea_authoring import install_kea_service
+        ssh4 = FakeSSHClient([("", "", 0)])
+        ssh6 = FakeSSHClient([("", "", 0)])
+        install_kea_service(ssh4, "dhcp4")
+        install_kea_service(ssh6, "dhcp6")
+        assert "kea-dhcp4-server" in ssh4.calls[0]
+        assert "kea-dhcp6-server" in ssh6.calls[0]
+        assert "kea-dhcp6-server" not in ssh4.calls[0]
+
+
+class TestMissingBinaryScriptHandling:
+    """The actual bug report: a missing kea-dhcp6 binary must never leak
+    a raw Python traceback through the SSH output — it should produce a
+    clean 'missingbinary:kea-dhcp6' sentinel instead."""
+
+    def test_authoring_script_catches_missing_binary(self):
+        from jen.services.kea_authoring import render_author_config_script
+        script = render_author_config_script("dhcp6", "/etc/kea/kea-dhcp6.conf",
+                                              {"Dhcp6": {}}, allow_overwrite=False, dry_run=True)
+        assert "except FileNotFoundError:" in script
+        assert "missingbinary:kea-dhcp6" in script
+        # The try/except must wrap the actual subprocess.run call, not
+        # just appear somewhere in the script text.
+        assert "try:\n    result = subprocess.run" in script
+
+    def test_v6_subnet_patch_script_catches_missing_binary(self):
+        from jen.services.kea6 import build_subnet6_patch_script
+        script = build_subnet6_patch_script(
+            1, "/etc/kea/kea-dhcp6.conf", "2001:db8::10-2001:db8::20", [],
+            "", "", "", "", "", dry_run=True,
+        )
+        assert "except FileNotFoundError:" in script
+        assert "missingbinary:kea-dhcp6" in script
+
+    def test_v4_subnet_patch_script_catches_missing_binary(self):
+        import jen.routes.subnets as subnets_module
+        script = subnets_module._build_subnet_patch_script(
+            1, "/etc/kea/kea-dhcp4.conf", "192.168.1.10-192.168.1.20", [],
+            "", "", "", "", "", dry_run=True,
+        )
+        assert "except FileNotFoundError:" in script
+        assert "missingbinary:kea-dhcp4" in script
+
+    def test_all_three_generated_scripts_remain_valid_python(self):
+        """Guard against the fix itself introducing a syntax error into
+        the script that actually runs on the remote Kea server."""
+        import ast
+        from jen.services.kea_authoring import render_author_config_script
+        from jen.services.kea6 import build_subnet6_patch_script
+        import jen.routes.subnets as subnets_module
+
+        scripts = [
+            render_author_config_script("dhcp6", "/x", {"Dhcp6": {}}, False, True),
+            render_author_config_script("dhcp4", "/x", {"Dhcp4": {}}, False, True),
+            build_subnet6_patch_script(1, "/x", "", [], "", "", "", "", "", dry_run=True),
+            subnets_module._build_subnet_patch_script(1, "/x", "", [], "", "", "", "", "", dry_run=True),
+        ]
+        for script in scripts:
+            ast.parse(script)  # raises SyntaxError if invalid
+
+
+class TestCheckKeaBinariesRoute:
+
+    def test_requires_superadmin(self, client, db):
+        from tests.conftest import restricted_client
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        resp = c.post("/settings/infrastructure/check-kea-binaries", follow_redirects=False)
+        assert resp.status_code == 302
+
+    def test_reports_per_server_status(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        import jen.services.kea6 as kea6_module
+        ssh = FakeSSHClient([("/usr/sbin/kea-dhcp4\n", "")])
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: ssh)
+        resp = logged_in_client.post("/settings/infrastructure/check-kea-binaries")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["servers"][0]["dhcp4"] is True
+        assert data["servers"][0]["dhcp6"] is False
+
+    def test_skips_servers_without_ssh(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "no-ssh", "ssh_host": ""}])
+        resp = logged_in_client.post("/settings/infrastructure/check-kea-binaries")
+        assert resp.status_code == 200
+        assert resp.get_json()["servers"] == []
+
+    def test_connection_failure_reported_not_raised(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "unreachable", "ssh_host": "9.9.9.9"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        import jen.services.kea6 as kea6_module
+        def fail_connect(s):
+            raise TimeoutError("no route to host")
+        monkeypatch.setattr(kea6_module, "_connect_ssh", fail_connect)
+        resp = logged_in_client.post("/settings/infrastructure/check-kea-binaries")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["servers"][0]["ok"] is False
+        assert "no route to host" in data["servers"][0]["error"]
+
+
+class TestInstallKeaBinaryRoute:
+
+    def test_requires_superadmin(self, client, db):
+        from tests.conftest import restricted_client
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        resp = c.post("/settings/infrastructure/install-kea-binary/dhcp6", follow_redirects=False)
+        assert resp.status_code == 302
+
+    def test_invalid_service_rejected(self, logged_in_client):
+        resp = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp5")
+        assert resp.status_code == 400
+
+    def test_successful_install(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        import jen.services.kea6 as kea6_module
+        ssh = FakeSSHClient([("Setting up kea-dhcp6-server ...", "", 0)])
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: ssh)
+        resp = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp6")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["servers"][0]["ok"] is True
+
+    def test_failed_install_reported(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        import jen.services.kea6 as kea6_module
+        ssh = FakeSSHClient([("E: Unable to locate package", "", 100)])
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: ssh)
+        resp = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp6")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is False
+        assert data["servers"][0]["ok"] is False
+
+
+class TestAuthorKeaPreviewMissingBinary:
+
+    def test_preview_surfaces_missing_binary_cleanly(self, logged_in_client, monkeypatch):
+        """The exact scenario from the bug report: kea-dhcp6 not
+        installed must produce a clean, structured response — never a
+        raw traceback string reaching the browser."""
+        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        import jen.services.kea6 as kea6_module
+        fake_ssh = FakeSSHClient([("missingbinary:kea-dhcp6", "")])
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6/preview", data={
+            "interfaces": "eth0", "control_socket": "/run/kea6.sock",
+            "db_host": "h", "db_user": "u", "db_name": "kea",
+            "subnets": "1 = V6LAN, 2001:db8::/64",
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["servers"][0]["missing_binary"] == "kea-dhcp6"
+        assert data["servers"][0]["ok"] is False
+        assert "Traceback" not in json.dumps(data)
 
 
 class TestAuthorKeaConfigPostRoute:

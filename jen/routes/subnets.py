@@ -294,10 +294,15 @@ with open(tmp, 'w') as f:
     json.dump(cfg, f, indent=2)
 
 # Run kea-dhcp4 -t against the temp file
-result = subprocess.run(
-    ['kea-dhcp4', '-t', tmp],
-    capture_output=True, text=True
-)
+try:
+    result = subprocess.run(
+        ['kea-dhcp4', '-t', tmp],
+        capture_output=True, text=True
+    )
+except FileNotFoundError:
+    os.unlink(tmp)
+    print('missingbinary:kea-dhcp4')
+    sys.exit(1)
 combined = result.stdout + result.stderr
 
 if result.returncode != 0 or 'ERROR' in combined:
@@ -512,6 +517,9 @@ print('ok')
                 results.append(f"✅ {server.get('name', server['ssh_host'])}: subnet {new_id} created and Kea restarted")
             elif out == "idexists":
                 errors.append(f"❌ {server.get('name', server['ssh_host'])}: subnet ID {new_id} already exists on this server")
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again.")
             elif out.startswith("testerror:"):
                 error_detail = out[len("testerror:"):]
                 errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
@@ -648,6 +656,9 @@ print('ok')
                 results.append(f"✅ {server.get('name', server['ssh_host'])}: subnet {subnet_id} removed and Kea restarted")
             elif out == "notfound":
                 results.append(f"ℹ️ {server.get('name', server['ssh_host'])}: subnet {subnet_id} was not in Kea's config")
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again.")
             elif out.startswith("testerror:"):
                 error_detail = out[len("testerror:"):]
                 errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
@@ -862,6 +873,10 @@ def edit_subnet_preview(subnet_id):
                 server_results.append({"name": name, "ok": True, "message": "Config test passed"})
             elif out == "nochange":
                 server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                server_results.append({"name": name, "ok": False, "missing_binary": binary,
+                                       "message": f"{binary} is not installed on this server."})
             elif out.startswith("testerror:"):
                 server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
             else:
@@ -944,6 +959,9 @@ def edit_subnet_post(subnet_id):
                 )
                 rs.read()
                 results.append(f"✅ {server.get('name', server['ssh_host'])}: config validated, updated and restarted")
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again.")
             elif out.startswith("testerror:"):
                 error_detail = out[len("testerror:"):]
                 errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")
@@ -1130,6 +1148,10 @@ def edit_subnet6_preview(subnet_id):
                 server_results.append({"name": name, "ok": True, "message": "Config test passed"})
             elif out == "nochange":
                 server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                server_results.append({"name": name, "ok": False, "missing_binary": binary,
+                                       "message": f"{binary} is not installed on this server."})
             elif out.startswith("testerror:"):
                 server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
             else:
@@ -1180,6 +1202,9 @@ def edit_subnet6_post(subnet_id):
                 # same fallback the v4 restart and the Phase 1 toggle use).
                 out2, err2 = __kea6._dual_name_systemctl(ssh, "restart")
                 results.append(f"✅ {server.get('name', server['ssh_host'])}: config validated, updated and restarted")
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again.")
             elif out.startswith("testerror:"):
                 error_detail = out[len("testerror:"):]
                 errors.append(f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}")

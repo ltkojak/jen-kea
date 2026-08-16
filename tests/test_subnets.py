@@ -179,10 +179,15 @@ with open(tmp, 'w') as f:
     json.dump(cfg, f, indent=2)
 
 # Run kea-dhcp4 -t against the temp file
-result = subprocess.run(
-    ['kea-dhcp4', '-t', tmp],
-    capture_output=True, text=True
-)
+try:
+    result = subprocess.run(
+        ['kea-dhcp4', '-t', tmp],
+        capture_output=True, text=True
+    )
+except FileNotFoundError:
+    os.unlink(tmp)
+    print('missingbinary:kea-dhcp4')
+    sys.exit(1)
 combined = result.stdout + result.stderr
 
 if result.returncode != 0 or 'ERROR' in combined:

@@ -874,6 +874,12 @@ def author_kea_config_preview(service):
                 ssh.close()
             if out == "preview-ok":
                 server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                server_results.append({
+                    "name": name, "ok": False, "missing_binary": binary,
+                    "message": f"{binary} is not installed on this server.",
+                })
             elif out.startswith("testerror:"):
                 server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
             else:
@@ -921,6 +927,9 @@ def author_kea_config_post(service):
                 results.append(f"✅ {name}: {conf_path} written. Enable/restart the service to use it.")
             elif out == "exists":
                 errors.append(f"❌ {name}: {conf_path} already exists — check \"overwrite\" to replace it.")
+            elif out.startswith("missingbinary:"):
+                binary = out[len("missingbinary:"):]
+                errors.append(f"❌ {name}: {binary} is not installed on this server — install it and try again.")
             elif out.startswith("testerror:"):
                 errors.append(f"❌ {name}: config test failed, nothing written. Error: {out[len('testerror:'):]}")
             else:
@@ -950,6 +959,71 @@ def author_kea_config_post(service):
         flash(e, "error")
     __user.audit("AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(results)+len(errors)}")
     return redirect(url_for('settings.settings_infrastructure'))
+
+
+@bp.route("/settings/infrastructure/check-kea-binaries", methods=["POST"])
+@login_required
+@_superadmin_required
+def check_kea_binaries():
+    """
+    Whether kea-dhcp4/kea-dhcp6 are actually installed on each
+    configured server — for both protocols, checked together, since a
+    reasonable next question after "why did dhcp6 fail" is "is dhcp4
+    actually fine, or was I wrong about that too." A manual check
+    (button-triggered), not run automatically on every Settings page
+    load — an SSH round trip per server isn't something every visitor
+    to this page should pay for.
+    """
+    results = []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            ssh = __kea6._connect_ssh(server)
+            try:
+                installed = __authoring.detect_installed_kea_services(ssh)
+            finally:
+                ssh.close()
+            results.append({"name": name, "ok": True, **installed})
+        except Exception as e:
+            results.append({"name": name, "ok": False, "error": str(e)})
+    return jsonify({"servers": results})
+
+
+@bp.route("/settings/infrastructure/install-kea-binary/<service>", methods=["POST"])
+@login_required
+@_superadmin_required
+def install_kea_binary(service):
+    """
+    Installs kea-{dhcp4,dhcp6}-server via apt on every configured
+    server with SSH set up. Superadmin only — this runs a real
+    system-level package install with sudo, a bigger blast radius than
+    anything else reachable from this page short of the config-authoring
+    write itself.
+    """
+    if service not in ("dhcp4", "dhcp6"):
+        return jsonify({"ok": False, "error": "Invalid service."}), 400
+
+    results = []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            ssh = __kea6._connect_ssh(server)
+            try:
+                ok, output = __authoring.install_kea_service(ssh, service)
+            finally:
+                ssh.close()
+            results.append({"name": name, "ok": ok, "output": output})
+        except Exception as e:
+            results.append({"name": name, "ok": False, "output": str(e)})
+
+    all_ok = bool(results) and all(r["ok"] for r in results)
+    __user.audit("INSTALL_KEA_BINARY", service,
+                 f"all_ok={all_ok} servers={len(results)}")
+    return jsonify({"ok": all_ok, "servers": results})
 
 
 @bp.route("/settings/infrastructure/save-jen-db", methods=["POST"])

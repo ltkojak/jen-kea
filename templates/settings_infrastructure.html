@@ -186,6 +186,83 @@ function startUpdate(evt) {
 })();
 </script>
 
+{% if current_user.role == 'superadmin' %}
+<!-- Kea package install status (v5.1.2) — for both dhcp4 and dhcp6, since
+     a missing dhcp6 binary raises the same question about dhcp4. Manual
+     "Check" button rather than run on every page load, to avoid an SSH
+     round trip per server on every visit. -->
+<div class="card">
+    <div class="card-header"><span class="card-title">📦 Kea Package Status</span></div>
+    <div class="form-hint" style="margin-bottom:12px;">Confirms the kea-dhcp4-server / kea-dhcp6-server packages are actually installed on each configured server — separate from whether Jen can reach the Control Agent API.</div>
+    <button type="button" class="btn btn-sm btn-secondary" id="check-kea-pkgs-btn" onclick="checkKeaPackages()">🔍 Check Installation</button>
+    <div id="kea-pkgs-results" style="margin-top:12px;font-size:13px;"></div>
+</div>
+
+<script>
+async function checkKeaPackages() {
+    var btn = document.getElementById('check-kea-pkgs-btn');
+    var resultsDiv = document.getElementById('kea-pkgs-results');
+    btn.disabled = true;
+    resultsDiv.innerHTML = '<span style="color:var(--text-muted);">Checking…</span>';
+    try {
+        var resp = await fetch('/settings/infrastructure/check-kea-binaries', {
+            method: 'POST',
+            headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
+        });
+        var data = await resp.json();
+        if (!data.servers || data.servers.length === 0) {
+            resultsDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured.</span>';
+            btn.disabled = false;
+            return;
+        }
+        resultsDiv.innerHTML = data.servers.map(function(s) {
+            if (!s.ok) {
+                return '<div style="color:var(--danger);">❌ <strong>' + s.name + ':</strong> ' + s.error + '</div>';
+            }
+            var row = '<div style="margin-bottom:6px;"><strong>' + s.name + ':</strong> ';
+            row += s.dhcp4 ? '<span style="color:var(--success);">✅ kea-dhcp4</span>' :
+                '<span style="color:var(--danger);">❌ kea-dhcp4 <button type="button" class="btn btn-sm btn-secondary" style="margin-left:4px;" onclick="installKeaPkg(this, \'dhcp4\')">Install</button></span>';
+            row += '&nbsp;&nbsp;';
+            row += s.dhcp6 ? '<span style="color:var(--success);">✅ kea-dhcp6</span>' :
+                '<span style="color:var(--danger);">❌ kea-dhcp6 <button type="button" class="btn btn-sm btn-secondary" style="margin-left:4px;" onclick="installKeaPkg(this, \'dhcp6\')">Install</button></span>';
+            row += '<span class="pkg-install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span></div>';
+            return row;
+        }).join('');
+    } catch (e) {
+        resultsDiv.innerHTML = '<span style="color:var(--danger);">❌ ' + e.message + '</span>';
+    }
+    btn.disabled = false;
+}
+
+async function installKeaPkg(btn, service) {
+    var statusEl = btn.parentElement.nextElementSibling;
+    btn.disabled = true;
+    statusEl.textContent = 'Installing kea-' + service + '-server — this can take a minute…';
+    try {
+        var resp = await fetch('/settings/infrastructure/install-kea-binary/' + service, {
+            method: 'POST',
+            headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
+        });
+        var data = await resp.json();
+        if (data.ok) {
+            statusEl.style.color = 'var(--success)';
+            statusEl.textContent = '✅ Installed';
+            await checkKeaPackages();
+        } else {
+            statusEl.style.color = 'var(--danger)';
+            var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
+            statusEl.textContent = '❌ ' + (msg || 'Install failed.');
+            btn.disabled = false;
+        }
+    } catch (e) {
+        statusEl.style.color = 'var(--danger)';
+        statusEl.textContent = '❌ ' + e.message;
+        btn.disabled = false;
+    }
+}
+</script>
+{% endif %}
+
 <!-- Kea API -->
 <div class="card">
     <div class="card-header"><span class="card-title">🔌 Kea Control Agent API</span>

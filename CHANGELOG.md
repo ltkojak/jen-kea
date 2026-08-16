@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.2] - 2026-08-17
+
+### Kea package detection and one-click install
+
+A missing `kea-dhcp4`/`kea-dhcp6` binary previously surfaced as a raw
+Python traceback in the config-authoring and subnet-edit preview
+panels — genuinely broken output, not just unpolished. Fixed, and
+turned into a real capability: Jen can now tell you whether the Kea
+packages are actually installed and install them for you.
+
+### What changed for users
+
+- Settings → Infrastructure has a new "Kea Package Status" card
+  (superadmin only) — "Check Installation" reports whether
+  `kea-dhcp4-server`/`kea-dhcp6-server` are present on each configured
+  server, with an inline "Install" button for anything missing.
+- The "Author a starting config" wizard now catches a missing binary
+  during Preview & Validate and offers to install it right there,
+  re-running validation automatically afterward.
+- The same clean handling was applied to the existing v4/v6 subnet-edit
+  preview and apply flows, which had the identical latent bug.
+
+### What changed under the hood
+
+- `jen/services/kea_authoring.py`: `detect_installed_kea_services()`
+  (checks both protocols together via `which`) and
+  `install_kea_service()` (`apt-get update && apt-get install -y
+  kea-{service}-server` over SSH, targeting Jen's documented Ubuntu
+  24.04 platform).
+- All three script generators that shell out to `kea-dhcp4/6 -t`
+  (`kea_authoring.py`, `kea6.py`'s subnet patch script, and
+  `subnets.py`'s v4 equivalent) now catch `FileNotFoundError` around
+  the `subprocess.run()` call and emit a clean `missingbinary:<name>`
+  sentinel instead of letting the traceback reach the browser.
+- Two new routes: `POST /settings/infrastructure/check-kea-binaries`
+  and `POST /settings/infrastructure/install-kea-binary/<service>`,
+  both superadmin-gated.
+- 20 new tests, including one that confirms all three generated remote
+  scripts remain valid Python after the fix, and one reproducing the
+  exact reported bug (missing binary during config authoring) to
+  confirm the response is now structured JSON, never a traceback.
+
 ## [5.1.1] - 2026-08-17
 
 ### Fix: "Author a starting config" required subnets that had no way to be added
