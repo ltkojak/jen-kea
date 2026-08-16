@@ -1,3 +1,4 @@
+{% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
     <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
@@ -27,26 +28,31 @@
         {% else %}<span class="badge badge-dynamic">● Dynamic</span>{% endif %}
     </td>
     <td data-label="">
-        <div style="display:flex;gap:4px;align-items:center;flex-wrap:nowrap;">
-            {% if current_user.role in ('superadmin','admin') %}
-            <button class="btn-act btn-act-edit edit-btn"
-                data-id="{{ d.id }}" data-mac="{{ d.mac }}"
-                data-name="{{ d.device_name|e if d.device_name else '' }}"
-                data-owner="{{ d.owner|e if d.owner else '' }}"
-                data-notes="{{ d.notes|e if d.notes else '' }}"
-                data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
-                data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}"
-                title="Edit">✏️</button>
-            {% endif %}
-            {% if not d.has_reservation %}
-            <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="btn-act btn-act-pin" title="Create reservation">📌</a>
-            {% endif %}
-            {% if current_user.role in ('superadmin','admin') %}
-            <span class="btn-act-divider"></span>
-            <form method="POST" action="/devices/delete/{{ d.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn-act btn-act-del" title="Remove from inventory">✕</button>
-            </form>
-            {% endif %}
+        <div class="action-menu">
+            <input type="checkbox" id="am-dev-{{ d.id }}" class="action-menu-toggle">
+            <label for="am-dev-{{ d.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
+            <div class="action-menu-dropdown">
+                {% if current_user.role in ('superadmin','admin') %}
+                <button type="button" class="action-menu-item edit-btn"
+                    data-id="{{ d.id }}" data-mac="{{ d.mac }}"
+                    data-name="{{ d.device_name|e if d.device_name else '' }}"
+                    data-owner="{{ d.owner|e if d.owner else '' }}"
+                    data-notes="{{ d.notes|e if d.notes else '' }}"
+                    data-type="{{ d.type_override_key|e if d.type_override_key else '' }}"
+                    data-icon="{{ d.icon_override_key|e if d.icon_override_key else '' }}">{{ icon_edit() }}Edit device</button>
+                {% endif %}
+                {% if d.has_reservation %}
+                <span class="action-menu-item disabled">{{ icon_pin() }}Reservation exists</span>
+                {% else %}
+                <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
+                {% endif %}
+                {% if current_user.role in ('superadmin','admin') %}
+                <div class="action-menu-divider"></div>
+                <form method="POST" action="/devices/delete/{{ d.id }}" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Remove from inventory</button>
+                </form>
+                {% endif %}
+            </div>
         </div>
     </td>
 </tr>

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Alert Settings{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_edit, icon_trash, icon_dots, icon_test %}
 <div class="page-header">
     <h1>🔔 Alert Settings</h1>
     <p>Configure notification channels, alert types, and message templates</p>
@@ -72,16 +73,21 @@ var JEN_CHANNELS = {
                 <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
                 {% endif %}
             </div>
-            <div style="display:flex;gap:6px;">
-                <form method="POST" action="/settings/alerts/test-channel/{{ ch.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-secondary">🧪 Test</button>
-                </form>
-                <button class="btn-act btn-act-edit edit-channel-btn"
-                    data-id="{{ ch.id }}"
-                    onclick="editChannelFromBtn({{ ch.id }})">✏️ Edit</button>
-                <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete this alert channel?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn-act btn-act-del" title="Delete channel">✕</button>
-                </form>
+            <div class="action-menu">
+                <input type="checkbox" id="am-chan-{{ ch.id }}" class="action-menu-toggle">
+                <label for="am-chan-{{ ch.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
+                <div class="action-menu-dropdown">
+                    <form method="POST" action="/settings/alerts/test-channel/{{ ch.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="action-menu-item">{{ icon_test() }}Send test</button>
+                    </form>
+                    <button type="button" class="action-menu-item edit-channel-btn"
+                        data-id="{{ ch.id }}"
+                        onclick="editChannelFromBtn({{ ch.id }})">{{ icon_edit() }}Edit channel</button>
+                    <div class="action-menu-divider"></div>
+                    <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" onsubmit="return false;" data-confirm="Delete this alert channel?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Delete channel</button>
+                    </form>
+                </div>
             </div>
         </div>
         <!-- Alert types this channel handles -->

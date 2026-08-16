@@ -200,6 +200,28 @@
         .nav-avatar-wrap .nav-dropdown-content { min-width:200px; right: 0; left: auto; }
         .nav-avatar { width:32px; height:32px; border-radius:50%; background:linear-gradient(135deg,#0077b6,#00b4d8); color:#fff; font-size:12px; font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; -webkit-tap-highlight-color:transparent; }
 
+        /* Row action menu — same checkbox-toggle mechanism as .nav-dropdown
+           above, so it works identically across browsers with zero JS
+           dependency for the open/close itself (outside-click-to-close and
+           single-menu-open are the only parts that need the small script
+           at the bottom of this file). A single "⋯" trigger per row keeps
+           every row's action column the same fixed width regardless of
+           which actions apply to that row — no icons shifting around when
+           one doesn't apply. */
+        .action-menu { position: relative; display: inline-block; }
+        .action-menu-toggle { display: none; }
+        .action-menu-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius); cursor: pointer; color: var(--text-muted); -webkit-tap-highlight-color: transparent; }
+        .action-menu-btn:hover, .action-menu-toggle:checked ~ .action-menu-btn { background: var(--surface2); color: var(--text); }
+        .action-menu-dropdown { display: none; position: absolute; top: calc(100% + 4px); right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); min-width: 190px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 60; overflow: hidden; }
+        .action-menu-toggle:checked ~ .action-menu-dropdown { display: block; }
+        .action-menu-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; color: var(--text); text-decoration: none; background: none; border: none; width: 100%; text-align: left; cursor: pointer; font-family: inherit; }
+        .action-menu-item:hover { background: var(--surface2); text-decoration: none; }
+        .action-menu-item.disabled { color: var(--text-muted); cursor: default; }
+        .action-menu-item.disabled:hover { background: none; }
+        .action-menu-item.danger { color: var(--danger); }
+        .action-menu-item.danger:hover { background: #2d1215; }
+        .action-menu-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
         /* ── iPad (769–1024px) ── */
         @media (max-width: 1024px) and (min-width: 769px) {
             .hide-tablet { display: none !important; }
@@ -572,6 +594,39 @@ function sortTable(table, col, th) {
         if (!e.target.closest('.nav-dropdown')) {
             var el = document.getElementById('dd-avatar');
             if (el) el.checked = false;
+        }
+    });
+
+    // Row action menus (⋯ buttons) — close on outside click, close on
+    // Escape, and only one open at a time. The open/close toggle itself
+    // is pure CSS (checkbox + label, same mechanism as .nav-dropdown
+    // above); this only handles the parts CSS alone can't do.
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.action-menu')) {
+            document.querySelectorAll('.action-menu-toggle:checked').forEach(function(cb) { cb.checked = false; });
+        }
+    });
+    document.addEventListener('change', function(e) {
+        if (e.target.classList.contains('action-menu-toggle') && e.target.checked) {
+            document.querySelectorAll('.action-menu-toggle').forEach(function(cb) {
+                if (cb !== e.target) cb.checked = false;
+            });
+        }
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.action-menu-toggle:checked').forEach(function(cb) { cb.checked = false; });
+        }
+    });
+    // Close the menu itself once an item inside it is actually clicked
+    // (edit opens a modal, delete opens the confirm dialog — either way
+    // the dropdown shouldn't stay open behind it).
+    document.addEventListener('click', function(e) {
+        var item = e.target.closest('.action-menu-item');
+        if (item) {
+            var menu = item.closest('.action-menu');
+            var toggle = menu && menu.querySelector('.action-menu-toggle');
+            if (toggle) toggle.checked = false;
         }
     });
 

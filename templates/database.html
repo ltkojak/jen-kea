@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Database Management{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_download, icon_trash, icon_dots %}
 
 {% set active_tab = request.args.get('tab', 'export') %}
 
@@ -172,10 +173,17 @@
             <td style="color:var(--text-muted);font-size:12px;">{{ b.size_kb }} KB</td>
             <td style="font-size:11px;color:var(--text-muted);">{{ b.tables | join(', ') if b.tables else '—' }}</td>
             <td style="white-space:nowrap;">
-                <a href="/database/backup/download/{{ b.filename }}" class="btn-act btn-act-edit" title="Download">⬇️</a>
-                <form method="POST" action="/database/backup/delete/{{ b.filename }}" style="display:inline;" onsubmit="return false;" data-confirm="Delete backup {{ b.filename }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button class="btn-act btn-act-del" title="Delete backup">✕</button>
-                </form>
+                <div class="action-menu">
+                    <input type="checkbox" id="am-backup-{{ loop.index }}" class="action-menu-toggle">
+                    <label for="am-backup-{{ loop.index }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
+                    <div class="action-menu-dropdown">
+                        <a href="/database/backup/download/{{ b.filename }}" class="action-menu-item">{{ icon_download() }}Download</a>
+                        <div class="action-menu-divider"></div>
+                        <form method="POST" action="/database/backup/delete/{{ b.filename }}" onsubmit="return false;" data-confirm="Delete backup {{ b.filename }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Delete backup</button>
+                        </form>
+                    </div>
+                </div>
             </td>
         </tr>
         {% endfor %}

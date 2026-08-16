@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Brand Icons{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_trash %}
 <div class="page-header">
     <h1>🎨 Brand Icons</h1>
     <p>Manage icons used in the Device Inventory. Upload custom SVGs to override bundled icons or add new ones.</p>
@@ -44,7 +45,7 @@
             <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
             <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del"
-                        onclick="jenConfirm('Delete custom icon {{ icon.name }}?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">✕ Remove</button>
+                        onclick="jenConfirm('Delete custom icon {{ icon.name }}?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">{{ icon_trash() }} Remove</button>
             </form>
         </div>
         {% endfor %}

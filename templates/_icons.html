@@ -1,0 +1,19 @@
+{# templates/_icons.html — small inline SVG icons, hand-authored.
+   Deliberately not a webfont or external icon set: this project just
+   fixed the Reports page for exactly the failure mode a CDN-hosted
+   icon font would reintroduce (silent breakage with no outbound
+   internet). Inline SVG has zero network dependency either way. #}
+
+{% macro icon_edit() %}<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 3.5l3 3L6 17l-4 1 1-4L13.5 3.5z"/></svg>{% endmacro %}
+
+{% macro icon_trash() %}<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2m-7 0l1 11a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-11"/><path d="M8.5 9v5M11.5 9v5"/></svg>{% endmacro %}
+
+{% macro icon_pin() %}<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2a5 5 0 0 1 5 5c0 4-5 11-5 11S5 11 5 7a5 5 0 0 1 5-5z"/><circle cx="10" cy="7" r="1.8"/></svg>{% endmacro %}
+
+{% macro icon_dots() %}<svg viewBox="0 0 20 20" width="17" height="17" fill="currentColor" aria-hidden="true"><circle cx="10" cy="4" r="1.6"/><circle cx="10" cy="10" r="1.6"/><circle cx="10" cy="16" r="1.6"/></svg>{% endmacro %}
+
+{% macro icon_download() %}<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10m0 0l-4-4m4 4l4-4"/><path d="M4 15v1a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-1"/></svg>{% endmacro %}
+
+{% macro icon_test() %}<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3h4M8.5 3v4.5L5 14a1.5 1.5 0 0 0 1.3 2.2h7.4A1.5 1.5 0 0 0 15 14l-3.5-6.5V3"/><path d="M6.5 12h7"/></svg>{% endmacro %}
+
+{% macro icon_pause() %}<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M7 4v12M13 4v12"/></svg>{% endmacro %}

@@ -1,6 +1,7 @@
 {# Partial template — rendered for both initial page load and HTMX swaps #}
 {# Used by: reservations.html (full page) and reservations.reservation_row (HTMX) #}
 {% from '_device_badge.html' import device_badge %}
+{% from '_icons.html' import icon_edit, icon_trash, icon_dots %}
 <tr id="reservation-{{ h.host_id }}">
     <td data-label="IP" class="mono">{{ h.ip }}</td>
     <td data-label="Hostname" style="white-space:nowrap;">
@@ -28,16 +29,19 @@
     <td data-label="Notes" class="hide-tablet" style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
     {% if current_user.role in ('superadmin','admin') %}
     <td data-label="">
-        <div style="display:flex;gap:4px;align-items:center;justify-content:flex-end;">
-        <a href="/reservations/edit/{{ h.host_id }}" class="btn-act btn-act-edit" title="Edit">✏️</a>
-        <span class="btn-act-divider"></span>
-        <button class="btn-act btn-act-del"
-                title="Delete"
-                hx-post="/reservations/delete/{{ h.host_id }}"
-                hx-target="#reservation-{{ h.host_id }}"
-                hx-swap="outerHTML swap:300ms"
-                hx-confirm="Delete reservation for {{ h.ip }}?"
-                hx-indicator="#reservation-{{ h.host_id }}">✕</button>
+        <div class="action-menu">
+            <input type="checkbox" id="am-res-{{ h.host_id }}" class="action-menu-toggle">
+            <label for="am-res-{{ h.host_id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
+            <div class="action-menu-dropdown">
+                <a href="/reservations/edit/{{ h.host_id }}" class="action-menu-item">{{ icon_edit() }}Edit reservation</a>
+                <div class="action-menu-divider"></div>
+                <button type="button" class="action-menu-item danger"
+                        hx-post="/reservations/delete/{{ h.host_id }}"
+                        hx-target="#reservation-{{ h.host_id }}"
+                        hx-swap="outerHTML swap:300ms"
+                        hx-confirm="Delete reservation for {{ h.ip }}?"
+                        hx-indicator="#reservation-{{ h.host_id }}">{{ icon_trash() }}Delete reservation</button>
+            </div>
         </div>
     </td>
     {% endif %}

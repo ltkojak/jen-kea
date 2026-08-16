@@ -4,35 +4,72 @@
 
 ## [5.1.3] - 2026-08-17
 
-### Reservation active/inactive status
+### Reservation active/inactive status, Reports fix, unified action menus
 
-The Reservations page now shows whether each reserved IP is actually
-in use right now — the same signal Windows DHCP shows on its
-reservation list — instead of just listing what's configured with no
-indication of whether a device has ever picked it up.
+Three related changes: the Reservations page now shows whether each
+reserved IP is actually in use right now; the Reports page's charts,
+which were silently failing to render, are fixed; and every page with
+a row of action icons (edit/reserve/delete and similar) now uses one
+consistent "⋯" action-menu component instead of the old fixed icon
+row, whose width and icon set used to shift depending on which
+actions applied to a given row.
 
 ### What changed for users
 
-- A new Status column on the v4 Reservations page: **● Active** (the
-  reserved IP currently has a live, non-expired lease bound to it),
-  **○ Inactive** (no current lease at that address), or **⚠️ Conflict**
+- **Reservations**: a new Status column — **● Active** (the reserved
+  IP currently has a live, non-expired lease bound to it), **○
+  Inactive** (no current lease at that address), or **⚠️ Conflict**
   (the address is currently leased, but to a different MAC than the
-  reservation itself — worth knowing about, distinct from a normal
-  active reservation).
-- A new Status filter (All / Active only / Inactive only) alongside
-  the existing subnet and search filters.
+  reservation itself). A new Status filter (All / Active only /
+  Inactive only) alongside the existing subnet and search filters.
+- **Reports**: charts render again. Root cause was Chart.js loading
+  from an external CDN at runtime with no error shown on failure —
+  fixed by vendoring it locally, matching the same convention already
+  used for htmx.
+- **Unified row actions**: Devices, Leases, Reservations, Database
+  (backups), Settings → Alerts, and Settings → API Keys all now show a
+  single "⋯" button per row that opens a dropdown of the actions that
+  apply to that row. Rows that used to lose an icon or shift width
+  depending on state — a device that already has a reservation, a
+  lease already tied to a reservation, an API key that's already
+  revoked — now show an explicit, always-present entry for that state
+  (e.g. "Reservation exists", greyed out) instead of silently omitting
+  the icon. A handful of other pages (Infrastructure's extra-server
+  rows, the nav logo remover, plugin uninstall, saved-search delete,
+  custom icon delete) keep a single button rather than a dropdown,
+  since they have one incidental action next to a primary labeled
+  button and no shifting-row problem to fix — those were simply
+  re-skinned with the same icon set for visual consistency.
+- Icons switched from emoji to small inline SVGs everywhere — no
+  external icon font, no CDN dependency.
 
 ### What changed under the hood
 
 - `jen/routes/reservations.py`: the v4 reservation query gained a
   `LEFT JOIN lease4` (matched on address, restricted to `state=0 AND
   expire > NOW()`) to compute active/conflict status per row, plus an
-  `EXISTS`/`NOT EXISTS` clause for the status filter so it composes
-  correctly with pagination and the existing subnet/search filters.
-- 8 new tests against real inserted `hosts`/`lease4` rows, covering the
-  active/inactive/conflict cases, that an expired or released lease
-  doesn't count as active, and that the status filter actually narrows
-  results.
+  `EXISTS`/`NOT EXISTS` clause for the status filter.
+- `static/js/chart.umd.min.js` (new) — Chart.js 4.4.1, vendored.
+  `templates/reports.html` now loads it locally instead of from
+  cdnjs.cloudflare.com.
+- `templates/_icons.html` (new) — hand-authored inline SVG macros
+  (edit, trash, pin, dots, download, test, pause).
+- `templates/base.html` — new `.action-menu` CSS component (same
+  checkbox-toggle mechanism already used for the nav avatar dropdown,
+  so open/close works without JS; a small script handles outside-click
+  close, Escape, single-menu-open, and closing the menu when an item
+  inside it is clicked).
+- `_device_rows.html`, `_lease_rows.html`, `_reservation_row.html`,
+  `database.html`, `settings_alerts.html`, `api_keys.html` rewritten
+  to use the new pattern.
+- 30 new tests: 8 for reservation status (active/inactive/conflict,
+  expired/released leases not counting as active, filter correctness),
+  7 for the Reports fix (no CDN reference remains, the vendored file
+  loads and is served, real `lease_history` data renders correctly),
+  and 15 across the action-menu conversions (Devices, Leases, and the
+  Settings pages), specifically covering the conditional-item-count
+  cases — a reserved device, a lease with a reservation, a revoked API
+  key — that the redesign exists to fix.
 
 ## [5.1.2] - 2026-08-17
 

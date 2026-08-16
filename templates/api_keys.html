@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}API Keys{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_trash, icon_pause, icon_dots %}
 <div class="page-header">
     <h1>🔑 API Keys</h1>
     <p>Manage read-only API keys for integrations with Home Assistant, Zabbix, and other tools.</p>
@@ -64,14 +65,21 @@
                 {% endif %}
             </td>
             <td style="display:flex;gap:6px;">
-                {% if k.active %}
-                <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-sm btn-secondary" onclick="jenConfirm('Revoke this key? Any integrations using it will stop working.', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">⏸ Revoke</button>
-                </form>
-                {% endif %}
-                <form method="POST" action="/settings/api-keys/delete/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn-act btn-act-del" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">✕</button>
-                </form>
+                <div class="action-menu">
+                    <input type="checkbox" id="am-key-{{ k.id }}" class="action-menu-toggle">
+                    <label for="am-key-{{ k.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
+                    <div class="action-menu-dropdown">
+                        {% if k.active %}
+                        <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="button" class="action-menu-item" onclick="jenConfirm('Revoke this key? Any integrations using it will stop working.', function(){ this.closest('form').submit(); }.bind(this))">{{ icon_pause() }}Revoke key</button>
+                        </form>
+                        <div class="action-menu-divider"></div>
+                        {% endif %}
+                        <form method="POST" action="/settings/api-keys/delete/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="button" class="action-menu-item danger" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form').submit(); }.bind(this))">{{ icon_trash() }}Delete key</button>
+                        </form>
+                    </div>
+                </div>
             </td>
         </tr>
         {% endfor %}

@@ -226,3 +226,105 @@ class TestAuditLog:
                        "ORDER BY created_at DESC LIMIT 1")
             row = cur.fetchone()
         assert row is not None
+
+
+class TestActionMenuUnifiedUI:
+    """v5.1.4 — Settings pages' row actions (alert channels, API keys)
+    converted from the old fixed-icon-row pattern to the same
+    single-⋯-trigger action menu used everywhere else, for a genuinely
+    unified UI rather than converting one page and leaving the rest
+    inconsistent. These two specifically have real conditional item
+    counts per row (a revoked API key has one fewer action than an
+    active one) — the same class of bug the whole redesign started
+    from — so they get direct verification, not just a smoke check."""
+
+    def test_alert_channel_row_shows_all_three_actions(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_channels")
+            cur.execute("""
+                INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
+                VALUES ('email', 'test-channel', 1, '{}', '[]')
+            """)
+        db.commit()
+        resp = logged_in_client.get("/settings/alerts")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert 'class="action-menu"' in body
+        assert "Send test" in body
+        assert "Edit channel" in body
+        assert "Delete channel" in body
+
+    def test_active_api_key_shows_revoke_and_delete(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys")
+            cur.execute("""
+                INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active)
+                VALUES ('active-key', 'hash-active-test', 'jen_abcd', 1, 1)
+            """)
+        db.commit()
+        resp = logged_in_client.get("/settings/api-keys")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert 'class="action-menu"' in body
+        assert "Revoke key" in body
+        assert "Delete key" in body
+
+    def test_revoked_api_key_omits_revoke_but_keeps_same_menu_trigger(self, logged_in_client, db):
+        """The actual fix: a revoked key has one fewer menu item, but
+        the row's trigger/column is identical either way — nothing
+        shifts, unlike the old per-row icon layout."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys")
+            cur.execute("""
+                INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active)
+                VALUES ('revoked-key', 'hash-revoked-test', 'jen_efgh', 1, 0)
+            """)
+        db.commit()
+        resp = logged_in_client.get("/settings/api-keys")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert 'class="action-menu"' in body
+        assert "Revoke key" not in body
+        assert "Delete key" in body
+
+    def test_mixed_active_and_revoked_keys_same_menu_count(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys")
+            cur.execute("""
+                INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active)
+                VALUES ('active-key', 'hash-mix-active', 'jen_ijkl', 1, 1)
+            """)
+            cur.execute("""
+                INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active)
+                VALUES ('revoked-key', 'hash-mix-revoked', 'jen_mnop', 1, 0)
+            """)
+        db.commit()
+        resp = logged_in_client.get("/settings/api-keys")
+        body = resp.data.decode()
+        assert body.count('class="action-menu"') == 2
+
+    def test_no_leftover_old_icon_row_classes_on_converted_pages(self, logged_in_client, db):
+        """The old btn-act-edit/pin/del pattern must genuinely be gone
+        from these two pages' row markup — not just checking the bare
+        substring, since the CSS *rule* for those classes still lives
+        in base.html's shared <style> block (kept for the handful of
+        single-button pages that still use it) and would appear on
+        every page regardless. Check for the class actually being
+        applied to an element instead."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_channels")
+            cur.execute("""
+                INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
+                VALUES ('email', 'leftover-check', 1, '{}', '[]')
+            """)
+            cur.execute("DELETE FROM api_keys")
+            cur.execute("""
+                INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active)
+                VALUES ('leftover-check', 'hash-leftover', 'jen_qrst', 1, 1)
+            """)
+        db.commit()
+        for path in ("/settings/alerts", "/settings/api-keys"):
+            resp = logged_in_client.get(path)
+            assert b'"btn-act-edit' not in resp.data
+            assert b'"btn-act-pin' not in resp.data
+            assert b'"btn-act-del' not in resp.data

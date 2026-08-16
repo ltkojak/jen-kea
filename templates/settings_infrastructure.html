@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Infrastructure Settings{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_trash %}
 <div class="page-header">
     <h1>🖧 Infrastructure Settings</h1>
     <p>Kea API, database connections, SSH, and subnet configuration</p>
@@ -503,7 +504,7 @@ async function installKeaPkg(btn, service) {
     <div class="extra-server-row" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <strong>Server {{ loop.index + 1 }}</strong>
-            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.extra-server-row').remove()" title="Remove">✕</button>
+            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.extra-server-row').remove()" title="Remove">{{ icon_trash() }}</button>
         </div>
         <div class="form-row">
             <div class="form-group">
@@ -745,7 +746,7 @@ function addServerRow() {
     row.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <strong>Server ${count}</strong>
-            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.extra-server-row').remove()" title="Remove">✕</button>
+            <button type="button" class="btn-act btn-act-del" onclick="this.closest('.extra-server-row').remove()" title="Remove"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2m-7 0l1 11a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-11"/><path d="M8.5 9v5M11.5 9v5"/></svg></button>
         </div>
         <div class="form-row">
             <div class="form-group"><label>Server Name</label><input type="text" name="extra_name[]" placeholder="Kea Standby"></div>

@@ -115,3 +115,70 @@ class TestSearch:
         """Empty search query is handled gracefully."""
         r = logged_in_client.get("/search?q=")
         assert r.status_code == 200
+
+
+class TestLeaseRowActionMenu:
+    """v5.1.4 — Lease row actions (reserve/release) converted to the
+    unified action-menu component. A leased device that already has a
+    static reservation shows a different item set (View reservation
+    only) than one that doesn't (Create reservation + Release lease) —
+    the same conditional-item-count case the whole redesign started
+    from — so this is verified directly against real lease4/hosts
+    rows, not just smoke-tested."""
+
+    def test_lease_without_reservation_shows_create_and_release(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("""
+                INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire,
+                    subnet_id, state, hostname)
+                VALUES (INET_ATON('10.10.10.90'), UNHEX('aabbccddee90'), 3600,
+                    DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0, 'no-res-host')
+            """)
+        db.commit()
+        resp = logged_in_client.get("/leases")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert 'class="action-menu"' in body
+        assert "Create reservation" in body
+        assert "Release lease" in body
+        assert "View reservation" not in body
+
+    def test_lease_with_reservation_shows_view_only(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+            cur.execute("""
+                INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire,
+                    subnet_id, state, hostname)
+                VALUES (INET_ATON('10.10.10.91'), UNHEX('aabbccddee91'), 3600,
+                    DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0, 'res-host')
+            """)
+            cur.execute("""
+                INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type,
+                    dhcp4_subnet_id, ipv4_address, hostname)
+                VALUES (UNHEX('aabbccddee91'), 0, 1, INET_ATON('10.10.10.91'), 'res-host')
+            """)
+        db.commit()
+        resp = logged_in_client.get("/leases")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        assert 'class="action-menu"' in body
+        assert "View reservation" in body
+        assert "Create reservation" not in body
+        assert "Release lease" not in body
+
+    def test_no_leftover_old_icon_row_classes(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("""
+                INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire,
+                    subnet_id, state, hostname)
+                VALUES (INET_ATON('10.10.10.92'), UNHEX('aabbccddee92'), 3600,
+                    DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0, 'leftover-check')
+            """)
+        db.commit()
+        resp = logged_in_client.get("/leases")
+        assert b'"btn-act-edit' not in resp.data
+        assert b'"btn-act-pin' not in resp.data
+        assert b'"btn-act-del' not in resp.data

@@ -1,4 +1,5 @@
 {% from '_device_badge.html' import device_badge %}
+{% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
 {% for l in leases %}
 <tr>
     <td data-label="IP" class="mono"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
@@ -12,19 +13,21 @@
     <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire|utcfmt }}</td>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td data-label="">
-        <div style="display:flex;gap:4px;align-items:center;justify-content:flex-end;">
-        {% if l.has_reservation %}
-        <a href="/reservations?search={{ l.mac }}"
-           class="btn-act btn-act-pin" title="Has reservation — view it">📋</a>
-        {% else %}
-        <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}"
-           class="btn-act btn-act-pin" title="Create reservation">📌</a>
-        <span class="btn-act-divider"></span>
-        <form method="POST" action="/leases/release" style="display:inline;" onsubmit="return false;" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="ip" value="{{ l.ip }}">
-            <button type="submit" class="btn-act btn-act-del" title="Release lease">✕</button>
-        </form>
-        {% endif %}
+        <div class="action-menu">
+            <input type="checkbox" id="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-toggle">
+            <label for="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
+            <div class="action-menu-dropdown">
+                {% if l.has_reservation %}
+                <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
+                {% else %}
+                <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
+                <div class="action-menu-divider"></div>
+                <form method="POST" action="/leases/release" onsubmit="return false;" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="ip" value="{{ l.ip }}">
+                    <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Release lease</button>
+                </form>
+                {% endif %}
+            </div>
         </div>
     </td>
     {% endif %}

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Saved Searches{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_trash %}
 <div class="page-header">
     <h1>🔖 Saved Searches & Filters</h1>
     <p>Your saved page filters — accessible from the filter bar on Leases and Reservations pages</p>
@@ -28,7 +29,7 @@
             <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">▶ Load</a>
             <form method="POST" action="/saved-searches/delete/{{ s.id }}" style="display:inline;"
                   onsubmit="return false;" data-confirm="Delete this saved filter?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn-act btn-act-del" title="Delete">✕</button>
+                <button type="submit" class="btn-act btn-act-del" title="Delete">{{ icon_trash() }}</button>
             </form>
         </td>
     </tr>

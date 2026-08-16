@@ -102,14 +102,9 @@
 {% endblock %}
 {% block scripts %}
 {% if data_points > 0 %}
-// Load Chart.js
-(function() {
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
-    script.onload = function() { buildCharts(); };
-    document.head.appendChild(script);
-})();
-
+</script>
+<script src="/static/js/chart.umd.min.js"></script>
+<script>
 const HISTORY = {{ history | tojson }};
 const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
 
@@ -209,5 +204,6 @@ function buildCharts() {
         });
     });
 }
+buildCharts();
 {% endif %}
 {% endblock %}

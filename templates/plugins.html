@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Plugins{% endblock %}
 {% block content %}
+{% from '_icons.html' import icon_trash %}
 
 <div class="page-header">
     <h1>🧩 Plugins</h1>
@@ -78,7 +79,7 @@
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
                           data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin">✕</button>
+                        <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin">{{ icon_trash() }}</button>
                     </form>
                 </div>
             </td>
