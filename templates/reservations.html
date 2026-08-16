@@ -85,6 +85,11 @@ function confirmBulk(action) {
             {% endfor %}
         </select>
         <input type="text" name="search" value="{{ search }}" placeholder="Search IP, hostname, MAC...">
+        <select name="status" title="Whether the reserved IP currently has a live lease">
+            <option value="all"      {% if status_filter == 'all'      %}selected{% endif %}>All statuses</option>
+            <option value="active"   {% if status_filter == 'active'   %}selected{% endif %}>Active only</option>
+            <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>Inactive only</option>
+        </select>
         <select name="per_page" title="Rows per page">
             <option value="all" {% if per_page == 'all' %}selected{% endif %}>Show all</option>
             <option value="50"  {% if per_page == '50'  %}selected{% endif %}>50 per page</option>

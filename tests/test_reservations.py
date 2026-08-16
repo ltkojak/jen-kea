@@ -185,6 +185,138 @@ class TestDeleteReservation:
         assert r.status_code == 200
 
 
+class TestReservationStatus:
+    """v5.1.3 — active/inactive (and conflict) status on the reservations
+    list, matching what Windows DHCP shows: does the reserved IP
+    currently have a live lease bound to it? Uses real hosts/lease4 rows
+    against the real test DB rather than mocking Kea, since this is
+    Jen's own read-side computation, not a Kea API call."""
+
+    def _insert_reservation(self, db, mac_hex="aabbccddee01", ip="10.99.1.10",
+                            hostname="status-test", subnet_id=1):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
+                "dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, %s, INET_ATON(%s), %s)",
+                (mac_hex, subnet_id, ip, hostname),
+            )
+            host_id = cur.lastrowid
+        db.commit()
+        return host_id
+
+    def _insert_lease(self, db, ip, mac_hex, state=0, expire_offset_seconds=3600):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, "
+                "subnet_id, state) VALUES (INET_ATON(%s), UNHEX(%s), 3600, "
+                "DATE_ADD(NOW(), INTERVAL %s SECOND), 1, %s)",
+                (ip, mac_hex, expire_offset_seconds, state),
+            )
+        db.commit()
+
+    def test_reservation_with_no_lease_is_inactive(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.10", mac_hex="aabbccddee01")
+        resp = logged_in_client.get("/reservations")
+        assert resp.status_code == 200
+        # The filter dropdown always contains the literal text "Active
+        # only"/"Inactive only" regardless of data, so check the specific
+        # status-badge marker (○/●) rather than the bare word.
+        assert b"\xe2\x97\x8b Inactive" in resp.data  # ○ Inactive
+        assert b"\xe2\x97\x8f Active" not in resp.data  # ● Active
+
+    def test_reservation_with_matching_active_lease_is_active(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.11", mac_hex="aabbccddee02")
+        self._insert_lease(db, "10.99.1.11", "aabbccddee02")
+        resp = logged_in_client.get("/reservations")
+        assert resp.status_code == 200
+        assert b"\xe2\x97\x8f Active" in resp.data  # ● Active
+
+    def test_expired_lease_does_not_count_as_active(self, logged_in_client, db):
+        """A lease that already expired must not make the reservation
+        show as active — only a genuinely live lease counts."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.12", mac_hex="aabbccddee03")
+        self._insert_lease(db, "10.99.1.12", "aabbccddee03", expire_offset_seconds=-3600)
+        resp = logged_in_client.get("/reservations")
+        assert resp.status_code == 200
+        assert b"\xe2\x97\x8b Inactive" in resp.data
+
+    def test_released_lease_does_not_count_as_active(self, logged_in_client, db):
+        """state != 0 (released/expired-per-Kea) must not count as active
+        even if the expire timestamp is still in the future."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.13", mac_hex="aabbccddee04")
+        self._insert_lease(db, "10.99.1.13", "aabbccddee04", state=1)
+        resp = logged_in_client.get("/reservations")
+        assert resp.status_code == 200
+        assert b"\xe2\x97\x8b Inactive" in resp.data
+
+    def test_different_mac_on_reserved_ip_shows_conflict(self, logged_in_client, db):
+        """The reserved IP has a live lease, but it belongs to a
+        different device than the reservation — must be flagged
+        distinctly from a plain 'Active' status."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.14", mac_hex="aabbccddee05")
+        self._insert_lease(db, "10.99.1.14", "112233445566")  # different MAC
+        resp = logged_in_client.get("/reservations")
+        assert resp.status_code == 200
+        assert b"Conflict" in resp.data
+
+    def test_status_filter_active_only(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.20", mac_hex="aabbccddee10", hostname="online-host")
+        self._insert_lease(db, "10.99.1.20", "aabbccddee10")
+        self._insert_reservation(db, ip="10.99.1.21", mac_hex="aabbccddee11", hostname="offline-host")
+        resp = logged_in_client.get("/reservations?status=active")
+        assert resp.status_code == 200
+        assert b"online-host" in resp.data
+        assert b"offline-host" not in resp.data
+
+    def test_status_filter_inactive_only(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.22", mac_hex="aabbccddee12", hostname="printer-alpha")
+        self._insert_lease(db, "10.99.1.22", "aabbccddee12")
+        self._insert_reservation(db, ip="10.99.1.23", mac_hex="aabbccddee13", hostname="scanner-beta")
+        resp = logged_in_client.get("/reservations?status=inactive")
+        assert resp.status_code == 200
+        assert b"scanner-beta" in resp.data
+        assert b"printer-alpha" not in resp.data
+
+    def test_invalid_status_value_falls_back_to_all(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        self._insert_reservation(db, ip="10.99.1.24", mac_hex="aabbccddee14", hostname="whatever-host")
+        resp = logged_in_client.get("/reservations?status=bogus")
+        assert resp.status_code == 200
+        assert b"whatever-host" in resp.data  # not filtered out
+
+
 class TestSettings:
     """Settings pages — basic load tests."""
 

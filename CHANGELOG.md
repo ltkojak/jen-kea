@@ -2,6 +2,38 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.3] - 2026-08-17
+
+### Reservation active/inactive status
+
+The Reservations page now shows whether each reserved IP is actually
+in use right now — the same signal Windows DHCP shows on its
+reservation list — instead of just listing what's configured with no
+indication of whether a device has ever picked it up.
+
+### What changed for users
+
+- A new Status column on the v4 Reservations page: **● Active** (the
+  reserved IP currently has a live, non-expired lease bound to it),
+  **○ Inactive** (no current lease at that address), or **⚠️ Conflict**
+  (the address is currently leased, but to a different MAC than the
+  reservation itself — worth knowing about, distinct from a normal
+  active reservation).
+- A new Status filter (All / Active only / Inactive only) alongside
+  the existing subnet and search filters.
+
+### What changed under the hood
+
+- `jen/routes/reservations.py`: the v4 reservation query gained a
+  `LEFT JOIN lease4` (matched on address, restricted to `state=0 AND
+  expire > NOW()`) to compute active/conflict status per row, plus an
+  `EXISTS`/`NOT EXISTS` clause for the status filter so it composes
+  correctly with pagination and the existing subnet/search filters.
+- 8 new tests against real inserted `hosts`/`lease4` rows, covering the
+  active/inactive/conflict cases, that an expired or released lease
+  doesn't count as active, and that the status filter actually narrows
+  results.
+
 ## [5.1.2] - 2026-08-17
 
 ### Kea package detection and one-click install

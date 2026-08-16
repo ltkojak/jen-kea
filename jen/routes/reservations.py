@@ -61,6 +61,9 @@ def reservations():
 
     subnet_filter = request.args.get("subnet", "all")
     search = __auth.sanitize_search(request.args.get("search", "").strip())
+    status_filter = request.args.get("status", "all")
+    if status_filter not in ("all", "active", "inactive"):
+        status_filter = "all"
     sort = request.args.get("sort", "ip")
     direction = request.args.get("dir", "asc")
     if direction not in ("asc", "desc"):
@@ -110,6 +113,21 @@ def reservations():
                         where.append("(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)")
                         s = f"%{search}%"
                         params += [s, s, s.replace(":", "")]
+                    # v5.1.3 — reservation active/inactive status, same
+                    # concept Windows DHCP shows: does the reserved IP
+                    # currently have a live, non-expired lease bound to
+                    # it? EXISTS/NOT EXISTS rather than a JOIN in the
+                    # WHERE-building list, since this list is shared
+                    # between the COUNT query and the main SELECT and a
+                    # LEFT JOIN would double-count/complicate COUNT(*).
+                    active_lease_exists = (
+                        "EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address "
+                        "AND l.state=0 AND l.expire > NOW())"
+                    )
+                    if status_filter == "active":
+                        where.append(active_lease_exists)
+                    elif status_filter == "inactive":
+                        where.append(f"NOT {active_lease_exists}")
                     cur.execute(f"SELECT COUNT(*) as cnt FROM hosts h WHERE {' AND '.join(where)}", params)
                     total = cur.fetchone()["cnt"]
                     if per_page:
@@ -120,8 +138,11 @@ def reservations():
                     cur.execute(f"""
                         SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
                                h.hostname, HEX(h.dhcp_identifier) AS mac_hex,
-                               h.dhcp4_subnet_id AS subnet_id
+                               h.dhcp4_subnet_id AS subnet_id,
+                               l.expire AS lease_expire, HEX(l.hwaddr) AS lease_mac_hex
                         FROM hosts h
+                        LEFT JOIN lease4 l ON l.address = h.ipv4_address
+                            AND l.state = 0 AND l.expire > NOW()
                         WHERE {' AND '.join(where)}
                         ORDER BY {sort_col} {direction}
                         {limit_clause}
@@ -135,10 +156,25 @@ def reservations():
                             # Fetch DNS override from Kea options table
                             cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
                             dns_row = cur.fetchone()
+                            # Active: the reserved IP currently has a live
+                            # lease (the JOIN above only matches non-expired,
+                            # state=0 leases, so a match here means "in use
+                            # right now"). Conflict: that live lease belongs
+                            # to a DIFFERENT MAC than the reservation itself
+                            # — the reservation exists but something else is
+                            # currently sitting on its address, worth
+                            # flagging distinctly from a plain inactive
+                            # reservation rather than showing it as simply
+                            # "active" (technically true, but misleading).
+                            is_active = row["lease_expire"] is not None
+                            lease_mac = (":".join(row["lease_mac_hex"][i:i+2] for i in range(0,12,2))
+                                        if row.get("lease_mac_hex") else "")
+                            is_conflict = is_active and lease_mac and mac and lease_mac.lower() != mac.lower()
                             hosts.append({**row, "mac": mac,
                                           "notes": note["notes"] if note else "",
                                           "dns_override": dns_row["formatted_value"] if dns_row else "",
-                                          "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")})
+                                          "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
+                                          "is_active": is_active, "is_conflict": is_conflict})
     except Exception as e:
         flash(f"Could not load reservations: {str(e)}", "error")
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
@@ -149,7 +185,7 @@ def reservations():
         hosts=hosts, subnet_filter=subnet_filter, search=search,
         subnet_map=accessible_subnet_map, page=page, pages=pages,
         total=total, stale_days=stale_days, sort=sort, direction=direction,
-        device_info=device_info, per_page=per_page_param,
+        device_info=device_info, per_page=per_page_param, status_filter=status_filter,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,
         view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,

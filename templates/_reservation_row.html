@@ -9,6 +9,15 @@
     </td>
     <td data-label="MAC" class="mono hide-mobile">{{ h.mac }}</td>
     <td data-label="Subnet"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
+    <td data-label="Status">
+        {% if h.is_conflict %}
+        <span style="color:var(--warning);font-size:12px;" title="Reserved IP is currently leased to a different MAC than this reservation">⚠️ Conflict</span>
+        {% elif h.is_active %}
+        <span style="color:var(--success);font-size:12px;">● Active</span>
+        {% else %}
+        <span style="color:var(--text-muted);font-size:12px;">○ Inactive</span>
+        {% endif %}
+    </td>
     <td data-label="DNS" class="mono hide-tablet">
         {% if h.dns_override %}
         <span style="color:var(--success);font-size:11px;" title="{{ h.dns_override }}">● Override</span>
