@@ -2,7 +2,7 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.1.3] - 2026-08-17
+## [5.1.4] - 2026-08-17
 
 ### Reservation active/inactive status, Reports fix, unified action menus
 
