@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.1.4"
+JEN_VERSION="5.1.5"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -747,27 +747,22 @@ install_files() {
     chmod 440 "$SUDOERS_FILE"
     ok "Installed sudoers entry"
 
-    # Download HTMX for local serving (works offline after install)
-    local htmx_path="$INSTALL_DIR/static/js/htmx.min.js"
-    if [[ ! -f "$htmx_path" ]] || [[ ! -s "$htmx_path" ]]; then
-        spinner_start "Downloading HTMX..."
-        mkdir -p "$INSTALL_DIR/static/js"
-        if curl -sf --connect-timeout 10             "https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js"             -o "$htmx_path" 2>/dev/null; then
-            spinner_stop
-            ok "Downloaded HTMX  ${DIM}($(wc -c < "$htmx_path") bytes)${NC}"
-        else
-            spinner_stop
-            # Try to copy from source if bundled
-            if [[ -f "$SCRIPT_DIR/static/js/htmx.min.js" ]] &&                [[ -s "$SCRIPT_DIR/static/js/htmx.min.js" ]]; then
-                cp "$SCRIPT_DIR/static/js/htmx.min.js" "$htmx_path"
-                ok "Installed HTMX from package"
-            else
-                warn "Could not download HTMX — interactive table features will be disabled"
-            fi
-        fi
-    else
-        ok "HTMX already installed"
-    fi
+    # Everything under static/ (favicon, vendored JS like htmx and
+    # Chart.js, etc.) ships in the package tarball — copy the whole
+    # tree generically rather than hand-listing individual files here.
+    # A prior version of this script only special-cased htmx.min.js and
+    # icons/brands/*.svg by name; any new vendored file (e.g. Chart.js,
+    # added for the Reports page in v5.1.4) silently never made it to
+    # $INSTALL_DIR, so it 404'd with no visible error. This also drops
+    # the old fallback that downloaded htmx from unpkg.com over the
+    # network if missing locally — everything needed is already bundled
+    # in the package, so there's no reason for install-time internet
+    # access at all. static/icons/custom/ is gitignored runtime user
+    # data, not part of the package, so this copy never touches it.
+    spinner_start "Installing static assets (JS, icons, favicon)..."
+    cp -r "$SCRIPT_DIR/static/." "$INSTALL_DIR/static/"
+    spinner_stop
+    ok "Installed static assets  ${DIM}($(find "$SCRIPT_DIR/static" -type f | wc -l) files)${NC}"
 
     spinner_start "Setting permissions..."
     chown -R "$JEN_USER:$JEN_USER" "$INSTALL_DIR" "$CONFIG_DIR"

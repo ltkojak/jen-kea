@@ -2,7 +2,7 @@
 
 A full-featured web-based management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built with Python and Flask. Jen provides a comprehensive UI for managing DHCP leases, reservations, subnets, and infrastructure — accessible from any browser including mobile and iPad.
 
-[![Version](https://img.shields.io/badge/Version-5.1.4-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
+[![Version](https://img.shields.io/badge/Version-5.1.5-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.0-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
@@ -98,7 +98,7 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 ### Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v5.1.4.tar.gz
+tar xzf jen-v5.1.5.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -142,7 +142,7 @@ Change your password immediately after first login.
 ## Upgrading
 
 ```bash
-tar xzf jen-v5.1.4.tar.gz
+tar xzf jen-v5.1.5.tar.gz
 cd jen
 sudo ./install.sh
 ```

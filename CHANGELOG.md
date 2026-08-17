@@ -2,6 +2,46 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.5] - 2026-08-17
+
+### install.sh wasn't actually deploying the Reports fix
+
+v5.1.4 vendored Chart.js locally to fix the Reports page, but the fix
+didn't actually take effect on deployment: `install.sh` copies files
+into the live install directory using a hand-maintained per-file list
+(it only knew about `htmx.min.js` and `icons/brands/*.svg` by exact
+name), and `chart.umd.min.js` was never added to that list. The
+browser requested `/static/js/chart.umd.min.js`, got a 404, and the
+`<script>` tag failed to load with no visible error — so the symptom
+looked identical to the original CDN bug even though that part of the
+fix was correct.
+
+### What changed for users
+
+- Reports charts actually render now after upgrading. Confirmed by
+  simulating both a fresh install and an upgrade of a pre-5.1.4
+  install against a realistic directory layout before shipping this.
+- `favicon.ico` gets installed too — it had the exact same gap
+  (missing from every install, not just this release, simply less
+  noticeable than a broken feature page).
+- `install.sh` no longer reaches out to `unpkg.com` over the network
+  at install time to fetch htmx as a fallback — everything it needs is
+  already bundled in the package tarball, so there's no reason for
+  install-time internet access at all.
+
+### What changed under the hood
+
+- `install.sh`: replaced the hand-maintained per-file copy list
+  (`icons/brands/*.svg`, `htmx.min.js` with a `curl` fallback to
+  `unpkg.com`) with a single generic `cp -r "$SCRIPT_DIR/static/."
+  "$INSTALL_DIR/static/"`, so any file added to `static/` in the
+  future is installed automatically without needing a matching
+  `install.sh` change. `static/icons/custom/` (user-uploaded device
+  icons) is gitignored and never present in the source tree, so this
+  copy cannot touch it — verified directly by simulating an upgrade
+  with a fake pre-existing custom icon in place and confirming it
+  survived.
+
 ## [5.1.4] - 2026-08-17
 
 ### Reservation active/inactive status, Reports fix, unified action menus
