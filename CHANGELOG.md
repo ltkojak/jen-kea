@@ -2,6 +2,36 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.7] - 2026-08-17
+
+### Unblocking the v5.1.6 self-update fix (no functional changes)
+
+v5.1.6 fixed self_update()'s static-asset copy logic — but that fix
+could never take effect on the update that installed it, because
+self_update() always runs using the code already on disk *before* the
+update starts, not the new code inside the tarball being installed.
+Anyone updating from v5.1.5 to v5.1.6 via the button ran v5.1.5's old,
+still-broken copy logic to do it, so chart.umd.min.js still never got
+installed even though v5.1.6's tarball genuinely contained it — and
+the update button won't offer anything once you're already on the
+latest tag, so there was no way to retrigger it without a new version
+existing to update to.
+
+This release is purely a version bump for that reason. No code
+changed. Once this is live as the latest release, clicking Update
+runs v5.1.6's already-correct copy logic (now running on the box
+doing the updating) against this tarball, which finally installs
+`static/js/chart.umd.min.js` correctly.
+
+### What changed for users
+
+- Reports charts should finally render after this update, if you
+  updated to v5.1.6 via the self-update button rather than a manual
+  `install.sh --upgrade` (which wasn't affected by this particular
+  bootstrap gap, since it always re-derives its file list from
+  whatever's in the currently-extracted tarball rather than from
+  already-running code).
+
 ## [5.1.6] - 2026-08-17
 
 ### The self-update button had its own, separate static-assets gap
