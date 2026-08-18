@@ -2,6 +2,46 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.6] - 2026-08-17
+
+### The self-update button had its own, separate static-assets gap
+
+v5.1.5 fixed `install.sh` so a manual `install.sh --upgrade` correctly
+deploys vendored static assets like `chart.umd.min.js`. That fix never
+touched the in-app self-update button (Settings → Infrastructure →
+Update), because it's a completely independent code path — its own
+hand-maintained list of what to copy, generated into a helper script
+and run via sudo, living entirely in `jen/routes/settings.py`. That
+list had a comment explicitly excluding "other static/ subfolders
+(nav_logo, favicon, generated JS, etc.)" — treating vendored release
+assets the same as genuine user uploads. The Reports page stayed
+broken for anyone using the self-update button specifically, on every
+release, regardless of what v5.1.5 fixed elsewhere.
+
+### What changed for users
+
+- Reports charts actually render after clicking Update in Settings →
+  Infrastructure, not just after a manual `install.sh --upgrade`.
+- `favicon.ico` and `htmx.min.js` also get updated on self-update now,
+  for the same reason.
+
+### What changed under the hood
+
+- `jen/routes/settings.py::self_update()`: replaced the
+  `static/icons/brands/*.svg`-only copy command with a recursive copy
+  of the whole extracted `static/` directory into the install dir,
+  mirroring the v5.1.5 `install.sh` fix. `static/icons/custom/` (user
+  uploads) is gitignored and never present in the release tarball, so
+  this copy cannot reach it — confirmed by a real test asserting
+  `icons/custom` never appears anywhere in the generated helper
+  script.
+- 3 new tests using the existing real-tarball-and-captured-helper-
+  script pattern from the v4.4.16 `run.py` regression test: the
+  recursive static copy command is present, it never references
+  `icons/custom` or `rm -rf`s anything under `static/`, and
+  self-update still succeeds against a tarball with no `static/`
+  directory at all (older/malformed release, shouldn't crash).
+
 ## [5.1.5] - 2026-08-17
 
 ### install.sh wasn't actually deploying the Reports fix

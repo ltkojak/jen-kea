@@ -1829,13 +1829,24 @@ def self_update():
                 f'rm -rf "{install_dir}/templates" && cp -r "{extracted}/templates" "{install_dir}/templates"'
             )
 
-        # Brand icons only — never touch static/icons/custom (user uploads)
-        # or other static/ subfolders (nav_logo, favicon, generated JS, etc.)
-        brands_src = os.path.join(extracted, "static", "icons", "brands")
-        if os.path.isdir(brands_src):
+        # Everything under static/ except user-uploaded custom icons.
+        # v5.1.6: this previously only copied static/icons/brands/*.svg
+        # and explicitly, by comment, excluded "other static/ subfolders
+        # (nav_logo, favicon, generated JS, etc.)" — lumping vendored
+        # release assets (htmx.min.js, chart.umd.min.js, favicon.ico) in
+        # with genuine user uploads. Vendored JS ships with every
+        # release and needs to update on every release; it was never
+        # being copied by this code path at all, on any version, which
+        # is why the Reports page stayed broken for anyone using the
+        # self-update button even after chart.umd.min.js was fixed in
+        # install.sh — self-update is a separate, independently
+        # maintained copy list and was never touched by that fix.
+        # static/icons/custom/ is gitignored and never present in the
+        # extracted tarball, so this copy cannot reach it regardless.
+        static_src = os.path.join(extracted, "static")
+        if os.path.isdir(static_src):
             copy_cmds.append(
-                f'mkdir -p "{install_dir}/static/icons/brands" && '
-                f'cp "{brands_src}/"*.svg "{install_dir}/static/icons/brands/" 2>/dev/null || true'
+                f'mkdir -p "{install_dir}/static" && cp -r "{static_src}/." "{install_dir}/static/"'
             )
 
         # systemd service file — reload daemon after
@@ -1858,7 +1869,7 @@ def self_update():
                 f'cp "{sudoers_src}" /etc/sudoers.d/jen && chmod 440 /etc/sudoers.d/jen'
             )
 
-        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/run.py" "{install_dir}/templates" "{install_dir}/static/icons/brands" 2>/dev/null || true')
+        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/run.py" "{install_dir}/templates" "{install_dir}/static" 2>/dev/null || true')
 
         with open(helper, "w") as f:
             f.write("#!/bin/bash\nset -e\n")
