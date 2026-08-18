@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Kea DHCP Management Console"
-LABEL version="5.1.8"
+LABEL version="5.1.9"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     openssl \
     curl \
-    && pip3 install --break-system-packages \
+    && pip3 install --break-system-packages --no-cache-dir \
         "flask>=3.1.3" \
         "flask-login>=0.6.3" \
         "pymysql>=1.2.0" \

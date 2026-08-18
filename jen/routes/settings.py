@@ -1776,10 +1776,17 @@ def self_update():
             logger.warning(f"No checksum asset published for v{expected_version}; proceeding unverified.")
 
         # ── Extract to temp dir ────────────────────────────────────────────
+        # Filter must reject by TYPE, not just name: a member named safely
+        # under "jen/" can still be a symlink/hardlink whose target points
+        # outside tmp_dir (tar slip via link, not path traversal via name).
+        # Only allow plain files and directories.
         tmp_dir = tempfile.mkdtemp(prefix="jen_update_extract_", dir="/tmp")
         with tarfile.open(tmp.name, "r:gz") as tf:
             members = [m for m in tf.getmembers()
-                       if m.name.startswith("jen/") and ".." not in m.name]
+                       if m.name.startswith("jen/")
+                       and ".." not in m.name
+                       and not os.path.isabs(m.name)
+                       and (m.isfile() or m.isdir())]
             tf.extractall(tmp_dir, members=members)
 
         extracted = os.path.join(tmp_dir, "jen")

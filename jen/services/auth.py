@@ -310,7 +310,15 @@ def paramiko_load_known_hosts(ssh_client) -> None:
     but the accepted key is persisted to extensions.SSH_KNOWN_HOSTS and
     checked on every later connection — previously nothing was ever
     loaded or saved, so AutoAddPolicy trusted a fresh key on literally
-    every single call, with no memory between connections at all."""
+    every single call, with no memory between connections at all.
+
+    v5.1.9 — a failure here must not be swallowed. If the known_hosts
+    file can't be loaded (corruption, permissions, disk error), silently
+    continuing means AutoAddPolicy treats every previously-pinned host as
+    brand new and re-trusts whatever key is presented — quietly
+    disabling host-key verification. Raise instead, so the caller's
+    existing SSH try/except surfaces this as a real connection failure
+    that gets fixed rather than a warning nobody sees."""
     import os
     os.makedirs(os.path.dirname(extensions.SSH_KNOWN_HOSTS), exist_ok=True)
     if not os.path.exists(extensions.SSH_KNOWN_HOSTS):
@@ -318,4 +326,7 @@ def paramiko_load_known_hosts(ssh_client) -> None:
     try:
         ssh_client.load_host_keys(extensions.SSH_KNOWN_HOSTS)
     except Exception as e:
-        logger.warning(f"Could not load SSH known_hosts (continuing): {e}")
+        raise RuntimeError(
+            f"Could not load SSH known_hosts file ({extensions.SSH_KNOWN_HOSTS}); "
+            f"refusing to connect without host-key verification: {e}"
+        ) from e

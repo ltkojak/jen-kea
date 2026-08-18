@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.9] - 2026-08-18
+
+### Security: hardened self-update extraction and SSH host-key verification
+
+Found via a security-scanning pass (bandit + hand-tracing of every
+flagged path, plus a hadolint check on the Dockerfile):
+
+- **Self-update tarball extraction** (`settings.py`) — the member
+  filter for the downloaded release tarball only checked the name
+  (`startswith("jen/")`, no `..`), not the member *type*. A symlink or
+  hardlink member could pass that filter and, once extracted, point
+  outside the temp directory. The filter now also requires
+  `m.isfile() or m.isdir()` and rejects absolute paths, so only plain
+  files and directories are ever extracted.
+- **SSH known-hosts loading** (`auth.py`) — `paramiko_load_known_hosts()`
+  previously logged a warning and continued if the known-hosts file
+  couldn't be loaded (corruption, permissions, disk error). Combined
+  with `AutoAddPolicy()`, that meant a load failure silently disabled
+  host-key verification — every host would be re-trusted as if seen for
+  the first time. It now raises instead, so the failure surfaces as a
+  real connection error through the existing SSH try/except in every
+  caller, rather than a log line nobody sees.
+- **Dockerfile** — added `--no-cache-dir` to the pip install step
+  (hadolint DL3042).
+
+No functional or UI changes. 616/617 tests passing — the one failure
+(`test_ipam_manifest_applies_correctly`) fails only in a full-suite run
+and passes cleanly in isolation, pointing to shared-DB-state/test-order
+leakage in `test_plugin_migrations.py` rather than anything touched by
+this release (neither changed file goes near plugin migrations). Not
+independently confirmed against unmodified v5.1.8 — worth a look, but
+not blocking this release.
+
 ## [5.1.8] - 2026-08-17
 
 ### Fix: static-asset deploy fix was overwriting custom favicons
