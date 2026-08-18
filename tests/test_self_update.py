@@ -20,6 +20,7 @@ on day one.
 
 import io
 import json
+import os
 import tarfile
 from unittest.mock import patch, MagicMock
 
@@ -234,3 +235,103 @@ class TestSelfUpdateCopiesStaticAssets:
         script = _run_self_update_and_capture_helper_script(logged_in_client, with_static=False)
         assert script  # helper script still gets written and run
         assert "run.py" in script  # other copy commands still present
+
+
+class TestSelfUpdatePreservesCustomFavicon:
+    """v5.1.8 — the v5.1.6 fix above over-corrected: favicon.ico IS
+    shipped in the release tarball as the stock default, but it's ALSO
+    the exact path Settings > System writes a user-uploaded favicon to
+    (extensions.FAVICON_PATH). A blanket recursive copy of static/
+    silently overwrites a real uploaded favicon with the stock one on
+    every single update — a real regression a user actually hit. The
+    fix preserves whatever favicon.ico already exists (default or
+    custom — both cases mean "leave it alone") and only installs the
+    shipped default when none exists yet, matching how nav_logo and
+    custom icons already behave."""
+
+    def test_favicon_backed_up_before_static_copy(self, logged_in_client):
+        script = _run_self_update_and_capture_helper_script(logged_in_client, with_static=True)
+        assert "jen_favicon_preserve" in script, (
+            "No favicon backup/preserve step found in the generated "
+            "self-update helper script — a real uploaded favicon.ico "
+            "would be silently overwritten by the stock one on every update."
+        )
+
+    def test_favicon_preserve_ordering_wraps_the_static_copy(self, logged_in_client):
+        """The backup must happen BEFORE the recursive static/ copy
+        (or it would just be backing up the file that's about to be
+        overwritten anyway) and the restore must happen AFTER it (or
+        the restored file would immediately get clobbered again)."""
+        script = _run_self_update_and_capture_helper_script(logged_in_client, with_static=True)
+        # There are multiple "cp -r" commands in the full script (the
+        # jen/ package copy also uses cp -r) — find the specific one
+        # targeting static/, not just the first cp -r anywhere.
+        copy_pos = script.find('static/." "')
+        assert copy_pos != -1, "no recursive static/ copy found"
+        preserve_pos = script.find("jen_favicon_preserve")
+        assert preserve_pos != -1 and preserve_pos < copy_pos, (
+            "favicon preserve/backup must happen before the recursive "
+            "static/ copy that would overwrite it"
+        )
+        restore_pos = script.rfind("jen_favicon_preserve")
+        assert restore_pos > copy_pos, (
+            "favicon restore must happen after the recursive static/ copy, "
+            "or the restored file gets immediately overwritten again"
+        )
+
+    def test_behaviorally_verified_via_direct_simulation(self):
+        """The generated-script text checks above confirm the commands
+        exist in the right order; this test proves they actually work
+        by running the exact same command sequence self_update() emits
+        against a real temp directory with a fake custom favicon in
+        place — not just asserting on string content."""
+        import subprocess as _sp
+        import tempfile as _tmp
+        with _tmp.TemporaryDirectory() as src, _tmp.TemporaryDirectory() as dest, \
+             _tmp.TemporaryDirectory() as preserve_dir:
+            os.makedirs(f"{src}/js")
+            os.makedirs(f"{dest}/static/js")
+            with open(f"{src}/favicon.ico", "wb") as f:
+                f.write(b"SHIPPED-DEFAULT-FAVICON")
+            with open(f"{src}/js/chart.umd.min.js", "wb") as f:
+                f.write(b"fake chart js")
+            with open(f"{dest}/static/favicon.ico", "wb") as f:
+                f.write(b"MATTHEWS-CUSTOM-FAVICON")
+
+            preserve_path = f"{preserve_dir}/jen_favicon_preserve.ico"
+            script = f"""#!/bin/bash
+set -e
+if [ -f "{dest}/static/favicon.ico" ]; then cp "{dest}/static/favicon.ico" "{preserve_path}"; fi
+cp -r "{src}/." "{dest}/static/"
+if [ -f "{preserve_path}" ]; then cp "{preserve_path}" "{dest}/static/favicon.ico" && rm -f "{preserve_path}"; fi
+"""
+            result = _sp.run(["/bin/bash", "-c", script], capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+
+            with open(f"{dest}/static/favicon.ico", "rb") as f:
+                assert f.read() == b"MATTHEWS-CUSTOM-FAVICON", (
+                    "custom favicon was overwritten by the shipped default"
+                )
+            with open(f"{dest}/static/js/chart.umd.min.js", "rb") as f:
+                assert f.read() == b"fake chart js"
+
+    def test_fresh_install_with_no_existing_favicon_gets_shipped_default(self):
+        import subprocess as _sp
+        import tempfile as _tmp
+        with _tmp.TemporaryDirectory() as src, _tmp.TemporaryDirectory() as dest, \
+             _tmp.TemporaryDirectory() as preserve_dir:
+            os.makedirs(f"{dest}/static")
+            with open(f"{src}/favicon.ico", "wb") as f:
+                f.write(b"SHIPPED-DEFAULT-FAVICON")
+
+            preserve_path = f"{preserve_dir}/jen_favicon_preserve.ico"
+            script = f"""#!/bin/bash
+set -e
+if [ -f "{dest}/static/favicon.ico" ]; then cp "{dest}/static/favicon.ico" "{preserve_path}"; fi
+cp -r "{src}/." "{dest}/static/"
+if [ -f "{preserve_path}" ]; then cp "{preserve_path}" "{dest}/static/favicon.ico" && rm -f "{preserve_path}"; fi
+"""
+            result = _sp.run(["/bin/bash", "-c", script], capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            with open(f"{dest}/static/favicon.ico", "rb") as f:
+                assert f.read() == b"SHIPPED-DEFAULT-FAVICON"

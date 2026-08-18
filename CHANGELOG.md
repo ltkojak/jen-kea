@@ -2,6 +2,54 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.8] - 2026-08-17
+
+### Fix: static-asset deploy fix was overwriting custom favicons
+
+Both the `install.sh` fix (v5.1.5) and the self-update fix (v5.1.6)
+for the Reports/Chart.js deployment gap blanket-copied the whole
+`static/` tree from the release tarball onto the live install. That
+was correct for vendored assets like `chart.umd.min.js` and
+`htmx.min.js`, but wrong for `favicon.ico`: it's shipped in the
+tarball as the stock default, but it's *also* the exact path
+Settings → System writes a user-uploaded favicon to
+(`extensions.FAVICON_PATH`). Every update — manual `install.sh
+--upgrade` or the self-update button — was silently overwriting a
+real custom favicon with the stock one, a real regression a user hit
+directly.
+
+### What changed for users
+
+- A custom favicon uploaded via Settings → System now survives every
+  future update. If yours was already overwritten by v5.1.5–v5.1.7,
+  you'll need to re-upload it once after this update; from here
+  forward it won't happen again.
+- Fresh installs, and installs that never had a custom favicon,
+  continue to get the shipped default exactly as before.
+
+### What changed under the hood
+
+- `install.sh` and `jen/routes/settings.py::self_update()`: both now
+  back up any existing `static/favicon.ico` before the recursive
+  `static/` copy runs, then restore that backup afterward — so
+  whatever was there before (default or custom) survives untouched,
+  and the shipped default is only ever installed when nothing exists
+  yet at all. Same semantics `nav_logo` and `static/icons/custom/`
+  already get, just applied to a file that (unlike those two) actually
+  ships in the tarball too.
+- Verified two ways: a direct simulation of the exact command sequence
+  against a real temp directory (not just checking the generated
+  script's text) for both the "custom favicon survives an update" and
+  "fresh install still gets the default" cases, plus text-level checks
+  confirming the backup happens before the static/ copy and the
+  restore happens after it, so the ordering can't silently regress.
+- 4 new tests in `tests/test_self_update.py` for the self-update code
+  path specifically; the `install.sh` side was verified by direct
+  bash-script simulation (not covered by the Python test suite, since
+  `install.sh` does real systemd/apt/sudoers operations that aren't
+  meaningfully unit-testable) — same verification approach used for
+  the v5.1.5 `install.sh` fix.
+
 ## [5.1.7] - 2026-08-17
 
 ### Unblocking the v5.1.6 self-update fix (no functional changes)

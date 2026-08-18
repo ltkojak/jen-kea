@@ -1843,10 +1843,27 @@ def self_update():
         # maintained copy list and was never touched by that fix.
         # static/icons/custom/ is gitignored and never present in the
         # extracted tarball, so this copy cannot reach it regardless.
+        #
+        # v5.1.8: that fix over-corrected — favicon.ico IS shipped in
+        # the tarball (unlike nav_logo, which isn't tracked in git at
+        # all) as the stock default, but it's ALSO the exact save path
+        # Settings > System writes a user-uploaded favicon to
+        # (extensions.FAVICON_PATH). The blanket copy silently
+        # overwrote a real uploaded favicon with the stock one on every
+        # update. Fixed by preserving whatever favicon.ico already
+        # exists (default or custom — both cases mean "leave it alone")
+        # and only installing the shipped default when none exists yet,
+        # the same semantics nav_logo and custom icons already get.
         static_src = os.path.join(extracted, "static")
         if os.path.isdir(static_src):
             copy_cmds.append(
-                f'mkdir -p "{install_dir}/static" && cp -r "{static_src}/." "{install_dir}/static/"'
+                f'mkdir -p "{install_dir}/static" && '
+                f'if [ -f "{install_dir}/static/favicon.ico" ]; then '
+                f'cp "{install_dir}/static/favicon.ico" /tmp/jen_favicon_preserve.ico; fi && '
+                f'cp -r "{static_src}/." "{install_dir}/static/" && '
+                f'if [ -f /tmp/jen_favicon_preserve.ico ]; then '
+                f'cp /tmp/jen_favicon_preserve.ico "{install_dir}/static/favicon.ico" && '
+                f'rm -f /tmp/jen_favicon_preserve.ico; fi'
             )
 
         # systemd service file — reload daemon after

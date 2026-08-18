@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.1.7"
+JEN_VERSION="5.1.8"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -759,8 +759,23 @@ install_files() {
     # in the package, so there's no reason for install-time internet
     # access at all. static/icons/custom/ is gitignored runtime user
     # data, not part of the package, so this copy never touches it.
+    #
+    # favicon.ico is a separate case: it IS shipped in the package as
+    # the stock default, but it's also the exact path Settings > System
+    # writes a user-uploaded favicon to. A blanket copy here would
+    # silently overwrite a real uploaded favicon with the stock one on
+    # every upgrade. Preserve whatever favicon.ico already exists
+    # (default or custom — both mean "leave it alone") and only install
+    # the shipped default when none exists yet.
     spinner_start "Installing static assets (JS, icons, favicon)..."
+    if [[ -f "$INSTALL_DIR/static/favicon.ico" ]]; then
+        cp "$INSTALL_DIR/static/favicon.ico" /tmp/jen_favicon_preserve.ico
+    fi
     cp -r "$SCRIPT_DIR/static/." "$INSTALL_DIR/static/"
+    if [[ -f /tmp/jen_favicon_preserve.ico ]]; then
+        cp /tmp/jen_favicon_preserve.ico "$INSTALL_DIR/static/favicon.ico"
+        rm -f /tmp/jen_favicon_preserve.ico
+    fi
     spinner_stop
     ok "Installed static assets  ${DIM}($(find "$SCRIPT_DIR/static" -type f | wc -l) files)${NC}"
 
