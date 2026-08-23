@@ -514,6 +514,19 @@
 </div>
 
 <script>
+function escapeHtml(str) {
+    // Shared helper for any client-side code that builds HTML from
+    // untrusted or user/device-supplied strings (DHCP hostnames, notes,
+    // etc.) before inserting via innerHTML. Always run untrusted text
+    // through this first.
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function toggleTheme() {
     const html = document.documentElement;
     const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';

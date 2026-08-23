@@ -22,7 +22,7 @@ function saveNote(id) {
         if (data.ok) {
             const display = document.getElementById('note-display-' + id);
             display.innerHTML = notes
-                ? '<span style="font-size:13px;color:var(--text-muted);">' + notes + '</span>'
+                ? '<span style="font-size:13px;color:var(--text-muted);">' + escapeHtml(notes) + '</span>'
                 : '<span style="font-size:12px;color:var(--text-muted);font-style:italic;">No notes — click to add</span>';
             cancelNote(id);
         } else {
@@ -127,6 +127,27 @@ function saveNote(id) {
         </table>
     </div>
     {% endif %}
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <div class="stat-label" style="margin-bottom:6px;">Notes</div>
+        <div id="note-display-{{ s.id }}"
+             {% if current_user.role in ('superadmin','admin') %}onclick="editNote({{ s.id }})" style="cursor:pointer;"{% endif %}>
+            {% if subnet_notes.get(s.id) %}
+            <span style="font-size:13px;color:var(--text-muted);">{{ subnet_notes.get(s.id) }}</span>
+            {% else %}
+            <span style="font-size:12px;color:var(--text-muted);font-style:italic;">{% if current_user.role in ('superadmin','admin') %}No notes — click to add{% else %}No notes{% endif %}</span>
+            {% endif %}
+        </div>
+        {% if current_user.role in ('superadmin','admin') %}
+        <div id="note-edit-{{ s.id }}" style="display:none;margin-top:6px;">
+            <textarea id="note-text-{{ s.id }}" rows="2" maxlength="1000"
+                      style="width:100%;resize:vertical;font-size:13px;">{{ subnet_notes.get(s.id, '') }}</textarea>
+            <div style="display:flex;gap:8px;margin-top:6px;">
+                <button type="button" class="btn btn-sm btn-primary" onclick="saveNote({{ s.id }})">Save</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="cancelNote({{ s.id }})">Cancel</button>
+            </div>
+        </div>
+        {% endif %}
+    </div>
     {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">

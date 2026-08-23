@@ -458,21 +458,25 @@ function loadTopDevices() {
                 + '<th>Device</th><th>IP</th><th>Subnet</th><th>Last Seen</th><th>Manufacturer</th>'
                 + '</tr></thead><tbody>';
             devices.forEach(function(d) {
-                var icon = d.device_icon ? '<span style="margin-right:4px;">' + d.device_icon + '</span>' : '';
+                // d.name / d.hostname ultimately fall back to the DHCP client's
+                // self-reported hostname, which is attacker-controlled (any
+                // device on the network can set it to anything) — escape
+                // before building HTML.
+                var icon = d.device_icon ? '<span style="margin-right:4px;">' + escapeHtml(d.device_icon) + '</span>' : '';
                 var name = d.name || d.mac;
                 var badge = d.has_reservation
                     ? '<span class="badge badge-reserved" style="font-size:10px;margin-left:4px;padding:1px 5px;">📌</span>'
                     : '';
                 var lastSeen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
-                var mfr = d.manufacturer ? '<span style="color:var(--text-muted);">' + d.manufacturer + '</span>' : '—';
+                var mfr = d.manufacturer ? '<span style="color:var(--text-muted);">' + escapeHtml(d.manufacturer) + '</span>' : '—';
                 html += '<tr>'
-                    + '<td><strong>' + icon + name + '</strong>' + badge
+                    + '<td><strong>' + icon + escapeHtml(name) + '</strong>' + badge
                     + (d.hostname && d.hostname !== name
-                        ? '<br><span style="color:var(--text-muted);font-size:10px;font-family:monospace;">' + d.hostname.replace(/\.$/, '') + '</span>'
+                        ? '<br><span style="color:var(--text-muted);font-size:10px;font-family:monospace;">' + escapeHtml(d.hostname.replace(/\.$/, '')) + '</span>'
                         : '')
                     + '</td>'
-                    + '<td class="mono" style="color:var(--primary);">' + (d.ip || '—') + '</td>'
-                    + '<td>' + (d.subnet || '—') + '</td>'
+                    + '<td class="mono" style="color:var(--primary);">' + escapeHtml(d.ip || '—') + '</td>'
+                    + '<td>' + escapeHtml(d.subnet || '—') + '</td>'
                     + '<td style="color:var(--text-muted);white-space:nowrap;">' + lastSeen + '</td>'
                     + '<td>' + mfr + '</td>'
                     + '</tr>';

@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.10] - 2026-08-23
+
+### Security: fixed stored XSS in the dashboard device widget, wired up subnet notes
+
+Found during a follow-up audit of the frontend/HTMX layer requested after
+v5.1.9:
+
+- **Stored XSS in "Top Active Devices"** (`dashboard.html`) — the
+  `loadTopDevices()` widget built its table with string-concatenated
+  `innerHTML`, including the device's DHCP-reported hostname with no
+  escaping. A DHCP client's hostname option is attacker-controlled — any
+  device on the network can set it to arbitrary text — so a malicious
+  hostname rendered as live HTML/JS in the browser of any logged-in user
+  who viewed the dashboard, including superadmins. Added a shared
+  `escapeHtml()` helper in `base.html` and applied it to every
+  device-supplied field in that widget (name, hostname, IP, subnet,
+  manufacturer). Every other place hostname is displayed already goes
+  through server-side Jinja autoescaping (or the `hostname` filter) and
+  was unaffected.
+- **Subnet notes feature completed** (`subnets.html`) — the notes
+  editor JS (`editNote`/`saveNote`/`cancelNote`) and its backend route
+  (`/subnets/save-note`) already existed and worked, but the template
+  never rendered the `note-display-*`/`note-edit-*`/`note-text-*`
+  elements the JS depended on, so the feature was unreachable. Added the
+  missing markup to each subnet card (admin/superadmin only, matching
+  the existing edit/delete controls), and escaped saved notes on the
+  client side with the same `escapeHtml()` helper as a second line of
+  defense — the initial page-load render already went through Jinja
+  autoescaping.
+
+No Python changed — templates only. No functional changes to any
+existing route or permission model.
+
 ## [5.1.9] - 2026-08-18
 
 ### Security: hardened self-update extraction and SSH host-key verification
