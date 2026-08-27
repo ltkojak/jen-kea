@@ -242,7 +242,13 @@ class TestLease6HistoryMigration:
         versions = [v for v, _, _ in migrations_module.MIGRATIONS]
         assert 11 in versions
         assert versions == sorted(versions)
-        assert versions[-1] == 11  # not yet superseded by a later migration
+        # v5.1.11 — migrations 12/13 (session-cache token_version, per-key
+        # API subnet scope) legitimately supersede 11 as the latest; this
+        # no longer asserts 11 is last, only that whatever comes after it
+        # continues strictly increasing (registry-wide invariant already
+        # enforced in migrations.py, re-checked here for this neighborhood).
+        idx = versions.index(11)
+        assert versions[idx:] == sorted(versions[idx:])
 
     def test_creates_table_idempotently(self, db):
         with db.cursor() as cur:
