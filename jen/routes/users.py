@@ -344,7 +344,9 @@ def set_user_timeout(user_id):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("UPDATE users SET session_timeout=%s WHERE id=%s", (timeout_val, user_id))
+                cur.execute(
+                    "UPDATE users SET session_timeout=%s, token_version=token_version+1 WHERE id=%s",
+                    (timeout_val, user_id))
             db.commit()
         session.pop("_user_cache", None)
         flash("Session timeout updated.", "success")
@@ -377,9 +379,14 @@ def set_user_role(user_id):
                     if cur.fetchone()["cnt"] <= 1:
                         flash("Cannot demote the last SuperAdmin account.", "error")
                         return redirect(url_for('users.users'))
-                cur.execute("UPDATE users SET role=%s WHERE id=%s", (role, user_id))
+                cur.execute(
+                    "UPDATE users SET role=%s, token_version=token_version+1 WHERE id=%s",
+                    (role, user_id))
             db.commit()
-        # Invalidate session cache for affected user
+        # Invalidate session cache for affected user (see load_user() in
+        # jen/__init__.py — token_version is what actually forces a
+        # demoted/promoted user's OWN already-open session to re-fetch;
+        # this pop only clears the ACTING superadmin's own cache)
         session.pop("_user_cache", None)
         flash(f"Role for '{row['username']}' updated to {role}.", "success")
         __user.audit("SET_ROLE", row["username"], f"role={role}")
@@ -410,7 +417,9 @@ def set_user_subnets(user_id):
                 if not row:
                     flash("User not found.", "error")
                     return redirect(url_for('users.users'))
-                cur.execute("UPDATE users SET subnet_access=%s WHERE id=%s", (subnet_access, user_id))
+                cur.execute(
+                    "UPDATE users SET subnet_access=%s, token_version=token_version+1 WHERE id=%s",
+                    (subnet_access, user_id))
             db.commit()
         session.pop("_user_cache", None)
         label = "all subnets" if subnet_access is None else f"subnets {subnet_access}"
@@ -491,14 +500,16 @@ def edit_user(user_id):
                 # Apply all changes in one update
                 if new_pw:
                     cur.execute("""
-                        UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s, password=%s
+                        UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s, password=%s,
+                               token_version=token_version+1
                         WHERE id=%s
                     """, (role, subnet_access, timeout_val, __user.hash_password(new_pw), user_id))
                     __user.audit("EDIT_USER", row["username"],
                                  f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val} password=reset")
                 else:
                     cur.execute("""
-                        UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s
+                        UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s,
+                               token_version=token_version+1
                         WHERE id=%s
                     """, (role, subnet_access, timeout_val, user_id))
                     __user.audit("EDIT_USER", row["username"],

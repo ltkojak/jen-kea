@@ -26,7 +26,7 @@ JEN_VERSION = None   # injected by app factory
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _api_auth():
-    """Validate Bearer token. Returns key row or None."""
+    """Validate Bearer token. Returns key row (with subnet_access) or None."""
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -36,7 +36,7 @@ def _api_auth():
         with jen_db() as db:
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name FROM api_keys WHERE key_hash=%s AND active=1",
+                    "SELECT id, name, subnet_access FROM api_keys WHERE key_hash=%s AND active=1",
                     (key_hash,)
                 )
                 row = cur.fetchone()
@@ -46,6 +46,23 @@ def _api_auth():
         return row
     except Exception:
         return None
+
+
+def _api_key_subnet_ids(key_row):
+    """Return the set of subnet_ids this key is scoped to, or None for
+    unrestricted (all subnets) — same NULL-means-all convention as
+    users.subnet_access. Malformed JSON is treated as unrestricted-deny
+    (empty set) rather than unrestricted-allow, so a corrupt value can
+    never silently grant more access than intended."""
+    raw = key_row.get("subnet_access") if key_row else None
+    if raw is None:
+        return None
+    try:
+        import json as _json
+        ids = _json.loads(raw) if isinstance(raw, str) else raw
+        return set(int(i) for i in ids)
+    except Exception:
+        return set()
 
 
 def api_error(message, code=400):
@@ -81,13 +98,17 @@ def api_v1_health():
 
 @bp.route("/api/v1/subnets")
 def api_v1_subnets():
-    if not _api_auth():
+    key = _api_auth()
+    if not key:
         return api_error("Invalid or missing API key.", 401)
+    scope = _api_key_subnet_ids(key)
     result = []
     try:
         with kea_db() as db:
             with db.cursor() as cur:
                 for sid, info in extensions.SUBNET_MAP.items():
+                    if scope is not None and sid not in scope:
+                        continue
                     cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
                     active = cur.fetchone()["cnt"]
                     cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (sid,))
@@ -121,8 +142,10 @@ def api_v1_subnets():
 
 @bp.route("/api/v1/leases")
 def api_v1_leases():
-    if not _api_auth():
+    key = _api_auth()
+    if not key:
         return api_error("Invalid or missing API key.", 401)
+    scope = _api_key_subnet_ids(key)
     subnet   = request.args.get("subnet", "")
     mac      = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
     hostname = request.args.get("hostname", "")
@@ -130,12 +153,18 @@ def api_v1_leases():
         limit = min(int(request.args.get("limit", 200)), 1000)
     except ValueError:
         limit = 200
+    if scope is not None and not scope:
+        return api_ok({"leases": [], "count": 0})
     result = []
     try:
         with kea_db() as db:
             with db.cursor() as cur:
                 where  = ["l.state=0", "l.expire > NOW()"]
                 params = []
+                if scope is not None:
+                    placeholders = ",".join(["%s"] * len(scope))
+                    where.append(f"l.subnet_id IN ({placeholders})")
+                    params.extend(scope)
                 if subnet:
                     sid = next((k for k, v in extensions.SUBNET_MAP.items()
                                 if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
@@ -175,8 +204,10 @@ def api_v1_leases():
 
 @bp.route("/api/v1/leases/<mac>")
 def api_v1_lease_by_mac(mac):
-    if not _api_auth():
+    key = _api_auth()
+    if not key:
         return api_error("Invalid or missing API key.", 401)
+    scope = _api_key_subnet_ids(key)
     mac_clean = mac.lower().replace(":", "").replace("-", "")
     if len(mac_clean) != 12:
         return api_error("Invalid MAC address format.", 400)
@@ -191,7 +222,10 @@ def api_v1_lease_by_mac(mac):
                     (mac_clean.upper(),)
                 )
                 row = cur.fetchone()
-        if not row:
+        if not row or (scope is not None and row["subnet_id"] not in scope):
+            # Same 404 whether the lease doesn't exist or this key just
+            # can't see its subnet — don't reveal which via a different
+            # status code.
             return api_error("No lease found for this MAC address.", 404)
         mf     = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
         si     = extensions.SUBNET_MAP.get(row["subnet_id"], {})
@@ -207,8 +241,10 @@ def api_v1_lease_by_mac(mac):
 
 @bp.route("/api/v1/devices")
 def api_v1_devices_endpoint():
-    if not _api_auth():
+    key = _api_auth()
+    if not key:
         return api_error("Invalid or missing API key.", 401)
+    scope = _api_key_subnet_ids(key)
     mac    = request.args.get("mac",    "").lower().replace(":", "").replace("-", "")
     name   = request.args.get("name",   "")
     subnet = request.args.get("subnet", "")
@@ -216,12 +252,18 @@ def api_v1_devices_endpoint():
         limit = min(int(request.args.get("limit", 200)), 1000)
     except ValueError:
         limit = 200
+    if scope is not None and not scope:
+        return api_ok({"devices": [], "count": 0})
     result = []
     try:
         with jen_db() as db:
             with db.cursor() as cur:
                 where  = ["1=1"]
                 params = []
+                if scope is not None:
+                    placeholders = ",".join(["%s"] * len(scope))
+                    where.append(f"d.last_subnet_id IN ({placeholders})")
+                    params.extend(scope)
                 if mac:
                     where.append("REPLACE(d.mac, ':', '') LIKE %s")
                     params.append("%" + mac + "%")
@@ -257,15 +299,17 @@ def api_v1_devices_endpoint():
 
 @bp.route("/api/v1/devices/<mac>")
 def api_v1_device_by_mac(mac):
-    if not _api_auth():
+    key = _api_auth()
+    if not key:
         return api_error("Invalid or missing API key.", 401)
+    scope = _api_key_subnet_ids(key)
     mac_fmt = mac.lower().replace("-", ":")
     try:
         with jen_db() as db, kea_db() as kdb:
             with db.cursor() as cur:
                 cur.execute("SELECT * FROM devices WHERE mac=%s", (mac_fmt,))
                 row = cur.fetchone()
-            if not row:
+            if not row or (scope is not None and row["last_subnet_id"] not in scope):
                 return api_error("Device not found.", 404)
             mac_clean = mac_fmt.replace(":", "").upper()
             with kdb.cursor() as kcur:
@@ -298,19 +342,27 @@ def api_v1_device_by_mac(mac):
 
 @bp.route("/api/v1/reservations")
 def api_v1_reservations():
-    if not _api_auth():
+    key = _api_auth()
+    if not key:
         return api_error("Invalid or missing API key.", 401)
+    scope = _api_key_subnet_ids(key)
     subnet = request.args.get("subnet", "")
     try:
         limit = min(int(request.args.get("limit", 200)), 1000)
     except ValueError:
         limit = 200
+    if scope is not None and not scope:
+        return api_ok({"reservations": [], "count": 0})
     result = []
     try:
         with kea_db() as db:
             with db.cursor() as cur:
                 where  = ["dhcp4_subnet_id > 0"]
                 params = []
+                if scope is not None:
+                    placeholders = ",".join(["%s"] * len(scope))
+                    where.append(f"dhcp4_subnet_id IN ({placeholders})")
+                    params.extend(scope)
                 if subnet:
                     sid = next((k for k, v in extensions.SUBNET_MAP.items()
                                 if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
@@ -347,14 +399,27 @@ def api_keys():
             with db.cursor() as cur:
                 cur.execute(
                     "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
-                    "u.username as created_by_name "
+                    "k.subnet_access, u.username as created_by_name "
                     "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
                     "ORDER BY k.created_at DESC"
                 )
                 keys = cur.fetchall()
+        import json as _json
+        for k in keys:
+            if k.get("subnet_access"):
+                try:
+                    ids = _json.loads(k["subnet_access"])
+                    k["subnet_names"] = [extensions.SUBNET_MAP.get(i, {}).get("name", str(i)) for i in ids]
+                except Exception:
+                    k["subnet_names"] = None
+            else:
+                k["subnet_names"] = None
     except Exception as e:
         flash(f"Could not load API keys: {e}", "error")
-    return render_template("api_keys.html", keys=keys)
+    accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+    return render_template("api_keys.html", keys=keys,
+                           subnet_map=accessible_subnet_map,
+                           can_grant_all_subnets=current_user.all_subnets)
 
 
 @bp.route("/settings/api-keys/create", methods=["POST"])
@@ -367,17 +432,44 @@ def api_keys_create():
     if not name:
         flash("Key name is required.", "error")
         return redirect(url_for("api.api_keys"))
+
+    # Scope: chosen independently per-key at creation time, not inherited
+    # from the creating user's own account and not unrestricted by default
+    # (v5.1.11 — see migration 13). A key's access can never exceed what
+    # the creating user can themselves see: for a subnet-restricted admin,
+    # any "all" selection or any subnet id outside their own access is
+    # dropped server-side, regardless of what the submitted form contains
+    # — the <select> only offers their own subnets in the first place, but
+    # this clamp holds even against a hand-crafted request.
+    import json as _json
+    subnet_ids_raw = request.form.getlist("subnet_ids")
+    if current_user.all_subnets:
+        if not subnet_ids_raw or "all" in subnet_ids_raw:
+            subnet_access = None
+        else:
+            ids = [int(s) for s in subnet_ids_raw if s.isdigit()]
+            subnet_access = _json.dumps(ids) if ids else None
+    else:
+        allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+        ids = [int(s) for s in subnet_ids_raw if s.isdigit() and int(s) in allowed]
+        if not ids:
+            flash("Select at least one subnet this key should have access to.", "error")
+            return redirect(url_for("api.api_keys"))
+        subnet_access = _json.dumps(ids)
+
     raw_key  = "jen_" + secrets.token_hex(24)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
         with jen_db() as db:
             with db.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES (%s,%s,%s,%s)",
-                    (name, key_hash, raw_key[:8], current_user.id)
+                    "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access) "
+                    "VALUES (%s,%s,%s,%s,%s)",
+                    (name, key_hash, raw_key[:8], current_user.id, subnet_access)
                 )
             db.commit()
-        audit("API_KEY_CREATE", "api_keys", f"Key '{name}' created by {current_user.username}")
+        scope_desc = "all subnets" if subnet_access is None else f"subnets {subnet_access}"
+        audit("API_KEY_CREATE", "api_keys", f"Key '{name}' created by {current_user.username}, scope={scope_desc}")
         session["new_api_key"]      = raw_key
         session["new_api_key_name"] = name
         flash("API key created. Copy it now — it won't be shown again.", "success")

@@ -27,6 +27,24 @@
             <input type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
             <div class="form-hint">A descriptive name so you know what this key is used for.</div>
         </div>
+        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+            <label>Subnet Access</label>
+            <select name="subnet_ids" multiple style="width:100%;min-height:90px;">
+                {% if can_grant_all_subnets %}
+                <option value="all" selected>All Subnets</option>
+                {% endif %}
+                {% for sid, info in subnet_map.items() %}
+                <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                {% endfor %}
+            </select>
+            <div class="form-hint">
+                {% if can_grant_all_subnets %}
+                Ctrl/Cmd+click for multiple. "All Subnets" = unrestricted. A key's access is set here, independent of who creates it.
+                {% else %}
+                Ctrl/Cmd+click for multiple. Limited to the subnets your own account can access.
+                {% endif %}
+            </div>
+        </div>
         <button type="submit" class="btn btn-primary" style="margin-bottom:20px;">🔑 Generate Key</button>
     </form>
 </div>
@@ -42,6 +60,7 @@
         <thead><tr>
             <th>Name</th>
             <th>Key Prefix</th>
+            <th>Subnet Access</th>
             <th>Created</th>
             <th>Last Used</th>
             <th>Status</th>
@@ -52,6 +71,13 @@
         <tr>
             <td><strong>{{ k.name }}</strong></td>
             <td class="mono" style="color:var(--text-muted);">{{ k.key_prefix }}…</td>
+            <td style="font-size:12px;">
+                {% if k.subnet_names %}
+                {{ k.subnet_names | join(', ') }}
+                {% else %}
+                <span style="color:var(--text-muted);">All subnets</span>
+                {% endif %}
+            </td>
             <td style="color:var(--text-muted);font-size:12px;">
                 {{ k.created_at|utcdate }}
                 {% if k.created_by_name %}<span style="color:var(--text-muted);"> by {{ k.created_by_name }}</span>{% endif %}

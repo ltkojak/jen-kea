@@ -158,10 +158,26 @@ def get_alert_template(alert_type):
     return DEFAULT_TEMPLATES.get(alert_type, "")
 
 def render_template_str(template, **kwargs):
-    """Render alert template with variable substitution."""
+    """Render alert template with variable substitution.
+
+    v5.1.11 — previously only caught KeyError (a placeholder with no
+    matching kwarg). str.format() can also raise IndexError (a stray
+    positional placeholder like '{0}'), ValueError (an invalid format
+    spec, e.g. '{days:d}' against a non-numeric value), or AttributeError
+    (a dotted placeholder like '{x.foo}' where the value has no such
+    attribute) — any admin-authored template typo in those categories
+    used to propagate out of send_alert() uncaught. Since check_alerts()
+    wraps its whole loop iteration in one try/except with no per-section
+    isolation for these particular calls, that exception skipped every
+    remaining check for that cycle — utilization, stale-reservation,
+    lease-history snapshot, daily summary — and repeated on every 30s pass
+    for as long as the bad template existed, with nothing but a log line
+    to show for it. Falling back to the raw template on any formatting
+    failure keeps a single bad template from silently disabling unrelated
+    monitoring."""
     try:
         return template.format(**kwargs)
-    except KeyError:
+    except Exception:
         return template
 
 def get_active_channels():

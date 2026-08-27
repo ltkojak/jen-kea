@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.1.10"
+JEN_VERSION = "5.1.11"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -110,32 +110,64 @@ def create_app() -> Flask:
     @login_manager.user_loader
     def load_user(user_id):
         from flask import g as _g
+        from jen.models.db import jen_db
 
         # Fast path: check g cache first (within same request)
         cached = getattr(_g, '_cached_user', None)
         if cached is not None and str(cached.id) == str(user_id):
             return cached
 
-        # Fast path: reconstruct from session data if available
+        # Fast path: reconstruct from session data, but only if it's still
+        # fresh. v5.1.11 — this used to trust session['_user_cache']
+        # indefinitely once set at login, so an admin demoting a user,
+        # narrowing their subnet access, shortening their timeout, or
+        # deleting their account outright had NO effect on that user's
+        # already-open session until it happened to expire on its own
+        # (using the OLD cached timeout). users.token_version is bumped by
+        # every one of those actions (users.py), so a single indexed-column
+        # SELECT here is enough to detect staleness without paying for a
+        # full row fetch on every request in the common (unchanged) case.
         sess_user = session.get('_user_cache')
         if sess_user and str(sess_user.get('id')) == str(user_id):
-            user = User(
-                sess_user['id'], sess_user['username'],
-                sess_user['role'], sess_user.get('session_timeout'),
-                sess_user.get('subnet_access')
-            )
-            _g._cached_user = user
-            try: _g._route_start = __import__('time').time()
-            except: pass
-            return user
+            have_current = False
+            tv_row = None
+            try:
+                with jen_db() as db:
+                    with db.cursor() as cur:
+                        cur.execute("SELECT token_version FROM users WHERE id=%s", (user_id,))
+                        tv_row = cur.fetchone()
+                have_current = True
+            except Exception as e:
+                logger.error(f"load_user token_version check error: {e}")
 
-        # Slow path: DB lookup (only on first login or if session cache missing)
-        from jen.models.db import jen_db
+            if have_current:
+                if tv_row is None:
+                    # Account no longer exists — don't serve a cache that
+                    # describes a deleted user.
+                    session.pop('_user_cache', None)
+                    return None
+                if tv_row["token_version"] == sess_user.get("token_version", 0):
+                    user = User(
+                        sess_user['id'], sess_user['username'],
+                        sess_user['role'], sess_user.get('session_timeout'),
+                        sess_user.get('subnet_access')
+                    )
+                    _g._cached_user = user
+                    return user
+                # else: cache is stale — fall through to the slow path below
+                # to refresh it with the current row.
+            # else: couldn't check freshness (DB hiccup) — fall through to
+            # the slow path rather than silently trusting a cache we could
+            # not verify.
+
+        # Slow path: full DB lookup — first login, cache missing, or cache
+        # found to be stale/unverifiable above.
         try:
             with jen_db() as db:
                 with db.cursor() as cur:
                     cur.execute(
-                        "SELECT id, username, role, session_timeout, subnet_access FROM users WHERE id=%s",
+                        "SELECT id, username, role, session_timeout, subnet_access, "
+                        "token_version FROM users WHERE id=%s",
                         (user_id,)
                     )
                     row = cur.fetchone()
@@ -146,11 +178,10 @@ def create_app() -> Flask:
                 session['_user_cache'] = {
                     'id': row["id"], 'username': row["username"],
                     'role': row["role"], 'session_timeout': row["session_timeout"],
-                    'subnet_access': row["subnet_access"]
+                    'subnet_access': row["subnet_access"],
+                    'token_version': row["token_version"]
                 }
                 _g._cached_user = user
-                try: _g._route_start = __import__('time').time()
-                except: pass
                 return user
         except Exception as e:
             logger.error(f"load_user error: {e}")

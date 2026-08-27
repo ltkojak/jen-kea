@@ -68,7 +68,7 @@ def login():
                 with db.cursor() as cur:
                     # User lookup
                     cur.execute(
-                        "SELECT id, username, role, session_timeout, password, subnet_access FROM users WHERE username=%s",
+                        "SELECT id, username, role, session_timeout, password, subnet_access, token_version FROM users WHERE username=%s",
                         (username,)
                     )
                     row = cur.fetchone()
@@ -172,7 +172,8 @@ def login():
                     session["_user_cache"] = {
                         "id": user.id, "username": user.username,
                         "role": user.role, "session_timeout": user.session_timeout,
-                        "subnet_access": row.get("subnet_access")
+                        "subnet_access": row.get("subnet_access"),
+                        "token_version": row.get("token_version", 0)
                     }
                     flash("MFA is required for your account. Please enroll now.", "warning")
                     return redirect(url_for('mfa_routes.mfa_enroll'))
@@ -182,7 +183,8 @@ def login():
             session["_user_cache"] = {
                 "id": user.id, "username": user.username,
                 "role": user.role, "session_timeout": user.session_timeout,
-                "subnet_access": row.get("subnet_access")
+                "subnet_access": row.get("subnet_access"),
+                "token_version": row.get("token_version", 0)
             }
             __user.audit("LOGIN", "auth", f"User {username} logged in from {ip}")
             return redirect(url_for('dashboard.dashboard'))

@@ -36,6 +36,7 @@
         <pre class="code-block">Authorization: Bearer YOUR_API_KEY</pre>
         <p style="margin-top:8px;"><strong style="color:var(--text);">Response format:</strong> All responses are JSON. Errors return <code class="mono-box">{"error": "message"}</code> with an appropriate HTTP status code.</p>
         <p style="margin-top:8px;"><strong style="color:var(--text);">All keys are read-only.</strong> The API cannot modify your DHCP configuration or reservations.</p>
+        <p style="margin-top:8px;"><strong style="color:var(--text);">Subnet scope:</strong> each key has its own subnet access, set independently when the key is created (<a href="/settings/api-keys">manage keys</a>) — it is not tied to whoever created it. A key restricted to specific subnets returns empty results / 404s for anything outside its scope, the same as if that data didn't exist.</p>
     </div>
 </div>
 

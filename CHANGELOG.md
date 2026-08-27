@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.11] - 2026-08-23
+
+### Security/reliability: session-cache staleness, per-key API scoping, alert-template resilience
+
+Three fixes from a continued audit pass, following up on v5.1.9/v5.1.10:
+
+- **Stale session cache on revoked access** (`jen/__init__.py`, `users.py`) —
+  `load_user()`'s session-cache fast path trusted `session['_user_cache']`
+  (role, subnet access, session timeout) indefinitely once set at login,
+  with no way for the server to invalidate one specific already-open
+  session. An admin demoting a user, restricting their subnets,
+  shortening their timeout, or deleting their account outright had no
+  effect on that user's current session until it happened to expire on
+  its own — using the OLD, possibly-longer cached timeout. Added
+  `users.token_version` (migration 12), bumped on every such change.
+  `load_user()` now does one cheap indexed `SELECT token_version` before
+  trusting the cache: match → serve from cache as before (same
+  performance profile for the unchanged case); mismatch → full refetch
+  and cache refresh; no row at all (deleted account) → cache dropped and
+  the user is logged out immediately. Also removed two `_g._route_start`
+  lines in `load_user()` — confirmed dead, set but never read anywhere.
+
+- **API keys had no scope of their own** (`jen/routes/api.py`,
+  `templates/api_keys.html`) — every `/api/v1/*` endpoint returned data
+  for ALL subnets for any valid key, regardless of who created it or
+  what subnets *they* could see. Since subnet-restricted admins (not just
+  viewers) can create API keys, a restricted admin could mint a key with
+  more access than their own account has. Added `api_keys.subnet_access`
+  (migration 13, NULL = unrestricted, same convention as
+  `users.subnet_access`) — a key's scope is now chosen explicitly at
+  creation time, independent of the creating user, and is clamped
+  server-side to never exceed what the creating user can themselves see
+  (checked against a hand-crafted request too, not just the form). All
+  six `/api/v1/*` read endpoints now filter/deny by the key's own scope;
+  a lease/device outside scope 404s the same way a nonexistent one would.
+
+- **`render_template_str` (alerts.py)** — previously only caught
+  `KeyError` from a malformed admin-authored alert template. Any other
+  `str.format()` failure (`IndexError`, `ValueError`, `AttributeError`)
+  propagated out of `send_alert()`; because `check_alerts()`'s
+  `kea_down`/`kea_up`/`new_lease`/`new_device`/`ha_failover` calls aren't
+  individually wrapped, that exception skipped every remaining check for
+  the rest of that 30-second cycle — utilization, stale-reservation,
+  snapshot, daily summary — and repeated on every subsequent cycle for as
+  long as the bad template existed, with only a log line to show for it.
+  Now falls back to the raw template on any formatting failure.
+
+No functional changes to any endpoint's read-only nature; API responses
+for existing unrestricted keys are unaffected (NULL scope = all subnets,
+same as before this release).
+
 ## [5.1.10] - 2026-08-23
 
 ### Security: fixed stored XSS in the dashboard device widget, wired up subnet notes

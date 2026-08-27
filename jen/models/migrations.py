@@ -224,6 +224,7 @@ _BASELINE_TABLES = [
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         last_used TIMESTAMP NULL,
         active TINYINT(1) DEFAULT 1,
+        subnet_access JSON DEFAULT NULL COMMENT 'NULL = all subnets; JSON array of subnet_ids = restricted to those',
         INDEX idx_hash (key_hash)
     )""",
     """CREATE TABLE IF NOT EXISTS plugins (
@@ -453,6 +454,47 @@ def _m011_lease6_history(db):
         )""")
 
 
+def _m012_users_token_version(db):
+    """users.token_version: v5.1.11 — load_user()'s session-cache fast path
+    previously trusted session['_user_cache'] (role/subnet_access/
+    session_timeout) indefinitely once set at login, with no way for the
+    server to invalidate a single already-open session. An admin demoting
+    a user, restricting their subnets, shortening their timeout, or even
+    deleting their account outright had no effect on that user's current
+    session until it happened to expire on its own (using the OLD,
+    possibly-longer cached timeout). Bumping this counter on any such
+    change lets load_user() cheaply detect a stale cache (one indexed
+    single-column SELECT) and force a real refresh, without giving up the
+    original point of the cache — avoiding a full row fetch on every
+    request for the common case where nothing has changed."""
+    with db.cursor() as cur:
+        if _column_missing(cur, "users", "token_version"):
+            cur.execute("ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0")
+
+
+def _m013_api_keys_subnet_access(db):
+    """api_keys.subnet_access: v5.1.11 — API keys previously had no scope
+    of their own at all; any valid key returned every subnet's leases/
+    devices/reservations regardless of who created it. That meant a
+    subnet-restricted admin (subnet_access IS allowed to restrict admins,
+    not just viewers — see users.subnet_access) could create a key and use
+    it to read subnets they have no UI access to themselves — the key
+    silently had MORE access than its creator. Rather than have keys
+    inherit the creating user's own subnet_access (which would break if
+    that user's access changes later, or if they're later deleted), each
+    key gets its own independent scope, chosen explicitly at creation
+    time — same NULL-means-unrestricted convention as users.subnet_access,
+    for the same reason: a key covering a plugin's needs today shouldn't
+    silently change scope because someone edited an unrelated admin
+    account."""
+    with db.cursor() as cur:
+        if _column_missing(cur, "api_keys", "subnet_access"):
+            cur.execute(
+                "ALTER TABLE api_keys ADD COLUMN subnet_access JSON DEFAULT NULL "
+                "COMMENT 'NULL = all subnets; JSON array of subnet_ids = restricted to those'"
+            )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -468,6 +510,9 @@ MIGRATIONS = [
     (9, "mfa_attempts table for MFA brute-force throttling",   _m009_mfa_attempts),
     (10, "plugin_schema_migrations tracking table",            _m010_plugin_schema_migrations),
     (11, "lease6_history table (v5.0 IPv6 Phase 1)",           _m011_lease6_history),
+    (12, "users.token_version column for session-cache invalidation",
+                                                              _m012_users_token_version),
+    (13, "api_keys.subnet_access column for per-key scope",    _m013_api_keys_subnet_access),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
