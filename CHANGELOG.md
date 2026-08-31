@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.14] - 2026-08-31
+
+### The real root cause of "subnet filters don't apply": htmx was never actually vendored
+
+`static/js/htmx.min.js` — the JS library every `hx-get`/`hx-trigger`/
+`hx-target`/`hx-push-url` attribute in the entire app depends on — was
+a 42-byte placeholder comment (`// HTMX 1.9.12 - replace with actual
+file`), not the real library. Confirmed present as far back as v5.1.9,
+the earliest version audited, so this predates every fix in this
+series and has nothing to do with any of them.
+
+This is the actual explanation for every "I select a subnet and it
+doesn't filter" report investigated across 5.1.9–5.1.13: no JS ever
+ran to intercept the selection and fire the AJAX request. The
+`<select>` element visually kept showing whatever the user picked —
+that's native browser behavior, unrelated to JS — while the request
+that was supposed to apply the filter simply never happened. On pages
+with a real `<button type="submit">` on a plain `method="GET"` form,
+the browser's own non-JS fallback could still produce a real
+navigation; on the live-filter (`change`-triggered) path relied on
+elsewhere, nothing fired at all. The three v5.1.12 subnet-filter
+consistency fixes (existence/access validation across Leases, Devices,
+Reservations) were real and correct fixes for what they addressed, but
+they could never have been the actual cause of what was being
+reported, because the request carrying the filter value often never
+reached the server in the first place.
+
+Fixed by replacing the placeholder with the genuine htmx 1.9.12
+minified build (verified against npm's published shasum before use).
+
+**Added `tests/test_htmx_vendoring.py`** to close the gap that let
+this ship silently for so long: checks the vendored file is
+appropriately sized and contains real htmx content, not just a
+same-named stub. This mirrors a check that already exists for
+Chart.js (`test_reports.py`) — that fix's own docstring named
+htmx.min.js as following the same vendoring convention, but the
+equivalent verification for htmx itself was never actually written
+until now. No test in this suite loads a real browser or JS engine —
+the existing htmx-behavior tests only exercise the server's response
+to a simulated `HX-Request` header — so nothing here previously could
+have caught a client-side asset being silently wrong.
+
 ## [5.1.13] - 2026-08-31
 
 ### Fix new_reserved_lease firing logic (was shipped incorrect under the 5.1.12 label)
