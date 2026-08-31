@@ -2,6 +2,38 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.13] - 2026-08-31
+
+### Fix new_reserved_lease firing logic (was shipped incorrect under the 5.1.12 label)
+
+`new_reserved_lease` (added below in 5.1.12) shipped with the wrong
+firing semantics: it fired only once per MAC, ever — the same
+"genuinely never seen before" logic `new_device` uses. For a device
+that's already been reserved and seen for a while (the normal case),
+that means it would never fire again, no matter how many times that
+device's lease actually goes active — moving subnets, coming back
+online after being off. That's exactly backwards from what the alert
+type exists for.
+
+Fixed by making reservation status a tag on the *same* freshness check
+`new_lease` already uses (was this IP active as of the last 30-second
+poll), instead of a reason to run a separate one-time check. A reserved
+lease going newly active now fires `new_reserved_lease` every time,
+not just the first time in Jen's history; a mere renewal of an
+already-active reserved lease still stays silent, exactly as before.
+
+This also simplified the implementation — one query instead of two, no
+separate reservation lookup needed per cycle.
+
+**Note on versioning:** the incorrect version of this logic was
+mistakenly repackaged and re-presented under the "5.1.12" label after
+an initial correction attempt, meaning two different code payloads
+briefly existed under the same version string. If you deployed
+anything calling itself 5.1.12, please redeploy this release
+regardless of when you pulled it, to be certain you're running the
+corrected logic. Version numbers should never be reused once a build
+has been shared — this was a process mistake worth naming plainly.
+
 ## [5.1.12] - 2026-08-27
 
 ### New alert type, and consistency fixes for subnet filtering across Leases/Devices/Reservations

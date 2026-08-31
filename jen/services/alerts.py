@@ -114,7 +114,7 @@ DEFAULT_TEMPLATES = {
 #   rotate, DUID-to-MAC extraction only works for 2 of several DUID
 #   types). A parallel v6 device-tracking loop would be a real, separate
 #   feature, not a small generalization.
-# - new_reserved_lease (v5.1.12): same v4-only scope as new_lease/
+# - new_reserved_lease (v5.1.13): same v4-only scope as new_lease/
 #   new_device for the same reason — same lease4/hosts query shape.
 #   Fires every time a reserved device's lease goes newly active (moved
 #   subnets, came back online after being off), using the same
@@ -551,7 +551,7 @@ def check_alerts():
                 with __kea_db_ctx() as db:
                     with db.cursor() as cur:
                         # ── Lease tracking ──
-                        # v5.1.12 — this used to anti-join out any lease
+                        # v5.1.13 — this used to anti-join out any lease
                         # matching a reservation (WHERE h.host_id IS NULL),
                         # to avoid re-firing "new lease" on every renewal of
                         # every statically-reserved device. But that meant
