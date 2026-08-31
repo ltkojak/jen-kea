@@ -113,7 +113,14 @@ def devices():
                     if subnet_filter != "all":
                         try:
                             sid = int(subnet_filter)
-                            if current_user.can_access_subnet(sid):
+                            # v5.1.12 — same fix as reservations.py: verify
+                            # the id actually exists in SUBNET_MAP before
+                            # trusting it, matching leases.py's existing
+                            # guard, rather than filtering directly on a
+                            # possibly stale/nonexistent id.
+                            if sid not in extensions.SUBNET_MAP:
+                                subnet_filter = "all"
+                            elif current_user.can_access_subnet(sid):
                                 where.append("d.last_subnet_id=%s")
                                 params.append(sid)
                             else:
@@ -210,7 +217,20 @@ def _devices_v6():
     if subnet_filter != "all":
         try:
             subnet_id = int(subnet_filter)
-            if subnet_id not in extensions.SUBNET6_MAP:
+            # v5.1.12 — checked SUBNET6_MAP membership only, never the
+            # user's own subnet access, unlike the v4 devices route. Same
+            # paired-v4-subnet access rule as leases_v6/global search: an
+            # unpaired v6 subnet has no v4 side to inherit access from, so
+            # it's restricted to all_subnets users.
+            info = extensions.SUBNET6_MAP.get(subnet_id)
+            paired = info.get("paired_subnet4_id") if info else None
+            allowed = (
+                info is not None and (
+                    current_user.all_subnets or
+                    (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+                )
+            )
+            if not allowed:
                 subnet_filter = "all"
                 subnet_id = None
         except ValueError:

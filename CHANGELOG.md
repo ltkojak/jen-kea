@@ -2,6 +2,54 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.12] - 2026-08-27
+
+### New alert type, and consistency fixes for subnet filtering across Leases/Devices/Reservations
+
+- **New `new_reserved_lease` alert type** (`jen/services/alerts.py`) —
+  `new_lease`/`new_device` are built from a query that deliberately
+  excluded any lease matching a reservation entirely, to avoid
+  re-alerting on every renewal of every statically-reserved device.
+  That also meant a reserved device's lease going newly active — moving
+  subnets, coming back online after being off — was invisible, not just
+  on its first-ever appearance but every single time. Reservation status
+  is now a tag on the exact same freshness check `new_lease` already
+  uses (an IP not seen active last cycle), rather than a reason to skip
+  that check altogether — so a reserved device's lease going active
+  fires `new_reserved_lease` every time it happens, while a mere
+  renewal of an already-active reserved lease still stays silent, same
+  as it always has for the dynamic pool. Selectable per-channel and has
+  its own editable template, same as every other alert type.
+
+- **Subnet-filter consistency across Leases/Devices/Reservations**
+  (`jen/routes/leases.py`, `devices.py`, `reservations.py`) — auditing
+  all three pages side by side surfaced two one-directional gaps:
+  - The v4 Leases filter already verified a submitted subnet id actually
+    exists in `SUBNET_MAP` before using it, falling back to "all"
+    otherwise. Devices and Reservations were missing that same guard —
+    a stale or mistyped subnet id (e.g. left over after a Kea-side
+    subnet renumbering) would filter directly on whatever the id
+    happened to currently mean, with no indication the requested
+    subnet didn't match what was returned. All three v4 views now
+    apply the same existence check consistently.
+  - Conversely, all three IPv6 views checked `SUBNET6_MAP` membership
+    but never the user's own subnet access — a subnet-restricted user
+    could view any v6 subnet's leases/devices/reservations by id
+    regardless of their own restrictions. Now enforced consistently
+    with the same paired-v4-subnet access rule global search already
+    uses (an unpaired v6 subnet has no v4 side to inherit access from,
+    so it's restricted to unrestricted/superadmin users).
+
+Neither of these subnet-filter fixes changes behavior for an
+unrestricted (superadmin, or admin with no subnet_access set) user
+selecting a subnet id that legitimately exists — only for ids that
+don't exist at all, or that a restricted user shouldn't be able to see.
+If a page's dropdown shows a subnet by name and filtering by it still
+returns another subnet's data, that id exists in Jen's own `[subnets]`
+config but no longer matches what Kea's live config actually assigns
+that id to — worth checking directly, since neither of these fixes
+can correct a genuine mismatch between Jen's config and Kea's own.
+
 ## [5.1.11] - 2026-08-23
 
 ### Security/reliability: session-cache staleness, per-key API scoping, alert-template resilience

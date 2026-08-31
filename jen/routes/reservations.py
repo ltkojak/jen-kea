@@ -99,7 +99,21 @@ def reservations():
                     if subnet_filter != "all":
                         try:
                             sid = int(subnet_filter)
-                            if current_user.can_access_subnet(sid):
+                            # v5.1.12 — this branch used to skip straight to
+                            # can_access_subnet() without first checking the
+                            # id is a subnet Jen actually knows about. A
+                            # superadmin's can_access_subnet() is always
+                            # True, so any integer at all — including a
+                            # stale/mistyped id left over from a config
+                            # change — passed straight through as a real
+                            # filter and silently returned whatever
+                            # currently holds that dhcp4_subnet_id, with no
+                            # indication the requested subnet doesn't exist.
+                            # leases.py already guarded this; bringing
+                            # reservations/devices in line with it.
+                            if sid not in extensions.SUBNET_MAP:
+                                subnet_filter = "all"
+                            elif current_user.can_access_subnet(sid):
                                 where.append("h.dhcp4_subnet_id=%s")
                                 params.append(sid)
                             else:
@@ -221,7 +235,18 @@ def _reservations_v6():
     if subnet_filter != "all":
         try:
             subnet_id = int(subnet_filter)
-            if subnet_id not in extensions.SUBNET6_MAP:
+            # v5.1.12 — same fix as leases_v6/devices_v6: checked
+            # SUBNET6_MAP membership only, never the user's own subnet
+            # access. Same paired-v4-subnet access rule as global search.
+            info = extensions.SUBNET6_MAP.get(subnet_id)
+            paired = info.get("paired_subnet4_id") if info else None
+            allowed = (
+                info is not None and (
+                    current_user.all_subnets or
+                    (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+                )
+            )
+            if not allowed:
                 subnet_filter = "all"
                 subnet_id = None
         except ValueError:

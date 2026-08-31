@@ -74,6 +74,7 @@ DEFAULT_TEMPLATES = {
     "ha_failover":        "⚡ <b>HA Failover</b>\n{server_name} state changed: <b>{old_state}</b> → <b>{new_state}</b>",
     "new_lease":          "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "new_device":         "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "new_reserved_lease": "📌 <b>Reserved Device Online</b>\nA reserved device's IP just went active\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "utilization_high":   "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
     "utilization_ok":     "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
     "pool_exhaustion":    "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
@@ -113,6 +114,16 @@ DEFAULT_TEMPLATES = {
 #   rotate, DUID-to-MAC extraction only works for 2 of several DUID
 #   types). A parallel v6 device-tracking loop would be a real, separate
 #   feature, not a small generalization.
+# - new_reserved_lease (v5.1.12): same v4-only scope as new_lease/
+#   new_device for the same reason — same lease4/hosts query shape.
+#   Fires every time a reserved device's lease goes newly active (moved
+#   subnets, came back online after being off), using the same
+#   last_seen_leases freshness check as new_lease — not a one-time
+#   "ever seen" check, since a reserved device coming back after being
+#   offline is exactly the case worth knowing about, not just its first
+#   appearance ever. Renewals of an already-active reserved lease still
+#   don't fire, same as new_lease, since the IP itself doesn't change on
+#   a renewal.
 # - reservation_added / reservation_deleted / kea_config_changed: found
 #   during this audit to NOT actually be wired to fire from any v4 route
 #   today (grepped for send_alert() call sites — none exist for these
@@ -134,6 +145,7 @@ ALERT_TYPE_LABELS = {
     "ha_failover":        "HA failover / state change",
     "new_lease":          "New dynamic lease",
     "new_device":         "Unknown device detected",
+    "new_reserved_lease": "Reserved device's lease goes active",
     "utilization_high":   "Subnet utilization high",
     "utilization_ok":     "Subnet utilization recovery",
     "pool_exhaustion":    "Pool exhaustion warning",
@@ -539,13 +551,34 @@ def check_alerts():
                 with __kea_db_ctx() as db:
                     with db.cursor() as cur:
                         # ── Lease tracking ──
+                        # v5.1.12 — this used to anti-join out any lease
+                        # matching a reservation (WHERE h.host_id IS NULL),
+                        # to avoid re-firing "new lease" on every renewal of
+                        # every statically-reserved device. But that meant
+                        # a reserved device's IP going active — moving
+                        # subnets, coming back online after being off — was
+                        # invisible forever, not just on its very first
+                        # appearance. The fix isn't a separate one-time
+                        # "ever seen" check (that would still miss a
+                        # reserved device that comes back after being
+                        # offline, e.g. moved between subnets) — it's to
+                        # keep reservation status as a tag on the SAME
+                        # freshness check dynamic leases already use.
+                        # last_seen_leases already correctly distinguishes
+                        # "this IP is a genuinely new binding" from "this
+                        # is just a renewal of an IP already active last
+                        # cycle" for the dynamic pool; there's no reason
+                        # reserved leases need different freshness logic,
+                        # only a different alert type once something IS
+                        # fresh.
                         cur.execute("""
                             SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
-                                   IFNULL(l.hostname,'') AS hostname, l.subnet_id
+                                   IFNULL(l.hostname,'') AS hostname, l.subnet_id,
+                                   (h.host_id IS NOT NULL) AS is_reserved
                             FROM lease4 l
                             LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
                                 AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                            WHERE l.state=0 AND h.host_id IS NULL
+                            WHERE l.state=0
                         """)
                         current_leases = set()
                         new_lease_rows = []
@@ -586,9 +619,23 @@ def check_alerts():
                             logger.error(f"Device tracking error: {e}")
 
                         # ── New lease alerts ──
+                        # A row only reaches here once per genuinely new
+                        # binding (last_seen_leases already filtered out
+                        # renewals) — is_reserved just picks which alert
+                        # type describes it. A reserved device gets
+                        # new_reserved_lease every time its lease goes
+                        # active again, not just once ever; new_device
+                        # remains the "genuinely never seen this MAC
+                        # before" signal for the dynamic-pool case, since a
+                        # reserved MAC is by definition already known.
                         for row in new_lease_rows:
                             mac = __format_mac(row["hwaddr"])
                             subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
+                            if row["is_reserved"]:
+                                send_alert("new_reserved_lease", ip=row["ip"], mac=mac,
+                                          hostname=row["hostname"] or "(none)", subnet=subnet_name)
+                                known_macs.add(mac)
+                                continue
                             send_alert("new_lease", ip=row["ip"], mac=mac,
                                       hostname=row["hostname"] or "(none)", subnet=subnet_name)
                             # New device alert — only fire for MACs truly never

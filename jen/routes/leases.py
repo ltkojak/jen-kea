@@ -223,7 +223,23 @@ def _leases_v6():
     if subnet_filter != "all":
         try:
             subnet_id = int(subnet_filter)
-            if subnet_id not in extensions.SUBNET6_MAP:
+            # v5.1.12 — this checked SUBNET6_MAP membership but never the
+            # user's own subnet access at all, unlike every v4 filter route
+            # in this file. A subnet-restricted user could view any v6
+            # subnet's leases by id. Access follows the v6 subnet's
+            # paired_subnet4_id where one exists (same network as its v4
+            # counterpart) — an unpaired v6 subnet has no v4 side to
+            # inherit access from, so it's restricted to all_subnets users,
+            # matching the same rule global search already uses.
+            info = extensions.SUBNET6_MAP.get(subnet_id)
+            paired = info.get("paired_subnet4_id") if info else None
+            allowed = (
+                info is not None and (
+                    current_user.all_subnets or
+                    (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+                )
+            )
+            if not allowed:
                 subnet_filter = "all"
                 subnet_id = None
         except ValueError:
