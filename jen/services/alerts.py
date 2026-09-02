@@ -594,7 +594,7 @@ def ip_to_int(ip):
 
 def check_alerts():
     import time
-    last_kea_status = True
+    last_kea_status = {}
     last_seen_leases = set()
     known_macs = set()
     alerted_high_subnets = set()
@@ -618,32 +618,45 @@ def check_alerts():
 
     while True:
         try:
-            # ── Kea up/down — check all servers ──
-            for srv in extensions.KEA_SERVERS:
-                srv_id = srv["id"]
-                srv_up = __kea_is_up(server=srv)
-                prev_status = last_kea_status if isinstance(last_kea_status, bool) else last_kea_status.get(srv_id, True)
-                if not srv_up and prev_status:
-                    send_alert("kea_down", server_name=srv["name"])
-                elif srv_up and not prev_status:
-                    send_alert("kea_up", server_name=srv["name"])
-                if isinstance(last_kea_status, dict):
+            # ── Kea up/down + HA — checked every ~5s (6 times within
+            # this outer iteration's ~30s cycle), decoupled from the
+            # heavier work below. v5.1.17 — everything in this loop
+            # used to share one single 30-second heartbeat. A Kea/
+            # server reboot that's actually down for less than ~30
+            # seconds (plausible for a fast VM or lightweight OS) could
+            # fall entirely between two polls and never register as
+            # down at all — not a logic bug in the up/down detection
+            # itself (traced it exhaustively; it's correct), just an
+            # architectural blind spot from coupling a cheap, fast-
+            # changing check to the same cadence as much heavier,
+            # far-less time-sensitive work (utilization scans,
+            # snapshots, the daily summary). Checking 6x as often
+            # shrinks that blind spot to ~5 seconds without changing
+            # anything about how often the heavier work below runs.
+            for _ in range(6):
+                for srv in extensions.KEA_SERVERS:
+                    srv_id = srv["id"]
+                    srv_up = __kea_is_up(server=srv)
+                    prev_status = last_kea_status.get(srv_id, True)
+                    if not srv_up and prev_status:
+                        send_alert("kea_down", server_name=srv["name"])
+                    elif srv_up and not prev_status:
+                        send_alert("kea_up", server_name=srv["name"])
                     last_kea_status[srv_id] = srv_up
-                else:
-                    last_kea_status = {s["id"]: __kea_is_up(server=s) for s in extensions.KEA_SERVERS}
 
-                # ── HA state monitoring ──
-                if srv_up and len(extensions.KEA_SERVERS) > 1:
-                    ha = __kea_command("ha-heartbeat", server=srv)
-                    if ha.get("result") == 0:
-                        new_state = ha.get("arguments", {}).get("state", "")
-                        old_state = last_ha_states.get(srv_id)
-                        if old_state is not None and new_state != old_state:
-                            send_alert("ha_failover", server_name=srv["name"],
-                                      old_state=old_state, new_state=new_state)
-                        last_ha_states[srv_id] = new_state
+                    # ── HA state monitoring ──
+                    if srv_up and len(extensions.KEA_SERVERS) > 1:
+                        ha = __kea_command("ha-heartbeat", server=srv)
+                        if ha.get("result") == 0:
+                            new_state = ha.get("arguments", {}).get("state", "")
+                            old_state = last_ha_states.get(srv_id)
+                            if old_state is not None and new_state != old_state:
+                                send_alert("ha_failover", server_name=srv["name"],
+                                          old_state=old_state, new_state=new_state)
+                            last_ha_states[srv_id] = new_state
+                time.sleep(5)
 
-            kea_up = any(isinstance(last_kea_status, dict) and v for v in last_kea_status.values()) if isinstance(last_kea_status, dict) else last_kea_status
+            kea_up = any(last_kea_status.values()) if last_kea_status else True
 
             if kea_up:
                 with __kea_db_ctx() as db:
@@ -850,7 +863,14 @@ def check_alerts():
 
         except Exception as e:
             logger.error(f"Alert thread error: {e}")
-        time.sleep(30)
+            # v5.1.17 — the inner 6x5s health-check loop above accounts
+            # for normal-path cadence now (no trailing sleep needed on
+            # success). This one small sleep is a safety net so a
+            # persistent, immediately-raised exception (e.g. a bad
+            # config value that throws before ever reaching the inner
+            # loop's own sleeps) can't spin the thread at high CPU with
+            # no delay at all.
+            time.sleep(5)
 
 # ─────────────────────────────────────────
 # Favicon

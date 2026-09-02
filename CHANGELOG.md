@@ -2,6 +2,40 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.17] - 2026-09-02
+
+### Decouple Kea health checking from the 30-second monitoring cycle
+
+Investigated a report of a Kea server reboot that Jen never showed as
+down. Traced the up/down detection logic exhaustively — the state
+machine itself is correct (verified: it alerts immediately if Kea is
+already down at Jen's very first check, doesn't false-alarm on a
+healthy start, and fires clean down→up/up→down transitions with no
+edge case found). The real problem is architectural, not a logic bug:
+
+Every check in `check_alerts()` — Kea health, HA state, lease
+tracking, utilization, stale reservations, snapshots, the daily
+summary — shared one single 30-second heartbeat. A reboot that's
+actually down for less than ~30 seconds (entirely plausible for a
+fast VM or a lightweight OS) can fall completely between two polls
+and never register as down at all, purely by timing luck. Polling
+can't guarantee catching every outage shorter than its own interval,
+but coupling a cheap, fast-changing check (is the API up right now?)
+to the same cadence as much heavier, far-less time-sensitive work was
+making that blind spot needlessly wide.
+
+Kea/HA health is now checked every ~5 seconds (6 times within the
+same overall ~30-second cycle the heavier work still runs on) —
+shrinking the blind spot from ~30 seconds to ~5 without changing how
+often utilization scans, snapshots, or the daily summary run. Also
+simplified `last_kea_status` from an awkward bool-or-dict dual-typed
+variable to a plain dict throughout, removing a redundant duplicate
+`kea_is_up()` call that only fired on Jen's very first-ever health
+check.
+
+No behavior change to alert content, thresholds, or any other alert
+type — purely a timing fix for how quickly a real outage gets caught.
+
 ## [5.1.16] - 2026-09-02
 
 ### Per-channel subnet scoping, reserved-lease recurrence control, Telegram rate-limit hardening
