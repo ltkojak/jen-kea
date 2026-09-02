@@ -2,6 +2,41 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.15] - 2026-08-31
+
+### Fix silent per-message alert failures caused by unescaped device hostnames
+
+Root cause of "some notifications never go out" (as distinct from "no
+notifications go out," already fixed in 5.1.14, and "this specific
+alert type never fires," already fixed in 5.1.11–5.1.13): a device's
+DHCP hostname (option 12) is fully attacker/device-controlled — any
+client on the network can set it to anything, including raw `&`, `<`,
+`>`. Telegram (`parse_mode=HTML`) and Pushover (`html=1`) both strictly
+validate the outgoing message as HTML and reject the **entire send**
+if it doesn't parse. An ordinary, not-even-malicious hostname like
+`AT&T-Hotspot` was enough to silently kill every `new_lease`/
+`new_device`/`new_reserved_lease` alert for that one device, every
+single time its lease went active, while every other device on the
+network kept alerting fine. No retry, nothing surfaced anywhere except
+a `failed` row in `alert_log` that nobody's watching in real time —
+exactly the "some, not all, and seemingly random" pattern reported.
+
+Fixed by HTML-escaping the untrusted value (`hostname`) at each call
+site in `check_alerts()`, via a new `safe_text()` helper — deliberately
+**not** applied generically to every kwarg inside `render_template_str`,
+since `daily_summary`'s `summary` kwarg is pre-built HTML from Jen
+itself (deliberate `<b>` tags); blanket-escaping every kwarg would have
+turned that into visible `&lt;b&gt;` text instead of fixing anything.
+Slack/webhook/ntfy/Discord — which strip HTML tags via regex rather
+than validating them — now also unescape the stripped text afterward,
+so a hostname's escaped entities render as the actual characters for
+recipients that don't parse HTML at all, rather than showing literal
+`&amp;` in the message.
+
+Added `tests/test_alerts.py::TestUntrustedHostnameHtmlEscaping`,
+including a regression test asserting `daily_summary`'s own markup
+survives the fix untouched.
+
 ## [5.1.14] - 2026-08-31
 
 ### The real root cause of "subnet filters don't apply": htmx was never actually vendored

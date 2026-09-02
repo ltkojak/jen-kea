@@ -10,6 +10,7 @@ import logging
 import re
 import threading
 import time
+import html
 
 import requests
 
@@ -192,6 +193,31 @@ def render_template_str(template, **kwargs):
     except Exception:
         return template
 
+def safe_text(value):
+    """HTML-escape a single untrusted, device-supplied value before it
+    goes into an alert template.
+
+    v5.1.15 — hostname (DHCP option 12) is attacker/device-controlled:
+    any client on the network can set it to anything, including raw
+    '&', '<', '>'. Telegram (parse_mode=HTML) and Pushover (html=1) both
+    strictly validate the message as HTML and reject the ENTIRE send if
+    it doesn't parse — so a device with an ordinary, not even malicious
+    hostname like "AT&T-Hotspot" could silently kill every new_lease/
+    new_device alert for that one device, every time, while every other
+    device's alerts kept working fine. That's exactly the "some
+    notifications never go out" pattern: not a broken channel, not a
+    broken alert type — content-dependent, per-message failures with no
+    retry and nothing surfaced except a row in alert_log's history that
+    nobody's watching in real time.
+
+    This is deliberately applied per-value at each call site, not
+    generically to every kwarg inside render_template_str — some kwargs
+    (daily_summary's `summary` above all) are pre-built strings that
+    already contain deliberate <b> tags from Jen itself, and blanket-
+    escaping those would turn the intended bold formatting into visible
+    "&lt;b&gt;" text instead of fixing anything."""
+    return html.escape(str(value), quote=False)
+
 def get_active_channels():
     """Get all enabled alert channels."""
     try:
@@ -330,9 +356,15 @@ def _send_slack_channel(message, config):
     if not webhook_url:
         return False
     import re
+    import html
     # Convert HTML bold to Slack bold
     slack_text = message.replace('<b>', '*').replace('</b>', '*')
     slack_text = re.sub(r'<[^>]+>', '', slack_text)
+    # v5.1.15 — message now arrives with untrusted values (hostname, etc.)
+    # HTML-escaped (e.g. "AT&amp;T-Hotspot"), so a Slack message would
+    # otherwise show the raw escaped entity instead of the actual
+    # character. Slack doesn't parse HTML at all, so unescape for display.
+    slack_text = html.unescape(slack_text)
     resp = requests.post(webhook_url, json={"text": slack_text}, timeout=10)
     if resp.status_code != 200:
         raise Exception(f"Slack error {resp.status_code}: {resp.text}")
@@ -343,7 +375,11 @@ def _send_webhook_channel(message, alert_type, config):
     if not webhook_url:
         return False
     import re
-    plain = re.sub(r'<[^>]+>', '', message).replace('\n', '\n')
+    import html
+    # v5.1.15 — same unescape-for-plain-text reasoning as Slack/ntfy/
+    # Discord. The "html" field below intentionally keeps the raw
+    # escaped `message` as-is, for consumers that do want valid HTML.
+    plain = html.unescape(re.sub(r'<[^>]+>', '', message).replace('\n', '\n'))
     payload_type = config.get("payload_type", "json")
     headers = {"Content-Type": "application/json"}
     custom_header_name = config.get("header_name", "")
@@ -362,13 +398,17 @@ def _send_webhook_channel(message, alert_type, config):
 def _send_ntfy_channel(message, config):
     """Send alert via ntfy.sh or self-hosted ntfy."""
     import re
+    import html
     url = config.get("url", "https://ntfy.sh").rstrip("/")
     topic = config.get("topic", "")
     token = config.get("token", "")
     priority = config.get("priority", "default")
     if not topic:
         raise Exception("ntfy topic not configured")
-    plain = re.sub(r'<[^>]+>', '', message).strip()
+    # v5.1.15 — unescape for the same reason as Slack/webhook: ntfy
+    # doesn't parse HTML, so the raw escaped entity would otherwise show
+    # up literally instead of the actual character.
+    plain = html.unescape(re.sub(r'<[^>]+>', '', message).strip())
     headers = {"Title": "Jen Alert", "Priority": priority, "Tags": "bell"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -410,11 +450,14 @@ def _send_pushover_channel(message, config):
 def _send_discord_channel(message, config):
     """Send alert via Discord webhook."""
     import re
+    import html
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
         raise Exception("Discord webhook URL not configured")
     text = message.replace("<b>", "**").replace("</b>", "**")
     text = re.sub(r'<[^>]+>', '', text).strip()
+    # v5.1.15 — same unescape-for-plain-text reasoning as Slack/ntfy.
+    text = html.unescape(text)
     resp = requests.post(webhook_url, json={"content": text, "username": "Jen DHCP"}, timeout=10)
     if resp.status_code not in (200, 204):
         raise Exception(f"Discord error: HTTP {resp.status_code} — {resp.text[:200]}")
@@ -631,19 +674,20 @@ def check_alerts():
                         for row in new_lease_rows:
                             mac = __format_mac(row["hwaddr"])
                             subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
+                            hostname = safe_text(row["hostname"]) if row["hostname"] else "(none)"
                             if row["is_reserved"]:
                                 send_alert("new_reserved_lease", ip=row["ip"], mac=mac,
-                                          hostname=row["hostname"] or "(none)", subnet=subnet_name)
+                                          hostname=hostname, subnet=subnet_name)
                                 known_macs.add(mac)
                                 continue
                             send_alert("new_lease", ip=row["ip"], mac=mac,
-                                      hostname=row["hostname"] or "(none)", subnet=subnet_name)
+                                      hostname=hostname, subnet=subnet_name)
                             # New device alert — only fire for MACs truly never
                             # seen before (not in devices table, not just unknown
                             # since last restart)
                             if mac not in known_macs:
                                 send_alert("new_device", ip=row["ip"], mac=mac,
-                                          hostname=row["hostname"] or "(none)", subnet=subnet_name)
+                                          hostname=hostname, subnet=subnet_name)
                                 known_macs.add(mac)  # prevent repeat alerts this session
 
                         # Update known MACs from all current leases
@@ -704,7 +748,7 @@ def check_alerts():
                                     res = cur.fetchone()
                                     if res:
                                         send_alert("stale_reservation", ip=res["ip"] or "",
-                                                  mac=row["mac"], hostname=res["hostname"] or "",
+                                                  mac=row["mac"], hostname=safe_text(res["hostname"]) if res["hostname"] else "",
                                                   days=row["days"])
                                         alerted_stale_macs.add(row["mac"])
                         except Exception as e:

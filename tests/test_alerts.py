@@ -193,3 +193,60 @@ def mock_kea_db(monkeypatch):
 
     from jen.models import db as db_mod
     monkeypatch.setattr(db_mod, "get_kea_db", lambda: MockConn())
+
+
+class TestUntrustedHostnameHtmlEscaping:
+    """v5.1.15 — a device's DHCP hostname (option 12) is fully
+    attacker/device-controlled: any client on the network can set it to
+    anything, including raw HTML special characters. An ordinary,
+    not-even-malicious hostname like "AT&T-Hotspot" broke Telegram's
+    strict HTML validation (parse_mode=HTML) and Pushover's (html=1),
+    causing the ENTIRE alert to be silently rejected — not just for that
+    one device once, but every single time that device's lease went
+    active, while every other device's alerts kept working fine
+    unaffected. This is what "some notifications never go out" actually
+    looked like: not a broken channel, not a broken alert type, a
+    content-dependent per-message failure with no retry.
+
+    Fixed by escaping only the genuinely untrusted value (hostname) at
+    each call site — not generically inside render_template_str, since
+    daily_summary's `summary` kwarg is pre-built HTML from Jen itself
+    (deliberate <b> tags) and blanket-escaping every kwarg would have
+    turned that into visible "&lt;b&gt;" text instead of fixing
+    anything.
+    """
+
+    def test_safe_text_escapes_ampersand_lt_gt(self):
+        from jen.services.alerts import safe_text
+        assert safe_text("AT&T-Hotspot") == "AT&amp;T-Hotspot"
+        assert safe_text("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
+        assert safe_text("normal-hostname") == "normal-hostname"
+
+    def test_safe_text_does_not_escape_quotes(self):
+        """Telegram/Pushover HTML mode has no attributes to break out of,
+        so quotes are harmless as literal text — escaping them would
+        just make hostnames like "Laura's iPhone" look wrong for no
+        safety benefit."""
+        from jen.services.alerts import safe_text
+        assert safe_text("Laura's iPhone") == "Laura's iPhone"
+
+    def test_new_lease_message_with_problematic_hostname_is_valid_html(self):
+        """The actual bug: a hostname containing '&' used to produce a
+        message Telegram would reject outright."""
+        from jen.services.alerts import render_template_str, safe_text, DEFAULT_TEMPLATES
+        hostname = safe_text("AT&T-Hotspot")
+        msg = render_template_str(DEFAULT_TEMPLATES["new_lease"], ip="10.10.10.50",
+                                  mac="aa:bb:cc:dd:ee:ff", hostname=hostname, subnet="IoT")
+        assert "AT&amp;T-Hotspot" in msg
+        assert "AT&T-Hotspot" not in msg  # the raw, HTML-breaking form must be gone
+        assert "<b>" in msg  # the template's own deliberate markup survives
+
+    def test_daily_summary_html_survives_unescaped(self):
+        """The fix must NOT touch daily_summary's pre-built <b> tags —
+        this is the regression the naive "escape every kwarg" approach
+        would have caused."""
+        from jen.services.alerts import render_template_str, DEFAULT_TEMPLATES
+        summary = "<b>Daily Network Summary</b>\n\n<b>Production</b> (10.10.10.0/23): 65 active"
+        msg = render_template_str(DEFAULT_TEMPLATES["daily_summary"], summary=summary)
+        assert "<b>Daily Network Summary</b>" in msg
+        assert "&lt;b&gt;" not in msg
