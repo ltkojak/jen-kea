@@ -2,6 +2,53 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.16] - 2026-09-02
+
+### Per-channel subnet scoping, reserved-lease recurrence control, Telegram rate-limit hardening
+
+Three additions, all in the notification system, following a request
+to review the whole alerting pipeline end to end:
+
+- **Per-channel subnet scoping** — each alert channel can now be
+  limited to specific subnets for subnet-specific alerts (new lease,
+  new device, reserved device online, utilization, pool exhaustion,
+  stale reservation). Kea up/down, HA failover, and the daily summary
+  are never subnet-scoped, since they aren't tied to one specific
+  subnet. New `alert_channels.subnet_scope` column (migration 14),
+  same NULL-means-unrestricted convention as `users.subnet_access` and
+  `api_keys.subnet_access` — every existing channel keeps alerting on
+  everything by default. Unlike those two, a malformed scope value
+  fails *open* here (sends anyway), not closed — this is a
+  notification preference, not an access boundary, and going silent
+  on every alert because of a JSON typo is worse than occasionally
+  over-notifying.
+
+- **Reserved-lease notification recurrence is now an explicit choice**
+  — a new "Reserved Device Notifications" setting (global, Settings →
+  Alerts) lets you pick "every time it comes online" (the v5.1.13
+  behavior, and the default) or "only the first time ever" (the
+  original, narrower behavior from before 5.1.13, now offered
+  as a documented option instead of something that could only happen
+  by accident).
+
+- **Telegram rate-limit handling** — Telegram's Bot API returns HTTP
+  429 with a `retry_after` value when you exceed roughly one message
+  per second to the same chat, with no handling for that previously. A
+  burst of several devices reconnecting within the same 30-second poll
+  cycle (e.g. after an outage) sends that many `sendMessage` calls
+  back-to-back with no delay between them — enough to trip this limit
+  and permanently drop whichever messages got rate-limited, no retry,
+  nothing to show for it beyond a generic `failed` row in `alert_log`.
+  One retry, honoring Telegram's own requested wait (capped at 10s so
+  a single alert can't stall the whole poll cycle), covers the
+  ordinary burst case.
+
+Also re-confirmed by tracing the code directly: `new_reserved_lease`
+was NOT still firing only once — that was fixed in 5.1.13 and remains
+correct. If reserved-device alerts still aren't showing up after this
+release, the next thing to check is which version is actually running
+live, given how much churn this alert type has had across 5.1.11–13.
+
 ## [5.1.15] - 2026-08-31
 
 ### Fix silent per-message alert failures caused by unescaped device hostnames

@@ -243,6 +243,34 @@ def channel_handles_alert(channel, alert_type):
     except Exception:
         return False
 
+def channel_allows_subnet(channel, subnet_id):
+    """v5.1.16 — per-channel subnet scoping for notifications. NULL/empty
+    scope means unrestricted (every channel's existing default, and what
+    every channel had implicitly before this existed). subnet_id=None
+    means the alert isn't tied to one specific subnet (kea_down,
+    ha_failover, daily_summary, etc.) — those always go through
+    regardless of scope, since "which subnets do you want lease/device
+    alerts for" doesn't apply to them.
+
+    A malformed/unparseable scope value fails OPEN (sends anyway), not
+    closed — this is a notification preference, not an access-control
+    boundary, and silently going quiet on every alert because of a
+    stored JSON typo is a worse outcome here than occasionally
+    over-notifying."""
+    if subnet_id is None:
+        return True
+    scope = channel.get("subnet_scope")
+    if not scope:
+        return True
+    try:
+        import json
+        allowed = json.loads(scope) if isinstance(scope, str) else scope
+        if not allowed:
+            return True
+        return int(subnet_id) in [int(s) for s in allowed]
+    except Exception:
+        return True
+
 def get_channel_config(channel):
     """Parse channel config JSON."""
     try:
@@ -256,14 +284,21 @@ def get_channel_config(channel):
     except Exception:
         return {}
 
-def send_alert(alert_type, log_result=True, **kwargs):
-    """Send alert to all enabled channels that handle this alert type."""
+def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
+    """Send alert to all enabled channels that handle this alert type.
+
+    subnet_id (v5.1.16): the raw subnet id an alert relates to, used
+    only for per-channel subnet-scope filtering (channel_allows_subnet)
+    — never passed into the message template itself. Leave as None for
+    alert types that aren't tied to one specific subnet."""
     template = get_alert_template(alert_type)
     message = render_template_str(template, **kwargs)
     channels = get_active_channels()
     results = []
     for channel in channels:
         if not channel_handles_alert(channel, alert_type):
+            continue
+        if not channel_allows_subnet(channel, subnet_id):
             continue
         ctype = channel["channel_type"]
         config = get_channel_config(channel)
@@ -302,19 +337,39 @@ def send_alert(alert_type, log_result=True, **kwargs):
     return results
 
 def _send_telegram_channel(message, config):
+    """v5.1.16 — Telegram's Bot API rate-limits at roughly one message
+    per second per chat and returns HTTP 429 with a retry_after value
+    when exceeded, with no automatic retry previously. A burst of
+    several new leases landing in the same 30-second poll cycle (e.g.
+    after an outage, when many devices re-associate at once) sends that
+    many sendMessage calls back-to-back with no delay between them —
+    easily enough to trip this limit, permanently dropping whichever
+    messages got rate-limited with no retry and no distinguishing
+    marker beyond a generic "failed" row in alert_log. One retry,
+    honoring Telegram's own requested wait (capped at 10s so a single
+    alert can't stall the whole 30-second poll loop) covers the
+    ordinary burst case without an unbounded retry loop."""
     token = config.get("token", "")
     chat_id = config.get("chat_id", "")
     if not token or not chat_id:
         return False
-    resp = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
-        timeout=10
-    )
-    data = resp.json()
-    if not data.get("ok"):
-        raise Exception(f"Telegram error: {data.get('description', 'Unknown')}")
-    return True
+    last_data = {}
+    for attempt in range(2):
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+            timeout=10
+        )
+        data = resp.json()
+        if data.get("ok"):
+            return True
+        last_data = data
+        if resp.status_code == 429 and attempt == 0:
+            retry_after = data.get("parameters", {}).get("retry_after", 1)
+            time.sleep(min(max(retry_after, 1), 10))
+            continue
+        break
+    raise Exception(f"Telegram error: {last_data.get('description', 'Unknown')}")
 
 def _send_email_channel(message, alert_type, config):
     import smtplib
@@ -593,6 +648,7 @@ def check_alerts():
             if kea_up:
                 with __kea_db_ctx() as db:
                     with db.cursor() as cur:
+                        reserved_lease_mode = __get_global_setting("reserved_lease_mode", "always")
                         # ── Lease tracking ──
                         # v5.1.13 — this used to anti-join out any lease
                         # matching a reservation (WHERE h.host_id IS NULL),
@@ -676,18 +732,31 @@ def check_alerts():
                             subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
                             hostname = safe_text(row["hostname"]) if row["hostname"] else "(none)"
                             if row["is_reserved"]:
+                                # v5.1.16 — recurrence is now an admin
+                                # choice, not something hardcoded either
+                                # way. "always" (default, matches the
+                                # v5.1.13 fix): fires every time a
+                                # reserved lease goes newly active.
+                                # "once": fires only the first time a
+                                # given reserved MAC is ever seen —
+                                # offered as an explicit, documented
+                                # option for anyone who actually wants
+                                # the old quieter behavior, rather than
+                                # that being an accidental bug.
+                                if reserved_lease_mode == "once" and mac in known_macs:
+                                    continue
                                 send_alert("new_reserved_lease", ip=row["ip"], mac=mac,
-                                          hostname=hostname, subnet=subnet_name)
+                                          hostname=hostname, subnet=subnet_name, subnet_id=row["subnet_id"])
                                 known_macs.add(mac)
                                 continue
                             send_alert("new_lease", ip=row["ip"], mac=mac,
-                                      hostname=hostname, subnet=subnet_name)
+                                      hostname=hostname, subnet=subnet_name, subnet_id=row["subnet_id"])
                             # New device alert — only fire for MACs truly never
                             # seen before (not in devices table, not just unknown
                             # since last restart)
                             if mac not in known_macs:
                                 send_alert("new_device", ip=row["ip"], mac=mac,
-                                          hostname=hostname, subnet=subnet_name)
+                                          hostname=hostname, subnet=subnet_name, subnet_id=row["subnet_id"])
                                 known_macs.add(mac)  # prevent repeat alerts this session
 
                         # Update known MACs from all current leases
@@ -719,15 +788,17 @@ def check_alerts():
                                         subnet_key = f"{sid}"
                                         if pct >= threshold and subnet_key not in alerted_high_subnets:
                                             send_alert("utilization_high", subnet=info["name"],
-                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size)
+                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size,
+                                                      subnet_id=sid)
                                             alerted_high_subnets.add(subnet_key)
                                         elif pct < threshold and subnet_key in alerted_high_subnets:
                                             send_alert("utilization_ok", subnet=info["name"],
-                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size)
+                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size,
+                                                      subnet_id=sid)
                                             alerted_high_subnets.discard(subnet_key)
                                         if free <= exhaustion_threshold:
                                             send_alert("pool_exhaustion", subnet=info["name"],
-                                                      cidr=info["cidr"], free=free)
+                                                      cidr=info["cidr"], free=free, subnet_id=sid)
 
                         # ── Stale reservation alerts ──
                         try:
@@ -744,12 +815,13 @@ def check_alerts():
                                 if row["mac"] not in alerted_stale_macs:
                                     # Check if has reservation
                                     mac_hex = row["mac"].replace(":", "")
-                                    cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
+                                    cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id "
+                                               "FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
                                     res = cur.fetchone()
                                     if res:
                                         send_alert("stale_reservation", ip=res["ip"] or "",
                                                   mac=row["mac"], hostname=safe_text(res["hostname"]) if res["hostname"] else "",
-                                                  days=row["days"])
+                                                  days=row["days"], subnet_id=res["dhcp4_subnet_id"])
                                         alerted_stale_macs.add(row["mac"])
                         except Exception as e:
                             logger.error(f"Stale reservation check error: {e}")

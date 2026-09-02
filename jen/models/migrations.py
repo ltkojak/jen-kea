@@ -187,6 +187,7 @@ _BASELINE_TABLES = [
         enabled TINYINT(1) DEFAULT 0,
         config JSON,
         alert_types JSON,
+        subnet_scope JSON DEFAULT NULL COMMENT 'NULL = all subnets; JSON array of subnet_ids = only alert on those',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY unique_channel (channel_type, channel_name)
@@ -495,6 +496,32 @@ def _m013_api_keys_subnet_access(db):
             )
 
 
+def _m014_alert_subnet_scope(db):
+    """alert_channels.subnet_scope: v5.1.16 — every alert channel got
+    every subnet's new_lease/new_device/new_reserved_lease/utilization/
+    stale_reservation alerts, with no way to scope a channel to only
+    the subnets someone actually wants pinged about (e.g. IoT and
+    Production, but not a test VLAN). Same NULL-means-unrestricted
+    convention as api_keys.subnet_access and users.subnet_access — for
+    the same operational reason as those: a channel's notification
+    scope shouldn't have to be re-derived from anything else, and
+    everyone's existing channels keep alerting on everything by default
+    (NULL) unless someone deliberately narrows one down.
+
+    This is a notification preference, not an access-control boundary —
+    unlike the api_keys/users versions of this pattern, a malformed or
+    unparseable subnet_scope value is treated as "no restriction" (send
+    anyway) rather than "deny all", since silently going quiet on every
+    alert due to a JSON typo is a worse failure mode here than
+    occasionally over-notifying."""
+    with db.cursor() as cur:
+        if _column_missing(cur, "alert_channels", "subnet_scope"):
+            cur.execute(
+                "ALTER TABLE alert_channels ADD COLUMN subnet_scope JSON DEFAULT NULL "
+                "COMMENT 'NULL = all subnets; JSON array of subnet_ids = only alert on those'"
+            )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -513,6 +540,8 @@ MIGRATIONS = [
     (12, "users.token_version column for session-cache invalidation",
                                                               _m012_users_token_version),
     (13, "api_keys.subnet_access column for per-key scope",    _m013_api_keys_subnet_access),
+    (14, "alert_channels.subnet_scope + users global setting for reserved-lease recurrence",
+                                                              _m014_alert_subnet_scope),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

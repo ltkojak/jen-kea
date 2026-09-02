@@ -228,6 +228,10 @@ def settings_alerts():
                     if isinstance(ch.get("alert_types"), str):
                         try: ch["alert_types"] = json.loads(ch["alert_types"])
                         except (json.JSONDecodeError, ValueError): ch["alert_types"] = []
+                    # v5.1.16 — per-channel subnet scope for notifications
+                    if isinstance(ch.get("subnet_scope"), str):
+                        try: ch["subnet_scope"] = json.loads(ch["subnet_scope"])
+                        except (json.JSONDecodeError, ValueError): ch["subnet_scope"] = None
                 cur.execute("SELECT alert_type, template_text FROM alert_templates")
                 for row in cur.fetchall():
                     templates[row["alert_type"]] = row["template_text"]
@@ -252,6 +256,8 @@ def settings_alerts():
     summary_time = __user.get_global_setting("daily_summary_time", "07:00")
     pool_exhaustion_free = __user.get_global_setting("pool_exhaustion_free", "5")
     threshold_pct = __user.get_global_setting("alert_threshold_pct", "80")
+    reserved_lease_mode = __user.get_global_setting("reserved_lease_mode", "always")
+    accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     return render_template("settings_alerts.html",
                            channels=channels, templates=templates,
                            default_templates=DEFAULT_TEMPLATES,
@@ -259,6 +265,9 @@ def settings_alerts():
                            summary_time=summary_time,
                            pool_exhaustion_free=pool_exhaustion_free,
                            threshold_pct=threshold_pct,
+                           reserved_lease_mode=reserved_lease_mode,
+                           subnet_map=accessible_subnet_map,
+                           can_grant_all_subnets=current_user.all_subnets,
                            recent_alerts=recent_alerts)
 
 @bp.route("/settings/alerts/save-channel", methods=["POST"])
@@ -271,6 +280,24 @@ def save_alert_channel():
     channel_name = request.form.get("channel_name", "").strip()[:100]
     enabled = 1 if request.form.get("enabled") else 0
     alert_types = request.form.getlist("alert_types[]")
+
+    # v5.1.16 — per-channel subnet scope, same NULL-means-unrestricted
+    # convention and same creator-can't-exceed-their-own-access clamp as
+    # API key scoping. Unlike API keys this is a notification
+    # preference, not an access boundary, but keeping a subnet-
+    # restricted admin from silently scoping a channel to subnets they
+    # can't even see themselves avoids a confusing, hard-to-debug config.
+    subnet_ids_raw = request.form.getlist("subnet_ids")
+    if current_user.all_subnets:
+        if not subnet_ids_raw or "all" in subnet_ids_raw:
+            subnet_scope = None
+        else:
+            ids = [int(s) for s in subnet_ids_raw if s.isdigit()]
+            subnet_scope = json.dumps(ids) if ids else None
+    else:
+        allowed = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+        ids = [int(s) for s in subnet_ids_raw if s.isdigit() and int(s) in allowed]
+        subnet_scope = json.dumps(ids) if ids else None
 
     if channel_type not in ("telegram", "email", "slack", "webhook", "ntfy", "discord"):
         flash("Invalid channel type.", "error")
@@ -352,14 +379,14 @@ def save_alert_channel():
             with db.cursor() as cur:
                 if channel_id:
                     cur.execute("""
-                        UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s
+                        UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s, subnet_scope=%s
                         WHERE id=%s
-                    """, (channel_name, enabled, json.dumps(config), json.dumps(alert_types), channel_id))
+                    """, (channel_name, enabled, json.dumps(config), json.dumps(alert_types), subnet_scope, channel_id))
                 else:
                     cur.execute("""
-                        INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (channel_type, channel_name, enabled, json.dumps(config), json.dumps(alert_types)))
+                        INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types, subnet_scope)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (channel_type, channel_name, enabled, json.dumps(config), json.dumps(alert_types), subnet_scope))
             db.commit()
         flash(f"Alert channel '{channel_name}' saved.", "success")
         __user.audit("SAVE_ALERT_CHANNEL", channel_name, f"type={channel_type} enabled={enabled}")
@@ -468,15 +495,19 @@ def save_alert_global():
     summary_time = request.form.get("summary_time", "07:00").strip()
     pool_free = request.form.get("pool_exhaustion_free", "5").strip()
     threshold = request.form.get("alert_threshold_pct", "80").strip()
+    reserved_lease_mode = request.form.get("reserved_lease_mode", "always").strip()
     if not pool_free.isdigit() or int(pool_free) < 1:
         flash("Pool exhaustion threshold must be a positive number.", "error")
         return redirect(url_for('settings.settings_alerts'))
     if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
         flash("Utilization threshold must be between 1 and 100.", "error")
         return redirect(url_for('settings.settings_alerts'))
+    if reserved_lease_mode not in ("always", "once"):
+        reserved_lease_mode = "always"
     __user.set_global_setting("daily_summary_time", summary_time)
     __user.set_global_setting("pool_exhaustion_free", pool_free)
     __user.set_global_setting("alert_threshold_pct", threshold)
+    __user.set_global_setting("reserved_lease_mode", reserved_lease_mode)
     flash("Global alert settings saved.", "success")
     return redirect(url_for('settings.settings_alerts'))
 

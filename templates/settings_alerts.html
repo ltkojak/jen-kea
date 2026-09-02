@@ -27,6 +27,14 @@
                 <input type="time" name="summary_time" value="{{ summary_time }}" style="max-width:140px;">
                 <div class="form-hint">Time to send daily summary (server local time)</div>
             </div>
+            <div class="form-group">
+                <label>Reserved Device Notifications</label>
+                <select name="reserved_lease_mode" style="max-width:220px;">
+                    <option value="always" {% if reserved_lease_mode == 'always' %}selected{% endif %}>Every time it comes online</option>
+                    <option value="once" {% if reserved_lease_mode == 'once' %}selected{% endif %}>Only the first time ever</option>
+                </select>
+                <div class="form-hint">Applies to "Reserved device's lease goes active" alerts</div>
+            </div>
         </div>
         <button type="submit" class="btn btn-primary">Save Global Settings</button>
     </form>
@@ -43,7 +51,7 @@
 <script>
 var JEN_CHANNELS = {
 {% for ch in channels %}
-  {{ ch.id }}: {id:{{ ch.id }}, channel_type:"{{ ch.channel_type }}", channel_name:{{ ch.channel_name|tojson }}, enabled:{{ ch.enabled }}, config:{{ ch.config|tojson }}, alert_types:{{ ch.alert_types|tojson }}},
+  {{ ch.id }}: {id:{{ ch.id }}, channel_type:"{{ ch.channel_type }}", channel_name:{{ ch.channel_name|tojson }}, enabled:{{ ch.enabled }}, config:{{ ch.config|tojson }}, alert_types:{{ ch.alert_types|tojson }}, subnet_scope:{{ ch.subnet_scope|tojson }}},
 {% endfor %}
 };
 </script>
@@ -98,6 +106,12 @@ var JEN_CHANNELS = {
         </span>
         {% endfor %}
         </div>
+        {% if ch.subnet_scope %}
+        <div style="margin-top:8px;font-size:11px;color:var(--text-muted);">
+            📍 Subnet-specific alerts limited to:
+            {% for sid in ch.subnet_scope %}{{ subnet_map.get(sid, {}).get('name', 'Subnet ' + sid|string) }}{% if not loop.last %}, {% endif %}{% endfor %}
+        </div>
+        {% endif %}
     </div>
     {% endfor %}
     </div>
@@ -329,6 +343,25 @@ var JEN_CHANNELS = {
                 </div>
             </div>
 
+            <!-- Subnet scope -->
+            <div class="form-group" style="margin-top:16px;">
+                <label>Subnet Scope</label>
+                <select name="subnet_ids" id="channelSubnetIds" multiple style="width:100%;min-height:80px;">
+                    {% if can_grant_all_subnets %}
+                    <option value="all" selected>All Subnets</option>
+                    {% endif %}
+                    {% for sid, info in subnet_map.items() %}
+                    <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
+                    {% endfor %}
+                </select>
+                <div class="form-hint">
+                    Ctrl/Cmd+click for multiple. Only affects subnet-specific alerts (new lease, new device,
+                    reserved device online, utilization, stale reservation) — Kea up/down, HA failover, and
+                    the daily summary always send regardless of this.
+                    {% if not can_grant_all_subnets %} Limited to the subnets your own account can access.{% endif %}
+                </div>
+            </div>
+
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Channel</button>
@@ -407,6 +440,10 @@ function showAddChannel() {
     document.querySelectorAll('.alert-type-cb').forEach(cb => cb.checked = false);
     // Clear all fields
     ['tgToken','tgChatId'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    const subnetEl = document.getElementById('channelSubnetIds');
+    if (subnetEl) {
+        Array.from(subnetEl.options).forEach(opt => { opt.selected = (opt.value === 'all'); });
+    }
     showChannelFields('telegram');
     document.getElementById('channelModal').style.display = 'flex';
 }
@@ -414,10 +451,10 @@ function showAddChannel() {
 function editChannelFromBtn(id) {
     const ch = JEN_CHANNELS[id];
     if (!ch) { alert('Channel not found'); return; }
-    editChannel(ch.id, ch.channel_type, ch.channel_name, ch.enabled, ch.config, ch.alert_types);
+    editChannel(ch.id, ch.channel_type, ch.channel_name, ch.enabled, ch.config, ch.alert_types, ch.subnet_scope);
 }
 
-function editChannel(id, ctype, cname, enabled, config, alertTypes) {
+function editChannel(id, ctype, cname, enabled, config, alertTypes, subnetScope) {
     document.getElementById('modalTitle').textContent = 'Edit Channel: ' + cname;
     document.getElementById('channelId').value = id;
     const typeEl = document.getElementById('channelType');
@@ -465,6 +502,20 @@ function editChannel(id, ctype, cname, enabled, config, alertTypes) {
     document.querySelectorAll('.alert-type-cb').forEach(cb => {
         cb.checked = types.includes(cb.value);
     });
+    const subnetEl = document.getElementById('channelSubnetIds');
+    if (subnetEl) {
+        // subnetScope is null/undefined for "all subnets" (the default,
+        // and what every channel had implicitly before this existed),
+        // or an array of subnet ids for a restricted channel.
+        const scope = subnetScope || null;
+        Array.from(subnetEl.options).forEach(opt => {
+            if (opt.value === 'all') {
+                opt.selected = !scope;
+            } else {
+                opt.selected = !!(scope && scope.map(String).includes(opt.value));
+            }
+        });
+    }
     showChannelFields(ctype);
     document.getElementById('channelModal').style.display = 'flex';
 }
