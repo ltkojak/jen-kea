@@ -2,6 +2,45 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.18] - 2026-09-03
+
+### Fix action-menu dropdown getting trapped in a scroll box on filtered/short tables
+
+App-wide UI bug: `.table-wrap` (the container wrapping every list-page
+table — Leases, Reservations, Devices, both v4 and v6 variants, Users,
+API Keys, Audit Log, Plugins, Search Results, Saved Searches, Alert
+Settings, MFA Trusted Devices, the Dashboard's recent-leases widget —
+16 templates in total) only ever set `overflow-x: auto`, leaving
+`overflow-y` implicit. Per the CSS spec's overflow computed-value
+fixup rule, when one axis is explicitly non-`visible` and the other is
+left as the default `visible`, browsers force **both** axes to behave
+as `auto` — so this container was silently clipping vertical overflow
+too, not just the horizontal overflow it was actually meant for.
+
+The visible symptom: `.action-menu-dropdown` (the "⋯" menu) is an
+absolutely-positioned child that needs to overflow below the table
+when a row near the bottom opens it. With a short, heavily-filtered
+result set — one or two rows — there's no natural extra table height
+to absorb that overflow, so the dropdown got trapped inside a forced,
+tiny scroll region instead of floating naturally above the page,
+exactly matching the report: filter down to a couple of devices, open
+the "⋯" menu, and end up scrolling inside a cramped box just to click
+an item.
+
+Fixed with a single shared CSS rule change (`overflow-y: visible` set
+explicitly rather than left implicit) in `base.html` — since every
+affected page shares this one container class, this one-line fix
+resolves it everywhere at once rather than needing 16 separate
+per-template patches. Confirmed no `.table-wrap` usage anywhere
+intentionally relied on vertical scrolling (no paired `max-height`
+found), and confirmed the dropdown itself has no nested overflow
+clipping of its own that would undo the fix one level down.
+
+Added `tests/test_table_wrap_overflow.py`, which parses the actual CSS
+rule text (not just a substring match) so a future edit that drops the
+explicit `overflow-y: visible` — reintroducing the fixup-rule bug —
+fails CI immediately instead of shipping invisibly again.
+
 ## [5.1.17] - 2026-09-02
 
 ### Decouple Kea health checking from the 30-second monitoring cycle
