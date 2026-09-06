@@ -2,6 +2,62 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.20] - 2026-09-06
+
+### The action-menu clipping fix, actually fixed this time
+
+v5.1.18's fix for `.action-menu-dropdown` getting trapped in a scroll
+box on short/filtered tables did nothing. Confirmed still fully
+reproducible on v5.1.19 exactly as originally reported.
+
+**What went wrong:** the CSS overflow "computed-value fixup" rule (one
+axis explicitly non-`visible` forces the other axis to behave as
+non-`visible` too) operates on the *computed* value, not on whether it
+was authored explicitly or left as the default. `overflow-x: auto;
+overflow-y: visible;` computes identically to `overflow-x: auto;`
+alone — there is no way to fix this by setting overflow properties on
+the same element. v5.1.18 shipped a no-op, and its regression test
+only checked that the literal string `overflow-y: visible` appeared in
+the CSS text, never actual browser clipping behavior, so it passed a
+fix that changed nothing.
+
+**The actual fix:** `.action-menu-dropdown` is now repositioned via JS
+to `position: fixed` (viewport-relative — genuinely escapes ancestor
+overflow clipping, confirmed no ancestor here sets transform/filter/
+perspective/will-change:transform, any of which would defeat this)
+computed from the trigger button's own `getBoundingClientRect()`, only
+while open. Includes a flip-upward fallback when there isn't enough
+room below the button (exactly the short-table case reported), closes
+on scroll rather than trying to track a moving trigger, and
+repositions (without closing) on window resize.
+
+Reverted the ineffective `overflow-y: visible` from `.table-wrap`.
+
+**Verified properly this time**, not just asserted:
+- Extracted and syntax-checked the actual shipped JS with Node
+- Ran the real positioning math against four scenarios (normal case,
+  flip-upward, edge-clamping, and the exact short-viewport/short-table
+  case from the report) — all correct
+- Ran the actual functions (not a reimplementation) against a real
+  jsdom-simulated DOM: confirmed the dropdown genuinely switches to
+  `position: fixed` with correct coordinates on open, and all inline
+  overrides clear correctly on close
+
+Rewrote `tests/test_table_wrap_overflow.py` (the previous version
+tested for the ineffective CSS property) to check for the actual fix
+mechanism, and to explicitly guard against the ineffective
+`overflow-y: visible` ever being reintroduced and mistaken for
+sufficient again. This project has no browser-automation test
+infrastructure, so these are structural checks (the right function
+exists, calls the right APIs, is wired to the right events) — a real
+limitation, not a substitute for confirming this by hand after
+deploying it.
+
+Also: swept every comment touched in this release for accidental
+word-collisions with existing tests' `assert <word> not in resp.data`
+checks (the exact class of self-inflicted CI failure fixed in 5.1.19)
+before shipping, rather than after.
+
 ## [5.1.19] - 2026-09-06
 
 ### Fix CI test failure from v5.1.18's own explanatory CSS comment

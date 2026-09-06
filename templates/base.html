@@ -82,25 +82,24 @@
         .card-title { font-weight: 600; font-size: 14px; }
 
         /* Tables */
-        /* v5.1.18 — .table-wrap only ever set overflow-x, leaving
-           overflow-y implicit (visible). Per the CSS spec's overflow
-           computed-value fixup, when one axis is explicitly non-visible
-           and the second axis is left at the visible default, browsers
-           force BOTH axes to behave as auto — so this was silently
-           clipping vertical overflow too, not just horizontal,
-           everywhere it's used. That's what trapped the
-           .action-menu-dropdown (an absolutely-positioned child needing
-           to overflow below the table when opened near the bottom)
-           inside a tiny forced scroll region — worst with a short,
-           heavily-filtered result set, where there's no natural extra
-           table height to absorb the dropdown's overflow. No
-           .table-wrap usage anywhere pairs with an intentional
-           max-height, confirming vertical scrolling was never wanted
-           here — only the horizontal scroll for wide tables on narrow
-           screens was ever intended. Setting overflow-y explicitly (rather than leaving
-           it implicit) removes the ambiguity that triggers the fixup
-           rule. */
-        .table-wrap { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; }
+        /* v5.1.18 attempted to fix .action-menu-dropdown clipping by
+           adding overflow-y: visible here, reasoning that the CSS
+           overflow fixup rule (one non-visible axis forces the second
+           to behave as auto too) only triggered because overflow-y was
+           left implicit. That reasoning was wrong: the fixup rule
+           operates on the COMPUTED value of visible vs non-visible,
+           not on whether it was authored explicitly or defaulted —
+           overflow-x: auto; overflow-y: visible; computes identically
+           to overflow-x: auto; alone, so that "fix" changed nothing.
+           v5.1.20 reverts it (overflow-y left implicit again, since an
+           explicit visible does nothing a default visible didn't
+           already do) and fixes the actual dropdown-clipping problem
+           properly at the JS level instead — see positionActionMenu-
+           Dropdown() near the bottom of this file, which switches
+           .action-menu-dropdown to position:fixed (viewport-relative,
+           genuinely escapes ancestor overflow clipping) computed from
+           the trigger button's own coordinates, only while open. */
+        .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
         th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
         td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
@@ -629,25 +628,87 @@ function sortTable(table, col, th) {
     });
 
     // Row action menus (⋯ buttons) — close on outside click, close on
-    // Escape, and only one open at a time. The open/close toggle itself
-    // is pure CSS (checkbox + label, same mechanism as .nav-dropdown
-    // above); this only handles the parts CSS alone can't do.
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('.action-menu')) {
-            document.querySelectorAll('.action-menu-toggle:checked').forEach(function(cb) { cb.checked = false; });
+    // Escape, only one open at a time, and (v5.1.20) positioned via
+    // JS rather than left as position:absolute.
+    //
+    // Why: .action-menu-dropdown lives inside .table-wrap, which needs
+    // overflow-x: auto for wide tables to scroll horizontally on
+    // narrow screens. Per the CSS overflow spec, once ANY axis on an
+    // element is non-visible, the second axis is forced to behave as
+    // non-visible too, regardless of what it's actually set to — so a
+    // position:absolute dropdown that needs to overflow below a short,
+    // heavily-filtered table gets clipped by .table-wrap's bounds no
+    // matter what overflow-y is set to on that same element. There is
+    // no CSS-only fix for this; the standard, correct fix is to take
+    // the dropdown out of that clipped flow entirely.
+    //
+    // position:fixed is positioned relative to the viewport and
+    // genuinely escapes ancestor overflow clipping (confirmed no
+    // ancestor here sets transform/filter/perspective/
+    // will-change:transform, any of which would create a new
+    // containing block and defeat this). Coordinates are computed from
+    // the trigger button's own getBoundingClientRect() each time a
+    // menu opens, with a flip-upward fallback when there isn't enough
+    // room below, and the menu closes (rather than trying to track and
+    // reposition) on scroll, since a stale fixed position would
+    // drift out of alignment with its trigger as the page
+    // scrolls underneath it.
+    function actionMenuDropdownFor(toggle) {
+        var menu = toggle.closest('.action-menu');
+        return menu ? menu.querySelector('.action-menu-dropdown') : null;
+    }
+    function positionActionMenuDropdown(toggle) {
+        var menu = toggle.closest('.action-menu');
+        var dropdown = actionMenuDropdownFor(toggle);
+        var btn = menu && menu.querySelector('.action-menu-btn');
+        if (!dropdown || !btn) return;
+        var rect = btn.getBoundingClientRect();
+        dropdown.style.position = 'fixed';
+        dropdown.style.right = 'auto';  // overrides the CSS right:0 rule, which
+                                         // would conflict with an explicit left below
+        var dw = dropdown.offsetWidth;
+        var dh = dropdown.offsetHeight;
+        var vw = document.documentElement.clientWidth;
+        var vh = document.documentElement.clientHeight;
+        var left = rect.right - dw;
+        if (left < 4) left = 4;
+        if (left + dw > vw - 4) left = Math.max(4, vw - dw - 4);
+        var top = rect.bottom + 4;
+        if (top + dh > vh - 4 && (rect.top - dh - 4) > 4) {
+            top = rect.top - dh - 4;  // not enough room below — flip above the button
         }
+        dropdown.style.left = left + 'px';
+        dropdown.style.top = top + 'px';
+    }
+    function closeActionMenu(toggle) {
+        toggle.checked = false;
+        var dropdown = actionMenuDropdownFor(toggle);
+        if (dropdown) {
+            dropdown.style.position = '';
+            dropdown.style.left = '';
+            dropdown.style.top = '';
+            dropdown.style.right = '';
+        }
+    }
+    function closeAllActionMenus() {
+        document.querySelectorAll('.action-menu-toggle:checked').forEach(closeActionMenu);
+    }
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('.action-menu')) closeAllActionMenus();
     });
     document.addEventListener('change', function(e) {
-        if (e.target.classList.contains('action-menu-toggle') && e.target.checked) {
+        if (!e.target.classList.contains('action-menu-toggle')) return;
+        if (e.target.checked) {
             document.querySelectorAll('.action-menu-toggle').forEach(function(cb) {
-                if (cb !== e.target) cb.checked = false;
+                if (cb !== e.target && cb.checked) closeActionMenu(cb);
             });
+            positionActionMenuDropdown(e.target);
+        } else {
+            closeActionMenu(e.target);  // clears any leftover inline positioning
         }
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            document.querySelectorAll('.action-menu-toggle:checked').forEach(function(cb) { cb.checked = false; });
-        }
+        if (e.key === 'Escape') closeAllActionMenus();
     });
     // Close the menu itself once an item inside it is actually clicked
     // (edit opens a modal, delete opens the confirm dialog — either way
@@ -657,8 +718,19 @@ function sortTable(table, col, th) {
         if (item) {
             var menu = item.closest('.action-menu');
             var toggle = menu && menu.querySelector('.action-menu-toggle');
-            if (toggle) toggle.checked = false;
+            if (toggle) closeActionMenu(toggle);
         }
+    });
+    // Scroll anywhere (the page, or a horizontally-scrolled .table-wrap)
+    // closes any open menu rather than trying to keep it pinned to a
+    // now-moved button — capture:true since scroll events on nested
+    // scrollable containers don't bubble.
+    document.addEventListener('scroll', function() { closeAllActionMenus(); }, true);
+    // Reposition (don't close) on resize — far less disruptive than
+    // scroll to do mid-interaction, and orientation changes/devtools
+    // resizing shouldn't just dismiss whatever the user had open.
+    window.addEventListener('resize', function() {
+        document.querySelectorAll('.action-menu-toggle:checked').forEach(positionActionMenuDropdown);
     });
 
     // Keyboard shortcuts
