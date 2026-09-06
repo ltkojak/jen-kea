@@ -253,16 +253,48 @@ def detect_installed_kea_services(ssh) -> dict:
     Check whether the kea-dhcp4/kea-dhcp6 binaries actually exist on
     this server — for both protocols, not just whichever one triggered
     the check, since a user fixing one is likely to want to know about
-    the other too. Returns {"dhcp4": bool, "dhcp6": bool}. `which`
-    exiting non-zero (not found) is the expected, common case for a
-    protocol not yet installed — never raises for that; only a genuine
-    SSH/connection failure propagates to the caller.
+    the other too. Returns {"dhcp4": bool, "dhcp6": bool}.
+
+    v5.1.21 — this used to run `which kea-dhcp4 kea-dhcp6`, which
+    searches $PATH. Paramiko's exec_command() runs a non-interactive,
+    non-login shell by default, and depending on the target's sshd/PAM
+    configuration that session's $PATH can easily exclude /usr/sbin —
+    exactly where the official kea-dhcp4-server/kea-dhcp6-server .deb
+    packages install these binaries (standard Debian policy for
+    system-administration daemons). The practical result: a server
+    where Kea is genuinely installed and running — Control Agent
+    reachable, actually serving DHCP — got reported as "not installed"
+    here, because `which` was searching a PATH that never included the
+    directory the binary actually lives in. The existing test suite
+    never caught this because it only exercised the function's output
+    PARSING against a canned stdout string, never the real command's
+    actual PATH-dependent behavior against a live, restricted SSH
+    session — a genuine blind spot, not something the old tests were
+    wrong about for what they checked.
+
+    Now checks `command -v` (same PATH-based search as before, kept as
+    the first, cheapest check — still catches non-standard install
+    locations someone added to their own PATH) OR'd with explicit
+    `test -x` checks against the two standard install directories
+    (/usr/sbin, the actual real-world location; /usr/local/sbin, for a
+    build-from-source install), so a restricted non-login PATH can no
+    longer produce a false "not installed" for a binary that
+    demonstrably exists and is genuinely running. `which` exiting
+    non-zero (not found) is the expected, common case for a protocol
+    not yet installed — never raises for that; only a genuine SSH/
+    connection failure propagates to the caller.
     """
     result = {"dhcp4": False, "dhcp6": False}
-    _, stdout, _ = ssh.exec_command("which kea-dhcp4 kea-dhcp6 2>/dev/null")
+    cmd = (
+        "for f in kea-dhcp4 kea-dhcp6; do "
+        "if command -v \"$f\" >/dev/null 2>&1 || "
+        "[ -x \"/usr/sbin/$f\" ] || [ -x \"/usr/local/sbin/$f\" ]; then "
+        "echo \"${f}:FOUND\"; else echo \"${f}:MISSING\"; fi; done"
+    )
+    _, stdout, _ = ssh.exec_command(cmd)
     out = stdout.read().decode()
-    result["dhcp4"] = "kea-dhcp4" in out
-    result["dhcp6"] = "kea-dhcp6" in out
+    result["dhcp4"] = "kea-dhcp4:FOUND" in out
+    result["dhcp6"] = "kea-dhcp6:FOUND" in out
     return result
 
 

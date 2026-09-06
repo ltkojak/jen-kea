@@ -2357,21 +2357,41 @@ class TestDetectInstalledKeaServices:
 
     def test_both_present(self):
         from jen.services.kea_authoring import detect_installed_kea_services
-        ssh = FakeSSHClient([("/usr/sbin/kea-dhcp4\n/usr/sbin/kea-dhcp6\n", "")])
+        ssh = FakeSSHClient([("kea-dhcp4:FOUND\nkea-dhcp6:FOUND\n", "")])
         result = detect_installed_kea_services(ssh)
         assert result == {"dhcp4": True, "dhcp6": True}
 
     def test_only_dhcp4_present(self):
         from jen.services.kea_authoring import detect_installed_kea_services
-        ssh = FakeSSHClient([("/usr/sbin/kea-dhcp4\n", "")])
+        ssh = FakeSSHClient([("kea-dhcp4:FOUND\nkea-dhcp6:MISSING\n", "")])
         result = detect_installed_kea_services(ssh)
         assert result == {"dhcp4": True, "dhcp6": False}
 
     def test_neither_present(self):
         from jen.services.kea_authoring import detect_installed_kea_services
-        ssh = FakeSSHClient([("", "")])
+        ssh = FakeSSHClient([("kea-dhcp4:MISSING\nkea-dhcp6:MISSING\n", "")])
         result = detect_installed_kea_services(ssh)
         assert result == {"dhcp4": False, "dhcp6": False}
+
+    def test_command_falls_back_to_standard_sbin_paths_not_just_path_search(self):
+        """v5.1.21 — the actual bug: `which` alone only searches $PATH,
+        and a non-interactive SSH session's $PATH can easily exclude
+        /usr/sbin, where the real kea-dhcp4-server/kea-dhcp6-server
+        packages install these binaries. A genuinely-installed,
+        genuinely-running Kea server got reported as "not installed"
+        purely because of this. Confirms the actual command sent checks
+        the standard install locations directly, not just $PATH —
+        FakeSSHClient records the exact command string regardless of
+        what canned output it returns, so this verifies the fix is
+        actually present rather than only that output-parsing works
+        (which the pre-fix tests already covered without ever catching
+        this)."""
+        from jen.services.kea_authoring import detect_installed_kea_services
+        ssh = FakeSSHClient([("kea-dhcp4:FOUND\nkea-dhcp6:MISSING\n", "")])
+        detect_installed_kea_services(ssh)
+        cmd = ssh.calls[0]
+        assert "/usr/sbin/" in cmd, "must check the standard install path directly, not rely on $PATH alone"
+        assert "command -v" in cmd or "which" in cmd, "should still also try a PATH-based search"
 
 
 class TestInstallKeaService:
@@ -2476,7 +2496,7 @@ class TestCheckKeaBinariesRoute:
         server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4"}
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         import jen.services.kea6 as kea6_module
-        ssh = FakeSSHClient([("/usr/sbin/kea-dhcp4\n", "")])
+        ssh = FakeSSHClient([("kea-dhcp4:FOUND\nkea-dhcp6:MISSING\n", "")])
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: ssh)
         resp = logged_in_client.post("/settings/infrastructure/check-kea-binaries")
         assert resp.status_code == 200

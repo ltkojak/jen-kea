@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.21] - 2026-09-06
+
+### Fix false "kea-dhcp4/kea-dhcp6 not installed" report on a genuinely-running server
+
+Settings → Infrastructure → "Check Installation" (Kea Package Status)
+could report both binaries as not installed on a server that was
+demonstrably running Kea fine — Control Agent connected, actively
+serving DHCP.
+
+**Cause:** the check ran `which kea-dhcp4 kea-dhcp6` over SSH, which
+only searches `$PATH`. Paramiko's `exec_command()` runs a
+non-interactive, non-login shell by default, and depending on the
+target's sshd/PAM configuration, that session's `$PATH` can easily
+exclude `/usr/sbin` — exactly where the official
+`kea-dhcp4-server`/`kea-dhcp6-server` `.deb` packages install these
+binaries (standard Debian policy for system-administration daemons).
+A genuinely-installed, genuinely-running server got reported as "not
+installed" purely because the check was searching a `$PATH` that never
+included the directory the binary actually lives in.
+
+The existing tests for this function never caught it because they only
+exercised output *parsing* against a canned stdout string (literally
+hardcoding `/usr/sbin/kea-dhcp4` as the fixture text) — never the real
+command's actual `$PATH`-dependent behavior against a live, restricted
+SSH session. Verified the fix directly: ran both the old and new
+commands under a deliberately restricted `$PATH` missing `/usr/sbin`,
+confirming the old command fails to find a binary that's genuinely
+there while the new one correctly finds it.
+
+**Fix:** now checks `command -v` (kept as the first, cheapest check —
+still catches non-standard install locations) OR'd with explicit
+`test -x` checks against the standard install directories
+(`/usr/sbin`, the real-world location; `/usr/local/sbin`, for a
+build-from-source install), so a restricted non-login `$PATH` can no
+longer produce a false negative for a binary that demonstrably exists.
+
+Updated the existing tests' canned output to match the new detection
+markers, and added a new test that checks the actual SSH command sent
+includes the `/usr/sbin/` fallback — confirming the fix mechanism is
+present, not just that output parsing still works (which is exactly
+what the previous tests already covered without ever catching this).
+
 ## [5.1.20] - 2026-09-06
 
 ### The action-menu clipping fix, actually fixed this time
