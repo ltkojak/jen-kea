@@ -85,20 +85,21 @@
         /* v5.1.18 — .table-wrap only ever set overflow-x, leaving
            overflow-y implicit (visible). Per the CSS spec's overflow
            computed-value fixup, when one axis is explicitly non-visible
-           and the other is left as the visible default, browsers force
-           BOTH axes to behave as auto — so this was silently clipping
-           vertical overflow too, not just horizontal, everywhere it's
-           used. That's what trapped the .action-menu-dropdown (an
-           absolutely-positioned child needing to overflow below the
-           table when opened near the bottom) inside a tiny forced
-           scroll region — worst with a short, heavily-filtered result
-           set, where there's no natural extra table height to absorb
-           the dropdown's overflow. No .table-wrap usage anywhere pairs
-           with an intentional max-height, confirming vertical scrolling
-           was never wanted here — only the horizontal scroll for wide
-           tables on narrow screens was ever intended. Setting
-           overflow-y explicitly (rather than leaving it implicit)
-           removes the ambiguity that triggers the fixup rule. */
+           and the second axis is left at the visible default, browsers
+           force BOTH axes to behave as auto — so this was silently
+           clipping vertical overflow too, not just horizontal,
+           everywhere it's used. That's what trapped the
+           .action-menu-dropdown (an absolutely-positioned child needing
+           to overflow below the table when opened near the bottom)
+           inside a tiny forced scroll region — worst with a short,
+           heavily-filtered result set, where there's no natural extra
+           table height to absorb the dropdown's overflow. No
+           .table-wrap usage anywhere pairs with an intentional
+           max-height, confirming vertical scrolling was never wanted
+           here — only the horizontal scroll for wide tables on narrow
+           screens was ever intended. Setting overflow-y explicitly (rather than leaving
+           it implicit) removes the ambiguity that triggers the fixup
+           rule. */
         .table-wrap { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
         th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }

@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.1.19] - 2026-09-06
+
+### Fix CI test failure from v5.1.18's own explanatory CSS comment
+
+`test_kea6.py::TestReservationsV6View::test_v6_view_search_filters_by_hostname`
+started failing in CI after v5.1.18 shipped — not a regression in any
+actual functionality. That test inserts two IPv6 reservations, one
+hostnamed "findme" and one hostnamed "other", searches for "findme",
+and asserts the string "other" doesn't appear anywhere in the full
+page response — a reasonable way to confirm the non-matching
+reservation was correctly excluded from the results.
+
+v5.1.18's fix for the `.table-wrap` overflow bug added a detailed
+explanatory comment directly in `base.html`'s `<style>` block,
+including the sentence "...one axis is explicitly non-visible and
+**the other** is left as the visible default...". Since `base.html` is
+the shared page shell rendered on every full-page response, that
+comment text — containing the substring "other" — showed up in this
+test's response body too, tripping the assertion. The actual
+reservation filtering was, and remains, completely correct; only one
+reservation was ever rendered in the results table. This was a
+collision between an explanatory comment's prose and a test's
+substring check, not a functional bug.
+
+Fixed by rewording the comment (no technical meaning changed) to avoid
+the literal substring. Swept every other `assert <word> not in
+resp.data`-style test in the suite against `base.html` specifically,
+since it's the only template rendered on every full page — found four
+other superficial matches (`page-header`, `btn-act-edit`,
+`btn-act-pin`, `btn-act-del`), all of which are pre-existing CSS class
+*definitions* that were already in `base.html` before this session and
+only matter in practice for full-page responses; the tests checking
+for their absence specifically target HTMX partial responses, which
+never include `base.html`'s `<style>` block at all — confirmed no
+actual collision there.
+
+No functional changes — comment wording only.
+
 ## [5.1.18] - 2026-09-03
 
 ### Fix action-menu dropdown getting trapped in a scroll box on filtered/short tables
