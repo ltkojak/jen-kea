@@ -15,12 +15,24 @@ as cheap insurance against a future changelog entry that happens to
 contain a literal '<' or '&' (e.g., quoting an error message, a code
 snippet, or an HTML attribute) rendering as a broken/injected tag
 instead of literal text.
+
+v5.2.3 — added TestVersionSortKey and the sort-order tests in
+TestParseChangelog after a real bug report: "What's New" showed an old
+3.x-series release as the newest entry. This module's parsing logic
+used to trust the physical order release headers appear in the file;
+that assumption held for every test fixture used here (all
+newest-first by construction) but apparently doesn't hold somewhere in
+the real CHANGELOG.md's genuine multi-year history. Fixed by sorting
+explicitly by parsed version instead of trusting file order at all —
+these tests prove that holds even when a test fixture is deliberately
+built out of order, rather than only checking against already-sorted
+input like every test here previously did.
 """
 
 import pathlib
 import tempfile
 
-from jen.services.changelog import parse_changelog, _inline_markdown_to_html
+from jen.services.changelog import parse_changelog, _inline_markdown_to_html, _version_sort_key
 
 
 class TestInlineMarkdown:
@@ -61,6 +73,27 @@ class TestInlineMarkdown:
 
     def test_plain_text_with_no_markup_passes_through_unchanged_but_escaped(self):
         assert _inline_markdown_to_html("plain text, nothing special") == "plain text, nothing special"
+
+
+class TestVersionSortKey:
+
+    def test_simple_three_part_version(self):
+        assert _version_sort_key("5.2.2") == (5, 2, 2)
+
+    def test_numeric_not_lexical_comparison(self):
+        """The actual defect class plain string sorting has: "5.2.10"
+        < "5.2.9" as strings, since "1" < "9" character-by-character."""
+        assert _version_sort_key("5.2.10") > _version_sort_key("5.2.9")
+
+    def test_older_series_sorts_lower(self):
+        assert _version_sort_key("3.5.17") < _version_sort_key("5.2.2")
+
+    def test_malformed_version_falls_back_to_lowest_priority_not_crash(self):
+        assert _version_sort_key("unreleased") == (0,)
+        assert _version_sort_key("") == (0,)
+
+    def test_suffix_after_numeric_prefix_is_ignored_gracefully(self):
+        assert _version_sort_key("5.2.2-beta") == (5, 2, 2)
 
 
 class TestParseChangelog:
@@ -166,6 +199,75 @@ Oldest content.
         assert len(releases) == 1
         assert releases[0]["version"]
         assert releases[0]["date"]
+
+    def test_entries_sorted_newest_first_even_when_file_order_disagrees(self, tmp_path):
+        """v5.2.3 — the actual reported bug: "What's New" showed an old
+        release as if it were the newest. This module's own parsing
+        logic was already correct against every file used to test it,
+        because those files all happened to already be newest-first —
+        the real, much longer CHANGELOG.md (genuine multi-year history
+        predating this feature) apparently isn't strictly ordered that
+        way somewhere in its older entries. Rather than reproduce that
+        exact historical quirk, this proves the fix holds regardless
+        of file order at all: an old entry placed FIRST in the file
+        must still sort last."""
+        content = """# Changelog
+
+## [3.5.17] - 2026-06-05
+
+Old entry, physically first in the file.
+
+## [5.2.2] - 2026-09-08
+
+Newest entry, physically NOT first in the file.
+
+## [5.2.1] - 2026-09-07
+
+Second newest, also physically out of order.
+"""
+        path = self._write_changelog(tmp_path, content)
+        releases = parse_changelog(path=path)
+        assert [r["version"] for r in releases] == ["5.2.2", "5.2.1", "3.5.17"]
+
+    def test_numeric_version_sort_not_lexical(self, tmp_path):
+        """Plain string comparison gets this wrong: "5.2.10" < "5.2.9"
+        lexically, since "1" < "9" as characters. Must sort
+        numerically instead."""
+        content = """# Changelog
+
+## [5.2.9] - 2026-09-01
+
+Entry nine.
+
+## [5.2.10] - 2026-09-02
+
+Entry ten, must sort ABOVE nine despite "10" < "9" as a lexical string.
+"""
+        path = self._write_changelog(tmp_path, content)
+        releases = parse_changelog(path=path)
+        assert [r["version"] for r in releases] == ["5.2.10", "5.2.9"]
+
+    def test_malformed_version_does_not_break_sorting_of_real_entries(self, tmp_path):
+        content = """# Changelog
+
+## [5.2.2] - 2026-09-08
+
+Real newest entry.
+
+## [unreleased] - TBD
+
+A malformed/placeholder version string.
+
+## [5.2.1] - 2026-09-07
+
+Real second-newest entry.
+"""
+        path = self._write_changelog(tmp_path, content)
+        releases = parse_changelog(path=path)
+        versions = [r["version"] for r in releases]
+        assert versions[0] == "5.2.2"
+        assert versions[1] == "5.2.1"
+        assert versions[2] == "unreleased"
 
     def test_html_injection_in_changelog_entry_is_neutralized(self, tmp_path):
         """Defense in depth: even though this is our own trusted file,

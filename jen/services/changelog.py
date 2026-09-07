@@ -109,16 +109,61 @@ def _render_body(lines: list) -> str:
     return "".join(parts)
 
 
+def _version_sort_key(version: str) -> tuple:
+    """
+    Convert a version string like "5.2.2" into a tuple of ints for
+    correct numeric sorting — plain string comparison gets this wrong
+    (e.g. "5.2.10" sorts before "5.2.9" lexically, since "1" < "9").
+    Falls back to (0,) for anything that doesn't parse as dot-separated
+    integers (a stray non-numeric suffix, or an entirely malformed
+    version string), so one bad entry can't crash sorting for the rest
+    of the changelog — it just sorts as the oldest/lowest-priority
+    entry instead.
+    """
+    parts = []
+    for piece in version.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts) if parts else (0,)
+
+
 def parse_changelog(path=None, limit=None) -> list:
     """
     Parse CHANGELOG.md into a list of release entries, each a dict with
     "version", "date", and "html" (pre-rendered, already-safe HTML
-    body). Reads the real file at the repo root by default.
+    body). Reads the real file at the repo root by default. Entries are
+    sorted newest-first by parsed semantic version.
 
-    limit: if given, only the first `limit` release entries are parsed
-    and returned (the file is long; a "what's new" panel typically only
-    wants the last handful, and there's no reason to parse the whole
-    multi-year history just to show three entries).
+    v5.2.3 — this used to trust the order release headers physically
+    appear in the file (parsing top to bottom, stopping early once
+    `limit` entries were found), on the assumption the file is always
+    maintained newest-entry-first. That assumption broke in practice:
+    reported as "What's New" showing old entries (a 3.x-series release)
+    as if they were the newest, on the real deployed CHANGELOG.md —
+    which has genuine multi-year history well before this feature
+    existed (the file's own intro line references a separate "3.x
+    line" with its own release-history docs this module has never had
+    visibility into). Every test file used to verify this module's own
+    logic behaved correctly, because trusting file order is only wrong
+    if the file itself isn't strictly ordered that way — which
+    apparently the real one, somewhere in its older history, isn't.
+
+    Rather than track down the exact formatting quirk responsible in a
+    file this module can't fully see, entries are now explicitly
+    sorted by parsed version (see _version_sort_key) after parsing,
+    instead of trusting file order at all. This is strictly more
+    correct regardless of the file's actual order, and doesn't depend
+    on ever fully explaining the original discrepancy. The tradeoff:
+    this now always parses the entire file rather than stopping early
+    once `limit` entries are found, since the correct newest entries
+    can no longer be assumed to be the first ones encountered. A
+    changelog is plain text, even a long one — this cost is
+    negligible compared to the correctness it buys.
+
+    limit: if given, only the `limit` most recent releases (by
+    version, after sorting) are returned.
 
     Returns [] if the file can't be read for any reason — this is
     display-only content, never something that should break a page
@@ -147,9 +192,6 @@ def parse_changelog(path=None, limit=None) -> list:
         m = _RELEASE_HEADER_RE.match(line)
         if m:
             flush()
-            if limit is not None and len(releases) >= limit:
-                current = None
-                break
             current = {"version": m.group(1), "date": m.group(2).strip()}
             body_lines = []
             continue
@@ -157,5 +199,10 @@ def parse_changelog(path=None, limit=None) -> list:
             body_lines.append(line)
     else:
         flush()
+
+    releases.sort(key=lambda r: _version_sort_key(r["version"]), reverse=True)
+
+    if limit is not None:
+        releases = releases[:limit]
 
     return releases

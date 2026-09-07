@@ -2,6 +2,79 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.4] - 2026-09-08
+
+### Fix CI failure in 5.2.2's own test suite (5.2.2 never actually shipped)
+
+`tests/test_reservations.py::TestBulkReservationActions::test_bulk_delete_removes_selected_reservations`
+failed in CI — a bug in that new test itself, not in
+`bulk_delete_reservations()`, which was behaving correctly.
+
+**Cause:** the actual `hosts` row for a reservation is removed by Kea
+when it processes `reservation-del` — Kea owns that table, the exact
+same way the pre-existing single-item `delete_reservation()` route
+already works, and neither route ever issues its own `DELETE FROM
+hosts`. The failing test mocked Kea's API (`result: 0` on any command)
+and then asserted the `hosts` row was gone from the test database —
+but a mocked Kea never touches the real table, so that assertion could
+never pass regardless of whether the route's own logic was correct.
+The existing `test_delete_reservation()` test already knew this and
+only checks `status_code == 200` for exactly this reason; the new
+bulk-delete test just didn't follow that established pattern.
+
+**Fix:** rewrote the test to verify what's actually under Jen's
+control and observable without a real Kea server — that
+`bulk_delete_reservations()` sends the correct `reservation-del`
+command (right subnet-id, right MAC, right identifier type) for the
+selected host, and reports success. Confirmed the two remaining bulk-
+action tests from 5.2.2 (Leases, Devices) don't share this flaw —
+those routes mutate `lease4`/`devices` directly via Jen's own SQL with
+no Kea API dependency, so asserting the row's state directly against
+the test database is valid there.
+
+This test would have failed 5.2.2's own CI too, and did — the release
+was never actually confirmed green before being tagged. No application
+behavior changes here; this is a test-only fix.
+
+## [5.2.3] - 2026-09-08
+
+### Fix "What's New" showing old releases as the newest
+
+Reported: the About page's changelog viewer (added 5.2.1) showed an
+old 3.x-series release at the top, ahead of the actual current
+version.
+
+**Cause:** `parse_changelog()` trusted the physical order release
+headers appear in CHANGELOG.md, on the assumption the file is always
+maintained strictly newest-entry-first. That assumption held for
+every test fixture used to verify this module — all newest-first by
+construction — which is exactly why it wasn't caught before shipping.
+It doesn't hold against the real CHANGELOG.md, which has genuine
+multi-year history well before this feature existed (the file's own
+intro line references a separate "3.x line" with its own
+release-history docs this module never had visibility into) —
+something in that older history isn't strictly ordered the way every
+entry written during this project has been.
+
+**Fix:** rather than track down the exact historical formatting quirk
+responsible, in a file this module can't fully see, entries are now
+explicitly sorted by parsed semantic version (descending) after
+parsing, instead of trusting file order at all. Numeric comparison,
+not lexical — `5.2.10` correctly sorts after `5.2.9`, which plain
+string comparison would get backwards. A version string that doesn't
+parse cleanly falls back to sorting as the lowest priority rather than
+crashing the whole page.
+
+Added `TestVersionSortKey` and three new tests in `TestParseChangelog`
+that deliberately build changelog fixtures *out of order* — proving
+the fix holds regardless of file order, rather than only checking
+against already-sorted input like every existing test here did.
+
+The reports/analytics expansion originally planned for this release
+(device churn, busiest-hours, manufacturer breakdown) is real, larger
+scope than fit alongside this fix — moved to its own release rather
+than shipped half-finished.
+
 ## [5.2.2] - 2026-09-08
 
 ### Bulk actions for Leases and Devices — and a real bug found along the way

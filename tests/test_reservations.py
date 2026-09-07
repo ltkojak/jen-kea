@@ -378,16 +378,49 @@ class TestBulkReservationActions:
         db.commit()
         return host_id
 
-    def test_bulk_delete_removes_selected_reservations(self, logged_in_client, db, mock_kea):
-        host_id = self._insert_host(db)
+    def test_bulk_delete_removes_selected_reservations(self, logged_in_client, db, monkeypatch):
+        """v5.2.2/5.2.3 CI failure fix: the actual `hosts` row is
+        removed by Kea itself when it processes reservation-del
+        (Kea owns that table, the same way the single-item delete
+        route already works — see delete_reservation() above, which
+        never issues its own DELETE FROM hosts either) — Jen's own
+        side of this is only cleaning up reservation_notes and
+        reporting the outcome. Asserting the row is gone from a
+        *mocked* Kea's perspective was asserting something outside
+        what a mock can actually simulate; the mock returns success
+        without touching the real hosts table, so the row was always
+        going to still be there in this test environment regardless of
+        whether the route's logic is correct. This is exactly the same
+        shape of gap as the existing test_delete_reservation() test
+        above, which only checks status_code == 200 for the same
+        reason — it just wasn't followed for this new test.
+
+        What this test verifies instead: Jen sends the correct
+        reservation-del command (matching this specific host's
+        subnet-id and MAC), and reports success — the parts actually
+        under Jen's control and observable without a real Kea server.
+        """
+        host_id = self._insert_host(db, mac_hex="aabbccddee10", subnet_id=1)
+        calls = []
+
+        def fake_kea_command(cmd, service="dhcp4", arguments=None, server=None):
+            calls.append((cmd, arguments))
+            return {"result": 0, "text": "Host deleted", "arguments": {}}
+
+        monkeypatch.setattr("jen.services.kea.kea_command", fake_kea_command)
+
         r = logged_in_client.post("/reservations/bulk-delete",
                                   data={"host_ids[]": [str(host_id)]},
                                   follow_redirects=True)
         assert r.status_code == 200
         assert b"Deleted 1 reservation" in r.data
-        with db.cursor() as cur:
-            cur.execute("SELECT * FROM hosts WHERE host_id=%s", (host_id,))
-            assert cur.fetchone() is None
+
+        del_calls = [c for c in calls if c[0] == "reservation-del"]
+        assert len(del_calls) == 1, f"expected exactly one reservation-del call, got {del_calls}"
+        _, args = del_calls[0]
+        assert args["subnet-id"] == 1
+        assert args["identifier"] == "aa:bb:cc:dd:ee:10"
+        assert args["identifier-type"] == "hw-address"
 
     def test_bulk_delete_with_no_selection_shows_error(self, logged_in_client, mock_kea):
         r = logged_in_client.post("/reservations/bulk-delete", data={}, follow_redirects=True)
