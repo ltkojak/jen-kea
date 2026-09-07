@@ -67,6 +67,51 @@
 
 </div>
 
+<!-- What's New (v5.2.1) — reads the real CHANGELOG.md shipped with
+     this running instance, so what's shown always matches what's
+     actually deployed. Collapsed by default past the first entry to
+     keep the page from becoming a wall of text on every visit. -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🆕 What's New</span></div>
+    {% if changelog_entries %}
+    {% for entry in changelog_entries %}
+    <div style="{% if not loop.first %}margin-top:16px;padding-top:16px;border-top:1px solid var(--border);{% endif %}">
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;">
+            <span style="font-weight:600;color:var(--primary);font-size:14px;">v{{ entry.version }}</span>
+            <span style="font-size:12px;color:var(--text-muted);">{{ entry.date }}</span>
+        </div>
+        {% if loop.first %}
+        <div class="changelog-body" style="font-size:13px;line-height:1.6;color:var(--text-muted);">
+            {{ entry.html|safe }}
+        </div>
+        {% else %}
+        <details>
+            <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">Show details</summary>
+            <div class="changelog-body" style="font-size:13px;line-height:1.6;color:var(--text-muted);margin-top:8px;">
+                {{ entry.html|safe }}
+            </div>
+        </details>
+        {% endif %}
+    </div>
+    {% endfor %}
+    <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:16px;">
+        <a href="https://github.com/ltkojak/jen-kea/blob/main/CHANGELOG.md" target="_blank" class="btn btn-secondary btn-sm">📜 Full Changelog</a>
+    </div>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:13px;">Changelog not available.</p>
+    {% endif %}
+</div>
+
+<style>
+.changelog-body h4 { font-size:13px; color:var(--text); margin:10px 0 4px; }
+.changelog-body h4:first-child { margin-top:0; }
+.changelog-body p { margin:0 0 8px; }
+.changelog-body ul { margin:0 0 8px; padding-left:20px; }
+.changelog-body li { margin-bottom:4px; }
+.changelog-body code { background:var(--surface2); padding:1px 5px; border-radius:3px; font-size:12px; }
+.changelog-body a { color:var(--primary); }
+</style>
+
 <!-- Subnet Summary -->
 <div class="card">
     <div class="card-header"><span class="card-title">🌐 Configured Subnets</span></div>

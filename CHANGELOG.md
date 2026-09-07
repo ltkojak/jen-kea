@@ -2,6 +2,55 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.1] - 2026-09-07
+
+### In-app changelog viewer + PWA installability
+
+Second release of the 5.2.x series — two small, independent additions
+bundled together since neither touches existing data or behavior.
+
+**In-app "What's New" viewer** — Jen has always maintained a genuinely
+good CHANGELOG.md, but nothing surfaced it in the app itself. Added:
+
+- **`jen/services/changelog.py`** — a small, purpose-built parser for
+  CHANGELOG.md's own consistent format (release headers, subheadings,
+  prose, bullet lists with `**bold**`, `*italic*`, `` `code` ``, and
+  `[links](url)`). Deliberately not a general markdown library — this
+  parses our own file with a format we fully control, not arbitrary
+  third-party markdown, so a full parser would be a new dependency and
+  a larger, harder-to-audit HTML-output surface for a task this
+  constrained. All text is HTML-escaped before any formatting markup
+  is reintroduced, verified against actual injection attempts (a
+  `<script>` tag and a quote-breakout in a link URL), not just assumed
+  safe because the source file is our own.
+- Reads the real CHANGELOG.md shipped with the running instance at
+  request time, not a bundled/hardcoded copy — the same "don't let two
+  sources of truth drift apart" principle behind config drift
+  detection (5.2.0) itself.
+- Surfaced on the About page: newest release shown expanded, earlier
+  ones collapsed behind a "Show details" toggle.
+
+**PWA installability** — Jen was already thoroughly mobile-responsive
+but had no web manifest, so it couldn't be installed to a phone home
+screen as a standalone app.
+
+- New on-brand icon set (192×192, 512×512, iOS touch icon), generated
+  to match the existing teal/blue "Jen" wordmark gradient.
+- `static/manifest.webmanifest` plus the corresponding manifest link
+  and Apple-specific meta tags in `base.html`.
+- **Deliberately no service worker.** This app shows live Kea/lease
+  status; a service worker's caching could serve a stale "Kea: Online"
+  page while Kea is actually down, which is actively misleading for a
+  monitoring tool, not just a UX nitpick. Manual "Add to Home Screen"
+  works fully without one; only the fully-automatic install banner
+  some browsers proactively show may not appear.
+
+Added `tests/test_changelog.py` (parser correctness and injection
+resistance, plus route-level coverage for `/about`, which had none
+before this) and `tests/test_pwa_manifest.py` (manifest validity, every
+referenced icon file actually existing on disk, and an explicit guard
+that fails if a service worker registration is ever added later).
+
 ## [5.2.0] - 2026-09-07
 
 ### Config drift detection

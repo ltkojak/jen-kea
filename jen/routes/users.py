@@ -110,9 +110,11 @@ def about():
                     lease_counts[sid] = cur.fetchone()["cnt"]
     except Exception:
         pass
+    from jen.services.changelog import parse_changelog
+    changelog_entries = parse_changelog(limit=5)
     return render_template("about.html", jen_version=_JEN_VERSION(), kea_version=kea_version,
                            kea_up=kea_up, https_port=extensions.HTTPS_PORT, subnet_map=extensions.SUBNET_MAP,
-                           lease_counts=lease_counts)
+                           lease_counts=lease_counts, changelog_entries=changelog_entries)
 
 # ─────────────────────────────────────────
 

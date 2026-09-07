@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{% block title %}Jen{% endblock %} — Jen</title>
     <link rel="icon" href="/favicon.ico">
+    <!-- PWA installability (v5.2.1). Deliberately NO service worker:
+         this app shows live Kea/lease status, and a service worker's
+         caching could serve a stale "Kea: Online" page while Kea is
+         actually down — actively misleading for a monitoring tool, not
+         just a UX nitpick. The manifest + icons alone are enough for
+         genuine installability (manual "Install app"/"Add to Home
+         Screen" via the browser's own menu works everywhere that
+         supports PWAs at all); only the fully-automatic install
+         banner some browsers show proactively may not appear without
+         a service worker, which is a fair tradeoff for correctness on
+         a tool where "did the cached page lie to me" actually matters. -->
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <meta name="theme-color" content="#00b4d8">
+    <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Jen">
     <!-- HTMX — served locally for offline use -->
     <script src="/static/js/htmx.min.js" defer></script>
     <style>
