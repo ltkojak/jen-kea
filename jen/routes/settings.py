@@ -1022,6 +1022,30 @@ def check_kea_binaries():
     return jsonify({"servers": results})
 
 
+@bp.route("/settings/infrastructure/check-config-drift", methods=["POST"])
+@login_required
+@_admin_required
+def check_config_drift_route():
+    """
+    Manual, on-demand check of whether Jen's own subnet map still
+    agrees with what Kea's live config actually says — a config-get
+    call against the active server (same "one representative server"
+    convention as every other live-config read in this app; an HA
+    pair's config is expected to be identical across nodes, so
+    checking one is representative), not run automatically on every
+    Settings page load. The background check_alerts() loop already
+    runs this continuously and alerts on new/resolved drift — this
+    route exists for on-demand verification without waiting for or
+    digging through that alert history.
+    """
+    from jen.services.config_drift import check_config_drift
+    try:
+        issues = check_config_drift()
+        return jsonify({"ok": True, "issues": issues})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 @bp.route("/settings/infrastructure/install-kea-binary/<service>", methods=["POST"])
 @login_required
 @_superadmin_required

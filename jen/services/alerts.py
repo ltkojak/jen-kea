@@ -68,6 +68,14 @@ def __get_jen_db_direct():
     from jen.models.db import get_jen_db
     return get_jen_db()
 
+def __check_config_drift():
+    from jen.services.config_drift import check_config_drift
+    return check_config_drift()
+
+def __drift_issue_key(*a, **kw):
+    from jen.services.config_drift import issue_key
+    return issue_key(*a, **kw)
+
 
 DEFAULT_TEMPLATES = {
     "kea_down":           "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
@@ -83,6 +91,8 @@ DEFAULT_TEMPLATES = {
     "reservation_deleted":"🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
     "stale_reservation":  "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
     "kea_config_changed": "⚙️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
+    "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
+    "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
     "daily_summary":      "📊 <b>Daily Summary</b>\n{summary}",
     "rogue_device":       "🚨 <b>{subject}</b>\n{body}",
 }
@@ -154,6 +164,8 @@ ALERT_TYPE_LABELS = {
     "reservation_deleted":"Reservation deleted",
     "stale_reservation":  "Stale reservation detected",
     "kea_config_changed": "Kea config changed via Jen",
+    "config_drift_detected": "Config drift detected (Jen's subnet map disagrees with Kea)",
+    "config_drift_resolved": "Config drift resolved",
     "daily_summary":      "Daily summary",
     "rogue_device":       "Rogue device detected (Network Discovery plugin)",
 }
@@ -603,6 +615,7 @@ def check_alerts():
     last_summary_date = None
     last_snapshot_time = 0
     last_ha_states = {}  # server_id -> last known HA state
+    last_drift_issues = {}  # issue_key -> issue dict, for detected-once/resolved-once alerting
 
     # Seed known_macs from devices table so restarts don't
     # flood with "new device" alerts for every known device
@@ -838,6 +851,36 @@ def check_alerts():
                                         alerted_stale_macs.add(row["mac"])
                         except Exception as e:
                             logger.error(f"Stale reservation check error: {e}")
+
+                        # ── Config drift check (v5.2.0) ──
+                        # Jen's own subnet map is a manually-maintained
+                        # config file, not derived from Kea's live
+                        # config at all — it can silently drift out of
+                        # sync (this is exactly what caused a real bug:
+                        # selecting a subnet by name returned a
+                        # different subnet's data, because Jen's stored
+                        # id for that name no longer matched what Kea's
+                        # live config actually assigned it to). Alerts
+                        # once when an issue first appears and once when
+                        # it resolves — not every 30-second cycle it
+                        # persists — using the same detected/resolved
+                        # pairing pattern as kea_down/kea_up and
+                        # utilization_high/utilization_ok.
+                        try:
+                            current_issues = {
+                                __drift_issue_key(i): i for i in __check_config_drift()
+                            }
+                            for key, issue in current_issues.items():
+                                if key not in last_drift_issues:
+                                    send_alert("config_drift_detected", message=issue["message"],
+                                              subnet_id=issue["subnet_id"])
+                            for key, issue in last_drift_issues.items():
+                                if key not in current_issues:
+                                    send_alert("config_drift_resolved", message=issue["message"],
+                                              subnet_id=issue["subnet_id"])
+                            last_drift_issues = current_issues
+                        except Exception as e:
+                            logger.error(f"Config drift check error: {e}")
 
 
             # ── Lease history snapshot ──

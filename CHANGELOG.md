@@ -2,6 +2,54 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.0] - 2026-09-07
+
+### Config drift detection
+
+New feature (first of the 5.2.x series). Jen's own subnet id → name/
+CIDR mapping (`extensions.SUBNET_MAP`/`SUBNET6_MAP`, sourced from
+Jen's `[subnets]` config file) is not derived from Kea's live config
+at all — it's a separate, manually-maintained list kept in sync only
+by whoever remembers to update it. This is exactly what caused a real
+bug found in practice: selecting "IoT" in a subnet filter silently
+returned Production's data, because Jen's stored id for "IoT" no
+longer matched what Kea's live config actually assigned that id to.
+There was no way to know this had happened until it produced a
+confusing symptom.
+
+- **`jen/services/config_drift.py`** — compares Jen's stored subnet
+  map against a live `config-get` for both IPv4 and IPv6 (when
+  configured), surfacing three distinct problems: a subnet Jen has
+  that Kea's live config no longer does, a subnet Kea has that Jen
+  never named, and — the critical case, the exact failure mode behind
+  the real bug — both sides agreeing a subnet id exists but
+  disagreeing on which network it actually is. The core comparison is
+  a pure function with no I/O, so it's fully and directly testable
+  against hand-built maps; a live-fetch failure is treated as
+  "couldn't check right now," never as "Kea has zero subnets" (which
+  would otherwise flood false positives during any transient Kea
+  outage).
+
+- **Automatic, continuous checking** — wired into the existing
+  `check_alerts()` background loop, using the same detected-once/
+  resolved-once alerting pattern already used for `kea_down`/`kea_up`
+  and `utilization_high`/`utilization_ok` (two new alert types,
+  `config_drift_detected` and `config_drift_resolved`), so it doesn't
+  spam every 30-second cycle while an issue persists, and lets you
+  know when it's fixed too. Respects per-channel subnet scoping like
+  every other subnet-specific alert.
+
+- **Manual on-demand check** — Settings → Infrastructure → "Config
+  Drift Check" card, matching the existing "Kea Package Status" card's
+  pattern, for checking right now without waiting for or digging
+  through alert history.
+
+Added `tests/test_config_drift.py`, weighted heavily toward the pure
+comparison logic since that's where the feature's actual value lives —
+covers the no-drift case, all three issue types individually and in
+combination, and the "Kea unreachable must skip rather than report
+false drift" case explicitly.
+
 ## [5.1.21] - 2026-09-06
 
 ### Fix false "kea-dhcp4/kea-dhcp6 not installed" report on a genuinely-running server

@@ -262,6 +262,52 @@ async function installKeaPkg(btn, service) {
     }
 }
 </script>
+
+<!-- Config Drift Check (v5.2.0) — manual on-demand verification.
+     The background check_alerts() loop already runs this continuously
+     and alerts on new/resolved drift; this card is for checking right
+     now without waiting for or digging through alert history. -->
+<div class="card">
+    <div class="card-header"><span class="card-title">🔀 Config Drift Check</span></div>
+    <div class="form-hint" style="margin-bottom:12px;">Compares Jen's own subnet id/name/CIDR mapping against Kea's live config-get — catches Jen's config silently falling out of sync with what Kea actually has, before it causes a filter, alert, or API key to silently affect the wrong subnet.</div>
+    <button type="button" class="btn btn-sm btn-secondary" id="check-drift-btn" onclick="checkConfigDrift()">🔍 Check Now</button>
+    <div id="config-drift-results" style="margin-top:12px;font-size:13px;"></div>
+</div>
+
+<script>
+async function checkConfigDrift() {
+    var btn = document.getElementById('check-drift-btn');
+    var resultsDiv = document.getElementById('config-drift-results');
+    btn.disabled = true;
+    resultsDiv.innerHTML = '<span style="color:var(--text-muted);">Checking…</span>';
+    try {
+        var resp = await fetch('/settings/infrastructure/check-config-drift', {
+            method: 'POST',
+            headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
+        });
+        var data = await resp.json();
+        if (!data.ok) {
+            resultsDiv.innerHTML = '<span style="color:var(--danger);">❌ ' + (data.error || 'Check failed.') + '</span>';
+            btn.disabled = false;
+            return;
+        }
+        if (data.issues.length === 0) {
+            resultsDiv.innerHTML = '<span style="color:var(--success);">✅ No drift detected — Jen\'s subnet map agrees with Kea\'s live config.</span>';
+            btn.disabled = false;
+            return;
+        }
+        resultsDiv.innerHTML = data.issues.map(function(i) {
+            return '<div style="margin-bottom:8px;padding:8px 10px;background:var(--surface2);border-radius:var(--radius);border-left:3px solid var(--warning);">'
+                 + '<strong style="color:var(--warning);">[' + i.family.toUpperCase() + '] ' + i.type.replace(/_/g, ' ') + '</strong>'
+                 + '<div style="margin-top:4px;color:var(--text);">' + i.message + '</div></div>';
+        }).join('');
+    } catch (e) {
+        resultsDiv.innerHTML = '<span style="color:var(--danger);">❌ ' + e.message + '</span>';
+    }
+    btn.disabled = false;
+}
+</script>
+
 {% endif %}
 
 <!-- Kea API -->
