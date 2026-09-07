@@ -2,6 +2,49 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.5] - 2026-09-08
+
+### The actual root cause of "What's New" showing old releases
+
+v5.2.3 fixed a real bug in `parse_changelog()`'s sort order, but it
+wasn't the actual cause of what was reported: "What's New" continued
+showing an old 3.x-series release as the newest entry even after that
+fix shipped. The real cause is more fundamental: **CHANGELOG.md was
+never included in either deployment path's file list at all** — not
+`self_update()`, not `install.sh`. Both treat it as source-repo
+material (like docs/ or tests/), not part of "the running install," so
+it has never been refreshed by any automated update, on any release,
+ever. Any instance's `CHANGELOG.md` has been frozen since whichever
+version was first manually installed — completely independent of the
+actual application code being correctly updated release after release.
+
+This is the **third** time this exact category of bug has hit this
+project: `run.py` itself was missing from self-update's copy list
+until v4.4.16; vendored static assets (`chart.umd.min.js`,
+`htmx.min.js`) were missing until v5.1.6/v5.1.8; now `CHANGELOG.md`,
+for the identical underlying reason — a file the running app actually
+reads, living outside the `jen/`/`templates/`/`static/` scope both
+deployment paths treat as "the app."
+
+**Fixed** by adding `CHANGELOG.md` to both `install.sh` and
+`self_update()`'s copy lists. Added `TestSelfUpdateCopiesChangelog` to
+`tests/test_self_update.py`, matching the existing convention from the
+`run.py` and static-asset fixes — capturing the real generated helper
+script and asserting the actual `cp` command is present, not just that
+some code path was reached.
+
+**Important — this fix has the same bootstrapping limitation as every
+prior fix to `self_update()` itself:** self-update runs using the code
+*already on disk* before the update runs. Updating to this version via
+the in-app "Update Now" button updates the application code (including
+the fixed `self_update()` function itself) correctly, but that
+specific update cycle is still driven by the *old*, un-fixed copy
+logic — so `CHANGELOG.md` will not actually refresh until the *next*
+update after this one. If you want "What's New" to be current
+immediately rather than after your next update, copy it manually once:
+`sudo cp ~/jen/CHANGELOG.md /opt/jen/CHANGELOG.md` (adjust paths to
+your actual git working copy and install directory).
+
 ## [5.2.4] - 2026-09-08
 
 ### Fix CI failure in 5.2.2's own test suite (5.2.2 never actually shipped)

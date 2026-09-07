@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.2.4"
+JEN_VERSION="5.2.5"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -711,6 +711,23 @@ install_files() {
 
     spinner_start "Installing application files..."
     cp "$SCRIPT_DIR/run.py"  "$INSTALL_DIR/run.py"
+    # v5.2.5 — CHANGELOG.md was never copied here (or in self_update()'s
+    # equivalent list in jen/routes/settings.py) at all, on any release
+    # before this one. This is the third time this exact category of bug
+    # has hit this project: run.py itself was missing from self-update's
+    # copy list until v4.4.16, vendored static assets (chart.umd.min.js,
+    # htmx.min.js) were missing until v5.1.6/v5.1.8, and now CHANGELOG.md
+    # for the same reason — a file the running app actually reads at
+    # runtime, but which lives outside the jen/, templates/, static/
+    # scope both this script and self_update() treat as "the app," so it
+    # silently never gets refreshed on update. The v5.2.1 in-app "What's
+    # New" changelog viewer reads this exact file, so every existing
+    # install has been showing whatever CHANGELOG.md happened to be
+    # present at initial install time, indefinitely, no matter how many
+    # releases ship after it.
+    if [[ -f "$SCRIPT_DIR/CHANGELOG.md" ]]; then
+        cp "$SCRIPT_DIR/CHANGELOG.md" "$INSTALL_DIR/CHANGELOG.md"
+    fi
     # Copy legacy monolith for reference (not executed)
     if [[ -f "$SCRIPT_DIR/legacy/jen.py" ]]; then
         mkdir -p "$INSTALL_DIR/legacy"

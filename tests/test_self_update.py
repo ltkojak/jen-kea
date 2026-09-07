@@ -27,7 +27,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
-def _build_fake_release_tarball(version="4.4.16", with_static=False):
+def _build_fake_release_tarball(version="4.4.16", with_static=False, with_changelog=False):
     """A real, valid tar.gz with exactly the top-level layout self_update()
     expects: jen/{run.py, jen/__init__.py, templates/index.html,
     jen.service, jen-sudoers}. Minimal but structurally real — this is
@@ -50,6 +50,8 @@ def _build_fake_release_tarball(version="4.4.16", with_static=False):
             add("jen/static/js/htmx.min.js", "// fake htmx\n")
             add("jen/static/js/chart.umd.min.js", "// fake chart.js\n")
             add("jen/static/icons/brands/apple.svg", "<svg></svg>\n")
+        if with_changelog:
+            add("jen/CHANGELOG.md", f"# Changelog\n\n## [{version}] - 2026-01-01\n\nFake entry.\n")
     buf.seek(0)
     return buf.read()
 
@@ -133,12 +135,12 @@ class TestSelfUpdateCopiesRunPy:
         assert "templates" in script
 
 
-def _run_self_update_and_capture_helper_script(logged_in_client, version="5.1.6", with_static=False):
+def _run_self_update_and_capture_helper_script(logged_in_client, version="5.1.6", with_static=False, with_changelog=False):
     """Shared scaffolding: run self_update() against a real (in-memory)
     tarball and capture the generated helper script's content before
     self_update() deletes it. Same approach as
     TestSelfUpdateCopiesRunPy above."""
-    tarball_bytes = _build_fake_release_tarball(version=version, with_static=with_static)
+    tarball_bytes = _build_fake_release_tarball(version=version, with_static=with_static, with_changelog=with_changelog)
 
     fake_api_response = MagicMock()
     fake_api_response.status_code = 200
@@ -335,3 +337,41 @@ if [ -f "{preserve_path}" ]; then cp "{preserve_path}" "{dest}/static/favicon.ic
             assert result.returncode == 0, result.stderr
             with open(f"{dest}/static/favicon.ico", "rb") as f:
                 assert f.read() == b"SHIPPED-DEFAULT-FAVICON"
+
+
+class TestSelfUpdateCopiesChangelog:
+    """v5.2.5 — the third occurrence of this exact category of bug:
+    run.py itself was missing from self-update's copy list until
+    v4.4.16; vendored static assets (chart.umd.min.js, htmx.min.js)
+    were missing until v5.1.6/v5.1.8; CHANGELOG.md was missing from
+    both self_update() AND install.sh, on every release up through
+    v5.2.4. A user reported the v5.2.1 "What's New" viewer showing an
+    old 3.x-series release as the newest entry — the actual cause
+    wasn't the parsing/sorting logic (already fixed once, incorrectly
+    assumed to be the whole problem, in v5.2.3) but that CHANGELOG.md
+    on a self-updated install had never been refreshed at all, ever,
+    since whichever version was first manually installed. Self-update
+    is the primary supported upgrade path, not a fallback — this
+    means every self-updated install's "What's New" panel has been
+    silently frozen since day one, regardless of how many releases
+    shipped after it."""
+
+    def test_changelog_copy_command_present(self, logged_in_client):
+        script = _run_self_update_and_capture_helper_script(logged_in_client, with_changelog=True)
+        import re
+        assert re.search(r'cp\s+"[^"]*CHANGELOG\.md"\s+"[^"]*CHANGELOG\.md"', script), (
+            "No `cp ... CHANGELOG.md ... CHANGELOG.md` command found in the "
+            "generated self-update helper script — the v5.2.1 \"What's New\" "
+            "viewer would keep reading whatever CHANGELOG.md existed at "
+            "initial install time, forever, no matter how many releases "
+            "ship after it."
+        )
+
+    def test_run_still_succeeds_without_changelog_in_tarball(self, logged_in_client):
+        """An older/malformed tarball without CHANGELOG.md shouldn't
+        crash self_update() — the copy command is conditional on the
+        file actually existing in the extracted tarball, same pattern
+        as every other copy_cmds entry."""
+        script = _run_self_update_and_capture_helper_script(logged_in_client, with_changelog=False)
+        assert script  # helper script still gets written and run
+        assert "run.py" in script  # other copy commands still present

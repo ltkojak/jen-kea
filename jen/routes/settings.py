@@ -1885,6 +1885,24 @@ def self_update():
         if os.path.isfile(run_py_src):
             copy_cmds.append(f'cp "{run_py_src}" "{install_dir}/run.py"')
 
+        # CHANGELOG.md — v5.2.5. This is the third time this exact
+        # category of bug has hit self-update: run.py itself was
+        # missing from this copy list until v4.4.16, vendored static
+        # assets (chart.umd.min.js, htmx.min.js) were missing until
+        # v5.1.6/v5.1.8, and now CHANGELOG.md for the same underlying
+        # reason — a file the running app genuinely reads at runtime
+        # (the v5.2.1 "What's New" viewer, jen/services/changelog.py),
+        # but which lives outside the jen/, templates/, static/ scope
+        # this function treats as "the app," so it was never being
+        # refreshed on update at all. Anyone using self-update as their
+        # real deployment path — which is the primary supported path,
+        # not a fallback — has been shown whatever CHANGELOG.md existed
+        # at whenever this instance was first installed, indefinitely,
+        # no matter how many releases have shipped since.
+        changelog_src = os.path.join(extracted, "CHANGELOG.md")
+        if os.path.isfile(changelog_src):
+            copy_cmds.append(f'cp "{changelog_src}" "{install_dir}/CHANGELOG.md"')
+
         # Templates
         if os.path.isdir(os.path.join(extracted, "templates")):
             copy_cmds.append(
