@@ -2,6 +2,36 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.11] - 2026-09-08
+
+### Fix CI failure in 5.2.10's test suite
+
+`tests/test_api_key_authorization.py::TestLimitParameterFloor::test_zero_limit_does_not_crash`
+failed in CI — a bug in the test's own fixture data, not the `limit`
+floor logic it was checking.
+
+**Cause:** `TestLimitParameterFloor`'s helper for inserting a valid API
+key built the raw key from a fixed literal string, so every call
+within that test class produced the exact same SHA-256 hash.
+`api_keys.key_hash` has a `UNIQUE` constraint, so the second test to
+call the helper failed with a duplicate-key `IntegrityError` before
+the actual `limit`-clamping code under test ever ran.
+
+**Fix:** each call now generates its own genuinely random raw key via
+`secrets.token_hex()`, matching how real API keys are actually
+generated elsewhere in the app. Verified directly — ran the fixed
+helper's key-generation logic twice in sequence and confirmed the two
+resulting hashes are always distinct, rather than just re-running the
+suite and hoping.
+
+While reviewing this, checked the rest of the same test file for the
+identical class of mistake — every API-key-name and admin-username
+value used across the file's remaining ~15 test methods was confirmed
+genuinely unique, so this was an isolated case, not a symptom of a
+wider pattern in that file.
+
+No application behavior changed; this is a test-only fix.
+
 ## [5.2.10] - 2026-09-08
 
 ### SECURITY: API key authorization scope, plus three related fixes in the same file

@@ -270,8 +270,17 @@ class TestLimitParameterFloor:
     pass without actually exercising the code it's meant to test."""
 
     def _insert_valid_key_and_get_raw(self, db, admin_id):
+        """v5.2.11 fix — this used to build the raw key from a fixed
+        literal string, so every call within this test class produced
+        the exact same key_hash. api_keys.key_hash has a UNIQUE
+        constraint, so the second test in this class to call this
+        helper failed with a duplicate-key IntegrityError, not because
+        of anything wrong in the limit-clamping logic being tested —
+        a bug in the test's own fixture data, not the application.
+        Each call now gets its own unique raw key via secrets."""
         import hashlib
-        raw_key = "jen_testkeyfortlimitfloor0000000000000000"
+        import secrets
+        raw_key = "jen_" + secrets.token_hex(20)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         with db.cursor() as cur:
             cur.execute(
