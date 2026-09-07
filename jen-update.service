@@ -1,0 +1,13 @@
+[Unit]
+Description=Jen self-update (one-shot, root-privileged)
+# v5.2.6 security fix — see /usr/local/sbin/jen-update-root.py's own
+# docstring for the full rationale. This unit exists so www-data can
+# trigger an update via `sudo systemctl start jen-update.service`
+# (zero parameters, nothing attacker-controllable) instead of the
+# previous design where www-data wrote and then sudo-executed its own
+# script from /tmp.
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/sbin/jen-update-root.py

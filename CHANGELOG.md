@@ -2,6 +2,102 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.6] - 2026-09-08
+
+### SECURITY: root privilege escalation via the self-update sudoers rule
+
+**This is the most important fix shipped in this project to date.**
+Following a third-party security review, the self-updater's privilege
+model has been redesigned.
+
+**The vulnerability:** the sudoers file granted `www-data` (the Jen
+web process) passwordless root access to run
+`/bin/bash /tmp/jen_update_install.sh`. That exact file was written by
+`www-data` itself, as part of every normal update. Since `/tmp` is
+world-writable and `www-data` is the exact account permitted to write
+that exact path, the real security boundary was: **gain any code
+execution as `www-data` → write that file yourself → `sudo` it → root.**
+Every checksum/signature validation the old `self_update()` route
+performed was irrelevant to this path, because an attacker never
+needed to go through that route at all — the update button's own
+checks are not a barrier if you can just create the file the sudo rule
+already trusts.
+
+**The fix** moves the entire download → verify → extract → install
+pipeline out of the Flask app and into a new standalone script,
+`jen-update-root.py`:
+- Lives outside `/opt/jen` entirely, so `install.sh`'s own
+  `chown -R www-data:www-data` on the install directory can never
+  re-expose it
+- Owned `root:root`, mode `0700` — `www-data` cannot read or modify it
+- Takes **zero arguments and accepts no input from `www-data` at all**
+  — it always re-derives "the current latest release" from GitHub
+  itself, independently, in the trusted execution context
+- Reachable only via `sudo systemctl start jen-update.service` — a
+  command with no parameters, mirroring the already-safe
+  `sudo systemctl restart jen` pattern used elsewhere in this project
+
+The practical result: even a fully-compromised `www-data` account can
+now only ever trigger "install whatever GitHub currently publishes as
+the latest jen-kea release" — nothing else. It cannot inject arbitrary
+file content or arbitrary commands into the root execution context,
+because nothing it controls ever reaches the privileged script as input.
+
+**Also fixed in the same rewrite** (a separate issue from the same
+review): the old code proceeded with an *unverified* update if a
+checksum file was missing, had no matching entry, or failed to parse —
+logging a warning and continuing anyway. `jen-update-root.py` fails
+closed in all of those cases: no valid checksum match, no install,
+full stop.
+
+`self_update()` in `jen/routes/settings.py` is reduced from roughly
+290 lines to about 70. It no longer downloads, verifies, extracts, or
+copies anything — it only optionally backs up the database (unchanged
+— that's Jen backing up its own data with credentials it already has,
+not part of the privilege boundary) and triggers the hardened service.
+
+**⚠️ Important — a one-time manual step is required for this specific
+upgrade, for any instance whose primary deployment path is the in-app
+"Update Now" button:**
+
+Self-update always runs using the code already on disk *before* the
+update runs. That means clicking "Update Now" to reach this version
+will still execute the *old*, vulnerable copy logic one last time —
+which has no way of knowing to install the new root-owned script or
+the new systemd unit, since neither existed in any prior release. For
+this one release only, run the manual upgrade path instead, with real
+administrator access:
+
+```
+sudo ./install.sh --upgrade
+```
+
+This correctly installs `jen-update-root.py` and `jen-update.service`
+alongside everything else. After this one transition, the in-app
+"Update Now" button works normally — and correctly — for every release
+after this one.
+
+**Frontend note:** the update-progress overlay's polling logic
+previously received the exact target version back from the server in
+the post-update redirect (`?updated=X.Y.Z`) to know what to wait for.
+The new route can't supply that anymore, since resolving "latest" now
+happens entirely inside the privileged script. The redirect is now a
+simple `?updating=1` flag, and the target version for display/
+comparison is carried across the page reload via `sessionStorage`
+instead (set right before the form submits, read back on page load).
+If that value is ever unavailable, the polling logic falls back to
+"Jen responded at all" as its completion signal rather than getting
+permanently stuck waiting for an exact match it can't make.
+
+Added `tests/test_jen_update_root.py` (checksum verification and file
+installation, run directly against real temporary directories rather
+than mocked shell-script text matching) and completely rewrote
+`tests/test_self_update.py`, since every previous test in that file
+verified the old route's now-removed download/copy pipeline. The new
+tests confirm the route never writes to `/tmp/jen_update_install.sh`
+again, never calls `requests` or `tarfile` itself, and only ever
+triggers the hardened service.
+
 ## [5.2.5] - 2026-09-08
 
 ### The actual root cause of "What's New" showing old releases

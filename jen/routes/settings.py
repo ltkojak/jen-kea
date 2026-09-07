@@ -1659,7 +1659,6 @@ def save_nav_color():
 
 GITHUB_REPO          = "ltkojak/jen-kea"
 GITHUB_RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-GITHUB_ASSET_PREFIX  = f"https://github.com/{GITHUB_REPO}/releases/download/"
 
 
 @bp.route("/settings/infrastructure/check-update")
@@ -1717,289 +1716,74 @@ def check_update():
 @login_required
 @_superadmin_required
 def self_update():
-    """Download latest release tarball and install it, then restart Jen.
-
-    v4.4.2: previously trusted the client-submitted asset_url/version
-    directly, only checking the URL started with "https://github.com/" —
-    that would accept a release asset from ANY GitHub repo, not just this
-    one. Now the asset URL and version are always re-derived server-side
-    from the GitHub API against the pinned repo, and a SHA256 checksum is
-    verified if the release publishes one (see release.yml).
     """
-    import requests as _req
-    import tarfile, shutil, tempfile, hashlib as _hashlib
+    Trigger the hardened, root-privileged updater.
 
-    submitted_version = request.form.get("version", "").strip()
-    do_db_backup      = request.form.get("db_backup", "0") == "1"
+    v5.2.6 — SECURITY FIX. This route used to perform the entire
+    download, checksum verification, extraction, and file-copy
+    pipeline itself while running as www-data, then write a helper
+    script to /tmp/jen_update_install.sh and sudo-execute it as root.
+    Since /tmp is world-writable and www-data is the exact account
+    permitted to write that exact path, the real security boundary was
+    "gain any code execution as www-data → write that file yourself →
+    sudo it → root" — completely bypassing every validation this route
+    performed, since an attacker never needed to go through this route
+    at all to reach that sudo rule.
 
-    # ── Re-derive the release info from GitHub ourselves — never trust a
-    #    client-submitted asset_url. This is the same lookup check_update()
-    #    does, repeated here so this endpoint has its own authoritative view.
+    This route now does none of the download/verify/extract/copy work
+    itself. It optionally takes a database backup (unchanged — that's
+    Jen backing up its own database with credentials it already
+    legitimately has, not a privilege-boundary concern) and then
+    triggers `sudo systemctl start jen-update.service` — a command
+    with NO parameters, matching the same already-safe pattern used
+    for `sudo systemctl restart jen`. The entire pipeline now runs
+    inside /usr/local/sbin/jen-update-root.py, a script owned
+    root:root, mode 0700, that www-data cannot read or modify, and
+    which re-derives the release information from GitHub itself rather
+    than trusting anything from this request. See that script's own
+    docstring for the full design, including why it fails closed on
+    checksum verification (a separate issue found in the same review
+    that produced this fix).
+
+    One consequence: this route can no longer offer "the release
+    changed since you checked, please refresh" — the trigger is now
+    "install whatever GitHub currently reports as latest," full stop,
+    with no version parameter passed through at all. That's deliberate:
+    passing a version through here would reintroduce attacker-
+    controllable input into the root-privileged path. Explicit version
+    selection (e.g. a deliberate downgrade) still works via the manual
+    git+tar+install.sh path, run with real administrator access.
+    """
+    do_db_backup = request.form.get("db_backup", "0") == "1"
+
+    if do_db_backup:
+        try:
+            from jen.services import dbexport as _dbexport
+            content, fname = _dbexport.export_jen()
+            payload = json.loads(content.decode("utf-8"))
+            backup_path = _dbexport._write_backup(payload, "jen-pre-update.json.gz")
+            flash(f"Database backed up to {backup_path}", "success")
+        except Exception as e:
+            logger.error(f"Pre-update database backup failed: {e}")
+            flash("Database backup failed — aborting update. Check server logs for details.", "error")
+            return redirect(url_for("settings.settings_infrastructure"))
+
     try:
-        resp = _req.get(
-            GITHUB_RELEASES_API,
-            headers={"Accept": "application/vnd.github+json"},
-            timeout=8
-        )
-        if resp.status_code != 200:
-            flash(f"Could not verify release: GitHub API returned {resp.status_code}", "error")
-            return redirect(url_for("settings.settings_infrastructure"))
-        data = resp.json()
-    except Exception as e:
-        flash(f"Could not verify release: {e}", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
-
-    latest_tag = data.get("tag_name", "").lstrip("v")
-    if submitted_version and submitted_version != latest_tag:
-        flash("The release changed since you checked — please refresh and try again.", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
-    expected_version = latest_tag
-
-    assets = data.get("assets", [])
-    asset_url = ""
-    for asset in assets:
-        if asset["name"].endswith(".tar.gz") and "jen-v" in asset["name"]:
-            asset_url = asset["browser_download_url"]
-            break
-
-    if not asset_url or not asset_url.startswith(GITHUB_ASSET_PREFIX):
-        flash("Invalid or missing release asset URL.", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
-
-    # Optional integrity check — verify against a checksums file if the
-    # release publishes one (SHA256SUMS / checksums.txt). Older releases
-    # built before this existed won't have one; we proceed without blocking
-    # in that case, but log it so it's visible this install is running
-    # without checksum verification.
-    checksum_asset_url = ""
-    for asset in assets:
-        if asset["name"].lower() in ("sha256sums", "sha256sums.txt", "checksums.txt"):
-            checksum_asset_url = asset["browser_download_url"]
-            break
-
-    try:
-        # ── Optional DB backup ─────────────────────────────────────────────
-        if do_db_backup:
-            try:
-                from jen.services import dbexport as _dbexport
-                content, fname = _dbexport.export_jen()
-                import json
-                payload = json.loads(content.decode("utf-8"))
-                backup_path = _dbexport._write_backup(
-                    payload, f"jen-pre-update-{expected_version}.json.gz"
-                )
-                flash(f"Database backed up to {backup_path}", "success")
-            except Exception as e:
-                flash(f"Database backup failed: {e} — aborting update.", "error")
-                return redirect(url_for("settings.settings_infrastructure"))
-
-        # ── Download tarball ───────────────────────────────────────────────
-        resp = _req.get(asset_url, timeout=120, stream=True)
-        if resp.status_code != 200:
-            flash(f"Download failed: HTTP {resp.status_code}", "error")
-            return redirect(url_for("settings.settings_infrastructure"))
-
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".tar.gz", prefix="jen_update_", dir="/tmp", delete=False
-        )
-        sha256 = _hashlib.sha256()
-        for chunk in resp.iter_content(chunk_size=8192):
-            tmp.write(chunk)
-            sha256.update(chunk)
-        tmp.close()
-
-        if checksum_asset_url:
-            try:
-                cresp = _req.get(checksum_asset_url, timeout=15)
-                tarball_name = asset_url.rsplit("/", 1)[-1]
-                expected_hash = None
-                for line in cresp.text.splitlines():
-                    parts = line.split()
-                    if len(parts) == 2 and parts[1].lstrip("*") == tarball_name:
-                        expected_hash = parts[0].lower()
-                        break
-                if expected_hash and expected_hash != sha256.hexdigest():
-                    os.unlink(tmp.name)
-                    flash("Checksum verification failed — downloaded file does not match "
-                          "the published release checksum. Update aborted.", "error")
-                    return redirect(url_for("settings.settings_infrastructure"))
-                elif not expected_hash:
-                    logger.warning(f"Checksum file present but no entry found for {tarball_name}; proceeding unverified.")
-            except Exception as e:
-                logger.warning(f"Checksum verification error (proceeding unverified): {e}")
-        else:
-            logger.warning(f"No checksum asset published for v{expected_version}; proceeding unverified.")
-
-        # ── Extract to temp dir ────────────────────────────────────────────
-        # Filter must reject by TYPE, not just name: a member named safely
-        # under "jen/" can still be a symlink/hardlink whose target points
-        # outside tmp_dir (tar slip via link, not path traversal via name).
-        # Only allow plain files and directories.
-        tmp_dir = tempfile.mkdtemp(prefix="jen_update_extract_", dir="/tmp")
-        with tarfile.open(tmp.name, "r:gz") as tf:
-            members = [m for m in tf.getmembers()
-                       if m.name.startswith("jen/")
-                       and ".." not in m.name
-                       and not os.path.isabs(m.name)
-                       and (m.isfile() or m.isdir())]
-            tf.extractall(tmp_dir, members=members)
-
-        extracted = os.path.join(tmp_dir, "jen")
-        if not os.path.isdir(extracted):
-            flash("Update package format invalid — expected jen/ directory in tarball.", "error")
-            return redirect(url_for("settings.settings_infrastructure"))
-
-        # ── Copy files via privileged helper script ────────────────────────
-        # www-data cannot write to /opt/jen/, /etc/systemd/, or /etc/sudoers.d/
-        # directly — use a sudo-allowed helper script that copies only the
-        # files the manual installer would touch (jen/, templates/, brand
-        # icons, systemd unit, sudoers entry). Mirrors install.sh's scope —
-        # everything else in the tarball (docs, tests, README, etc.) is
-        # source-repo material, not part of the running install.
-        helper = "/tmp/jen_update_install.sh"
-        install_dir = "/opt/jen"
-
-        copy_cmds = []
-
-        # Core application package
-        if os.path.isdir(os.path.join(extracted, "jen")):
-            copy_cmds.append(
-                f'rm -rf "{install_dir}/jen" && cp -r "{extracted}/jen" "{install_dir}/jen"'
-            )
-
-        # Entry point — v4.4.16 fix: this was never in the copy list at
-        # all, on any release before this one. self_update() would
-        # correctly update the jen/ package (imported by run.py), but
-        # run.py itself — the actual file systemd executes — was never
-        # touched. Anyone using the self-update button as their real
-        # deployment path (not `install.sh --upgrade`) has been silently
-        # running a stale run.py since whenever it was last installed
-        # manually, for every release in between, regardless of what
-        # actually changed in run.py itself. Found via the v4.4.15
-        # logging-config rollout: every unit test and manual repro of
-        # jen/logging_config.py passed, because importing it directly
-        # always worked — the bug was entirely that the deployed run.py
-        # never actually called it, since that specific file had quietly
-        # never been part of what self-update installs.
-        run_py_src = os.path.join(extracted, "run.py")
-        if os.path.isfile(run_py_src):
-            copy_cmds.append(f'cp "{run_py_src}" "{install_dir}/run.py"')
-
-        # CHANGELOG.md — v5.2.5. This is the third time this exact
-        # category of bug has hit self-update: run.py itself was
-        # missing from this copy list until v4.4.16, vendored static
-        # assets (chart.umd.min.js, htmx.min.js) were missing until
-        # v5.1.6/v5.1.8, and now CHANGELOG.md for the same underlying
-        # reason — a file the running app genuinely reads at runtime
-        # (the v5.2.1 "What's New" viewer, jen/services/changelog.py),
-        # but which lives outside the jen/, templates/, static/ scope
-        # this function treats as "the app," so it was never being
-        # refreshed on update at all. Anyone using self-update as their
-        # real deployment path — which is the primary supported path,
-        # not a fallback — has been shown whatever CHANGELOG.md existed
-        # at whenever this instance was first installed, indefinitely,
-        # no matter how many releases have shipped since.
-        changelog_src = os.path.join(extracted, "CHANGELOG.md")
-        if os.path.isfile(changelog_src):
-            copy_cmds.append(f'cp "{changelog_src}" "{install_dir}/CHANGELOG.md"')
-
-        # Templates
-        if os.path.isdir(os.path.join(extracted, "templates")):
-            copy_cmds.append(
-                f'rm -rf "{install_dir}/templates" && cp -r "{extracted}/templates" "{install_dir}/templates"'
-            )
-
-        # Everything under static/ except user-uploaded custom icons.
-        # v5.1.6: this previously only copied static/icons/brands/*.svg
-        # and explicitly, by comment, excluded "other static/ subfolders
-        # (nav_logo, favicon, generated JS, etc.)" — lumping vendored
-        # release assets (htmx.min.js, chart.umd.min.js, favicon.ico) in
-        # with genuine user uploads. Vendored JS ships with every
-        # release and needs to update on every release; it was never
-        # being copied by this code path at all, on any version, which
-        # is why the Reports page stayed broken for anyone using the
-        # self-update button even after chart.umd.min.js was fixed in
-        # install.sh — self-update is a separate, independently
-        # maintained copy list and was never touched by that fix.
-        # static/icons/custom/ is gitignored and never present in the
-        # extracted tarball, so this copy cannot reach it regardless.
-        #
-        # v5.1.8: that fix over-corrected — favicon.ico IS shipped in
-        # the tarball (unlike nav_logo, which isn't tracked in git at
-        # all) as the stock default, but it's ALSO the exact save path
-        # Settings > System writes a user-uploaded favicon to
-        # (extensions.FAVICON_PATH). The blanket copy silently
-        # overwrote a real uploaded favicon with the stock one on every
-        # update. Fixed by preserving whatever favicon.ico already
-        # exists (default or custom — both cases mean "leave it alone")
-        # and only installing the shipped default when none exists yet,
-        # the same semantics nav_logo and custom icons already get.
-        static_src = os.path.join(extracted, "static")
-        if os.path.isdir(static_src):
-            copy_cmds.append(
-                f'mkdir -p "{install_dir}/static" && '
-                f'if [ -f "{install_dir}/static/favicon.ico" ]; then '
-                f'cp "{install_dir}/static/favicon.ico" /tmp/jen_favicon_preserve.ico; fi && '
-                f'cp -r "{static_src}/." "{install_dir}/static/" && '
-                f'if [ -f /tmp/jen_favicon_preserve.ico ]; then '
-                f'cp /tmp/jen_favicon_preserve.ico "{install_dir}/static/favicon.ico" && '
-                f'rm -f /tmp/jen_favicon_preserve.ico; fi'
-            )
-
-        # systemd service file — reload daemon after
-        service_src = os.path.join(extracted, "jen.service")
-        if os.path.isfile(service_src):
-            copy_cmds.append(f'cp "{service_src}" /etc/systemd/system/jen.service')
-            copy_cmds.append('systemctl daemon-reload')
-
-        # sudoers entry — validate before installing (visudo -c) to avoid
-        # locking out all sudo access with a malformed file. Note: this
-        # grants whatever the release's jen-sudoers file contains; the
-        # checksum/repo-pin checks above establish that it came from the
-        # genuine ltkojak/jen-kea release, but that release is still the
-        # trust boundary here — same as running `install.sh` from it would be.
-        sudoers_src = os.path.join(extracted, "jen-sudoers")
-        sudoers_updated = os.path.isfile(sudoers_src)
-        if sudoers_updated:
-            copy_cmds.append(
-                f'visudo -c -f "{sudoers_src}" && '
-                f'cp "{sudoers_src}" /etc/sudoers.d/jen && chmod 440 /etc/sudoers.d/jen'
-            )
-
-        copy_cmds.append(f'chown -R www-data:www-data "{install_dir}/jen" "{install_dir}/run.py" "{install_dir}/templates" "{install_dir}/static" 2>/dev/null || true')
-
-        with open(helper, "w") as f:
-            f.write("#!/bin/bash\nset -e\n")
-            f.write("\n".join(copy_cmds))
-            f.write("\n")
-        os.chmod(helper, 0o755)
-
         result = subprocess.run(
-            ["/usr/bin/sudo", "/bin/bash", helper],
-            capture_output=True, text=True, timeout=60
+            ["/usr/bin/sudo", "/usr/bin/systemctl", "start", "--no-block", "jen-update.service"],
+            capture_output=True, text=True, timeout=15,
         )
-
-        # Cleanup
-        os.unlink(tmp.name)
-        os.unlink(helper)
-        shutil.rmtree(tmp_dir)
-
-        if result.returncode != 0:
-            flash(f"Update failed during file installation: {result.stderr}", "error")
-            return redirect(url_for("settings.settings_infrastructure"))
-
-        __user.audit("SELF_UPDATE", "jen",
-                     f"Updated to v{expected_version}" + (" (sudoers updated)" if sudoers_updated else ""))
-        flash(f"Jen updated to v{expected_version}. Restarting now…", "success")
-
-        def do_restart():
-            import time
-            time.sleep(2)
-            subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
-
-        threading.Thread(target=do_restart, daemon=True).start()
-        return redirect(url_for("settings.settings_infrastructure", updated=expected_version))
-
     except Exception as e:
-        flash(f"Update failed: {e}", "error")
+        logger.error(f"Failed to trigger jen-update.service: {e}")
+        flash("Could not start the update — check server logs for details.", "error")
         return redirect(url_for("settings.settings_infrastructure"))
+
+    if result.returncode != 0:
+        logger.error(f"jen-update.service failed to start: {result.stderr}")
+        flash("Could not start the update — check server logs for details.", "error")
+        return redirect(url_for("settings.settings_infrastructure"))
+
+    __user.audit("SELF_UPDATE", "jen", "Triggered update via jen-update.service")
+    flash("Update started. This page will refresh automatically once Jen is back.", "success")
+    return redirect(url_for("settings.settings_infrastructure", updating="1"))
+

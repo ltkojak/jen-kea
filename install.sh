@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.2.5"
+JEN_VERSION="5.2.6"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -763,6 +763,26 @@ install_files() {
     cp "$SCRIPT_DIR/jen-sudoers" "$SUDOERS_FILE"
     chmod 440 "$SUDOERS_FILE"
     ok "Installed sudoers entry"
+
+    # v5.2.6 security fix — the self-update helper script must live
+    # OUTSIDE $INSTALL_DIR entirely. This script's own final action
+    # below does `chown -R www-data:www-data "$INSTALL_DIR"`, which
+    # would otherwise silently re-expose a root-owned helper placed
+    # anywhere under /opt/jen to the exact account the whole point of
+    # this fix is to keep it away from. See
+    # /usr/local/sbin/jen-update-root.py's own docstring for the full
+    # security rationale.
+    if [[ -f "$SCRIPT_DIR/jen-update-root.py" ]]; then
+        cp "$SCRIPT_DIR/jen-update-root.py" /usr/local/sbin/jen-update-root.py
+        chown root:root /usr/local/sbin/jen-update-root.py
+        chmod 700 /usr/local/sbin/jen-update-root.py
+        ok "Installed root-privileged update script"
+    fi
+    if [[ -f "$SCRIPT_DIR/jen-update.service" ]]; then
+        cp "$SCRIPT_DIR/jen-update.service" /etc/systemd/system/jen-update.service
+        systemctl daemon-reload
+        ok "Installed jen-update.service"
+    fi
 
     # Everything under static/ (favicon, vendored JS like htmx and
     # Chart.js, etc.) ships in the package tarball — copy the whole

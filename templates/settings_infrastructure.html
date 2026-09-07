@@ -26,8 +26,7 @@
         </button>
         <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
               style="display:none;" onsubmit="return startUpdate(event)"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="asset_url" id="update-asset-url">
-            <input type="hidden" name="version" id="update-version">
+            <input type="hidden" id="update-version">
             <div style="margin-bottom:10px;">
                 <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
                     <input type="checkbox" name="db_backup" value="1" checked>
@@ -90,7 +89,6 @@ function checkForUpdates() {
             } else if (d.status === 'update_available') {
                 status.style.color = 'var(--warning)';
                 status.textContent = '⬆ Jen v' + d.latest + ' is available (published ' + d.published + '). You are running v' + d.current + '.';
-                document.getElementById('update-asset-url').value = d.asset_url;
                 document.getElementById('update-version').value = d.latest;
                 document.getElementById('update-form').style.display = '';
                 var link = document.getElementById('release-notes-link');
@@ -120,6 +118,15 @@ function startUpdate(evt) {
     var msg     = document.getElementById('update-overlay-msg');
     var version = document.getElementById('update-version').value;
 
+    // v5.2.6 — the server no longer knows or reports a specific target
+    // version in its redirect (see settings.py's self_update() for
+    // why: it now only triggers a root-privileged systemd unit that
+    // independently re-derives "latest" from GitHub itself, rather
+    // than the Flask route resolving and passing a version through).
+    // sessionStorage carries this value across the page reload instead
+    // — set here before submit, read back by the page-load check below.
+    try { sessionStorage.setItem('jen_update_target_version', version); } catch (e) {}
+
     overlay.style.display = 'flex';
     title.textContent = 'Updating to v' + version + '…';
     msg.textContent = 'Downloading update package…';
@@ -127,22 +134,35 @@ function startUpdate(evt) {
     setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Installing files…'; }, 2500);
     setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Restarting Jen…'; }, 5500);
 
-    // If the server redirects back with an error (no ?updated= param), the
+    // If the server redirects back with an error (no ?updating= param), the
     // overlay needs to disappear so the error flash message is visible —
     // handled by the page-load check below, which only keeps the overlay up
-    // when ?updated=X.Y.Z is actually present in the URL.
+    // when ?updating=1 is actually present in the URL.
     return true; // allow normal form submission
 }
 
 // On page load: only show the restart-polling overlay if the server
-// confirmed success via ?updated=X.Y.Z in the redirect URL. This avoids
-// showing a false "restarting" overlay when the update actually failed
-// server-side (bad download, DB backup failure, file copy error, etc.) —
-// in those cases an error flash message is shown normally instead.
+// confirmed the update was actually triggered via ?updating=1 in the
+// redirect URL. This avoids showing a false "restarting" overlay when
+// triggering the update failed server-side (DB backup failure, the
+// jen-update.service failing to start, etc.) — in those cases an
+// error flash message is shown normally instead.
+//
+// v5.2.6 — this used to read a specific target version out of
+// ?updated=X.Y.Z, since the old self_update() route resolved and
+// redirected with the exact version it had just installed. The new
+// route can't do that (it triggers a root-privileged systemd unit
+// that independently re-derives "latest" itself — see settings.py),
+// so the flag is now just ?updating=1, and the target version for
+// display/comparison purposes is read back from the sessionStorage
+// value startUpdate() saved right before the form was submitted.
 (function() {
     var params = new URLSearchParams(window.location.search);
-    var pending = params.get('updated');
+    var pending = params.get('updating');
     if (!pending) return;
+
+    var targetVersion = '';
+    try { targetVersion = sessionStorage.getItem('jen_update_target_version') || ''; } catch (e) {}
 
     // Clean the query param from the URL so a manual refresh doesn't re-trigger this
     var cleanUrl = window.location.pathname;
@@ -152,7 +172,7 @@ function startUpdate(evt) {
     var title   = document.getElementById('update-overlay-title');
     var msg     = document.getElementById('update-overlay-msg');
     overlay.style.display = 'flex';
-    title.textContent = 'Updating to v' + pending + '…';
+    title.textContent = targetVersion ? ('Updating to v' + targetVersion + '…') : 'Updating Jen…';
     msg.textContent = 'Restarting Jen…';
 
     var attempts = 0;
@@ -164,7 +184,16 @@ function startUpdate(evt) {
                 return r.json();
             })
             .then(function(d) {
-                if (d.current === pending) {
+                // If we know the specific target version (the normal
+                // case — see startUpdate() above), wait for Jen to
+                // report exactly that version. If we don't (e.g.
+                // sessionStorage was unavailable or got cleared),
+                // fall back to "Jen responded at all" as the signal
+                // that the restart completed — less precise, but
+                // still correct in the common case and never gets
+                // permanently stuck with no target to compare against.
+                if (targetVersion ? d.current === targetVersion : true) {
+                    try { sessionStorage.removeItem('jen_update_target_version'); } catch (e) {}
                     clearInterval(poll);
                     msg.textContent = 'Update complete — reloading…';
                     setTimeout(function() { window.location.reload(); }, 800);
