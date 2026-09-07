@@ -349,3 +349,87 @@ class TestSettings:
         # Viewer logged_in_client uses admin session — just verify 200/302
         r = logged_in_client.get("/settings/system")
         assert r.status_code in (200, 302, 403)
+
+
+class TestBulkReservationActions:
+    """v5.2.2 — bulk delete/export on the Reservations page. This
+    JS (toggleAll/updateCount/confirmBulk) and both backend routes
+    (bulk_delete_reservations, bulk_export_reservations) already
+    existed before this release — but there was no checkbox, no
+    select-all, no action bar, and no <form> anywhere in the template
+    to actually connect them. The feature was completely unreachable
+    from the UI despite a fully correct, already-tested-looking
+    backend. These tests exercise the routes directly (as any prior
+    test here could already have done, had anyone written one) and
+    also confirm the previously-missing markup is now actually
+    present in a real rendered page.
+    """
+
+    def _insert_host(self, db, mac_hex="aabbccddee10", ip="10.99.0.40",
+                      subnet_id=1, hostname="bulk-test-host"):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
+                "dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, %s, INET_ATON(%s), %s)",
+                (mac_hex, subnet_id, ip, hostname)
+            )
+            host_id = cur.lastrowid
+        db.commit()
+        return host_id
+
+    def test_bulk_delete_removes_selected_reservations(self, logged_in_client, db, mock_kea):
+        host_id = self._insert_host(db)
+        r = logged_in_client.post("/reservations/bulk-delete",
+                                  data={"host_ids[]": [str(host_id)]},
+                                  follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Deleted 1 reservation" in r.data
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM hosts WHERE host_id=%s", (host_id,))
+            assert cur.fetchone() is None
+
+    def test_bulk_delete_with_no_selection_shows_error(self, logged_in_client, mock_kea):
+        r = logged_in_client.post("/reservations/bulk-delete", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"No reservations selected" in r.data
+
+    def test_bulk_delete_respects_subnet_restriction(self, client, db, mock_kea):
+        """A bulk action can't be used to reach a subnet a restricted
+        admin couldn't touch one at a time — same guard as the
+        single-item delete route, checked per host_id in the loop."""
+        from tests.conftest import restricted_client
+        host_id = self._insert_host(db, mac_hex="aabbccddee11", ip="10.99.0.41", subnet_id=1)
+        restricted_client(client, db, allowed_subnets=[999])
+        r = client.post("/reservations/bulk-delete",
+                        data={"host_ids[]": [str(host_id)]},
+                        follow_redirects=True)
+        assert r.status_code == 200
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM hosts WHERE host_id=%s", (host_id,))
+            assert cur.fetchone() is not None, "reservation outside the restricted admin's scope must survive"
+
+    def test_bulk_export_returns_csv_of_selected_reservations(self, logged_in_client, db, mock_kea):
+        host_id = self._insert_host(db, mac_hex="aabbccddee12", ip="10.99.0.42", hostname="export-target")
+        r = logged_in_client.post("/reservations/bulk-export",
+                                  data={"host_ids[]": [str(host_id)]})
+        assert r.status_code == 200
+        assert b"export-target" in r.data
+        assert b"10.99.0.42" in r.data
+
+    def test_bulk_export_with_no_selection_shows_error(self, logged_in_client, mock_kea):
+        r = logged_in_client.post("/reservations/bulk-export", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"No reservations selected" in r.data
+
+    def test_reservations_page_now_actually_renders_the_bulk_markup(self, logged_in_client, db, mock_kea):
+        """Regression guard for the actual bug: the page must contain
+        real checkboxes, a select-all control, and a bulk form —
+        not just the JS that references IDs which didn't exist."""
+        host_id = self._insert_host(db, mac_hex="aabbccddee13", ip="10.99.0.43")
+        r = logged_in_client.get("/reservations")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert 'id="bulk-form"' in body
+        assert 'id="selectAll"' in body
+        assert f'name="host_ids[]" value="{host_id}"' in body

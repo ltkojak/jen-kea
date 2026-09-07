@@ -1,6 +1,33 @@
 {% extends "base.html" %}
 {% from '_device_badge.html' import device_badge %}
 {% block title %}Leases{% endblock %}
+{% block scripts %}
+function toggleAll(cb) {
+    document.querySelectorAll('.row-checkbox').forEach(c => c.checked = cb.checked);
+    updateCount();
+}
+function updateCount() {
+    const n = document.querySelectorAll('.row-checkbox:checked').length;
+    const el = document.getElementById('selectedCount');
+    if (el) el.textContent = n + ' selected';
+    const bar = document.getElementById('leases-bulk-bar');
+    if (bar) bar.style.display = n > 0 ? 'flex' : 'none';
+    const all = document.getElementById('selectAll');
+    if (all) {
+        const total = document.querySelectorAll('.row-checkbox').length;
+        all.indeterminate = n > 0 && n < total;
+        all.checked = n === total && total > 0;
+    }
+}
+function confirmBulkRelease() {
+    const n = document.querySelectorAll('.row-checkbox:checked').length;
+    if (n === 0) { alert('No leases selected.'); return false; }
+    jenConfirm(`Release ${n} lease(s)? Each device will need to renew to get a new IP.`, function() {
+        document.getElementById('bulk-form').submit();
+    });
+    return false;
+}
+{% endblock %}
 {% block content %}
 <div class="page-header">
     <h1>📋 Leases</h1>

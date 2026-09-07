@@ -10,6 +10,8 @@ function updateCount() {
     const n = document.querySelectorAll('.row-checkbox:checked').length;
     const el = document.getElementById('selectedCount');
     if (el) el.textContent = n + ' selected';
+    const bar = document.getElementById('reservations-bulk-bar');
+    if (bar) bar.style.display = n > 0 ? 'flex' : 'none';
     const all = document.getElementById('selectAll');
     if (all) {
         const total = document.querySelectorAll('.row-checkbox').length;
@@ -20,11 +22,24 @@ function updateCount() {
 function confirmBulk(action) {
     const n = document.querySelectorAll('.row-checkbox:checked').length;
     if (n === 0) { alert('No reservations selected.'); return false; }
+    const form = document.getElementById('bulk-form');
+    // v5.2.2 — this used to set a #bulk-action hidden field and submit
+    // to whatever the form's own (single, static) action URL was. The
+    // backend has always had two separate routes for this
+    // (/reservations/bulk-delete and /reservations/bulk-export), not
+    // one dispatcher — the checkboxes, action bar, and form markup
+    // this JS needed never existed in the template at all, so this
+    // mismatch was never actually reachable or noticed until now.
     if (action === 'delete') {
         jenConfirm(`Delete ${n} reservation(s)? This cannot be undone.`, function() {
-            document.getElementById('bulk-action').value = action;
-            document.getElementById('bulk-form').submit();
+            form.action = '/reservations/bulk-delete';
+            form.submit();
         });
+        return false;
+    }
+    if (action === 'export') {
+        form.action = '/reservations/bulk-export';
+        form.submit();
         return false;
     }
     return true;

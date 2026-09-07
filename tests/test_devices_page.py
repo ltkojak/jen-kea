@@ -145,3 +145,50 @@ class TestDevicesActionMenu:
         assert 'data-notes=' in body
         assert 'data-type=' in body
         assert 'data-icon=' in body
+
+
+class TestBulkDeleteDevices:
+    """v5.2.2 — bulk removal of multiple devices from inventory at
+    once, following the same shape as reservations.py's
+    bulk_delete_reservations() and leases.py's bulk_release_leases().
+    Purely a Jen-side cleanup — no Kea API call involved at all."""
+
+    def test_bulk_delete_removes_selected_devices(self, logged_in_client, db):
+        device_id = _insert_device(db, mac_hex="aabbccddee30", last_ip="10.10.10.70")
+        db.commit()
+        r = logged_in_client.post("/devices/bulk-delete",
+                                  data={"device_ids[]": [str(device_id)]},
+                                  follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Removed 1 device" in r.data
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM devices WHERE id=%s", (device_id,))
+            assert cur.fetchone() is None
+
+    def test_bulk_delete_with_no_selection_shows_error(self, logged_in_client):
+        r = logged_in_client.post("/devices/bulk-delete", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"No devices selected" in r.data
+
+    def test_bulk_delete_respects_subnet_restriction(self, client, db):
+        from tests.conftest import restricted_client
+        device_id = _insert_device(db, mac_hex="aabbccddee31", last_ip="10.10.10.71", subnet_id=1)
+        db.commit()
+        restricted_client(client, db, allowed_subnets=[999])
+        r = client.post("/devices/bulk-delete",
+                        data={"device_ids[]": [str(device_id)]},
+                        follow_redirects=True)
+        assert r.status_code == 200
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM devices WHERE id=%s", (device_id,))
+            assert cur.fetchone() is not None, "device outside the restricted admin's scope must survive"
+
+    def test_devices_page_renders_bulk_markup(self, logged_in_client, db):
+        device_id = _insert_device(db, mac_hex="aabbccddee32", last_ip="10.10.10.72")
+        db.commit()
+        r = logged_in_client.get("/devices")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert 'id="bulk-form"' in body
+        assert 'action="/devices/bulk-delete"' in body
+        assert f'name="device_ids[]" value="{device_id}"' in body

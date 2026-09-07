@@ -345,6 +345,58 @@ def delete_device(device_id):
         flash(f"Error: {str(e)}", "error")
     return redirect(url_for('devices.devices'))
 
+
+@bp.route("/devices/bulk-delete", methods=["POST"])
+@login_required
+@_admin_required
+def bulk_delete_devices():
+    """
+    Remove multiple devices from inventory at once — mirrors
+    reservations.py's bulk_delete_reservations() and leases.py's
+    bulk_release_leases() in shape. Purely a Jen-side inventory
+    cleanup (unlike the reservation/lease bulk actions, this never
+    touches Kea's own config or lease table at all — a device with no
+    associated reservation or active lease is just historical record-
+    keeping in Jen's own devices table), so there's no external system
+    to fail against; the only per-item check is the same subnet-access
+    guard the single-device delete route already applies.
+    """
+    device_ids = request.form.getlist("device_ids[]")
+    if not device_ids:
+        flash("No devices selected.", "error")
+        return redirect(url_for('devices.devices'))
+
+    deleted = 0
+    errors = 0
+    try:
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                for device_id in device_ids:
+                    try:
+                        device_id = int(device_id)
+                        cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
+                        existing = cur.fetchone()
+                        if existing and existing.get("last_subnet_id") is not None \
+                                and not current_user.can_access_subnet(existing["last_subnet_id"]):
+                            errors += 1
+                            continue
+                        cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
+                        if cur.rowcount:
+                            deleted += 1
+                        else:
+                            errors += 1
+                    except Exception:
+                        errors += 1
+            db.commit()
+    except Exception as e:
+        flash(f"Bulk delete error: {str(e)}", "error")
+        return redirect(url_for('devices.devices'))
+
+    flash(f"Removed {deleted} device(s) from inventory." + (f" {errors} failed or skipped." if errors else ""),
+          "success" if errors == 0 else "warning")
+    __user.audit("BULK_DELETE_DEVICES", "devices", f"Deleted={deleted} Errors={errors} by {current_user.username}")
+    return redirect(url_for('devices.devices'))
+
 @bp.route("/devices/settings", methods=["POST"])
 @login_required
 @_admin_required

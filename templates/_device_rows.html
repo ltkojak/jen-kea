@@ -1,6 +1,11 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
+    {% if current_user.role in ('superadmin','admin') %}
+    <td data-label="" class="no-label">
+        <input type="checkbox" class="row-checkbox" name="device_ids[]" value="{{ d.id }}" onchange="updateCount()">
+    </td>
+    {% endif %}
     <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
     <td data-label="Name"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
     <td data-label="Owner" class="hide-tablet"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
@@ -57,7 +62,7 @@
     </td>
 </tr>
 {% else %}
-<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted);">
+<tr><td colspan="{{ 11 if current_user.role in ('superadmin','admin') else 10 }}" style="text-align:center;padding:32px;color:var(--text-muted);">
     {% if show_stale %}No stale devices found (none inactive for {{ stale_days }}+ days).
     {% elif search %}No devices matching "{{ search }}".
     {% else %}No devices in inventory yet. Devices appear automatically as DHCP leases are issued.{% endif %}

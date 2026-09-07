@@ -2,6 +2,13 @@
 {% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
 {% for l in leases %}
 <tr>
+    {% if not show_expired and current_user.role in ('superadmin','admin') %}
+    <td data-label="" class="no-label">
+        {% if not l.has_reservation %}
+        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}" onchange="updateCount()">
+        {% endif %}
+    </td>
+    {% endif %}
     <td data-label="IP" class="mono"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
     <td data-label="Hostname" style="white-space:nowrap;">
         {{ l.hostname | hostname or '—' }}
@@ -33,5 +40,5 @@
     {% endif %}
 </tr>
 {% else %}
-<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--text-muted);">No leases found.</td></tr>
+<tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}" style="text-align:center;padding:32px;color:var(--text-muted);">No leases found.</td></tr>
 {% endfor %}

@@ -2,6 +2,61 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.2] - 2026-09-08
+
+### Bulk actions for Leases and Devices — and a real bug found along the way
+
+Third release of the 5.2.x series. Set out to extend Reservations'
+existing bulk-action pattern to Leases and Devices — turned out
+Reservations' bulk actions didn't actually work either.
+
+**Found: Reservations' bulk delete/export were completely unreachable
+from the UI.** The JS (`toggleAll`/`updateCount`/`confirmBulk`) already
+existed in `reservations.html`, and both backend routes
+(`bulk_delete_reservations`, `bulk_export_reservations`) were fully
+built and correct — but there was no checkbox, no select-all control,
+no action bar, and no `<form>` anywhere in the template to actually
+connect them. The exact same "half-wired feature" pattern as the
+subnet-notes bug found earlier in this project. The original JS was
+also written assuming a single dispatcher endpoint with an `action`
+field, which never matched how the two real backend routes actually
+work — so even with the markup in place, the wiring itself needed
+correcting, not just completing.
+
+- **Reservations** — added the missing markup (checkboxes, select-all,
+  action bar, form) and fixed the JS to target each action's real
+  endpoint directly. Checkboxes and "Export Selected" are visible to
+  any logged-in user (matching `bulk_export_reservations`'s existing
+  `@login_required`-only gate); "Delete Selected" is admin/superadmin
+  only.
+- **Leases** — new `/leases/bulk-release` route and matching UI,
+  scoped to active (non-expired), non-reserved leases only — matching
+  exactly where the single-lease "Release lease" action already lives.
+  Releasing a reserved lease's active binding doesn't accomplish much
+  since Kea just reissues the same reservation on renewal; the route
+  re-checks this server-side even though the template only ever offers
+  a checkbox for non-reserved rows.
+- **Devices** — new `/devices/bulk-delete` route and matching UI. Pure
+  Jen-side inventory cleanup — no Kea API or lease-table interaction at
+  all, so there's no external system to fail against beyond the same
+  subnet-access guard the single-device delete route already applies.
+
+All three bulk routes: per-item subnet-access check (a bulk action
+can't reach a subnet a restricted admin couldn't touch one at a time),
+a single summary flash rather than one per item, and an audit log
+entry. Fixed the empty-state `colspan` on Leases and Devices to be
+dynamically correct now that column count varies by role and view
+state, rather than the previous hardcoded (and already slightly
+imprecise) values.
+
+Added real test coverage for all three bulk routes plus the previously
+untested Reservations bulk actions — including confirming the
+subnet-restriction guard actually holds, that a reserved lease can't
+be released via a hand-crafted bulk request even though the UI never
+offers it a checkbox, and that the correct markup is now genuinely
+present in each rendered page rather than just asserting the JS
+functions exist.
+
 ## [5.2.1] - 2026-09-07
 
 ### In-app changelog viewer + PWA installability

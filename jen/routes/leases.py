@@ -326,6 +326,71 @@ def release_lease():
         flash(f"Error releasing lease: {str(e)}", "error")
     return redirect(url_for('leases.leases'))
 
+
+@bp.route("/leases/bulk-release", methods=["POST"])
+@login_required
+@_admin_required
+def bulk_release_leases():
+    """
+    Release multiple active, non-reserved leases at once — e.g.
+    clearing a block of leases before subnet maintenance, or a bulk
+    cleanup of devices that are clearly gone. Mirrors
+    reservations.py's bulk_delete_reservations() in shape: per-item
+    subnet-access check (a bulk action can't be used to touch a
+    subnet a restricted admin couldn't touch one at a time), and a
+    single summary flash rather than one per lease.
+
+    Reserved leases are excluded here the same way they're excluded
+    from the single-lease "Release lease" action — releasing a
+    reserved IP's active binding doesn't accomplish much, since Kea
+    will just reissue the same reservation on the next renewal. The
+    template only renders a checkbox for non-reserved rows in the
+    first place, but this is re-checked server-side too, since a
+    request here isn't required to have come from that exact form.
+    """
+    ips = request.form.getlist("ips[]")
+    if not ips:
+        flash("No leases selected.", "error")
+        return redirect(url_for('leases.leases'))
+
+    released = 0
+    errors = 0
+    try:
+        with __db.kea_db() as db:
+            with db.cursor() as cur:
+                for ip in ips:
+                    try:
+                        cur.execute(
+                            "SELECT l.subnet_id FROM lease4 l "
+                            "LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id "
+                            "AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0 "
+                            "WHERE inet_ntoa(l.address)=%s AND l.state=0 AND h.host_id IS NULL",
+                            (ip,)
+                        )
+                        row = cur.fetchone()
+                        if not row:
+                            errors += 1
+                            continue
+                        if not current_user.can_access_subnet(row["subnet_id"]):
+                            errors += 1
+                            continue
+                        cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
+                        if cur.rowcount:
+                            released += 1
+                        else:
+                            errors += 1
+                    except Exception:
+                        errors += 1
+            db.commit()
+    except Exception as e:
+        flash(f"Bulk release error: {str(e)}", "error")
+        return redirect(url_for('leases.leases'))
+
+    flash(f"Released {released} lease(s)." + (f" {errors} failed or skipped." if errors else ""),
+          "success" if errors == 0 else "warning")
+    __user.audit("BULK_RELEASE_LEASES", "leases", f"Released={released} Errors={errors} by {current_user.username}")
+    return redirect(url_for('leases.leases'))
+
 MAX_IPMAP_ADDRESSES = 2048  # sanity cap so a misconfigured huge pool can't render tens of thousands of cells
 
 
