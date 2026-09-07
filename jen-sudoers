@@ -1,2 +1,2 @@
 www-data ALL=(root) NOPASSWD: /usr/bin/systemctl restart jen
-www-data ALL=(root) NOPASSWD: /usr/bin/systemctl start jen-update.service
+www-data ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block jen-update.service

@@ -2,6 +2,56 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.9] - 2026-09-08
+
+### Fix self-update being completely broken since v5.2.6
+
+**Impact:** every self-update attempt has failed on every instance
+running v5.2.6, v5.2.7, or v5.2.8 — not a transitional issue affecting
+one upgrade, a permanent break in the feature until this fix is
+applied. Reported as "Could not start the update" in the UI.
+
+**Cause:** the v5.2.6 security rewrite's sudoers rule authorized
+`/usr/bin/systemctl start jen-update.service`, but the actual code
+invoked `/usr/bin/systemctl start --no-block jen-update.service` — an
+extra `--no-block` flag added for a real reason (without it, the
+triggering call blocks waiting for the update service to fully
+complete, including its own final `systemctl restart jen` step, which
+kills the exact Flask worker process that's blocked waiting) but never
+reflected in the sudoers rule authorizing it. `sudo` matches commands
+literally, argument-by-argument — a rule with no wildcards (deliberate,
+since a wildcard here would reopen exactly the attacker-controllable-
+input gap the v5.2.6 rewrite exists to close) must match byte-for-byte,
+and this one didn't. Every attempt was rejected with a sudo permission
+denial before ever reaching the update logic.
+
+**Fix:** the sudoers rule now authorizes the exact command the code
+actually invokes, `--no-block` included.
+
+Added `tests/test_sudoers_command_matching.py` — parses `jen-sudoers`
+and cross-checks every sudo-invoking `subprocess.run()` call in
+`jen/routes/settings.py` against it via AST, failing if any invoked
+command doesn't exactly match something authorized. Verified this test
+actually has teeth, not just coincidental passing: ran it against the
+original broken sudoers content and confirmed it correctly flags the
+exact mismatch that shipped. This class of bug — an update to one side
+of a two-file contract (code and the sudoers rule authorizing it)
+without a matching update to the second — is now checked automatically instead of
+depending on remembering to keep them in sync by hand.
+
+**⚠️ Because self-update is what's broken, self-update cannot fix
+itself.** Use the manual upgrade path for this release, with real
+administrator access:
+
+```
+cd ~/jen
+sudo ./install.sh --upgrade
+```
+
+This installs the corrected `jen-sudoers` file directly. After this
+one update, the in-app "Update Now" button works correctly again for
+every release going forward.
+
 ## [5.2.8] - 2026-09-08
 
 ### Fix CI failure in 5.2.7's test suite
