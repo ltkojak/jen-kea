@@ -522,6 +522,29 @@ def _m014_alert_subnet_scope(db):
             )
 
 
+def _m015_users_must_change_password(db):
+    """users.must_change_password: v5.2.7 security fix. A fresh install
+    seeds an 'admin'/'admin' superadmin with nothing enforcing that the
+    obvious default ever actually gets changed — the README says to
+    change it immediately, but that's advisory, not enforced anywhere
+    in the application. Given Jen manages real DHCP infrastructure, a
+    forgotten default credential has a much larger blast radius than
+    the same oversight on a low-stakes app.
+
+    This column, combined with a before_request hook (see jen/__init__.py)
+    that redirects every authenticated request to a forced password-
+    change screen while it's set, makes the rest of the application
+    genuinely unavailable until the password is changed — not just
+    documented as something you should do. Also set on newly-created
+    user accounts (add_user() in jen/routes/users.py), since a
+    superadmin setting another user's initial password is the same
+    category of concern as the default seed itself.
+    """
+    with db.cursor() as cur:
+        if _column_missing(cur, "users", "must_change_password"):
+            cur.execute("ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -542,6 +565,8 @@ MIGRATIONS = [
     (13, "api_keys.subnet_access column for per-key scope",    _m013_api_keys_subnet_access),
     (14, "alert_channels.subnet_scope + users global setting for reserved-lease recurrence",
                                                               _m014_alert_subnet_scope),
+    (15, "users.must_change_password column for forced password-change enforcement",
+                                                              _m015_users_must_change_password),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

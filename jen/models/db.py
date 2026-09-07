@@ -339,8 +339,10 @@ def init_jen_db() -> None:
             cur.execute("SELECT COUNT(*) as cnt FROM users")
             if cur.fetchone()["cnt"] == 0:
                 cur.execute(
-                    "INSERT INTO users (username, password, role) VALUES (%s, %s, 'superadmin')",
+                    "INSERT INTO users (username, password, role, must_change_password) "
+                    "VALUES (%s, %s, 'superadmin', 1)",
                     ("admin", hash_password("admin"))
                 )
-                print("Created default superadmin user: admin / admin")
+                print("Created default superadmin user: admin / admin — "
+                      "you will be required to change this password on first login.")
         db.commit()

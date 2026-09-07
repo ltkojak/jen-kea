@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.2.6"
+JEN_VERSION = "5.2.7"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -150,7 +150,8 @@ def create_app() -> Flask:
                     user = User(
                         sess_user['id'], sess_user['username'],
                         sess_user['role'], sess_user.get('session_timeout'),
-                        sess_user.get('subnet_access')
+                        sess_user.get('subnet_access'),
+                        sess_user.get('must_change_password', False)
                     )
                     _g._cached_user = user
                     return user
@@ -167,19 +168,20 @@ def create_app() -> Flask:
                 with db.cursor() as cur:
                     cur.execute(
                         "SELECT id, username, role, session_timeout, subnet_access, "
-                        "token_version FROM users WHERE id=%s",
+                        "token_version, must_change_password FROM users WHERE id=%s",
                         (user_id,)
                     )
                     row = cur.fetchone()
             if row:
                 user = User(row["id"], row["username"],
                             row["role"], row["session_timeout"],
-                            row["subnet_access"])
+                            row["subnet_access"], row["must_change_password"])
                 session['_user_cache'] = {
                     'id': row["id"], 'username': row["username"],
                     'role': row["role"], 'session_timeout': row["session_timeout"],
                     'subnet_access': row["subnet_access"],
-                    'token_version': row["token_version"]
+                    'token_version': row["token_version"],
+                    'must_change_password': bool(row["must_change_password"])
                 }
                 _g._cached_user = user
                 return user
@@ -287,6 +289,35 @@ def create_app() -> Flask:
                 f"https://{host}:{extensions.HTTPS_PORT}{request.path}",
                 code=301
             )
+
+    @app.before_request
+    def _enforce_password_change():
+        """v5.2.7 security fix — see the users.must_change_password
+        migration's docstring (jen/models/migrations.py) for the full
+        rationale: a fresh install's default admin/admin credential,
+        and any admin-set initial password for a new user, previously
+        had nothing enforcing that it ever actually gets changed.
+
+        While this flag is set, every authenticated request is
+        redirected to the forced password-change screen — the rest of
+        the application is genuinely unavailable, not just documented
+        as something you should go do. Allowlists: the change-password
+        route itself (or this would redirect-loop), logout (a user
+        stuck on this screen must still be able to sign out), the
+        entire /mfa/ path (so this doesn't fight with an in-progress
+        MFA enrollment/verification flow — whichever the user lands on
+        first, the other still isn't reachable until this resolves),
+        and static assets.
+        """
+        if not current_user.is_authenticated:
+            return
+        if not getattr(current_user, "must_change_password", False):
+            return
+        if request.path.startswith("/static/") or request.path.startswith("/mfa/"):
+            return
+        if request.path in (url_for("auth.force_password_change"), url_for("auth.logout")):
+            return
+        return redirect(url_for("auth.force_password_change"))
 
     @app.before_request
     def _csrf_protect():

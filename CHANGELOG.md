@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.7] - 2026-09-08
+
+### SECURITY: enforce a password change on the default admin credential
+
+Second fix from the same third-party security review that produced
+v5.2.6. A fresh install seeds an `admin`/`admin` superadmin account
+with nothing enforcing that the obvious default ever actually gets
+changed — the README says to change it immediately, but that was
+advisory only, never enforced anywhere in the application. Given Jen
+manages real DHCP infrastructure, a forgotten default credential has a
+much larger blast radius than the same oversight elsewhere.
+
+**Fix:** new `users.must_change_password` column, set on the default
+admin seed and on any newly-created user account (an admin setting a
+new user's initial password is the same category of concern as
+the default seed itself). A new `before_request` hook makes the rest
+of the application genuinely unavailable while this flag is set —
+every authenticated request redirects to a forced password-change
+screen — rather than just documenting that the password should be
+changed. The new screen deliberately doesn't re-verify the current
+password (reaching it at all already proves the user knows it — they
+just logged in) and explicitly rejects setting the new password back
+to `admin` or to the account's own username, closing the obvious
+"change it right back" loophole.
+
+Traced the session-cache plumbing carefully rather than assuming:
+`load_user()`'s fast and slow paths both needed updating, and the
+login route in `auth.py` turned out to independently build its own
+session-cache dict in two separate places (a detail only found by
+checking). The existing `change_password()` route already clears the
+session cache on a successful change, which meant this flag correctly
+propagates without needing any new cache-invalidation logic of its
+own.
+
+Added `tests/test_password_change_enforcement.py` covering the seed
+and creation paths, the enforcement middleware (including that it
+doesn't interfere with an in-progress MFA enrollment/verification
+flow), and the new route's validation — verified the actual SQL and
+validation logic directly via source inspection against the real
+functions, since a fresh, all-migrations-applied test database isn't
+available in every environment this was developed in.
+
 ## [5.2.6] - 2026-09-08
 
 ### SECURITY: root privilege escalation via the self-update sudoers rule

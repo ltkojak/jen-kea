@@ -223,7 +223,8 @@ def add_user():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO users (username, password, role, subnet_access, session_timeout) VALUES (%s, %s, %s, %s, %s)",
+                    "INSERT INTO users (username, password, role, subnet_access, session_timeout, must_change_password) "
+                    "VALUES (%s, %s, %s, %s, %s, 1)",
                     (username, __user.hash_password(password), role, subnet_access, timeout_val)
                 )
             db.commit()
@@ -324,7 +325,7 @@ def change_password():
                 if not row or not __user.verify_password(row["password"], current_pw):
                     flash("Current password is incorrect.", "error")
                     return redirect(url_for('users.users'))
-                cur.execute("UPDATE users SET password=%s WHERE id=%s",
+                cur.execute("UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
                             (__user.hash_password(new_pw), current_user.id))
             db.commit()
         session.pop("_user_cache", None)

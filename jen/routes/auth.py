@@ -68,7 +68,7 @@ def login():
                 with db.cursor() as cur:
                     # User lookup
                     cur.execute(
-                        "SELECT id, username, role, session_timeout, password, subnet_access, token_version FROM users WHERE username=%s",
+                        "SELECT id, username, role, session_timeout, password, subnet_access, token_version, must_change_password FROM users WHERE username=%s",
                         (username,)
                     )
                     row = cur.fetchone()
@@ -147,7 +147,8 @@ def login():
             __auth.clear_login_attempts(ip, username)
 
             user = User(row["id"], row["username"], row["role"],
-                        row["session_timeout"], row.get("subnet_access"))
+                        row["session_timeout"], row.get("subnet_access"),
+                        row.get("must_change_password"))
 
             # MFA check
             mfa_mode = settings.get("mfa_mode", "off")
@@ -173,7 +174,8 @@ def login():
                         "id": user.id, "username": user.username,
                         "role": user.role, "session_timeout": user.session_timeout,
                         "subnet_access": row.get("subnet_access"),
-                        "token_version": row.get("token_version", 0)
+                        "token_version": row.get("token_version", 0),
+                        "must_change_password": bool(row.get("must_change_password"))
                     }
                     flash("MFA is required for your account. Please enroll now.", "warning")
                     return redirect(url_for('mfa_routes.mfa_enroll'))
@@ -184,7 +186,8 @@ def login():
                 "id": user.id, "username": user.username,
                 "role": user.role, "session_timeout": user.session_timeout,
                 "subnet_access": row.get("subnet_access"),
-                "token_version": row.get("token_version", 0)
+                "token_version": row.get("token_version", 0),
+                "must_change_password": bool(row.get("must_change_password"))
             }
             __user.audit("LOGIN", "auth", f"User {username} logged in from {ip}")
             return redirect(url_for('dashboard.dashboard'))
@@ -204,6 +207,61 @@ def logout():
     session.pop("_avatar_url", None)
     logout_user()
     return redirect(url_for('auth.login'))
+
+
+@bp.route("/force-password-change", methods=["GET", "POST"])
+@login_required
+def force_password_change():
+    """
+    v5.2.7 security fix — the destination the _enforce_password_change()
+    before_request hook (jen/__init__.py) sends every request to while
+    current_user.must_change_password is set. See the
+    users.must_change_password migration's docstring
+    (jen/models/migrations.py) for the full rationale: a fresh install's
+    default admin/admin credential, and any admin-set initial password
+    for a new user, previously had nothing enforcing it ever actually
+    gets changed.
+
+    Deliberately does NOT re-verify the current password the way
+    users.py's general change_password() route does for an already-
+    logged-in user changing their password voluntarily — reaching this
+    route at all already proves the user knows the current password
+    (they just logged in with it), so asking again has no security
+    benefit, only friction.
+    """
+    if request.method == "GET":
+        return render_template("force_password_change.html")
+
+    new_pw = request.form.get("new_password", "")
+    confirm_pw = request.form.get("confirm_password", "")
+
+    if len(new_pw) < 8:
+        flash("New password must be at least 8 characters.", "error")
+        return render_template("force_password_change.html")
+    if new_pw != confirm_pw:
+        flash("New passwords do not match.", "error")
+        return render_template("force_password_change.html")
+    if new_pw.lower() == "admin" or new_pw == current_user.username:
+        flash("Please choose a password other than the default or your own username.", "error")
+        return render_template("force_password_change.html")
+
+    try:
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
+                    (__user.hash_password(new_pw), current_user.id)
+                )
+            db.commit()
+        session.pop("_user_cache", None)
+        __user.audit("CHANGE_PASSWORD", current_user.username,
+                     "Password changed (forced — first login or admin-assigned password)")
+        flash("Password changed successfully.", "success")
+        return redirect(url_for('dashboard.dashboard'))
+    except Exception as e:
+        logger.error(f"Forced password change error: {e}")
+        flash("Error changing password. Please try again.", "error")
+        return render_template("force_password_change.html")
 
 # ─────────────────────────────────────────
 # Dashboard

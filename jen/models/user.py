@@ -16,11 +16,13 @@ logger = logging.getLogger(__name__)
 
 
 class User(UserMixin):
-    def __init__(self, id, username, role, session_timeout=None, subnet_access=None):
+    def __init__(self, id, username, role, session_timeout=None, subnet_access=None,
+                 must_change_password=False):
         self.id              = id
         self.username        = username
         self.role            = role
         self.session_timeout = session_timeout
+        self.must_change_password = bool(must_change_password)
         # subnet_access: None = all subnets; list of int subnet_ids = restricted
         if subnet_access is None:
             self._subnet_access = None
