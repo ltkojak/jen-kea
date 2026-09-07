@@ -123,6 +123,8 @@
         All API keys are <strong>read-only</strong> — they can query leases, devices, reservations, and subnet stats but cannot make any changes to your network.<br><br>
         Keys are passed in the <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">Authorization: Bearer &lt;key&gt;</code> HTTP header.<br><br>
         A key is shown only once at creation time. If you lose it, revoke it and generate a new one.
+        {% if current_user.role != 'superadmin' %}<br><br>
+        You can see and manage only the API keys you've created yourself. A superadmin can see and manage every key.{% endif %}
     </p>
 </div>
 {% endblock %}

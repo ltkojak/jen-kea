@@ -5,6 +5,7 @@ REST API v1 endpoints and API key management routes.
 """
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime
 
@@ -20,13 +21,26 @@ from jen.services.kea import kea_command, kea_is_up, get_active_kea_server
 
 bp = Blueprint("api", __name__)
 
+logger = logging.getLogger(__name__)
+
 JEN_VERSION = None   # injected by app factory
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _api_auth():
-    """Validate Bearer token. Returns key row (with subnet_access) or None."""
+    """Validate Bearer token. Returns key row (with subnet_access) or None.
+
+    v5.2.10 — last_used used to be written on every single authenticated
+    API request, unconditionally, regardless of how recently it was
+    last updated. Harmless at low traffic, but unnecessary write
+    amplification for a value whose only real use (showing roughly
+    when a key was last used, in the API keys list) doesn't need
+    second-level precision. Now only updates once per 5-minute window
+    per key, via a single conditional UPDATE — atomic and one round
+    trip, not a separate SELECT-then-maybe-UPDATE that could race with
+    itself under concurrent requests.
+    """
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
@@ -41,7 +55,11 @@ def _api_auth():
                 )
                 row = cur.fetchone()
                 if row:
-                    cur.execute("UPDATE api_keys SET last_used=NOW() WHERE id=%s", (row["id"],))
+                    cur.execute(
+                        "UPDATE api_keys SET last_used=NOW() WHERE id=%s "
+                        "AND (last_used IS NULL OR last_used < NOW() - INTERVAL 5 MINUTE)",
+                        (row["id"],)
+                    )
                     db.commit()
         return row
     except Exception:
@@ -150,7 +168,7 @@ def api_v1_leases():
     mac      = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
     hostname = request.args.get("hostname", "")
     try:
-        limit = min(int(request.args.get("limit", 200)), 1000)
+        limit = max(1, min(int(request.args.get("limit", 200)), 1000))
     except ValueError:
         limit = 200
     if scope is not None and not scope:
@@ -249,7 +267,7 @@ def api_v1_devices_endpoint():
     name   = request.args.get("name",   "")
     subnet = request.args.get("subnet", "")
     try:
-        limit = min(int(request.args.get("limit", 200)), 1000)
+        limit = max(1, min(int(request.args.get("limit", 200)), 1000))
     except ValueError:
         limit = 200
     if scope is not None and not scope:
@@ -348,7 +366,7 @@ def api_v1_reservations():
     scope = _api_key_subnet_ids(key)
     subnet = request.args.get("subnet", "")
     try:
-        limit = min(int(request.args.get("limit", 200)), 1000)
+        limit = max(1, min(int(request.args.get("limit", 200)), 1000))
     except ValueError:
         limit = 200
     if scope is not None and not scope:
@@ -397,12 +415,31 @@ def api_keys():
     try:
         with jen_db() as db:
             with db.cursor() as cur:
-                cur.execute(
-                    "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
-                    "k.subnet_access, u.username as created_by_name "
-                    "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
-                    "ORDER BY k.created_at DESC"
-                )
+                # v5.2.10 security fix — this previously loaded every
+                # key regardless of who created it, and any admin
+                # (not just superadmin) could view, revoke, or delete
+                # any other admin's key just by knowing or guessing its
+                # id, including one with broader subnet access than
+                # they themselves have. A plain admin now only ever
+                # sees keys they created; superadmins continue to see
+                # everything, consistent with how superadmin access
+                # works everywhere else in the app.
+                if current_user.is_superadmin:
+                    cur.execute(
+                        "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
+                        "k.subnet_access, k.created_by, u.username as created_by_name "
+                        "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
+                        "ORDER BY k.created_at DESC"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
+                        "k.subnet_access, k.created_by, u.username as created_by_name "
+                        "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
+                        "WHERE k.created_by = %s "
+                        "ORDER BY k.created_at DESC",
+                        (current_user.id,)
+                    )
                 keys = cur.fetchall()
         import json as _json
         for k in keys:
@@ -415,7 +452,8 @@ def api_keys():
             else:
                 k["subnet_names"] = None
     except Exception as e:
-        flash(f"Could not load API keys: {e}", "error")
+        logger.error(f"Could not load API keys: {e}")
+        flash("Could not load API keys. Check server logs for details.", "error")
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     return render_template("api_keys.html", keys=keys,
                            subnet_map=accessible_subnet_map,
@@ -474,7 +512,8 @@ def api_keys_create():
         session["new_api_key_name"] = name
         flash("API key created. Copy it now — it won't be shown again.", "success")
     except Exception as e:
-        flash(f"Error creating key: {e}", "error")
+        logger.error(f"Error creating API key: {e}")
+        flash("Error creating key. Check server logs for details.", "error")
     return redirect(url_for("api.api_keys"))
 
 
@@ -487,15 +526,28 @@ def api_keys_revoke(key_id):
     try:
         with jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
+                cur.execute("SELECT name, created_by FROM api_keys WHERE id=%s", (key_id,))
                 row = cur.fetchone()
-                if row:
-                    cur.execute("UPDATE api_keys SET active=0 WHERE id=%s", (key_id,))
-                    db.commit()
-                    audit("API_KEY_REVOKE", "api_keys", f"Key '{row['name']}' revoked")
-                    flash(f"API key '{row['name']}' revoked.", "success")
+                # v5.2.10 security fix — this previously let any admin
+                # revoke any key by id, including one created by
+                # another admin (or a superadmin) with broader subnet
+                # access than they themselves have. Now scoped to
+                # "you created it, or you're a superadmin" — the same
+                # rule the listing query above applies. Deliberately
+                # one generic message for both "no such key" and
+                # "exists but isn't yours" — distinguishing the two
+                # would let someone confirm a specific key id exists
+                # even though they can't act on it either way.
+                if not row or (not current_user.is_superadmin and row["created_by"] != current_user.id):
+                    flash("API key not found.", "error")
+                    return redirect(url_for("api.api_keys"))
+                cur.execute("UPDATE api_keys SET active=0 WHERE id=%s", (key_id,))
+                db.commit()
+                audit("API_KEY_REVOKE", "api_keys", f"Key '{row['name']}' revoked")
+                flash(f"API key '{row['name']}' revoked.", "success")
     except Exception as e:
-        flash(f"Error revoking key: {e}", "error")
+        logger.error(f"Error revoking API key {key_id}: {e}")
+        flash("Error revoking key. Check server logs for details.", "error")
     return redirect(url_for("api.api_keys"))
 
 
@@ -508,15 +560,20 @@ def api_keys_delete(key_id):
     try:
         with jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT name FROM api_keys WHERE id=%s", (key_id,))
+                cur.execute("SELECT name, created_by FROM api_keys WHERE id=%s", (key_id,))
                 row = cur.fetchone()
-                if row:
-                    cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
-                    db.commit()
-                    audit("API_KEY_DELETE", "api_keys", f"Key '{row['name']}' deleted")
-                    flash(f"API key '{row['name']}' deleted.", "success")
+                # Same ownership rule and same-message-either-way
+                # reasoning as api_keys_revoke() above.
+                if not row or (not current_user.is_superadmin and row["created_by"] != current_user.id):
+                    flash("API key not found.", "error")
+                    return redirect(url_for("api.api_keys"))
+                cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
+                db.commit()
+                audit("API_KEY_DELETE", "api_keys", f"Key '{row['name']}' deleted")
+                flash(f"API key '{row['name']}' deleted.", "success")
     except Exception as e:
-        flash(f"Error deleting key: {e}", "error")
+        logger.error(f"Error deleting API key {key_id}: {e}")
+        flash("Error deleting key. Check server logs for details.", "error")
     return redirect(url_for("api.api_keys"))
 
 

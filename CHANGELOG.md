@@ -2,6 +2,59 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.10] - 2026-09-08
+
+### SECURITY: API key authorization scope, plus three related fixes in the same file
+
+Third fix from the same third-party security review that produced
+v5.2.6 and v5.2.7.
+
+**The finding:** the API key listing query loaded every key regardless
+of who created it, and the revoke/delete routes checked only
+`role in (superadmin, admin)` — no ownership check, no scope check. A
+subnet-restricted plain admin could view metadata for, revoke, or
+delete a superadmin's unrestricted API key just by knowing or guessing
+its (small, sequential) id.
+
+**Fix:** a plain admin now only ever sees, and can only ever act on,
+API keys they created themselves. Superadmins continue to see and
+manage everything, consistent with how superadmin access already
+works everywhere else in the app. The revoke and delete routes give
+the same generic "API key not found" message whether a key genuinely
+doesn't exist or exists but isn't the caller's — distinguishing the
+two would let someone confirm a specific key id exists even though
+they can't act on it either way. Added a brief note to the API Keys
+page itself for plain admins, since this is a real, visible behavior
+change worth surfacing rather than a silent restriction.
+
+**Bundled into the same pass**, since all three touch this exact file
+and two of them are the exact lines being rewritten for the
+authorization fix anyway:
+
+- **Raw exception leaks** in the API key listing, create, revoke, and
+  delete routes — all four previously did `flash(f"Error: {e}")`,
+  putting raw exception text (potentially including schema details,
+  connection info, or credentials) directly in front of the user. Now
+  logged server-side with a generic message shown instead.
+- **`limit` parameter floor** — the REST API's `limit` query parameter
+  was capped at 1000 but had no lower bound, so `?limit=-1` reached
+  MySQL as a literal negative `LIMIT`, which MySQL rejects outright
+  rather than clamping. Now `max(1, min(value, 1000))`.
+- **`last_used` write throttling** — `_api_auth()` wrote `last_used`
+  on every single authenticated API request, unconditionally. Now
+  throttled to once per 5-minute window via a single conditional
+  `UPDATE ... WHERE last_used IS NULL OR last_used < NOW() - INTERVAL
+  5 MINUTE` — atomic, one round trip, no separate SELECT-then-maybe-
+  UPDATE that could race with itself under concurrent requests.
+
+Added `tests/test_api_key_authorization.py` covering all of the above
+— including a test that specifically reproduces the reported
+vulnerability (a restricted admin attempting to revoke an
+unrestricted key created by a second admin) and confirms the key
+remains untouched, and DB-level tests proving the throttling SQL
+correctly distinguishes "never used," "still within the window," and
+"window has passed" cases.
+
 ## [5.2.9] - 2026-09-08
 
 ### Fix self-update being completely broken since v5.2.6
