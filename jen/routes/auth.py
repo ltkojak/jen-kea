@@ -235,14 +235,21 @@ def force_password_change():
     new_pw = request.form.get("new_password", "")
     confirm_pw = request.form.get("confirm_password", "")
 
-    if len(new_pw) < 8:
-        flash("New password must be at least 8 characters.", "error")
-        return render_template("force_password_change.html")
     if new_pw != confirm_pw:
         flash("New passwords do not match.", "error")
         return render_template("force_password_change.html")
+    # This check must run BEFORE the length check below — "admin" is
+    # only 5 characters, so the length check would always catch it
+    # first and this one would never fire for its actual intended
+    # purpose. Checking the specific, security-relevant case ahead of
+    # the generic one ensures the person actually sees why their choice
+    # was rejected, not a generic length complaint that happens to
+    # also be true.
     if new_pw.lower() == "admin" or new_pw == current_user.username:
         flash("Please choose a password other than the default or your own username.", "error")
+        return render_template("force_password_change.html")
+    if len(new_pw) < 8:
+        flash("New password must be at least 8 characters.", "error")
         return render_template("force_password_change.html")
 
     try:

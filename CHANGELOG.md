@@ -2,6 +2,46 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.8] - 2026-09-08
+
+### Fix CI failure in 5.2.7's test suite
+
+Two failures in `tests/test_password_change_enforcement.py`, both bugs
+in the tests rather than the application logic they were checking —
+same category as the 5.2.4 fix, but for this feature's own test suite.
+
+**`test_rejects_reusing_the_literal_default` failed:**
+`force_password_change()` checked password length before checking for
+the literal string `"admin"`. Since `"admin"` is only 5 characters,
+the generic "must be at least 8 characters" error always fired first,
+and the dedicated "not the default" check
+could never actually run for the one input it exists to catch. The
+security outcome was already correct either way (`"admin"` was always
+rejected), but the specific, more useful error message was
+unreachable. Fixed by reordering: the specific check now runs before
+the generic length check.
+
+**`test_change_password_route_clears_flag_too` failed:**
+this test assumed the general `/users/change-password` route would
+still work while `must_change_password` is set and clear the flag.
+It doesn't — the enforcement middleware's allowlist only permits
+`/force-password-change` and `/logout`, by design, since the entire
+point of this feature is that the rest of the application (including
+this alternate password-change route) is genuinely unavailable until
+the dedicated screen is used. The test's premise was wrong, not the
+middleware. Replaced it with two tests: one confirming
+`/users/change-password` is correctly blocked and redirected while the
+flag is set, and one verifying — via direct source inspection rather
+than a fragile HTTP-level test — that `change_password()`'s own UPDATE
+statement still clears the flag as a defense-in-depth measure, in case
+a future change to the allowlist ever makes that route reachable
+during enforcement.
+
+No application behavior changed beyond the validation-order fix in
+`force_password_change()`, which only affects which error message is
+shown for one specific rejected input — the actual set of passwords
+accepted or rejected is unchanged.
+
 ## [5.2.7] - 2026-09-08
 
 ### SECURITY: enforce a password change on the default admin credential

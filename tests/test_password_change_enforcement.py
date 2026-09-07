@@ -176,13 +176,21 @@ class TestForcePasswordChangeRoute:
         assert b"Current password" not in r.data
 
 
-class TestGeneralChangePasswordAlsoClearsFlag:
-    """Defense in depth: if a user with the flag still set somehow
-    reaches the general change_password() route (e.g. it stays
-    reachable for other reasons in the future), it should still clear
-    the flag rather than leaving them stuck."""
+class TestGeneralChangePasswordRouteDuringEnforcement:
+    """/users/change-password is not in the enforcement middleware's
+    allowlist (only /force-password-change and /logout are — see
+    jen/__init__.py's _enforce_password_change()), and that's
+    intentional: the whole point of this feature is that the rest of
+    the application, including this alternate password-change route,
+    is genuinely unavailable until the dedicated screen is used. An
+    earlier version of this test incorrectly assumed this route would
+    still work during enforcement and clear the flag — it doesn't,
+    because the middleware correctly redirects the request away before
+    change_password()'s own logic ever runs. This test now verifies
+    that block is real, rather than assuming the route is reachable.
+    """
 
-    def test_change_password_route_clears_flag_too(self, client, db):
+    def test_change_password_route_is_blocked_during_enforcement(self, client, db):
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO users (username, password, role, must_change_password) "
@@ -206,9 +214,39 @@ class TestGeneralChangePasswordAlsoClearsFlag:
             "current_password": "originalpass123",
             "new_password": "differentnewpass123",
             "confirm_password": "differentnewpass123",
-        }, follow_redirects=True)
-        assert r.status_code == 200
+        }, follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert "/force-password-change" in r.headers.get("Location", "")
 
+        # And the password genuinely wasn't changed, since the request
+        # never reached change_password()'s own logic at all.
         with db.cursor() as cur:
             cur.execute("SELECT must_change_password FROM users WHERE id=%s", (user_id,))
-            assert cur.fetchone()["must_change_password"] == 0
+            assert cur.fetchone()["must_change_password"] == 1
+
+
+class TestGeneralChangePasswordSqlAlsoClearsFlag:
+    """Defense in depth: verifies change_password()'s own UPDATE
+    statement clears must_change_password, in case a future change to
+    the enforcement middleware's allowlist ever makes this route
+    reachable while the flag is set. Checked via source inspection
+    rather than an HTTP-level test — the class above already
+    establishes that this route is unreachable via HTTP while the flag
+    is set, by design, so constructing an HTTP integration test for
+    "the flag also clears here" would either be circular or depend on
+    fragile cross-test state (e.g. assuming no other test in the full
+    suite has already changed the shared default admin account's
+    password), rather than testing anything this specific change
+    actually guards against.
+    """
+
+    def test_change_password_update_statement_clears_flag(self):
+        import inspect
+        import jen.routes.users as users_module
+        source = inspect.getsource(users_module.change_password)
+        assert "must_change_password=0" in source, (
+            "change_password()'s UPDATE statement no longer clears "
+            "must_change_password — if the enforcement middleware's "
+            "allowlist is ever changed to permit this route, an "
+            "account could get stuck unable to clear the flag"
+        )
