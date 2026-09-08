@@ -113,11 +113,20 @@ def mfa_verify():
                         pending_id, days_raw, device_name,
                         ip_address=request.remote_addr, user_agent=ua)
                     resp = redirect(next_url)
+                    # v5.2.12 security fix — this cookie is a long-lived
+                    # MFA bypass token (up to 10 years for "forever").
+                    # It was missing `secure`, unlike the main session
+                    # cookie (SESSION_COOKIE_SECURE, set conditionally on
+                    # SSL in jen/__init__.py) — meaning a browser could
+                    # send this specific token over plain HTTP even on an
+                    # instance with HTTPS configured, before any
+                    # HTTP→HTTPS redirect takes effect. Matches the same
+                    # ssl_configured() condition the session cookie uses.
                     if days_raw == "forever":
-                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax")
+                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
                     else:
                         days = int(days_raw)
-                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax")
+                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
                     __user.audit("MFA_BACKUP_CODE", "auth", f"{pending_username} trusted={days_raw}")
                     return resp
                 __user.audit("MFA_BACKUP_CODE", "auth", pending_username)
@@ -148,12 +157,20 @@ def mfa_verify():
                         pending_id, days_raw, device_name,
                         ip_address=request.remote_addr, user_agent=ua)
                     resp = redirect(next_url)
+                    # v5.2.12 security fix — this cookie is a long-lived
+                    # MFA bypass token (up to 10 years for "forever").
+                    # It was missing `secure`, unlike the main session
+                    # cookie (SESSION_COOKIE_SECURE, set conditionally on
+                    # SSL in jen/__init__.py) — meaning a browser could
+                    # send this specific token over plain HTTP even on an
+                    # instance with HTTPS configured, before any
+                    # HTTP→HTTPS redirect takes effect. Matches the same
+                    # ssl_configured() condition the session cookie uses.
                     if days_raw == "forever":
-                        # No max_age = session-less persistent cookie (10 years)
-                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax")
+                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
                     else:
                         days = int(days_raw)
-                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax")
+                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
                     __user.audit("MFA_VERIFY", "auth", f"{pending_username} trusted={days_raw}")
                     return resp
                 __user.audit("MFA_VERIFY", "auth", pending_username)

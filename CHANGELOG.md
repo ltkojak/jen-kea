@@ -2,6 +2,55 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.12] - 2026-09-08
+
+### Two small hardening fixes: trusted-device cookie, Docker healthcheck
+
+Fourth and fifth findings from the same third-party security review
+that produced v5.2.6, v5.2.7, and v5.2.10 — bundled together since
+both are small, single-file, mechanical changes with no relationship
+between them and no interaction risk.
+
+**`jen_trusted` cookie missing `Secure`.** This cookie is a long-lived
+MFA bypass token (up to 10 years for "remember this device forever").
+Unlike the main session cookie, which is marked `Secure` whenever SSL
+is configured, this one had no `secure` flag at all — a browser could
+send this specific token over plain HTTP even on an instance with
+HTTPS configured, before any HTTP→HTTPS redirect takes effect. Fixed
+across all four call sites (two duplicated code paths — backup-code
+verification and TOTP verification — each with a "forever" and an
+"N days" branch), using the same `ssl_configured()` condition the
+session cookie already uses. Also removed a stale, incorrect comment
+next to one of the call sites ("No max_age = session-less persistent
+cookie" — the code has always explicitly set a 10-year `max_age`;
+the comment was simply wrong).
+
+**Docker Compose healthcheck used `CMD` (exec form) with `||`.**
+`CMD` does not invoke a shell, so `||` was never treated as shell OR
+logic — it was passed to `curl` as a literal, meaningless argument.
+Verified this directly rather than assuming: ran the exact broken
+argv as a single non-shell process and found curl's own handling of
+multiple positional URL arguments happened to mask the bug in some
+cases (occasionally still reaching a later URL in the list by
+accident), which is worth being precise about — it was never the
+intended "try HTTP, fall back to HTTPS" logic actually running, just
+an unreliable side effect of how curl parses extra arguments. Fixed by
+switching to `CMD-SHELL`, which explicitly invokes `/bin/sh -c`, in
+both `docker-compose.yml` and `docker-compose.mysql.yml` (which
+maintain this same healthcheck independently).
+
+Added `tests/test_small_hardening_fixes.py`. For the cookie fix,
+verified via direct source inspection that all four call sites include
+the flag, correctly conditioned on `ssl_configured()` rather than
+hardcoded — full HTTP-level testing would require a real enrolled TOTP
+secret and a live-generated code just to reach one `set_cookie()`
+call. For the healthcheck fix, went further than checking the YAML
+text: spun up a real local HTTP server and ran the actual shell
+command Docker would run, confirming it genuinely falls through to the
+working fallback target when the first is unreachable — with a server
+log line proving the fallback request was actually received, not just
+that the exit code happened to be zero.
+
 ## [5.2.11] - 2026-09-08
 
 ### Fix CI failure in 5.2.10's test suite
