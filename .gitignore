@@ -14,3 +14,7 @@ ssh/
 
 # Custom icons (user-uploaded, not part of the repo)
 static/icons/custom/
+
+# Local maintainer working notes — includes un-patched security items
+# that SECURITY.md says not to disclose publicly before a fix ships
+PENDING.md
