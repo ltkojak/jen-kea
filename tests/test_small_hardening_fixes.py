@@ -42,7 +42,7 @@ class TestTrustedDeviceCookieSecureFlag:
 
     def test_every_jen_trusted_cookie_call_includes_secure_flag(self):
         source = self._mfa_routes_source()
-        calls = re.findall(r'set_cookie\("jen_trusted".*?\)', source, re.DOTALL)
+        calls = re.findall(r'set_cookie\(\s*"jen_trusted".*?\)', source, re.DOTALL)
         assert len(calls) == 4, (
             f"expected exactly 4 jen_trusted set_cookie() calls (two code "
             f"paths — backup code and TOTP — each with a 'forever' and an "
@@ -61,7 +61,7 @@ class TestTrustedDeviceCookieSecureFlag:
         instance. Must match the same ssl_configured() condition the
         main session cookie already uses."""
         source = self._mfa_routes_source()
-        calls = re.findall(r'set_cookie\("jen_trusted".*?\)', source, re.DOTALL)
+        calls = re.findall(r'set_cookie\(\s*"jen_trusted".*?\)', source, re.DOTALL)
         for call in calls:
             assert "secure=__config.ssl_configured()" in call, f"expected secure=__config.ssl_configured(), got: {call}"
 
@@ -69,7 +69,7 @@ class TestTrustedDeviceCookieSecureFlag:
         """Regression guard: fixing the missing Secure flag shouldn't
         have disturbed the other, already-correct cookie attributes."""
         source = self._mfa_routes_source()
-        calls = re.findall(r'set_cookie\("jen_trusted".*?\)', source, re.DOTALL)
+        calls = re.findall(r'set_cookie\(\s*"jen_trusted".*?\)', source, re.DOTALL)
         for call in calls:
             assert "httponly=True" in call
             assert 'samesite="Lax"' in call
