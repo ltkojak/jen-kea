@@ -187,6 +187,16 @@ def _patch_extensions():
     extensions.HTTP_PORT  = 5099
     extensions.HTTPS_PORT = 8499
     extensions.CONFIG_FILE = "/tmp/jen_test.config"
+    # v5.4.0 — repoint the MFA-secret encryption key off /etc/jen so the
+    # suite works on a dev box where /etc/jen isn't writable (CI creates
+    # it, a laptop running pytest may not). Same direct-assignment pattern
+    # as CONFIG_FILE above. Drop any cached Fernet bound to a stale path.
+    extensions.MFA_KEY_PATH = "/tmp/jen_test_mfa_key"
+    try:
+        from jen.services.crypto import reset_key_cache
+        reset_key_cache()
+    except Exception:
+        pass
 
     cfg = configparser.ConfigParser()
     cfg["kea"]    = {"api_url": "http://localhost:18000",

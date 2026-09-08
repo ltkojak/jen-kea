@@ -97,6 +97,13 @@ _active_server_cache: dict = {"server": None, "ts": 0}
 
 # ── File paths ───────────────────────────────────────────────────────────────
 CONFIG_FILE   = "/etc/jen/jen.config"
+# v5.4.0 — Fernet key for encrypting MFA (TOTP) secrets at rest. Lives
+# under /etc/jen (the config/secrets dir, preserved across upgrades),
+# NOT in the database it protects. Plain module constant like the paths
+# above — the test suite repoints it the same way it repoints CONFIG_FILE.
+# jen/services/crypto.py falls back to $JEN_ROOT/.mfa_key when this path
+# isn't writable, mirroring _load_secret_key()'s two-candidate approach.
+MFA_KEY_PATH  = "/etc/jen/mfa_key"
 SSL_CERT      = "/etc/jen/ssl/certificate.crt"
 SSL_KEY       = "/etc/jen/ssl/private.key"
 SSL_CA        = "/etc/jen/ssl/ca_bundle.crt"

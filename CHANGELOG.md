@@ -2,6 +2,58 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.4.0] - 2026-09-08
+
+### TOTP secrets are now encrypted at rest
+
+`mfa_methods.secret` — the shared secret behind every enrolled
+authenticator app — was stored as plaintext base32. Anyone able to read
+that one column could generate valid second-factor codes for every user
+and walk straight through MFA: a downloaded or misplaced database
+export (Jen's own export UI includes this table), a read replica, a
+compromised database account, SQL injection anywhere in the app, or a
+shared database host. Backup codes, trusted-device tokens, and API keys
+were already one-way sha256 hashes; the TOTP secret is the one value
+Jen has to be able to read back (it recomputes the current code from it
+every 30 seconds), so the fix is encryption with a key kept outside the
+database, not a hash.
+
+**How it works.** A new `jen/services/crypto.py` wraps each secret with
+Fernet (AES-128-CBC + HMAC, from the `cryptography` library — already a
+transitive dependency via paramiko, now pinned explicitly). Stored
+values gain a `v1:` prefix so a future key rotation is a recognisable,
+migratable format rather than an ambiguous blob. The key lives at
+`/etc/jen/mfa_key` (0600), with the same two-candidate load-or-create
+logic and `$JEN_ROOT` fallback that `_load_secret_key()` already uses
+for the Flask session key — created on first use, not by the installer,
+and preserved across upgrades because `/etc/jen` always is.
+
+**Upgrade.** Migration 17 encrypts every existing plaintext secret in
+place on the first restart after updating. It's idempotent (rows
+already in `v1:` form are skipped) and shares one transaction with its
+own version record, so a crash partway through recovers cleanly on the
+next start. New enrolments encrypt at the point of insert;
+`verify_totp()` decrypts on read, with a passthrough for any
+still-plaintext value so nothing breaks in the window before migration
+17 runs.
+
+**Key loss fails closed.** If `/etc/jen/mfa_key` can't be read (a
+database restored or migrated onto a different install without copying
+the key across) `verify_totp()` skips the unreadable row and returns
+false — the affected user falls back to their backup codes and an admin
+can reset their MFA. A missing-and-unwritable key aborts startup during
+migration rather than inventing an ephemeral one that would render
+every stored secret permanently unreadable. Database exports now carry
+`v1:` ciphertext instead of plaintext (an improvement — export files
+were a leak vector), with the tradeoff that MFA secrets do not restore
+onto a different install; this is called out in the export table
+description and `docs/troubleshooting.md`.
+
+16 tests added (`tests/test_mfa_encryption.py`): crypto round-trips and
+failure modes, migration 17 (encrypt + idempotent re-run), the
+enrol/verify wiring, legacy-plaintext compatibility, and the
+fail-closed paths.
+
 ## [5.3.3] - 2026-09-08
 
 ### The privileged updater can now update itself, a migration gap closed, and Ruff added

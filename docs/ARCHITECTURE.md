@@ -175,6 +175,37 @@ gets installed against known CVEs on every push, so a newly-disclosed
 vulnerability in a floor-pinned dependency gets caught even without a
 version bump.
 
+### 3.6 MFA secret encryption at rest (v5.4.0)
+
+`mfa_methods.secret` (the TOTP shared secret) is encrypted with Fernet
+before storage — see `jen/services/crypto.py`. Backup codes,
+trusted-device tokens, and API keys are one-way sha256 hashes because
+Jen only ever needs to *check* them; a TOTP secret has to be recovered
+in cleartext every 30 seconds to recompute the current code, so it's
+encryption with an external key, not a hash.
+
+**The key** lives at `/etc/jen/mfa_key` (0600), created on first use
+with the same load-or-create + `$JEN_ROOT` fallback pattern as the
+Flask session key (`_load_secret_key()`). It is deliberately **not** in
+the database it protects and **not** in database exports.
+
+**Why this is the boundary:** the threat is read access to the `jen_db`
+`mfa_methods` table without corresponding access to the application
+host's filesystem — a downloaded export, a read replica, a compromised
+DB account, SQL injection, a shared DB host. An attacker who already
+has `/etc/jen` has the app itself and this buys nothing; that's an
+accepted non-goal, same framing as the sudoers grant in 3.1.
+
+**What this means for future changes:** `verify_totp()` fails **closed**
+on a decrypt failure (unreadable row skipped, never trusted) — a DB
+restored/migrated without its key leaves users on backup codes / an
+admin reset, never bypassed. Migration 17 does the one-time in-place
+encryption of pre-existing plaintext rows and aborts startup (rather
+than minting an ephemeral key) if the key can't be persisted. Any new
+code path that reads `mfa_methods.secret` must go through
+`crypto.decrypt_secret()` and must not treat a `SecretDecryptError` as
+"authenticated".
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:

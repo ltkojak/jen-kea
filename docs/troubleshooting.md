@@ -279,6 +279,33 @@ Replace `newpassword` with your desired password. Log in with `admin` / `newpass
 
 ---
 
+## MFA / Authenticator App Stopped Working After a Restore or Migration
+
+Since v5.4.0 the TOTP secret behind each authenticator app is encrypted
+at rest with a key stored at `/etc/jen/mfa_key` — **not** in the
+database and **not** in database exports. If you restore a Jen database
+export onto a different machine, or migrate the database to a new
+server, without also copying `/etc/jen/mfa_key` across, the existing
+authenticator enrolments can't be decrypted and TOTP codes will be
+rejected.
+
+This fails safe, not open — affected users are not bypassed. Recovery:
+
+- **The user still has backup codes** — log in with one of those, then
+  re-enrol the authenticator (Settings → Security), which writes a
+  fresh secret under the new key.
+- **An admin resets the user's MFA** — Users → edit user → reset MFA,
+  then the user re-enrols.
+- **Best: copy the key from the old host** before decommissioning it:
+  `scp old-host:/etc/jen/mfa_key new-host:/etc/jen/mfa_key` (then
+  `chown` it to the Jen service user, `chmod 600`), and restart Jen.
+
+A brand-new install generates its own `/etc/jen/mfa_key` on first run.
+`/etc/jen` is preserved across in-place upgrades, so a normal
+`sudo ./install.sh` upgrade is unaffected.
+
+---
+
 ## Locked Out (Rate Limiting)
 
 If you've locked yourself out and can't log in:

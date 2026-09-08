@@ -14,6 +14,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.crypto as __crypto
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
 from jen.services.access import superadmin_required as _superadmin_required
@@ -188,11 +189,16 @@ def mfa_enroll():
                 flash("Invalid verification code. Please try again.", "error")
                 return redirect(url_for('mfa_routes.mfa_enroll'))
             try:
+                # v5.4.0 — the code was already verified above against the
+                # plaintext `secret` from the form; it is stored encrypted
+                # at rest (jen/services/crypto.py). verify_totp() decrypts
+                # on read.
+                stored_secret = __crypto.encrypt_secret(secret)
                 with __db.jen_db() as db:
                     with db.cursor() as cur:
                         cur.execute("""INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
                                        VALUES (%s, 'totp', %s, %s, 1)""",
-                                    (current_user.id, secret, device_name))
+                                    (current_user.id, stored_secret, device_name))
                     db.commit()
                     # Generate backup codes
                     codes = __mfa.generate_backup_codes(current_user.id)

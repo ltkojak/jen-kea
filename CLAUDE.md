@@ -159,6 +159,31 @@ templates are `_`-prefixed and returned for HTMX swaps.
 - Bandit findings that are reviewed-and-accepted go in `.github/bandit-baseline.json`
   with reasoning; only *new* findings fail CI.
 
+## Versioning
+
+`MAJOR.MINOR.PATCH`. The deciding question is what an operator has to do on upgrade:
+
+- **PATCH** (`5.3.3 → 5.3.4`) — bug fixes, small self-contained security fixes,
+  dependency bumps, docs, refactors with no behavior change, test-only changes, lint
+  passes. No new user-facing capability. A migration is allowed only if it's a pure
+  corrective backfill of an existing feature (e.g. migration 16).
+- **MINOR** (`5.3.x → 5.4.0`) — a new user-facing feature or subsystem; a migration that
+  adds a capability or changes stored-data format (e.g. encrypting MFA secrets at rest);
+  security hardening bigger than a one-line fix; a new **optional / backward-compatible**
+  config section. Upgrade stays fully automatic (`sudo ./install.sh`), no manual steps.
+- **MAJOR** (`5.x → 6.0.0`) — anything that breaks a clean `install.sh` upgrade: a
+  required config-file change, a migration that can't run automatically, dropped
+  OS/Kea/Python support, a removed feature or API endpoint, or a changed default an
+  operator would notice.
+
+Process:
+
+- The three version strings (`jen/__init__.py` `JEN_VERSION`, `install.sh`
+  `JEN_VERSION`, README badges) move together in the **same commit**.
+- Bump only at release time, bundled with the `CHANGELOG.md` entry — never per-fix on a
+  working branch.
+- Once a version has been described as deployed it is frozen; see rule 4 below.
+
 ## Release & Working Discipline
 
 1. **Never run `git push` or `git tag` without explicitly asking first and getting a

@@ -32,7 +32,7 @@ JEN_TABLES = {
     "alert_log":           "Historical alert delivery log",
     "saved_searches":      "Saved filter presets",
     "dashboard_prefs":     "Per-user dashboard widget layout",
-    "mfa_methods":         "MFA method records (secrets stored hashed)",
+    "mfa_methods":         "MFA method records (TOTP secrets encrypted at rest; the key lives in /etc/jen, NOT in this export — secrets will not restore onto a different install)",
     "mfa_backup_codes":    "MFA backup/recovery codes",
     "mfa_trusted_devices": "Trusted device tokens for MFA bypass",
     "api_keys":            "API key records (hashed — raw keys not recoverable)",

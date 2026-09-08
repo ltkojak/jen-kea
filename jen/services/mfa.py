@@ -92,6 +92,8 @@ def verify_totp(user_id, code):
     """
     try:
         import pyotp
+
+        from jen.services import crypto as _crypto
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
                 cur.execute("SELECT id, secret FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
@@ -101,7 +103,16 @@ def verify_totp(user_id, code):
             return False
         code = code.strip()
         for row in rows:
-            if pyotp.TOTP(row["secret"]).verify(code, valid_window=1):
+            # v5.4.0 — secrets are encrypted at rest. Fail CLOSED on a
+            # decrypt failure (unreadable row is skipped, not trusted): a
+            # DB restored/migrated without its /etc/jen/mfa_key leaves the
+            # user on backup codes / an admin MFA reset, never bypassed.
+            try:
+                secret = _crypto.decrypt_secret(row["secret"])
+            except Exception as e:
+                logger.error(f"TOTP secret decrypt failed for mfa_methods.id={row['id']}: {e}")
+                continue
+            if pyotp.TOTP(secret).verify(code, valid_window=1):
                 try:
                     with __jen_db_ctx() as db:
                         with db.cursor() as cur:

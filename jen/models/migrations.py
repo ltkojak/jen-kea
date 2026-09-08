@@ -592,6 +592,48 @@ def _m016_backfill_must_change_password_for_existing_admin_admin(db):
             cur.execute("UPDATE users SET must_change_password = 1 WHERE id = %s", (user_id,))
 
 
+def _m017_encrypt_mfa_secrets(db):
+    """
+    v5.4.0 — `mfa_methods.secret` (the TOTP shared secret) was stored as
+    plaintext base32. Anyone able to read that one column — a downloaded
+    or misplaced DB export, a read replica, a compromised DB account, SQL
+    injection anywhere in the app, a shared DB host — could generate valid
+    second-factor codes for every enrolled user, defeating MFA entirely.
+
+    A TOTP secret has to be stored reversibly (Jen recomputes the current
+    code from it every 30s), so the fix is encryption with a key kept
+    outside the database — see jen/services/crypto.py. This migration
+    wraps every existing plaintext value with encrypt_secret(), producing
+    a "v1:"-prefixed Fernet token. New enrolments encrypt at INSERT time
+    (jen/routes/mfa_routes.py); verification decrypts on read
+    (jen/services/mfa.py::verify_totp), with a legacy-plaintext passthrough
+    so a row this migration somehow hasn't reached still works.
+
+    Idempotent: rows already in "v1:" form are skipped by the WHERE
+    clause, so a re-run (or a crash partway through, since the UPDATEs and
+    the schema_migrations INSERT share one transaction) is safe. If the
+    encryption key can't be created or persisted, encrypt_secret() raises
+    and this migration aborts app startup rather than recording itself as
+    applied — the same fail-loud contract every migration here follows.
+    """
+    from jen.services.crypto import PREFIX, encrypt_secret
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, secret FROM mfa_methods "
+            "WHERE secret IS NOT NULL AND secret <> '' AND secret NOT LIKE %s",
+            (PREFIX + "%",),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            cur.execute(
+                "UPDATE mfa_methods SET secret = %s WHERE id = %s",
+                (encrypt_secret(row["secret"]), row["id"]),
+            )
+        if rows:
+            logger.warning("Migration 17: encrypted %d existing MFA secret(s) at rest", len(rows))
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -616,6 +658,8 @@ MIGRATIONS = [
                                                               _m015_users_must_change_password),
     (16, "backfill must_change_password for existing users still on the literal default password",
                                                               _m016_backfill_must_change_password_for_existing_admin_admin),
+    (17, "Encrypt existing plaintext mfa_methods.secret values at rest (v5.4.0)",
+                                                              _m017_encrypt_mfa_secrets),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
