@@ -27,13 +27,11 @@ def _load_user(user_id):
     """Load a user by ID — thin wrapper around the login_manager user loader."""
     from jen.models.db import jen_db
     from jen.models.user import User
+
     try:
         with jen_db() as db:
             with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, username, role, session_timeout FROM users WHERE id=%s",
-                    (user_id,)
-                )
+                cur.execute("SELECT id, username, role, session_timeout FROM users WHERE id=%s", (user_id,))
                 row = cur.fetchone()
         if row:
             return User(row["id"], row["username"], row["role"], row["session_timeout"])
@@ -44,9 +42,8 @@ def _load_user(user_id):
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -63,8 +60,8 @@ def mfa_verify():
     if not pending_id:
         # No pending MFA — if already fully logged in, go to dashboard; else back to login
         if current_user.is_authenticated:
-            return redirect(url_for('dashboard.dashboard'))
-        return redirect(url_for('auth.login'))
+            return redirect(url_for("dashboard.dashboard"))
+        return redirect(url_for("auth.login"))
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
         flash(f"Too many failed codes. Try again in {remaining} minute(s).", "error")
@@ -83,7 +80,7 @@ def mfa_verify():
                 session.pop("mfa_pending_user_id", None)
                 session.pop("mfa_pending_username", None)
                 remember = request.form.get("remember_device")
-                next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
+                next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
                     # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
@@ -93,11 +90,12 @@ def mfa_verify():
                     if not ua:
                         logger.warning(
                             f"Trust creation from {request.remote_addr} with no User-Agent header; "
-                            f"headers present: {sorted(k for k, _ in request.headers)}")
+                            f"headers present: {sorted(k for k, _ in request.headers)}"
+                        )
                     device_name = __fp.describe_client_device(request.remote_addr, ua)
                     token = __mfa.create_trusted_device_token(
-                        pending_id, days_raw, device_name,
-                        ip_address=request.remote_addr, user_agent=ua)
+                        pending_id, days_raw, device_name, ip_address=request.remote_addr, user_agent=ua
+                    )
                     resp = redirect(next_url)
                     # v5.2.12 security fix — this cookie is a long-lived
                     # MFA bypass token (up to 10 years for "forever").
@@ -109,10 +107,24 @@ def mfa_verify():
                     # HTTP→HTTPS redirect takes effect. Matches the same
                     # ssl_configured() condition the session cookie uses.
                     if days_raw == "forever":
-                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
+                        resp.set_cookie(
+                            "jen_trusted",
+                            token,
+                            max_age=10 * 365 * 86400,
+                            httponly=True,
+                            samesite="Lax",
+                            secure=__config.ssl_configured(),
+                        )
                     else:
                         days = int(days_raw)
-                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
+                        resp.set_cookie(
+                            "jen_trusted",
+                            token,
+                            max_age=days * 86400,
+                            httponly=True,
+                            samesite="Lax",
+                            secure=__config.ssl_configured(),
+                        )
                     __user.audit("MFA_BACKUP_CODE", "auth", f"{pending_username} trusted={days_raw}")
                     return resp
                 __user.audit("MFA_BACKUP_CODE", "auth", pending_username)
@@ -127,7 +139,7 @@ def mfa_verify():
                 session.pop("mfa_pending_user_id", None)
                 session.pop("mfa_pending_username", None)
                 remember = request.form.get("remember_device")
-                next_url = session.pop("mfa_next", url_for('dashboard.dashboard'))
+                next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
                     # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
@@ -137,11 +149,12 @@ def mfa_verify():
                     if not ua:
                         logger.warning(
                             f"Trust creation from {request.remote_addr} with no User-Agent header; "
-                            f"headers present: {sorted(k for k, _ in request.headers)}")
+                            f"headers present: {sorted(k for k, _ in request.headers)}"
+                        )
                     device_name = __fp.describe_client_device(request.remote_addr, ua)
                     token = __mfa.create_trusted_device_token(
-                        pending_id, days_raw, device_name,
-                        ip_address=request.remote_addr, user_agent=ua)
+                        pending_id, days_raw, device_name, ip_address=request.remote_addr, user_agent=ua
+                    )
                     resp = redirect(next_url)
                     # v5.2.12 security fix — this cookie is a long-lived
                     # MFA bypass token (up to 10 years for "forever").
@@ -153,10 +166,24 @@ def mfa_verify():
                     # HTTP→HTTPS redirect takes effect. Matches the same
                     # ssl_configured() condition the session cookie uses.
                     if days_raw == "forever":
-                        resp.set_cookie("jen_trusted", token, max_age=10*365*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
+                        resp.set_cookie(
+                            "jen_trusted",
+                            token,
+                            max_age=10 * 365 * 86400,
+                            httponly=True,
+                            samesite="Lax",
+                            secure=__config.ssl_configured(),
+                        )
                     else:
                         days = int(days_raw)
-                        resp.set_cookie("jen_trusted", token, max_age=days*86400, httponly=True, samesite="Lax", secure=__config.ssl_configured())
+                        resp.set_cookie(
+                            "jen_trusted",
+                            token,
+                            max_age=days * 86400,
+                            httponly=True,
+                            samesite="Lax",
+                            secure=__config.ssl_configured(),
+                        )
                     __user.audit("MFA_VERIFY", "auth", f"{pending_username} trusted={days_raw}")
                     return resp
                 __user.audit("MFA_VERIFY", "auth", pending_username)
@@ -167,6 +194,7 @@ def mfa_verify():
     has_totp = __mfa.user_has_mfa(pending_id) if pending_id else False
     return render_template("mfa_challenge.html", username=pending_username, has_totp=has_totp)
 
+
 @bp.route("/mfa/enroll", methods=["GET", "POST"])
 @login_required
 def mfa_enroll():
@@ -175,6 +203,7 @@ def mfa_enroll():
 
     import pyotp
     import qrcode
+
     if request.method == "POST":
         action = request.form.get("action")
         if action == "enroll":
@@ -183,11 +212,11 @@ def mfa_enroll():
             device_name = request.form.get("device_name", "Authenticator").strip()[:100] or "Authenticator"
             if not secret or not code:
                 flash("Missing secret or code.", "error")
-                return redirect(url_for('mfa_routes.mfa_enroll'))
+                return redirect(url_for("mfa_routes.mfa_enroll"))
             totp = pyotp.TOTP(secret)
             if not totp.verify(code, valid_window=1):
                 flash("Invalid verification code. Please try again.", "error")
-                return redirect(url_for('mfa_routes.mfa_enroll'))
+                return redirect(url_for("mfa_routes.mfa_enroll"))
             try:
                 # v5.4.0 — the code was already verified above against the
                 # plaintext `secret` from the form; it is stored encrypted
@@ -196,9 +225,11 @@ def mfa_enroll():
                 stored_secret = __crypto.encrypt_secret(secret)
                 with __db.jen_db() as db:
                     with db.cursor() as cur:
-                        cur.execute("""INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
+                        cur.execute(
+                            """INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
                                        VALUES (%s, 'totp', %s, %s, 1)""",
-                                    (current_user.id, stored_secret, device_name))
+                            (current_user.id, stored_secret, device_name),
+                        )
                     db.commit()
                     # Generate backup codes
                     codes = __mfa.generate_backup_codes(current_user.id)
@@ -208,7 +239,7 @@ def mfa_enroll():
             except Exception as e:
                 logger.error(f"MFA enrollment error for {current_user.username}: {e}")
                 flash("Enrollment error. Check server logs for details.", "error")
-                return redirect(url_for('mfa_routes.mfa_enroll'))
+                return redirect(url_for("mfa_routes.mfa_enroll"))
         elif action in ("remove", "remove_totp"):
             method_id = request.form.get("method_id") or request.form.get("mfa_id")
             try:
@@ -221,7 +252,7 @@ def mfa_enroll():
             except Exception as e:
                 logger.error(f"MFA removal error for {current_user.username}: {e}")
                 flash("Error removing authenticator. Check server logs for details.", "error")
-            return redirect(url_for('mfa_routes.mfa_enroll'))
+            return redirect(url_for("mfa_routes.mfa_enroll"))
         elif action == "new_backup_codes":
             codes = __mfa.generate_backup_codes(current_user.id)
             __user.audit("MFA_NEW_BACKUP", "auth", current_user.username)
@@ -237,15 +268,23 @@ def mfa_enroll():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1", (current_user.id,))
+                cur.execute(
+                    "SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
+                    (current_user.id,),
+                )
                 methods = cur.fetchall()
-                cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,))
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,)
+                )
                 backup_count = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"mfa_enroll fetch error: {e}")
-        methods = []; backup_count = 0
-    return render_template("mfa_enroll.html", secret=secret, qr_b64=qr_b64,
-                           totp_methods=methods, passkeys=[], backup_count=backup_count)
+        methods = []
+        backup_count = 0
+    return render_template(
+        "mfa_enroll.html", secret=secret, qr_b64=qr_b64, totp_methods=methods, passkeys=[], backup_count=backup_count
+    )
+
 
 @bp.route("/mfa/regenerate-backup-codes", methods=["POST"])
 @login_required
@@ -254,27 +293,31 @@ def regenerate_backup_codes():
     __user.audit("MFA_NEW_BACKUP", "auth", current_user.username)
     return render_template("mfa_backup_codes.html", codes=codes)
 
+
 @bp.route("/mfa/trusted-devices")
 @login_required
 def mfa_trusted_devices():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("""SELECT id, device_name, created_at, expires_at, last_used,
+                cur.execute(
+                    """SELECT id, device_name, created_at, expires_at, last_used,
                                       ip_address, user_agent
                                FROM mfa_trusted_devices WHERE user_id=%s
-                               ORDER BY created_at DESC""", (current_user.id,))
+                               ORDER BY created_at DESC""",
+                    (current_user.id,),
+                )
                 devices = cur.fetchall()
         # Render-time fallback (v4.3.1): if a stored name still says Unknown
         # but we have a raw UA on file, show the parsed UA instead.
         for d in devices:
             name = d.get("device_name") or ""
             if ("unknown" in name.lower() or not name.strip()) and d.get("user_agent"):
-                d["device_name"] = __fp.describe_client_device(
-                    d.get("ip_address") or "", d["user_agent"])
+                d["device_name"] = __fp.describe_client_device(d.get("ip_address") or "", d["user_agent"])
     except Exception:
         devices = []
     return render_template("mfa_trusted_devices.html", devices=devices)
+
 
 @bp.route("/mfa/trusted-devices/remove/<int:device_id>", methods=["POST"])
 @bp.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])  # legacy alias
@@ -290,7 +333,8 @@ def remove_trusted_device(device_id):
     except Exception as e:
         logger.error(f"Error removing trusted device {device_id}: {e}")
         flash("Error removing trusted device. Check server logs for details.", "error")
-    return redirect(url_for('mfa_routes.mfa_trusted_devices'))
+    return redirect(url_for("mfa_routes.mfa_trusted_devices"))
+
 
 @bp.route("/mfa/revoke-all-devices", methods=["POST"])
 @login_required
@@ -306,7 +350,8 @@ def revoke_all_trusted_devices():
     except Exception as e:
         logger.error(f"Error revoking all trusted devices for {current_user.username}: {e}")
         flash("Error revoking trusted devices. Check server logs for details.", "error")
-    return redirect(url_for('mfa_routes.mfa_trusted_devices'))
+    return redirect(url_for("mfa_routes.mfa_trusted_devices"))
+
 
 @bp.route("/mfa/admin-reset/<int:user_id>", methods=["POST"])
 @login_required
@@ -324,7 +369,8 @@ def admin_reset_mfa(user_id):
     except Exception as e:
         logger.error(f"Error resetting MFA for user {user_id}: {e}")
         flash("Error resetting MFA. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
+
 
 # ─────────────────────────────────────────
 # User Profile

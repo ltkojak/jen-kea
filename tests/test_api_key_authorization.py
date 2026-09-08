@@ -36,8 +36,14 @@ def _insert_api_key(db, name, created_by, subnet_access=None, active=1):
         cur.execute(
             "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access, active) "
             "VALUES (%s, %s, %s, %s, %s, %s)",
-            (name, f"hash_{name}", name[:8], created_by,
-             json.dumps(subnet_access) if subnet_access is not None else None, active)
+            (
+                name,
+                f"hash_{name}",
+                name[:8],
+                created_by,
+                json.dumps(subnet_access) if subnet_access is not None else None,
+                active,
+            ),
         )
         return cur.lastrowid
 
@@ -46,7 +52,7 @@ def _insert_admin_user(db, username, role="admin"):
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO users (username, password, role) VALUES (%s, %s, %s)",
-            (username, hash_password("testpass123"), role)
+            (username, hash_password("testpass123"), role),
         )
         return cur.lastrowid
 
@@ -54,8 +60,11 @@ def _insert_admin_user(db, username, role="admin"):
 def _login_as(client, user_id, username, role):
     with client.session_transaction() as sess:
         sess["_user_cache"] = {
-            "id": user_id, "username": username, "role": role,
-            "session_timeout": None, "subnet_access": None,
+            "id": user_id,
+            "username": username,
+            "role": role,
+            "session_timeout": None,
+            "subnet_access": None,
         }
         sess["_user_id"] = str(user_id)
         sess["_fresh"] = True
@@ -63,7 +72,6 @@ def _login_as(client, user_id, username, role):
 
 
 class TestApiKeyListingScope:
-
     def test_superadmin_sees_keys_created_by_other_admins(self, logged_in_client, db):
         other_admin_id = _insert_admin_user(db, "other_admin_1")
         db.commit()
@@ -99,7 +107,6 @@ class TestApiKeyListingScope:
 
 
 class TestApiKeyRevokeAuthorization:
-
     def test_superadmin_can_revoke_any_key(self, logged_in_client, db):
         other_admin_id = _insert_admin_user(db, "other_admin_2")
         db.commit()
@@ -167,7 +174,6 @@ class TestApiKeyRevokeAuthorization:
 
 
 class TestApiKeyDeleteAuthorization:
-
     def test_superadmin_can_delete_any_key(self, logged_in_client, db):
         other_admin_id = _insert_admin_user(db, "other_admin_3")
         db.commit()
@@ -211,7 +217,6 @@ class TestApiKeyDeleteAuthorization:
 
 
 class TestApiKeyRoutesDoNotLeakExceptions:
-
     def test_revoke_error_does_not_leak_raw_exception_text(self, logged_in_client, monkeypatch):
         import jen.routes.api as api_module
 
@@ -255,9 +260,9 @@ class TestApiKeyRoutesDoNotLeakExceptions:
             raise RuntimeError("Duplicate entry 'secretname' for key 'PRIMARY' — internal detail")
 
         monkeypatch.setattr(api_module, "jen_db", fake_jen_db)
-        r = logged_in_client.post("/settings/api-keys/create",
-                                  data={"name": "test key", "subnet_ids": ["all"]},
-                                  follow_redirects=True)
+        r = logged_in_client.post(
+            "/settings/api-keys/create", data={"name": "test key", "subnet_ids": ["all"]}, follow_redirects=True
+        )
         assert r.status_code == 200
         assert b"internal detail" not in r.data
         assert b"Error creating key" in r.data
@@ -280,13 +285,14 @@ class TestLimitParameterFloor:
         Each call now gets its own unique raw key via secrets."""
         import hashlib
         import secrets
+
         raw_key = "jen_" + secrets.token_hex(20)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access, active) "
                 "VALUES (%s, %s, %s, %s, NULL, 1)",
-                ("limit-floor-test-key", key_hash, raw_key[:8], admin_id)
+                ("limit-floor-test-key", key_hash, raw_key[:8], admin_id),
             )
         db.commit()
         return raw_key
@@ -300,8 +306,7 @@ class TestLimitParameterFloor:
         db.commit()
         raw_key = self._insert_valid_key_and_get_raw(db, admin_id)
 
-        r = logged_in_client.get("/api/v1/leases?limit=-1",
-                                 headers={"Authorization": f"Bearer {raw_key}"})
+        r = logged_in_client.get("/api/v1/leases?limit=-1", headers={"Authorization": f"Bearer {raw_key}"})
         assert r.status_code == 200, f"expected a clamped, successful response, got {r.status_code}: {r.data}"
 
     def test_zero_limit_does_not_crash(self, logged_in_client, db, mock_kea):
@@ -309,13 +314,11 @@ class TestLimitParameterFloor:
         db.commit()
         raw_key = self._insert_valid_key_and_get_raw(db, admin_id)
 
-        r = logged_in_client.get("/api/v1/leases?limit=0",
-                                 headers={"Authorization": f"Bearer {raw_key}"})
+        r = logged_in_client.get("/api/v1/leases?limit=0", headers={"Authorization": f"Bearer {raw_key}"})
         assert r.status_code == 200, f"expected a clamped, successful response, got {r.status_code}: {r.data}"
 
 
 class TestLastUsedThrottling:
-
     def test_last_used_not_updated_within_five_minutes_of_previous_update(self, db):
         """Direct DB-level test of the throttling SQL itself — avoids
         needing to fake the passage of real time to test the 'still
@@ -337,7 +340,7 @@ class TestLastUsedThrottling:
             cur.execute(
                 "UPDATE api_keys SET last_used=NOW() WHERE id=%s "
                 "AND (last_used IS NULL OR last_used < NOW() - INTERVAL 5 MINUTE)",
-                (key_id,)
+                (key_id,),
             )
         db.commit()
 
@@ -361,7 +364,7 @@ class TestLastUsedThrottling:
             cur.execute(
                 "UPDATE api_keys SET last_used=NOW() WHERE id=%s "
                 "AND (last_used IS NULL OR last_used < NOW() - INTERVAL 5 MINUTE)",
-                (key_id,)
+                (key_id,),
             )
         db.commit()
 
@@ -374,10 +377,7 @@ class TestLastUsedThrottling:
         db.commit()
         key_id = _insert_api_key(db, "throttleTestKeyOld", admin_id)
         with db.cursor() as cur:
-            cur.execute(
-                "UPDATE api_keys SET last_used = NOW() - INTERVAL 10 MINUTE WHERE id=%s",
-                (key_id,)
-            )
+            cur.execute("UPDATE api_keys SET last_used = NOW() - INTERVAL 10 MINUTE WHERE id=%s", (key_id,))
         db.commit()
 
         with db.cursor() as cur:
@@ -388,7 +388,7 @@ class TestLastUsedThrottling:
             cur.execute(
                 "UPDATE api_keys SET last_used=NOW() WHERE id=%s "
                 "AND (last_used IS NULL OR last_used < NOW() - INTERVAL 5 MINUTE)",
-                (key_id,)
+                (key_id,),
             )
         db.commit()
 

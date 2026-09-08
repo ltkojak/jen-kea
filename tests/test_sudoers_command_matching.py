@@ -45,7 +45,7 @@ def _parse_sudoers_authorized_commands(path="jen-sudoers"):
         idx = line.find(marker)
         if idx == -1:
             continue
-        commands.add(line[idx + len(marker):].strip())
+        commands.add(line[idx + len(marker) :].strip())
     return commands
 
 
@@ -65,10 +65,7 @@ def _find_sudo_invocations(path="jen/routes/settings.py"):
     class Visitor(ast.NodeVisitor):
         def visit_Call(self, node):
             func = node.func
-            is_subprocess_call = (
-                isinstance(func, ast.Attribute)
-                and func.attr in ("run", "Popen")
-            )
+            is_subprocess_call = isinstance(func, ast.Attribute) and func.attr in ("run", "Popen")
             if is_subprocess_call and node.args:
                 first_arg = node.args[0]
                 if isinstance(first_arg, ast.List):
@@ -84,7 +81,6 @@ def _find_sudo_invocations(path="jen/routes/settings.py"):
 
 
 class TestEverySudoInvocationMatchesAnAuthorizedCommand:
-
     def test_at_least_one_sudo_invocation_and_one_authorized_command_exist(self):
         """Sanity check that both extraction methods actually found
         something — if either comes back empty, the rest of this
@@ -126,7 +122,9 @@ class TestEverySudoInvocationMatchesAnAuthorizedCommand:
 
         authorized = _parse_sudoers_authorized_commands()
         update_rules = [cmd for cmd in authorized if "jen-update.service" in cmd]
-        assert len(update_rules) == 1, f"expected exactly one jen-update.service sudoers rule, found {len(update_rules)}"
+        assert len(update_rules) == 1, (
+            f"expected exactly one jen-update.service sudoers rule, found {len(update_rules)}"
+        )
         assert "--no-block" in update_rules[0]
 
     def test_no_sudoers_rule_uses_a_wildcard(self):

@@ -296,6 +296,7 @@ def _m004_devices_overrides(db):
 def _m005_widen_password(db):
     """Widen users.password for werkzeug 3.x scrypt hashes."""
     import re
+
     with db.cursor() as cur:
         col_type = _column_type(cur, "users", "password")
         m = re.search(r"varchar\((\d+)\)", col_type)
@@ -344,6 +345,7 @@ def _m006_superadmin_role(db):
 def _m007_telegram_legacy(db):
     """Migrate legacy Telegram settings-table config to alert_channels."""
     import json
+
     with db.cursor() as cur:
         cur.execute("SELECT COUNT(*) as cnt FROM alert_channels WHERE channel_type='telegram'")
         if cur.fetchone()["cnt"]:
@@ -366,12 +368,14 @@ def _m007_telegram_legacy(db):
             alert_types.append("new_lease")
         if old.get("alert_utilization", "true") == "true":
             alert_types.append("utilization_high")
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO alert_channels
                 (channel_type, channel_name, enabled, config, alert_types)
             VALUES ('telegram', 'Telegram', %s, %s, %s)
-        """, (enabled, json.dumps({"token": token, "chat_id": chat_id}),
-              json.dumps(alert_types)))
+        """,
+            (enabled, json.dumps({"token": token, "chat_id": chat_id}), json.dumps(alert_types)),
+        )
         logger.info("Migration 7: migrated legacy Telegram settings to alert_channels")
 
 
@@ -584,10 +588,7 @@ def _m016_backfill_must_change_password_for_existing_admin_admin(db):
     with db.cursor() as cur:
         cur.execute("SELECT id, password FROM users WHERE must_change_password = 0")
         rows = cur.fetchall()
-        flagged_ids = [
-            row["id"] for row in rows
-            if row["password"] and verify_password(row["password"], "admin")
-        ]
+        flagged_ids = [row["id"] for row in rows if row["password"] and verify_password(row["password"], "admin")]
         for user_id in flagged_ids:
             cur.execute("UPDATE users SET must_change_password = 1 WHERE id = %s", (user_id,))
 
@@ -620,8 +621,7 @@ def _m017_encrypt_mfa_secrets(db):
 
     with db.cursor() as cur:
         cur.execute(
-            "SELECT id, secret FROM mfa_methods "
-            "WHERE secret IS NOT NULL AND secret <> '' AND secret NOT LIKE %s",
+            "SELECT id, secret FROM mfa_methods WHERE secret IS NOT NULL AND secret <> '' AND secret NOT LIKE %s",
             (PREFIX + "%",),
         )
         rows = cur.fetchall()
@@ -638,28 +638,26 @@ def _m017_encrypt_mfa_secrets(db):
 
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
-    (2, "users.avatar_url column",                            _m002_users_avatar),
-    (3, "devices manufacturer/type/icon columns",             _m003_devices_manufacturer),
-    (4, "devices override columns + widen icon override",     _m004_devices_overrides),
-    (5, "Widen users.password to VARCHAR(512)",               _m005_widen_password),
-    (6, "Superadmin role, one-time legacy admin promotion, subnet_access",
-                                                              _m006_superadmin_role),
+    (2, "users.avatar_url column", _m002_users_avatar),
+    (3, "devices manufacturer/type/icon columns", _m003_devices_manufacturer),
+    (4, "devices override columns + widen icon override", _m004_devices_overrides),
+    (5, "Widen users.password to VARCHAR(512)", _m005_widen_password),
+    (6, "Superadmin role, one-time legacy admin promotion, subnet_access", _m006_superadmin_role),
     (7, "Migrate legacy Telegram settings to alert_channels", _m007_telegram_legacy),
     (8, "mfa_trusted_devices ip_address + user_agent columns", _m008_trusted_device_metadata),
-    (9, "mfa_attempts table for MFA brute-force throttling",   _m009_mfa_attempts),
-    (10, "plugin_schema_migrations tracking table",            _m010_plugin_schema_migrations),
-    (11, "lease6_history table (v5.0 IPv6 Phase 1)",           _m011_lease6_history),
-    (12, "users.token_version column for session-cache invalidation",
-                                                              _m012_users_token_version),
-    (13, "api_keys.subnet_access column for per-key scope",    _m013_api_keys_subnet_access),
-    (14, "alert_channels.subnet_scope + users global setting for reserved-lease recurrence",
-                                                              _m014_alert_subnet_scope),
-    (15, "users.must_change_password column for forced password-change enforcement",
-                                                              _m015_users_must_change_password),
-    (16, "backfill must_change_password for existing users still on the literal default password",
-                                                              _m016_backfill_must_change_password_for_existing_admin_admin),
-    (17, "Encrypt existing plaintext mfa_methods.secret values at rest (v5.4.0)",
-                                                              _m017_encrypt_mfa_secrets),
+    (9, "mfa_attempts table for MFA brute-force throttling", _m009_mfa_attempts),
+    (10, "plugin_schema_migrations tracking table", _m010_plugin_schema_migrations),
+    (11, "lease6_history table (v5.0 IPv6 Phase 1)", _m011_lease6_history),
+    (12, "users.token_version column for session-cache invalidation", _m012_users_token_version),
+    (13, "api_keys.subnet_access column for per-key scope", _m013_api_keys_subnet_access),
+    (14, "alert_channels.subnet_scope + users global setting for reserved-lease recurrence", _m014_alert_subnet_scope),
+    (15, "users.must_change_password column for forced password-change enforcement", _m015_users_must_change_password),
+    (
+        16,
+        "backfill must_change_password for existing users still on the literal default password",
+        _m016_backfill_must_change_password_for_existing_admin_admin,
+    ),
+    (17, "Encrypt existing plaintext mfa_methods.secret values at rest (v5.4.0)", _m017_encrypt_mfa_secrets),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
@@ -667,11 +665,13 @@ MIGRATIONS = [
 # MIGRATIONS[1:] are intentionally different lengths (by exactly one
 # element, by construction, to compare each adjacent pair); strict=True
 # would make this assertion always raise.
-assert all(a[0] < b[0] for a, b in zip(MIGRATIONS, MIGRATIONS[1:], strict=False)), \
+assert all(a[0] < b[0] for a, b in zip(MIGRATIONS, MIGRATIONS[1:], strict=False)), (
     "MIGRATIONS versions must be strictly increasing"
+)
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
+
 
 def latest_version() -> int:
     return MIGRATIONS[-1][0]
@@ -680,6 +680,7 @@ def latest_version() -> int:
 def applied_versions() -> set:
     """Return the set of applied migration versions (empty if table absent)."""
     from jen.models.db import jen_db
+
     with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'schema_migrations'")
@@ -717,8 +718,7 @@ def run_migrations() -> int:
             fn(db)
             with db.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO schema_migrations (version, description) VALUES (%s, %s)",
-                    (version, description)
+                    "INSERT INTO schema_migrations (version, description) VALUES (%s, %s)", (version, description)
                 )
         count += 1
     if count:

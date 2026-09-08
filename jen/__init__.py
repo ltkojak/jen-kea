@@ -28,11 +28,13 @@ JEN_VERSION = "5.6.0"
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
 
+
 def _ssl_configured_cached() -> bool:
     global _ssl_configured_cache
     if _ssl_configured_cache is None:
         _ssl_configured_cache = ssl_configured()
     return _ssl_configured_cache
+
 
 # ── Login manager (module-level so decorators can reference it) ───────────────
 login_manager = LoginManager()
@@ -47,9 +49,7 @@ def create_app() -> Flask:
     app_config.reload()
 
     # ── Flask app ─────────────────────────────────────────────────────────────
-    app = Flask(__name__,
-                static_folder=extensions.STATIC_DIR,
-                template_folder=extensions.TEMPLATE_DIR)
+    app = Flask(__name__, static_folder=extensions.STATIC_DIR, template_folder=extensions.TEMPLATE_DIR)
     app.secret_key = _load_secret_key()
 
     # ── Session cookie hardening (v4.4.2) ─────────────────────────────────────
@@ -63,46 +63,46 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_SECURE"] = _ssl_configured_cached()
 
     # ── Jinja filters ─────────────────────────────────────────────────────────
-    @app.template_filter('utcfmt')
-    def utcfmt_filter(value, fmt='%Y-%m-%d %H:%M'):
+    @app.template_filter("utcfmt")
+    def utcfmt_filter(value, fmt="%Y-%m-%d %H:%M"):
         """Format a datetime as UTC, appending ' UTC' suffix for clarity."""
         if not value:
-            return '—'
+            return "—"
         try:
-            return value.strftime(fmt) + ' UTC'
+            return value.strftime(fmt) + " UTC"
         except Exception:
             return str(value)
 
-    @app.template_filter('utcdate')
+    @app.template_filter("utcdate")
     def utcdate_filter(value):
         """Format a datetime as date only (no time, no UTC suffix needed)."""
         if not value:
-            return '—'
+            return "—"
         try:
-            return value.strftime('%Y-%m-%d')
+            return value.strftime("%Y-%m-%d")
         except Exception:
             return str(value)
 
-    @app.template_filter('utctime')
+    @app.template_filter("utctime")
     def utctime_filter(value):
         """Format a datetime as time only with UTC suffix."""
         if not value:
-            return '—'
+            return "—"
         try:
-            return value.strftime('%H:%M:%S') + ' UTC'
+            return value.strftime("%H:%M:%S") + " UTC"
         except Exception:
             return str(value)
 
-    @app.template_filter('hostname')
+    @app.template_filter("hostname")
     def hostname_filter(value):
         """Strip trailing dots from hostnames (Kea sometimes stores 'tardis.' as FQDN)."""
         if not value:
             return value
-        return value.rstrip('.')
+        return value.rstrip(".")
 
     # ── Login manager ─────────────────────────────────────────────────────────
     login_manager.init_app(app)
-    login_manager.login_view    = "auth.login"
+    login_manager.login_view = "auth.login"
     login_manager.login_message = "Please log in to access Jen."
 
     @login_manager.user_loader
@@ -112,7 +112,7 @@ def create_app() -> Flask:
         from jen.models.db import jen_db
 
         # Fast path: check g cache first (within same request)
-        cached = getattr(_g, '_cached_user', None)
+        cached = getattr(_g, "_cached_user", None)
         if cached is not None and str(cached.id) == str(user_id):
             return cached
 
@@ -126,8 +126,8 @@ def create_app() -> Flask:
         # every one of those actions (users.py), so a single indexed-column
         # SELECT here is enough to detect staleness without paying for a
         # full row fetch on every request in the common (unchanged) case.
-        sess_user = session.get('_user_cache')
-        if sess_user and str(sess_user.get('id')) == str(user_id):
+        sess_user = session.get("_user_cache")
+        if sess_user and str(sess_user.get("id")) == str(user_id):
             have_current = False
             tv_row = None
             try:
@@ -143,14 +143,16 @@ def create_app() -> Flask:
                 if tv_row is None:
                     # Account no longer exists — don't serve a cache that
                     # describes a deleted user.
-                    session.pop('_user_cache', None)
+                    session.pop("_user_cache", None)
                     return None
                 if tv_row["token_version"] == sess_user.get("token_version", 0):
                     user = User(
-                        sess_user['id'], sess_user['username'],
-                        sess_user['role'], sess_user.get('session_timeout'),
-                        sess_user.get('subnet_access'),
-                        sess_user.get('must_change_password', False)
+                        sess_user["id"],
+                        sess_user["username"],
+                        sess_user["role"],
+                        sess_user.get("session_timeout"),
+                        sess_user.get("subnet_access"),
+                        sess_user.get("must_change_password", False),
                     )
                     _g._cached_user = user
                     return user
@@ -168,19 +170,26 @@ def create_app() -> Flask:
                     cur.execute(
                         "SELECT id, username, role, session_timeout, subnet_access, "
                         "token_version, must_change_password FROM users WHERE id=%s",
-                        (user_id,)
+                        (user_id,),
                     )
                     row = cur.fetchone()
             if row:
-                user = User(row["id"], row["username"],
-                            row["role"], row["session_timeout"],
-                            row["subnet_access"], row["must_change_password"])
-                session['_user_cache'] = {
-                    'id': row["id"], 'username': row["username"],
-                    'role': row["role"], 'session_timeout': row["session_timeout"],
-                    'subnet_access': row["subnet_access"],
-                    'token_version': row["token_version"],
-                    'must_change_password': bool(row["must_change_password"])
+                user = User(
+                    row["id"],
+                    row["username"],
+                    row["role"],
+                    row["session_timeout"],
+                    row["subnet_access"],
+                    row["must_change_password"],
+                )
+                session["_user_cache"] = {
+                    "id": row["id"],
+                    "username": row["username"],
+                    "role": row["role"],
+                    "session_timeout": row["session_timeout"],
+                    "subnet_access": row["subnet_access"],
+                    "token_version": row["token_version"],
+                    "must_change_password": bool(row["must_change_password"]),
                 }
                 _g._cached_user = user
                 return user
@@ -194,6 +203,7 @@ def create_app() -> Flask:
         import time
 
         from flask import g
+
         g._request_start = time.time()
         g._after_load_user = time.time()  # overwritten by load_user
 
@@ -202,13 +212,13 @@ def create_app() -> Flask:
         import time
 
         from flask import g
-        if hasattr(g, '_request_start') and not request.path.startswith('/static/'):
+
+        if hasattr(g, "_request_start") and not request.path.startswith("/static/"):
             elapsed = (time.time() - g._request_start) * 1000
             if elapsed > 500:
                 import logging
-                logging.getLogger('jen.timing').warning(
-                    f"SLOW {elapsed:.0f}ms  {request.method} {request.path}"
-                )
+
+                logging.getLogger("jen.timing").warning(f"SLOW {elapsed:.0f}ms  {request.method} {request.path}")
         return response
 
     @app.after_request
@@ -240,12 +250,10 @@ def create_app() -> Flask:
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
-            "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+            "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
         )
         if _ssl_configured_cached():
-            response.headers.setdefault(
-                "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
-            )
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
 
     @app.before_request
@@ -253,18 +261,16 @@ def create_app() -> Flask:
         if not current_user.is_authenticated:
             return
         # Skip static assets entirely
-        if request.path.startswith('/static/'):
+        if request.path.startswith("/static/"):
             return
         if get_global_setting("session_timeout_enabled", "true") == "false":
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
-        timeout = current_user.session_timeout or int(
-            get_global_setting("session_timeout_minutes", "60")
-        )
+        timeout = current_user.session_timeout or int(get_global_setting("session_timeout_minutes", "60"))
         if int(timeout) == 0:
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             return
-        now  = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
         last = session.get("last_active")
         if not last:
             session["last_active"] = now.isoformat()
@@ -286,10 +292,7 @@ def create_app() -> Flask:
             return
         if _ssl_configured_cached() and not request.is_secure:
             host = request.host.split(":")[0]
-            return redirect(
-                f"https://{host}:{extensions.HTTPS_PORT}{request.path}",
-                code=301
-            )
+            return redirect(f"https://{host}:{extensions.HTTPS_PORT}{request.path}", code=301)
 
     @app.before_request
     def _enforce_password_change():
@@ -336,21 +339,19 @@ def create_app() -> Flask:
             return
         token = csrf_svc.get_submitted_token()
         if not csrf_svc.validate_csrf_token(app, token):
-            logger.warning(
-                f"CSRF check failed: {request.method} {request.path} "
-                f"from {request.remote_addr}"
-            )
+            logger.warning(f"CSRF check failed: {request.method} {request.path} from {request.remote_addr}")
             from flask import render_template
+
             return render_template(
-                "error.html", code=403,
-                message="Your session security token is missing or expired. "
-                        "Please refresh the page and try again."
+                "error.html",
+                code=403,
+                message="Your session security token is missing or expired. Please refresh the page and try again.",
             ), 403
 
     # ── Context processor ─────────────────────────────────────────────────────
     @app.context_processor
     def inject_branding():
-        avatar_url   = None
+        avatar_url = None
         nav_logo_url = None
         restart_pending = False
         if current_user and current_user.is_authenticated:
@@ -359,10 +360,10 @@ def create_app() -> Flask:
             if avatar_url == "__unset__":
                 try:
                     from jen.models.db import jen_db
+
                     with jen_db() as db:
                         with db.cursor() as cur:
-                            cur.execute("SELECT avatar_url FROM users WHERE id=%s",
-                                        (current_user.id,))
+                            cur.execute("SELECT avatar_url FROM users WHERE id=%s", (current_user.id,))
                             row = cur.fetchone()
                             avatar_url = row.get("avatar_url") if row else None
                 except Exception:
@@ -389,36 +390,38 @@ def create_app() -> Flask:
         if current_user and current_user.is_authenticated:
             try:
                 from jen.services.kea6 import is_ipv6_enabled
+
                 ipv6_enabled = is_ipv6_enabled()
             except Exception:
                 ipv6_enabled = False
         return {
-            "branding_name":       "Jen",
-            "branding_nav_color":  get_global_setting("branding_nav_color", ""),
-            "branding_nav_logo":   nav_logo_url,
+            "branding_name": "Jen",
+            "branding_nav_color": get_global_setting("branding_nav_color", ""),
+            "branding_nav_logo": nav_logo_url,
             "current_user_avatar": avatar_url,
-            "jen_version":         JEN_VERSION,
-            "restart_pending":     restart_pending,
-            "ipv6_enabled":        ipv6_enabled,
-            "csrf_token":          lambda: csrf_svc.generate_csrf_token(app),
+            "jen_version": JEN_VERSION,
+            "restart_pending": restart_pending,
+            "ipv6_enabled": ipv6_enabled,
+            "csrf_token": lambda: csrf_svc.generate_csrf_token(app),
         }
 
     # ── Error handlers ────────────────────────────────────────────────────────
     @app.errorhandler(404)
     def not_found(e):
         from flask import render_template
-        return render_template("error.html", code=404,
-                               message="Page not found."), 404
+
+        return render_template("error.html", code=404, message="Page not found."), 404
 
     @app.errorhandler(500)
     def server_error(e):
         from flask import render_template
-        return render_template("error.html", code=500,
-                               message="Internal server error."), 500
+
+        return render_template("error.html", code=500, message="Internal server error."), 500
 
     @app.errorhandler(Exception)
     def handle_exception(e):
         from flask import render_template
+
         # v5.3.3 fix — this previously interpolated the raw exception
         # into the user-facing message (f"An error occurred: {e}"),
         # which is exactly the class of leak the entire
@@ -433,13 +436,15 @@ def create_app() -> Flask:
         # the same generic-message convention the 404 and explicit 500
         # handlers right above this one already correctly use.
         logger.exception(f"Unhandled exception: {e}")
-        return render_template("error.html", code=500,
-                               message="An unexpected error occurred. Check server logs for details."), 500
+        return render_template(
+            "error.html", code=500, message="An unexpected error occurred. Check server logs for details."
+        ), 500
 
     # ── Favicon ───────────────────────────────────────────────────────────────
     @app.route("/favicon.ico")
     def favicon():
         from flask import send_from_directory
+
         if os.path.exists(extensions.FAVICON_PATH):
             return send_from_directory(extensions.STATIC_DIR, "favicon.ico")
         return "", 204
@@ -449,6 +454,7 @@ def create_app() -> Flask:
 
     # ── Plugin loader — after core blueprints, before DB init ─────────────────
     from jen.services.plugins import get_nav_items, load_plugins
+
     load_plugins(app)
 
     # ── Plugin nav injection context processor ────────────────────────────────
@@ -458,6 +464,7 @@ def create_app() -> Flask:
 
     # ── DB init ───────────────────────────────────────────────────────────────
     from jen.models.db import init_jen_db
+
     init_jen_db()
 
     # v4.4.21: clear any pending-restart flag on every startup, not just
@@ -475,6 +482,7 @@ def create_app() -> Flask:
     # relying on one specific UI action to have been the cause.
     try:
         from jen.models.user import set_global_setting
+
         set_global_setting("restart_pending", "false")
     except Exception as e:
         logger.warning(f"Could not clear restart_pending flag at startup: {e}")
@@ -487,8 +495,6 @@ def create_app() -> Flask:
     # suite imports this factory and must not spin up threads.
 
     return app
-
-
 
 
 def _register_blueprints(app: Flask) -> None:
@@ -511,9 +517,22 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.users import bp as users_bp
 
     for blueprint in [
-        api_bp, auth_bp, dashboard_bp, database_bp, ddns_bp, devices_bp,
-        leases_bp, mfa_bp, plugins_bp, reports_bp, reservations_bp, search_bp,
-        servers_bp, settings_bp, subnets_bp, users_bp,
+        api_bp,
+        auth_bp,
+        dashboard_bp,
+        database_bp,
+        ddns_bp,
+        devices_bp,
+        leases_bp,
+        mfa_bp,
+        plugins_bp,
+        reports_bp,
+        reservations_bp,
+        search_bp,
+        servers_bp,
+        settings_bp,
+        subnets_bp,
+        users_bp,
     ]:
         app.register_blueprint(blueprint)
 
@@ -551,6 +570,7 @@ def _load_secret_key() -> str:
         "ephemeral in-memory key — EVERY user will be logged out on the next "
         "restart of this process, and this will repeat every restart until "
         "the permissions issue is fixed. Check that www-data can write to "
-        "either of these paths.", " or ".join(candidates)
+        "either of these paths.",
+        " or ".join(candidates),
     )
     return os.urandom(32).hex()

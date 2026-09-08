@@ -57,17 +57,21 @@ class AppConfig:
         cfg = configparser.ConfigParser(interpolation=None)
         if not os.path.exists(self.path):
             raise FileNotFoundError(
-                f"Config file not found: {self.path}\n"
-                f"Copy jen.config.example to {self.path} and fill in your values."
+                f"Config file not found: {self.path}\nCopy jen.config.example to {self.path} and fill in your values."
             )
         cfg.read(self.path)
         required = [
-            ("kea",    "api_url"), ("kea",    "api_user"), ("kea",    "api_pass"),
-            ("kea_db", "host"),    ("kea_db", "user"),    ("kea_db", "password"),
-            ("jen_db", "host"),    ("jen_db", "user"),    ("jen_db", "password"),
+            ("kea", "api_url"),
+            ("kea", "api_user"),
+            ("kea", "api_pass"),
+            ("kea_db", "host"),
+            ("kea_db", "user"),
+            ("kea_db", "password"),
+            ("jen_db", "host"),
+            ("jen_db", "user"),
+            ("jen_db", "password"),
         ]
-        missing = [(s, k) for s, k in required
-                   if not cfg.has_option(s, k) or not cfg.get(s, k).strip()]
+        missing = [(s, k) for s, k in required if not cfg.has_option(s, k) or not cfg.get(s, k).strip()]
         if missing:
             raise ValueError(f"Missing required config values: {missing}")
         return cfg
@@ -81,7 +85,7 @@ class AppConfig:
         """
         extensions.cfg = cfg
 
-        extensions.KEA_API_URL  = cfg.get("kea", "api_url")
+        extensions.KEA_API_URL = cfg.get("kea", "api_url")
         extensions.KEA_API_USER = cfg.get("kea", "api_user")
         extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
 
@@ -97,7 +101,7 @@ class AppConfig:
         extensions.JEN_DB_NAME = cfg.get("jen_db", "database", fallback="jen")
         extensions.JEN_DB_SSL_CA = cfg.get("jen_db", "ssl_ca", fallback="")
 
-        extensions.HTTP_PORT  = cfg.getint("server", "http_port",  fallback=5050)
+        extensions.HTTP_PORT = cfg.getint("server", "http_port", fallback=5050)
         extensions.HTTPS_PORT = cfg.getint("server", "https_port", fallback=8443)
 
         # v5.5.0 — clamp to a sane range; a typo of 0 or 5000 shouldn't
@@ -105,9 +109,9 @@ class AppConfig:
         _threads = cfg.getint("server", "threads", fallback=8)
         extensions.WORKER_THREADS = max(1, min(_threads, 64))
 
-        extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host",     fallback="")
-        extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user",     fallback="")
-        extensions.KEA_CONF     = cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf")
+        extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host", fallback="")
+        extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user", fallback="")
+        extensions.KEA_CONF = cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf")
         extensions.SSH_KEY_PATH = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
@@ -118,18 +122,18 @@ class AppConfig:
         # see the v5.0 plan doc). Reading these costs a v4-only install
         # nothing; they're simply never consulted unless ipv6_enabled (a
         # settings-table flag, not a config value) is true.
-        extensions.KEA6_API_URL  = cfg.get("kea6", "api_url",  fallback=extensions.KEA_API_URL)
+        extensions.KEA6_API_URL = cfg.get("kea6", "api_url", fallback=extensions.KEA_API_URL)
         extensions.KEA6_API_USER = cfg.get("kea6", "api_user", fallback=extensions.KEA_API_USER)
         extensions.KEA6_API_PASS = cfg.get("kea6", "api_pass", fallback=extensions.KEA_API_PASS)
 
-        extensions.KEA6_DB_HOST = cfg.get("kea6_db", "host",     fallback=extensions.KEA_DB_HOST)
-        extensions.KEA6_DB_USER = cfg.get("kea6_db", "user",     fallback=extensions.KEA_DB_USER)
+        extensions.KEA6_DB_HOST = cfg.get("kea6_db", "host", fallback=extensions.KEA_DB_HOST)
+        extensions.KEA6_DB_USER = cfg.get("kea6_db", "user", fallback=extensions.KEA_DB_USER)
         extensions.KEA6_DB_PASS = cfg.get("kea6_db", "password", fallback=extensions.KEA_DB_PASS)
         extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
         extensions.KEA6_DB_SSL_CA = cfg.get("kea6_db", "ssl_ca", fallback=extensions.KEA_DB_SSL_CA)
 
         extensions.KEA_SERVERS = self.derive_kea_servers(cfg)
-        extensions.SUBNET_MAP  = self.derive_subnet_map(cfg)
+        extensions.SUBNET_MAP = self.derive_subnet_map(cfg)
         extensions.SUBNET6_MAP = self.derive_subnet_map(cfg, section="subnets6")
 
     def reload(self) -> configparser.ConfigParser:
@@ -149,8 +153,7 @@ class AppConfig:
         with open(self.path, "w") as f:
             parser.write(f)
 
-    def write_value(self, section: str, key: str, value: str,
-                    reload: bool = True) -> None:
+    def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:
         """Update a single value on disk, then reload."""
         parser = self._read_parser()
         if not parser.has_section(section):
@@ -220,33 +223,37 @@ class AppConfig:
         """Return list of server dicts from config."""
         primary_user = cfg.get("kea", "api_user")
         primary_pass = cfg.get("kea", "api_pass")
-        servers = [{
-            "id":       1,
-            "name":     cfg.get("kea", "name",     fallback="Kea Server 1"),
-            "api_url":  cfg.get("kea", "api_url"),
-            "api_user": primary_user,
-            "api_pass": primary_pass,
-            "ssh_host": cfg.get("kea_ssh", "host",     fallback=""),
-            "ssh_user": cfg.get("kea_ssh", "user",     fallback=""),
-            "ssh_key":  cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa"),
-            "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
-            "role":     cfg.get("kea", "role", fallback="primary"),
-        }]
+        servers = [
+            {
+                "id": 1,
+                "name": cfg.get("kea", "name", fallback="Kea Server 1"),
+                "api_url": cfg.get("kea", "api_url"),
+                "api_user": primary_user,
+                "api_pass": primary_pass,
+                "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
+                "ssh_user": cfg.get("kea_ssh", "user", fallback=""),
+                "ssh_key": cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa"),
+                "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+                "role": cfg.get("kea", "role", fallback="primary"),
+            }
+        ]
         n = 2
         while cfg.has_section(f"kea_server_{n}"):
             sec = f"kea_server_{n}"
-            servers.append({
-                "id":       n,
-                "name":     cfg.get(sec, "name",     fallback=f"Kea Server {n}"),
-                "api_url":  cfg.get(sec, "api_url",  fallback=""),
-                "api_user": cfg.get(sec, "api_user", fallback=primary_user),
-                "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
-                "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
-                "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
-                "ssh_key":  cfg.get(sec, "ssh_key",  fallback="/etc/jen/ssh/jen_rsa"),
-                "kea_conf": cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
-                "role":     cfg.get(sec, "role",     fallback="standby"),
-            })
+            servers.append(
+                {
+                    "id": n,
+                    "name": cfg.get(sec, "name", fallback=f"Kea Server {n}"),
+                    "api_url": cfg.get(sec, "api_url", fallback=""),
+                    "api_user": cfg.get(sec, "api_user", fallback=primary_user),
+                    "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
+                    "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
+                    "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
+                    "ssh_key": cfg.get(sec, "ssh_key", fallback="/etc/jen/ssh/jen_rsa"),
+                    "kea_conf": cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+                    "role": cfg.get(sec, "role", fallback="standby"),
+                }
+            )
             n += 1
         return servers
 
@@ -311,6 +318,7 @@ app_config = AppConfig()
 
 # ── Backward-compatible wrappers ─────────────────────────────────────────────
 # Existing callers and plugins import these names; they delegate to app_config.
+
 
 def load_config() -> configparser.ConfigParser:
     return app_config.load()

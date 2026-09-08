@@ -22,10 +22,11 @@ bp = Blueprint("api", __name__)
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = None   # injected by app factory
+JEN_VERSION = None  # injected by app factory
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _api_auth():
     """Validate Bearer token. Returns key row (with subnet_access) or None.
@@ -43,21 +44,18 @@ def _api_auth():
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         return None
-    raw_key  = auth[7:].strip()
+    raw_key = auth[7:].strip()
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
         with jen_db() as db:
             with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, name, subnet_access FROM api_keys WHERE key_hash=%s AND active=1",
-                    (key_hash,)
-                )
+                cur.execute("SELECT id, name, subnet_access FROM api_keys WHERE key_hash=%s AND active=1", (key_hash,))
                 row = cur.fetchone()
                 if row:
                     cur.execute(
                         "UPDATE api_keys SET last_used=NOW() WHERE id=%s "
                         "AND (last_used IS NULL OR last_used < NOW() - INTERVAL 5 MINUTE)",
-                        (row["id"],)
+                        (row["id"],),
                     )
                     db.commit()
         return row
@@ -76,6 +74,7 @@ def _api_key_subnet_ids(key_row):
         return None
     try:
         import json as _json
+
         ids = _json.loads(raw) if isinstance(raw, str) else raw
         return set(int(i) for i in ids)
     except Exception:
@@ -97,9 +96,10 @@ def _ip_to_int(ip):
 
 # ── REST API v1 ───────────────────────────────────────────────────────────────
 
+
 @bp.route("/api/v1/health")
 def api_v1_health():
-    up      = kea_is_up()
+    up = kea_is_up()
     version = ""
     try:
         ver = kea_command("version-get")
@@ -109,8 +109,8 @@ def api_v1_health():
     except Exception:
         pass
     from jen import JEN_VERSION as _ver
-    return api_ok({"jen_version": _ver, "kea_up": up,
-                   "kea_version": version, "subnets": len(extensions.SUBNET_MAP)})
+
+    return api_ok({"jen_version": _ver, "kea_up": up, "kea_version": version, "subnets": len(extensions.SUBNET_MAP)})
 
 
 @bp.route("/api/v1/subnets")
@@ -130,9 +130,18 @@ def api_v1_subnets():
                     active = cur.fetchone()["cnt"]
                     cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (sid,))
                     reserved = cur.fetchone()["cnt"]
-                    result.append({"id": sid, "name": info["name"], "cidr": info["cidr"],
-                                    "active_leases": active, "reservations": reserved,
-                                    "pool_size": 0, "pools": [], "utilization_pct": 0})
+                    result.append(
+                        {
+                            "id": sid,
+                            "name": info["name"],
+                            "cidr": info["cidr"],
+                            "active_leases": active,
+                            "reservations": reserved,
+                            "pool_size": 0,
+                            "pools": [],
+                            "utilization_pct": 0,
+                        }
+                    )
         try:
             cfg_result = kea_command("config-get", server=get_active_kea_server())
             if cfg_result.get("result") == 0:
@@ -147,8 +156,8 @@ def api_v1_subnets():
                                     start, end = [x.strip() for x in ps.split("-")]
                                     pool_size += _ip_to_int(end) - _ip_to_int(start) + 1
                                     pools.append(ps)
-                            r["pool_size"]       = pool_size
-                            r["pools"]           = pools
+                            r["pool_size"] = pool_size
+                            r["pools"] = pools
                             r["utilization_pct"] = round(r["active_leases"] / pool_size * 100, 1) if pool_size else 0
         except Exception:
             pass
@@ -164,8 +173,8 @@ def api_v1_leases():
     if not key:
         return api_error("Invalid or missing API key.", 401)
     scope = _api_key_subnet_ids(key)
-    subnet   = request.args.get("subnet", "")
-    mac      = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
+    subnet = request.args.get("subnet", "")
+    mac = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
     hostname = request.args.get("hostname", "")
     try:
         limit = max(1, min(int(request.args.get("limit", 200)), 1000))
@@ -177,15 +186,21 @@ def api_v1_leases():
     try:
         with kea_db() as db:
             with db.cursor() as cur:
-                where  = ["l.state=0", "l.expire > NOW()"]
+                where = ["l.state=0", "l.expire > NOW()"]
                 params = []
                 if scope is not None:
                     placeholders = ",".join(["%s"] * len(scope))
                     where.append(f"l.subnet_id IN ({placeholders})")
                     params.extend(scope)
                 if subnet:
-                    sid = next((k for k, v in extensions.SUBNET_MAP.items()
-                                if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                    sid = next(
+                        (
+                            k
+                            for k, v in extensions.SUBNET_MAP.items()
+                            if v["name"].lower() == subnet.lower() or str(k) == subnet
+                        ),
+                        None,
+                    )
                     if sid:
                         where.append("l.subnet_id=%s")
                         params.append(sid)
@@ -200,21 +215,28 @@ def api_v1_leases():
                     "l.subnet_id, (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
                     "l.expire AS expires, l.valid_lifetime "
                     "FROM lease4 l WHERE " + " AND ".join(where) + " ORDER BY l.expire DESC LIMIT %s",
-                    params + [limit]
+                    params + [limit],
                 )
                 for row in cur.fetchall():
-                    mf = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
+                    mf = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
                     si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
-                    result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
-                                    "subnet_id": row["subnet_id"], "subnet_name": si.get("name", ""),
-                                    "obtained": row["obtained"].isoformat() if row["obtained"] else None,
-                                    "expires":  row["expires"].isoformat()  if row["expires"]  else None,
-                                    "valid_lifetime": row["valid_lifetime"]})
+                    result.append(
+                        {
+                            "ip": row["ip"],
+                            "mac": mf,
+                            "hostname": row["hostname"] or "",
+                            "subnet_id": row["subnet_id"],
+                            "subnet_name": si.get("name", ""),
+                            "obtained": row["obtained"].isoformat() if row["obtained"] else None,
+                            "expires": row["expires"].isoformat() if row["expires"] else None,
+                            "valid_lifetime": row["valid_lifetime"],
+                        }
+                    )
         di = get_device_info_map([r["mac"] for r in result if r["mac"]])
         for r in result:
             info = di.get(r["mac"], {})
             r["manufacturer"] = info.get("manufacturer", "")
-            r["device_type"]  = info.get("device_type",  "unknown")
+            r["device_type"] = info.get("device_type", "unknown")
     except Exception as e:
         logger.error(f"api_v1_leases error: {e}")
         return api_error("Internal error. Check server logs for details.", 500)
@@ -238,7 +260,7 @@ def api_v1_lease_by_mac(mac):
                     "l.subnet_id, (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained, "
                     "l.expire AS expires, l.valid_lifetime, l.state "
                     "FROM lease4 l WHERE HEX(l.hwaddr)=%s ORDER BY l.expire DESC LIMIT 1",
-                    (mac_clean.upper(),)
+                    (mac_clean.upper(),),
                 )
                 row = cur.fetchone()
         if not row or (scope is not None and row["subnet_id"] not in scope):
@@ -246,14 +268,22 @@ def api_v1_lease_by_mac(mac):
             # can't see its subnet — don't reveal which via a different
             # status code.
             return api_error("No lease found for this MAC address.", 404)
-        mf     = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
-        si     = extensions.SUBNET_MAP.get(row["subnet_id"], {})
+        mf = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
+        si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
         active = row["state"] == 0 and row["expires"] and row["expires"] > datetime.now()
-        return api_ok({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
-                        "subnet_id": row["subnet_id"], "subnet_name": si.get("name", ""),
-                        "obtained": row["obtained"].isoformat() if row["obtained"] else None,
-                        "expires":  row["expires"].isoformat()  if row["expires"]  else None,
-                        "valid_lifetime": row["valid_lifetime"], "active": active})
+        return api_ok(
+            {
+                "ip": row["ip"],
+                "mac": mf,
+                "hostname": row["hostname"] or "",
+                "subnet_id": row["subnet_id"],
+                "subnet_name": si.get("name", ""),
+                "obtained": row["obtained"].isoformat() if row["obtained"] else None,
+                "expires": row["expires"].isoformat() if row["expires"] else None,
+                "valid_lifetime": row["valid_lifetime"],
+                "active": active,
+            }
+        )
     except Exception as e:
         logger.error(f"api_v1_lease_by_mac error: {e}")
         return api_error("Internal error. Check server logs for details.", 500)
@@ -265,8 +295,8 @@ def api_v1_devices_endpoint():
     if not key:
         return api_error("Invalid or missing API key.", 401)
     scope = _api_key_subnet_ids(key)
-    mac    = request.args.get("mac",    "").lower().replace(":", "").replace("-", "")
-    name   = request.args.get("name",   "")
+    mac = request.args.get("mac", "").lower().replace(":", "").replace("-", "")
+    name = request.args.get("name", "")
     subnet = request.args.get("subnet", "")
     try:
         limit = max(1, min(int(request.args.get("limit", 200)), 1000))
@@ -278,7 +308,7 @@ def api_v1_devices_endpoint():
     try:
         with jen_db() as db:
             with db.cursor() as cur:
-                where  = ["1=1"]
+                where = ["1=1"]
                 params = []
                 if scope is not None:
                     placeholders = ",".join(["%s"] * len(scope))
@@ -291,8 +321,14 @@ def api_v1_devices_endpoint():
                     where.append("(d.device_name LIKE %s OR d.last_hostname LIKE %s)")
                     params += ["%" + name + "%", "%" + name + "%"]
                 if subnet:
-                    sid = next((k for k, v in extensions.SUBNET_MAP.items()
-                                if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                    sid = next(
+                        (
+                            k
+                            for k, v in extensions.SUBNET_MAP.items()
+                            if v["name"].lower() == subnet.lower() or str(k) == subnet
+                        ),
+                        None,
+                    )
                     if sid:
                         where.append("d.last_subnet_id=%s")
                         params.append(sid)
@@ -301,17 +337,23 @@ def api_v1_devices_endpoint():
                     "d.last_subnet_id, d.first_seen, d.last_seen, "
                     "DATEDIFF(NOW(), d.last_seen) as days_inactive "
                     "FROM devices d WHERE " + " AND ".join(where) + " ORDER BY d.last_seen DESC LIMIT %s",
-                    params + [limit]
+                    params + [limit],
                 )
                 for row in cur.fetchall():
                     si = extensions.SUBNET_MAP.get(row["last_subnet_id"], {})
-                    result.append({"mac": row["mac"], "device_name": row["device_name"] or "",
-                                    "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
-                                    "last_hostname": row["last_hostname"] or "",
-                                    "subnet_name": si.get("name", ""),
-                                    "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
-                                    "last_seen":  row["last_seen"].isoformat()  if row["last_seen"]  else None,
-                                    "days_inactive": row["days_inactive"]})
+                    result.append(
+                        {
+                            "mac": row["mac"],
+                            "device_name": row["device_name"] or "",
+                            "owner": row["owner"] or "",
+                            "last_ip": row["last_ip"] or "",
+                            "last_hostname": row["last_hostname"] or "",
+                            "subnet_name": si.get("name", ""),
+                            "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
+                            "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+                            "days_inactive": row["days_inactive"],
+                        }
+                    )
     except Exception as e:
         logger.error(f"api_v1_devices_endpoint error: {e}")
         return api_error("Internal error. Check server logs for details.", 500)
@@ -338,23 +380,29 @@ def api_v1_device_by_mac(mac):
                     "SELECT inet_ntoa(address) AS ip, hostname, state, "
                     "(expire - INTERVAL valid_lifetime SECOND) AS obtained, expire AS expires "
                     "FROM lease4 WHERE HEX(hwaddr)=%s ORDER BY expire DESC LIMIT 1",
-                    (mac_clean,)
+                    (mac_clean,),
                 )
                 lease = kcur.fetchone()
         si = extensions.SUBNET_MAP.get(row["last_subnet_id"], {})
-        result = {"mac": row["mac"], "device_name": row["device_name"] or "",
-                  "owner": row["owner"] or "", "last_ip": row["last_ip"] or "",
-                  "last_hostname": row["last_hostname"] or "", "subnet_name": si.get("name", ""),
-                  "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
-                  "last_seen":  row["last_seen"].isoformat()  if row["last_seen"]  else None,
-                  "online": False, "current_lease": None}
+        result = {
+            "mac": row["mac"],
+            "device_name": row["device_name"] or "",
+            "owner": row["owner"] or "",
+            "last_ip": row["last_ip"] or "",
+            "last_hostname": row["last_hostname"] or "",
+            "subnet_name": si.get("name", ""),
+            "first_seen": row["first_seen"].isoformat() if row["first_seen"] else None,
+            "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
+            "online": False,
+            "current_lease": None,
+        }
         if lease and lease["state"] == 0 and lease["expires"] and lease["expires"] > datetime.now():
             result["online"] = True
             result["current_lease"] = {
-                "ip":       lease["ip"],
+                "ip": lease["ip"],
                 "hostname": lease["hostname"] or "",
                 "obtained": lease["obtained"].isoformat() if lease["obtained"] else None,
-                "expires":  lease["expires"].isoformat()  if lease["expires"]  else None,
+                "expires": lease["expires"].isoformat() if lease["expires"] else None,
             }
         return api_ok(result)
     except Exception as e:
@@ -379,15 +427,21 @@ def api_v1_reservations():
     try:
         with kea_db() as db:
             with db.cursor() as cur:
-                where  = ["dhcp4_subnet_id > 0"]
+                where = ["dhcp4_subnet_id > 0"]
                 params = []
                 if scope is not None:
                     placeholders = ",".join(["%s"] * len(scope))
                     where.append(f"dhcp4_subnet_id IN ({placeholders})")
                     params.extend(scope)
                 if subnet:
-                    sid = next((k for k, v in extensions.SUBNET_MAP.items()
-                                if v["name"].lower() == subnet.lower() or str(k) == subnet), None)
+                    sid = next(
+                        (
+                            k
+                            for k, v in extensions.SUBNET_MAP.items()
+                            if v["name"].lower() == subnet.lower() or str(k) == subnet
+                        ),
+                        None,
+                    )
                     if sid:
                         where.append("dhcp4_subnet_id=%s")
                         params.append(sid)
@@ -395,13 +449,20 @@ def api_v1_reservations():
                     "SELECT inet_ntoa(ipv4_address) AS ip, hostname, "
                     "HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id "
                     "FROM hosts WHERE " + " AND ".join(where) + " ORDER BY ipv4_address LIMIT %s",
-                    params + [limit]
+                    params + [limit],
                 )
                 for row in cur.fetchall():
-                    mf = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
+                    mf = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower() if row["mac_hex"] else ""
                     si = extensions.SUBNET_MAP.get(row["subnet_id"], {})
-                    result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
-                                    "subnet_id": row["subnet_id"], "subnet_name": si.get("name", "")})
+                    result.append(
+                        {
+                            "ip": row["ip"],
+                            "mac": mf,
+                            "hostname": row["hostname"] or "",
+                            "subnet_id": row["subnet_id"],
+                            "subnet_name": si.get("name", ""),
+                        }
+                    )
     except Exception as e:
         logger.error(f"api_v1_reservations error: {e}")
         return api_error("Internal error. Check server logs for details.", 500)
@@ -409,6 +470,7 @@ def api_v1_reservations():
 
 
 # ── API Key Management ────────────────────────────────────────────────────────
+
 
 @bp.route("/settings/api-keys")
 @login_required
@@ -443,10 +505,11 @@ def api_keys():
                         "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
                         "WHERE k.created_by = %s "
                         "ORDER BY k.created_at DESC",
-                        (current_user.id,)
+                        (current_user.id,),
                     )
                 keys = cur.fetchall()
         import json as _json
+
         for k in keys:
             if k.get("subnet_access"):
                 try:
@@ -460,9 +523,9 @@ def api_keys():
         logger.error(f"Could not load API keys: {e}")
         flash("Could not load API keys. Check server logs for details.", "error")
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
-    return render_template("api_keys.html", keys=keys,
-                           subnet_map=accessible_subnet_map,
-                           can_grant_all_subnets=current_user.all_subnets)
+    return render_template(
+        "api_keys.html", keys=keys, subnet_map=accessible_subnet_map, can_grant_all_subnets=current_user.all_subnets
+    )
 
 
 @bp.route("/settings/api-keys/create", methods=["POST"])
@@ -485,6 +548,7 @@ def api_keys_create():
     # — the <select> only offers their own subnets in the first place, but
     # this clamp holds even against a hand-crafted request.
     import json as _json
+
     subnet_ids_raw = request.form.getlist("subnet_ids")
     if current_user.all_subnets:
         if not subnet_ids_raw or "all" in subnet_ids_raw:
@@ -500,7 +564,7 @@ def api_keys_create():
             return redirect(url_for("api.api_keys"))
         subnet_access = _json.dumps(ids)
 
-    raw_key  = "jen_" + secrets.token_hex(24)
+    raw_key = "jen_" + secrets.token_hex(24)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
         with jen_db() as db:
@@ -508,12 +572,12 @@ def api_keys_create():
                 cur.execute(
                     "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access) "
                     "VALUES (%s,%s,%s,%s,%s)",
-                    (name, key_hash, raw_key[:8], current_user.id, subnet_access)
+                    (name, key_hash, raw_key[:8], current_user.id, subnet_access),
                 )
             db.commit()
         scope_desc = "all subnets" if subnet_access is None else f"subnets {subnet_access}"
         audit("API_KEY_CREATE", "api_keys", f"Key '{name}' created by {current_user.username}, scope={scope_desc}")
-        session["new_api_key"]      = raw_key
+        session["new_api_key"] = raw_key
         session["new_api_key_name"] = name
         flash("API key created. Copy it now — it won't be shown again.", "success")
     except Exception as e:
@@ -590,11 +654,9 @@ def api_docs():
         with jen_db() as db:
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, name, key_prefix FROM api_keys WHERE active=1 "
-                    "ORDER BY created_at DESC LIMIT 10"
+                    "SELECT id, name, key_prefix FROM api_keys WHERE active=1 ORDER BY created_at DESC LIMIT 10"
                 )
                 keys = cur.fetchall()
     except Exception:
         pass
-    return render_template("api_docs.html", keys=keys,
-                           base_url=request.host_url.rstrip("/"))
+    return render_template("api_docs.html", keys=keys, base_url=request.host_url.rstrip("/"))

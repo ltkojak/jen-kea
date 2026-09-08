@@ -37,7 +37,6 @@ import re
 
 
 class TestActionMenuDropdownPositioning:
-
     def _base_html(self):
         return pathlib.Path("templates/base.html").read_text(errors="ignore")
 
@@ -102,4 +101,6 @@ class TestActionMenuDropdownPositioning:
         content = self._base_html()
         assert "function closeActionMenu" in content
         assert "function closeAllActionMenus" in content
-        assert re.search(r"addEventListener\(['\"]scroll['\"],\s*function\s*\(\)\s*\{\s*closeAllActionMenus\(\)", content)
+        assert re.search(
+            r"addEventListener\(['\"]scroll['\"],\s*function\s*\(\)\s*\{\s*closeAllActionMenus\(\)", content
+        )

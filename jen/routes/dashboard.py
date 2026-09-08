@@ -24,9 +24,8 @@ bp = Blueprint("dashboard", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -61,8 +60,7 @@ def _get_ipv6_dashboard_summary():
             reserved += len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
     except Exception:
         return None
-    return {"active": active, "reserved": reserved,
-            "subnet_count": len(extensions.SUBNET6_MAP)}
+    return {"active": active, "reserved": reserved, "subnet_count": len(extensions.SUBNET6_MAP)}
 
 
 @bp.route("/")
@@ -79,9 +77,15 @@ def dashboard():
     # Build skeleton stats — filtered to subnets this user can access
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     stats = {
-        sid: {"active": "…", "dynamic": "…", "reservations": "…",
-              "name": info["name"], "cidr": info["cidr"],
-              "routers": "", "dns_servers": ""}
+        sid: {
+            "active": "…",
+            "dynamic": "…",
+            "reservations": "…",
+            "name": info["name"],
+            "cidr": info["cidr"],
+            "routers": "",
+            "dns_servers": "",
+        }
         for sid, info in accessible_subnet_map.items()
     }
 
@@ -102,14 +106,13 @@ def dashboard():
                 kea_subnets[sid] = {"routers": routers, "dns_servers": dns_servers}
         for sid in stats:
             if sid in kea_subnets:
-                stats[sid]["routers"]     = kea_subnets[sid]["routers"]
+                stats[sid]["routers"] = kea_subnets[sid]["routers"]
                 stats[sid]["dns_servers"] = kea_subnets[sid]["dns_servers"]
     except Exception:
         pass  # Non-fatal — cards still render without gateway/DNS
 
     server_statuses = [
-        {"server": s, "up": None, "ha_state": None, "ha_partner": None, "version": ""}
-        for s in extensions.KEA_SERVERS
+        {"server": s, "up": None, "ha_state": None, "ha_partner": None, "version": ""} for s in extensions.KEA_SERVERS
     ]
 
     recent = []
@@ -129,7 +132,8 @@ def dashboard():
                         subnet_params = ids
                     else:
                         subnet_clause = "AND 1=0"
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT inet_ntoa(l.address) AS ip, l.hostname,
                            HEX(l.hwaddr) AS mac_hex, l.subnet_id,
                            (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
@@ -140,22 +144,35 @@ def dashboard():
                       {subnet_clause}
                     ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
                     LIMIT 50
-                """, [window_seconds] + subnet_params)
+                """,
+                    [window_seconds] + subnet_params,
+                )
                 for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                     sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
-                    recent.append({"ip": row["ip"], "hostname": row["hostname"] or "",
-                                    "mac": mac, "subnet_id": row["subnet_id"],
-                                    "subnet_name": sname, "obtained": row["obtained"]})
-        mac_list = [l["mac"] for l in recent if l.get("mac")]
+                    recent.append(
+                        {
+                            "ip": row["ip"],
+                            "hostname": row["hostname"] or "",
+                            "mac": mac,
+                            "subnet_id": row["subnet_id"],
+                            "subnet_name": sname,
+                            "obtained": row["obtained"],
+                        }
+                    )
+        mac_list = [row["mac"] for row in recent if row.get("mac")]
         device_info = __fp.get_device_info_map(mac_list)
     except Exception as e:
         logger.error(f"Dashboard recent leases error: {e}")
 
     template_vars = dict(
-        stats=stats, recent=recent, kea_up=None,
-        subnet_map=accessible_subnet_map, pool_sizes={},
-        hours=hours_str, server_statuses=server_statuses,
+        stats=stats,
+        recent=recent,
+        kea_up=None,
+        subnet_map=accessible_subnet_map,
+        pool_sizes={},
+        hours=hours_str,
+        server_statuses=server_statuses,
         device_info=device_info,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,
@@ -166,9 +183,11 @@ def dashboard():
         return render_template("_recent_leases_rows.html", **template_vars), 200
     return render_template("dashboard.html", **template_vars)
 
+
 # ─────────────────────────────────────────
 # Leases
 # ─────────────────────────────────────────
+
 
 @bp.route("/api/saved-searches")
 @login_required
@@ -178,13 +197,17 @@ def api_saved_searches():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 if page:
-                    cur.execute("SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name", (current_user.id, page))
+                    cur.execute(
+                        "SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name",
+                        (current_user.id, page),
+                    )
                 else:
                     cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
                 searches = cur.fetchall()
         return jsonify([dict(s) for s in searches])
     except Exception:
         return jsonify([])
+
 
 # ─────────────────────────────────────────
 # Dashboard Preferences
@@ -193,23 +216,34 @@ def api_saved_searches():
 @login_required
 def save_dashboard_prefs():
     widgets = request.json.get("widgets", ["subnet_stats", "recent_leases"])
-    valid = {"subnet_stats", "recent_leases", "top_devices", "lease_sparklines",
-             "alert_summary", "server_status", "lease_history_chart", "totals"}
+    valid = {
+        "subnet_stats",
+        "recent_leases",
+        "top_devices",
+        "lease_sparklines",
+        "alert_summary",
+        "server_status",
+        "lease_history_chart",
+        "totals",
+    }
     widgets = [w for w in widgets if w in valid]
     if not widgets:
         widgets = ["subnet_stats", "totals", "recent_leases", "server_status"]
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("""INSERT INTO dashboard_prefs (user_id, widgets)
+                cur.execute(
+                    """INSERT INTO dashboard_prefs (user_id, widgets)
                                VALUES (%s, %s)
                                ON DUPLICATE KEY UPDATE widgets=%s, updated_at=NOW()""",
-                            (current_user.id, json.dumps(widgets), json.dumps(widgets)))
+                    (current_user.id, json.dumps(widgets), json.dumps(widgets)),
+                )
             db.commit()
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"Error saving dashboard prefs: {e}")
         return jsonify({"error": "Could not save preferences."}), 500
+
 
 @bp.route("/api/dashboard/get-prefs")
 @login_required
@@ -224,8 +258,10 @@ def get_dashboard_prefs():
     except Exception:
         return jsonify({"widgets": ["subnet_stats", "totals", "recent_leases", "server_status"]})
 
+
 # ─────────────────────────────────────────
 # Global Search
+
 
 @bp.route("/api/stats")
 @login_required
@@ -238,12 +274,15 @@ def api_stats():
                 for subnet_id, info in accessible.items():
                     cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                     active = cur.fetchone()["cnt"]
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT COUNT(*) as cnt FROM lease4 l
                         LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
                             AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
                         WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
-                    """, (subnet_id,))
+                    """,
+                        (subnet_id,),
+                    )
                     dynamic = cur.fetchone()["cnt"]
                     cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                     reservations = cur.fetchone()["cnt"]
@@ -270,38 +309,52 @@ def api_stats():
         if ver_result.get("result") == 0:
             kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
             kea_version = kea_version.splitlines()[0] if kea_version else ""
-        server_statuses = [{
-            "id":       s["id"],
-            "name":     s["name"],
-            "up":       __kea.kea_is_up(server=s),
-            "role":     s.get("role", "primary"),
-            "ha_state": None,
-            "version":  "",
-        } for s in extensions.KEA_SERVERS]
+        server_statuses = [
+            {
+                "id": s["id"],
+                "name": s["name"],
+                "up": __kea.kea_is_up(server=s),
+                "role": s.get("role", "primary"),
+                "ha_state": None,
+                "version": "",
+            }
+            for s in extensions.KEA_SERVERS
+        ]
         # Add HA state and version for online servers
         for srv in server_statuses:
             if srv["up"]:
                 if len(extensions.KEA_SERVERS) > 1:
-                    ha = __kea.kea_command("ha-heartbeat",
-                                          server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"]))
+                    ha = __kea.kea_command(
+                        "ha-heartbeat", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
+                    )
                     if ha.get("result") == 0:
                         srv["ha_state"] = ha.get("arguments", {}).get("state", "")
-                ver = __kea.kea_command("version-get",
-                                        server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"]))
+                ver = __kea.kea_command(
+                    "version-get", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
+                )
                 if ver.get("result") == 0:
                     v = ver.get("arguments", {}).get("extended", ver.get("text", ""))
                     srv["version"] = v.splitlines()[0] if v else ""
-        return jsonify({
-            "subnets": stats,
-            "pool_sizes": pool_sizes,
-            "kea_up": any(s["up"] for s in server_statuses),
-            "kea_version": kea_version,
-            "servers": server_statuses,
-        })
+        return jsonify(
+            {
+                "subnets": stats,
+                "pool_sizes": pool_sizes,
+                "kea_up": any(s["up"] for s in server_statuses),
+                "kea_version": kea_version,
+                "servers": server_statuses,
+            }
+        )
     except Exception as e:
         logger.error(f"api_stats error: {e}")
-        return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False,
-                        "servers": [], "error": "Could not load dashboard stats."})
+        return jsonify(
+            {
+                "subnets": {},
+                "pool_sizes": {},
+                "kea_up": False,
+                "servers": [],
+                "error": "Could not load dashboard stats.",
+            }
+        )
 
 
 @bp.route("/api/lease-history")
@@ -332,7 +385,8 @@ def api_lease_history():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 if subnet_id:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                                AVG(dynamic_leases) AS dynamic,
@@ -343,10 +397,13 @@ def api_lease_history():
                           AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                         GROUP BY subnet_id, hour
                         ORDER BY hour ASC
-                    """, (subnet_id, days))
+                    """,
+                        (subnet_id, days),
+                    )
                 elif accessible_ids:
                     placeholders = ",".join(["%s"] * len(accessible_ids))
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                                AVG(dynamic_leases) AS dynamic,
@@ -357,7 +414,9 @@ def api_lease_history():
                           AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                         GROUP BY subnet_id, hour
                         ORDER BY subnet_id, hour ASC
-                    """, accessible_ids + [days])
+                    """,
+                        accessible_ids + [days],
+                    )
                 else:
                     cur.execute("SELECT 1 FROM DUAL WHERE 1=0")  # no accessible subnets
                 rows = cur.fetchall()
@@ -370,13 +429,15 @@ def api_lease_history():
                 history[sid] = []
             pool = row["pool_size"] or 0
             dynamic = float(row["dynamic"] or 0)
-            history[sid].append({
-                "t":    row["hour"],
-                "d":    round(dynamic, 1),
-                "a":    round(float(row["active"] or 0), 1),
-                "pct":  round(dynamic / pool * 100, 1) if pool > 0 else 0,
-                "pool": pool,
-            })
+            history[sid].append(
+                {
+                    "t": row["hour"],
+                    "d": round(dynamic, 1),
+                    "a": round(float(row["active"] or 0), 1),
+                    "pct": round(dynamic / pool * 100, 1) if pool > 0 else 0,
+                    "pool": pool,
+                }
+            )
         return jsonify({"history": history, "days": days})
     except Exception as e:
         logger.error(f"api_lease_history error: {e}")
@@ -402,7 +463,8 @@ def api_top_devices():
                     return jsonify({"devices": []})
                 placeholders = ",".join(["%s"] * len(accessible_ids))
                 # Top devices by how recently active and how many times seen
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT d.mac, d.device_name, d.last_hostname,
                            d.last_ip, d.last_subnet_id, d.last_seen,
                            COALESCE(d.manufacturer_override, d.manufacturer) AS manufacturer,
@@ -414,31 +476,32 @@ def api_top_devices():
                       AND d.last_seen >= DATE_SUB(NOW(), INTERVAL 30 DAY)
                     ORDER BY d.last_seen DESC
                     LIMIT 10
-                """, accessible_ids)
+                """,
+                    accessible_ids,
+                )
                 rows = cur.fetchall()
 
             with kdb.cursor() as kcur:
                 for row in rows:
                     mac_hex = row["mac"].replace(":", "")
-                    kcur.execute(
-                        "SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s",
-                        (mac_hex,)
-                    )
+                    kcur.execute("SELECT host_id FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
                     has_reservation = bool(kcur.fetchone())
                     subnet_name = accessible.get(row["last_subnet_id"], {}).get("name", "")
-                    devices.append({
-                        "mac":             row["mac"],
-                        "name":            row["device_name"] or row["last_hostname"] or row["mac"],
-                        "hostname":        row["last_hostname"] or "",
-                        "ip":              row["last_ip"] or "",
-                        "subnet":          subnet_name,
-                        "manufacturer":    row["manufacturer"] or "",
-                        "device_type":     row["device_type"] or "",
-                        "device_icon":     row["device_icon"] or "",
-                        "last_seen":       row["last_seen"].isoformat() if row["last_seen"] else "",
-                        "days_inactive":   row["days_inactive"] or 0,
-                        "has_reservation": has_reservation,
-                    })
+                    devices.append(
+                        {
+                            "mac": row["mac"],
+                            "name": row["device_name"] or row["last_hostname"] or row["mac"],
+                            "hostname": row["last_hostname"] or "",
+                            "ip": row["last_ip"] or "",
+                            "subnet": subnet_name,
+                            "manufacturer": row["manufacturer"] or "",
+                            "device_type": row["device_type"] or "",
+                            "device_icon": row["device_icon"] or "",
+                            "last_seen": row["last_seen"].isoformat() if row["last_seen"] else "",
+                            "days_inactive": row["days_inactive"] or 0,
+                            "has_reservation": has_reservation,
+                        }
+                    )
         return jsonify({"devices": devices})
     except Exception as e:
         logger.error(f"api_top_devices error: {e}")
@@ -470,24 +533,28 @@ def api_alert_summary():
         # detail actually lives. Unrestricted users are unaffected.
         show_message = current_user.all_subnets
         for row in rows:
-            alerts.append({
-                "type":    row["alert_type"],
-                "channel": row["channel_type"],
-                "message": row["message"] if show_message else "",
-                "status":  row["status"],
-                "error":   row["error"] or "" if show_message else "",
-                "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M UTC") if row["sent_at"] else "",
-            })
+            alerts.append(
+                {
+                    "type": row["alert_type"],
+                    "channel": row["channel_type"],
+                    "message": row["message"] if show_message else "",
+                    "status": row["status"],
+                    "error": row["error"] or "" if show_message else "",
+                    "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M UTC") if row["sent_at"] else "",
+                }
+            )
         return jsonify({"alerts": alerts})
     except Exception as e:
         logger.error(f"api_alert_summary error: {e}")
         return jsonify({"alerts": [], "error": "Could not load alert summary."})
+
 
 @bp.route("/api/recent-leases")
 @login_required
 def api_recent_leases():
     """Recent leases for dashboard widget — returns HTML fragment."""
     from jen.services.fingerprint import get_device_info_map, get_manufacturer_icon_url
+
     try:
         hours = float(request.args.get("hours", "0.5"))
     except ValueError:
@@ -504,34 +571,54 @@ def api_recent_leases():
             # logged-in user saw the 50 most recent leases system-wide,
             # including subnets they're restricted away from.
             from jen.services.access import add_subnet_restriction
-            where, params = ["l.state=0", "l.expire > NOW()",
-                              "(l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)"], [window_seconds]
+
+            where, params = (
+                [
+                    "l.state=0",
+                    "l.expire > NOW()",
+                    "(l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)",
+                ],
+                [window_seconds],
+            )
             where, params = add_subnet_restriction(where, params, "l", "subnet_id")
             with db.cursor() as cur:
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT inet_ntoa(l.address) AS ip, l.hostname,
                            HEX(l.hwaddr) AS mac_hex, l.subnet_id,
                            (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
                     FROM lease4 l
-                    WHERE {' AND '.join(where)}
+                    WHERE {" AND ".join(where)}
                     ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
                     LIMIT 50
-                """, params)
+                """,
+                    params,
+                )
                 for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                     sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
-                    recent.append({"ip": row["ip"], "hostname": row["hostname"] or "",
-                                    "mac": mac, "subnet_id": row["subnet_id"],
-                                    "subnet_name": sname, "obtained": row["obtained"]})
-        mac_list = [l["mac"] for l in recent if l.get("mac")]
+                    recent.append(
+                        {
+                            "ip": row["ip"],
+                            "hostname": row["hostname"] or "",
+                            "mac": mac,
+                            "subnet_id": row["subnet_id"],
+                            "subnet_name": sname,
+                            "obtained": row["obtained"],
+                        }
+                    )
+        mac_list = [row["mac"] for row in recent if row.get("mac")]
         device_info = get_device_info_map(mac_list)
     except Exception as e:
         logger.error(f"Recent leases error: {e}")
 
-    return render_template("_recent_leases.html",
-                           recent=recent, device_info=device_info,
-                           get_manufacturer_icon_url=get_manufacturer_icon_url,
-                           device_type_display=DEVICE_TYPE_DISPLAY)
+    return render_template(
+        "_recent_leases.html",
+        recent=recent,
+        device_info=device_info,
+        get_manufacturer_icon_url=get_manufacturer_icon_url,
+        device_type_display=DEVICE_TYPE_DISPLAY,
+    )
 
 
 @bp.route("/metrics")
@@ -621,41 +708,54 @@ def prometheus_metrics():
 
     # ── Pool size + utilization per subnet (from the periodic snapshot,
     #    NOT live — see docstring) ────────────────────────────────────────
-    lines.append("# HELP jen_subnet_pool_size Total addresses in the subnet's DHCP pool, "
-                 "from the most recent periodic snapshot (see snapshot_interval_minutes)")
+    lines.append(
+        "# HELP jen_subnet_pool_size Total addresses in the subnet's DHCP pool, "
+        "from the most recent periodic snapshot (see snapshot_interval_minutes)"
+    )
     lines.append("# TYPE jen_subnet_pool_size gauge")
-    lines.append("# HELP jen_subnet_utilization_ratio Active leases / pool size (0.0-1.0), "
-                 "from the most recent periodic snapshot")
+    lines.append(
+        "# HELP jen_subnet_utilization_ratio Active leases / pool size (0.0-1.0), "
+        "from the most recent periodic snapshot"
+    )
     lines.append("# TYPE jen_subnet_utilization_ratio gauge")
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 for subnet_id, info in extensions.SUBNET_MAP.items():
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT active_leases, pool_size FROM lease_history
                         WHERE subnet_id=%s ORDER BY snapshot_time DESC LIMIT 1
-                    """, (subnet_id,))
+                    """,
+                        (subnet_id,),
+                    )
                     row = cur.fetchone()
                     if row and row["pool_size"]:
                         util = row["active_leases"] / row["pool_size"]
-                        lines.append(f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}')
-                        lines.append(f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}')
+                        lines.append(
+                            f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}'
+                        )
+                        lines.append(
+                            f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}'
+                        )
     except Exception:
         pass
 
     # ── Alerts sent, cumulative — a real Prometheus counter, since
     #    alert_log is never pruned (confirmed: no DELETE/retention logic
     #    exists for it anywhere in the codebase) ─────────────────────────
-    lines.append("# HELP jen_alerts_sent_total Cumulative alerts sent, by type and status. "
-                 "A real counter — use rate()/increase() in PromQL for a firing rate.")
+    lines.append(
+        "# HELP jen_alerts_sent_total Cumulative alerts sent, by type and status. "
+        "A real counter — use rate()/increase() in PromQL for a firing rate."
+    )
     lines.append("# TYPE jen_alerts_sent_total counter")
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 cur.execute("SELECT alert_type, status, COUNT(*) as cnt FROM alert_log GROUP BY alert_type, status")
                 for row in cur.fetchall():
-                    atype = str(row["alert_type"]).replace('"', '')
-                    status = str(row["status"]).replace('"', '')
+                    atype = str(row["alert_type"]).replace('"', "")
+                    status = str(row["status"]).replace('"', "")
                     lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {row["cnt"]}')
     except Exception:
         pass
@@ -668,7 +768,7 @@ def prometheus_metrics():
     lines.append("# TYPE jen_server_up gauge")
     try:
         for status in __kea.get_all_server_status():
-            name = str(status["server"].get("name", status["server"].get("id", "unknown"))).replace('"', '')
+            name = str(status["server"].get("name", status["server"].get("id", "unknown"))).replace('"', "")
             lines.append(f'jen_server_up{{server="{name}"}} {1 if status["up"] else 0}')
     except Exception:
         pass
@@ -689,7 +789,9 @@ def prometheus_metrics():
     #    comparable to v4's, so there's nothing honest to report yet.
     #    active_leases carries a "type" label (IA_NA vs IA_PD) rather than
     #    summing them into one number, for the same reason.
-    lines.append("# HELP jen_ipv6_enabled Whether IPv6 support is enabled in Jen (not whether kea-dhcp6 itself is reachable — see jen_kea6_up)")
+    lines.append(
+        "# HELP jen_ipv6_enabled Whether IPv6 support is enabled in Jen (not whether kea-dhcp6 itself is reachable — see jen_kea6_up)"
+    )
     lines.append("# TYPE jen_ipv6_enabled gauge")
     ipv6_on = False
     try:
@@ -699,15 +801,19 @@ def prometheus_metrics():
     lines.append(f"jen_ipv6_enabled {1 if ipv6_on else 0}")
 
     if ipv6_on and extensions.SUBNET6_MAP:
-        lines.append("# HELP jen_subnet6_active_leases Number of active IPv6 leases per subnet, by lease type (IA_NA address vs IA_PD delegated prefix)")
+        lines.append(
+            "# HELP jen_subnet6_active_leases Number of active IPv6 leases per subnet, by lease type (IA_NA address vs IA_PD delegated prefix)"
+        )
         lines.append("# TYPE jen_subnet6_active_leases gauge")
         try:
             for subnet_id, info in extensions.SUBNET6_MAP.items():
                 by_type = {}
-                for l in __kea6.list_lease6(subnet_id=subnet_id):
-                    by_type[l["lease_type_name"]] = by_type.get(l["lease_type_name"], 0) + 1
+                for lease in __kea6.list_lease6(subnet_id=subnet_id):
+                    by_type[lease["lease_type_name"]] = by_type.get(lease["lease_type_name"], 0) + 1
                 for type_name, cnt in by_type.items():
-                    lines.append(f'jen_subnet6_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}",type="{type_name}"}} {cnt}')
+                    lines.append(
+                        f'jen_subnet6_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}",type="{type_name}"}} {cnt}'
+                    )
         except Exception:
             pass
 
@@ -728,5 +834,6 @@ def prometheus_metrics():
             lines.append("jen_kea6_up 0")
 
     return Response("\n".join(lines) + "\n", mimetype="text/plain")
+
 
 # ─────────────────────────────────────────

@@ -190,8 +190,7 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
     # all sudo access with a malformed file.
     sudoers_src = os.path.join(extracted, "jen-sudoers")
     if os.path.isfile(sudoers_src):
-        check = subprocess.run(["/usr/sbin/visudo", "-c", "-f", sudoers_src],
-                               capture_output=True, text=True)
+        check = subprocess.run(["/usr/sbin/visudo", "-c", "-f", sudoers_src], capture_output=True, text=True)
         if check.returncode != 0:
             log(f"ERROR: new jen-sudoers failed validation, not installing it: {check.stderr}")
         else:
@@ -202,15 +201,20 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
     # to www-data. This script and its own directory are never touched
     # by this chown, since they're not under install_dir at all.
     subprocess.run(
-        ["/bin/chown", "-R", "www-data:www-data",
-         os.path.join(install_dir, "jen"), os.path.join(install_dir, "run.py"),
-         os.path.join(install_dir, "templates"), os.path.join(install_dir, "static")],
+        [
+            "/bin/chown",
+            "-R",
+            "www-data:www-data",
+            os.path.join(install_dir, "jen"),
+            os.path.join(install_dir, "run.py"),
+            os.path.join(install_dir, "templates"),
+            os.path.join(install_dir, "static"),
+        ],
         check=False,
     )
 
 
-def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH,
-                               update_service_path=UPDATE_SERVICE_PATH):
+def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, update_service_path=UPDATE_SERVICE_PATH):
     """
     v5.3.3 fix — a real gap found by a third-party review of the v5.2.6
     redesign: install_extracted_files() above installs the application
@@ -304,9 +308,11 @@ def install_python_dependencies(install_dir=INSTALL_DIR):
     if result.returncode == 0:
         log("Dependencies up to date.")
     else:
-        log("WARNING: pip install failed — the app will start on whatever is "
+        log(
+            "WARNING: pip install failed — the app will start on whatever is "
             "already present (run.py falls back to werkzeug if gunicorn is "
-            f"missing). Fix with `sudo ./install.sh --upgrade`. pip said:\n{result.stderr.strip()}")
+            f"missing). Fix with `sudo ./install.sh --upgrade`. pip said:\n{result.stderr.strip()}"
+        )
 
 
 def verify_release_checksum(tarball_name, actual_hash, checksum_text):
@@ -403,11 +409,14 @@ def main():
         tmp_tarball.close()
 
         with tarfile.open(tmp_tarball.name, "r:gz") as tf:
-            members = [m for m in tf.getmembers()
-                       if m.name.startswith("jen/")
-                       and ".." not in m.name
-                       and not os.path.isabs(m.name)
-                       and (m.isfile() or m.isdir())]
+            members = [
+                m
+                for m in tf.getmembers()
+                if m.name.startswith("jen/")
+                and ".." not in m.name
+                and not os.path.isabs(m.name)
+                and (m.isfile() or m.isdir())
+            ]
             tf.extractall(tmp_dir, members=members)
 
         extracted = os.path.join(tmp_dir, "jen")
@@ -435,4 +444,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

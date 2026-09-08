@@ -3,6 +3,7 @@ Network Discovery plugin for Jen — v1.0.0
 Scans subnets for devices not in the Kea lease table.
 Requires nmap on the Jen host (sudo apt install nmap).
 """
+
 import ipaddress
 import logging
 import os as _os
@@ -15,40 +16,54 @@ from flask_login import login_required
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint("network_discovery", __name__,
-               template_folder="templates",
-               root_path=_os.path.dirname(_os.path.abspath(__file__)),
-               url_prefix="/network/discovery")
+bp = Blueprint(
+    "network_discovery",
+    __name__,
+    template_folder="templates",
+    root_path=_os.path.dirname(_os.path.abspath(__file__)),
+    url_prefix="/network/discovery",
+)
 
 _scan_lock = threading.Lock()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _get_db():
     from jen.models.db import get_jen_db
+
     return get_jen_db()
+
 
 def _get_kea_db():
     from jen.models.db import get_kea_db
+
     return get_kea_db()
+
 
 def _subnet_map():
     from jen import extensions
+
     return extensions.SUBNET_MAP
+
 
 def _accessible_subnets():
     from jen.services.access import get_accessible_subnet_map
+
     return get_accessible_subnet_map()
+
 
 def _nmap_available():
     return shutil.which("nmap") is not None
+
 
 def _arp_scan_available():
     return shutil.which("arp-scan") is not None
 
 
 # ── Scanning ──────────────────────────────────────────────────────────────────
+
 
 def _scan_subnet(subnet_id: int, cidr: str) -> dict:
     """
@@ -59,9 +74,10 @@ def _scan_subnet(subnet_id: int, cidr: str) -> dict:
     try:
         if _nmap_available():
             result = subprocess.run(
-                ["nmap", "-sn", "-T4", "--host-timeout", "5s", cidr,
-                 "--oG", "-"],
-                capture_output=True, text=True, timeout=120
+                ["nmap", "-sn", "-T4", "--host-timeout", "5s", cidr, "--oG", "-"],
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             for line in result.stdout.splitlines():
                 if not line.startswith("Host:"):
@@ -75,10 +91,7 @@ def _scan_subnet(subnet_id: int, cidr: str) -> dict:
                 if ip:
                     hosts.append({"ip": ip, "mac": "", "hostname": hostname})
         elif _arp_scan_available():
-            result = subprocess.run(
-                ["arp-scan", "--localnet", cidr],
-                capture_output=True, text=True, timeout=60
-            )
+            result = subprocess.run(["arp-scan", "--localnet", cidr], capture_output=True, text=True, timeout=60)
             for line in result.stdout.splitlines():
                 parts = line.split("\t")
                 if len(parts) >= 2:
@@ -119,20 +132,20 @@ def _cross_reference_kea(hosts: list, subnet_id: int) -> list:
         with kdb.cursor() as cur:
             cur.execute(
                 "SELECT inet_ntoa(address) as ip, HEX(hwaddr) as mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s",
-                (subnet_id,)
+                (subnet_id,),
             )
             for row in cur.fetchall():
                 kea_ips.add(row["ip"])
                 if row.get("mac_hex"):
-                    kea_macs.add(":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower())
+                    kea_macs.add(":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower())
             cur.execute(
                 "SELECT inet_ntoa(ipv4_address) as ip, HEX(dhcp_identifier) as mac_hex FROM hosts WHERE dhcp4_subnet_id=%s",
-                (subnet_id,)
+                (subnet_id,),
             )
             for row in cur.fetchall():
                 kea_ips.add(row["ip"])
                 if row.get("mac_hex"):
-                    kea_macs.add(":".join(row["mac_hex"][i:i+2] for i in range(0, 12, 2)).lower())
+                    kea_macs.add(":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower())
         kdb.close()
     except Exception as e:
         logger.error(f"Network Discovery: Kea cross-reference error: {e}")
@@ -141,11 +154,13 @@ def _cross_reference_kea(hosts: list, subnet_id: int) -> list:
     for host in hosts:
         host_mac = (host.get("mac") or "").lower()
         in_kea = host["ip"] in kea_ips or (host_mac and host_mac in kea_macs)
-        enriched.append({
-            **host,
-            "in_kea": in_kea,
-            "rogue": not in_kea,
-        })
+        enriched.append(
+            {
+                **host,
+                "in_kea": in_kea,
+                "rogue": not in_kea,
+            }
+        )
     return enriched
 
 
@@ -154,10 +169,7 @@ def _run_scan_job(subnet_id: int, cidr: str) -> int:
     db = _get_db()
     try:
         with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO nd_scan_jobs (subnet_id, status) VALUES (%s, 'running')",
-                (subnet_id,)
-            )
+            cur.execute("INSERT INTO nd_scan_jobs (subnet_id, status) VALUES (%s, 'running')", (subnet_id,))
             job_id = cur.lastrowid
         db.commit()
 
@@ -165,10 +177,7 @@ def _run_scan_job(subnet_id: int, cidr: str) -> int:
 
         if "error" in result:
             with db.cursor() as cur:
-                cur.execute(
-                    "UPDATE nd_scan_jobs SET status='error', finished_at=NOW() WHERE id=%s",
-                    (job_id,)
-                )
+                cur.execute("UPDATE nd_scan_jobs SET status='error', finished_at=NOW() WHERE id=%s", (job_id,))
             db.commit()
             db.close()
             return job_id
@@ -178,15 +187,19 @@ def _run_scan_job(subnet_id: int, cidr: str) -> int:
 
         # Clear old results for this subnet, keep last 3 jobs
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 DELETE FROM nd_scan_results WHERE job_id IN (
                     SELECT id FROM nd_scan_jobs
                     WHERE subnet_id=%s AND id != %s
                     ORDER BY started_at DESC LIMIT 100
                 )
-            """, (subnet_id, job_id))
+            """,
+                (subnet_id, job_id),
+            )
             for host in hosts:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO nd_scan_results
                         (job_id, ip, mac, hostname, in_kea, rogue)
                     VALUES (%s, %s, %s, %s, %s, %s)
@@ -194,27 +207,32 @@ def _run_scan_job(subnet_id: int, cidr: str) -> int:
                         mac=VALUES(mac), hostname=VALUES(hostname),
                         in_kea=VALUES(in_kea), rogue=VALUES(rogue),
                         discovered_at=NOW()
-                """, (job_id, host["ip"], host.get("mac",""),
-                      host.get("hostname",""), host["in_kea"], host["rogue"]))
-            cur.execute("""
+                """,
+                    (job_id, host["ip"], host.get("mac", ""), host.get("hostname", ""), host["in_kea"], host["rogue"]),
+                )
+            cur.execute(
+                """
                 UPDATE nd_scan_jobs
                 SET status='done', finished_at=NOW(),
                     hosts_found=%s, rogue_count=%s
                 WHERE id=%s
-            """, (len(hosts), rogue_count, job_id))
+            """,
+                (len(hosts), rogue_count, job_id),
+            )
         db.commit()
 
         # Fire Jen alert if rogue devices found
         if rogue_count > 0:
             try:
                 from jen.services.alerts import send_alert
+
                 subnet_name = _subnet_map().get(subnet_id, {}).get("name", str(subnet_id))
                 rogues = [h["ip"] for h in hosts if h["rogue"]]
                 send_alert(
                     alert_type="rogue_device",
                     subject=f"⚠️ {rogue_count} rogue device(s) on {subnet_name}",
-                    body=f"Network Discovery found {rogue_count} device(s) on {subnet_name} not in Kea:\n" +
-                         "\n".join(f"  • {ip}" for ip in rogues[:10])
+                    body=f"Network Discovery found {rogue_count} device(s) on {subnet_name} not in Kea:\n"
+                    + "\n".join(f"  • {ip}" for ip in rogues[:10]),
                 )
             except Exception as e:
                 logger.warning(f"Network Discovery: could not send alert: {e}")
@@ -223,10 +241,7 @@ def _run_scan_job(subnet_id: int, cidr: str) -> int:
         logger.error(f"Network Discovery scan error: {e}")
         try:
             with db.cursor() as cur:
-                cur.execute(
-                    "UPDATE nd_scan_jobs SET status='error', finished_at=NOW() WHERE id=%s",
-                    (job_id,)
-                )
+                cur.execute("UPDATE nd_scan_jobs SET status='error', finished_at=NOW() WHERE id=%s", (job_id,))
             db.commit()
         except Exception:
             pass
@@ -238,6 +253,7 @@ def _run_scan_job(subnet_id: int, cidr: str) -> int:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+
 @bp.route("/")
 @login_required
 def index():
@@ -247,20 +263,23 @@ def index():
         db = _get_db()
         with db.cursor() as cur:
             for sid in subnet_map:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT j.id, j.status, j.started_at, j.finished_at,
                            j.hosts_found, j.rogue_count
                     FROM nd_scan_jobs j
                     WHERE j.subnet_id=%s
                     ORDER BY j.started_at DESC LIMIT 1
-                """, (sid,))
+                """,
+                    (sid,),
+                )
                 row = cur.fetchone()
                 scan_summary[sid] = row or {}
         db.close()
     except Exception as e:
         logger.error(f"Network Discovery index error: {e}")
 
-    nmap_ok   = _nmap_available()
+    nmap_ok = _nmap_available()
     arpscan_ok = _arp_scan_available()
     scanner_ok = nmap_ok or arpscan_ok
 
@@ -278,6 +297,7 @@ def index():
 @login_required
 def start_scan(subnet_id):
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return redirect(url_for("network_discovery.index"))
 
@@ -308,6 +328,7 @@ def start_scan(subnet_id):
 @login_required
 def results(subnet_id):
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return redirect(url_for("network_discovery.index"))
 
@@ -321,18 +342,24 @@ def results(subnet_id):
     try:
         db = _get_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, status, started_at, finished_at, hosts_found, rogue_count
                 FROM nd_scan_jobs WHERE subnet_id=%s
                 ORDER BY started_at DESC LIMIT 1
-            """, (subnet_id,))
+            """,
+                (subnet_id,),
+            )
             job = cur.fetchone()
             if job:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT ip, mac, hostname, in_kea, rogue, discovered_at
                     FROM nd_scan_results WHERE job_id=%s
                     ORDER BY inet_aton(ip)
-                """, (job["id"],))
+                """,
+                    (job["id"],),
+                )
                 hosts = cur.fetchall()
         db.close()
     except Exception as e:
@@ -354,25 +381,31 @@ def results(subnet_id):
 def api_scan_status(subnet_id):
     """Poll endpoint for scan progress."""
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return jsonify({"error": "Access denied"}), 403
     try:
         db = _get_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, status, started_at, finished_at, hosts_found, rogue_count
                 FROM nd_scan_jobs WHERE subnet_id=%s
                 ORDER BY started_at DESC LIMIT 1
-            """, (subnet_id,))
+            """,
+                (subnet_id,),
+            )
             row = cur.fetchone()
         db.close()
         if row:
-            return jsonify({
-                "status": row["status"],
-                "hosts_found": row["hosts_found"],
-                "rogue_count": row["rogue_count"],
-                "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
-            })
+            return jsonify(
+                {
+                    "status": row["status"],
+                    "hosts_found": row["hosts_found"],
+                    "rogue_count": row["rogue_count"],
+                    "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
+                }
+            )
         return jsonify({"status": "never"})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)})

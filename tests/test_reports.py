@@ -19,7 +19,6 @@ import pathlib
 
 
 class TestReportsChartJsVendoring:
-
     def test_no_external_cdn_reference_anywhere_in_template(self):
         content = open("templates/reports.html").read()
         assert "cdnjs.cloudflare.com" not in content
@@ -40,11 +39,14 @@ class TestReportsChartJsVendoring:
         with db.cursor() as cur:
             cur.execute("DELETE FROM lease_history WHERE subnet_id=%s", (subnet_id,))
             for i in range(points):
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO lease_history (subnet_id, active_leases,
                         dynamic_leases, reserved_leases, pool_size)
                     VALUES (%s, %s, %s, %s, %s)
-                """, (subnet_id, 10 + i, 5 + i, 5, 100))
+                """,
+                    (subnet_id, 10 + i, 5 + i, 5, 100),
+                )
         db.commit()
 
     def test_page_references_local_chart_js_when_data_exists(self, logged_in_client, db):
@@ -76,6 +78,7 @@ class TestReportsChartJsVendoring:
         # Every open <script has a matching close before the next open,
         # i.e. no script tag contains a literal nested <script tag.
         import re
+
         segments = re.split(r"(<script[^>]*>|</script>)", body)
         depth = 0
         for seg in segments:

@@ -4,6 +4,7 @@ jen/services/scheduler.py
 APScheduler wrapper for scheduled backups.
 Started by the app factory after DB init.
 """
+
 import logging
 from datetime import datetime
 
@@ -23,19 +24,9 @@ def start_scheduler(app):
 
     _scheduler = BackgroundScheduler(daemon=True)
     # Run every hour — the job itself checks frequency/hour settings
+    _scheduler.add_job(_run_backup_job, CronTrigger(minute=0), id="jen_backup", replace_existing=True, args=[app])
     _scheduler.add_job(
-        _run_backup_job,
-        CronTrigger(minute=0),
-        id="jen_backup",
-        replace_existing=True,
-        args=[app]
-    )
-    _scheduler.add_job(
-        _run_audit_cleanup,
-        CronTrigger(hour=0, minute=5),
-        id="jen_audit_cleanup",
-        replace_existing=True,
-        args=[app]
+        _run_audit_cleanup, CronTrigger(hour=0, minute=5), id="jen_audit_cleanup", replace_existing=True, args=[app]
     )
     try:
         _scheduler.start()
@@ -49,10 +40,11 @@ def _run_backup_job(app):
     with app.app_context():
         try:
             from jen.services.dbexport import get_schedule, run_scheduled_backup
+
             sched = get_schedule()
             if not sched or not sched.get("enabled"):
                 return
-            now  = datetime.utcnow()
+            now = datetime.utcnow()
             hour = int(sched.get("hour", 2))
             freq = sched.get("frequency", "daily")
             if now.hour != hour:
@@ -63,8 +55,11 @@ def _run_backup_job(app):
             last_run = sched.get("last_run")
             if last_run:
                 try:
-                    lr_date = last_run.date() if hasattr(last_run, "date") else \
-                              datetime.strptime(str(last_run)[:10], "%Y-%m-%d").date()
+                    lr_date = (
+                        last_run.date()
+                        if hasattr(last_run, "date")
+                        else datetime.strptime(str(last_run)[:10], "%Y-%m-%d").date()
+                    )
                     if lr_date == now.date():
                         return
                 except Exception:
@@ -88,16 +83,14 @@ def _run_audit_cleanup(app):
         try:
             from jen.models import db as __db
             from jen.models import user as __user
+
             days_str = __user.get_global_setting("audit_retention_days", "90")
             days = int(days_str) if days_str else 90
             if days <= 0:
                 return  # 0 = keep forever
             with __db.jen_db() as db:
                 with db.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
-                        (days,)
-                    )
+                    cur.execute("DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)", (days,))
                     deleted = cur.rowcount
                 db.commit()
             if deleted:

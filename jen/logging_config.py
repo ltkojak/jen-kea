@@ -57,9 +57,7 @@ class JsonFormatter(logging.Formatter):
         # Anything passed via logger.info(..., extra={...}) rides along too,
         # rather than being silently dropped the way plain-text logging
         # would drop it.
-        standard_keys = set(logging.LogRecord(
-            "", 0, "", 0, "", (), None
-        ).__dict__.keys()) | {"message", "asctime"}
+        standard_keys = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys()) | {"message", "asctime"}
         for key, value in record.__dict__.items():
             if key not in standard_keys and key not in payload:
                 try:
@@ -82,6 +80,7 @@ def configure_logging(cfg=None) -> None:
     mirrors the same env-var-fallback pattern run.py already uses for
     Docker deployments without a mounted config file.
     """
+
     def _get(section, key, env_var, default):
         if cfg is not None:
             try:
@@ -120,9 +119,7 @@ def configure_logging(cfg=None) -> None:
     if log_file:
         try:
             os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            file_handler = TimedRotatingFileHandler(
-                log_file, when="midnight", backupCount=retention_days, utc=True
-            )
+            file_handler = TimedRotatingFileHandler(log_file, when="midnight", backupCount=retention_days, utc=True)
             file_handler.setFormatter(formatter)
             root.addHandler(file_handler)
         except Exception as e:

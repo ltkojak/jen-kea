@@ -24,9 +24,8 @@ bp = Blueprint("devices", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -85,7 +84,9 @@ def devices():
                     where = []
                     params = []
                     if search:
-                        where.append("(d.mac LIKE %s OR d.device_name LIKE %s OR d.owner LIKE %s OR d.last_ip LIKE %s OR d.last_hostname LIKE %s)")
+                        where.append(
+                            "(d.mac LIKE %s OR d.device_name LIKE %s OR d.owner LIKE %s OR d.last_ip LIKE %s OR d.last_hostname LIKE %s)"
+                        )
                         s = f"%{search}%"
                         params += [s, s, s, s, s]
                     if show_stale:
@@ -112,6 +113,7 @@ def devices():
                             subnet_filter = "all"
                     if subnet_filter == "all" and not current_user.all_subnets:
                         from jen.services.access import add_subnet_restriction
+
                         where, params = add_subnet_restriction(where, params, "d", "last_subnet_id")
                     where_str = " AND ".join(where) if where else "1=1"
 
@@ -122,7 +124,8 @@ def devices():
                         limit_clause = f"LIMIT {per_page} OFFSET {offset}"
                     else:
                         limit_clause = ""
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT d.id, d.mac, d.device_name, d.owner, d.notes,
                                d.first_seen, d.last_seen, d.last_ip, d.last_hostname, d.last_subnet_id,
                                COALESCE(d.manufacturer_override, d.manufacturer) AS manufacturer,
@@ -136,17 +139,26 @@ def devices():
                         WHERE {where_str}
                         ORDER BY {sort_col} {direction}
                         {limit_clause}
-                    """, params)
+                    """,
+                        params,
+                    )
                     rows = cur.fetchall()
 
                     with kdb.cursor() as kcur:
                         for row in rows:
                             mac_hex = row["mac"].replace(":", "")
-                            kcur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
+                            kcur.execute(
+                                "SELECT host_id, inet_ntoa(ipv4_address) AS ip FROM hosts WHERE HEX(dhcp_identifier)=%s",
+                                (mac_hex,),
+                            )
                             res = kcur.fetchone()
                             row["has_reservation"] = bool(res)
                             row["reservation_ip"] = res["ip"] if res else None
-                            row["subnet_name"] = extensions.SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "") if row["last_subnet_id"] else ""
+                            row["subnet_name"] = (
+                                extensions.SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "")
+                                if row["last_subnet_id"]
+                                else ""
+                            )
                             row["is_stale"] = row["days_since_seen"] >= stale_days
                             devices_list.append(row)
     except Exception as e:
@@ -154,18 +166,36 @@ def devices():
         flash("Could not load device inventory. Check server logs for details.", "error")
 
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
-    bundled_icons = sorted([f.replace(".svg","") for f in os.listdir(extensions.ICONS_BUNDLED_DIR) if f.endswith(".svg")]) if os.path.exists(extensions.ICONS_BUNDLED_DIR) else []
-    custom_icons = sorted([f.replace(".svg","") for f in os.listdir(extensions.ICONS_CUSTOM_DIR) if f.endswith(".svg")]) if os.path.exists(extensions.ICONS_CUSTOM_DIR) else []
+    bundled_icons = (
+        sorted([f.replace(".svg", "") for f in os.listdir(extensions.ICONS_BUNDLED_DIR) if f.endswith(".svg")])
+        if os.path.exists(extensions.ICONS_BUNDLED_DIR)
+        else []
+    )
+    custom_icons = (
+        sorted([f.replace(".svg", "") for f in os.listdir(extensions.ICONS_CUSTOM_DIR) if f.endswith(".svg")])
+        if os.path.exists(extensions.ICONS_CUSTOM_DIR)
+        else []
+    )
     template_vars = dict(
-        devices=devices_list, page=page, pages=pages,
-        total=total, search=search, show_stale=show_stale,
-        stale_days=stale_days, subnet_map=accessible_subnet_map,
-        sort=sort, direction=direction, per_page=per_page_param,
-        type_filter=type_filter, subnet_filter=subnet_filter,
+        devices=devices_list,
+        page=page,
+        pages=pages,
+        total=total,
+        search=search,
+        show_stale=show_stale,
+        stale_days=stale_days,
+        subnet_map=accessible_subnet_map,
+        sort=sort,
+        direction=direction,
+        per_page=per_page_param,
+        type_filter=type_filter,
+        subnet_filter=subnet_filter,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        bundled_icons=bundled_icons, custom_icons=custom_icons,
-        view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,
+        bundled_icons=bundled_icons,
+        custom_icons=custom_icons,
+        view_mode="v4",
+        subnet6_map=extensions.SUBNET6_MAP,
     )
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: same class of bug fixed in leases.py/reservations.py
@@ -192,7 +222,7 @@ def _devices_v6():
     """
     if not extensions.SUBNET6_MAP:
         flash("No IPv6 subnets are configured.", "error")
-        return redirect(url_for('devices.devices'))
+        return redirect(url_for("devices.devices"))
 
     search = __auth.sanitize_search(request.args.get("search", "").strip())
     subnet_filter = request.args.get("subnet", "all")
@@ -207,11 +237,9 @@ def _devices_v6():
             # it's restricted to all_subnets users.
             info = extensions.SUBNET6_MAP.get(subnet_id)
             paired = info.get("paired_subnet4_id") if info else None
-            allowed = (
-                info is not None and (
-                    current_user.all_subnets or
-                    (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-                )
+            allowed = info is not None and (
+                current_user.all_subnets
+                or (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
             )
             if not allowed:
                 subnet_filter = "all"
@@ -229,13 +257,17 @@ def _devices_v6():
         flash("Could not load IPv6 devices. Check server logs for details.", "error")
 
     template_vars = dict(
-        devices6=devices_list, total=len(devices_list),
-        subnet_filter=subnet_filter, search=search,
-        subnet6_map=extensions.SUBNET6_MAP, view_mode="v6",
+        devices6=devices_list,
+        total=len(devices_list),
+        subnet_filter=subnet_filter,
+        search=search,
+        subnet6_map=extensions.SUBNET6_MAP,
+        view_mode="v6",
     )
     if request.headers.get("HX-Request") == "true":
         return render_template("_devices6_results.html", **template_vars), 200
     return render_template("devices.html", **template_vars)
+
 
 @bp.route("/devices/edit/<int:device_id>", methods=["POST"])
 @login_required
@@ -260,54 +292,83 @@ def edit_device(device_id):
             with db.cursor() as cur:
                 cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                 existing = cur.fetchone()
-                if existing and existing.get("last_subnet_id") is not None \
-                        and not current_user.can_access_subnet(existing["last_subnet_id"]):
+                if (
+                    existing
+                    and existing.get("last_subnet_id") is not None
+                    and not current_user.can_access_subnet(existing["last_subnet_id"])
+                ):
                     return jsonify({"ok": False, "error": "You do not have access to that subnet."}), 403
                 if type_override == "auto" or type_override == "":
                     # Clear manual override (but keep icon override if set)
                     if icon_override:
-                        cur.execute("""UPDATE devices SET device_name=%s, owner=%s, notes=%s,
+                        cur.execute(
+                            """UPDATE devices SET device_name=%s, owner=%s, notes=%s,
                                        manufacturer_override=NULL, device_type_override=NULL,
                                        device_icon_override=%s
                                        WHERE id=%s""",
-                                    (device_name or None, owner or None, notes or None,
-                                     icon_override, device_id))
+                            (device_name or None, owner or None, notes or None, icon_override, device_id),
+                        )
                     else:
-                        cur.execute("""UPDATE devices SET device_name=%s, owner=%s, notes=%s,
+                        cur.execute(
+                            """UPDATE devices SET device_name=%s, owner=%s, notes=%s,
                                        manufacturer_override=NULL, device_type_override=NULL, device_icon_override=NULL
                                        WHERE id=%s""",
-                                    (device_name or None, owner or None, notes or None, device_id))
+                            (device_name or None, owner or None, notes or None, device_id),
+                        )
                     override_info = None
                 elif type_override in __fp.DEVICE_TYPE_DISPLAY:
                     type_label, _ = __fp.DEVICE_TYPE_DISPLAY[type_override]
                     type_icon_map = {
-                        "apple": ("Apple", "🍎"), "android": ("Android", "📱"),
-                        "windows": ("Windows", "🖥️"), "linux": ("Linux", "🐧"),
-                        "amazon": ("Amazon", "📦"), "iot": ("IoT Device", "🔌"),
-                        "tv": ("Smart TV", "📺"), "printer": ("Printer", "🖨️"),
-                        "nas": ("NAS", "🗄️"), "network": ("Network Device", "🌐"),
-                        "gaming": ("Gaming", "🎮"), "raspberry_pi": ("Raspberry Pi", "🥧"),
-                        "google": ("Google", "🔍"), "pc": ("PC", "🖥️"),
+                        "apple": ("Apple", "🍎"),
+                        "android": ("Android", "📱"),
+                        "windows": ("Windows", "🖥️"),
+                        "linux": ("Linux", "🐧"),
+                        "amazon": ("Amazon", "📦"),
+                        "iot": ("IoT Device", "🔌"),
+                        "tv": ("Smart TV", "📺"),
+                        "printer": ("Printer", "🖨️"),
+                        "nas": ("NAS", "🗄️"),
+                        "network": ("Network Device", "🌐"),
+                        "gaming": ("Gaming", "🎮"),
+                        "raspberry_pi": ("Raspberry Pi", "🥧"),
+                        "google": ("Google", "🔍"),
+                        "pc": ("PC", "🖥️"),
                         "unknown": ("Unknown", "❓"),
                     }
                     mfr_override, icon_default = type_icon_map.get(type_override, (type_label, "❓"))
                     # Use explicit icon override if set, otherwise default for type
                     final_icon = icon_override if icon_override else icon_default
-                    cur.execute("""UPDATE devices SET device_name=%s, owner=%s, notes=%s,
+                    cur.execute(
+                        """UPDATE devices SET device_name=%s, owner=%s, notes=%s,
                                    manufacturer_override=%s, device_type_override=%s, device_icon_override=%s
                                    WHERE id=%s""",
-                                (device_name or None, owner or None, notes or None,
-                                 mfr_override, type_override, final_icon, device_id))
-                    override_info = {"manufacturer": mfr_override, "device_type": type_override, "device_icon": final_icon}
+                        (
+                            device_name or None,
+                            owner or None,
+                            notes or None,
+                            mfr_override,
+                            type_override,
+                            final_icon,
+                            device_id,
+                        ),
+                    )
+                    override_info = {
+                        "manufacturer": mfr_override,
+                        "device_type": type_override,
+                        "device_icon": final_icon,
+                    }
                 else:
-                    cur.execute("UPDATE devices SET device_name=%s, owner=%s, notes=%s WHERE id=%s",
-                                (device_name or None, owner or None, notes or None, device_id))
+                    cur.execute(
+                        "UPDATE devices SET device_name=%s, owner=%s, notes=%s WHERE id=%s",
+                        (device_name or None, owner or None, notes or None, device_id),
+                    )
                     override_info = None
             db.commit()
         return jsonify({"ok": True, "override": override_info})
     except Exception as e:
         logger.error(f"Error editing device {device_id}: {e}")
         return jsonify({"ok": False, "error": "Could not save device. Check server logs for details."})
+
 
 @bp.route("/devices/delete/<int:device_id>", methods=["POST"])
 @login_required
@@ -318,10 +379,13 @@ def delete_device(device_id):
             with db.cursor() as cur:
                 cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                 existing = cur.fetchone()
-                if existing and existing.get("last_subnet_id") is not None \
-                        and not current_user.can_access_subnet(existing["last_subnet_id"]):
+                if (
+                    existing
+                    and existing.get("last_subnet_id") is not None
+                    and not current_user.can_access_subnet(existing["last_subnet_id"])
+                ):
                     flash("You do not have access to that subnet.", "error")
-                    return redirect(url_for('devices.devices'))
+                    return redirect(url_for("devices.devices"))
                 cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
             db.commit()
         flash("Device removed from inventory.", "success")
@@ -329,7 +393,7 @@ def delete_device(device_id):
     except Exception as e:
         logger.error(f"Error deleting device {device_id}: {e}")
         flash("Error deleting device. Check server logs for details.", "error")
-    return redirect(url_for('devices.devices'))
+    return redirect(url_for("devices.devices"))
 
 
 @bp.route("/devices/bulk-delete", methods=["POST"])
@@ -350,7 +414,7 @@ def bulk_delete_devices():
     device_ids = request.form.getlist("device_ids[]")
     if not device_ids:
         flash("No devices selected.", "error")
-        return redirect(url_for('devices.devices'))
+        return redirect(url_for("devices.devices"))
 
     deleted = 0
     errors = 0
@@ -362,8 +426,11 @@ def bulk_delete_devices():
                         device_id = int(device_id)
                         cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                         existing = cur.fetchone()
-                        if existing and existing.get("last_subnet_id") is not None \
-                                and not current_user.can_access_subnet(existing["last_subnet_id"]):
+                        if (
+                            existing
+                            and existing.get("last_subnet_id") is not None
+                            and not current_user.can_access_subnet(existing["last_subnet_id"])
+                        ):
                             errors += 1
                             continue
                         cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
@@ -377,12 +444,15 @@ def bulk_delete_devices():
     except Exception as e:
         logger.error(f"Bulk delete devices error: {e}")
         flash("Bulk delete failed. Check server logs for details.", "error")
-        return redirect(url_for('devices.devices'))
+        return redirect(url_for("devices.devices"))
 
-    flash(f"Removed {deleted} device(s) from inventory." + (f" {errors} failed or skipped." if errors else ""),
-          "success" if errors == 0 else "warning")
+    flash(
+        f"Removed {deleted} device(s) from inventory." + (f" {errors} failed or skipped." if errors else ""),
+        "success" if errors == 0 else "warning",
+    )
     __user.audit("BULK_DELETE_DEVICES", "devices", f"Deleted={deleted} Errors={errors} by {current_user.username}")
-    return redirect(url_for('devices.devices'))
+    return redirect(url_for("devices.devices"))
+
 
 @bp.route("/devices/settings", methods=["POST"])
 @login_required
@@ -391,10 +461,11 @@ def save_device_settings():
     stale_days = request.form.get("stale_days", "30").strip()
     if not stale_days.isdigit() or not (1 <= int(stale_days) <= 365):
         flash("Stale threshold must be between 1 and 365 days.", "error")
-        return redirect(url_for('devices.devices'))
+        return redirect(url_for("devices.devices"))
     __user.set_global_setting("stale_device_days", stale_days)
     flash(f"Stale device threshold set to {stale_days} days.", "success")
-    return redirect(url_for('devices.devices'))
+    return redirect(url_for("devices.devices"))
+
 
 # ─────────────────────────────────────────
 # Reservations — bulk actions + stale detection

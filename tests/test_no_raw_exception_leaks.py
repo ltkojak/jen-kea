@@ -87,42 +87,60 @@ def _raise_only_outside_load_user(original_fn, exc):
                 return original_fn(*args, **kwargs)
             frame = frame.f_back
         raise exc
+
     return _inner
 
 
 # Each entry: (file, line-content substring, reason it's intentionally safe)
 ALLOWED_RAW_EXCEPTION_LINES = [
-    ("jen/routes/database.py", 'flash(f"Cannot read file: {err}"',
-     "err here is parse_import_file()'s own deliberate, sanitized message "
-     "about the user's own uploaded file (e.g. a JSON decode failure) — "
-     "not a raw exception object, and it's about their own file's content, "
-     "not Jen's internal state."),
-    ("jen/routes/plugins.py", 'flash(f"Could not fetch registry: {err}"',
-     "err comes from services/plugins.py's fetch_registry(), which was "
-     "fixed at the source to log the raw exception and return only a "
-     "generic string — this is safe by construction, not by omission here."),
-    ("jen/routes/reservations.py", "flash(str(e)",
-     "e is a ValueError raised by kea6.normalize_duid() specifically to "
-     "be surfaced as a form-validation message about the user's own "
-     "submitted DUID — see that function's own docstring."),
-    ("jen/routes/settings.py", 'flash(f"Test error: {str(e)}"',
-     "wraps sending a test message to a webhook/ntfy/Discord channel the "
-     "admin themselves configured — the failure reason is the actionable "
-     "diagnostic they need, not an internal leak."),
-    ("jen/routes/settings.py", "Could not connect to {target_server",
-     "SSH connection failure to a server the admin themselves configured "
-     "in Settings — same category as above."),
-    ("jen/routes/settings.py", '"message": str(e)}',
-     "SSH config-test failure against an admin-configured server."),
-    ("jen/routes/settings.py", 'errors.append(f"❌ {name}: {str(e)}")',
-     "SSH config-write failure against an admin-configured server."),
-    ("jen/routes/settings.py", '"error": str(e)}',
-     "SSH binary-check failure against an admin-configured server."),
-    ("jen/routes/settings.py", '"output": str(e)}',
-     "SSH binary-install failure against an admin-configured server."),
-    ("jen/routes/settings.py", 'flash(f"Telegram error {error_code}',
-     "Telegram's own API error response (code + description) — the "
-     "admin's own integration's diagnostic text, not a Python exception."),
+    (
+        "jen/routes/database.py",
+        'flash(f"Cannot read file: {err}"',
+        "err here is parse_import_file()'s own deliberate, sanitized message "
+        "about the user's own uploaded file (e.g. a JSON decode failure) — "
+        "not a raw exception object, and it's about their own file's content, "
+        "not Jen's internal state.",
+    ),
+    (
+        "jen/routes/plugins.py",
+        'flash(f"Could not fetch registry: {err}"',
+        "err comes from services/plugins.py's fetch_registry(), which was "
+        "fixed at the source to log the raw exception and return only a "
+        "generic string — this is safe by construction, not by omission here.",
+    ),
+    (
+        "jen/routes/reservations.py",
+        "flash(str(e)",
+        "e is a ValueError raised by kea6.normalize_duid() specifically to "
+        "be surfaced as a form-validation message about the user's own "
+        "submitted DUID — see that function's own docstring.",
+    ),
+    (
+        "jen/routes/settings.py",
+        'flash(f"Test error: {str(e)}"',
+        "wraps sending a test message to a webhook/ntfy/Discord channel the "
+        "admin themselves configured — the failure reason is the actionable "
+        "diagnostic they need, not an internal leak.",
+    ),
+    (
+        "jen/routes/settings.py",
+        "Could not connect to {target_server",
+        "SSH connection failure to a server the admin themselves configured in Settings — same category as above.",
+    ),
+    ("jen/routes/settings.py", '"message": str(e)}', "SSH config-test failure against an admin-configured server."),
+    (
+        "jen/routes/settings.py",
+        'errors.append(f"❌ {name}: {str(e)}")',
+        "SSH config-write failure against an admin-configured server.",
+    ),
+    ("jen/routes/settings.py", '"error": str(e)}', "SSH binary-check failure against an admin-configured server."),
+    ("jen/routes/settings.py", '"output": str(e)}', "SSH binary-install failure against an admin-configured server."),
+    (
+        "jen/routes/settings.py",
+        'flash(f"Telegram error {error_code}',
+        "Telegram's own API error response (code + description) — the "
+        "admin's own integration's diagnostic text, not a Python exception.",
+    ),
 ]
 
 # These aren't exception leaks at all — an integer error/success COUNT
@@ -143,7 +161,7 @@ def _scan_route_file_for_raw_exception_leaks(path):
     text = pathlib.Path(path).read_text()
     leak_pattern = re.compile(
         r'(flash\(f".*\{e\}|flash\(f".*\{str\(e\)\}|flash\(f".*\{err\}|'
-        r'flash\(str\(e\)|jsonify\(.*str\(e\)|api_error\(str\(e\)|'
+        r"flash\(str\(e\)|jsonify\(.*str\(e\)|api_error\(str\(e\)|"
         # v5.3.3 addition — catches the exact shape that slipped past
         # every other pattern here: jen/__init__.py's global
         # @app.errorhandler(Exception) interpolated the raw exception
@@ -167,9 +185,9 @@ def _scan_route_file_for_raw_exception_leaks(path):
 
 
 class TestNoUnexplainedRawExceptionLeaksInRoutes:
-
     def test_every_route_file_is_clean_or_explicitly_allowlisted(self):
         import glob
+
         # v5.3.3 — widened from "jen/routes/*.py" to the whole jen/
         # package (recursively). The exact bug that prompted this
         # widening lived in jen/__init__.py, outside jen/routes/
@@ -223,6 +241,7 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
 
     def test_users_list_error_is_generic(self, logged_in_client):
         import jen.models.db as db_module
+
         original = db_module.jen_db
         exc = RuntimeError("Access denied for user 'jen'@'10.10.11.251' — internal detail xyz456")
         with patch("jen.routes.users.__db.jen_db", side_effect=_raise_only_outside_load_user(original, exc)):
@@ -250,6 +269,7 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
 
     def test_devices_list_error_is_generic(self, logged_in_client):
         import jen.models.db as db_module
+
         original = db_module.jen_db
         exc = RuntimeError("Deadlock found marker_ghi345")
         with patch("jen.routes.devices.__db.jen_db", side_effect=_raise_only_outside_load_user(original, exc)):
@@ -261,13 +281,14 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
     def test_rest_api_v1_leases_error_is_generic_json(self, logged_in_client, db):
         import hashlib
         import secrets
+
         raw_key = "jen_" + secrets.token_hex(20)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access, active) "
                 "VALUES (%s, %s, %s, 1, NULL, 1)",
-                ("leak-test-key", key_hash, raw_key[:8])
+                ("leak-test-key", key_hash, raw_key[:8]),
             )
         db.commit()
 

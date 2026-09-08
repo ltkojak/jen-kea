@@ -24,10 +24,16 @@ class TestSubnetRestrictionOnMutations:
 
     def test_add_reservation_rejected_for_out_of_scope_subnet(self, client, db, mock_kea):
         _restricted_client(client, db, allowed_subnets=[999])
-        r = client.post("/reservations/add", data={
-            "subnet_id": "1", "mac": "aa:bb:cc:dd:ee:02",
-            "ip": "10.99.0.20", "hostname": "sneaky",
-        }, follow_redirects=True)
+        r = client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "aa:bb:cc:dd:ee:02",
+                "ip": "10.99.0.20",
+                "hostname": "sneaky",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
         assert b"do not have access" in r.data.lower()
 
@@ -46,9 +52,13 @@ class TestSubnetRestrictionOnMutations:
         assert r.status_code == 200
         assert b"do not have access" in r.data.lower()
 
-        r = client.post(f"/reservations/edit/{host_id}", data={
-            "hostname": "hijacked",
-        }, follow_redirects=True)
+        r = client.post(
+            f"/reservations/edit/{host_id}",
+            data={
+                "hostname": "hijacked",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
         assert b"do not have access" in r.data.lower()
 
@@ -93,10 +103,16 @@ class TestSubnetRestrictionOnMutations:
     def test_add_reservation_allowed_within_scope(self, client, db, mock_kea):
         """Sanity check: the fix doesn't block legitimate in-scope access."""
         _restricted_client(client, db, allowed_subnets=[1])
-        r = client.post("/reservations/add", data={
-            "subnet_id": "1", "mac": "aa:bb:cc:dd:ee:06",
-            "ip": "10.99.0.60", "hostname": "allowed-host",
-        }, follow_redirects=True)
+        r = client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "aa:bb:cc:dd:ee:06",
+                "ip": "10.99.0.60",
+                "hostname": "allowed-host",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
         assert b"do not have access" not in r.data.lower()
 
@@ -106,6 +122,7 @@ class TestMfaLockout:
 
     def test_locked_out_after_max_attempts(self, client, db):
         from jen.services.auth import MFA_MAX_ATTEMPTS, is_mfa_locked_out
+
         user_id = 1
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS):
@@ -122,6 +139,7 @@ class TestMfaLockout:
 
     def test_not_locked_out_below_threshold(self, db):
         from jen.services.auth import MFA_MAX_ATTEMPTS, is_mfa_locked_out
+
         user_id = 2
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS - 1):
@@ -140,10 +158,12 @@ class TestMfaLockout:
         to a fixed number of minutes — never the rl_lockout_minutes=0
         'permanent until admin clears' mode."""
         from jen.services.auth import MFA_LOCKOUT_MINUTES
+
         assert MFA_LOCKOUT_MINUTES > 0
 
     def test_mfa_verify_route_blocks_when_locked_out(self, client, db):
         from jen.services.auth import MFA_MAX_ATTEMPTS
+
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS):
                 cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (%s)", (1,))
@@ -163,6 +183,7 @@ class TestMfaLockout:
 
     def test_clear_mfa_attempts(self, db):
         from jen.services.auth import MFA_MAX_ATTEMPTS, clear_mfa_attempts, is_mfa_locked_out
+
         user_id = 3
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS):
@@ -181,41 +202,49 @@ class TestRemoteCommandValidators:
 
     def test_valid_ssh_target_accepts_hostname_and_ip(self):
         from jen.services.auth import valid_ssh_target
+
         assert valid_ssh_target("theelders.local") is True
         assert valid_ssh_target("10.10.11.250") is True
 
     def test_valid_ssh_target_rejects_flag_injection(self):
         from jen.services.auth import valid_ssh_target
+
         assert valid_ssh_target("-oProxyCommand=touch /tmp/pwned") is False
         assert valid_ssh_target("") is False
 
     def test_valid_unix_username_accepts_normal_names(self):
         from jen.services.auth import valid_unix_username
+
         assert valid_unix_username("kea") is True
         assert valid_unix_username("service_1") is True
 
     def test_valid_unix_username_rejects_shell_metacharacters(self):
         from jen.services.auth import valid_unix_username
+
         assert valid_unix_username("kea; rm -rf /") is False
         assert valid_unix_username("$(whoami)") is False
 
     def test_valid_remote_path_accepts_normal_absolute_paths(self):
         from jen.services.auth import valid_remote_path
+
         assert valid_remote_path("/var/log/kea/kea-ddns.log") is True
 
     def test_valid_remote_path_rejects_command_injection(self):
         from jen.services.auth import valid_remote_path
+
         assert valid_remote_path("/tmp/x; rm -rf /") is False
         assert valid_remote_path("/tmp/x`whoami`") is False
         assert valid_remote_path("relative/path") is False
 
     def test_valid_dns_lookup_host_accepts_hostname_and_ip(self):
         from jen.services.auth import valid_dns_lookup_host
+
         assert valid_dns_lookup_host("tardis.local") is True
         assert valid_dns_lookup_host("10.10.11.5") is True
 
     def test_valid_dns_lookup_host_rejects_command_injection(self):
         from jen.services.auth import valid_dns_lookup_host
+
         assert valid_dns_lookup_host("x; rm -rf /") is False
         assert valid_dns_lookup_host("$(id)") is False
         assert valid_dns_lookup_host("host `whoami`") is False
@@ -233,8 +262,7 @@ class TestDatabaseSuperadminOnly:
     ones a restricted admin is scoped to."""
 
     def _admin_client(self, client, db):
-        return _restricted_client(client, db, allowed_subnets=None,
-                                   role="admin", username="plainadmin1")
+        return _restricted_client(client, db, allowed_subnets=None, role="admin", username="plainadmin1")
 
     def test_database_page_forbidden_for_plain_admin(self, client, db):
         self._admin_client(client, db)
@@ -272,8 +300,7 @@ class TestPluginsSuperadminOnly:
     Python with the full privileges of the Jen process."""
 
     def _admin_client(self, client, db):
-        return _restricted_client(client, db, allowed_subnets=None,
-                                   role="admin", username="plainadmin2")
+        return _restricted_client(client, db, allowed_subnets=None, role="admin", username="plainadmin2")
 
     def test_plugins_page_forbidden_for_plain_admin(self, client, db):
         self._admin_client(client, db)
@@ -307,6 +334,7 @@ class TestPluginZipSlip:
     def _make_zip(self, entries):
         import io
         import zipfile
+
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             for name, content in entries.items():
@@ -316,6 +344,7 @@ class TestPluginZipSlip:
 
     def test_rejects_parent_directory_traversal(self, tmp_path):
         from jen.services.plugins import _safe_extract
+
         zf = self._make_zip({"../../../tmp/evil_pwned.txt": "pwned"})
         dest = tmp_path / "plugin_dest"
         with pytest.raises(ValueError, match="Unsafe path"):
@@ -324,6 +353,7 @@ class TestPluginZipSlip:
 
     def test_rejects_absolute_path(self, tmp_path):
         from jen.services.plugins import _safe_extract
+
         zf = self._make_zip({"/etc/evil_pwned.txt": "pwned"})
         dest = tmp_path / "plugin_dest"
         with pytest.raises(ValueError, match="Unsafe path"):
@@ -331,11 +361,14 @@ class TestPluginZipSlip:
 
     def test_allows_normal_plugin_contents(self, tmp_path):
         from jen.services.plugins import _safe_extract
-        zf = self._make_zip({
-            "manifest.json": '{"id": "test-plugin"}',
-            "plugin.py": "def register(app): pass",
-            "templates/index.html": "<h1>hi</h1>",
-        })
+
+        zf = self._make_zip(
+            {
+                "manifest.json": '{"id": "test-plugin"}',
+                "plugin.py": "def register(app): pass",
+                "templates/index.html": "<h1>hi</h1>",
+            }
+        )
         dest = tmp_path / "plugin_dest"
         _safe_extract(zf, str(dest))
         assert (dest / "manifest.json").is_file()
@@ -344,9 +377,8 @@ class TestPluginZipSlip:
 
     def test_install_plugin_rejects_https_only_violation(self, monkeypatch):
         from jen.services import plugins as plugins_svc
-        ok, msg = plugins_svc.install_plugin("evil-plugin", {
-            "download_url": "http://not-secure.example.com/evil"
-        })
+
+        ok, msg = plugins_svc.install_plugin("evil-plugin", {"download_url": "http://not-secure.example.com/evil"})
         assert ok is False
         assert "https" in msg.lower()
 
@@ -358,23 +390,19 @@ class TestMfaAdminResetSuperadminOnly:
 
     def test_forbidden_for_plain_admin(self, client, db):
         target_client, target_id = _restricted_client(
-            client, db, allowed_subnets=None, role="admin", username="plainadmin3")
+            client, db, allowed_subnets=None, role="admin", username="plainadmin3"
+        )
         # Log back in as a *different* plain admin trying to reset target's MFA
-        attacker_client, _ = _restricted_client(
-            client, db, allowed_subnets=None, role="admin", username="plainadmin4")
+        attacker_client, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="plainadmin4")
         r = attacker_client.post(f"/mfa/admin-reset/{target_id}", follow_redirects=True)
         assert r.status_code == 200
         assert b"superadmin access required" in r.data.lower()
 
     def test_allowed_for_superadmin(self, client, db):
-        _, target_id = _restricted_client(
-            client, db, allowed_subnets=None, role="admin", username="plainadmin5")
+        _, target_id = _restricted_client(client, db, allowed_subnets=None, role="admin", username="plainadmin5")
         # Switch the same client's session over to the superadmin account.
         with client.session_transaction() as sess:
-            sess["_user_cache"] = {
-                "id": 1, "username": "admin",
-                "role": "superadmin", "session_timeout": None
-            }
+            sess["_user_cache"] = {"id": 1, "username": "admin", "role": "superadmin", "session_timeout": None}
             sess["_user_id"] = "1"
             sess["_fresh"] = True
         r = client.post(f"/mfa/admin-reset/{target_id}", follow_redirects=True)
@@ -447,11 +475,13 @@ class TestPluginIdValidationOnAllLifecycleFunctions:
 
     def test_valid_plugin_id_accepts_normal_ids(self):
         from jen.services.plugins import valid_plugin_id
+
         assert valid_plugin_id("network-discovery") is True
         assert valid_plugin_id("ipam-lite") is True
 
     def test_valid_plugin_id_rejects_traversal(self):
         from jen.services.plugins import valid_plugin_id
+
         assert valid_plugin_id("../../etc/cron.d/evil") is False
         assert valid_plugin_id("..") is False
         assert valid_plugin_id("") is False
@@ -460,6 +490,7 @@ class TestPluginIdValidationOnAllLifecycleFunctions:
     def test_uninstall_plugin_rejects_invalid_id_without_touching_disk(self, tmp_path, monkeypatch):
         from jen import extensions
         from jen.services import plugins as plugins_svc
+
         monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path))
         ok, msg = plugins_svc.uninstall_plugin("../../evil")
         assert ok is False
@@ -468,6 +499,7 @@ class TestPluginIdValidationOnAllLifecycleFunctions:
     def test_enable_disable_plugin_noop_on_invalid_id(self, tmp_path, monkeypatch):
         from jen import extensions
         from jen.services import plugins as plugins_svc
+
         monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path))
         # Should not raise, and should not create anything outside tmp_path.
         plugins_svc.enable_plugin("../escape")
@@ -490,6 +522,7 @@ class TestConstantTimeLegacyPasswordCompare:
         import hashlib
 
         from jen.models.user import verify_password
+
         legacy_hash = hashlib.sha256(b"correcthorse").hexdigest()
         assert verify_password(legacy_hash, "correcthorse") is True
 
@@ -497,16 +530,20 @@ class TestConstantTimeLegacyPasswordCompare:
         import hashlib
 
         from jen.models.user import verify_password
+
         legacy_hash = hashlib.sha256(b"correcthorse").hexdigest()
         assert verify_password(legacy_hash, "wrongpassword") is False
 
     def test_uses_constant_time_compare(self, monkeypatch):
         import jen.models.user as user_mod
+
         calls = []
         real_compare = user_mod.secrets.compare_digest
+
         def _spy(a, b):
             calls.append((a, b))
             return real_compare(a, b)
+
         monkeypatch.setattr(user_mod.secrets, "compare_digest", _spy)
         user_mod.verify_password("deadbeef" * 8, "whatever")
         assert len(calls) == 1

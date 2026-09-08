@@ -64,53 +64,59 @@ def detect_subnet_drift(jen_map: dict, live_map: dict, family: str = "v4") -> li
         info = jen_map[sid]
         name = info.get("name") or f"Subnet {sid}"
         cidr = info.get("cidr") or "unknown CIDR"
-        issues.append({
-            "type": "missing_in_kea",
-            "family": family,
-            "subnet_id": sid,
-            "jen_name": name,
-            "jen_cidr": info.get("cidr", ""),
-            "message": (
-                f"Jen has subnet {sid} ('{name}', {cidr}) configured, but "
-                f"Kea's live config has no subnet with that id."
-            ),
-        })
+        issues.append(
+            {
+                "type": "missing_in_kea",
+                "family": family,
+                "subnet_id": sid,
+                "jen_name": name,
+                "jen_cidr": info.get("cidr", ""),
+                "message": (
+                    f"Jen has subnet {sid} ('{name}', {cidr}) configured, but "
+                    f"Kea's live config has no subnet with that id."
+                ),
+            }
+        )
 
     for sid in sorted(live_ids - jen_ids):
         cidr = live_map[sid]
-        issues.append({
-            "type": "unknown_to_jen",
-            "family": family,
-            "subnet_id": sid,
-            "kea_cidr": cidr,
-            "message": (
-                f"Kea's live config has subnet {sid} ({cidr}) that Jen has "
-                f"no name for — it will show as 'Subnet {sid}' anywhere Jen "
-                f"displays it, and can't be selected by name in filters, "
-                f"alerts, or API key scoping."
-            ),
-        })
+        issues.append(
+            {
+                "type": "unknown_to_jen",
+                "family": family,
+                "subnet_id": sid,
+                "kea_cidr": cidr,
+                "message": (
+                    f"Kea's live config has subnet {sid} ({cidr}) that Jen has "
+                    f"no name for — it will show as 'Subnet {sid}' anywhere Jen "
+                    f"displays it, and can't be selected by name in filters, "
+                    f"alerts, or API key scoping."
+                ),
+            }
+        )
 
     for sid in sorted(jen_ids & live_ids):
         jen_cidr = jen_map[sid].get("cidr", "")
         kea_cidr = live_map[sid]
         if jen_cidr and kea_cidr and jen_cidr != kea_cidr:
             name = jen_map[sid].get("name") or f"Subnet {sid}"
-            issues.append({
-                "type": "cidr_mismatch",
-                "family": family,
-                "subnet_id": sid,
-                "jen_name": name,
-                "jen_cidr": jen_cidr,
-                "kea_cidr": kea_cidr,
-                "message": (
-                    f"Jen calls subnet {sid} '{name}' ({jen_cidr}), but "
-                    f"Kea's live config says subnet {sid} is actually "
-                    f"{kea_cidr}. Any subnet filter, alert, or API key "
-                    f"scoped to '{name}' is now silently affecting the "
-                    f"wrong network."
-                ),
-            })
+            issues.append(
+                {
+                    "type": "cidr_mismatch",
+                    "family": family,
+                    "subnet_id": sid,
+                    "jen_name": name,
+                    "jen_cidr": jen_cidr,
+                    "kea_cidr": kea_cidr,
+                    "message": (
+                        f"Jen calls subnet {sid} '{name}' ({jen_cidr}), but "
+                        f"Kea's live config says subnet {sid} is actually "
+                        f"{kea_cidr}. Any subnet filter, alert, or API key "
+                        f"scoped to '{name}' is now silently affecting the "
+                        f"wrong network."
+                    ),
+                }
+            )
 
     return issues
 
@@ -127,10 +133,12 @@ def fetch_live_subnet_map(family: str = "v4", server: dict = None) -> dict:
     try:
         if family == "v6":
             from jen.services.kea6 import kea6_command
+
             result = kea6_command("config-get", server=server)
             dhcp_key, subnet_key = "Dhcp6", "subnet6"
         else:
             from jen.services.kea import kea_command
+
             result = kea_command("config-get", server=server)
             dhcp_key, subnet_key = "Dhcp4", "subnet4"
         if result.get("result") != 0:
@@ -166,6 +174,7 @@ def check_config_drift() -> list:
 
     try:
         from jen.services.kea6 import is_ipv6_enabled
+
         if is_ipv6_enabled() and extensions.SUBNET6_MAP:
             live_v6 = fetch_live_subnet_map("v6")
             if live_v6:

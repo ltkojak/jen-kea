@@ -1,5 +1,3 @@
-
-
 class TestSaveSubnetNoteAccessControl:
     """v4.4.9: save_subnet_note() had no can_access_subnet() check at
     all, unlike every sibling route on this page (edit_subnet,
@@ -8,25 +6,22 @@ class TestSaveSubnetNoteAccessControl:
 
     def test_rejected_for_out_of_scope_subnet(self, client, db):
         from tests.conftest import restricted_client as _restricted_client
-        _restricted_client(client, db, allowed_subnets=[999], role="admin",
-                            username="subnetnote_restricted1")
-        r = client.post("/subnets/save-note",
-                        data={"subnet_id": "1", "notes": "should not be allowed"})
+
+        _restricted_client(client, db, allowed_subnets=[999], role="admin", username="subnetnote_restricted1")
+        r = client.post("/subnets/save-note", data={"subnet_id": "1", "notes": "should not be allowed"})
         assert r.status_code == 403
         data = r.get_json()
         assert data["ok"] is False
         assert "access" in data["error"].lower()
 
     def test_allowed_within_scope(self, logged_in_client):
-        r = logged_in_client.post("/subnets/save-note",
-                                  data={"subnet_id": "1", "notes": "allowed note"})
+        r = logged_in_client.post("/subnets/save-note", data={"subnet_id": "1", "notes": "allowed note"})
         assert r.status_code == 200
         data = r.get_json()
         assert data["ok"] is True
 
     def test_rejects_non_integer_subnet_id(self, logged_in_client):
-        r = logged_in_client.post("/subnets/save-note",
-                                  data={"subnet_id": "not-a-number", "notes": "x"})
+        r = logged_in_client.post("/subnets/save-note", data={"subnet_id": "not-a-number", "notes": "x"})
         assert r.status_code == 200
         data = r.get_json()
         assert data["ok"] is False
@@ -43,56 +38,70 @@ class TestParseAndValidateSubnetEditForm:
         class FakeForm(dict):
             def get(self, k, default=""):
                 return dict.get(self, k, default)
+
         return FakeForm(kwargs)
 
     def test_valid_full_form_returns_no_error(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
-        fields, error = _parse_and_validate_subnet_edit_form(self._form(
-            pool="10.0.0.10-10.0.0.200", valid_lifetime="3600",
-            renew_timer="1800", rebind_timer="3150",
-            routers="10.0.0.1", dns_servers="9.9.9.9, 1.1.1.1",
-        ))
+
+        fields, error = _parse_and_validate_subnet_edit_form(
+            self._form(
+                pool="10.0.0.10-10.0.0.200",
+                valid_lifetime="3600",
+                renew_timer="1800",
+                rebind_timer="3150",
+                routers="10.0.0.1",
+                dns_servers="9.9.9.9, 1.1.1.1",
+            )
+        )
         assert error is None
         assert fields["new_pool"] == "10.0.0.10-10.0.0.200"
 
     def test_empty_form_is_valid_no_op(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form())
         assert error is None
         assert not any(fields.values())
 
     def test_bad_pool_format_rejected(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form(pool="not-a-pool"))
         assert fields is None
         assert "Invalid pool format" in error
 
     def test_bad_router_ip_rejected(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form(routers="999.999.999.999"))
         assert fields is None
         assert "Invalid router IP" in error
 
     def test_bad_dns_ip_rejected(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form(dns_servers="not.an.ip"))
         assert fields is None
         assert "Invalid DNS server IP" in error
 
     def test_negative_timer_rejected(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form(valid_lifetime="-5"))
         assert fields is None
         assert "Valid Lifetime must be a positive integer" in error
 
     def test_zero_timer_rejected(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form(renew_timer="0"))
         assert fields is None
         assert "Renew Timer must be a positive integer" in error
 
     def test_non_numeric_timer_rejected(self):
         from jen.routes.subnets import _parse_and_validate_subnet_edit_form
+
         fields, error = _parse_and_validate_subnet_edit_form(self._form(rebind_timer="abc"))
         assert fields is None
         assert "Rebind Timer must be a positive integer" in error
@@ -108,10 +117,11 @@ class TestBuildSubnetPatchScript:
         behavior at all — this is a literal string-equality check
         against a copy of the pre-refactor inline script."""
         from jen.routes.subnets import _build_subnet_patch_script
-        subnet_id, kea_conf = 5, '/etc/kea/kea-dhcp4.conf'
-        new_pool, extra_pools = '10.0.0.10-10.0.0.200', ['10.0.1.10-10.0.1.200']
-        new_lifetime, new_renew, new_rebind = '3600', '1800', '3150'
-        new_routers, new_dns = '10.0.0.1', '9.9.9.9,1.1.1.1'
+
+        subnet_id, kea_conf = 5, "/etc/kea/kea-dhcp4.conf"
+        new_pool, extra_pools = "10.0.0.10-10.0.0.200", ["10.0.1.10-10.0.1.200"]
+        new_lifetime, new_renew, new_rebind = "3600", "1800", "3150"
+        new_routers, new_dns = "10.0.0.1", "9.9.9.9,1.1.1.1"
 
         original = f"""
 import json, sys, shutil, subprocess, os, tempfile
@@ -200,19 +210,37 @@ if result.returncode != 0 or 'ERROR' in combined:
 os.replace(tmp, path)
 print('ok')
 """
-        actual = _build_subnet_patch_script(subnet_id, kea_conf, new_pool, extra_pools,
-                                              new_lifetime, new_renew, new_rebind,
-                                              new_routers, new_dns, dry_run=False)
+        actual = _build_subnet_patch_script(
+            subnet_id,
+            kea_conf,
+            new_pool,
+            extra_pools,
+            new_lifetime,
+            new_renew,
+            new_rebind,
+            new_routers,
+            new_dns,
+            dry_run=False,
+        )
         assert actual == original
 
     def test_both_modes_produce_valid_python(self):
         import ast
 
         from jen.routes.subnets import _build_subnet_patch_script
+
         for dry_run in (False, True):
             script = _build_subnet_patch_script(
-                5, '/etc/kea/kea-dhcp4.conf', '10.0.0.10-10.0.0.200', [],
-                '3600', '', '', '', '', dry_run=dry_run,
+                5,
+                "/etc/kea/kea-dhcp4.conf",
+                "10.0.0.10-10.0.0.200",
+                [],
+                "3600",
+                "",
+                "",
+                "",
+                "",
+                dry_run=dry_run,
             )
             ast.parse(script)  # raises on invalid syntax
 
@@ -225,6 +253,7 @@ print('ok')
         import hashlib
         import os
         import subprocess
+
         conf_path = tmp_path / "kea-dhcp4.conf"
         conf_path.write_text('{"Dhcp4": {"subnet4": [{"id": 5, "pools": [{"pool": "10.0.0.10-10.0.0.100"}]}]}}')
         original_hash = hashlib.md5(conf_path.read_bytes()).hexdigest()
@@ -235,9 +264,18 @@ print('ok')
         os.chmod(fake_bin / "kea-dhcp4", 0o755)
 
         from jen.routes.subnets import _build_subnet_patch_script
+
         script = _build_subnet_patch_script(
-            5, str(conf_path), "10.0.0.10-10.0.0.200", [],
-            "7200", "", "", "", "", dry_run=True,
+            5,
+            str(conf_path),
+            "10.0.0.10-10.0.0.200",
+            [],
+            "7200",
+            "",
+            "",
+            "",
+            "",
+            dry_run=True,
         )
         script_path = tmp_path / "script.py"
         script_path.write_text(script)
@@ -246,8 +284,9 @@ print('ok')
         result = subprocess.run(["python3", str(script_path)], capture_output=True, text=True, env=env)
 
         assert result.stdout.strip() == "preview-ok"
-        assert hashlib.md5(conf_path.read_bytes()).hexdigest() == original_hash, \
+        assert hashlib.md5(conf_path.read_bytes()).hexdigest() == original_hash, (
             "dry_run=True must never modify the live config file"
+        )
         # No leftover temp/backup files either
         assert list(tmp_path.glob("*.jen_tmp")) == []
         assert list(tmp_path.glob("*.jen_backup")) == []
@@ -256,6 +295,7 @@ print('ok')
         import hashlib
         import os
         import subprocess
+
         conf_path = tmp_path / "kea-dhcp4.conf"
         conf_path.write_text('{"Dhcp4": {"subnet4": [{"id": 5, "pools": [{"pool": "10.0.0.10-10.0.0.100"}]}]}}')
         original_hash = hashlib.md5(conf_path.read_bytes()).hexdigest()
@@ -266,9 +306,18 @@ print('ok')
         os.chmod(fake_bin / "kea-dhcp4", 0o755)
 
         from jen.routes.subnets import _build_subnet_patch_script
+
         script = _build_subnet_patch_script(
-            5, str(conf_path), "10.0.0.10-10.0.0.200", [],
-            "", "", "", "", "", dry_run=True,
+            5,
+            str(conf_path),
+            "10.0.0.10-10.0.0.200",
+            [],
+            "",
+            "",
+            "",
+            "",
+            "",
+            dry_run=True,
         )
         script_path = tmp_path / "script.py"
         script_path.write_text(script)
@@ -283,14 +332,29 @@ print('ok')
 class TestComputeSubnetEditDiff:
     def test_only_submitted_fields_appear_in_diff(self, monkeypatch):
         from jen.routes import subnets as subnets_mod
-        monkeypatch.setattr(subnets_mod, "_get_subnet_kea_data", lambda sid: {
-            "pool_str": "10.0.0.10-10.0.0.100", "pools": ["10.0.0.10-10.0.0.100"],
-            "valid_lifetime": 3600, "renew_timer": 1800, "rebind_timer": 3150,
-            "routers": "10.0.0.1", "dns_servers": "9.9.9.9",
-        })
-        fields = {"new_pool": "10.0.0.10-10.0.0.250", "extra_pools": [],
-                   "new_lifetime": "", "new_renew": "", "new_rebind": "",
-                   "new_routers": "", "new_dns": ""}
+
+        monkeypatch.setattr(
+            subnets_mod,
+            "_get_subnet_kea_data",
+            lambda sid: {
+                "pool_str": "10.0.0.10-10.0.0.100",
+                "pools": ["10.0.0.10-10.0.0.100"],
+                "valid_lifetime": 3600,
+                "renew_timer": 1800,
+                "rebind_timer": 3150,
+                "routers": "10.0.0.1",
+                "dns_servers": "9.9.9.9",
+            },
+        )
+        fields = {
+            "new_pool": "10.0.0.10-10.0.0.250",
+            "extra_pools": [],
+            "new_lifetime": "",
+            "new_renew": "",
+            "new_rebind": "",
+            "new_routers": "",
+            "new_dns": "",
+        }
         diff = subnets_mod._compute_subnet_edit_diff(1, fields)
         assert len(diff) == 1
         assert diff[0]["field"] == "Primary Pool"
@@ -299,12 +363,29 @@ class TestComputeSubnetEditDiff:
 
     def test_unset_current_value_shows_placeholder(self, monkeypatch):
         from jen.routes import subnets as subnets_mod
-        monkeypatch.setattr(subnets_mod, "_get_subnet_kea_data", lambda sid: {
-            "pool_str": "", "pools": [], "valid_lifetime": "", "renew_timer": "",
-            "rebind_timer": "", "routers": "", "dns_servers": "",
-        })
-        fields = {"new_pool": "", "extra_pools": [], "new_lifetime": "",
-                   "new_renew": "", "new_rebind": "", "new_routers": "10.0.0.1", "new_dns": ""}
+
+        monkeypatch.setattr(
+            subnets_mod,
+            "_get_subnet_kea_data",
+            lambda sid: {
+                "pool_str": "",
+                "pools": [],
+                "valid_lifetime": "",
+                "renew_timer": "",
+                "rebind_timer": "",
+                "routers": "",
+                "dns_servers": "",
+            },
+        )
+        fields = {
+            "new_pool": "",
+            "extra_pools": [],
+            "new_lifetime": "",
+            "new_renew": "",
+            "new_rebind": "",
+            "new_routers": "10.0.0.1",
+            "new_dns": "",
+        }
         diff = subnets_mod._compute_subnet_edit_diff(1, fields)
         assert diff[0]["field"] == "Routers"
         assert diff[0]["old"] == "(unset)"
@@ -327,8 +408,8 @@ class TestEditSubnetPreviewRoute:
 
     def test_out_of_scope_subnet_returns_403(self, client, db):
         from tests.conftest import restricted_client as _restricted_client
-        _restricted_client(client, db, allowed_subnets=[999], role="admin",
-                            username="preview_restricted1")
+
+        _restricted_client(client, db, allowed_subnets=[999], role="admin", username="preview_restricted1")
         r = client.post("/subnets/edit/1/preview")
         assert r.status_code == 403
 
@@ -339,10 +420,10 @@ class TestEditSubnetPreviewRoute:
 
     def test_empty_form_reports_no_changes_without_touching_ssh(self, logged_in_client, monkeypatch):
         from jen import extensions
+
         # If this reaches SSH code at all despite being a no-op, this
         # would raise instead of the route handling it gracefully.
-        monkeypatch.setattr(extensions, "KEA_SERVERS",
-                             [{"id": 1, "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
         r = logged_in_client.post("/subnets/edit/1/preview", data={})
         assert r.status_code == 200
         data = r.get_json()
@@ -351,9 +432,9 @@ class TestEditSubnetPreviewRoute:
 
     def test_server_with_no_ssh_host_is_skipped(self, logged_in_client, monkeypatch):
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "ssh_host": ""}])
-        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data",
-                             lambda sid: {"pool_str": "", "pools": []})
+        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
         r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
         assert r.status_code == 200
         data = r.get_json()
@@ -364,10 +445,11 @@ class TestEditSubnetPreviewRoute:
         from unittest.mock import MagicMock, patch
 
         from jen import extensions
-        monkeypatch.setattr(extensions, "KEA_SERVERS",
-                             [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
-        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data",
-                             lambda sid: {"pool_str": "", "pools": []})
+
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
 
         fake_ssh = MagicMock()
         fake_stdout = MagicMock()
@@ -377,8 +459,7 @@ class TestEditSubnetPreviewRoute:
         fake_ssh.exec_command.return_value = (MagicMock(), fake_stdout, fake_stderr)
 
         with patch("paramiko.SSHClient", return_value=fake_ssh):
-            r = logged_in_client.post("/subnets/edit/1/preview",
-                                      data={"pool": "10.0.0.10-10.0.0.200"})
+            r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
         assert r.status_code == 200
         data = r.get_json()
         assert data["all_passed"] is True
@@ -389,10 +470,11 @@ class TestEditSubnetPreviewRoute:
         from unittest.mock import MagicMock, patch
 
         from jen import extensions
-        monkeypatch.setattr(extensions, "KEA_SERVERS",
-                             [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
-        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data",
-                             lambda sid: {"pool_str": "", "pools": []})
+
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
 
         fake_ssh = MagicMock()
         fake_stdout = MagicMock()
@@ -402,8 +484,7 @@ class TestEditSubnetPreviewRoute:
         fake_ssh.exec_command.return_value = (MagicMock(), fake_stdout, fake_stderr)
 
         with patch("paramiko.SSHClient", return_value=fake_ssh):
-            r = logged_in_client.post("/subnets/edit/1/preview",
-                                      data={"pool": "10.0.0.10-10.0.0.200"})
+            r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
         assert r.status_code == 200
         data = r.get_json()
         assert data["all_passed"] is False
@@ -416,9 +497,9 @@ class TestEditSubnetPreviewRoute:
         subnet after a preview call, the same signal edit_subnet_post
         itself writes to on a real apply."""
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SERVERS", [])  # no servers to even contact
-        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data",
-                             lambda sid: {"pool_str": "", "pools": []})
+        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
 
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) as cnt FROM audit_log WHERE action='EDIT_SUBNET'")
@@ -430,7 +511,9 @@ class TestEditSubnetPreviewRoute:
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) as cnt FROM audit_log WHERE action='EDIT_SUBNET'")
             after = cur.fetchone()["cnt"]
-        assert after == before, "preview must never write an EDIT_SUBNET audit entry — that's edit_subnet_post's job alone"
+        assert after == before, (
+            "preview must never write an EDIT_SUBNET audit entry — that's edit_subnet_post's job alone"
+        )
 
 
 class TestGetSubnetKeaData:
@@ -480,9 +563,7 @@ class TestGetSubnetKeaData:
             "result": 0,
             "arguments": {
                 "Dhcp4": {
-                    "subnet4": [
-                        {"id": 2, "pools": [{"pool": "10.10.30.10 - 10.10.30.200"}], "option-data": []}
-                    ],
+                    "subnet4": [{"id": 2, "pools": [{"pool": "10.10.30.10 - 10.10.30.200"}], "option-data": []}],
                 }
             },
         }

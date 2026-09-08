@@ -20,79 +20,106 @@ logger = logging.getLogger(__name__)
 # ── Lazy service imports (avoids circular imports) ───────────────────────────
 def __get_jen_db():
     from jen.models.db import get_jen_db
+
     return get_jen_db()
+
 
 def __jen_db_ctx():
     from jen.models.db import jen_db
+
     return jen_db()
+
 
 def __kea_db_ctx():
     from jen.models.db import kea_db
+
     return kea_db()
+
 
 def __get_kea_db():
     from jen.models.db import get_kea_db
+
     return get_kea_db()
+
 
 def __kea_command(*a, **kw):
     from jen.services.kea import kea_command
+
     return kea_command(*a, **kw)
+
 
 def __kea_is_up(*a, **kw):
     from jen.services.kea import kea_is_up
+
     return kea_is_up(*a, **kw)
+
 
 def __get_active_kea_server():
     from jen.services.kea import get_active_kea_server
+
     return get_active_kea_server()
+
 
 def __format_mac(*a, **kw):
     from jen.services.kea import format_mac
+
     return format_mac(*a, **kw)
+
 
 def __classify_device(*a, **kw):
     from jen.services.fingerprint import classify_device
+
     return classify_device(*a, **kw)
+
 
 def __get_device_info_map(*a, **kw):
     from jen.services.fingerprint import get_device_info_map
+
     return get_device_info_map(*a, **kw)
+
 
 def __get_global_setting(key, default=None):
     from jen.models.user import get_global_setting
+
     return get_global_setting(key, default)
+
 
 def __get_jen_db_direct():
     from jen.models.db import get_jen_db
+
     return get_jen_db()
+
 
 def __check_config_drift():
     from jen.services.config_drift import check_config_drift
+
     return check_config_drift()
+
 
 def __drift_issue_key(*a, **kw):
     from jen.services.config_drift import issue_key
+
     return issue_key(*a, **kw)
 
 
 DEFAULT_TEMPLATES = {
-    "kea_down":           "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
-    "kea_up":             "✅ <b>Kea Alert</b>\n{server_name} is back <b>UP</b>.",
-    "ha_failover":        "⚡ <b>HA Failover</b>\n{server_name} state changed: <b>{old_state}</b> → <b>{new_state}</b>",
-    "new_lease":          "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
-    "new_device":         "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "kea_down": "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
+    "kea_up": "✅ <b>Kea Alert</b>\n{server_name} is back <b>UP</b>.",
+    "ha_failover": "⚡ <b>HA Failover</b>\n{server_name} state changed: <b>{old_state}</b> → <b>{new_state}</b>",
+    "new_lease": "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "new_device": "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "new_reserved_lease": "📌 <b>Reserved Device Online</b>\nA reserved device's IP just went active\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
-    "utilization_high":   "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
-    "utilization_ok":     "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
-    "pool_exhaustion":    "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
-    "reservation_added":  "📌 <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
-    "reservation_deleted":"🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
-    "stale_reservation":  "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
+    "utilization_high": "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
+    "utilization_ok": "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
+    "pool_exhaustion": "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
+    "reservation_added": "📌 <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "reservation_deleted": "🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
+    "stale_reservation": "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
     "kea_config_changed": "⚙️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
     "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
     "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
-    "daily_summary":      "📊 <b>Daily Summary</b>\n{summary}",
-    "rogue_device":       "🚨 <b>{subject}</b>\n{body}",
+    "daily_summary": "📊 <b>Daily Summary</b>\n{summary}",
+    "rogue_device": "🚨 <b>{subject}</b>\n{body}",
 }
 
 # ── v5.0 Phase 4 — IPv6 alerting: what generalizes, what doesn't ────────────
@@ -149,24 +176,25 @@ DEFAULT_TEMPLATES = {
 #   network-discovery-plugin note).
 
 ALERT_TYPE_LABELS = {
-    "kea_down":           "Kea goes down",
-    "kea_up":             "Kea comes back up",
-    "ha_failover":        "HA failover / state change",
-    "new_lease":          "New dynamic lease",
-    "new_device":         "Unknown device detected",
+    "kea_down": "Kea goes down",
+    "kea_up": "Kea comes back up",
+    "ha_failover": "HA failover / state change",
+    "new_lease": "New dynamic lease",
+    "new_device": "Unknown device detected",
     "new_reserved_lease": "Reserved device's lease goes active",
-    "utilization_high":   "Subnet utilization high",
-    "utilization_ok":     "Subnet utilization recovery",
-    "pool_exhaustion":    "Pool exhaustion warning",
-    "reservation_added":  "Reservation added",
-    "reservation_deleted":"Reservation deleted",
-    "stale_reservation":  "Stale reservation detected",
+    "utilization_high": "Subnet utilization high",
+    "utilization_ok": "Subnet utilization recovery",
+    "pool_exhaustion": "Pool exhaustion warning",
+    "reservation_added": "Reservation added",
+    "reservation_deleted": "Reservation deleted",
+    "stale_reservation": "Stale reservation detected",
     "kea_config_changed": "Kea config changed via Jen",
     "config_drift_detected": "Config drift detected (Jen's subnet map disagrees with Kea)",
     "config_drift_resolved": "Config drift resolved",
-    "daily_summary":      "Daily summary",
-    "rogue_device":       "Rogue device detected (Network Discovery plugin)",
+    "daily_summary": "Daily summary",
+    "rogue_device": "Rogue device detected (Network Discovery plugin)",
 }
+
 
 def get_alert_template(alert_type):
     try:
@@ -179,6 +207,7 @@ def get_alert_template(alert_type):
     except Exception:
         pass
     return DEFAULT_TEMPLATES.get(alert_type, "")
+
 
 def render_template_str(template, **kwargs):
     """Render alert template with variable substitution.
@@ -202,6 +231,7 @@ def render_template_str(template, **kwargs):
         return template.format(**kwargs)
     except Exception:
         return template
+
 
 def safe_text(value):
     """HTML-escape a single untrusted, device-supplied value before it
@@ -228,6 +258,7 @@ def safe_text(value):
     "&lt;b&gt;" text instead of fixing anything."""
     return html.escape(str(value), quote=False)
 
+
 def get_active_channels():
     """Get all enabled alert channels."""
     try:
@@ -240,6 +271,7 @@ def get_active_channels():
         logger.error(f"get_active_channels error: {e}")
         return []
 
+
 def channel_handles_alert(channel, alert_type):
     """Check if channel is configured to send this alert type."""
     try:
@@ -248,10 +280,12 @@ def channel_handles_alert(channel, alert_type):
             return False
         if isinstance(alert_types, str):
             import json
+
             alert_types = json.loads(alert_types)
         return alert_type in alert_types
     except Exception:
         return False
+
 
 def channel_allows_subnet(channel, subnet_id):
     """v5.1.16 — per-channel subnet scoping for notifications. NULL/empty
@@ -274,12 +308,14 @@ def channel_allows_subnet(channel, subnet_id):
         return True
     try:
         import json
+
         allowed = json.loads(scope) if isinstance(scope, str) else scope
         if not allowed:
             return True
         return int(subnet_id) in [int(s) for s in allowed]
     except Exception:
         return True
+
 
 def get_channel_config(channel):
     """Parse channel config JSON."""
@@ -289,10 +325,12 @@ def get_channel_config(channel):
             return {}
         if isinstance(cfg_data, str):
             import json
+
             return json.loads(cfg_data)
         return cfg_data
     except Exception:
         return {}
+
 
 def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
     """Send alert to all enabled channels that handle this alert type.
@@ -336,15 +374,25 @@ def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
             try:
                 with __jen_db_ctx() as db:
                     with db.cursor() as cur:
-                        cur.execute("""
+                        cur.execute(
+                            """
                             INSERT INTO alert_log (channel_type, alert_type, message, status, error)
                             VALUES (%s, %s, %s, %s, %s)
-                        """, (ctype, alert_type, message[:500], "ok" if ok else "failed", error[:500] if error else None))
+                        """,
+                            (
+                                ctype,
+                                alert_type,
+                                message[:500],
+                                "ok" if ok else "failed",
+                                error[:500] if error else None,
+                            ),
+                        )
                     db.commit()
             except Exception as e:
                 logger.error(f"Alert log error: {e}")
         results.append((ctype, ok, error))
     return results
+
 
 def _send_telegram_channel(message, config):
     """v5.1.16 — Telegram's Bot API rate-limits at roughly one message
@@ -368,7 +416,7 @@ def _send_telegram_channel(message, config):
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
             json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
-            timeout=10
+            timeout=10,
         )
         data = resp.json()
         if data.get("ok"):
@@ -381,10 +429,12 @@ def _send_telegram_channel(message, config):
         break
     raise Exception(f"Telegram error: {last_data.get('description', 'Unknown')}")
 
+
 def _send_email_channel(message, alert_type, config):
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
+
     host = config.get("smtp_host", "")
     port = int(config.get("smtp_port", 587))
     user = config.get("smtp_user", "")
@@ -394,15 +444,15 @@ def _send_email_channel(message, alert_type, config):
     if not host or not to_addr:
         return False
     # Strip HTML tags for email subject, keep for body
-    subject_text = re.sub(r'<[^>]+>', '', message.split('\n')[0])
+    subject_text = re.sub(r"<[^>]+>", "", message.split("\n")[0])
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Jen Alert: {subject_text}"
     msg["From"] = from_addr
     msg["To"] = to_addr
     # Plain text version
-    plain = re.sub(r'<[^>]+>', '', message).replace('\n', '\n')
+    plain = re.sub(r"<[^>]+>", "", message).replace("\n", "\n")
     # HTML version
-    html_body = message.replace('\n', '<br>').replace('<b>', '<strong>').replace('</b>', '</strong>')
+    html_body = message.replace("\n", "<br>").replace("<b>", "<strong>").replace("</b>", "</strong>")
     html = f"<html><body style='font-family:sans-serif;'>{html_body}</body></html>"
     msg.attach(MIMEText(plain, "plain"))
     msg.attach(MIMEText(html, "html"))
@@ -415,14 +465,16 @@ def _send_email_channel(message, alert_type, config):
         server.sendmail(from_addr, to_addr, msg.as_string())
     return True
 
+
 def _send_slack_channel(message, config):
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
         return False
     import html
+
     # Convert HTML bold to Slack bold
-    slack_text = message.replace('<b>', '*').replace('</b>', '*')
-    slack_text = re.sub(r'<[^>]+>', '', slack_text)
+    slack_text = message.replace("<b>", "*").replace("</b>", "*")
+    slack_text = re.sub(r"<[^>]+>", "", slack_text)
     # v5.1.15 — message now arrives with untrusted values (hostname, etc.)
     # HTML-escaped (e.g. "AT&amp;T-Hotspot"), so a Slack message would
     # otherwise show the raw escaped entity instead of the actual
@@ -433,15 +485,17 @@ def _send_slack_channel(message, config):
         raise Exception(f"Slack error {resp.status_code}: {resp.text}")
     return True
 
+
 def _send_webhook_channel(message, alert_type, config):
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
         return False
     import html
+
     # v5.1.15 — same unescape-for-plain-text reasoning as Slack/ntfy/
     # Discord. The "html" field below intentionally keeps the raw
     # escaped `message` as-is, for consumers that do want valid HTML.
-    plain = html.unescape(re.sub(r'<[^>]+>', '', message).replace('\n', '\n'))
+    plain = html.unescape(re.sub(r"<[^>]+>", "", message).replace("\n", "\n"))
     payload_type = config.get("payload_type", "json")
     headers = {"Content-Type": "application/json"}
     custom_header_name = config.get("header_name", "")
@@ -457,9 +511,11 @@ def _send_webhook_channel(message, alert_type, config):
         raise Exception(f"Webhook error {resp.status_code}: {resp.text[:200]}")
     return True
 
+
 def _send_ntfy_channel(message, config):
     """Send alert via ntfy.sh or self-hosted ntfy."""
     import html
+
     url = config.get("url", "https://ntfy.sh").rstrip("/")
     topic = config.get("topic", "")
     token = config.get("token", "")
@@ -469,12 +525,11 @@ def _send_ntfy_channel(message, config):
     # v5.1.15 — unescape for the same reason as Slack/webhook: ntfy
     # doesn't parse HTML, so the raw escaped entity would otherwise show
     # up literally instead of the actual character.
-    plain = html.unescape(re.sub(r'<[^>]+>', '', message).strip())
+    plain = html.unescape(re.sub(r"<[^>]+>", "", message).strip())
     headers = {"Title": "Jen Alert", "Priority": priority, "Tags": "bell"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    resp = requests.post(f"{url}/{topic}", data=plain.encode("utf-8"),
-                         headers=headers, timeout=10)
+    resp = requests.post(f"{url}/{topic}", data=plain.encode("utf-8"), headers=headers, timeout=10)
     if resp.status_code not in (200, 201, 204):
         raise Exception(f"ntfy error: HTTP {resp.status_code} — {resp.text[:200]}")
     return True
@@ -486,35 +541,37 @@ def _send_pushover_channel(message, config):
     api_token = config.get("api_token", "")
     if not user_key or not api_token:
         raise Exception("Pushover user key and API token are required")
-    plain = re.sub(r'<[^>]+>', '', message).strip()
+    plain = re.sub(r"<[^>]+>", "", message).strip()
     # Use first line as title, rest as message
-    lines = plain.split('\n', 1)
+    lines = plain.split("\n", 1)
     title = lines[0].strip() if lines else "Jen Alert"
-    body  = lines[1].strip() if len(lines) > 1 else plain
+    body = lines[1].strip() if len(lines) > 1 else plain
     resp = requests.post(
         "https://api.pushover.net/1/messages.json",
         data={
-            "token":   api_token,
-            "user":    user_key,
-            "title":   title,
+            "token": api_token,
+            "user": user_key,
+            "title": title,
             "message": body,
-            "html":    1,
+            "html": 1,
         },
-        timeout=10
+        timeout=10,
     )
     data = resp.json()
     if data.get("status") != 1:
         raise Exception(f"Pushover error: {data.get('errors', resp.text)}")
     return True
 
+
 def _send_discord_channel(message, config):
     """Send alert via Discord webhook."""
     import html
+
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
         raise Exception("Discord webhook URL not configured")
     text = message.replace("<b>", "**").replace("</b>", "**")
-    text = re.sub(r'<[^>]+>', '', text).strip()
+    text = re.sub(r"<[^>]+>", "", text).strip()
     # v5.1.15 — same unescape-for-plain-text reasoning as Slack/ntfy.
     text = html.unescape(text)
     resp = requests.post(webhook_url, json={"content": text, "username": "Jen DHCP"}, timeout=10)
@@ -522,13 +579,13 @@ def _send_discord_channel(message, config):
         raise Exception(f"Discord error: HTTP {resp.status_code} — {resp.text[:200]}")
     return True
 
+
 def take_lease_snapshot():
     """Record current lease counts for all subnets."""
     try:
         retention_days = int(__get_global_setting("history_retention_days", "90"))
         with __kea_db_ctx() as kdb:
             with __jen_db_ctx() as jdb:
-
                 # Get pool sizes from Kea config
                 pool_sizes = {}
                 result = __kea_command("config-get", server=__get_active_kea_server())
@@ -543,28 +600,39 @@ def take_lease_snapshot():
                 with kdb.cursor() as kcur:
                     with jdb.cursor() as jcur:
                         for subnet_id, _info in extensions.SUBNET_MAP.items():
-                            kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                            kcur.execute(
+                                "SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,)
+                            )
                             active = kcur.fetchone()["cnt"]
-                            kcur.execute("""
+                            kcur.execute(
+                                """
                                 SELECT COUNT(*) as cnt FROM lease4 l
                                 LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
                                     AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
                                 WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
-                            """, (subnet_id,))
+                            """,
+                                (subnet_id,),
+                            )
                             dynamic = kcur.fetchone()["cnt"]
                             kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                             reserved = kcur.fetchone()["cnt"]
                             pool_size = pool_sizes.get(subnet_id, 0)
-                            jcur.execute("""
+                            jcur.execute(
+                                """
                                 INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
                                 VALUES (%s, %s, %s, %s, %s)
-                            """, (subnet_id, active, dynamic, reserved, pool_size))
+                            """,
+                                (subnet_id, active, dynamic, reserved, pool_size),
+                            )
 
                         # Purge old history
-                        jcur.execute(f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)")
+                        jcur.execute(
+                            f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
+                        )
                 jdb.commit()
     except Exception as e:
         logger.error(f"Snapshot error: {e}")
+
 
 def send_daily_summary():
     """Build and send daily summary."""
@@ -581,7 +649,9 @@ def send_daily_summary():
                         lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
                     # New devices in last 24h
                     with jdb.cursor() as jcur:
-                        jcur.execute("SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+                        jcur.execute(
+                            "SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)"
+                        )
                         new_devices = jcur.fetchone()["cnt"]
                         jcur.execute("SELECT COUNT(*) as cnt FROM devices")
                         total_devices = jcur.fetchone()["cnt"]
@@ -592,12 +662,15 @@ def send_daily_summary():
     except Exception as e:
         logger.error(f"Daily summary error: {e}")
 
+
 def ip_to_int(ip):
     parts = ip.strip().split(".")
-    return sum(int(x) << (8*(3-i)) for i, x in enumerate(parts))
+    return sum(int(x) << (8 * (3 - i)) for i, x in enumerate(parts))
+
 
 def check_alerts():
     import time
+
     last_kea_status = {}
     last_seen_leases = set()
     known_macs = set()
@@ -656,8 +729,9 @@ def check_alerts():
                             new_state = ha.get("arguments", {}).get("state", "")
                             old_state = last_ha_states.get(srv_id)
                             if old_state is not None and new_state != old_state:
-                                send_alert("ha_failover", server_name=srv["name"],
-                                          old_state=old_state, new_state=new_state)
+                                send_alert(
+                                    "ha_failover", server_name=srv["name"], old_state=old_state, new_state=new_state
+                                )
                             last_ha_states[srv_id] = new_state
                 time.sleep(5)
 
@@ -716,8 +790,11 @@ def check_alerts():
                                 with jdb.cursor() as jcur:
                                     for row in all_leases:
                                         mac = __format_mac(row["hwaddr"])
-                                        manufacturer, device_type, device_icon = __classify_device(mac, row["hostname"] or "")
-                                        jcur.execute("""
+                                        manufacturer, device_type, device_icon = __classify_device(
+                                            mac, row["hostname"] or ""
+                                        )
+                                        jcur.execute(
+                                            """
                                             INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen,
                                                                  manufacturer, device_type, device_icon)
                                             VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s)
@@ -727,10 +804,23 @@ def check_alerts():
                                                 manufacturer=IF(manufacturer_override IS NULL, %s, manufacturer),
                                                 device_type=IF(manufacturer_override IS NULL, %s, device_type),
                                                 device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
-                                        """, (mac, row["ip"], row["hostname"], row["subnet_id"],
-                                              manufacturer, device_type, device_icon,
-                                              row["ip"], row["hostname"], row["subnet_id"],
-                                              manufacturer, device_type, device_icon))
+                                        """,
+                                            (
+                                                mac,
+                                                row["ip"],
+                                                row["hostname"],
+                                                row["subnet_id"],
+                                                manufacturer,
+                                                device_type,
+                                                device_icon,
+                                                row["ip"],
+                                                row["hostname"],
+                                                row["subnet_id"],
+                                                manufacturer,
+                                                device_type,
+                                                device_icon,
+                                            ),
+                                        )
                                 jdb.commit()
                         except Exception as e:
                             logger.error(f"Device tracking error: {e}")
@@ -747,7 +837,9 @@ def check_alerts():
                         # reserved MAC is by definition already known.
                         for row in new_lease_rows:
                             mac = __format_mac(row["hwaddr"])
-                            subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", f"Subnet {row['subnet_id']}")
+                            subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get(
+                                "name", f"Subnet {row['subnet_id']}"
+                            )
                             hostname = safe_text(row["hostname"]) if row["hostname"] else "(none)"
                             if row["is_reserved"]:
                                 # v5.1.16 — recurrence is now an admin
@@ -763,18 +855,36 @@ def check_alerts():
                                 # that being an accidental bug.
                                 if reserved_lease_mode == "once" and mac in known_macs:
                                     continue
-                                send_alert("new_reserved_lease", ip=row["ip"], mac=mac,
-                                          hostname=hostname, subnet=subnet_name, subnet_id=row["subnet_id"])
+                                send_alert(
+                                    "new_reserved_lease",
+                                    ip=row["ip"],
+                                    mac=mac,
+                                    hostname=hostname,
+                                    subnet=subnet_name,
+                                    subnet_id=row["subnet_id"],
+                                )
                                 known_macs.add(mac)
                                 continue
-                            send_alert("new_lease", ip=row["ip"], mac=mac,
-                                      hostname=hostname, subnet=subnet_name, subnet_id=row["subnet_id"])
+                            send_alert(
+                                "new_lease",
+                                ip=row["ip"],
+                                mac=mac,
+                                hostname=hostname,
+                                subnet=subnet_name,
+                                subnet_id=row["subnet_id"],
+                            )
                             # New device alert — only fire for MACs truly never
                             # seen before (not in devices table, not just unknown
                             # since last restart)
                             if mac not in known_macs:
-                                send_alert("new_device", ip=row["ip"], mac=mac,
-                                          hostname=hostname, subnet=subnet_name, subnet_id=row["subnet_id"])
+                                send_alert(
+                                    "new_device",
+                                    ip=row["ip"],
+                                    mac=mac,
+                                    hostname=hostname,
+                                    subnet=subnet_name,
+                                    subnet_id=row["subnet_id"],
+                                )
                                 known_macs.add(mac)  # prevent repeat alerts this session
 
                         # Update known MACs from all current leases
@@ -805,18 +915,35 @@ def check_alerts():
                                         free = pool_size - active
                                         subnet_key = f"{sid}"
                                         if pct >= threshold and subnet_key not in alerted_high_subnets:
-                                            send_alert("utilization_high", subnet=info["name"],
-                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size,
-                                                      subnet_id=sid)
+                                            send_alert(
+                                                "utilization_high",
+                                                subnet=info["name"],
+                                                cidr=info["cidr"],
+                                                pct=pct,
+                                                used=active,
+                                                total=pool_size,
+                                                subnet_id=sid,
+                                            )
                                             alerted_high_subnets.add(subnet_key)
                                         elif pct < threshold and subnet_key in alerted_high_subnets:
-                                            send_alert("utilization_ok", subnet=info["name"],
-                                                      cidr=info["cidr"], pct=pct, used=active, total=pool_size,
-                                                      subnet_id=sid)
+                                            send_alert(
+                                                "utilization_ok",
+                                                subnet=info["name"],
+                                                cidr=info["cidr"],
+                                                pct=pct,
+                                                used=active,
+                                                total=pool_size,
+                                                subnet_id=sid,
+                                            )
                                             alerted_high_subnets.discard(subnet_key)
                                         if free <= exhaustion_threshold:
-                                            send_alert("pool_exhaustion", subnet=info["name"],
-                                                      cidr=info["cidr"], free=free, subnet_id=sid)
+                                            send_alert(
+                                                "pool_exhaustion",
+                                                subnet=info["name"],
+                                                cidr=info["cidr"],
+                                                free=free,
+                                                subnet_id=sid,
+                                            )
 
                         # ── Stale reservation alerts ──
                         try:
@@ -833,13 +960,21 @@ def check_alerts():
                                 if row["mac"] not in alerted_stale_macs:
                                     # Check if has reservation
                                     mac_hex = row["mac"].replace(":", "")
-                                    cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id "
-                                               "FROM hosts WHERE HEX(dhcp_identifier)=%s", (mac_hex,))
+                                    cur.execute(
+                                        "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id "
+                                        "FROM hosts WHERE HEX(dhcp_identifier)=%s",
+                                        (mac_hex,),
+                                    )
                                     res = cur.fetchone()
                                     if res:
-                                        send_alert("stale_reservation", ip=res["ip"] or "",
-                                                  mac=row["mac"], hostname=safe_text(res["hostname"]) if res["hostname"] else "",
-                                                  days=row["days"], subnet_id=res["dhcp4_subnet_id"])
+                                        send_alert(
+                                            "stale_reservation",
+                                            ip=res["ip"] or "",
+                                            mac=row["mac"],
+                                            hostname=safe_text(res["hostname"]) if res["hostname"] else "",
+                                            days=row["days"],
+                                            subnet_id=res["dhcp4_subnet_id"],
+                                        )
                                         alerted_stale_macs.add(row["mac"])
                         except Exception as e:
                             logger.error(f"Stale reservation check error: {e}")
@@ -859,21 +994,20 @@ def check_alerts():
                         # pairing pattern as kea_down/kea_up and
                         # utilization_high/utilization_ok.
                         try:
-                            current_issues = {
-                                __drift_issue_key(i): i for i in __check_config_drift()
-                            }
+                            current_issues = {__drift_issue_key(i): i for i in __check_config_drift()}
                             for key, issue in current_issues.items():
                                 if key not in last_drift_issues:
-                                    send_alert("config_drift_detected", message=issue["message"],
-                                              subnet_id=issue["subnet_id"])
+                                    send_alert(
+                                        "config_drift_detected", message=issue["message"], subnet_id=issue["subnet_id"]
+                                    )
                             for key, issue in last_drift_issues.items():
                                 if key not in current_issues:
-                                    send_alert("config_drift_resolved", message=issue["message"],
-                                              subnet_id=issue["subnet_id"])
+                                    send_alert(
+                                        "config_drift_resolved", message=issue["message"], subnet_id=issue["subnet_id"]
+                                    )
                             last_drift_issues = current_issues
                         except Exception as e:
                             logger.error(f"Config drift check error: {e}")
-
 
             # ── Lease history snapshot ──
             snapshot_interval = int(__get_global_setting("snapshot_interval_minutes", "30")) * 60
@@ -884,6 +1018,7 @@ def check_alerts():
 
             # ── Daily summary ──
             import datetime as dt
+
             summary_time = __get_global_setting("daily_summary_time", "07:00")
             now = dt.datetime.now(dt.timezone.utc)
             today = now.date()
@@ -906,6 +1041,7 @@ def check_alerts():
             # loop's own sleeps) can't spin the thread at high CPU with
             # no delay at all.
             time.sleep(5)
+
 
 # ─────────────────────────────────────────
 # Favicon

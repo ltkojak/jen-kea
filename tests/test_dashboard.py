@@ -25,11 +25,21 @@ class TestDashboard:
     def test_dashboard_no_kea_graceful(self, logged_in_client, monkeypatch):
         """Dashboard loads even when Kea is unreachable."""
         from jen.services import kea as kea_svc
+
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
-        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [{
-            "server": {"id": 1, "name": "Test Kea"}, "up": False,
-            "ha_state": None, "version": "", "role": "primary"
-        }])
+        monkeypatch.setattr(
+            kea_svc,
+            "get_all_server_status",
+            lambda: [
+                {
+                    "server": {"id": 1, "name": "Test Kea"},
+                    "up": False,
+                    "ha_state": None,
+                    "version": "",
+                    "role": "primary",
+                }
+            ],
+        )
         r = logged_in_client.get("/")
         assert r.status_code == 200
 
@@ -77,9 +87,9 @@ class TestApiStats:
     def test_api_stats_kea_down_graceful(self, logged_in_client, monkeypatch):
         """api/stats returns valid JSON even when Kea is down."""
         from jen.services import kea as kea_svc
+
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
-        monkeypatch.setattr(kea_svc, "kea_command",
-                           lambda *a, **kw: {"result": 1, "text": "error"})
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "error"})
         monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
         r = logged_in_client.get("/api/stats")
         assert r.status_code == 200
@@ -105,6 +115,7 @@ class TestPrometheusMetrics:
         import configparser
 
         from jen import extensions
+
         test_cfg = configparser.ConfigParser()
         test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
         if "server" not in test_cfg:
@@ -133,9 +144,15 @@ class TestPrometheusMetrics:
         # Every metric line must be preceded by its own HELP and TYPE
         # comment — this is the actual Prometheus exposition format
         # contract, not just "doesn't crash".
-        for family in ["jen_subnet_active_leases", "jen_subnet_reserved_hosts",
-                        "jen_subnet_pool_size", "jen_subnet_utilization_ratio",
-                        "jen_alerts_sent_total", "jen_kea_up", "jen_server_up"]:
+        for family in [
+            "jen_subnet_active_leases",
+            "jen_subnet_reserved_hosts",
+            "jen_subnet_pool_size",
+            "jen_subnet_utilization_ratio",
+            "jen_alerts_sent_total",
+            "jen_kea_up",
+            "jen_server_up",
+        ]:
             assert f"# HELP {family}" in text, f"missing HELP for {family}"
             assert f"# TYPE {family}" in text, f"missing TYPE for {family}"
 
@@ -156,6 +173,7 @@ class TestPrometheusMetrics:
         import configparser
 
         from jen import extensions
+
         test_cfg = configparser.ConfigParser()
         test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
         test_cfg["server"] = {"metrics_token": "s3cret"}
@@ -172,9 +190,9 @@ class TestPrometheusMetrics:
 
     def test_survives_kea_down(self, client, monkeypatch, metrics_open):
         from jen.services import kea as kea_svc
+
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
-        monkeypatch.setattr(kea_svc, "kea_command",
-                           lambda *a, **kw: {"result": 1, "text": "error"})
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "error"})
         monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
         r = client.get("/metrics")
         assert r.status_code == 200

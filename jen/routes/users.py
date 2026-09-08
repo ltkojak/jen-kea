@@ -26,9 +26,8 @@ bp = Blueprint("users", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -61,14 +60,17 @@ def audit_log():
                 cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
                 total = cur.fetchone()["cnt"]
                 offset = (page - 1) * per_page
-                cur.execute(f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}", params)
+                cur.execute(
+                    f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}",
+                    params,
+                )
                 logs = cur.fetchall()
     except Exception as e:
         logger.error(f"Could not load audit log: {e}")
         flash("Could not load audit log. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page)
-    return render_template("audit.html", logs=logs, page=page, pages=pages,
-                           total=total, search=search)
+    return render_template("audit.html", logs=logs, page=page, pages=pages, total=total, search=search)
+
 
 # ─────────────────────────────────────────
 # About
@@ -96,12 +98,22 @@ def about():
     except Exception:
         pass
     from jen.services.changelog import parse_changelog
+
     changelog_entries = parse_changelog(limit=5)
-    return render_template("about.html", jen_version=_JEN_VERSION(), kea_version=kea_version,
-                           kea_up=kea_up, https_port=extensions.HTTPS_PORT, subnet_map=extensions.SUBNET_MAP,
-                           lease_counts=lease_counts, changelog_entries=changelog_entries)
+    return render_template(
+        "about.html",
+        jen_version=_JEN_VERSION(),
+        kea_version=kea_version,
+        kea_up=kea_up,
+        https_port=extensions.HTTPS_PORT,
+        subnet_map=extensions.SUBNET_MAP,
+        lease_counts=lease_counts,
+        changelog_entries=changelog_entries,
+    )
+
 
 # ─────────────────────────────────────────
+
 
 @bp.route("/profile")
 @login_required
@@ -109,35 +121,43 @@ def user_profile():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s",
-                           (current_user.id,))
+                cur.execute(
+                    "SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s", (current_user.id,)
+                )
                 user_data = cur.fetchone()
-                cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1",
-                           (current_user.id,))
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (current_user.id,)
+                )
                 totp_count = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s",
-                           (current_user.id,))
+                cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (current_user.id,))
                 passkey_count = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0",
-                           (current_user.id,))
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,)
+                )
                 backup_count = cur.fetchone()["cnt"]
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT COUNT(*) as cnt FROM mfa_trusted_devices
                     WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())
-                """, (current_user.id,))
+                """,
+                    (current_user.id,),
+                )
                 trusted_count = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"Error loading profile for {current_user.username}: {e}")
         flash("Error loading profile. Check server logs for details.", "error")
         user_data = None
         totp_count = passkey_count = backup_count = trusted_count = 0
-    return render_template("user_profile.html",
-                           user_data=user_data,
-                           totp_count=totp_count,
-                           passkey_count=passkey_count,
-                           backup_count=backup_count,
-                           device_count=trusted_count,
-                           mfa_enrolled=(totp_count + passkey_count) > 0)
+    return render_template(
+        "user_profile.html",
+        user_data=user_data,
+        totp_count=totp_count,
+        passkey_count=passkey_count,
+        backup_count=backup_count,
+        device_count=trusted_count,
+        mfa_enrolled=(totp_count + passkey_count) > 0,
+    )
+
 
 # ─────────────────────────────────────────
 # Users
@@ -149,18 +169,24 @@ def users():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username")
+                cur.execute(
+                    "SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username"
+                )
                 all_users = cur.fetchall()
                 for u in all_users:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) +
                             (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as mfa_count
-                    """, (u["id"], u["id"]))
+                    """,
+                        (u["id"], u["id"]),
+                    )
                     u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
                     # Parse subnet_access for display
                     try:
                         import json as _json
+
                         u["subnet_ids"] = _json.loads(u["subnet_access"]) if u["subnet_access"] else None
                     except Exception:
                         u["subnet_ids"] = None
@@ -170,14 +196,21 @@ def users():
         all_users = []
     global_timeout = __user.get_global_setting("session_timeout_minutes", "60")
     mfa_mode = __mfa.get_mfa_mode()
-    return render_template("users.html", users=all_users, global_timeout=global_timeout,
-                           mfa_mode=mfa_mode, subnet_map=extensions.SUBNET_MAP)
+    return render_template(
+        "users.html",
+        users=all_users,
+        global_timeout=global_timeout,
+        mfa_mode=mfa_mode,
+        subnet_map=extensions.SUBNET_MAP,
+    )
+
 
 @bp.route("/users/add", methods=["POST"])
 @login_required
 @_superadmin_required
 def add_user():
     import json as _json
+
     username = request.form.get("username", "").strip()[:100]
     password = request.form.get("password", "")
     role = request.form.get("role", "viewer")
@@ -195,16 +228,16 @@ def add_user():
 
     if not username:
         flash("Username is required.", "error")
-        return redirect(url_for('users.users'))
-    if not re.match(r'^[a-zA-Z0-9_\-\.]{1,100}$', username):
+        return redirect(url_for("users.users"))
+    if not re.match(r"^[a-zA-Z0-9_\-\.]{1,100}$", username):
         flash("Username may only contain letters, numbers, underscores, hyphens, and dots.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     if len(password) < 8:
         flash("Password must be at least 8 characters.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     if role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
 
     try:
         with __db.jen_db() as db:
@@ -212,7 +245,7 @@ def add_user():
                 cur.execute(
                     "INSERT INTO users (username, password, role, subnet_access, session_timeout, must_change_password) "
                     "VALUES (%s, %s, %s, %s, %s, 1)",
-                    (username, __user.hash_password(password), role, subnet_access, timeout_val)
+                    (username, __user.hash_password(password), role, subnet_access, timeout_val),
                 )
             db.commit()
         flash(f"User '{username}' created.", "success")
@@ -222,7 +255,8 @@ def add_user():
     except Exception as e:
         logger.error(f"Error creating user '{username}': {e}")
         flash("Error creating user. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
+
 
 @bp.route("/users/delete/<int:user_id>", methods=["POST"])
 @login_required
@@ -230,7 +264,7 @@ def add_user():
 def delete_user(user_id):
     if user_id == current_user.id:
         flash("You cannot delete your own account.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -238,13 +272,13 @@ def delete_user(user_id):
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
-                    return redirect(url_for('users.users'))
+                    return redirect(url_for("users.users"))
                 # Protect: cannot delete the last superadmin
                 if row["role"] == "superadmin":
                     cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
                     if cur.fetchone()["cnt"] <= 1:
                         flash("Cannot delete the last SuperAdmin account.", "error")
-                        return redirect(url_for('users.users'))
+                        return redirect(url_for("users.users"))
                 cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
             db.commit()
         flash(f"User '{row['username']}' deleted.", "success")
@@ -252,22 +286,24 @@ def delete_user(user_id):
     except Exception as e:
         logger.error(f"Error deleting user {user_id}: {e}")
         flash("Error deleting user. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
+
 
 @bp.route("/users/upload-avatar", methods=["POST"])
 @login_required
 def upload_avatar():
     import re
+
     data_url = request.form.get("avatar_data_url", "").strip()
     if data_url and data_url.startswith("data:image/"):
         # Validate it's a reasonable size (max ~200KB base64)
         if len(data_url) > 280000:
             flash("Image too large. Please use an image under 200KB.", "error")
-            return redirect(url_for('users.user_profile'))
+            return redirect(url_for("users.user_profile"))
         # Validate format
-        if not re.match(r'^data:image/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$', data_url):
+        if not re.match(r"^data:image/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$", data_url):
             flash("Invalid image format.", "error")
-            return redirect(url_for('users.user_profile'))
+            return redirect(url_for("users.user_profile"))
         try:
             with __db.jen_db() as db:
                 with db.cursor() as cur:
@@ -291,7 +327,8 @@ def upload_avatar():
         except Exception as e:
             logger.error(f"Error removing avatar for {current_user.username}: {e}")
             flash("Error removing avatar. Check server logs for details.", "error")
-    return redirect(url_for('users.user_profile'))
+    return redirect(url_for("users.user_profile"))
+
 
 @bp.route("/users/change-password", methods=["POST"])
 @login_required
@@ -302,22 +339,23 @@ def change_password():
 
     if new_pw != confirm_pw:
         flash("New passwords do not match.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     if len(new_pw) < 8:
         flash("New password must be at least 8 characters.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
 
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT id, password FROM users WHERE id=%s",
-                            (current_user.id,))
+                cur.execute("SELECT id, password FROM users WHERE id=%s", (current_user.id,))
                 row = cur.fetchone()
                 if not row or not __user.verify_password(row["password"], current_pw):
                     flash("Current password is incorrect.", "error")
-                    return redirect(url_for('users.users'))
-                cur.execute("UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
-                            (__user.hash_password(new_pw), current_user.id))
+                    return redirect(url_for("users.users"))
+                cur.execute(
+                    "UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
+                    (__user.hash_password(new_pw), current_user.id),
+                )
             db.commit()
         session.pop("_user_cache", None)
         flash("Password changed successfully.", "success")
@@ -325,7 +363,8 @@ def change_password():
     except Exception as e:
         logger.error(f"Error changing password for {current_user.username}: {e}")
         flash("Error changing password. Check server logs for details.", "error")
-    return redirect(url_for('users.user_profile'))
+    return redirect(url_for("users.user_profile"))
+
 
 @bp.route("/users/set-timeout/<int:user_id>", methods=["POST"])
 @login_required
@@ -334,21 +373,23 @@ def set_user_timeout(user_id):
     timeout = request.form.get("timeout", "").strip()
     if timeout and (not timeout.isdigit() or not (1 <= int(timeout) <= 1440)):
         flash("Timeout must be between 1 and 1440 minutes, or blank for global default.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     timeout_val = int(timeout) if timeout.isdigit() else None
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 cur.execute(
                     "UPDATE users SET session_timeout=%s, token_version=token_version+1 WHERE id=%s",
-                    (timeout_val, user_id))
+                    (timeout_val, user_id),
+                )
             db.commit()
         session.pop("_user_cache", None)
         flash("Session timeout updated.", "success")
     except Exception as e:
         logger.error(f"Error updating timeout for user {user_id}: {e}")
         flash("Error updating timeout. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
+
 
 @bp.route("/users/set-role/<int:user_id>", methods=["POST"])
 @login_required
@@ -357,10 +398,10 @@ def set_user_role(user_id):
     role = request.form.get("role", "viewer")
     if role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     if user_id == current_user.id and role != "superadmin":
         flash("You cannot demote your own account from SuperAdmin.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -368,16 +409,14 @@ def set_user_role(user_id):
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
-                    return redirect(url_for('users.users'))
+                    return redirect(url_for("users.users"))
                 # Protect last superadmin
                 if row["role"] == "superadmin" and role != "superadmin":
                     cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
                     if cur.fetchone()["cnt"] <= 1:
                         flash("Cannot demote the last SuperAdmin account.", "error")
-                        return redirect(url_for('users.users'))
-                cur.execute(
-                    "UPDATE users SET role=%s, token_version=token_version+1 WHERE id=%s",
-                    (role, user_id))
+                        return redirect(url_for("users.users"))
+                cur.execute("UPDATE users SET role=%s, token_version=token_version+1 WHERE id=%s", (role, user_id))
             db.commit()
         # Invalidate session cache for affected user (see load_user() in
         # jen/__init__.py — token_version is what actually forces a
@@ -389,7 +428,7 @@ def set_user_role(user_id):
     except Exception as e:
         logger.error(f"Error updating role for user {user_id}: {e}")
         flash("Error updating role. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
 
 
 @bp.route("/users/set-subnets/<int:user_id>", methods=["POST"])
@@ -397,6 +436,7 @@ def set_user_role(user_id):
 @_superadmin_required
 def set_user_subnets(user_id):
     import json as _json
+
     subnet_ids_raw = request.form.getlist("subnet_ids")
     # "all" value means unrestricted (NULL)
     if not subnet_ids_raw or "all" in subnet_ids_raw:
@@ -413,10 +453,11 @@ def set_user_subnets(user_id):
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
-                    return redirect(url_for('users.users'))
+                    return redirect(url_for("users.users"))
                 cur.execute(
                     "UPDATE users SET subnet_access=%s, token_version=token_version+1 WHERE id=%s",
-                    (subnet_access, user_id))
+                    (subnet_access, user_id),
+                )
             db.commit()
         session.pop("_user_cache", None)
         label = "all subnets" if subnet_access is None else f"subnets {subnet_access}"
@@ -425,12 +466,13 @@ def set_user_subnets(user_id):
     except Exception as e:
         logger.error(f"Error updating subnet access for user {user_id}: {e}")
         flash("Error updating subnet access. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
 
 
 # ─────────────────────────────────────────
 # Devices
 # ─────────────────────────────────────────
+
 
 @bp.route("/users/edit/<int:user_id>", methods=["POST"])
 @login_required
@@ -439,33 +481,33 @@ def edit_user(user_id):
     """Unified edit endpoint — handles role, subnets, timeout, and optional password reset."""
     import json as _json
 
-    role        = request.form.get("role", "viewer")
+    role = request.form.get("role", "viewer")
     timeout_raw = request.form.get("timeout", "").strip()
-    new_pw      = request.form.get("new_password", "").strip()
-    confirm_pw  = request.form.get("confirm_password", "").strip()
+    new_pw = request.form.get("new_password", "").strip()
+    confirm_pw = request.form.get("confirm_password", "").strip()
     subnet_ids_raw = request.form.getlist("subnet_ids")
 
     # Validate role
     if role not in ("superadmin", "admin", "viewer"):
         flash("Invalid role.", "error")
-        return redirect(url_for('users.users'))
+        return redirect(url_for("users.users"))
 
     # Validate timeout
     timeout_val = None
     if timeout_raw:
         if not timeout_raw.isdigit() or not (1 <= int(timeout_raw) <= 1440):
             flash("Timeout must be 1–1440 minutes.", "error")
-            return redirect(url_for('users.users'))
+            return redirect(url_for("users.users"))
         timeout_val = int(timeout_raw)
 
     # Validate password if provided
     if new_pw:
         if len(new_pw) < 8:
             flash("New password must be at least 8 characters.", "error")
-            return redirect(url_for('users.users'))
+            return redirect(url_for("users.users"))
         if new_pw != confirm_pw:
             flash("New passwords do not match.", "error")
-            return redirect(url_for('users.users'))
+            return redirect(url_for("users.users"))
 
     # Subnet access
     if not subnet_ids_raw or "all" in subnet_ids_raw or role == "superadmin":
@@ -483,35 +525,47 @@ def edit_user(user_id):
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
-                    return redirect(url_for('users.users'))
+                    return redirect(url_for("users.users"))
 
                 # Protect last superadmin from demotion
                 if row["role"] == "superadmin" and role != "superadmin":
                     if user_id == current_user.id:
                         flash("You cannot demote your own SuperAdmin account.", "error")
-                        return redirect(url_for('users.users'))
+                        return redirect(url_for("users.users"))
                     cur.execute("SELECT COUNT(*) as cnt FROM users WHERE role='superadmin'")
                     if cur.fetchone()["cnt"] <= 1:
                         flash("Cannot demote the last SuperAdmin account.", "error")
-                        return redirect(url_for('users.users'))
+                        return redirect(url_for("users.users"))
 
                 # Apply all changes in one update
                 if new_pw:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s, password=%s,
                                token_version=token_version+1
                         WHERE id=%s
-                    """, (role, subnet_access, timeout_val, __user.hash_password(new_pw), user_id))
-                    __user.audit("EDIT_USER", row["username"],
-                                 f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val} password=reset")
+                    """,
+                        (role, subnet_access, timeout_val, __user.hash_password(new_pw), user_id),
+                    )
+                    __user.audit(
+                        "EDIT_USER",
+                        row["username"],
+                        f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val} password=reset",
+                    )
                 else:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE users SET role=%s, subnet_access=%s, session_timeout=%s,
                                token_version=token_version+1
                         WHERE id=%s
-                    """, (role, subnet_access, timeout_val, user_id))
-                    __user.audit("EDIT_USER", row["username"],
-                                 f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val}")
+                    """,
+                        (role, subnet_access, timeout_val, user_id),
+                    )
+                    __user.audit(
+                        "EDIT_USER",
+                        row["username"],
+                        f"role={role} subnets={subnet_access or 'all'} timeout={timeout_val}",
+                    )
 
             db.commit()
         session.pop("_user_cache", None)
@@ -519,7 +573,7 @@ def edit_user(user_id):
     except Exception as e:
         logger.error(f"Error updating user {user_id}: {e}")
         flash("Error updating user. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))
 
 
 @bp.route("/users/reset-mfa/<int:user_id>", methods=["POST"])
@@ -534,15 +588,14 @@ def reset_user_mfa(user_id):
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
-                    return redirect(url_for('users.users'))
+                    return redirect(url_for("users.users"))
                 cur.execute("UPDATE mfa_methods SET enabled=0 WHERE user_id=%s", (user_id,))
                 cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
                 cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
             db.commit()
         flash(f"MFA for '{row['username']}' has been reset. They will need to re-enroll.", "success")
-        __user.audit("RESET_MFA", row["username"],
-                     f"MFA reset by {current_user.username}")
+        __user.audit("RESET_MFA", row["username"], f"MFA reset by {current_user.username}")
     except Exception as e:
         logger.error(f"Error resetting MFA for user {user_id}: {e}")
         flash("Error resetting MFA. Check server logs for details.", "error")
-    return redirect(url_for('users.users'))
+    return redirect(url_for("users.users"))

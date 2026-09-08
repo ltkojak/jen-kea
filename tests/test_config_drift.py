@@ -18,7 +18,6 @@ with mocked Kea responses, matching the mocking convention already
 used throughout tests/test_kea6.py.
 """
 
-
 from jen.services.config_drift import (
     check_config_drift,
     detect_subnet_drift,
@@ -28,7 +27,6 @@ from jen.services.config_drift import (
 
 
 class TestDetectSubnetDrift:
-
     def test_no_drift_when_maps_agree(self):
         jen_map = {10: {"name": "Production", "cidr": "10.10.10.0/23"}}
         live_map = {10: "10.10.10.0/23"}
@@ -86,13 +84,13 @@ class TestDetectSubnetDrift:
     def test_multiple_simultaneous_issues(self):
         jen_map = {
             10: {"name": "Production", "cidr": "10.10.10.0/23"},  # agrees, no issue
-            20: {"name": "IoT", "cidr": "10.10.30.0/24"},          # cidr mismatch below
-            30: {"name": "Gone", "cidr": "10.10.99.0/24"},          # missing in kea
+            20: {"name": "IoT", "cidr": "10.10.30.0/24"},  # cidr mismatch below
+            30: {"name": "Gone", "cidr": "10.10.99.0/24"},  # missing in kea
         }
         live_map = {
             10: "10.10.10.0/23",
-            20: "10.10.31.0/24",   # mismatched
-            40: "10.10.70.0/24",   # unknown to jen
+            20: "10.10.31.0/24",  # mismatched
+            40: "10.10.70.0/24",  # unknown to jen
         }
         issues = detect_subnet_drift(jen_map, live_map)
         types = sorted(i["type"] for i in issues)
@@ -118,7 +116,6 @@ class TestDetectSubnetDrift:
 
 
 class TestIssueKey:
-
     def test_stable_and_unique_per_issue(self):
         issue = {"family": "v4", "type": "cidr_mismatch", "subnet_id": 24}
         assert issue_key(issue) == "v4:cidr_mismatch:24"
@@ -131,18 +128,22 @@ class TestIssueKey:
 
 
 class TestFetchLiveSubnetMap:
-
     def test_v4_success_extracts_id_and_cidr(self, monkeypatch):
         import jen.services.kea as kea_module
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
             return {
                 "result": 0,
-                "arguments": {"Dhcp4": {"subnet4": [
-                    {"id": 10, "subnet": "10.10.10.0/23"},
-                    {"id": 20, "subnet": "10.10.30.0/24"},
-                ]}},
+                "arguments": {
+                    "Dhcp4": {
+                        "subnet4": [
+                            {"id": 10, "subnet": "10.10.10.0/23"},
+                            {"id": 20, "subnet": "10.10.30.0/24"},
+                        ]
+                    }
+                },
             }
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
         result = fetch_live_subnet_map("v4")
         assert result == {10: "10.10.10.0/23", 20: "10.10.30.0/24"}
@@ -153,10 +154,15 @@ class TestFetchLiveSubnetMap:
         def fake_kea6_command(command, arguments=None, server=None):
             return {
                 "result": 0,
-                "arguments": {"Dhcp6": {"subnet6": [
-                    {"id": 1, "subnet": "2001:db8::/64"},
-                ]}},
+                "arguments": {
+                    "Dhcp6": {
+                        "subnet6": [
+                            {"id": 1, "subnet": "2001:db8::/64"},
+                        ]
+                    }
+                },
             }
+
         monkeypatch.setattr(kea6_module, "kea6_command", fake_kea6_command)
         result = fetch_live_subnet_map("v6")
         assert result == {1: "2001:db8::/64"}
@@ -166,6 +172,7 @@ class TestFetchLiveSubnetMap:
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
             return {"result": 1, "text": "Cannot connect to Kea API"}
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
         assert fetch_live_subnet_map("v4") == {}
 
@@ -174,22 +181,31 @@ class TestFetchLiveSubnetMap:
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
             return {"result": 0, "arguments": {}}  # missing "Dhcp4" entirely
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
         assert fetch_live_subnet_map("v4") == {}
 
 
 class TestCheckConfigDrift:
-
     def test_v4_drift_detected_end_to_end(self, monkeypatch):
         import jen.services.kea as kea_module
         from jen import extensions
+
         monkeypatch.setattr(extensions, "SUBNET_MAP", {24: {"name": "IoT", "cidr": "10.10.30.0/24"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
-            return {"result": 0, "arguments": {"Dhcp4": {"subnet4": [
-                {"id": 24, "subnet": "10.10.10.0/23"},  # drifted
-            ]}}}
+            return {
+                "result": 0,
+                "arguments": {
+                    "Dhcp4": {
+                        "subnet4": [
+                            {"id": 24, "subnet": "10.10.10.0/23"},  # drifted
+                        ]
+                    }
+                },
+            }
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
 
         issues = check_config_drift()
@@ -200,13 +216,22 @@ class TestCheckConfigDrift:
     def test_no_drift_returns_empty_list(self, monkeypatch):
         import jen.services.kea as kea_module
         from jen import extensions
+
         monkeypatch.setattr(extensions, "SUBNET_MAP", {10: {"name": "Production", "cidr": "10.10.10.0/23"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
-            return {"result": 0, "arguments": {"Dhcp4": {"subnet4": [
-                {"id": 10, "subnet": "10.10.10.0/23"},
-            ]}}}
+            return {
+                "result": 0,
+                "arguments": {
+                    "Dhcp4": {
+                        "subnet4": [
+                            {"id": 10, "subnet": "10.10.10.0/23"},
+                        ]
+                    }
+                },
+            }
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
 
         assert check_config_drift() == []
@@ -217,11 +242,13 @@ class TestCheckConfigDrift:
         of Jen's real subnets as 'missing_in_kea', which is false."""
         import jen.services.kea as kea_module
         from jen import extensions
+
         monkeypatch.setattr(extensions, "SUBNET_MAP", {10: {"name": "Production", "cidr": "10.10.10.0/23"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
             return {"result": 1, "text": "Cannot connect to Kea API"}
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
 
         assert check_config_drift() == []
@@ -230,18 +257,28 @@ class TestCheckConfigDrift:
         import jen.services.kea as kea_module
         import jen.services.kea6 as kea6_module
         from jen import extensions
+
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         monkeypatch.setattr(kea6_module, "is_ipv6_enabled", lambda: True)
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
             return {"result": 0, "arguments": {"Dhcp4": {"subnet4": []}}}
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
 
         def fake_kea6_command(command, arguments=None, server=None):
-            return {"result": 0, "arguments": {"Dhcp6": {"subnet6": [
-                {"id": 1, "subnet": "2001:db8:9999::/64"},  # drifted
-            ]}}}
+            return {
+                "result": 0,
+                "arguments": {
+                    "Dhcp6": {
+                        "subnet6": [
+                            {"id": 1, "subnet": "2001:db8:9999::/64"},  # drifted
+                        ]
+                    }
+                },
+            }
+
         monkeypatch.setattr(kea6_module, "kea6_command", fake_kea6_command)
 
         issues = check_config_drift()
@@ -253,12 +290,14 @@ class TestCheckConfigDrift:
         import jen.services.kea as kea_module
         import jen.services.kea6 as kea6_module
         from jen import extensions
+
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         monkeypatch.setattr(kea6_module, "is_ipv6_enabled", lambda: False)
 
         def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
             return {"result": 0, "arguments": {"Dhcp4": {"subnet4": []}}}
+
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
 
         assert check_config_drift() == []

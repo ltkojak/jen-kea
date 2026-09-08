@@ -37,7 +37,6 @@ import pathlib
 
 
 class TestHtmxVendoring:
-
     def test_no_external_cdn_reference_for_htmx_anywhere(self):
         """htmx must be served locally, not from a CDN — matches the
         same offline-homelab reasoning as the Chart.js fix."""

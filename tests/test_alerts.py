@@ -74,43 +74,35 @@ class TestAlertEndpoints:
 
     def test_test_alert_requires_channel(self, logged_in_client):
         """Test alert with no channels configured returns error."""
-        r = logged_in_client.post("/settings/test-alert/999",
-                                  follow_redirects=True)
+        r = logged_in_client.post("/settings/test-alert/999", follow_redirects=True)
         assert r.status_code in (200, 404)
 
 
 class TestHTMXRoutes:
     """HTMX partial response routes."""
 
-    def test_reservations_htmx_returns_fragment(self, logged_in_client,
-                                                 mock_kea_reservations):
+    def test_reservations_htmx_returns_fragment(self, logged_in_client, mock_kea_reservations):
         """Reservations with HX-Request returns HTML fragment not full page."""
-        r = logged_in_client.get("/reservations",
-                                 headers={"HX-Request": "true"})
+        r = logged_in_client.get("/reservations", headers={"HX-Request": "true"})
         assert r.status_code == 200
         # Fragment should NOT contain full page structure
         assert b"<!DOCTYPE html>" not in r.data
         assert b"<html" not in r.data
 
-    def test_leases_htmx_returns_fragment(self, logged_in_client,
-                                           mock_kea_db):
+    def test_leases_htmx_returns_fragment(self, logged_in_client, mock_kea_db):
         """Leases with HX-Request returns HTML fragment not full page."""
-        r = logged_in_client.get("/leases",
-                                 headers={"HX-Request": "true"})
+        r = logged_in_client.get("/leases", headers={"HX-Request": "true"})
         assert r.status_code == 200
         assert b"<!DOCTYPE html>" not in r.data
         assert b"<html" not in r.data
 
-    def test_dashboard_htmx_returns_fragment(self, logged_in_client,
-                                              mock_kea):
+    def test_dashboard_htmx_returns_fragment(self, logged_in_client, mock_kea):
         """Dashboard with HX-Request returns recent leases fragment."""
-        r = logged_in_client.get("/?hours=1",
-                                 headers={"HX-Request": "true"})
+        r = logged_in_client.get("/?hours=1", headers={"HX-Request": "true"})
         assert r.status_code == 200
         assert b"<!DOCTYPE html>" not in r.data
 
-    def test_delete_reservation_htmx_returns_empty(self, logged_in_client,
-                                                    monkeypatch):
+    def test_delete_reservation_htmx_returns_empty(self, logged_in_client, monkeypatch):
         """Deleting a reservation via HTMX returns empty string (removes row)."""
         from jen.models import db as db_mod
         from jen.services import kea as kea_svc
@@ -118,41 +110,62 @@ class TestHTMXRoutes:
         # Mock Kea to return the host for lookup and success for delete
         def mock_kea_cmd(cmd, *a, server=None, **kw):
             if "get" in cmd:
-                return {"result": 0, "arguments": {"hosts": [
-                    {"hw-address": "aa:bb:cc:dd:ee:01",
-                     "ip-address": "10.99.0.10",
-                     "hostname": "test",
-                     "dhcp4-subnet-id": 1, "id": 101}
-                ]}}
+                return {
+                    "result": 0,
+                    "arguments": {
+                        "hosts": [
+                            {
+                                "hw-address": "aa:bb:cc:dd:ee:01",
+                                "ip-address": "10.99.0.10",
+                                "hostname": "test",
+                                "dhcp4-subnet-id": 1,
+                                "id": 101,
+                            }
+                        ]
+                    },
+                }
             return {"result": 0, "text": "deleted"}
 
         monkeypatch.setattr(kea_svc, "kea_command", mock_kea_cmd)
-        monkeypatch.setattr(kea_svc, "get_active_kea_server",
-                            lambda: {"id": 1, "api_url": "http://localhost:18000",
-                                     "api_user": "test", "api_pass": "test"})
+        monkeypatch.setattr(
+            kea_svc,
+            "get_active_kea_server",
+            lambda: {"id": 1, "api_url": "http://localhost:18000", "api_user": "test", "api_pass": "test"},
+        )
 
         # Mock the Kea DB for the host lookup
         class MockCursor:
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
             def execute(self, sql, args=None):
                 self._sql = sql
+
             def fetchone(self):
-                return {"ip": "10.99.0.10", "mac_hex": "AABBCCDDEEE01",
-                        "subnet_id": 1}
-            def fetchall(self): return []
-            def close(self): pass
+                return {"ip": "10.99.0.10", "mac_hex": "AABBCCDDEEE01", "subnet_id": 1}
+
+            def fetchall(self):
+                return []
+
+            def close(self):
+                pass
 
         class MockConn:
-            def cursor(self): return MockCursor()
-            def close(self): pass
-            def commit(self): pass
+            def cursor(self):
+                return MockCursor()
+
+            def close(self):
+                pass
+
+            def commit(self):
+                pass
 
         monkeypatch.setattr(db_mod, "get_kea_db", lambda: MockConn())
 
-        r = logged_in_client.post("/reservations/delete/101",
-                                  headers={"HX-Request": "true"},
-                                  data={"subnet_id": "1"})
+        r = logged_in_client.post("/reservations/delete/101", headers={"HX-Request": "true"}, data={"subnet_id": "1"})
         assert r.status_code == 200
         assert r.data == b""
 
@@ -160,39 +173,69 @@ class TestHTMXRoutes:
 @pytest.fixture
 def mock_kea_reservations(monkeypatch):
     from jen.services import kea as kea_svc
-    monkeypatch.setattr(kea_svc, "kea_command", lambda cmd, *a, **kw: {
-        "result": 0,
-        "arguments": {"hosts": [
-            {"hw-address": "aa:bb:cc:dd:ee:01",
-             "ip-address": "10.99.0.10",
-             "hostname": "test-host",
-             "dhcp4-subnet-id": 1,
-             "id": 101},
-        ]}
-    })
+
+    monkeypatch.setattr(
+        kea_svc,
+        "kea_command",
+        lambda cmd, *a, **kw: {
+            "result": 0,
+            "arguments": {
+                "hosts": [
+                    {
+                        "hw-address": "aa:bb:cc:dd:ee:01",
+                        "ip-address": "10.99.0.10",
+                        "hostname": "test-host",
+                        "dhcp4-subnet-id": 1,
+                        "id": 101,
+                    },
+                ]
+            },
+        },
+    )
     monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: True)
-    monkeypatch.setattr(kea_svc, "get_active_kea_server",
-                        lambda: {"id": 1, "api_url": "http://localhost:18000",
-                                 "api_user": "test", "api_pass": "test"})
+    monkeypatch.setattr(
+        kea_svc,
+        "get_active_kea_server",
+        lambda: {"id": 1, "api_url": "http://localhost:18000", "api_user": "test", "api_pass": "test"},
+    )
 
 
 @pytest.fixture
 def mock_kea_db(monkeypatch):
     class MockCursor:
-        def __init__(self): self._rows = []
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
-        def execute(self, sql, args=None): self._rows = []
-        def fetchone(self): return None
-        def fetchall(self): return []
-        def close(self): pass
+        def __init__(self):
+            self._rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def execute(self, sql, args=None):
+            self._rows = []
+
+        def fetchone(self):
+            return None
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            pass
 
     class MockConn:
-        def cursor(self): return MockCursor()
-        def close(self): pass
-        def commit(self): pass
+        def cursor(self):
+            return MockCursor()
+
+        def close(self):
+            pass
+
+        def commit(self):
+            pass
 
     from jen.models import db as db_mod
+
     monkeypatch.setattr(db_mod, "get_kea_db", lambda: MockConn())
 
 
@@ -219,6 +262,7 @@ class TestUntrustedHostnameHtmlEscaping:
 
     def test_safe_text_escapes_ampersand_lt_gt(self):
         from jen.services.alerts import safe_text
+
         assert safe_text("AT&T-Hotspot") == "AT&amp;T-Hotspot"
         assert safe_text("<script>alert(1)</script>") == "&lt;script&gt;alert(1)&lt;/script&gt;"
         assert safe_text("normal-hostname") == "normal-hostname"
@@ -229,15 +273,18 @@ class TestUntrustedHostnameHtmlEscaping:
         just make hostnames like "Laura's iPhone" look wrong for no
         safety benefit."""
         from jen.services.alerts import safe_text
+
         assert safe_text("Laura's iPhone") == "Laura's iPhone"
 
     def test_new_lease_message_with_problematic_hostname_is_valid_html(self):
         """The actual bug: a hostname containing '&' used to produce a
         message Telegram would reject outright."""
         from jen.services.alerts import DEFAULT_TEMPLATES, render_template_str, safe_text
+
         hostname = safe_text("AT&T-Hotspot")
-        msg = render_template_str(DEFAULT_TEMPLATES["new_lease"], ip="10.10.10.50",
-                                  mac="aa:bb:cc:dd:ee:ff", hostname=hostname, subnet="IoT")
+        msg = render_template_str(
+            DEFAULT_TEMPLATES["new_lease"], ip="10.10.10.50", mac="aa:bb:cc:dd:ee:ff", hostname=hostname, subnet="IoT"
+        )
         assert "AT&amp;T-Hotspot" in msg
         assert "AT&T-Hotspot" not in msg  # the raw, HTML-breaking form must be gone
         assert "<b>" in msg  # the template's own deliberate markup survives
@@ -247,6 +294,7 @@ class TestUntrustedHostnameHtmlEscaping:
         this is the regression the naive "escape every kwarg" approach
         would have caused."""
         from jen.services.alerts import DEFAULT_TEMPLATES, render_template_str
+
         summary = "<b>Daily Network Summary</b>\n\n<b>Production</b> (10.10.10.0/23): 65 active"
         msg = render_template_str(DEFAULT_TEMPLATES["daily_summary"], summary=summary)
         assert "<b>Daily Network Summary</b>" in msg

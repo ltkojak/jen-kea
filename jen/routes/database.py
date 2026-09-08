@@ -37,7 +37,7 @@ bp = Blueprint("database", __name__)
 @login_required
 @_superadmin_required
 def database():
-    backups  = dbexport.list_backups()
+    backups = dbexport.list_backups()
     schedule = dbexport.get_schedule()
     return render_template(
         "database.html",
@@ -64,7 +64,7 @@ def export_jen():
         return Response(
             gzip.compress(content),
             mimetype="application/gzip",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
         logger.error(f"Jen DB export failed: {e}")
@@ -86,7 +86,7 @@ def export_kea():
         return Response(
             gzip.compress(content),
             mimetype="application/gzip",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
         logger.error(f"Kea DB export failed: {e}")
@@ -107,11 +107,7 @@ def download_backup(filename):
     with open(path, "rb") as f:
         data = f.read()
     __user.audit("DB_BACKUP_DOWNLOAD", safe, "")
-    return Response(
-        data,
-        mimetype="application/gzip",
-        headers={"Content-Disposition": f"attachment; filename={safe}"}
-    )
+    return Response(data, mimetype="application/gzip", headers={"Content-Disposition": f"attachment; filename={safe}"})
 
 
 @bp.route("/database/backup/delete/<path:filename>", methods=["POST"])
@@ -179,8 +175,8 @@ def import_inspect():
     # Store bytes in session-style temp file for the confirm step
     import base64
     import tempfile
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz",
-                                     dir="/tmp", prefix="jen_import_")
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")
     tmp.write(file_bytes)
     tmp.close()
     return render_template(
@@ -198,6 +194,7 @@ def import_inspect():
 @_superadmin_required
 def import_confirm():
     import base64
+
     tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
     # Validate path is within the expected temp directory — prevent path traversal
     if not tmp_path or not tmp_path.startswith("/tmp/jen_import_") or not os.path.isfile(tmp_path):
@@ -208,12 +205,12 @@ def import_confirm():
     os.unlink(tmp_path)
 
     meta = dbexport.parse_import_file(file_bytes)[0]
-    db   = meta.get("database")
+    db = meta.get("database")
 
     try:
         if db == "jen":
             tables = request.form.getlist("tables") or None
-            mode   = request.form.get("mode", "replace")
+            mode = request.form.get("mode", "replace")
             results = dbexport.import_jen(file_bytes, tables, truncate=(mode == "replace"))
             __user.audit("DB_IMPORT", "jen", f"tables={tables or 'all'} mode={mode}")
         elif db == "kea":
@@ -236,10 +233,10 @@ def import_confirm():
 @login_required
 @_superadmin_required
 def save_schedule():
-    enabled     = 1 if request.form.get("enabled") else 0
-    frequency   = request.form.get("frequency", "daily")
-    hour        = int(request.form.get("hour", 2))
-    keep_count  = max(1, min(30, int(request.form.get("keep_count", 7))))
+    enabled = 1 if request.form.get("enabled") else 0
+    frequency = request.form.get("frequency", "daily")
+    hour = int(request.form.get("hour", 2))
+    keep_count = max(1, min(30, int(request.form.get("keep_count", 7))))
     include_jen = 1 if request.form.get("include_jen") else 0
     include_kea = 1 if request.form.get("include_kea") else 0
     try:
@@ -275,11 +272,11 @@ def migrate_test():
     host = request.form.get("host", "").strip()
     port = request.form.get("port", "3306").strip() or "3306"
     user = request.form.get("user", "").strip()
-    pw   = request.form.get("password", "")
-    db   = request.form.get("database", "").strip()
+    pw = request.form.get("password", "")
+    db = request.form.get("database", "").strip()
     ok, info = dbexport.test_connection(host, port, user, pw, db)
     if ok:
-        return {"ok": True,  "info": info}
+        return {"ok": True, "info": info}
     return {"ok": False, "error": info}
 
 
@@ -288,14 +285,14 @@ def migrate_test():
 @_superadmin_required
 def migrate_run():
     """SSE endpoint — streams migration progress to the browser."""
-    which    = request.form.get("which", "jen")      # "jen" or "kea"
-    host     = request.form.get("host", "").strip()
-    port     = request.form.get("port", "3306").strip() or "3306"
-    user     = request.form.get("user", "").strip()
-    pw       = request.form.get("password", "")
-    db       = request.form.get("database", "").strip()
-    tables   = request.form.getlist("tables") or None
-    kea_grp  = request.form.get("kea_group", "reservations")
+    which = request.form.get("which", "jen")  # "jen" or "kea"
+    host = request.form.get("host", "").strip()
+    port = request.form.get("port", "3306").strip() or "3306"
+    user = request.form.get("user", "").strip()
+    pw = request.form.get("password", "")
+    db = request.form.get("database", "").strip()
+    tables = request.form.getlist("tables") or None
+    kea_grp = request.form.get("kea_group", "reservations")
 
     q = queue.Queue()
 
@@ -309,8 +306,7 @@ def migrate_run():
             else:
                 results = dbexport.migrate_kea(host, port, user, pw, db, kea_grp, _progress)
             q.put(("done", results))
-            __user.audit("DB_MIGRATE", which,
-                         f"target={host}/{db} tables={tables or 'all'}")
+            __user.audit("DB_MIGRATE", which, f"target={host}/{db} tables={tables or 'all'}")
         except Exception as e:
             q.put(("error", str(e)))
 
@@ -338,5 +334,5 @@ def migrate_run():
     return Response(
         stream_with_context(_generate()),
         mimetype="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"}
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )

@@ -25,6 +25,7 @@ class TestDdnsPageAuth:
 class TestDdnsLogFetch:
     def test_ssh_host_not_configured(self, logged_in_client, monkeypatch):
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
         with patch("jen.routes.ddns.subprocess.run") as mock_run:
             r = logged_in_client.get("/ddns")
@@ -34,6 +35,7 @@ class TestDdnsLogFetch:
 
     def test_successful_log_fetch_uses_hardened_ssh_opts(self, logged_in_client, monkeypatch):
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
         monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
         fake_result = MagicMock(returncode=0, stdout="line1\nline2\n", stderr="")
@@ -47,6 +49,7 @@ class TestDdnsLogFetch:
 
     def test_missing_log_file(self, logged_in_client, monkeypatch):
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
         monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
         fake_result = MagicMock(returncode=1, stdout="", stderr="No such file or directory")
@@ -59,10 +62,10 @@ class TestDdnsLogFetch:
         import subprocess
 
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
         monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
-        with patch("jen.routes.ddns.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=15)):
+        with patch("jen.routes.ddns.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=15)):
             r = logged_in_client.get("/ddns")
             assert r.status_code == 200
             assert b"timed out" in r.data.lower()
@@ -76,6 +79,7 @@ class TestDdnsSshLookupProvider:
         import configparser
 
         from jen import extensions
+
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")  # skip log fetch branch
 
         # extensions.cfg is a session-shared global (built once by
@@ -91,8 +95,10 @@ class TestDdnsSshLookupProvider:
         fake_active_server = {"ssh_host": "10.0.0.5", "ssh_user": "kea"}
         fake_lookup_result = MagicMock(returncode=0, stdout="10.99.0.50\n", stderr="")
 
-        with patch("jen.services.kea.get_active_kea_server", return_value=fake_active_server), \
-             patch("jen.routes.ddns.subprocess.run", return_value=fake_lookup_result) as mock_run:
+        with (
+            patch("jen.services.kea.get_active_kea_server", return_value=fake_active_server),
+            patch("jen.routes.ddns.subprocess.run", return_value=fake_lookup_result) as mock_run,
+        ):
             r = logged_in_client.get("/ddns", query_string={"host": "test-host.local"})
             assert r.status_code == 200
             assert mock_run.called

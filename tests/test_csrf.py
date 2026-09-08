@@ -33,14 +33,12 @@ def csrf_client(app, client):
 def logged_in_csrf_client(csrf_client):
     """logged_in_client's session setup, but on the CSRF-enabled client."""
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc).isoformat()
     with csrf_client.session_transaction() as sess:
-        sess["_user_cache"] = {
-            "id": 1, "username": "admin",
-            "role": "superadmin", "session_timeout": None
-        }
+        sess["_user_cache"] = {"id": 1, "username": "admin", "role": "superadmin", "session_timeout": None}
         sess["_user_id"] = "1"
-        sess["_fresh"]   = True
+        sess["_fresh"] = True
         sess["last_active"] = now
     return csrf_client
 
@@ -98,7 +96,7 @@ class TestCsrfTokenLogic:
             # padding bit the way the last-2-char approach could.
             mid = len(token) // 2
             flipped_char = "a" if token[mid] != "a" else "b"
-            tampered = token[:mid] + flipped_char + token[mid + 1:]
+            tampered = token[:mid] + flipped_char + token[mid + 1 :]
             assert csrf_svc.validate_csrf_token(app, tampered) is False
 
     def test_token_from_different_session_fails(self, app):
@@ -140,9 +138,7 @@ class TestCsrfTokenLogic:
             assert csrf_svc.get_submitted_token() == "from-form"
 
     def test_get_submitted_token_falls_back_to_header(self, app):
-        with app.test_request_context(
-            headers={"X-CSRFToken": "from-header"}, method="POST"
-        ):
+        with app.test_request_context(headers={"X-CSRFToken": "from-header"}, method="POST"):
             assert csrf_svc.get_submitted_token() == "from-header"
 
 
@@ -159,9 +155,7 @@ class TestCsrfMiddlewareIntegration:
 
     def test_post_with_valid_token_succeeds(self, app, logged_in_csrf_client, mock_kea):
         token = _valid_token_for(app, logged_in_csrf_client)
-        r = logged_in_csrf_client.post(
-            self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": token}
-        )
+        r = logged_in_csrf_client.post(self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": token})
         assert r.status_code == 200
 
     def test_post_with_token_via_header_succeeds(self, app, logged_in_csrf_client, mock_kea):
@@ -176,9 +170,7 @@ class TestCsrfMiddlewareIntegration:
         assert r.status_code == 200
 
     def test_post_with_garbage_token_rejected(self, logged_in_csrf_client):
-        r = logged_in_csrf_client.post(
-            self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": "garbage"}
-        )
+        r = logged_in_csrf_client.post(self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": "garbage"})
         assert r.status_code == 403
 
     def test_post_with_another_sessions_token_rejected(self, app, logged_in_csrf_client):
@@ -191,9 +183,7 @@ class TestCsrfMiddlewareIntegration:
         with app.test_request_context():
             foreign_token = csrf_svc.generate_csrf_token(app)
 
-        r = logged_in_csrf_client.post(
-            self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": foreign_token}
-        )
+        r = logged_in_csrf_client.post(self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": foreign_token})
         assert r.status_code == 403
 
     def test_get_requests_never_blocked(self, logged_in_csrf_client):
@@ -221,7 +211,5 @@ class TestCsrfMiddlewareIntegration:
         """Sanity check: with the default (CSRF-disabled-for-tests) client
         used by the rest of the suite, POSTs still work exactly as before —
         confirms WTF_CSRF_ENABLED=False truly bypasses the new hook."""
-        r = logged_in_client.post(
-            "/subnets/save-note", data={"subnet_id": "1", "notes": "unaffected"}
-        )
+        r = logged_in_client.post("/subnets/save-note", data={"subnet_id": "1", "notes": "unaffected"})
         assert r.status_code == 200

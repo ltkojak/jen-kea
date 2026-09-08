@@ -25,16 +25,16 @@ from tests.conftest import restricted_client as _restricted_client
 # that gets it as far as the auth check (not necessarily further — we're
 # testing the gate, not full functional behavior).
 _DATABASE_ROUTES = [
-    ("GET",  "/database", {}),
+    ("GET", "/database", {}),
     ("POST", "/database/export/jen", {}),
     ("POST", "/database/export/kea", {}),
-    ("GET",  "/database/backup/download/somefile.json.gz", {}),
+    ("GET", "/database/backup/download/somefile.json.gz", {}),
     ("POST", "/database/backup/delete/somefile.json.gz", {}),
     ("POST", "/database/backup/now", {}),
     ("POST", "/database/import/inspect", {}),
     ("POST", "/database/import/confirm", {}),
     ("POST", "/database/schedule", {}),
-    ("GET",  "/database/migrate", {}),
+    ("GET", "/database/migrate", {}),
     ("POST", "/database/migrate/test", {}),
     # /database/migrate/run deliberately excluded — it spawns a background
     # thread and streams SSE; the auth decorator runs before any of that,
@@ -66,8 +66,9 @@ class TestDatabaseRoutesRejectPlainAdmin:
 
     @pytest.mark.parametrize("method,path,data", _DATABASE_ROUTES)
     def test_plain_admin_forbidden(self, client, db, method, path, data):
-        _restricted_client(client, db, allowed_subnets=None, role="admin",
-                            username=f"dbtest_admin_{abs(hash(path + method)) % 100000}")
+        _restricted_client(
+            client, db, allowed_subnets=None, role="admin", username=f"dbtest_admin_{abs(hash(path + method)) % 100000}"
+        )
         if method == "GET":
             r = client.get(path, follow_redirects=True)
         else:
@@ -95,11 +96,9 @@ class TestBackupPathTraversalProtection:
 
     def test_download_traversal_resolves_within_backup_dir(self, logged_in_client, monkeypatch, tmp_path):
         from jen.services import dbexport
+
         monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
-        r = logged_in_client.get(
-            "/database/backup/download/..%2f..%2f..%2fetc%2fpasswd",
-            follow_redirects=True
-        )
+        r = logged_in_client.get("/database/backup/download/..%2f..%2f..%2fetc%2fpasswd", follow_redirects=True)
         # Either 404 (Werkzeug's <path:filename> still can't smuggle a
         # literal escape) or Jen's own "not found" flash — either way,
         # nothing outside tmp_path was ever touched.
@@ -109,13 +108,11 @@ class TestBackupPathTraversalProtection:
 
     def test_delete_traversal_does_not_remove_arbitrary_file(self, logged_in_client, monkeypatch, tmp_path):
         from jen.services import dbexport
+
         outside_target = tmp_path.parent / "should_not_be_deleted.txt"
         outside_target.write_text("do not delete me")
         monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
-        logged_in_client.post(
-            f"/database/backup/delete/..%2f{outside_target.name}",
-            follow_redirects=True
-        )
+        logged_in_client.post(f"/database/backup/delete/..%2f{outside_target.name}", follow_redirects=True)
         assert outside_target.exists()
         outside_target.unlink()
 
@@ -128,21 +125,13 @@ class TestImportConfirmTmpPathValidation:
 
     def test_rejects_path_outside_tmp_import_prefix(self, logged_in_client):
         tampered = base64.b64encode(b"/etc/passwd").decode()
-        r = logged_in_client.post(
-            "/database/import/confirm",
-            data={"tmp_path": tampered},
-            follow_redirects=True
-        )
+        r = logged_in_client.post("/database/import/confirm", data={"tmp_path": tampered}, follow_redirects=True)
         assert r.status_code == 200
         assert b"expired" in r.data.lower() or b"re-upload" in r.data.lower()
 
     def test_rejects_correct_prefix_but_nonexistent_file(self, logged_in_client):
         fake = base64.b64encode(b"/tmp/jen_import_doesnotexist123").decode()
-        r = logged_in_client.post(
-            "/database/import/confirm",
-            data={"tmp_path": fake},
-            follow_redirects=True
-        )
+        r = logged_in_client.post("/database/import/confirm", data={"tmp_path": fake}, follow_redirects=True)
         assert r.status_code == 200
         assert b"expired" in r.data.lower() or b"re-upload" in r.data.lower()
 
@@ -150,24 +139,22 @@ class TestImportConfirmTmpPathValidation:
         import tempfile
 
         from jen.services import dbexport
+
         # A minimal, syntactically valid export payload so parse_import_file
         # doesn't error out before we even reach the path-validation logic
         # this test is actually targeting.
-        monkeypatch.setattr(dbexport, "parse_import_file",
-                             lambda file_bytes: ({"database": "unknown-for-test"}, {}, None))
-        real_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz",
-                                                dir="/tmp", prefix="jen_import_")
+        monkeypatch.setattr(
+            dbexport, "parse_import_file", lambda file_bytes: ({"database": "unknown-for-test"}, {}, None)
+        )
+        real_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")
         real_tmp.write(b"placeholder")
         real_tmp.close()
         encoded = base64.b64encode(real_tmp.name.encode()).decode()
 
-        r = logged_in_client.post(
-            "/database/import/confirm",
-            data={"tmp_path": encoded},
-            follow_redirects=True
-        )
+        r = logged_in_client.post("/database/import/confirm", data={"tmp_path": encoded}, follow_redirects=True)
         assert r.status_code == 200
         # The temp file must be consumed (unlinked) either way, valid path
         # or not — it should never survive a confirm attempt.
         import os
+
         assert not os.path.exists(real_tmp.name)

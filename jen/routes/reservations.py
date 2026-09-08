@@ -34,9 +34,8 @@ bp = Blueprint("reservations", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -114,9 +113,12 @@ def reservations():
                             subnet_filter = "all"
                     if subnet_filter == "all" and not current_user.all_subnets:
                         from jen.services.access import add_subnet_restriction
+
                         where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
                     if search:
-                        where.append("(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)")
+                        where.append(
+                            "(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)"
+                        )
                         s = f"%{search}%"
                         params += [s, s, s.replace(":", "")]
                     # v5.1.3 — reservation active/inactive status, same
@@ -141,7 +143,8 @@ def reservations():
                         limit_clause = f"LIMIT {per_page} OFFSET {offset}"
                     else:
                         limit_clause = ""
-                    cur.execute(f"""
+                    cur.execute(
+                        f"""
                         SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
                                h.hostname, HEX(h.dhcp_identifier) AS mac_hex,
                                h.dhcp4_subnet_id AS subnet_id,
@@ -149,18 +152,23 @@ def reservations():
                         FROM hosts h
                         LEFT JOIN lease4 l ON l.address = h.ipv4_address
                             AND l.state = 0 AND l.expire > NOW()
-                        WHERE {' AND '.join(where)}
+                        WHERE {" AND ".join(where)}
                         ORDER BY {sort_col} {direction}
                         {limit_clause}
-                    """, params)
+                    """,
+                        params,
+                    )
                     rows = cur.fetchall()
                     with jdb.cursor() as jcur:
                         for row in rows:
-                            mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                            mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                             jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
                             note = jcur.fetchone()
                             # Fetch DNS override from Kea options table
-                            cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
+                            cur.execute(
+                                "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6",
+                                (row["host_id"],),
+                            )
                             dns_row = cur.fetchone()
                             # Active: the reserved IP currently has a live
                             # lease (the JOIN above only matches non-expired,
@@ -173,14 +181,23 @@ def reservations():
                             # reservation rather than showing it as simply
                             # "active" (technically true, but misleading).
                             is_active = row["lease_expire"] is not None
-                            lease_mac = (":".join(row["lease_mac_hex"][i:i+2] for i in range(0,12,2))
-                                        if row.get("lease_mac_hex") else "")
+                            lease_mac = (
+                                ":".join(row["lease_mac_hex"][i : i + 2] for i in range(0, 12, 2))
+                                if row.get("lease_mac_hex")
+                                else ""
+                            )
                             is_conflict = is_active and lease_mac and mac and lease_mac.lower() != mac.lower()
-                            hosts.append({**row, "mac": mac,
-                                          "notes": note["notes"] if note else "",
-                                          "dns_override": dns_row["formatted_value"] if dns_row else "",
-                                          "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
-                                          "is_active": is_active, "is_conflict": is_conflict})
+                            hosts.append(
+                                {
+                                    **row,
+                                    "mac": mac,
+                                    "notes": note["notes"] if note else "",
+                                    "dns_override": dns_row["formatted_value"] if dns_row else "",
+                                    "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
+                                    "is_active": is_active,
+                                    "is_conflict": is_conflict,
+                                }
+                            )
     except Exception as e:
         logger.error(f"Could not load reservations: {e}")
         flash("Could not load reservations. Check server logs for details.", "error")
@@ -189,13 +206,23 @@ def reservations():
     mac_list = [h["mac"] for h in hosts if h.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
     template_vars = dict(
-        hosts=hosts, subnet_filter=subnet_filter, search=search,
-        subnet_map=accessible_subnet_map, page=page, pages=pages,
-        total=total, stale_days=stale_days, sort=sort, direction=direction,
-        device_info=device_info, per_page=per_page_param, status_filter=status_filter,
+        hosts=hosts,
+        subnet_filter=subnet_filter,
+        search=search,
+        subnet_map=accessible_subnet_map,
+        page=page,
+        pages=pages,
+        total=total,
+        stale_days=stale_days,
+        sort=sort,
+        direction=direction,
+        device_info=device_info,
+        per_page=per_page_param,
+        status_filter=status_filter,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-        view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,
+        view_mode="v4",
+        subnet6_map=extensions.SUBNET6_MAP,
     )
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
@@ -220,7 +247,7 @@ def _reservations_v6():
     """
     if not extensions.SUBNET6_MAP:
         flash("No IPv6 subnets are configured.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
 
     search = __auth.sanitize_search(request.args.get("search", "").strip())
     subnet_filter = request.args.get("subnet", "all")
@@ -233,11 +260,9 @@ def _reservations_v6():
             # access. Same paired-v4-subnet access rule as global search.
             info = extensions.SUBNET6_MAP.get(subnet_id)
             paired = info.get("paired_subnet4_id") if info else None
-            allowed = (
-                info is not None and (
-                    current_user.all_subnets or
-                    (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-                )
+            allowed = info is not None and (
+                current_user.all_subnets
+                or (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
             )
             if not allowed:
                 subnet_filter = "all"
@@ -251,7 +276,8 @@ def _reservations_v6():
         if search:
             s = search.lower()
             hosts6 = [
-                h for h in hosts6
+                h
+                for h in hosts6
                 if s in (h["hostname"] or "").lower()
                 or s in (h["duid_hex"] or "").lower()
                 or any(s in (r["address"] or "").lower() for r in h["reservations"])
@@ -263,13 +289,17 @@ def _reservations_v6():
         flash("Could not load IPv6 reservations. Check server logs for details.", "error")
 
     template_vars = dict(
-        hosts6=hosts6, total=len(hosts6),
-        subnet_filter=subnet_filter, search=search,
-        subnet6_map=extensions.SUBNET6_MAP, view_mode="v6",
+        hosts6=hosts6,
+        total=len(hosts6),
+        subnet_filter=subnet_filter,
+        search=search,
+        subnet6_map=extensions.SUBNET6_MAP,
+        view_mode="v6",
     )
     if request.headers.get("HX-Request") == "true":
         return render_template("_reservations6_results.html", **template_vars), 200
     return render_template("reservations.html", **template_vars)
+
 
 @bp.route("/reservations/add")
 @login_required
@@ -281,9 +311,10 @@ def add_reservation():
         "hostname": request.args.get("hostname", ""),
         "subnet_id": request.args.get("subnet_id", ""),
     }
-    return render_template("add_reservation.html",
-                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
-                           prefill=prefill)
+    return render_template(
+        "add_reservation.html", subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), prefill=prefill
+    )
+
 
 @bp.route("/reservations/add", methods=["POST"])
 @login_required
@@ -298,18 +329,23 @@ def add_reservation_post():
         subnet_id = int(request.form.get("subnet_id", 1))
     except ValueError:
         flash("Invalid subnet.", "error")
-        return redirect(url_for('reservations.add_reservation'))
+        return redirect(url_for("reservations.add_reservation"))
     if not current_user.can_access_subnet(subnet_id):
         flash("You do not have access to that subnet.", "error")
-        return redirect(url_for('reservations.add_reservation'))
+        return redirect(url_for("reservations.add_reservation"))
     errors = []
-    if not __auth.valid_ip(ip): errors.append(f"Invalid IP: {ip}")
-    if not __auth.valid_mac(mac): errors.append(f"Invalid MAC: {mac}")
-    if hostname and not __auth.valid_hostname(hostname): errors.append(f"Invalid hostname: {hostname}")
-    if dns_override and not __auth.valid_dns(dns_override): errors.append(f"Invalid DNS: {dns_override}")
+    if not __auth.valid_ip(ip):
+        errors.append(f"Invalid IP: {ip}")
+    if not __auth.valid_mac(mac):
+        errors.append(f"Invalid MAC: {mac}")
+    if hostname and not __auth.valid_hostname(hostname):
+        errors.append(f"Invalid hostname: {hostname}")
+    if dns_override and not __auth.valid_dns(dns_override):
+        errors.append(f"Invalid DNS: {dns_override}")
     if errors:
-        for e in errors: flash(e, "error")
-        return redirect(url_for('reservations.add_reservation'))
+        for e in errors:
+            flash(e, "error")
+        return redirect(url_for("reservations.add_reservation"))
     res = {"subnet-id": subnet_id, "hw-address": mac, "ip-address": ip, "hostname": hostname}
     if dns_override:
         res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
@@ -324,17 +360,20 @@ def add_reservation_post():
                         if row:
                             with __db.jen_db() as jdb:
                                 with jdb.cursor() as jcur:
-                                    jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
-                                                 (row["host_id"], notes, notes))
+                                    jcur.execute(
+                                        "INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
+                                        (row["host_id"], notes, notes),
+                                    )
                                 jdb.commit()
             except Exception:
                 pass
         flash(f"Reservation added: {ip} → {mac}", "success")
         __user.audit("ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname}")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
     else:
         flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
-        return redirect(url_for('reservations.add_reservation'))
+        return redirect(url_for("reservations.add_reservation"))
+
 
 @bp.route("/reservations/edit/<int:host_id>")
 @login_required
@@ -344,15 +383,18 @@ def edit_reservation(host_id):
         with __db.kea_db() as db:
             with __db.jen_db() as jdb:
                 with db.cursor() as cur:
-                    cur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+                    cur.execute(
+                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
+                        (host_id,),
+                    )
                     host = cur.fetchone()
                     if not host:
                         flash("Reservation not found.", "error")
-                        return redirect(url_for('reservations.reservations'))
+                        return redirect(url_for("reservations.reservations"))
                     if not current_user.can_access_subnet(host["subnet_id"]):
                         flash("You do not have access to that subnet.", "error")
-                        return redirect(url_for('reservations.reservations'))
-                    mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
+                        return redirect(url_for("reservations.reservations"))
+                    mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
                     cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
                     dns_row = cur.fetchone()
                     host["mac"] = mac
@@ -364,8 +406,11 @@ def edit_reservation(host_id):
     except Exception as e:
         logger.error(f"Error loading reservation {host_id} for edit: {e}")
         flash("Error loading reservation. Check server logs for details.", "error")
-        return redirect(url_for('reservations.reservations'))
-    return render_template("edit_reservation.html", host=host, subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP))
+        return redirect(url_for("reservations.reservations"))
+    return render_template(
+        "edit_reservation.html", host=host, subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP)
+    )
+
 
 @bp.route("/reservations/edit/<int:host_id>", methods=["POST"])
 @login_required
@@ -377,23 +422,34 @@ def edit_reservation_post(host_id):
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+                cur.execute(
+                    "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
+                    (host_id,),
+                )
                 host = cur.fetchone()
                 if not host:
                     flash("Reservation not found.", "error")
-                    return redirect(url_for('reservations.reservations'))
+                    return redirect(url_for("reservations.reservations"))
                 if not current_user.can_access_subnet(host["subnet_id"]):
                     flash("You do not have access to that subnet.", "error")
-                    return redirect(url_for('reservations.reservations'))
-                mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
-                __kea.kea_command("reservation-del", arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac})
-                res = {"subnet-id": host["subnet_id"], "hw-address": mac, "ip-address": host["ip"], "hostname": hostname}
+                    return redirect(url_for("reservations.reservations"))
+                mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
+                __kea.kea_command(
+                    "reservation-del",
+                    arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
+                )
+                res = {
+                    "subnet-id": host["subnet_id"],
+                    "hw-address": mac,
+                    "ip-address": host["ip"],
+                    "hostname": hostname,
+                }
                 if dns_override:
                     res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
                 result = __kea.kea_command("reservation-add", arguments={"reservation": res})
                 if result.get("result") != 0:
                     flash(f"Kea error: {result.get('text')}", "error")
-                    return redirect(url_for('reservations.edit_reservation', host_id=host_id))
+                    return redirect(url_for("reservations.edit_reservation", host_id=host_id))
         # Kea's reservation-del + reservation-add churns hosts.host_id — it's an
         # AUTO_INCREMENT primary key, so the recreated row gets a brand new id
         # even though ip/mac/subnet are unchanged. Kea does that write over its
@@ -405,7 +461,7 @@ def edit_reservation_post(host_id):
             with db2.cursor() as cur2:
                 cur2.execute(
                     "SELECT host_id FROM hosts WHERE dhcp4_subnet_id=%s AND inet_ntoa(ipv4_address)=%s",
-                    (host["subnet_id"], host["ip"])
+                    (host["subnet_id"], host["ip"]),
                 )
                 new_host_row = cur2.fetchone()
                 new_host_id = new_host_row["host_id"] if new_host_row else host_id
@@ -413,15 +469,18 @@ def edit_reservation_post(host_id):
             with jdb.cursor() as jcur:
                 if new_host_id != host_id:
                     jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
-                jcur.execute("INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
-                             (new_host_id, notes, notes))
+                jcur.execute(
+                    "INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
+                    (new_host_id, notes, notes),
+                )
             jdb.commit()
         flash("Reservation updated.", "success")
         __user.audit("EDIT_RESERVATION", host["ip"], f"hostname={hostname}")
     except Exception as e:
         logger.error(f"Error editing reservation {host_id}: {e}")
         flash("Error saving reservation. Check server logs for details.", "error")
-    return redirect(url_for('reservations.reservations'))
+    return redirect(url_for("reservations.reservations"))
+
 
 @bp.route("/reservations/delete/<int:host_id>", methods=["POST"])
 @login_required
@@ -431,16 +490,25 @@ def delete_reservation(host_id):
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+                cur.execute(
+                    "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
+                    (host_id,),
+                )
                 host = cur.fetchone()
                 if host and not current_user.can_access_subnet(host["subnet_id"]):
                     if is_htmx:
-                        return '<tr><td colspan="7" style="color:var(--danger);padding:8px;">You do not have access to that subnet.</td></tr>', 403
+                        return (
+                            '<tr><td colspan="7" style="color:var(--danger);padding:8px;">You do not have access to that subnet.</td></tr>',
+                            403,
+                        )
                     flash("You do not have access to that subnet.", "error")
-                    return redirect(url_for('reservations.reservations'))
+                    return redirect(url_for("reservations.reservations"))
                 if host:
-                    mac = ":".join(host["mac_hex"][i:i+2] for i in range(0,12,2)) if host["mac_hex"] else ""
-                    result = __kea.kea_command("reservation-del", arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac})
+                    mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
+                    result = __kea.kea_command(
+                        "reservation-del",
+                        arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
+                    )
                     if result.get("result") == 0:
                         with __db.jen_db() as jdb:
                             with jdb.cursor() as jcur:
@@ -453,17 +521,24 @@ def delete_reservation(host_id):
                         flash(f"Reservation {host['ip']} deleted.", "success")
                     else:
                         if is_htmx:
-                            return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Kea error: {result.get("text")}</td></tr>', 422
+                            return (
+                                f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Kea error: {result.get("text")}</td></tr>',
+                                422,
+                            )
                         flash(f"Kea error: {result.get('text')}", "error")
     except Exception as e:
         logger.error(f"Error deleting reservation {host_id}: {e}")
         if is_htmx:
-            return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Error deleting reservation — check server logs.</td></tr>', 500
+            return (
+                f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Error deleting reservation — check server logs.</td></tr>',
+                500,
+            )
         flash("Error deleting reservation. Check server logs for details.", "error")
-    return redirect(url_for('reservations.reservations'))
+    return redirect(url_for("reservations.reservations"))
 
 
 # ── v6 write-side (Phase 3) ──────────────────────────────────────────────────
+
 
 @bp.route("/reservations/add6")
 @login_required
@@ -473,15 +548,16 @@ def add_reservation6():
     only, same gating as the v4 add flow."""
     if not extensions.SUBNET6_MAP:
         flash("No IPv6 subnets are configured.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
     prefill = {
         "duid": request.args.get("duid", ""),
         "hostname": request.args.get("hostname", ""),
         "subnet_id": request.args.get("subnet_id", ""),
     }
-    return render_template("add_reservation6.html",
-                           subnet6_map=current_user.filter_subnet_map(extensions.SUBNET6_MAP),
-                           prefill=prefill)
+    return render_template(
+        "add_reservation6.html", subnet6_map=current_user.filter_subnet_map(extensions.SUBNET6_MAP), prefill=prefill
+    )
+
 
 @bp.route("/reservations/add6", methods=["POST"])
 @login_required
@@ -503,10 +579,10 @@ def add_reservation6_post():
         subnet_id = int(request.form.get("subnet_id", 0))
     except ValueError:
         flash("Invalid subnet.", "error")
-        return redirect(url_for('reservations.add_reservation6'))
+        return redirect(url_for("reservations.add_reservation6"))
     if subnet_id not in extensions.SUBNET6_MAP:
         flash("Invalid IPv6 subnet.", "error")
-        return redirect(url_for('reservations.add_reservation6'))
+        return redirect(url_for("reservations.add_reservation6"))
 
     errors = []
     try:
@@ -533,20 +609,24 @@ def add_reservation6_post():
     if errors:
         for e in errors:
             flash(e, "error")
-        return redirect(url_for('reservations.add_reservation6'))
+        return redirect(url_for("reservations.add_reservation6"))
 
     result = __kea6.add_v6_reservation(
-        subnet_id, duid_norm, hostname=hostname,
+        subnet_id,
+        duid_norm,
+        hostname=hostname,
         addresses=[address] if address else None,
-        prefix=prefix or None, prefix_len=prefix_len,
+        prefix=prefix or None,
+        prefix_len=prefix_len,
     )
     if result.get("result") == 0:
         flash(f"IPv6 reservation added for DUID {duid_norm}.", "success")
         __user.audit("ADD_RESERVATION6", duid_norm, f"subnet={subnet_id} hostname={hostname}")
-        return redirect(url_for('reservations.reservations', view="v6"))
+        return redirect(url_for("reservations.reservations", view="v6"))
     else:
         flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
-        return redirect(url_for('reservations.add_reservation6'))
+        return redirect(url_for("reservations.add_reservation6"))
+
 
 @bp.route("/reservations/delete6", methods=["POST"])
 @login_required
@@ -562,15 +642,15 @@ def delete_reservation6():
         subnet_id = int(request.form.get("subnet_id", 0))
     except ValueError:
         flash("Invalid subnet.", "error")
-        return redirect(url_for('reservations.reservations', view="v6"))
+        return redirect(url_for("reservations.reservations", view="v6"))
     if subnet_id not in extensions.SUBNET6_MAP:
         flash("Invalid IPv6 subnet.", "error")
-        return redirect(url_for('reservations.reservations', view="v6"))
+        return redirect(url_for("reservations.reservations", view="v6"))
     try:
         duid_norm = __kea6.normalize_duid(duid)
     except ValueError as e:
         flash(str(e), "error")
-        return redirect(url_for('reservations.reservations', view="v6"))
+        return redirect(url_for("reservations.reservations", view="v6"))
 
     result = __kea6.delete_v6_reservation(subnet_id, duid_norm)
     if result.get("result") == 0:
@@ -578,7 +658,8 @@ def delete_reservation6():
         __user.audit("DELETE_RESERVATION6", duid_norm, f"subnet={subnet_id}")
     else:
         flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
-    return redirect(url_for('reservations.reservations', view="v6"))
+    return redirect(url_for("reservations.reservations", view="v6"))
+
 
 @bp.route("/reservations/export")
 @login_required
@@ -590,26 +671,44 @@ def export_reservations():
                 writer = csv.writer(output)
                 writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
                 with db.cursor() as cur:
-                    cur.execute("SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp4_subnet_id > 0 ORDER BY ipv4_address")
+                    cur.execute(
+                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp4_subnet_id > 0 ORDER BY ipv4_address"
+                    )
                     for row in cur.fetchall():
                         if not current_user.can_access_subnet(row["subnet_id"]):
                             continue
-                        mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                        cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],))
+                        mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                        cur.execute(
+                            "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],)
+                        )
                         dns_row = cur.fetchone()
                         dns = dns_row["formatted_value"] if dns_row else ""
                         with jdb.cursor() as jcur:
                             jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
                             note = jcur.fetchone()
                         subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")
-                        writer.writerow([row["ip"], mac, row["hostname"] or "", row["subnet_id"], subnet_name, dns, note["notes"] if note else ""])
+                        writer.writerow(
+                            [
+                                row["ip"],
+                                mac,
+                                row["hostname"] or "",
+                                row["subnet_id"],
+                                subnet_name,
+                                dns,
+                                note["notes"] if note else "",
+                            ]
+                        )
         output.seek(0)
-        return Response(output.getvalue(), mimetype="text/csv",
-                        headers={"Content-Disposition": "attachment;filename=reservations.csv"})
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=reservations.csv"},
+        )
     except Exception as e:
         logger.error(f"Error exporting reservations: {e}")
         flash("Export failed. Check server logs for details.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
+
 
 @bp.route("/reservations/import", methods=["POST"])
 @login_required
@@ -619,7 +718,7 @@ def import_reservations():
     csv_file = request.files.get("csv_file")
     if not csv_file or not csv_file.filename:
         flash("No file selected.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
     results = {"added": 0, "skipped": 0, "errors": []}
     try:
         stream = io.StringIO(csv_file.stream.read().decode("utf-8-sig"))
@@ -651,32 +750,45 @@ def import_reservations():
                 if not dry_run:
                     with db.cursor() as cur:
                         # Check for duplicate
-                        cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s AND dhcp4_subnet_id=%s", (ip, subnet_id))
+                        cur.execute(
+                            "SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s AND dhcp4_subnet_id=%s",
+                            (ip, subnet_id),
+                        )
                         if cur.fetchone():
                             results["skipped"] += 1
                             continue
-                        cur.execute("""INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id,
+                        cur.execute(
+                            """INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id,
                                        ipv4_address, hostname, dhcp4_client_classes, dhcp6_client_classes)
                                        VALUES (UNHEX(%s), 1, %s, INET_ATON(%s), %s, '', '')""",
-                                    (mac_bytes, subnet_id, ip, hostname))
+                            (mac_bytes, subnet_id, ip, hostname),
+                        )
                 results["added"] += 1
             if not dry_run:
                 db.commit()
         if dry_run:
-            flash(f"Dry run: {results['added']} would be added, {results['skipped']} skipped. {len(results['errors'])} error(s).", "info")
+            flash(
+                f"Dry run: {results['added']} would be added, {results['skipped']} skipped. {len(results['errors'])} error(s).",
+                "info",
+            )
         else:
-            flash(f"Import complete: {results['added']} added, {results['skipped']} skipped. {len(results['errors'])} error(s).", "success")
+            flash(
+                f"Import complete: {results['added']} added, {results['skipped']} skipped. {len(results['errors'])} error(s).",
+                "success",
+            )
             __user.audit("IMPORT_RESERVATIONS", "reservations", f"Added {results['added']} by {current_user.username}")
         for err in results["errors"][:10]:
             flash(err, "warning")
     except Exception as e:
         logger.error(f"Error importing reservations: {e}")
         flash("Import failed. Check server logs for details.", "error")
-    return redirect(url_for('reservations.reservations'))
+    return redirect(url_for("reservations.reservations"))
+
 
 # ─────────────────────────────────────────
 # Subnets
 # ─────────────────────────────────────────
+
 
 @bp.route("/reservations/bulk-delete", methods=["POST"])
 @login_required
@@ -685,7 +797,7 @@ def bulk_delete_reservations():
     host_ids = request.form.getlist("host_ids[]")
     if not host_ids:
         flash("No reservations selected.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
 
     deleted = 0
     errors = 0
@@ -696,17 +808,24 @@ def bulk_delete_reservations():
                     for host_id in host_ids:
                         try:
                             host_id = int(host_id)
-                            cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s", (host_id,))
+                            cur.execute(
+                                "SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s",
+                                (host_id,),
+                            )
                             host = cur.fetchone()
                             if host and not current_user.can_access_subnet(host["dhcp4_subnet_id"]):
                                 errors += 1
                                 continue
                             if host:
                                 mac = __kea.format_mac(host["dhcp_identifier"])
-                                result = __kea.kea_command("reservation-del", arguments={
-                                    "subnet-id": host["dhcp4_subnet_id"],
-                                    "identifier-type": "hw-address", "identifier": mac
-                                })
+                                result = __kea.kea_command(
+                                    "reservation-del",
+                                    arguments={
+                                        "subnet-id": host["dhcp4_subnet_id"],
+                                        "identifier-type": "hw-address",
+                                        "identifier": mac,
+                                    },
+                                )
                                 if result.get("result") == 0:
                                     with jdb.cursor() as jcur:
                                         jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
@@ -719,12 +838,15 @@ def bulk_delete_reservations():
     except Exception as e:
         logger.error(f"Bulk delete reservations error: {e}")
         flash("Bulk delete failed. Check server logs for details.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
 
-    flash(f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""),
-          "success" if errors == 0 else "warning")
+    flash(
+        f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""),
+        "success" if errors == 0 else "warning",
+    )
     __user.audit("BULK_DELETE_RESERVATIONS", "reservations", f"Deleted={deleted} Errors={errors}")
-    return redirect(url_for('reservations.reservations'))
+    return redirect(url_for("reservations.reservations"))
+
 
 @bp.route("/reservations/bulk-export", methods=["POST"])
 @login_required
@@ -732,7 +854,7 @@ def bulk_export_reservations():
     host_ids = request.form.getlist("host_ids[]")
     if not host_ids:
         flash("No reservations selected.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
     try:
         with __db.kea_db() as db:
             with __db.jen_db() as jdb:
@@ -743,17 +865,22 @@ def bulk_export_reservations():
                     for host_id in host_ids:
                         try:
                             host_id = int(host_id)
-                            cur.execute("""
+                            cur.execute(
+                                """
                                 SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
                                        h.dhcp_identifier, h.hostname, h.dhcp4_subnet_id
                                 FROM hosts h WHERE h.host_id=%s
-                            """, (host_id,))
+                            """,
+                                (host_id,),
+                            )
                             row = cur.fetchone()
                             if row and not current_user.can_access_subnet(row["dhcp4_subnet_id"]):
                                 continue
                             if row:
                                 mac = __kea.format_mac(row["dhcp_identifier"])
-                                cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
+                                cur.execute(
+                                    "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,)
+                                )
                                 dns_row = cur.fetchone()
                                 dns = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
                                 with jdb.cursor() as jcur:
@@ -761,18 +888,31 @@ def bulk_export_reservations():
                                     note_row = jcur.fetchone()
                                     notes = note_row["notes"] if note_row else ""
                                 subnet_name = extensions.SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "")
-                                writer.writerow([row["ip"], mac, row["hostname"] or "", row["dhcp4_subnet_id"],
-                                                 subnet_name, dns, notes])
+                                writer.writerow(
+                                    [
+                                        row["ip"],
+                                        mac,
+                                        row["hostname"] or "",
+                                        row["dhcp4_subnet_id"],
+                                        subnet_name,
+                                        dns,
+                                        notes,
+                                    ]
+                                )
                         except Exception:
                             pass
         output.seek(0)
         __user.audit("BULK_EXPORT_RESERVATIONS", "reservations", f"Exported {len(host_ids)} selected")
-        return Response(output.getvalue(), mimetype="text/csv",
-                        headers={"Content-Disposition": "attachment;filename=reservations_selected.csv"})
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=reservations_selected.csv"},
+        )
     except Exception as e:
         logger.error(f"Error exporting selected reservations: {e}")
         flash("Export failed. Check server logs for details.", "error")
-        return redirect(url_for('reservations.reservations'))
+        return redirect(url_for("reservations.reservations"))
+
 
 # ─────────────────────────────────────────
 # Subnet notes

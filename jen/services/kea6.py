@@ -47,6 +47,7 @@ def is_ipv6_enabled() -> bool:
     reload-and-re-derive plumbing.
     """
     from jen.models.user import get_global_setting
+
     try:
         return get_global_setting("ipv6_enabled", "false") == "true"
     except Exception as e:
@@ -66,12 +67,12 @@ def _v6_server(server: dict = None) -> dict:
     """
     if server is None:
         return {
-            "api_url":  extensions.KEA6_API_URL,
+            "api_url": extensions.KEA6_API_URL,
             "api_user": extensions.KEA6_API_USER,
             "api_pass": extensions.KEA6_API_PASS,
         }
     return {
-        "api_url":  server.get("api6_url")  or extensions.KEA6_API_URL  or server["api_url"],
+        "api_url": server.get("api6_url") or extensions.KEA6_API_URL or server["api_url"],
         "api_user": server.get("api6_user") or extensions.KEA6_API_USER or server["api_user"],
         "api_pass": server.get("api6_pass") or extensions.KEA6_API_PASS or server["api_pass"],
     }
@@ -79,8 +80,7 @@ def _v6_server(server: dict = None) -> dict:
 
 def kea6_command(command: str, arguments: dict = None, server: dict = None) -> dict:
     """Send a command to kea-dhcp6 via the same Control Agent plumbing v4 uses."""
-    return kea_command(command, service="dhcp6", arguments=arguments,
-                        server=_v6_server(server))
+    return kea_command(command, service="dhcp6", arguments=arguments, server=_v6_server(server))
 
 
 def kea6_is_up(server: dict = None) -> bool:
@@ -97,6 +97,7 @@ def kea6_is_up(server: dict = None) -> bool:
 # gating happens at the route level (jen/routes/settings.py), not here —
 # this module has no notion of the logged-in user, matching how the rest
 # of jen/services/ stays decoupled from Flask/auth.
+
 
 def _dual_name_systemctl(ssh, action: str) -> tuple:
     """
@@ -134,9 +135,12 @@ def _connect_ssh(server: dict):
     ssh = paramiko.SSHClient()
     __auth.paramiko_load_known_hosts(ssh)
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(server["ssh_host"],
-                username=server.get("ssh_user", extensions.KEA_SSH_USER),
-                key_filename=extensions.SSH_KEY_PATH, timeout=10)
+    ssh.connect(
+        server["ssh_host"],
+        username=server.get("ssh_user", extensions.KEA_SSH_USER),
+        key_filename=extensions.SSH_KEY_PATH,
+        timeout=10,
+    )
     try:
         ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
     except Exception:
@@ -150,6 +154,7 @@ def _kea6_conf_path(server: dict) -> str:
     exists yet for this (nothing in the Phase 1 checklist calls for one);
     derive it from the v4 kea_conf path rather than hardcoding /etc/kea/."""
     import os as _os
+
     kea4_conf = server.get("kea_conf") or extensions.KEA_CONF
     return _os.path.join(_os.path.dirname(kea4_conf), "kea-dhcp6.conf")
 
@@ -183,24 +188,29 @@ def set_ipv6_service_state(enable: bool) -> list:
             try:
                 kea6_conf = _kea6_conf_path(server)
                 if enable and not _config_exists(ssh, kea6_conf):
-                    results.append({
-                        "name": name, "ok": False,
-                        "message": f"No {kea6_conf} on this server — use "
-                                   f"'Author a starting config' below to generate "
-                                   f"one (pulling interfaces/DB info from your "
-                                   f"existing kea-dhcp4.conf where possible), "
-                                   f"then retry.",
-                    })
+                    results.append(
+                        {
+                            "name": name,
+                            "ok": False,
+                            "message": f"No {kea6_conf} on this server — use "
+                            f"'Author a starting config' below to generate "
+                            f"one (pulling interfaces/DB info from your "
+                            f"existing kea-dhcp4.conf where possible), "
+                            f"then retry.",
+                        }
+                    )
                     continue
                 out, err = _dual_name_systemctl(ssh, action)
                 if out == "done":
-                    results.append({
-                        "name": name, "ok": True,
-                        "message": f"kea-dhcp6-server {'enabled and started' if enable else 'stopped and disabled'}",
-                    })
+                    results.append(
+                        {
+                            "name": name,
+                            "ok": True,
+                            "message": f"kea-dhcp6-server {'enabled and started' if enable else 'stopped and disabled'}",
+                        }
+                    )
                 else:
-                    results.append({"name": name, "ok": False,
-                                     "message": err or out or "Unknown systemctl result"})
+                    results.append({"name": name, "ok": False, "message": err or out or "Unknown systemctl result"})
             finally:
                 ssh.close()
         except Exception as e:
@@ -234,7 +244,7 @@ def _hex_to_colon_mac(hex_str: str) -> str:
     HEX()-selected column rather than raw bytes."""
     if not hex_str:
         return ""
-    return ":".join(hex_str[i:i + 2] for i in range(0, len(hex_str), 2)).lower()
+    return ":".join(hex_str[i : i + 2] for i in range(0, len(hex_str), 2)).lower()
 
 
 def extract_mac_from_duid(duid_hex: str):
@@ -260,13 +270,13 @@ def extract_mac_from_duid(duid_hex: str):
         duid_type = int(duid_hex[0:4], 16)
     except ValueError:
         return None
-    if duid_type == 1:      # DUID-LLT
+    if duid_type == 1:  # DUID-LLT
         ll = duid_hex[16:]  # skip type(4) + hwtype(4) + time(8) hex chars
-    elif duid_type == 3:    # DUID-LL
-        ll = duid_hex[8:]   # skip type(4) + hwtype(4) hex chars
+    elif duid_type == 3:  # DUID-LL
+        ll = duid_hex[8:]  # skip type(4) + hwtype(4) hex chars
     else:
         return None
-    if len(ll) != 12:       # not a 6-byte (48-bit) link-layer address — don't guess
+    if len(ll) != 12:  # not a 6-byte (48-bit) link-layer address — don't guess
         return None
     return _hex_to_colon_mac(ll)
 
@@ -286,8 +296,7 @@ def get_lease6_mac(hwaddr_hex: str, duid_hex: str):
     return extract_mac_from_duid(duid_hex)
 
 
-def list_lease6(subnet_id: int = None, lease_type: int = None,
-                search: str = None, show_expired: bool = False) -> list:
+def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = None, show_expired: bool = False) -> list:
     """
     Read lease6 rows, optionally filtered by subnet/type/search. Mirrors
     the shape jen/routes/leases.py's lease4 query builds, adapted for v6's
@@ -321,7 +330,8 @@ def list_lease6(subnet_id: int = None, lease_type: int = None,
     results = []
     with kea6_db() as db:
         with db.cursor() as cur:
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 SELECT address, HEX(duid) AS duid_hex, HEX(hwaddr) AS hwaddr_hex,
                        valid_lifetime, expire,
                        (expire - INTERVAL valid_lifetime SECOND) AS obtained,
@@ -329,25 +339,29 @@ def list_lease6(subnet_id: int = None, lease_type: int = None,
                        hostname, state
                 FROM lease6 WHERE {where_str}
                 ORDER BY address
-            """, params)
+            """,
+                params,
+            )
             for row in cur.fetchall():
-                results.append({
-                    "address":         row["address"],
-                    "duid_hex":        row["duid_hex"] or "",
-                    "mac":             get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or "",
-                    "valid_lifetime":  row["valid_lifetime"],
-                    "expire":          row["expire"],
-                    "obtained":        row["obtained"],
-                    "subnet_id":       row["subnet_id"],
-                    "pref_lifetime":   row["pref_lifetime"],
-                    "lease_type":      row["lease_type"],
-                    "lease_type_name": LEASE6_TYPE_NAMES.get(row["lease_type"], "?"),
-                    "iaid":            row["iaid"],
-                    "prefix_len":      row["prefix_len"],
-                    "hostname":        row["hostname"] or "",
-                    "state":           row["state"],
-                    "expired":         (row["state"] or 0) != 0,
-                })
+                results.append(
+                    {
+                        "address": row["address"],
+                        "duid_hex": row["duid_hex"] or "",
+                        "mac": get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or "",
+                        "valid_lifetime": row["valid_lifetime"],
+                        "expire": row["expire"],
+                        "obtained": row["obtained"],
+                        "subnet_id": row["subnet_id"],
+                        "pref_lifetime": row["pref_lifetime"],
+                        "lease_type": row["lease_type"],
+                        "lease_type_name": LEASE6_TYPE_NAMES.get(row["lease_type"], "?"),
+                        "iaid": row["iaid"],
+                        "prefix_len": row["prefix_len"],
+                        "hostname": row["hostname"] or "",
+                        "state": row["state"],
+                        "expired": (row["state"] or 0) != 0,
+                    }
+                )
     return results
 
 
@@ -377,44 +391,52 @@ def get_ipv6_reservations(subnet_id: int = None) -> list:
     order = []
     with kea6_db() as db:
         with db.cursor() as cur:
-            cur.execute(f"""
+            cur.execute(
+                f"""
                 SELECT host_id, HEX(dhcp_identifier) AS duid_hex,
                        dhcp_identifier_type, dhcp6_subnet_id, hostname,
                        dhcp6_client_classes
                 FROM hosts WHERE {where_str}
                 ORDER BY host_id
-            """, params)
+            """,
+                params,
+            )
             for row in cur.fetchall():
                 hosts_by_id[row["host_id"]] = {
-                    "host_id":              row["host_id"],
-                    "duid_hex":             row["duid_hex"] or "",
+                    "host_id": row["host_id"],
+                    "duid_hex": row["duid_hex"] or "",
                     "dhcp_identifier_type": row["dhcp_identifier_type"],
-                    "subnet_id":            row["dhcp6_subnet_id"],
-                    "hostname":             row["hostname"] or "",
-                    "client_classes":       row["dhcp6_client_classes"] or "",
-                    "reservations":         [],
+                    "subnet_id": row["dhcp6_subnet_id"],
+                    "hostname": row["hostname"] or "",
+                    "client_classes": row["dhcp6_client_classes"] or "",
+                    "reservations": [],
                 }
                 order.append(row["host_id"])
 
             if hosts_by_id:
                 placeholders = ",".join(["%s"] * len(hosts_by_id))
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT reservation_id, address, prefix_len, type,
                            dhcp6_iaid, host_id
                     FROM ipv6_reservations WHERE host_id IN ({placeholders})
-                """, list(hosts_by_id.keys()))
+                """,
+                    list(hosts_by_id.keys()),
+                )
                 for row in cur.fetchall():
                     host = hosts_by_id.get(row["host_id"])
                     if host is None:
                         continue
-                    host["reservations"].append({
-                        "reservation_id": row["reservation_id"],
-                        "address":        row["address"],
-                        "prefix_len":     row["prefix_len"],
-                        "type":           row["type"],
-                        "type_name":      IPV6_RESERVATION_TYPE_NAMES.get(row["type"], "?"),
-                        "iaid":           row["dhcp6_iaid"],
-                    })
+                    host["reservations"].append(
+                        {
+                            "reservation_id": row["reservation_id"],
+                            "address": row["address"],
+                            "prefix_len": row["prefix_len"],
+                            "type": row["type"],
+                            "type_name": IPV6_RESERVATION_TYPE_NAMES.get(row["type"], "?"),
+                            "iaid": row["dhcp6_iaid"],
+                        }
+                    )
 
     return [hosts_by_id[hid] for hid in order]
 
@@ -443,34 +465,34 @@ def list_lease6_devices(subnet_id: int = None, search: str = None) -> list:
     leases = list_lease6(subnet_id=subnet_id, search=search, show_expired=False)
     by_duid = {}
     order = []
-    for l in leases:
-        key = l["duid_hex"] or f"__no_duid_{l['address']}"
+    for lease in leases:
+        key = lease["duid_hex"] or f"__no_duid_{lease['address']}"
         if key not in by_duid:
-            manufacturer, device_type, icon = (
-                __fp.lookup_oui(l["mac"]) if l["mac"] else ("", "", "")
-            )
+            manufacturer, device_type, icon = __fp.lookup_oui(lease["mac"]) if lease["mac"] else ("", "", "")
             by_duid[key] = {
-                "duid_hex":     l["duid_hex"],
-                "mac":          l["mac"],
+                "duid_hex": lease["duid_hex"],
+                "mac": lease["mac"],
                 "manufacturer": manufacturer if manufacturer != "Unknown" else "",
-                "device_type":  device_type if device_type != "unknown" else "",
-                "icon":         icon if manufacturer != "Unknown" else "",
-                "hostname":     l["hostname"],
-                "subnet_id":    l["subnet_id"],
-                "addresses":    [],
-                "last_expire":  l["expire"],
+                "device_type": device_type if device_type != "unknown" else "",
+                "icon": icon if manufacturer != "Unknown" else "",
+                "hostname": lease["hostname"],
+                "subnet_id": lease["subnet_id"],
+                "addresses": [],
+                "last_expire": lease["expire"],
             }
             order.append(key)
         dev = by_duid[key]
-        if not dev["hostname"] and l["hostname"]:
-            dev["hostname"] = l["hostname"]
-        if l["expire"] and (not dev["last_expire"] or l["expire"] > dev["last_expire"]):
-            dev["last_expire"] = l["expire"]
-        dev["addresses"].append({
-            "address":    l["address"],
-            "type_name":  l["lease_type_name"],
-            "prefix_len": l["prefix_len"],
-        })
+        if not dev["hostname"] and lease["hostname"]:
+            dev["hostname"] = lease["hostname"]
+        if lease["expire"] and (not dev["last_expire"] or lease["expire"] > dev["last_expire"]):
+            dev["last_expire"] = lease["expire"]
+        dev["addresses"].append(
+            {
+                "address": lease["address"],
+                "type_name": lease["lease_type_name"],
+                "prefix_len": lease["prefix_len"],
+            }
+        )
     return [by_duid[k] for k in order]
 
 
@@ -487,6 +509,7 @@ def list_lease6_devices(subnet_id: int = None, search: str = None) -> list:
 # during Phase 3 research — reservation-add wraps that same object shape
 # in {"reservation": {...}}, identical to how the v4 add flow already
 # wraps hw-address/ip-address today.
+
 
 def normalize_duid(duid: str) -> str:
     """
@@ -505,12 +528,18 @@ def normalize_duid(duid: str) -> str:
         int(hex_only, 16)
     except ValueError as e:
         raise ValueError(f"DUID must be hex: {duid!r}") from e
-    return ":".join(hex_only[i:i + 2] for i in range(0, len(hex_only), 2))
+    return ":".join(hex_only[i : i + 2] for i in range(0, len(hex_only), 2))
 
 
-def add_v6_reservation(subnet_id: int, duid: str, hostname: str = "",
-                       addresses: list = None, prefix: str = None,
-                       prefix_len: int = None, server: dict = None) -> dict:
+def add_v6_reservation(
+    subnet_id: int,
+    duid: str,
+    hostname: str = "",
+    addresses: list = None,
+    prefix: str = None,
+    prefix_len: int = None,
+    server: dict = None,
+) -> dict:
     """
     Add a v6 host reservation — an address (IA_NA) reservation, a
     delegated-prefix (IA_PD) reservation, or both at once (the same
@@ -540,11 +569,15 @@ def delete_v6_reservation(subnet_id: int, duid: str, server: dict = None) -> dic
     fixed at 'duid' — Jen's v6 reservation UI is DUID-only, matching how
     Jen only builds v4 reservations by hw-address, not the other v4
     identifier types Kea itself also supports)."""
-    return kea6_command("reservation-del", arguments={
-        "subnet-id": subnet_id,
-        "identifier-type": "duid",
-        "identifier": normalize_duid(duid),
-    }, server=server)
+    return kea6_command(
+        "reservation-del",
+        arguments={
+            "subnet-id": subnet_id,
+            "identifier-type": "duid",
+            "identifier": normalize_duid(duid),
+        },
+        server=server,
+    )
 
 
 # ── Write-side: v6 subnet editing (Phase 3) ─────────────────────────────────
@@ -566,23 +599,30 @@ def delete_v6_reservation(subnet_id: int, duid: str, server: dict = None) -> dic
 #     Phase 3 boundary — PD-pool (prefix delegation pool) editing is not
 #     included here.
 
+
 def get_subnet6_kea_data(subnet_id: int, server: dict = None) -> dict:
     """Fetch current v6 subnet config from Kea for pre-populating the edit
     form — same shape/intent as jen/routes/subnets.py's
     _get_subnet_kea_data(), read via kea6_command("config-get") against
     Dhcp6 rather than Dhcp4."""
-    empty = {"pools": [], "pool_str": "", "preferred_lifetime": "",
-             "valid_lifetime": "", "renew_timer": "", "rebind_timer": "",
-             "dns_servers": ""}
+    empty = {
+        "pools": [],
+        "pool_str": "",
+        "preferred_lifetime": "",
+        "valid_lifetime": "",
+        "renew_timer": "",
+        "rebind_timer": "",
+        "dns_servers": "",
+    }
     try:
         result = kea6_command("config-get", server=server)
         if result.get("result") != 0:
             return empty
         cfg = result["arguments"]["Dhcp6"]
-        global_pref    = cfg.get("preferred-lifetime", 0)
-        global_valid   = cfg.get("valid-lifetime", 0)
-        global_renew   = cfg.get("renew-timer", 0)
-        global_rebind  = cfg.get("rebind-timer", 0)
+        global_pref = cfg.get("preferred-lifetime", 0)
+        global_valid = cfg.get("valid-lifetime", 0)
+        global_renew = cfg.get("renew-timer", 0)
+        global_rebind = cfg.get("rebind-timer", 0)
         for s in cfg.get("subnet6", []):
             if s["id"] != subnet_id:
                 continue
@@ -596,22 +636,22 @@ def get_subnet6_kea_data(subnet_id: int, server: dict = None) -> dict:
                 if opt.get("name") == "dns-servers":
                     dns_servers = opt.get("data", "")
             return {
-                "pools":              pools,
-                "pool_str":           pools[0] if pools else "",
-                "preferred_lifetime": s.get("preferred-lifetime", global_pref)   or "",
-                "valid_lifetime":     s.get("valid-lifetime",     global_valid)  or "",
-                "renew_timer":        s.get("renew-timer",        global_renew)  or "",
-                "rebind_timer":       s.get("rebind-timer",       global_rebind) or "",
-                "dns_servers":        dns_servers,
+                "pools": pools,
+                "pool_str": pools[0] if pools else "",
+                "preferred_lifetime": s.get("preferred-lifetime", global_pref) or "",
+                "valid_lifetime": s.get("valid-lifetime", global_valid) or "",
+                "renew_timer": s.get("renew-timer", global_renew) or "",
+                "rebind_timer": s.get("rebind-timer", global_rebind) or "",
+                "dns_servers": dns_servers,
             }
     except Exception:
         pass
     return empty
 
 
-def build_subnet6_patch_script(subnet_id, kea6_conf, new_pool, extra_pools,
-                               new_preferred, new_valid, new_renew, new_rebind,
-                               new_dns, dry_run=False):
+def build_subnet6_patch_script(
+    subnet_id, kea6_conf, new_pool, extra_pools, new_preferred, new_valid, new_renew, new_rebind, new_dns, dry_run=False
+):
     """
     Build the remote Python script that patches subnet_id's v6 config,
     writes it to a temp file, and runs `kea-dhcp6 -t` against it.

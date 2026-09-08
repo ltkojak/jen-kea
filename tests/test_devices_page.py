@@ -12,28 +12,32 @@ exists" label — never an omitted icon.
 """
 
 
-
 def _insert_device(db, mac_hex="aabbccddee01", last_ip="10.10.10.50", subnet_id=None):
-    mac_colon = ":".join(mac_hex[i:i+2] for i in range(0, 12, 2))
+    mac_colon = ":".join(mac_hex[i : i + 2] for i in range(0, 12, 2))
     with db.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, first_seen, last_seen)
             VALUES (%s, %s, 'test-device', %s, NOW(), NOW())
-        """, (mac_colon, last_ip, subnet_id))
+        """,
+            (mac_colon, last_ip, subnet_id),
+        )
         return cur.lastrowid
 
 
 def _insert_reservation(db, mac_hex="aabbccddee01", ip="10.10.10.50", subnet_id=1):
     with db.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type,
                 dhcp4_subnet_id, ipv4_address, hostname)
             VALUES (UNHEX(%s), 0, %s, INET_ATON(%s), 'reserved-host')
-        """, (mac_hex, subnet_id, ip))
+        """,
+            (mac_hex, subnet_id, ip),
+        )
 
 
 class TestDevicesActionMenu:
-
     def test_action_menu_present_regardless_of_reservation_state(self, logged_in_client, db):
         """The core fix: both a reserved and an unreserved device get
         the exact same action-menu wrapper — no icon is silently
@@ -93,6 +97,7 @@ class TestDevicesActionMenu:
 
     def test_viewer_does_not_see_edit_or_delete_items(self, client, db):
         from tests.conftest import restricted_client
+
         with db.cursor() as cur:
             cur.execute("DELETE FROM devices")
         db.commit()
@@ -107,7 +112,7 @@ class TestDevicesActionMenu:
         # "edit-btn" in its selector regardless of whether any button
         # exists — check for the actual rendered element instead of the
         # bare substring.
-        assert 'action-menu-item edit-btn' not in body
+        assert "action-menu-item edit-btn" not in body
         assert b"Remove from inventory" not in resp.data
         # But the reservation item should still be visible to a viewer —
         # it's informational/a link, not a mutating action gated to admins.
@@ -138,12 +143,12 @@ class TestDevicesActionMenu:
         db.commit()
         resp = logged_in_client.get("/devices")
         body = resp.data.decode()
-        assert 'data-mac=' in body
-        assert 'data-name=' in body
-        assert 'data-owner=' in body
-        assert 'data-notes=' in body
-        assert 'data-type=' in body
-        assert 'data-icon=' in body
+        assert "data-mac=" in body
+        assert "data-name=" in body
+        assert "data-owner=" in body
+        assert "data-notes=" in body
+        assert "data-type=" in body
+        assert "data-icon=" in body
 
 
 class TestBulkDeleteDevices:
@@ -155,9 +160,9 @@ class TestBulkDeleteDevices:
     def test_bulk_delete_removes_selected_devices(self, logged_in_client, db):
         device_id = _insert_device(db, mac_hex="aabbccddee30", last_ip="10.10.10.70")
         db.commit()
-        r = logged_in_client.post("/devices/bulk-delete",
-                                  data={"device_ids[]": [str(device_id)]},
-                                  follow_redirects=True)
+        r = logged_in_client.post(
+            "/devices/bulk-delete", data={"device_ids[]": [str(device_id)]}, follow_redirects=True
+        )
         assert r.status_code == 200
         assert b"Removed 1 device" in r.data
         with db.cursor() as cur:
@@ -171,12 +176,11 @@ class TestBulkDeleteDevices:
 
     def test_bulk_delete_respects_subnet_restriction(self, client, db):
         from tests.conftest import restricted_client
+
         device_id = _insert_device(db, mac_hex="aabbccddee31", last_ip="10.10.10.71", subnet_id=1)
         db.commit()
         restricted_client(client, db, allowed_subnets=[999])
-        r = client.post("/devices/bulk-delete",
-                        data={"device_ids[]": [str(device_id)]},
-                        follow_redirects=True)
+        r = client.post("/devices/bulk-delete", data={"device_ids[]": [str(device_id)]}, follow_redirects=True)
         assert r.status_code == 200
         with db.cursor() as cur:
             cur.execute("SELECT * FROM devices WHERE id=%s", (device_id,))

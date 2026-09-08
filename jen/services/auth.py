@@ -13,22 +13,30 @@ from jen import extensions
 logger = logging.getLogger(__name__)
 
 # ── Compiled validation patterns ──────────────────────────────────────────────
-MAC_RE  = re.compile(r'^([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}$')
-HOST_RE = re.compile(r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?'
-                     r'(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$')
+MAC_RE = re.compile(r"^([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}$")
+HOST_RE = re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?"
+    r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
+)
 
 
 def __get_jen_db():
     from jen.models.db import get_jen_db
+
     return get_jen_db()
+
 
 def __jen_db_ctx():
     from jen.models.db import jen_db
+
     return jen_db()
+
 
 def __get_global_setting(key, default=None):
     from jen.models.user import get_global_setting
+
     return get_global_setting(key, default)
+
 
 def valid_ip(ip):
     try:
@@ -37,13 +45,16 @@ def valid_ip(ip):
     except ValueError:
         return False
 
+
 def valid_mac(mac):
     return bool(MAC_RE.match(mac.strip()))
+
 
 def valid_hostname(hostname):
     if not hostname:
         return True  # optional
     return len(hostname) <= 253 and bool(HOST_RE.match(hostname))
+
 
 def valid_cidr(cidr):
     try:
@@ -51,6 +62,7 @@ def valid_cidr(cidr):
         return True
     except ValueError:
         return False
+
 
 def valid_pool(pool):
     """Validate pool format: x.x.x.x-y.y.y.y"""
@@ -61,11 +73,13 @@ def valid_pool(pool):
         return False
     return valid_ip(parts[0]) and valid_ip(parts[1])
 
+
 def valid_dns(dns):
     """Validate comma-separated IP list"""
     if not dns:
         return True  # optional
     return all(valid_ip(ip.strip()) for ip in dns.split(","))
+
 
 def valid_positive_int(val):
     try:
@@ -73,9 +87,10 @@ def valid_positive_int(val):
     except (ValueError, TypeError):
         return False
 
+
 def sanitize_search(search):
     """Strip characters that could cause SQL issues"""
-    return re.sub(r'[^\w\s\.\:\-]', '', search)[:100]
+    return re.sub(r"[^\w\s\.\:\-]", "", search)[:100]
 
 
 # ── SSH / remote-command target validation (v4.4.2) ───────────────────────────
@@ -87,8 +102,9 @@ def sanitize_search(search):
 # the free-text DNS lookup host a user can submit, and the configured SSH
 # host/user themselves (also guards against a host value like "-oProxyCommand=..."
 # being read as an ssh flag rather than a target).
-UNIX_USERNAME_RE = re.compile(r'^[a-z_][a-z0-9_-]{0,31}$')
-SAFE_REMOTE_PATH_RE = re.compile(r'^/[A-Za-z0-9_./-]+$')
+UNIX_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+SAFE_REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
+
 
 def valid_ssh_target(value):
     """A hostname or IP, and not something that could be parsed as an ssh flag."""
@@ -97,14 +113,17 @@ def valid_ssh_target(value):
         return False
     return valid_hostname(value) or valid_ip(value)
 
+
 def valid_unix_username(value):
     value = (value or "").strip()
     return bool(UNIX_USERNAME_RE.match(value))
+
 
 def valid_remote_path(value):
     """Absolute path, no shell metacharacters, whitespace, or quotes."""
     value = (value or "").strip()
     return bool(SAFE_REMOTE_PATH_RE.match(value))
+
 
 def valid_dns_lookup_host(value):
     """What a user is allowed to type into the DDNS 'look up this host' box."""
@@ -124,9 +143,11 @@ def get_rate_limit_settings():
         "mode": __get_global_setting("rl_mode", "both"),  # ip, username, both, off
     }
 
+
 def record_login_attempt(ip, username):
     """Fire-and-forget — don't block the response."""
     import threading
+
     def _record():
         try:
             with __jen_db_ctx() as db:
@@ -136,11 +157,14 @@ def record_login_attempt(ip, username):
                 db.commit()
         except Exception as e:
             logger.error(f"Rate limit record error: {e}")
+
     threading.Thread(target=_record, daemon=True).start()
+
 
 def clear_login_attempts(ip, username):
     """Fire-and-forget — don't block the login response."""
     import threading
+
     def _clear():
         try:
             with __jen_db_ctx() as db:
@@ -149,7 +173,9 @@ def clear_login_attempts(ip, username):
                 db.commit()
         except Exception as e:
             logger.error(f"Rate limit clear error: {e}")
+
     threading.Thread(target=_clear, daemon=True).start()
+
 
 def is_locked_out(ip, username):
     rl = get_rate_limit_settings()
@@ -176,13 +202,15 @@ def is_locked_out(ip, username):
                 count = 0
                 if mode in ("ip", "both"):
                     cur.execute(
-                        f"SELECT COUNT(*) as cnt FROM login_attempts "
-                        f"WHERE ip_address=%s AND attempted_at >= {window}", (ip,))
+                        f"SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address=%s AND attempted_at >= {window}",
+                        (ip,),
+                    )
                     count = max(count, cur.fetchone()["cnt"])
                 if mode in ("username", "both"):
                     cur.execute(
-                        f"SELECT COUNT(*) as cnt FROM login_attempts "
-                        f"WHERE username=%s AND attempted_at >= {window}", (username,))
+                        f"SELECT COUNT(*) as cnt FROM login_attempts WHERE username=%s AND attempted_at >= {window}",
+                        (username,),
+                    )
                     count = max(count, cur.fetchone()["cnt"])
 
                 if count >= max_attempts:
@@ -192,14 +220,17 @@ def is_locked_out(ip, username):
                         # Lock expires when the oldest attempt in the window ages out.
                         field = "ip_address" if mode in ("ip", "both") else "username"
                         val = ip if mode in ("ip", "both") else username
-                        cur.execute(f"""
+                        cur.execute(
+                            f"""
                             SELECT CEIL(
                                 ({lockout_minutes} * 60) -
                                 TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW())
                             ) as remaining
                             FROM login_attempts
                             WHERE {field}=%s AND attempted_at >= {window}
-                        """, (val,))
+                        """,
+                            (val,),
+                        )
                         row = cur.fetchone()
                         remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
                         remaining_mins = max(1, (remaining_secs + 59) // 60)
@@ -210,6 +241,7 @@ def is_locked_out(ip, username):
     except Exception as e:
         logger.error(f"Rate limit check error: {e}")
         return False, 0
+
 
 # ─────────────────────────────────────────
 # MFA rate limiting
@@ -223,9 +255,11 @@ def is_locked_out(ip, username):
 MFA_MAX_ATTEMPTS = 10
 MFA_LOCKOUT_MINUTES = 15
 
+
 def record_mfa_attempt(user_id):
     """Fire-and-forget — don't block the response."""
     import threading
+
     def _record():
         try:
             with __jen_db_ctx() as db:
@@ -235,11 +269,14 @@ def record_mfa_attempt(user_id):
                 db.commit()
         except Exception as e:
             logger.error(f"MFA rate limit record error: {e}")
+
     threading.Thread(target=_record, daemon=True).start()
+
 
 def clear_mfa_attempts(user_id):
     """Fire-and-forget — don't block the response."""
     import threading
+
     def _clear():
         try:
             with __jen_db_ctx() as db:
@@ -248,7 +285,9 @@ def clear_mfa_attempts(user_id):
                 db.commit()
         except Exception as e:
             logger.error(f"MFA rate limit clear error: {e}")
+
     threading.Thread(target=_clear, daemon=True).start()
+
 
 def is_mfa_locked_out(user_id):
     """Returns (locked: bool, remaining_minutes: int). Always a timed
@@ -259,14 +298,14 @@ def is_mfa_locked_out(user_id):
                 cur.execute(
                     "SELECT COUNT(*) as cnt FROM mfa_attempts "
                     "WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
-                    (user_id, MFA_LOCKOUT_MINUTES)
+                    (user_id, MFA_LOCKOUT_MINUTES),
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= MFA_MAX_ATTEMPTS:
                     cur.execute(
                         "SELECT CEIL(%s - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) / 60) as remaining "
                         "FROM mfa_attempts WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
-                        (MFA_LOCKOUT_MINUTES * 60, user_id, MFA_LOCKOUT_MINUTES)
+                        (MFA_LOCKOUT_MINUTES * 60, user_id, MFA_LOCKOUT_MINUTES),
                     )
                     row = cur.fetchone()
                     remaining = max(1, int(row["remaining"] or 1)) if row else MFA_LOCKOUT_MINUTES
@@ -296,11 +335,15 @@ def ssh_cli_opts() -> list:
     protection StrictHostKeyChecking exists for.
     """
     import os
+
     os.makedirs(os.path.dirname(extensions.SSH_KNOWN_HOSTS), exist_ok=True)
     return [
-        "-i", extensions.SSH_KEY_PATH,
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", f"UserKnownHostsFile={extensions.SSH_KNOWN_HOSTS}",
+        "-i",
+        extensions.SSH_KEY_PATH,
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"UserKnownHostsFile={extensions.SSH_KNOWN_HOSTS}",
     ]
 
 
@@ -320,6 +363,7 @@ def paramiko_load_known_hosts(ssh_client) -> None:
     existing SSH try/except surfaces this as a real connection failure
     that gets fixed rather than a warning nobody sees."""
     import os
+
     os.makedirs(os.path.dirname(extensions.SSH_KNOWN_HOSTS), exist_ok=True)
     if not os.path.exists(extensions.SSH_KNOWN_HOSTS):
         open(extensions.SSH_KNOWN_HOSTS, "a").close()

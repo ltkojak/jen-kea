@@ -21,9 +21,8 @@ bp = Blueprint("ddns", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -43,10 +42,16 @@ def ddns():
     else:
         try:
             result = subprocess.run(
-                ["ssh"] + __auth.ssh_cli_opts() + ["-o", "ConnectTimeout=10"] +
-                [f"{extensions.KEA_SSH_USER}@{extensions.KEA_SSH_HOST}",
-                 f"sudo tail -200 {shlex.quote(extensions.DDNS_LOG)}"],
-                capture_output=True, text=True, timeout=15
+                ["ssh"]
+                + __auth.ssh_cli_opts()
+                + ["-o", "ConnectTimeout=10"]
+                + [
+                    f"{extensions.KEA_SSH_USER}@{extensions.KEA_SSH_HOST}",
+                    f"sudo tail -200 {shlex.quote(extensions.DDNS_LOG)}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 err = result.stderr.strip()
@@ -84,9 +89,12 @@ def ddns():
                 forward_zone = extensions.cfg.get("ddns", "forward_zone", fallback="")
                 if dns_url and dns_token:
                     import requests as req
-                    r = req.get(f"{dns_url}/api/zones/records/get",
-                                params={"token": dns_token, "domain": lookup_host, "zone": forward_zone},
-                                timeout=5)
+
+                    r = req.get(
+                        f"{dns_url}/api/zones/records/get",
+                        params={"token": dns_token, "domain": lookup_host, "zone": forward_zone},
+                        timeout=5,
+                    )
                     data = r.json()
                     records = data.get("response", {}).get("records", [])
                     if records:
@@ -101,15 +109,18 @@ def ddns():
                 dns_pass = extensions.cfg.get("ddns", "api_token", fallback="")
                 if dns_url:
                     import requests as req
+
                     # Try Pi-hole v6 API first
                     try:
-                        auth = req.post(f"{dns_url}/api/auth",
-                                        json={"password": dns_pass}, timeout=5)
+                        auth = req.post(f"{dns_url}/api/auth", json={"password": dns_pass}, timeout=5)
                         if auth.status_code == 200 and auth.json().get("session", {}).get("valid"):
                             sid = auth.json()["session"]["sid"]
-                            r = req.get(f"{dns_url}/api/dns/records",
-                                        params={"domain": lookup_host},
-                                        headers={"X-FTL-SID": sid}, timeout=5)
+                            r = req.get(
+                                f"{dns_url}/api/dns/records",
+                                params={"domain": lookup_host},
+                                headers={"X-FTL-SID": sid},
+                                timeout=5,
+                            )
                             data = r.json()
                             records = data.get("records", [])
                             lookup_result = records if records else f"No DNS records found for {lookup_host}"
@@ -117,9 +128,11 @@ def ddns():
                             raise Exception("Auth failed")
                     except Exception:
                         # Fallback to Pi-hole v5 API
-                        r = req.get(f"{dns_url}/admin/api.php",
-                                    params={"customdns": "", "action": "get", "auth": dns_pass},
-                                    timeout=5)
+                        r = req.get(
+                            f"{dns_url}/admin/api.php",
+                            params={"customdns": "", "action": "get", "auth": dns_pass},
+                            timeout=5,
+                        )
                         data = r.json()
                         matches = [e for e in data.get("data", []) if lookup_host in str(e)]
                         lookup_result = matches if matches else f"No records found for {lookup_host} (Pi-hole v5 API)"
@@ -132,8 +145,8 @@ def ddns():
                 dns_pass = extensions.cfg.get("ddns", "api_token", fallback="")
                 if dns_url:
                     import requests as req
-                    r = req.get(f"{dns_url}/control/rewrite/list",
-                                auth=(dns_user, dns_pass), timeout=5)
+
+                    r = req.get(f"{dns_url}/control/rewrite/list", auth=(dns_user, dns_pass), timeout=5)
                     data = r.json()
                     matches = [e for e in data if lookup_host in str(e.get("domain", ""))]
                     lookup_result = matches if matches else f"No rewrite rules found for {lookup_host}"
@@ -148,21 +161,34 @@ def ddns():
                 if ssh_host:
                     quoted_host = shlex.quote(lookup_host)
                     result = subprocess.run(
-                        ["ssh"] + __auth.ssh_cli_opts() + ["-o", "ConnectTimeout=10"] +
-                        [f"{ssh_user}@{ssh_host}",
-                         f"dig +short {quoted_host} 2>/dev/null || host {quoted_host} 2>/dev/null"],
-                        capture_output=True, text=True, timeout=10
+                        ["ssh"]
+                        + __auth.ssh_cli_opts()
+                        + ["-o", "ConnectTimeout=10"]
+                        + [
+                            f"{ssh_user}@{ssh_host}",
+                            f"dig +short {quoted_host} 2>/dev/null || host {quoted_host} 2>/dev/null",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
                     )
                     lookup_result = result.stdout.strip() or f"No DNS result for {lookup_host}"
                 else:
                     import socket
+
                     lookup_result = socket.gethostbyname(lookup_host)
 
             else:
                 lookup_result = "DNS lookup not configured."
         except Exception as e:
             lookup_result = f"Lookup error: {str(e)}"
-    return render_template("ddns.html", lines=lines, lookup_host=lookup_host,
-                           lookup_result=lookup_result, log_status=log_status,
-                           log_message=log_message, ddns_log=extensions.DDNS_LOG,
-                           dns_provider=extensions.cfg.get("ddns", "dns_provider", fallback="technitium"))
+    return render_template(
+        "ddns.html",
+        lines=lines,
+        lookup_host=lookup_host,
+        lookup_result=lookup_result,
+        log_status=log_status,
+        log_message=log_message,
+        ddns_log=extensions.DDNS_LOG,
+        dns_provider=extensions.cfg.get("ddns", "dns_provider", fallback="technitium"),
+    )

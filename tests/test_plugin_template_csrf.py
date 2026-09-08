@@ -66,24 +66,24 @@ class TestPluginFormsHaveCsrfToken:
         # Regression guard for the regex/logic itself — confirms this
         # test would actually have caught the real bug that prompted
         # it, using the exact form HTML that shipped broken.
-        broken_html = '''
+        broken_html = """
         <form id="edit-form" method="POST" action="/network/ipam/entry/1">
             <input type="hidden" name="ip" id="edit-ip-input">
             <button type="submit">Save</button>
         </form>
-        '''
+        """
         forms = _POST_FORM_RE.findall(broken_html)
         assert len(forms) == 1
         assert "csrf_token" not in forms[0]
 
     def test_detector_accepts_a_known_good_form(self):
-        fixed_html = '''
+        fixed_html = """
         <form id="edit-form" method="POST" action="/network/ipam/entry/1">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="ip" id="edit-ip-input">
             <button type="submit">Save</button>
         </form>
-        '''
+        """
         forms = _POST_FORM_RE.findall(fixed_html)
         assert len(forms) == 1
         assert "csrf_token" in forms[0]

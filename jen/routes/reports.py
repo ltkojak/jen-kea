@@ -20,9 +20,8 @@ bp = Blueprint("reports", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -44,7 +43,8 @@ def reports():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
-                    cur.execute("""
+                    cur.execute(
+                        """
                         SELECT
                             DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:%%i') as ts,
                             active_leases, dynamic_leases, reserved_leases, pool_size
@@ -52,13 +52,11 @@ def reports():
                         WHERE subnet_id=%s
                         AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                         ORDER BY snapshot_time ASC
-                    """, (subnet_id, days))
+                    """,
+                        (subnet_id, days),
+                    )
                     rows = cur.fetchall()
-                    history[subnet_id] = {
-                        "name": info["name"],
-                        "cidr": info["cidr"],
-                        "data": rows
-                    }
+                    history[subnet_id] = {"name": info["name"], "cidr": info["cidr"], "data": rows}
     except Exception as e:
         logger.error(f"Reports error: {e}")
         flash("Could not load history data. Check server logs for details.", "error")
@@ -71,18 +69,26 @@ def reports():
                 with db.cursor() as cur:
                     with jdb.cursor() as jcur:
                         for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
-                            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                            cur.execute(
+                                "SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,)
+                            )
                             active = cur.fetchone()["cnt"]
-                            jcur.execute("""
+                            jcur.execute(
+                                """
                                 SELECT active_leases, pool_size, snapshot_time
                                 FROM lease_history WHERE subnet_id=%s
                                 ORDER BY snapshot_time DESC LIMIT 1
-                            """, (subnet_id,))
+                            """,
+                                (subnet_id,),
+                            )
                             last = jcur.fetchone()
-                            jcur.execute("""
+                            jcur.execute(
+                                """
                                 SELECT MAX(active_leases) as peak FROM lease_history
                                 WHERE subnet_id=%s AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
-                            """, (subnet_id, days))
+                            """,
+                                (subnet_id, days),
+                            )
                             peak = jcur.fetchone()
                             summary[subnet_id] = {
                                 "name": info["name"],
@@ -98,11 +104,17 @@ def reports():
     retention_days = __user.get_global_setting("history_retention_days", "90")
     data_points = sum(len(h["data"]) for h in history.values())
 
-    return render_template("reports.html",
-                           history=history, summary=summary, days=days,
-                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), data_points=data_points,
-                           snapshot_interval=snapshot_interval,
-                           retention_days=retention_days)
+    return render_template(
+        "reports.html",
+        history=history,
+        summary=summary,
+        days=days,
+        subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
+        data_points=data_points,
+        snapshot_interval=snapshot_interval,
+        retention_days=retention_days,
+    )
+
 
 @bp.route("/reports/settings", methods=["POST"])
 @login_required
@@ -112,15 +124,16 @@ def save_report_settings():
     retention = request.form.get("retention_days", "90").strip()
     if not interval.isdigit() or not (5 <= int(interval) <= 1440):
         flash("Snapshot interval must be between 5 and 1440 minutes.", "error")
-        return redirect(url_for('reports.reports'))
+        return redirect(url_for("reports.reports"))
     if not retention.isdigit() or not (1 <= int(retention) <= 365):
         flash("Retention must be between 1 and 365 days.", "error")
-        return redirect(url_for('reports.reports'))
+        return redirect(url_for("reports.reports"))
     __user.set_global_setting("snapshot_interval_minutes", interval)
     __user.set_global_setting("history_retention_days", retention)
     flash(f"Report settings saved — snapshots every {interval} minutes, kept for {retention} days.", "success")
     __user.audit("SAVE_SETTINGS", "reports", f"interval={interval}min retention={retention}days")
-    return redirect(url_for('reports.reports'))
+    return redirect(url_for("reports.reports"))
+
 
 # ─────────────────────────────────────────
 # API

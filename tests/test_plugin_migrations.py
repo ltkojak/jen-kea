@@ -19,11 +19,17 @@ def _t1_manifest(plugin_id="test_plugin_a"):
     return {
         "id": plugin_id,
         "db_migrations": [
-            {"version": 1, "description": "first table",
-             "sql": f"CREATE TABLE IF NOT EXISTS {plugin_id}_t1 (id INT PRIMARY KEY)"},
-            {"version": 2, "description": "second table",
-             "sql": f"CREATE TABLE IF NOT EXISTS {plugin_id}_t2 (id INT PRIMARY KEY)"},
-        ]
+            {
+                "version": 1,
+                "description": "first table",
+                "sql": f"CREATE TABLE IF NOT EXISTS {plugin_id}_t1 (id INT PRIMARY KEY)",
+            },
+            {
+                "version": 2,
+                "description": "second table",
+                "sql": f"CREATE TABLE IF NOT EXISTS {plugin_id}_t2 (id INT PRIMARY KEY)",
+            },
+        ],
     }
 
 
@@ -47,10 +53,13 @@ class TestTrackingAndIdempotency:
     def test_new_migration_added_later_gets_picked_up(self, db):
         manifest = _t1_manifest("test_plugin_e")
         run_plugin_migrations(manifest)
-        manifest["db_migrations"].append({
-            "version": 3, "description": "third table",
-            "sql": "CREATE TABLE IF NOT EXISTS test_plugin_e_t3 (id INT PRIMARY KEY)"
-        })
+        manifest["db_migrations"].append(
+            {
+                "version": 3,
+                "description": "third table",
+                "sql": "CREATE TABLE IF NOT EXISTS test_plugin_e_t3 (id INT PRIMARY KEY)",
+            }
+        )
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True
         assert count == 1, "only the new migration should apply, not 1 and 2 again"
@@ -73,13 +82,18 @@ class TestFailureHandling:
         manifest = {
             "id": "failing_plugin_x",
             "db_migrations": [
-                {"version": 1, "description": "good table",
-                 "sql": "CREATE TABLE IF NOT EXISTS failing_plugin_x_t1 (id INT PRIMARY KEY)"},
-                {"version": 2, "description": "broken",
-                 "sql": "CREATE TABLE THIS IS NOT VALID SQL AT ALL"},
-                {"version": 3, "description": "never reached",
-                 "sql": "CREATE TABLE IF NOT EXISTS failing_plugin_x_t3 (id INT PRIMARY KEY)"},
-            ]
+                {
+                    "version": 1,
+                    "description": "good table",
+                    "sql": "CREATE TABLE IF NOT EXISTS failing_plugin_x_t1 (id INT PRIMARY KEY)",
+                },
+                {"version": 2, "description": "broken", "sql": "CREATE TABLE THIS IS NOT VALID SQL AT ALL"},
+                {
+                    "version": 3,
+                    "description": "never reached",
+                    "sql": "CREATE TABLE IF NOT EXISTS failing_plugin_x_t3 (id INT PRIMARY KEY)",
+                },
+            ],
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is False
@@ -90,11 +104,13 @@ class TestFailureHandling:
         manifest = {
             "id": "failing_plugin_y",
             "db_migrations": [
-                {"version": 1, "description": "broken",
-                 "sql": "NOT VALID SQL"},
-                {"version": 2, "description": "should never run",
-                 "sql": "CREATE TABLE IF NOT EXISTS failing_plugin_y_t2 (id INT PRIMARY KEY)"},
-            ]
+                {"version": 1, "description": "broken", "sql": "NOT VALID SQL"},
+                {
+                    "version": 2,
+                    "description": "should never run",
+                    "sql": "CREATE TABLE IF NOT EXISTS failing_plugin_y_t2 (id INT PRIMARY KEY)",
+                },
+            ],
         }
         run_plugin_migrations(manifest)
         with db.cursor() as cur:
@@ -106,7 +122,7 @@ class TestFailureHandling:
             "id": "failing_plugin_z",
             "db_migrations": [
                 {"version": 1, "description": "broken", "sql": "NOT VALID SQL"},
-            ]
+            ],
         }
         run_plugin_migrations(manifest)
         assert _plugin_applied_versions("failing_plugin_z") == set()
@@ -130,7 +146,7 @@ class TestManifestValidation:
         are still correctly rejected."""
         manifest = {
             "id": "genuinely_malformed_plugin",
-            "db_migrations": [12345]  # neither a string nor a valid dict
+            "db_migrations": [12345],  # neither a string nor a valid dict
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is False
@@ -142,7 +158,7 @@ class TestManifestValidation:
             "db_migrations": [
                 {"version": 1, "description": "a", "sql": "CREATE TABLE IF NOT EXISTS dup_a (id INT)"},
                 {"version": 1, "description": "b", "sql": "CREATE TABLE IF NOT EXISTS dup_b (id INT)"},
-            ]
+            ],
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is False
@@ -156,7 +172,7 @@ class TestManifestValidation:
             "db_migrations": [
                 {"version": 2, "description": "second", "sql": "CREATE TABLE IF NOT EXISTS ooo_t2 (id INT)"},
                 {"version": 1, "description": "first", "sql": "CREATE TABLE IF NOT EXISTS ooo_t1 (id INT)"},
-            ]
+            ],
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True
@@ -218,7 +234,7 @@ class TestBackwardCompatWithOldFlatFormat:
             "db_migrations": [
                 "CREATE TABLE IF NOT EXISTS old_format_ok_t1 (id INT PRIMARY KEY)",
                 "CREATE TABLE IF NOT EXISTS old_format_ok_t2 (id INT PRIMARY KEY)",
-            ]
+            ],
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True
@@ -231,7 +247,7 @@ class TestBackwardCompatWithOldFlatFormat:
                 "CREATE TABLE IF NOT EXISTS ofv_t1 (id INT PRIMARY KEY)",
                 "CREATE TABLE IF NOT EXISTS ofv_t2 (id INT PRIMARY KEY)",
                 "CREATE TABLE IF NOT EXISTS ofv_t3 (id INT PRIMARY KEY)",
-            ]
+            ],
         }
         run_plugin_migrations(manifest)
         assert _plugin_applied_versions("old_format_versions_plugin") == {1, 2, 3}
@@ -241,7 +257,7 @@ class TestBackwardCompatWithOldFlatFormat:
             "id": "old_format_idempotent_plugin",
             "db_migrations": [
                 "CREATE TABLE IF NOT EXISTS ofi_t1 (id INT PRIMARY KEY)",
-            ]
+            ],
         }
         run_plugin_migrations(manifest)
         ok, msg, count = run_plugin_migrations(manifest)
@@ -253,9 +269,12 @@ class TestBackwardCompatWithOldFlatFormat:
             "id": "mixed_format_plugin",
             "db_migrations": [
                 "CREATE TABLE IF NOT EXISTS mixed_t1 (id INT PRIMARY KEY)",
-                {"version": 2, "description": "new-format entry",
-                 "sql": "CREATE TABLE IF NOT EXISTS mixed_t2 (id INT PRIMARY KEY)"},
-            ]
+                {
+                    "version": 2,
+                    "description": "new-format entry",
+                    "sql": "CREATE TABLE IF NOT EXISTS mixed_t2 (id INT PRIMARY KEY)",
+                },
+            ],
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True
@@ -277,7 +296,7 @@ class TestBackwardCompatWithOldFlatFormat:
                 "CREATE TABLE IF NOT EXISTS ipamrwd_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
                 "CREATE TABLE IF NOT EXISTS ipamrwd_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))",
                 "CREATE TABLE IF NOT EXISTS ipamrwd_subnets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, cidr VARCHAR(18) NOT NULL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
-            ]
+            ],
         }
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True, f"real ipam manifest should succeed: {msg}"
@@ -309,10 +328,12 @@ class TestLoadPluginsDoesNotSkipOnMigrationFailure:
         monkeypatch.setattr(plugins_mod, "discover_plugins", lambda: [fake_manifest])
 
         load_attempted = {}
+
         def fake_load_plugin(app_arg, manifest):
             load_attempted["called"] = True
             load_attempted["plugin_id"] = manifest["id"]
             return True
+
         monkeypatch.setattr(plugins_mod, "_load_plugin", fake_load_plugin)
 
         plugins_mod.load_plugins(app)

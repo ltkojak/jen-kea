@@ -61,6 +61,7 @@ class TestScriptExistsWithCorrectShape:
 
     def test_script_is_valid_python(self):
         import ast
+
         ast.parse(_SCRIPT_PATH.read_text())
 
     def test_script_never_accepts_command_line_arguments(self):
@@ -76,43 +77,30 @@ class TestScriptExistsWithCorrectShape:
 
 
 class TestVerifyReleaseChecksum:
-
     def test_matching_checksum_returns_true(self, jen_update_root):
         checksum_text = "abc123def456  jen-v5.2.6.tar.gz\n"
-        assert jen_update_root.verify_release_checksum(
-            "jen-v5.2.6.tar.gz", "abc123def456", checksum_text
-        ) is True
+        assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "abc123def456", checksum_text) is True
 
     def test_mismatched_checksum_returns_false(self, jen_update_root):
         checksum_text = "abc123def456  jen-v5.2.6.tar.gz\n"
-        assert jen_update_root.verify_release_checksum(
-            "jen-v5.2.6.tar.gz", "wronghash000", checksum_text
-        ) is False
+        assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "wronghash000", checksum_text) is False
 
     def test_missing_entry_for_this_tarball_returns_false(self, jen_update_root):
         """A checksum file that exists but doesn't mention this exact
         tarball must fail closed, not pass through unverified."""
         checksum_text = "abc123def456  some-other-file.tar.gz\n"
-        assert jen_update_root.verify_release_checksum(
-            "jen-v5.2.6.tar.gz", "abc123def456", checksum_text
-        ) is False
+        assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "abc123def456", checksum_text) is False
 
     def test_empty_checksum_file_returns_false(self, jen_update_root):
-        assert jen_update_root.verify_release_checksum(
-            "jen-v5.2.6.tar.gz", "abc123def456", ""
-        ) is False
+        assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "abc123def456", "") is False
 
     def test_case_insensitive_hash_comparison(self, jen_update_root):
         checksum_text = "ABC123DEF456  jen-v5.2.6.tar.gz\n"
-        assert jen_update_root.verify_release_checksum(
-            "jen-v5.2.6.tar.gz", "abc123def456", checksum_text
-        ) is True
+        assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "abc123def456", checksum_text) is True
 
     def test_malformed_lines_are_skipped_not_fatal(self, jen_update_root):
         checksum_text = "this line is malformed\nabc123def456  jen-v5.2.6.tar.gz\n"
-        assert jen_update_root.verify_release_checksum(
-            "jen-v5.2.6.tar.gz", "abc123def456", checksum_text
-        ) is True
+        assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "abc123def456", checksum_text) is True
 
 
 class TestInstallExtractedFiles:
@@ -140,9 +128,7 @@ class TestInstallExtractedFiles:
         if with_service:
             (extracted / "jen.service").write_text("[Unit]\nDescription=fake\n")
         if with_sudoers:
-            (extracted / "jen-sudoers").write_text(
-                "www-data ALL=(root) NOPASSWD: /usr/bin/systemctl restart jen\n"
-            )
+            (extracted / "jen-sudoers").write_text("www-data ALL=(root) NOPASSWD: /usr/bin/systemctl restart jen\n")
         return extracted
 
     def test_jen_package_and_run_py_installed(self, jen_update_root, tmp_path):
@@ -223,14 +209,15 @@ class TestInstallExtractedFiles:
                 return MagicMock(returncode=0, stderr="")
             return MagicMock(returncode=0)
 
-        with patch("shutil.copy2") as mock_copy2, patch("os.chmod"), \
-             patch("subprocess.run", side_effect=fake_run):
+        with patch("shutil.copy2") as mock_copy2, patch("os.chmod"), patch("subprocess.run", side_effect=fake_run):
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
 
         visudo_calls = [c for c in calls if c[0] == "/usr/sbin/visudo"]
         assert len(visudo_calls) == 1
         sudoers_copy_calls = [c for c in mock_copy2.call_args_list if "jen-sudoers" in str(c)]
-        assert len(sudoers_copy_calls) == 1, "sudoers file must be copied to /etc/sudoers.d/jen after passing validation"
+        assert len(sudoers_copy_calls) == 1, (
+            "sudoers file must be copied to /etc/sudoers.d/jen after passing validation"
+        )
 
     def test_invalid_sudoers_never_installed(self, jen_update_root, tmp_path):
         """A malformed sudoers file must never be installed, or it can
@@ -244,8 +231,7 @@ class TestInstallExtractedFiles:
                 return MagicMock(returncode=1, stderr="syntax error near line 1")
             return MagicMock(returncode=0)
 
-        with patch("shutil.copy2") as mock_copy2, patch("os.chmod"), \
-             patch("subprocess.run", side_effect=fake_run):
+        with patch("shutil.copy2") as mock_copy2, patch("os.chmod"), patch("subprocess.run", side_effect=fake_run):
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
 
         sudoers_copy_calls = [c for c in mock_copy2.call_args_list if "sudoers.d/jen" in str(c)]
@@ -327,8 +313,9 @@ class TestInstallSelfUpdateFiles:
     the right-looking arguments.
     """
 
-    def _make_extracted_dir_with_self_update_files(self, tmp_path, script_content=b"# fake v2 updater\n",
-                                                     service_content=b"[Unit]\nDescription=fake v2\n"):
+    def _make_extracted_dir_with_self_update_files(
+        self, tmp_path, script_content=b"# fake v2 updater\n", service_content=b"[Unit]\nDescription=fake v2\n"
+    ):
         extracted = tmp_path / "extracted"
         extracted.mkdir(exist_ok=True)
         (extracted / "jen-update-root.py").write_bytes(script_content)
@@ -343,7 +330,8 @@ class TestInstallSelfUpdateFiles:
         with patch("os.chown"), patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_self_update_files(
-                str(extracted), self_install_path=str(self_install_path),
+                str(extracted),
+                self_install_path=str(self_install_path),
                 update_service_path=str(tmp_path / "jen-update.service"),
             )
         assert self_install_path.read_bytes() == b"# fake v2 updater\n"
@@ -359,7 +347,8 @@ class TestInstallSelfUpdateFiles:
         with patch("os.chown") as mock_chown, patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_self_update_files(
-                str(extracted), self_install_path=str(self_install_path),
+                str(extracted),
+                self_install_path=str(self_install_path),
                 update_service_path=str(tmp_path / "jen-update.service"),
             )
         # os.chown targets the TEMP file (before the atomic rename to
@@ -388,7 +377,8 @@ class TestInstallSelfUpdateFiles:
 
         with patch("os.chown"), patch("subprocess.run", side_effect=fake_run):
             jen_update_root.install_self_update_files(
-                str(extracted), self_install_path=str(tmp_path / "sbin" / "jen-update-root.py"),
+                str(extracted),
+                self_install_path=str(tmp_path / "sbin" / "jen-update-root.py"),
                 update_service_path=str(update_service_path),
             )
         assert update_service_path.read_bytes() == b"[Unit]\nDescription=fake v2\n"
@@ -406,7 +396,8 @@ class TestInstallSelfUpdateFiles:
         with patch("os.chown"), patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_self_update_files(
-                str(extracted), self_install_path=str(tmp_path / "sbin" / "jen-update-root.py"),
+                str(extracted),
+                self_install_path=str(tmp_path / "sbin" / "jen-update-root.py"),
                 update_service_path=str(update_service_path),
             )
         mode = os.stat(update_service_path).st_mode & 0o777
@@ -423,11 +414,15 @@ class TestInstallSelfUpdateFiles:
         self_install_path.parent.mkdir()
         self_install_path.write_bytes(b"# old v1 updater\n")
 
-        with patch("os.chown"), patch("subprocess.run") as mock_run, \
-             patch("os.replace", side_effect=os.replace) as mock_replace:
+        with (
+            patch("os.chown"),
+            patch("subprocess.run") as mock_run,
+            patch("os.replace", side_effect=os.replace) as mock_replace,
+        ):
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_self_update_files(
-                str(extracted), self_install_path=str(self_install_path),
+                str(extracted),
+                self_install_path=str(self_install_path),
                 update_service_path=str(tmp_path / "jen-update.service"),
             )
         assert mock_replace.called, "expected os.replace to be used for the atomic swap"
@@ -449,7 +444,8 @@ class TestInstallSelfUpdateFiles:
 
         with patch("os.chown"), patch("subprocess.run") as mock_run:
             jen_update_root.install_self_update_files(
-                str(extracted), self_install_path=str(self_install_path),
+                str(extracted),
+                self_install_path=str(self_install_path),
                 update_service_path=str(update_service_path),
             )
         assert self_install_path.read_bytes() == b"# untouched existing v1\n"
@@ -461,9 +457,12 @@ class TestInstallSelfUpdateFiles:
         this fix is useless if the new function exists but is never
         called from the real update flow."""
         import inspect
+
         main_source = inspect.getsource(jen_update_root.main)
         install_pos = main_source.find("install_extracted_files(")
         self_update_pos = main_source.find("install_self_update_files(")
         assert install_pos != -1, "main() no longer calls install_extracted_files()"
         assert self_update_pos != -1, "main() does not call install_self_update_files() at all"
-        assert self_update_pos > install_pos, "install_self_update_files() should run after the main application install"
+        assert self_update_pos > install_pos, (
+            "install_self_update_files() should run after the main application install"
+        )

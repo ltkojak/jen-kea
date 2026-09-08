@@ -20,15 +20,16 @@ from jen.services import mfa
 @pytest.fixture
 def two_totp_methods():
     """Seed two distinct TOTP methods for user 1; clean up after."""
-    secrets = {"_probe_iPhone": pyotp.random_base32(),
-               "_probe_Keeper": pyotp.random_base32()}
+    secrets = {"_probe_iPhone": pyotp.random_base32(), "_probe_Keeper": pyotp.random_base32()}
     with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("DELETE FROM mfa_methods WHERE name LIKE '\\_probe\\_%'")
             for name, sec in secrets.items():
                 cur.execute(
                     "INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled) "
-                    "VALUES (1, 'totp', %s, %s, 1)", (sec, name))
+                    "VALUES (1, 'totp', %s, %s, 1)",
+                    (sec, name),
+                )
         db.commit()
     yield secrets
     with jen_db() as db:
@@ -40,13 +41,11 @@ def two_totp_methods():
 def _last_used():
     with jen_db() as db:
         with db.cursor() as cur:
-            cur.execute("SELECT name, last_used FROM mfa_methods "
-                        "WHERE name LIKE '\\_probe\\_%' ORDER BY name")
+            cur.execute("SELECT name, last_used FROM mfa_methods WHERE name LIKE '\\_probe\\_%' ORDER BY name")
             return {r["name"]: r["last_used"] for r in cur.fetchall()}
 
 
 class TestMultiMethodTotp:
-
     def test_second_method_verifies(self, two_totp_methods):
         code = pyotp.TOTP(two_totp_methods["_probe_Keeper"]).now()
         assert mfa.verify_totp(1, code) is True

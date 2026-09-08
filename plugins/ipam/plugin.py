@@ -3,6 +3,7 @@ IPAM Lite plugin for Jen — v1.0.0
 Full IP address space management.
 Shows every IP in each subnet: available, dynamic lease, reserved, or static.
 """
+
 import csv
 import io
 import ipaddress
@@ -14,28 +15,39 @@ from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
 
-bp = Blueprint("ipam", __name__,
-               template_folder="templates",
-               root_path=_os.path.dirname(_os.path.abspath(__file__)),
-               url_prefix="/network/ipam")
+bp = Blueprint(
+    "ipam",
+    __name__,
+    template_folder="templates",
+    root_path=_os.path.dirname(_os.path.abspath(__file__)),
+    url_prefix="/network/ipam",
+)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _get_jen_db():
     from jen.models.db import get_jen_db
+
     return get_jen_db()
+
 
 def _get_kea_db():
     from jen.models.db import get_kea_db
+
     return get_kea_db()
+
 
 def _accessible_subnets():
     from jen.services.access import get_accessible_subnet_map
+
     return get_accessible_subnet_map()
+
 
 def _subnet_map():
     from jen import extensions
+
     return extensions.SUBNET_MAP
 
 
@@ -66,42 +78,41 @@ def _build_address_space(subnet_id: int, cidr: str) -> list:
     all_ips = [str(h) for h in network.hosts()]
 
     # Build lookup dicts from Kea
-    active_leases = {}   # ip -> {hostname, mac}
-    reservations = {}    # ip -> {hostname, mac, host_id}
+    active_leases = {}  # ip -> {hostname, mac}
+    reservations = {}  # ip -> {hostname, mac, host_id}
 
     try:
         kdb = _get_kea_db()
         with kdb.cursor() as cur:
             # Active leases
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT inet_ntoa(address) as ip,
                        l.hostname,
                        HEX(l.hwaddr) as mac_hex
                 FROM lease4 l
                 WHERE l.state=0 AND l.subnet_id=%s
-            """, (subnet_id,))
+            """,
+                (subnet_id,),
+            )
             for row in cur.fetchall():
-                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                active_leases[row["ip"]] = {
-                    "hostname": row["hostname"] or "",
-                    "mac": mac
-                }
+                mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                active_leases[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac}
             # Reservations
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT inet_ntoa(h.ipv4_address) as ip,
                        h.hostname,
                        HEX(h.dhcp_identifier) as mac_hex,
                        h.host_id
                 FROM hosts h
                 WHERE h.dhcp4_subnet_id=%s
-            """, (subnet_id,))
+            """,
+                (subnet_id,),
+            )
             for row in cur.fetchall():
-                mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                reservations[row["ip"]] = {
-                    "hostname": row["hostname"] or "",
-                    "mac": mac,
-                    "host_id": row["host_id"]
-                }
+                mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                reservations[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "host_id": row["host_id"]}
         kdb.close()
     except Exception as e:
         logger.error(f"IPAM: Kea DB error: {e}")
@@ -111,10 +122,7 @@ def _build_address_space(subnet_id: int, cidr: str) -> list:
     try:
         jdb = _get_jen_db()
         with jdb.cursor() as cur:
-            cur.execute(
-                "SELECT ip, label, owner, notes FROM ipam_static_entries WHERE subnet_id=%s",
-                (subnet_id,)
-            )
+            cur.execute("SELECT ip, label, owner, notes FROM ipam_static_entries WHERE subnet_id=%s", (subnet_id,))
             for row in cur.fetchall():
                 static_entries[row["ip"]] = row
         jdb.close()
@@ -163,6 +171,7 @@ def _build_address_space(subnet_id: int, cidr: str) -> list:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
+
 @bp.route("/")
 @login_required
 def index():
@@ -187,6 +196,7 @@ def index():
 @login_required
 def subnet_detail(subnet_id):
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return redirect(url_for("ipam.index"))
 
@@ -219,6 +229,7 @@ def subnet_detail(subnet_id):
 @login_required
 def export_csv(subnet_id):
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return redirect(url_for("ipam.index"))
 
@@ -231,18 +242,14 @@ def export_csv(subnet_id):
     space = _build_address_space(subnet_id, subnet["cidr"])
 
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=[
-        "ip", "status", "hostname", "mac", "label", "owner", "notes"
-    ])
+    writer = csv.DictWriter(output, fieldnames=["ip", "status", "hostname", "mac", "label", "owner", "notes"])
     writer.writeheader()
     for entry in space:
         writer.writerow({k: entry.get(k, "") for k in writer.fieldnames})
 
     response = make_response(output.getvalue())
     response.headers["Content-Type"] = "text/csv"
-    response.headers["Content-Disposition"] = (
-        f"attachment; filename=ipam-{subnet['name']}-{subnet_id}.csv"
-    )
+    response.headers["Content-Disposition"] = f"attachment; filename=ipam-{subnet['name']}-{subnet_id}.csv"
     return response
 
 
@@ -252,13 +259,14 @@ def save_entry(subnet_id):
     """Create or update a static IPAM entry."""
     from jen.models import user as __user
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return jsonify({"error": "Access denied"}), 403
 
-    ip      = request.form.get("ip", "").strip()
-    label   = request.form.get("label", "").strip()[:100]
-    owner   = request.form.get("owner", "").strip()[:100]
-    notes   = request.form.get("notes", "").strip()
+    ip = request.form.get("ip", "").strip()
+    label = request.form.get("label", "").strip()[:100]
+    owner = request.form.get("owner", "").strip()[:100]
+    notes = request.form.get("notes", "").strip()
     # ipam_status: 'static' = designated static entry, 'available' = clear to available
     ipam_status = request.form.get("ipam_status", "").strip()
 
@@ -288,15 +296,15 @@ def save_entry(subnet_id):
         try:
             db = _get_jen_db()
             with db.cursor() as cur:
+                cur.execute("DELETE FROM ipam_static_entries WHERE ip=%s AND subnet_id=%s", (ip, subnet_id))
                 cur.execute(
-                    "DELETE FROM ipam_static_entries WHERE ip=%s AND subnet_id=%s",
-                    (ip, subnet_id)
-                )
-                cur.execute("""
+                    """
                     INSERT INTO ipam_assignment_history
                         (ip, subnet_id, action, acted_by)
                     VALUES (%s, %s, 'cleared', %s)
-                """, (ip, subnet_id, current_user.username))
+                """,
+                    (ip, subnet_id, current_user.username),
+                )
             db.commit()
             db.close()
             flash(f"Entry for {ip} cleared.", "success")
@@ -307,20 +315,24 @@ def save_entry(subnet_id):
     try:
         db = _get_jen_db()
         with db.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO ipam_static_entries (ip, subnet_id, label, owner, notes)
                 VALUES (%s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     label=VALUES(label), owner=VALUES(owner),
                     notes=VALUES(notes), updated_at=NOW()
-            """, (ip, subnet_id, label, owner, notes))
-            cur.execute("""
+            """,
+                (ip, subnet_id, label, owner, notes),
+            )
+            cur.execute(
+                """
                 INSERT INTO ipam_assignment_history
                     (ip, subnet_id, label, owner, action, acted_by)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (ip, subnet_id, label, owner,
-                  'static' if ipam_status == 'static' else 'note',
-                  current_user.username))
+            """,
+                (ip, subnet_id, label, owner, "static" if ipam_status == "static" else "note", current_user.username),
+            )
         db.commit()
         db.close()
         flash(f"Entry saved for {ip}.", "success")
@@ -336,6 +348,7 @@ def save_entry(subnet_id):
 def delete_entry(subnet_id):
     from jen.models import user as __user
     from jen.services.access import assert_subnet_access
+
     if not assert_subnet_access(subnet_id):
         return jsonify({"error": "Access denied"}), 403
 
@@ -343,15 +356,15 @@ def delete_entry(subnet_id):
     try:
         db = _get_jen_db()
         with db.cursor() as cur:
+            cur.execute("DELETE FROM ipam_static_entries WHERE ip=%s AND subnet_id=%s", (ip, subnet_id))
             cur.execute(
-                "DELETE FROM ipam_static_entries WHERE ip=%s AND subnet_id=%s",
-                (ip, subnet_id)
-            )
-            cur.execute("""
+                """
                 INSERT INTO ipam_assignment_history
                     (ip, subnet_id, action, acted_by)
                 VALUES (%s, %s, 'removed', %s)
-            """, (ip, subnet_id, current_user.username))
+            """,
+                (ip, subnet_id, current_user.username),
+            )
         db.commit()
         db.close()
         flash(f"Entry for {ip} removed.", "success")

@@ -36,9 +36,8 @@ bp = Blueprint("settings", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -50,7 +49,8 @@ def __ip_to_int(ip):
 @login_required
 @_admin_required
 def settings():
-    return redirect(url_for('settings.settings_system'))
+    return redirect(url_for("settings.settings_system"))
+
 
 @bp.route("/settings/system")
 @login_required
@@ -60,14 +60,26 @@ def settings_system():
     if __config.ssl_configured():
         try:
             result = subprocess.run(
-                ["openssl", "x509", "-in", extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) else extensions.SSL_CERT,
-                 "-noout", "-subject", "-enddate", "-issuer"],
-                capture_output=True, text=True
+                [
+                    "openssl",
+                    "x509",
+                    "-in",
+                    extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) else extensions.SSL_CERT,
+                    "-noout",
+                    "-subject",
+                    "-enddate",
+                    "-issuer",
+                ],
+                capture_output=True,
+                text=True,
             )
             for line in result.stdout.splitlines():
-                if line.startswith("subject="): cert_info["subject"] = line.replace("subject=", "").strip()
-                elif line.startswith("notAfter="): cert_info["expires"] = line.replace("notAfter=", "").strip()
-                elif line.startswith("issuer="): cert_info["issuer"] = line.replace("issuer=", "").strip()
+                if line.startswith("subject="):
+                    cert_info["subject"] = line.replace("subject=", "").strip()
+                elif line.startswith("notAfter="):
+                    cert_info["expires"] = line.replace("notAfter=", "").strip()
+                elif line.startswith("issuer="):
+                    cert_info["issuer"] = line.replace("issuer=", "").strip()
         except Exception as e:
             logger.error(f"Error reading SSL certificate info: {e}")
             cert_info["error"] = "Could not read certificate info. Check server logs for details."
@@ -103,9 +115,13 @@ def settings_system():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT COUNT(DISTINCT ip_address) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
+                cur.execute(
+                    "SELECT COUNT(DISTINCT ip_address) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
+                )
                 rl_active_ips = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)")
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
+                )
                 rl_attempts_1h = cur.fetchone()["cnt"]
     except Exception:
         rl_active_ips = 0
@@ -141,22 +157,30 @@ def settings_system():
     except Exception:
         audit_log_count = "?"
 
-    return render_template("settings_system.html",
-                           ssl_configured=__config.ssl_configured(), cert_info=cert_info,
-                           has_favicon=os.path.exists(extensions.FAVICON_PATH),
-                           http_port=extensions.HTTP_PORT,
-                           https_port=extensions.HTTPS_PORT, ssh_pub_key=ssh_pub_key,
-                           ssh_configured=bool(ssh_pub_key),
-                           kea_ssh_host=extensions.KEA_SSH_HOST, kea_ssh_user=extensions.KEA_SSH_USER,
-                           telegram=telegram_settings, session=session_settings,
-                           rl=rl_settings, rl_active_ips=rl_active_ips,
-                           rl_attempts_1h=rl_attempts_1h,
-                           jen_version=_JEN_VERSION(),
-                           kea_version=kea_version,
-                           mfa_mode=mfa_mode,
-                           branding=branding,
-                           audit_retention_days=audit_retention_days,
-                           audit_log_count=audit_log_count)
+    return render_template(
+        "settings_system.html",
+        ssl_configured=__config.ssl_configured(),
+        cert_info=cert_info,
+        has_favicon=os.path.exists(extensions.FAVICON_PATH),
+        http_port=extensions.HTTP_PORT,
+        https_port=extensions.HTTPS_PORT,
+        ssh_pub_key=ssh_pub_key,
+        ssh_configured=bool(ssh_pub_key),
+        kea_ssh_host=extensions.KEA_SSH_HOST,
+        kea_ssh_user=extensions.KEA_SSH_USER,
+        telegram=telegram_settings,
+        session=session_settings,
+        rl=rl_settings,
+        rl_active_ips=rl_active_ips,
+        rl_attempts_1h=rl_attempts_1h,
+        jen_version=_JEN_VERSION(),
+        kea_version=kea_version,
+        mfa_mode=mfa_mode,
+        branding=branding,
+        audit_retention_days=audit_retention_days,
+        audit_log_count=audit_log_count,
+    )
+
 
 @bp.route("/settings/save-audit-retention", methods=["POST"])
 @login_required
@@ -167,17 +191,14 @@ def save_audit_retention():
         days = max(0, int(days_raw))
     except ValueError:
         flash("Invalid value — must be a number of days.", "error")
-        return redirect(url_for('settings.settings_system'))
+        return redirect(url_for("settings.settings_system"))
     __user.set_global_setting("audit_retention_days", str(days))
     # Run cleanup immediately if retention > 0
     if days > 0:
         try:
             with __db.jen_db() as db:
                 with db.cursor() as cur:
-                    cur.execute(
-                        "DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)",
-                        (days,)
-                    )
+                    cur.execute("DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)", (days,))
                     deleted = cur.rowcount
                 db.commit()
             flash(f"Audit log retention set to {days} days. {deleted} old entries removed.", "success")
@@ -187,7 +208,8 @@ def save_audit_retention():
     else:
         flash("Audit log retention set to keep forever (0 = no limit).", "success")
     __user.audit("SETTINGS", "audit_retention", f"retention_days={days}")
-    return redirect(url_for('settings.settings_system'))
+    return redirect(url_for("settings.settings_system"))
+
 
 @bp.route("/settings/system/save-mfa-mode", methods=["POST"])
 @login_required
@@ -196,18 +218,25 @@ def save_mfa_mode():
     mode = request.form.get("mfa_mode", "off")
     if mode not in ("off", "optional", "required_admins", "required_all"):
         flash("Invalid MFA mode.", "error")
-        return redirect(url_for('settings.settings_system'))
+        return redirect(url_for("settings.settings_system"))
     __user.set_global_setting("mfa_mode", mode)
-    labels = {"off": "Off", "optional": "Optional", "required_admins": "Required for Admins", "required_all": "Required for All"}
+    labels = {
+        "off": "Off",
+        "optional": "Optional",
+        "required_admins": "Required for Admins",
+        "required_all": "Required for All",
+    }
     flash(f"MFA policy set to: {labels.get(mode, mode)}", "success")
     __user.audit("SAVE_MFA_MODE", "settings", f"mode={mode} by {current_user.username}")
-    return redirect(url_for('settings.settings_system'))
+    return redirect(url_for("settings.settings_system"))
+
 
 @bp.route("/settings/alerts")
 @login_required
 @_admin_required
 def settings_alerts():
     import json
+
     channels = []
     templates = {}
     try:
@@ -218,15 +247,21 @@ def settings_alerts():
                 # Parse JSON fields
                 for ch in channels:
                     if isinstance(ch.get("config"), str):
-                        try: ch["config"] = json.loads(ch["config"])
-                        except (json.JSONDecodeError, ValueError): ch["config"] = {}
+                        try:
+                            ch["config"] = json.loads(ch["config"])
+                        except (json.JSONDecodeError, ValueError):
+                            ch["config"] = {}
                     if isinstance(ch.get("alert_types"), str):
-                        try: ch["alert_types"] = json.loads(ch["alert_types"])
-                        except (json.JSONDecodeError, ValueError): ch["alert_types"] = []
+                        try:
+                            ch["alert_types"] = json.loads(ch["alert_types"])
+                        except (json.JSONDecodeError, ValueError):
+                            ch["alert_types"] = []
                     # v5.1.16 — per-channel subnet scope for notifications
                     if isinstance(ch.get("subnet_scope"), str):
-                        try: ch["subnet_scope"] = json.loads(ch["subnet_scope"])
-                        except (json.JSONDecodeError, ValueError): ch["subnet_scope"] = None
+                        try:
+                            ch["subnet_scope"] = json.loads(ch["subnet_scope"])
+                        except (json.JSONDecodeError, ValueError):
+                            ch["subnet_scope"] = None
                 cur.execute("SELECT alert_type, template_text FROM alert_templates")
                 for row in cur.fetchall():
                     templates[row["alert_type"]] = row["template_text"]
@@ -254,23 +289,28 @@ def settings_alerts():
     threshold_pct = __user.get_global_setting("alert_threshold_pct", "80")
     reserved_lease_mode = __user.get_global_setting("reserved_lease_mode", "always")
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
-    return render_template("settings_alerts.html",
-                           channels=channels, templates=templates,
-                           default_templates=DEFAULT_TEMPLATES,
-                           alert_type_labels=ALERT_TYPE_LABELS,
-                           summary_time=summary_time,
-                           pool_exhaustion_free=pool_exhaustion_free,
-                           threshold_pct=threshold_pct,
-                           reserved_lease_mode=reserved_lease_mode,
-                           subnet_map=accessible_subnet_map,
-                           can_grant_all_subnets=current_user.all_subnets,
-                           recent_alerts=recent_alerts)
+    return render_template(
+        "settings_alerts.html",
+        channels=channels,
+        templates=templates,
+        default_templates=DEFAULT_TEMPLATES,
+        alert_type_labels=ALERT_TYPE_LABELS,
+        summary_time=summary_time,
+        pool_exhaustion_free=pool_exhaustion_free,
+        threshold_pct=threshold_pct,
+        reserved_lease_mode=reserved_lease_mode,
+        subnet_map=accessible_subnet_map,
+        can_grant_all_subnets=current_user.all_subnets,
+        recent_alerts=recent_alerts,
+    )
+
 
 @bp.route("/settings/alerts/save-channel", methods=["POST"])
 @login_required
 @_admin_required
 def save_alert_channel():
     import json
+
     channel_id = request.form.get("channel_id", "").strip()
     channel_type = request.form.get("channel_type", "").strip()
     channel_name = request.form.get("channel_name", "").strip()[:100]
@@ -297,10 +337,10 @@ def save_alert_channel():
 
     if channel_type not in ("telegram", "email", "slack", "webhook", "ntfy", "discord"):
         flash("Invalid channel type.", "error")
-        return redirect(url_for('settings.settings_alerts'))
+        return redirect(url_for("settings.settings_alerts"))
     if not channel_name:
         flash("Channel name is required.", "error")
-        return redirect(url_for('settings.settings_alerts'))
+        return redirect(url_for("settings.settings_alerts"))
 
     # Build config based on type
     config = {}
@@ -337,7 +377,7 @@ def save_alert_channel():
         }
     elif channel_type == "pushover":
         config = {
-            "user_key":  request.form.get("pushover_user_key", "").strip(),
+            "user_key": request.form.get("pushover_user_key", "").strip(),
             "api_token": request.form.get("pushover_api_token", "").strip(),
         }
         # Don't overwrite api_token if blank (treat like smtp_pass)
@@ -374,22 +414,36 @@ def save_alert_channel():
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 if channel_id:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s, subnet_scope=%s
                         WHERE id=%s
-                    """, (channel_name, enabled, json.dumps(config), json.dumps(alert_types), subnet_scope, channel_id))
+                    """,
+                        (channel_name, enabled, json.dumps(config), json.dumps(alert_types), subnet_scope, channel_id),
+                    )
                 else:
-                    cur.execute("""
+                    cur.execute(
+                        """
                         INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types, subnet_scope)
                         VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (channel_type, channel_name, enabled, json.dumps(config), json.dumps(alert_types), subnet_scope))
+                    """,
+                        (
+                            channel_type,
+                            channel_name,
+                            enabled,
+                            json.dumps(config),
+                            json.dumps(alert_types),
+                            subnet_scope,
+                        ),
+                    )
             db.commit()
         flash(f"Alert channel '{channel_name}' saved.", "success")
         __user.audit("SAVE_ALERT_CHANNEL", channel_name, f"type={channel_type} enabled={enabled}")
     except Exception as e:
         logger.error(f"Error saving alert channel '{channel_name}': {e}")
         flash("Error saving channel. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings_alerts'))
+    return redirect(url_for("settings.settings_alerts"))
+
 
 @bp.route("/settings/alerts/delete-channel/<int:channel_id>", methods=["POST"])
 @login_required
@@ -408,13 +462,15 @@ def delete_alert_channel(channel_id):
     except Exception as e:
         logger.error(f"Error deleting alert channel {channel_id}: {e}")
         flash("Error deleting channel. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings_alerts'))
+    return redirect(url_for("settings.settings_alerts"))
+
 
 @bp.route("/settings/alerts/test-channel/<int:channel_id>", methods=["POST"])
 @login_required
 @_admin_required
 def test_alert_channel(channel_id):
     import json
+
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -422,7 +478,7 @@ def test_alert_channel(channel_id):
                 channel = cur.fetchone()
         if not channel:
             flash("Channel not found.", "error")
-            return redirect(url_for('settings.settings_alerts'))
+            return redirect(url_for("settings.settings_alerts"))
         config = json.loads(channel["config"]) if isinstance(channel["config"], str) else channel["config"]
         ctype = channel["channel_type"]
         test_msg = f"🔔 <b>Jen Test</b>\nTest message from channel: {channel['channel_name']}"
@@ -446,7 +502,8 @@ def test_alert_channel(channel_id):
             flash(f"Test failed for '{channel['channel_name']}'.", "error")
     except Exception as e:
         flash(f"Test error: {str(e)}", "error")
-    return redirect(url_for('settings.settings_alerts'))
+    return redirect(url_for("settings.settings_alerts"))
+
 
 @bp.route("/settings/alerts/save-template", methods=["POST"])
 @login_required
@@ -456,21 +513,25 @@ def save_alert_template():
     template_text = request.form.get("template_text", "").strip()
     if alert_type not in DEFAULT_TEMPLATES:
         flash("Invalid alert type.", "error")
-        return redirect(url_for('settings.settings_alerts'))
+        return redirect(url_for("settings.settings_alerts"))
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO alert_templates (alert_type, template_text) VALUES (%s, %s)
                     ON DUPLICATE KEY UPDATE template_text=%s, updated_at=NOW()
-                """, (alert_type, template_text, template_text))
+                """,
+                    (alert_type, template_text, template_text),
+                )
             db.commit()
         flash(f"Template for '{ALERT_TYPE_LABELS.get(alert_type, alert_type)}' saved.", "success")
         __user.audit("SAVE_ALERT_TEMPLATE", alert_type, "Template updated")
     except Exception as e:
         logger.error(f"Error saving alert template '{alert_type}': {e}")
         flash("Error saving template. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings_alerts'))
+    return redirect(url_for("settings.settings_alerts"))
+
 
 @bp.route("/settings/alerts/reset-template", methods=["POST"])
 @login_required
@@ -486,7 +547,8 @@ def reset_alert_template():
     except Exception as e:
         logger.error(f"Error resetting alert template '{alert_type}': {e}")
         flash("Error resetting template. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings_alerts'))
+    return redirect(url_for("settings.settings_alerts"))
+
 
 @bp.route("/settings/alerts/save-global", methods=["POST"])
 @login_required
@@ -498,10 +560,10 @@ def save_alert_global():
     reserved_lease_mode = request.form.get("reserved_lease_mode", "always").strip()
     if not pool_free.isdigit() or int(pool_free) < 1:
         flash("Pool exhaustion threshold must be a positive number.", "error")
-        return redirect(url_for('settings.settings_alerts'))
+        return redirect(url_for("settings.settings_alerts"))
     if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
         flash("Utilization threshold must be between 1 and 100.", "error")
-        return redirect(url_for('settings.settings_alerts'))
+        return redirect(url_for("settings.settings_alerts"))
     if reserved_lease_mode not in ("always", "once"):
         reserved_lease_mode = "always"
     __user.set_global_setting("daily_summary_time", summary_time)
@@ -509,7 +571,8 @@ def save_alert_global():
     __user.set_global_setting("alert_threshold_pct", threshold)
     __user.set_global_setting("reserved_lease_mode", reserved_lease_mode)
     flash("Global alert settings saved.", "success")
-    return redirect(url_for('settings.settings_alerts'))
+    return redirect(url_for("settings.settings_alerts"))
+
 
 @bp.route("/settings/infrastructure")
 @login_required
@@ -528,16 +591,18 @@ def settings_infrastructure():
     n = 2
     while extensions.cfg.has_section(f"kea_server_{n}"):
         sec = f"kea_server_{n}"
-        extra_servers.append({
-            "id": n,
-            "name": extensions.cfg.get(sec, "name", fallback=f"Kea Server {n}"),
-            "api_url": extensions.cfg.get(sec, "api_url", fallback=""),
-            "api_user": extensions.cfg.get(sec, "api_user", fallback=""),
-            "ssh_host": extensions.cfg.get(sec, "ssh_host", fallback=""),
-            "ssh_user": extensions.cfg.get(sec, "ssh_user", fallback=""),
-            "kea_conf": extensions.cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
-            "role": extensions.cfg.get(sec, "role", fallback="standby"),
-        })
+        extra_servers.append(
+            {
+                "id": n,
+                "name": extensions.cfg.get(sec, "name", fallback=f"Kea Server {n}"),
+                "api_url": extensions.cfg.get(sec, "api_url", fallback=""),
+                "api_user": extensions.cfg.get(sec, "api_user", fallback=""),
+                "ssh_host": extensions.cfg.get(sec, "ssh_host", fallback=""),
+                "ssh_user": extensions.cfg.get(sec, "ssh_user", fallback=""),
+                "kea_conf": extensions.cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+                "role": extensions.cfg.get(sec, "role", fallback="standby"),
+            }
+        )
         n += 1
 
     infra = {
@@ -576,16 +641,22 @@ def settings_infrastructure():
     }
     restart_pending = __user.get_global_setting("restart_pending", "false") == "true"
     ipv6_enabled = __kea6.is_ipv6_enabled()
-    return render_template("settings_infrastructure.html", infra=infra, kea_up=kea_up,
-                           ssh_pub_key=ssh_pub_key, ssh_configured=bool(ssh_pub_key),
-                           restart_pending=restart_pending,
-                           ipv6_enabled=ipv6_enabled,
-                           http_port=extensions.HTTP_PORT,
-                           https_port=extensions.HTTPS_PORT,
-                           worker_threads=extensions.WORKER_THREADS,
-                           ssl_configured=__config.ssl_configured(),
-                           metrics_token=extensions.cfg.get("server", "metrics_token", fallback="") if extensions.cfg else "",
-                           metrics_open=extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False)
+    return render_template(
+        "settings_infrastructure.html",
+        infra=infra,
+        kea_up=kea_up,
+        ssh_pub_key=ssh_pub_key,
+        ssh_configured=bool(ssh_pub_key),
+        restart_pending=restart_pending,
+        ipv6_enabled=ipv6_enabled,
+        http_port=extensions.HTTP_PORT,
+        https_port=extensions.HTTPS_PORT,
+        worker_threads=extensions.WORKER_THREADS,
+        ssl_configured=__config.ssl_configured(),
+        metrics_token=extensions.cfg.get("server", "metrics_token", fallback="") if extensions.cfg else "",
+        metrics_open=extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False,
+    )
+
 
 @bp.route("/settings/infrastructure/save-kea", methods=["POST"])
 @login_required
@@ -596,7 +667,7 @@ def save_infra_kea():
     api_pass = request.form.get("api_pass", "").strip()
     if not api_url:
         flash("API URL is required.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
     items = [("kea", "api_url", api_url), ("kea", "api_user", api_user)]
     if api_pass:
         items.append(("kea", "api_pass", api_pass))
@@ -604,7 +675,8 @@ def save_infra_kea():
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/save-kea-db", methods=["POST"])
 @login_required
@@ -616,16 +688,16 @@ def save_infra_kea_db():
     database = request.form.get("database", "").strip()
     if not host or not user or not database:
         flash("Host, username, and database name are required.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
-    items = [("kea_db", "host", host), ("kea_db", "user", user),
-             ("kea_db", "database", database)]
+        return redirect(url_for("settings.settings_infrastructure"))
+    items = [("kea_db", "host", host), ("kea_db", "user", user), ("kea_db", "database", database)]
     if password:
         items.append(("kea_db", "password", password))
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_db", f"host={host}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/save-kea6", methods=["POST"])
 @login_required
@@ -671,7 +743,8 @@ def save_infra_kea6():
         __user.audit("SAVE_INFRA", "kea6_api", f"url={api_url or '(inherits v4)'}")
     else:
         flash("No Kea6 values provided — leaving [kea6] as inheriting v4 settings.", "info")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])
 @login_required
@@ -704,35 +777,38 @@ def toggle_ipv6():
     enable = request.form.get("enable", "").strip() == "true"
 
     if not any(s.get("ssh_host") for s in extensions.KEA_SERVERS):
-        flash("No Kea server has SSH configured — nothing to enable/disable remotely. "
-              "Configure SSH under Kea Server settings first.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        flash(
+            "No Kea server has SSH configured — nothing to enable/disable remotely. "
+            "Configure SSH under Kea Server settings first.",
+            "error",
+        )
+        return redirect(url_for("settings.settings_infrastructure"))
 
     results = __kea6.set_ipv6_service_state(enable)
     all_ok = bool(results) and all(r["ok"] for r in results)
 
     for r in results:
-        flash(f"{'✅' if r['ok'] else '❌'} {r['name']}: {r['message']}",
-              "success" if r["ok"] else "error")
+        flash(f"{'✅' if r['ok'] else '❌'} {r['name']}: {r['message']}", "success" if r["ok"] else "error")
 
     if enable:
         if all_ok:
             __user.set_global_setting("ipv6_enabled", "true")
             flash("IPv6 support enabled.", "success")
         else:
-            flash("IPv6 was NOT enabled — at least one server failed. "
-                  "Fix the issue above and try again.", "error")
+            flash("IPv6 was NOT enabled — at least one server failed. Fix the issue above and try again.", "error")
     else:
         __user.set_global_setting("ipv6_enabled", "false")
         if not all_ok:
-            flash("IPv6 display turned off, but at least one server may still be "
-                  "running kea-dhcp6-server — see errors above.", "error")
+            flash(
+                "IPv6 display turned off, but at least one server may still be "
+                "running kea-dhcp6-server — see errors above.",
+                "error",
+            )
         else:
             flash("IPv6 support disabled.", "success")
 
-    __user.audit("TOGGLE_IPV6", "ipv6_enabled",
-                 f"enable={enable} all_ok={all_ok} servers={len(results)}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    __user.audit("TOGGLE_IPV6", "ipv6_enabled", f"enable={enable} all_ok={all_ok} servers={len(results)}")
+    return redirect(url_for("settings.settings_infrastructure"))
 
 
 # ── Author a starting Kea config (v5.1) ──────────────────────────────────────
@@ -741,6 +817,7 @@ def toggle_ipv6():
 # operation as editing an existing subnet (see jen/services/kea_authoring.py
 # for the full reasoning). Superadmin-only: this writes a whole new config
 # file, a bigger blast radius than a single subnet edit.
+
 
 def _author_kea_detect(service: str):
     """Shared detection logic for the GET form and both POST routes below —
@@ -752,8 +829,14 @@ def _author_kea_detect(service: str):
     target_server = next((s for s in extensions.KEA_SERVERS if s.get("ssh_host")), None)
     if not target_server:
         return None, None, [], None
-    detected = {"found": False, "interfaces": [], "lease_db_type": "",
-               "lease_db_host": "", "lease_db_name": "", "hooks": []}
+    detected = {
+        "found": False,
+        "interfaces": [],
+        "lease_db_type": "",
+        "lease_db_host": "",
+        "lease_db_name": "",
+        "hooks": [],
+    }
     autodetected_interfaces = []
     ca_socket = None
     try:
@@ -780,12 +863,20 @@ def _author_kea_subnets_and_db(service: str):
     scratch is exactly the case where nothing may exist in Jen yet."""
     if service == "dhcp4":
         existing_subnets = extensions.SUBNET_MAP
-        db = {"host": extensions.KEA_DB_HOST, "user": extensions.KEA_DB_USER,
-             "password": extensions.KEA_DB_PASS, "name": extensions.KEA_DB_NAME}
+        db = {
+            "host": extensions.KEA_DB_HOST,
+            "user": extensions.KEA_DB_USER,
+            "password": extensions.KEA_DB_PASS,
+            "name": extensions.KEA_DB_NAME,
+        }
     else:
         existing_subnets = extensions.SUBNET6_MAP
-        db = {"host": extensions.KEA6_DB_HOST, "user": extensions.KEA6_DB_USER,
-             "password": extensions.KEA6_DB_PASS, "name": extensions.KEA6_DB_NAME}
+        db = {
+            "host": extensions.KEA6_DB_HOST,
+            "user": extensions.KEA6_DB_USER,
+            "password": extensions.KEA6_DB_PASS,
+            "name": extensions.KEA6_DB_NAME,
+        }
     return existing_subnets, db
 
 
@@ -814,6 +905,7 @@ def _parse_subnet_lines(text: str, service: str):
     jen.config directly. Returns (subnet_dict, error).
     """
     import configparser
+
     section = "subnets" if service == "dhcp4" else "subnets6"
     parser = configparser.ConfigParser(interpolation=None)
     try:
@@ -822,7 +914,7 @@ def _parse_subnet_lines(text: str, service: str):
         return None, f"Could not parse subnet list: {e}"
     subnets = AppConfig.derive_subnet_map(parser, section=section)
     if not subnets:
-        return None, "At least one subnet is required — one per line, e.g. \"1 = LAN, 192.168.1.0/24\"."
+        return None, 'At least one subnet is required — one per line, e.g. "1 = LAN, 192.168.1.0/24".'
     return subnets, None
 
 
@@ -832,23 +924,33 @@ def _parse_subnet_lines(text: str, service: str):
 def author_kea_config(service):
     if service not in ("dhcp4", "dhcp6"):
         flash("Invalid service.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     target_server, detected, autodetected_interfaces, ca_socket = _author_kea_detect(service)
     if not target_server:
-        flash("No Kea server has SSH configured — nothing to author against. "
-              "Configure SSH under Kea Server settings first.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        flash(
+            "No Kea server has SSH configured — nothing to author against. "
+            "Configure SSH under Kea Server settings first.",
+            "error",
+        )
+        return redirect(url_for("settings.settings_infrastructure"))
 
     existing_subnets, default_db = _author_kea_subnets_and_db(service)
     conf_path = __authoring.conf_path_for(target_server, service)
     default_socket = ca_socket or f"/run/kea/kea-{service}-ctrl-socket"
     subnet_lines = _subnets_to_lines(existing_subnets, service)
-    return render_template("author_kea_config.html", service=service,
-                           target_server=target_server, conf_path=conf_path,
-                           detected=detected, autodetected_interfaces=autodetected_interfaces,
-                           default_socket=default_socket, subnet_lines=subnet_lines,
-                           has_existing_subnets=bool(existing_subnets), default_db=default_db)
+    return render_template(
+        "author_kea_config.html",
+        service=service,
+        target_server=target_server,
+        conf_path=conf_path,
+        detected=detected,
+        autodetected_interfaces=autodetected_interfaces,
+        default_socket=default_socket,
+        subnet_lines=subnet_lines,
+        has_existing_subnets=bool(existing_subnets),
+        default_db=default_db,
+    )
 
 
 def _author_kea_build_config(service, form):
@@ -870,10 +972,13 @@ def _author_kea_build_config(service, form):
         return None, None, error
 
     _, default_db = _author_kea_subnets_and_db(service)
-    lease_db = {"host": db_host, "user": db_user, "name": db_name,
-               "password": default_db["password"]}  # Jen's own stored password — never re-typed in the form
-    config = __authoring.build_new_kea_config(service, interfaces, lease_db,
-                                              control_socket_path, subnets)
+    lease_db = {
+        "host": db_host,
+        "user": db_user,
+        "name": db_name,
+        "password": default_db["password"],
+    }  # Jen's own stored password — never re-typed in the form
+    config = __authoring.build_new_kea_config(service, interfaces, lease_db, control_socket_path, subnets)
     return config, subnets, None
 
 
@@ -896,10 +1001,12 @@ def author_kea_config_preview(service):
         try:
             conf_path = __authoring.conf_path_for(server, service)
             script = __authoring.render_author_config_script(
-                service, conf_path, config, allow_overwrite=False, dry_run=True)
+                service, conf_path, config, allow_overwrite=False, dry_run=True
+            )
             ssh = __kea6._connect_ssh(server)
             try:
                 import base64
+
                 enc = base64.b64encode(script.encode()).decode()
                 _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
                 out = stdout.read().decode().strip()
@@ -909,13 +1016,17 @@ def author_kea_config_preview(service):
             if out == "preview-ok":
                 server_results.append({"name": name, "ok": True, "message": "Config test passed"})
             elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:"):]
-                server_results.append({
-                    "name": name, "ok": False, "missing_binary": binary,
-                    "message": f"{binary} is not installed on this server.",
-                })
+                binary = out[len("missingbinary:") :]
+                server_results.append(
+                    {
+                        "name": name,
+                        "ok": False,
+                        "missing_binary": binary,
+                        "message": f"{binary} is not installed on this server.",
+                    }
+                )
             elif out.startswith("testerror:"):
-                server_results.append({"name": name, "ok": False, "message": out[len("testerror:"):]})
+                server_results.append({"name": name, "ok": False, "message": out[len("testerror:") :]})
             else:
                 server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
         except Exception as e:
@@ -931,12 +1042,12 @@ def author_kea_config_preview(service):
 def author_kea_config_post(service):
     if service not in ("dhcp4", "dhcp6"):
         flash("Invalid service.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     config, subnets, error = _author_kea_build_config(service, request.form)
     if error:
         flash(error, "error")
-        return redirect(url_for('settings.author_kea_config', service=service))
+        return redirect(url_for("settings.author_kea_config", service=service))
 
     allow_overwrite = request.form.get("allow_overwrite", "") == "true"
     errors, results = [], []
@@ -947,10 +1058,12 @@ def author_kea_config_post(service):
         try:
             conf_path = __authoring.conf_path_for(server, service)
             script = __authoring.render_author_config_script(
-                service, conf_path, config, allow_overwrite=allow_overwrite, dry_run=False)
+                service, conf_path, config, allow_overwrite=allow_overwrite, dry_run=False
+            )
             ssh = __kea6._connect_ssh(server)
             try:
                 import base64
+
                 enc = base64.b64encode(script.encode()).decode()
                 _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
                 out = stdout.read().decode().strip()
@@ -960,12 +1073,12 @@ def author_kea_config_post(service):
             if out == "ok":
                 results.append(f"✅ {name}: {conf_path} written. Enable/restart the service to use it.")
             elif out == "exists":
-                errors.append(f"❌ {name}: {conf_path} already exists — check \"overwrite\" to replace it.")
+                errors.append(f'❌ {name}: {conf_path} already exists — check "overwrite" to replace it.')
             elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:"):]
+                binary = out[len("missingbinary:") :]
                 errors.append(f"❌ {name}: {binary} is not installed on this server — install it and try again.")
             elif out.startswith("testerror:"):
-                errors.append(f"❌ {name}: config test failed, nothing written. Error: {out[len('testerror:'):]}")
+                errors.append(f"❌ {name}: config test failed, nothing written. Error: {out[len('testerror:') :]}")
             else:
                 errors.append(f"❌ {name}: {err or out}")
         except Exception as e:
@@ -991,8 +1104,8 @@ def author_kea_config_post(service):
         flash(r, "success")
     for e in errors:
         flash(e, "error")
-    __user.audit("AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(results)+len(errors)}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    __user.audit("AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(results) + len(errors)}")
+    return redirect(url_for("settings.settings_infrastructure"))
 
 
 @bp.route("/settings/infrastructure/check-kea-binaries", methods=["POST"])
@@ -1042,6 +1155,7 @@ def check_config_drift_route():
     digging through that alert history.
     """
     from jen.services.config_drift import check_config_drift
+
     try:
         issues = check_config_drift()
         return jsonify({"ok": True, "issues": issues})
@@ -1080,8 +1194,7 @@ def install_kea_binary(service):
             results.append({"name": name, "ok": False, "output": str(e)})
 
     all_ok = bool(results) and all(r["ok"] for r in results)
-    __user.audit("INSTALL_KEA_BINARY", service,
-                 f"all_ok={all_ok} servers={len(results)}")
+    __user.audit("INSTALL_KEA_BINARY", service, f"all_ok={all_ok} servers={len(results)}")
     return jsonify({"ok": all_ok, "servers": results})
 
 
@@ -1095,16 +1208,16 @@ def save_infra_jen_db():
     database = request.form.get("database", "").strip()
     if not host or not user or not database:
         flash("Host, username, and database name are required.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
-    items = [("jen_db", "host", host), ("jen_db", "user", user),
-             ("jen_db", "database", database)]
+        return redirect(url_for("settings.settings_infrastructure"))
+    items = [("jen_db", "host", host), ("jen_db", "user", user), ("jen_db", "database", database)]
     if password:
         items.append(("jen_db", "password", password))
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Jen database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "jen_db", f"host={host}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/save-ssh", methods=["POST"])
 @login_required
@@ -1115,13 +1228,13 @@ def save_infra_ssh():
     kea_conf = request.form.get("kea_conf", "").strip()
     if host and not __auth.valid_ssh_target(host):
         flash("Invalid SSH host — must be a valid hostname or IP address.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
     if user and not __auth.valid_unix_username(user):
         flash("Invalid SSH user — must be a valid unix username.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
     if kea_conf and not __auth.valid_remote_path(kea_conf):
         flash("Invalid Kea config path — must be an absolute path with no special characters.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
     items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
         items.append(("kea_ssh", "kea_conf", kea_conf))
@@ -1129,7 +1242,8 @@ def save_infra_ssh():
     __user.set_global_setting("restart_pending", "true")
     flash("SSH settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/save-extra-servers", methods=["POST"])
 @login_required
@@ -1147,15 +1261,15 @@ def save_extra_servers():
     for h in ssh_hosts:
         if h.strip() and not __auth.valid_ssh_target(h.strip()):
             flash(f"Invalid SSH host: {h.strip()}", "error")
-            return redirect(url_for('settings.settings_infrastructure'))
+            return redirect(url_for("settings.settings_infrastructure"))
     for u in ssh_users:
         if u.strip() and not __auth.valid_unix_username(u.strip()):
             flash(f"Invalid SSH user: {u.strip()}", "error")
-            return redirect(url_for('settings.settings_infrastructure'))
+            return redirect(url_for("settings.settings_infrastructure"))
     for kc in kea_confs:
         if kc.strip() and not __auth.valid_remote_path(kc.strip()):
             flash(f"Invalid Kea config path: {kc.strip()}", "error")
-            return redirect(url_for('settings.settings_infrastructure'))
+            return redirect(url_for("settings.settings_infrastructure"))
 
     def _rewrite_extra_servers(cfg):
         # Remove all existing extra server sections
@@ -1165,8 +1279,7 @@ def save_extra_servers():
             n += 1
         # Add new ones
         for i, (name, role, api_url, api_user, api_pass, ssh_host, ssh_user, kea_conf) in enumerate(
-            zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs, strict=True),
-            start=2
+            zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs, strict=True), start=2
         ):
             if not api_url.strip():
                 continue
@@ -1200,13 +1313,14 @@ def save_extra_servers():
         # list and misaligning one server's fields with another's.
         logger.error(f"Mismatched extra-server form field lengths: {e}")
         flash("Could not save additional servers — form data was inconsistent. Please try again.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     count = len(extensions.KEA_SERVERS) - 1
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     __user.set_global_setting("restart_pending", "true")
     __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/save-ddns", methods=["POST"])
 @login_required
@@ -1220,7 +1334,7 @@ def save_infra_ddns():
     forward_zone = request.form.get("forward_zone", "").strip()
     if log_path and not __auth.valid_remote_path(log_path):
         flash("Invalid log path — must be an absolute path with no special characters.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
     items = [("ddns", "dns_provider", dns_provider)]
     if log_path:
         items.append(("ddns", "log_path", log_path))
@@ -1235,7 +1349,8 @@ def save_infra_ddns():
     __config.app_config.write_values(items)
     flash("DDNS settings saved.", "success")
     __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/save-ha", methods=["POST"])
 @login_required
@@ -1253,7 +1368,8 @@ def save_ha_settings():
         __config.app_config.write_values(items)
     flash("HA settings saved.", "success")
     __user.audit("SAVE_INFRA", "ha_settings", f"mode={ha_mode}")
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
+
 
 @bp.route("/settings/infrastructure/restart", methods=["POST"])
 @login_required
@@ -1262,12 +1378,15 @@ def restart_jen():
     flash("Jen is restarting...", "success")
     __user.set_global_setting("restart_pending", "false")
     __user.audit("RESTART", "jen", "Manual restart triggered from Infrastructure settings")
+
     def do_restart():
         import time
+
         time.sleep(2)
         subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
+
     threading.Thread(target=do_restart, daemon=True).start()
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
 
 
 @bp.route("/settings/save-ports", methods=["POST"])
@@ -1276,28 +1395,28 @@ def restart_jen():
 def save_ports():
     ssl_on = __config.ssl_configured()
     try:
-        http_port  = int(request.form.get("http_port",  str(extensions.HTTP_PORT)))
+        http_port = int(request.form.get("http_port", str(extensions.HTTP_PORT)))
         https_port = int(request.form.get("https_port", str(extensions.HTTPS_PORT)))
-        threads    = int(request.form.get("threads", str(extensions.WORKER_THREADS)))
+        threads = int(request.form.get("threads", str(extensions.WORKER_THREADS)))
     except ValueError:
         flash("Ports and thread count must be valid numbers.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     if not (1024 <= http_port <= 65535):
         flash("HTTP port must be between 1024 and 65535.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     if ssl_on and not (1024 <= https_port <= 65535):
         flash("HTTPS port must be between 1024 and 65535.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     if ssl_on and http_port == https_port:
         flash("HTTP and HTTPS ports must be different.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     if not (1 <= threads <= 64):
         flash("Worker threads must be between 1 and 64.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     items = [("server", "http_port", str(http_port)), ("server", "threads", str(threads))]
     if ssl_on:
@@ -1309,16 +1428,22 @@ def save_ports():
     else:
         msg = f"Server settings updated — HTTP port {http_port}, {threads} worker threads. Restarting Jen..."
 
-    __user.audit("SAVE_PORTS", "settings",
-                 f"Server: HTTP:{http_port} HTTPS:{https_port} threads:{threads} by {current_user.username}")
+    __user.audit(
+        "SAVE_PORTS",
+        "settings",
+        f"Server: HTTP:{http_port} HTTPS:{https_port} threads:{threads} by {current_user.username}",
+    )
     flash(msg, "success")
 
     def do_restart():
-        import time; time.sleep(2)
+        import time
+
+        time.sleep(2)
         subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
+
     threading.Thread(target=do_restart, daemon=True).start()
 
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
 
 
 @bp.route("/settings/save-metrics", methods=["POST"])
@@ -1346,7 +1471,7 @@ def save_metrics_settings():
 
     if metrics_token and len(metrics_token) < 8:
         flash("Metrics token must be at least 8 characters — or leave it blank.", "error")
-        return redirect(url_for('settings.settings_infrastructure'))
+        return redirect(url_for("settings.settings_infrastructure"))
 
     items = [
         ("server", "metrics_token", metrics_token),
@@ -1354,8 +1479,11 @@ def save_metrics_settings():
     ]
     __config.app_config.write_values(items)
 
-    __user.audit("SAVE_METRICS_SETTINGS", "settings",
-                 f"metrics_token={'set' if metrics_token else 'empty'} metrics_open={metrics_open} by {current_user.username}")
+    __user.audit(
+        "SAVE_METRICS_SETTINGS",
+        "settings",
+        f"metrics_token={'set' if metrics_token else 'empty'} metrics_open={metrics_open} by {current_user.username}",
+    )
 
     if metrics_token:
         flash("Metrics settings saved — /metrics now requires this token.", "success")
@@ -1364,7 +1492,7 @@ def save_metrics_settings():
     else:
         flash("Metrics settings saved — /metrics will return 401 until a token or open access is set below.", "success")
 
-    return redirect(url_for('settings.settings_infrastructure'))
+    return redirect(url_for("settings.settings_infrastructure"))
 
 
 @bp.route("/settings/generate-ssh-key", methods=["POST"])
@@ -1374,11 +1502,27 @@ def generate_ssh_key():
     os.makedirs("/etc/jen/ssh", exist_ok=True)
     try:
         subprocess.run(
-            ["ssh-keygen", "-t", "rsa", "-b", "4096", "-f", extensions.SSH_KEY_PATH, "-N", "", "-C", "jen@your-jen-server"],
-            capture_output=True, check=True
+            [
+                "ssh-keygen",
+                "-t",
+                "rsa",
+                "-b",
+                "4096",
+                "-f",
+                extensions.SSH_KEY_PATH,
+                "-N",
+                "",
+                "-C",
+                "jen@your-jen-server",
+            ],
+            capture_output=True,
+            check=True,
         )
         os.chmod(extensions.SSH_KEY_PATH, 0o600)
-        subprocess.run(["chown", "www-data:www-data", extensions.SSH_KEY_PATH, extensions.SSH_KEY_PATH + ".pub"], capture_output=True)
+        subprocess.run(
+            ["chown", "www-data:www-data", extensions.SSH_KEY_PATH, extensions.SSH_KEY_PATH + ".pub"],
+            capture_output=True,
+        )
         with open(extensions.SSH_KEY_PATH + ".pub") as f:
             pub_key = f.read().strip()
         flash(f"SSH key generated. Add this public key to your-kea-server:\n{pub_key}", "success")
@@ -1389,7 +1533,8 @@ def generate_ssh_key():
     except Exception as e:
         logger.error(f"Error generating SSH key: {e}")
         flash("Error generating SSH key. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/save-telegram", methods=["POST"])
 @login_required
@@ -1401,7 +1546,7 @@ def save_telegram():
 
     if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
         flash("Utilization threshold must be between 1 and 100.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
 
     settings_map = {
         "telegram_enabled": "true" if request.form.get("enabled") else "false",
@@ -1416,7 +1561,8 @@ def save_telegram():
         __user.set_global_setting(k, v)
     flash("Telegram settings saved.", "success")
     __user.audit("SAVE_SETTINGS", "telegram", "Telegram settings updated")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/test-telegram", methods=["POST"])
 @login_required
@@ -1426,12 +1572,16 @@ def test_telegram():
     chat_id = __user.get_global_setting("telegram_chat_id")
     if not token or not chat_id:
         flash("Telegram not configured — enter a token and chat ID first.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": "🔔 <b>Jen Test</b>\nTelegram alerts are working correctly!", "parse_mode": "HTML"},
-            timeout=10
+            json={
+                "chat_id": chat_id,
+                "text": "🔔 <b>Jen Test</b>\nTelegram alerts are working correctly!",
+                "parse_mode": "HTML",
+            },
+            timeout=10,
         )
         data = resp.json()
         if data.get("ok"):
@@ -1447,7 +1597,8 @@ def test_telegram():
     except Exception as e:
         logger.error(f"Unexpected error testing Telegram: {e}")
         flash("Unexpected error. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/save-session", methods=["POST"])
 @login_required
@@ -1460,7 +1611,7 @@ def save_session_settings():
 
     if not timeout.isdigit() or not (0 <= int(timeout) <= 1440):
         flash("Session timeout must be between 0 and 1440 minutes (0 = never).", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
 
     __user.set_global_setting("session_timeout_minutes", timeout)
     __user.set_global_setting("session_timeout_enabled", enabled)
@@ -1472,7 +1623,8 @@ def save_session_settings():
     else:
         flash(f"Session timeout set to {timeout} minutes.", "success")
     __user.audit("SAVE_SETTINGS", "session", f"enabled={enabled} timeout={timeout}min")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/save-rate-limit", methods=["POST"])
 @login_required
@@ -1484,20 +1636,21 @@ def save_rate_limit():
 
     if not max_attempts.isdigit() or int(max_attempts) < 0:
         flash("Max attempts must be 0 or a positive number.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
     if not lockout_minutes.isdigit() or int(lockout_minutes) < 0:
         flash("Lockout duration must be 0 or a positive number.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
     if mode not in ("ip", "username", "both", "off"):
         flash("Invalid lockout mode.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
 
     __user.set_global_setting("rl_max_attempts", max_attempts)
     __user.set_global_setting("rl_lockout_minutes", lockout_minutes)
     __user.set_global_setting("rl_mode", mode)
     flash("Rate limiting settings saved.", "success")
     __user.audit("SAVE_SETTINGS", "rate_limit", f"max={max_attempts} lockout={lockout_minutes}min mode={mode}")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/clear-lockouts", methods=["POST"])
 @login_required
@@ -1513,7 +1666,8 @@ def clear_lockouts():
     except Exception as e:
         logger.error(f"Error clearing lockouts: {e}")
         flash("Error clearing lockouts. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/upload-cert", methods=["POST"])
 @login_required
@@ -1524,56 +1678,72 @@ def upload_cert():
     ca_file = request.files.get("ca_bundle")
     if not cert_file or not key_file:
         flash("Certificate and private key are required.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
     os.makedirs("/etc/jen/ssl", exist_ok=True)
     try:
         cert_data = cert_file.read().decode("utf-8")
         key_data = key_file.read().decode("utf-8")
         if "BEGIN CERTIFICATE" not in cert_data:
             flash("Invalid certificate file — does not appear to be a PEM certificate.", "error")
-            return redirect(url_for('settings.settings'))
+            return redirect(url_for("settings.settings"))
         if "BEGIN" not in key_data or "PRIVATE KEY" not in key_data:
             flash("Invalid private key file.", "error")
-            return redirect(url_for('settings.settings'))
-        with open(extensions.SSL_CERT, "w") as f: f.write(cert_data)
-        with open(extensions.SSL_KEY, "w") as f: f.write(key_data)
+            return redirect(url_for("settings.settings"))
+        with open(extensions.SSL_CERT, "w") as f:
+            f.write(cert_data)
+        with open(extensions.SSL_KEY, "w") as f:
+            f.write(key_data)
         if ca_file and ca_file.filename:
             ca_data = ca_file.read().decode("utf-8")
-            with open(extensions.SSL_CA, "w") as f: f.write(ca_data)
+            with open(extensions.SSL_CA, "w") as f:
+                f.write(ca_data)
             with open(extensions.SSL_COMBINED, "w") as f:
                 f.write(cert_data)
-                if not cert_data.endswith("\n"): f.write("\n")
+                if not cert_data.endswith("\n"):
+                    f.write("\n")
                 f.write(ca_data)
         else:
-            with open(extensions.SSL_COMBINED, "w") as f: f.write(cert_data)
+            with open(extensions.SSL_COMBINED, "w") as f:
+                f.write(cert_data)
         os.chmod(extensions.SSL_KEY, 0o640)
         os.chmod(extensions.SSL_CERT, 0o644)
         os.chmod(extensions.SSL_COMBINED, 0o644)
         flash("Certificate uploaded. Jen is restarting...", "success")
         __user.audit("UPLOAD_CERT", "settings", "SSL certificate uploaded")
+
         def restart():
-            import time; time.sleep(2)
+            import time
+
+            time.sleep(2)
             subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
+
         threading.Thread(target=restart, daemon=True).start()
     except UnicodeDecodeError:
         flash("Certificate files must be PEM format (text), not DER (binary).", "error")
     except Exception as e:
         logger.error(f"Error uploading certificate: {e}")
         flash("Error uploading certificate. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/remove-cert", methods=["POST"])
 @login_required
 @_admin_required
 def remove_cert():
     for f in [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]:
-        if os.path.exists(f): os.remove(f)
+        if os.path.exists(f):
+            os.remove(f)
     flash("Certificate removed. Restarting in HTTP mode...", "success")
+
     def restart():
-        import time; time.sleep(2)
+        import time
+
+        time.sleep(2)
         subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
+
     threading.Thread(target=restart, daemon=True).start()
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/upload-favicon", methods=["POST"])
 @login_required
@@ -1582,10 +1752,10 @@ def upload_favicon():
     favicon_file = request.files.get("favicon")
     if not favicon_file or not favicon_file.filename:
         flash("No file selected.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
     if not favicon_file.filename.lower().endswith((".ico", ".png")):
         flash("Favicon must be a .ico or .png file.", "error")
-        return redirect(url_for('settings.settings'))
+        return redirect(url_for("settings.settings"))
     os.makedirs(extensions.STATIC_DIR, exist_ok=True)
     try:
         favicon_file.save(extensions.FAVICON_PATH)
@@ -1593,15 +1763,18 @@ def upload_favicon():
     except Exception as e:
         logger.error(f"Error saving favicon: {e}")
         flash("Error saving favicon. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/remove-favicon", methods=["POST"])
 @login_required
 @_admin_required
 def remove_favicon():
-    if os.path.exists(extensions.FAVICON_PATH): os.remove(extensions.FAVICON_PATH)
+    if os.path.exists(extensions.FAVICON_PATH):
+        os.remove(extensions.FAVICON_PATH)
     flash("Favicon removed.", "success")
-    return redirect(url_for('settings.settings'))
+    return redirect(url_for("settings.settings"))
+
 
 @bp.route("/settings/icons")
 @login_required
@@ -1620,6 +1793,7 @@ def settings_icons():
             custom.append({"name": f.replace(".svg", ""), "file": f})
     return render_template("settings_icons.html", bundled=bundled, custom=custom)
 
+
 @bp.route("/settings/icons/upload", methods=["POST"])
 @login_required
 @_admin_required
@@ -1628,26 +1802,27 @@ def upload_custom_icon():
     icon_name = request.form.get("icon_name", "").strip().lower()
     if not svg_file or not icon_name:
         flash("Icon file and name are required.", "error")
-        return redirect(url_for('settings.settings_icons'))
+        return redirect(url_for("settings.settings_icons"))
     if not icon_name.replace("-", "").replace("_", "").isalnum():
         flash("Icon name must be alphanumeric (hyphens/underscores allowed).", "error")
-        return redirect(url_for('settings.settings_icons'))
+        return redirect(url_for("settings.settings_icons"))
     if not svg_file.filename.endswith(".svg"):
         flash("Only SVG files are accepted.", "error")
-        return redirect(url_for('settings.settings_icons'))
+        return redirect(url_for("settings.settings_icons"))
     svg_file.seek(0, 2)
     size = svg_file.tell()
     svg_file.seek(0)
     if size > 100 * 1024:
         flash("SVG file must be under 100KB.", "error")
-        return redirect(url_for('settings.settings_icons'))
+        return redirect(url_for("settings.settings_icons"))
     os.makedirs(extensions.ICONS_CUSTOM_DIR, exist_ok=True)
     dest = f"{extensions.ICONS_CUSTOM_DIR}/{icon_name}.svg"
     svg_file.save(dest)
     # Update MANUFACTURER_ICON_MAP if name matches a known manufacturer
     __user.audit("UPLOAD_ICON", "settings", f"Custom icon '{icon_name}.svg' uploaded by {current_user.username}")
     flash(f"Icon '{icon_name}.svg' uploaded. It will be used for any manufacturer mapped to '{icon_name}'.", "success")
-    return redirect(url_for('settings.settings_icons'))
+    return redirect(url_for("settings.settings_icons"))
+
 
 @bp.route("/settings/icons/delete/<name>", methods=["POST"])
 @login_required
@@ -1659,7 +1834,7 @@ def delete_custom_icon(name):
     # belongs here regardless in case the route ever changes to <path:name>.
     if not name or not name.replace("-", "").replace("_", "").isalnum():
         flash("Invalid icon name.", "error")
-        return redirect(url_for('settings.settings_icons'))
+        return redirect(url_for("settings.settings_icons"))
     path = f"{extensions.ICONS_CUSTOM_DIR}/{name}.svg"
     if os.path.exists(path):
         os.remove(path)
@@ -1667,7 +1842,8 @@ def delete_custom_icon(name):
         flash(f"Custom icon '{name}.svg' removed.", "success")
     else:
         flash("Icon not found.", "error")
-    return redirect(url_for('settings.settings_icons'))
+    return redirect(url_for("settings.settings_icons"))
+
 
 @bp.route("/settings/upload-nav-logo", methods=["POST"])
 @login_required
@@ -1676,21 +1852,22 @@ def upload_nav_logo():
     logo_file = request.files.get("logo")
     if not logo_file or not logo_file.filename:
         flash("No file selected.", "error")
-        return redirect(url_for('settings.settings_system'))
+        return redirect(url_for("settings.settings_system"))
     ext = logo_file.filename.rsplit(".", 1)[-1].lower()
     if ext not in ("png", "svg", "jpg", "jpeg", "webp"):
         flash("Logo must be PNG, SVG, JPG, or WebP.", "error")
-        return redirect(url_for('settings.settings_system'))
+        return redirect(url_for("settings.settings_system"))
     logo_file.seek(0, 2)
     size = logo_file.tell()
     logo_file.seek(0)
     if size > 200 * 1024:
         flash("Logo file must be under 200KB.", "error")
-        return redirect(url_for('settings.settings_system'))
+        return redirect(url_for("settings.settings_system"))
     # Remove any existing logo files
     for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
         old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"
-        if os.path.exists(old): os.remove(old)
+        if os.path.exists(old):
+            os.remove(old)
     os.makedirs(extensions.STATIC_DIR, exist_ok=True)
     try:
         logo_file.save(f"{extensions.NAV_LOGO_PATH}.{ext}")
@@ -1699,7 +1876,8 @@ def upload_nav_logo():
     except Exception as e:
         logger.error(f"Error saving nav logo: {e}")
         flash("Error saving logo. Check server logs for details.", "error")
-    return redirect(url_for('settings.settings_system'))
+    return redirect(url_for("settings.settings_system"))
+
 
 @bp.route("/settings/remove-nav-logo", methods=["POST"])
 @login_required
@@ -1707,10 +1885,12 @@ def upload_nav_logo():
 def remove_nav_logo():
     for ext in ("png", "svg", "jpg", "jpeg", "webp"):
         f = f"{extensions.NAV_LOGO_PATH}.{ext}"
-        if os.path.exists(f): os.remove(f)
+        if os.path.exists(f):
+            os.remove(f)
     __user.audit("BRANDING", "settings", f"Nav logo removed by {current_user.username}")
     flash("Nav logo removed.", "success")
-    return redirect(url_for('settings.settings_system'))
+    return redirect(url_for("settings.settings_system"))
+
 
 @bp.route("/settings/save-nav-color", methods=["POST"])
 @login_required
@@ -1719,19 +1899,19 @@ def save_nav_color():
     # Accept value from either the color picker or the text field
     color = request.form.get("nav_color_hex", "").strip() or request.form.get("nav_color", "").strip()
     # Validate — must be empty or a valid hex color
-    if color and not re.match(r'^#[0-9a-fA-F]{3,6}$', color):
+    if color and not re.match(r"^#[0-9a-fA-F]{3,6}$", color):
         flash("Invalid color value. Use a hex code like #1a1a2a.", "error")
-        return redirect(url_for('settings.settings_system'))
+        return redirect(url_for("settings.settings_system"))
     __user.set_global_setting("branding_nav_color", color)
     __user.audit("BRANDING", "settings", f"Nav color set to '{color}' by {current_user.username}")
     flash("Nav bar color updated." if color else "Nav bar color reset to default.", "success")
-    return redirect(url_for('settings.settings_system'))
+    return redirect(url_for("settings.settings_system"))
 
 
 # ── Self-update ───────────────────────────────────────────────────────────────
 
-GITHUB_REPO          = "ltkojak/jen-kea"
-GITHUB_RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_REPO = "ltkojak/jen-kea"
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 
 
 @bp.route("/settings/infrastructure/check-update")
@@ -1742,25 +1922,24 @@ def check_update():
     import requests as _req
 
     from jen import JEN_VERSION
+
     try:
-        resp = _req.get(
-            GITHUB_RELEASES_API,
-            headers={"Accept": "application/vnd.github+json"},
-            timeout=8
-        )
+        resp = _req.get(GITHUB_RELEASES_API, headers={"Accept": "application/vnd.github+json"}, timeout=8)
         if resp.status_code == 404:
             return jsonify({"status": "no_releases", "current": JEN_VERSION})
         if resp.status_code != 200:
             return jsonify({"status": "error", "message": f"GitHub API returned {resp.status_code}"})
 
         data = resp.json()
-        latest_tag  = data.get("tag_name", "").lstrip("v")
+        latest_tag = data.get("tag_name", "").lstrip("v")
         release_url = data.get("html_url", "")
-        published   = data.get("published_at", "")[:10]
+        published = data.get("published_at", "")[:10]
 
         def _ver(v):
-            try: return tuple(int(x) for x in v.split(".")[:3])
-            except Exception: return (0,0,0)
+            try:
+                return tuple(int(x) for x in v.split(".")[:3])
+            except Exception:
+                return (0, 0, 0)
 
         if _ver(latest_tag) > _ver(JEN_VERSION):
             # Find the tarball asset
@@ -1769,19 +1948,23 @@ def check_update():
                 if asset["name"].endswith(".tar.gz") and "jen-v" in asset["name"]:
                     asset_url = asset["browser_download_url"]
                     break
-            return jsonify({
-                "status":      "update_available",
-                "current":     JEN_VERSION,
-                "latest":      latest_tag,
-                "release_url": release_url,
-                "asset_url":   asset_url,
-                "published":   published,
-            })
-        return jsonify({
-            "status":  "up_to_date",
-            "current": JEN_VERSION,
-            "latest":  latest_tag,
-        })
+            return jsonify(
+                {
+                    "status": "update_available",
+                    "current": JEN_VERSION,
+                    "latest": latest_tag,
+                    "release_url": release_url,
+                    "asset_url": asset_url,
+                    "published": published,
+                }
+            )
+        return jsonify(
+            {
+                "status": "up_to_date",
+                "current": JEN_VERSION,
+                "latest": latest_tag,
+            }
+        )
     except Exception as e:
         logger.error(f"Error checking for updates: {e}")
         return jsonify({"status": "error", "message": "Could not check for updates. Check server logs for details."})
@@ -1845,6 +2028,7 @@ def self_update():
     if do_db_backup:
         try:
             from jen.services import dbexport as _dbexport
+
             content, fname = _dbexport.export_jen()
             payload = json.loads(content.decode("utf-8"))
             backup_path = _dbexport._write_backup(payload, "jen-pre-update.json.gz")
@@ -1857,7 +2041,9 @@ def self_update():
     try:
         result = subprocess.run(
             ["/usr/bin/sudo", "/usr/bin/systemctl", "start", "--no-block", "jen-update.service"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
     except Exception as e:
         logger.error(f"Failed to trigger jen-update.service: {e}")
@@ -1872,4 +2058,3 @@ def self_update():
     __user.audit("SELF_UPDATE", "jen", "Triggered update via jen-update.service")
     flash("Update started. This page will refresh automatically once Jen is back.", "success")
     return redirect(url_for("settings.settings_infrastructure", updating="1"))
-

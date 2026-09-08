@@ -49,8 +49,7 @@ REQUIRED_HOOKS = ["host_cmds", "lease_cmds"]
 # more specific (a sibling config, or the operator's own input) exists.
 DEFAULT_TIMERS = {
     "dhcp4": {"valid-lifetime": 86400, "renew-timer": 43200, "rebind-timer": 75600},
-    "dhcp6": {"preferred-lifetime": 3000, "valid-lifetime": 7200,
-             "renew-timer": 1000, "rebind-timer": 2000},
+    "dhcp6": {"preferred-lifetime": 3000, "valid-lifetime": 7200, "renew-timer": 1000, "rebind-timer": 2000},
 }
 
 SIBLING_SERVICE = {"dhcp4": "dhcp6", "dhcp6": "dhcp4"}
@@ -126,8 +125,14 @@ def detect_sibling_config(ssh, server: dict, target_service: str) -> dict:
     whatever fields were actually extractable — always returns a valid
     dict shape, callers don't need to null-check individual keys.
     """
-    result = {"found": False, "interfaces": [], "lease_db_type": "",
-             "lease_db_host": "", "lease_db_name": "", "hooks": []}
+    result = {
+        "found": False,
+        "interfaces": [],
+        "lease_db_type": "",
+        "lease_db_host": "",
+        "lease_db_name": "",
+        "hooks": [],
+    }
     sibling_service = SIBLING_SERVICE[target_service]
     sibling_path = conf_path_for(server, sibling_service)
     cfg = read_remote_json(ssh, sibling_path)
@@ -185,6 +190,7 @@ def _pool_for_cidr(cidr: str) -> str:
     out gateway/reserved ranges automatically; that's an edit, not an
     authoring decision."""
     import ipaddress
+
     net = ipaddress.ip_network(cidr, strict=False)
     if net.version == 4:
         hosts = list(net.hosts())
@@ -197,9 +203,14 @@ def _pool_for_cidr(cidr: str) -> str:
     return f"{first}-{last}"
 
 
-def build_new_kea_config(service: str, interfaces: list, lease_db: dict,
-                         control_socket_path: str, subnets: dict,
-                         hooks_dir: str = "/usr/lib/x86_64-linux-gnu/kea/hooks") -> dict:
+def build_new_kea_config(
+    service: str,
+    interfaces: list,
+    lease_db: dict,
+    control_socket_path: str,
+    subnets: dict,
+    hooks_dir: str = "/usr/lib/x86_64-linux-gnu/kea/hooks",
+) -> dict:
     """
     Build a complete Dhcp4/Dhcp6 config dict from scratch. `subnets` is
     Jen's own SUBNET_MAP/SUBNET6_MAP shape ({id: {"name","cidr",...}}) —
@@ -210,32 +221,37 @@ def build_new_kea_config(service: str, interfaces: list, lease_db: dict,
     it), never re-asked or left as a placeholder.
     """
     timers = DEFAULT_TIMERS[service]
-    hooks_libraries = [
-        {"library": os.path.join(hooks_dir, f"libdhcp_{h}.so")}
-        for h in REQUIRED_HOOKS
-    ]
+    hooks_libraries = [{"library": os.path.join(hooks_dir, f"libdhcp_{h}.so")} for h in REQUIRED_HOOKS]
 
     subnet_blocks = []
     for sid, info in subnets.items():
         pool = _pool_for_cidr(info["cidr"])
         if service == "dhcp4":
-            subnet_blocks.append({
-                "id": sid, "subnet": info["cidr"],
-                "pools": [{"pool": pool}],
-            })
+            subnet_blocks.append(
+                {
+                    "id": sid,
+                    "subnet": info["cidr"],
+                    "pools": [{"pool": pool}],
+                }
+            )
         else:
-            subnet_blocks.append({
-                "id": sid, "subnet": info["cidr"],
-                "pools": [{"pool": pool}],
-            })
+            subnet_blocks.append(
+                {
+                    "id": sid,
+                    "subnet": info["cidr"],
+                    "pools": [{"pool": pool}],
+                }
+            )
 
     section = {
         "interfaces-config": {"interfaces": interfaces},
         "control-socket": {"socket-type": "unix", "socket-name": control_socket_path},
         "lease-database": {
             "type": lease_db.get("type", "mysql"),
-            "host": lease_db["host"], "user": lease_db["user"],
-            "password": lease_db["password"], "name": lease_db["name"],
+            "host": lease_db["host"],
+            "user": lease_db["user"],
+            "password": lease_db["password"],
+            "name": lease_db["name"],
         },
         "hooks-libraries": hooks_libraries,
         **timers,
@@ -287,9 +303,9 @@ def detect_installed_kea_services(ssh) -> dict:
     result = {"dhcp4": False, "dhcp6": False}
     cmd = (
         "for f in kea-dhcp4 kea-dhcp6; do "
-        "if command -v \"$f\" >/dev/null 2>&1 || "
-        "[ -x \"/usr/sbin/$f\" ] || [ -x \"/usr/local/sbin/$f\" ]; then "
-        "echo \"${f}:FOUND\"; else echo \"${f}:MISSING\"; fi; done"
+        'if command -v "$f" >/dev/null 2>&1 || '
+        '[ -x "/usr/sbin/$f" ] || [ -x "/usr/local/sbin/$f" ]; then '
+        'echo "${f}:FOUND"; else echo "${f}:MISSING"; fi; done'
     )
     _, stdout, _ = ssh.exec_command(cmd)
     out = stdout.read().decode()
@@ -316,10 +332,7 @@ def install_kea_service(ssh, service: str) -> tuple:
     into a confusing "package not found" message.
     """
     package = f"kea-{service}-server"
-    cmd = (
-        f"sudo apt-get update -qq 2>&1 && "
-        f"sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {package} 2>&1"
-    )
+    cmd = f"sudo apt-get update -qq 2>&1 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {package} 2>&1"
     try:
         _, stdout, stderr = ssh.exec_command(cmd)
         out = stdout.read().decode()
@@ -332,8 +345,9 @@ def install_kea_service(ssh, service: str) -> tuple:
         return False, str(e)
 
 
-def render_author_config_script(service: str, kea_conf_path: str, config_dict: dict,
-                                allow_overwrite: bool, dry_run: bool = False) -> str:
+def render_author_config_script(
+    service: str, kea_conf_path: str, config_dict: dict, allow_overwrite: bool, dry_run: bool = False
+) -> str:
     """
     Build the remote Python script that writes a brand-new Kea config,
     tests it with `kea-dhcp4/6 -t`, and only keeps it if the test
@@ -359,10 +373,7 @@ def render_author_config_script(service: str, kea_conf_path: str, config_dict: d
         exists_check = ""
     else:
         on_pass = (
-            "if os.path.exists(path):\n"
-            "    shutil.copy2(path, path + '.jen_backup')\n"
-            "os.replace(tmp, path)\n"
-            "print('ok')"
+            "if os.path.exists(path):\n    shutil.copy2(path, path + '.jen_backup')\nos.replace(tmp, path)\nprint('ok')"
         )
         exists_check = (
             f"if os.path.exists(path) and not {allow_overwrite!r}:\n"

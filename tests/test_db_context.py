@@ -38,7 +38,6 @@ def fake_conn(monkeypatch):
 
 
 class TestContextManagers:
-
     def test_commit_and_close_on_clean_exit(self, fake_conn):
         with db_module.jen_db() as db:
             assert db is fake_conn
@@ -58,6 +57,7 @@ class TestContextManagers:
         def fn():
             with db_module.jen_db():
                 return "early"
+
         assert fn() == "early"
         assert fake_conn.committed == 1
         assert fake_conn.closed == 1
@@ -78,6 +78,7 @@ class TestContextManagers:
     def test_exception_propagates_unchanged(self, fake_conn):
         class Custom(Exception):
             pass
+
         with pytest.raises(Custom):
             with db_module.jen_db():
                 raise Custom()

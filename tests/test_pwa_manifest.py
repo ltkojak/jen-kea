@@ -22,7 +22,6 @@ import pathlib
 
 
 class TestWebManifest:
-
     def _manifest(self):
         path = pathlib.Path("static/manifest.webmanifest")
         assert path.exists(), "static/manifest.webmanifest is missing"
@@ -66,7 +65,6 @@ class TestWebManifest:
 
 
 class TestBaseTemplateReferencesManifest:
-
     def _base_html(self):
         return pathlib.Path("templates/base.html").read_text(errors="ignore")
 
@@ -82,7 +80,7 @@ class TestBaseTemplateReferencesManifest:
         for line in content.splitlines():
             if 'rel="apple-touch-icon"' in line:
                 start = line.index('href="') + len('href="')
-                icon_path = line[start:line.index('"', start)]
+                icon_path = line[start : line.index('"', start)]
                 break
         assert icon_path, "apple-touch-icon link found but href couldn't be parsed"
         assert pathlib.Path(icon_path.lstrip("/")).exists(), f"{icon_path} referenced but missing on disk"

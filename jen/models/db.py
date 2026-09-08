@@ -26,12 +26,12 @@ logger = logging.getLogger(__name__)
 # ── Connection pools ──────────────────────────────────────────────────────────
 # Initialised once on first use. Thread-safe — PooledDB handles locking.
 
-_jen_pool  = None
-_kea_pool  = None
+_jen_pool = None
+_kea_pool = None
 _pool_lock = threading.Lock()
 
-_POOL_MIN  = 2   # connections kept open permanently
-_POOL_MAX  = 10  # maximum concurrent connections
+_POOL_MIN = 2  # connections kept open permanently
+_POOL_MAX = 10  # maximum concurrent connections
 
 
 def _ssl_kwargs(ca_path: str) -> dict:
@@ -51,20 +51,21 @@ def _ssl_kwargs(ca_path: str) -> dict:
 def _make_jen_pool():
     """Create the Jen DB connection pool."""
     from dbutils.pooled_db import PooledDB
+
     return PooledDB(
-        creator      = pymysql,
-        mincached    = _POOL_MIN,
-        maxcached    = _POOL_MAX,
-        maxconnections = _POOL_MAX,
-        blocking     = True,          # wait for a connection rather than raise
-        ping         = 1,             # ping before use to detect stale connections
-        host         = extensions.JEN_DB_HOST,
-        user         = extensions.JEN_DB_USER,
-        password     = extensions.JEN_DB_PASS,
-        database     = extensions.JEN_DB_NAME,
-        cursorclass  = pymysql.cursors.DictCursor,
-        connect_timeout = 10,
-        charset      = "utf8mb4",
+        creator=pymysql,
+        mincached=_POOL_MIN,
+        maxcached=_POOL_MAX,
+        maxconnections=_POOL_MAX,
+        blocking=True,  # wait for a connection rather than raise
+        ping=1,  # ping before use to detect stale connections
+        host=extensions.JEN_DB_HOST,
+        user=extensions.JEN_DB_USER,
+        password=extensions.JEN_DB_PASS,
+        database=extensions.JEN_DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=10,
+        charset="utf8mb4",
         **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
     )
 
@@ -72,20 +73,21 @@ def _make_jen_pool():
 def _make_kea_pool():
     """Create the Kea DB connection pool."""
     from dbutils.pooled_db import PooledDB
+
     return PooledDB(
-        creator      = pymysql,
-        mincached    = _POOL_MIN,
-        maxcached    = _POOL_MAX,
-        maxconnections = _POOL_MAX,
-        blocking     = True,
-        ping         = 1,
-        host         = extensions.KEA_DB_HOST,
-        user         = extensions.KEA_DB_USER,
-        password     = extensions.KEA_DB_PASS,
-        database     = extensions.KEA_DB_NAME,
-        cursorclass  = pymysql.cursors.DictCursor,
-        connect_timeout = 10,
-        charset      = "utf8mb4",
+        creator=pymysql,
+        mincached=_POOL_MIN,
+        maxcached=_POOL_MAX,
+        maxconnections=_POOL_MAX,
+        blocking=True,
+        ping=1,
+        host=extensions.KEA_DB_HOST,
+        user=extensions.KEA_DB_USER,
+        password=extensions.KEA_DB_PASS,
+        database=extensions.KEA_DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=10,
+        charset="utf8mb4",
         **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
     )
 
@@ -100,7 +102,7 @@ def get_jen_db() -> pymysql.connections.Connection:
     global _jen_pool
     if _jen_pool is None:
         with _pool_lock:
-            if _jen_pool is None:           # double-checked locking
+            if _jen_pool is None:  # double-checked locking
                 try:
                     _jen_pool = _make_jen_pool()
                     logger.info("Jen DB connection pool initialised (dbutils)")
@@ -161,10 +163,10 @@ def _kea6_targets_same_db() -> bool:
     """True when [kea6_db] is absent/identical to [kea_db] — the common
     case per Phase 0 research (theelders would run both on one server)."""
     return (
-        extensions.KEA6_DB_HOST == extensions.KEA_DB_HOST and
-        extensions.KEA6_DB_USER == extensions.KEA_DB_USER and
-        extensions.KEA6_DB_PASS == extensions.KEA_DB_PASS and
-        extensions.KEA6_DB_NAME == extensions.KEA_DB_NAME
+        extensions.KEA6_DB_HOST == extensions.KEA_DB_HOST
+        and extensions.KEA6_DB_USER == extensions.KEA_DB_USER
+        and extensions.KEA6_DB_PASS == extensions.KEA_DB_PASS
+        and extensions.KEA6_DB_NAME == extensions.KEA_DB_NAME
     )
 
 
@@ -172,20 +174,21 @@ def _make_kea6_pool():
     """Create a distinct Kea6 DB connection pool — only called when the v6
     connection info genuinely differs from v4's (see _kea6_targets_same_db)."""
     from dbutils.pooled_db import PooledDB
+
     return PooledDB(
-        creator      = pymysql,
-        mincached    = _POOL_MIN,
-        maxcached    = _POOL_MAX,
-        maxconnections = _POOL_MAX,
-        blocking     = True,
-        ping         = 1,
-        host         = extensions.KEA6_DB_HOST,
-        user         = extensions.KEA6_DB_USER,
-        password     = extensions.KEA6_DB_PASS,
-        database     = extensions.KEA6_DB_NAME,
-        cursorclass  = pymysql.cursors.DictCursor,
-        connect_timeout = 10,
-        charset      = "utf8mb4",
+        creator=pymysql,
+        mincached=_POOL_MIN,
+        maxcached=_POOL_MAX,
+        maxconnections=_POOL_MAX,
+        blocking=True,
+        ping=1,
+        host=extensions.KEA6_DB_HOST,
+        user=extensions.KEA6_DB_USER,
+        password=extensions.KEA6_DB_PASS,
+        database=extensions.KEA6_DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=10,
+        charset="utf8mb4",
         **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
     )
 
@@ -233,6 +236,7 @@ def get_kea6_db() -> pymysql.connections.Connection:
 #
 # Explicit db.commit() calls inside the block remain valid and are honoured
 # immediately; the final commit on clean exit is then a harmless no-op.
+
 
 @contextmanager
 def jen_db():
@@ -299,16 +303,22 @@ def reset_pools() -> None:
     global _jen_pool, _kea_pool, _kea6_pool
     with _pool_lock:
         if _jen_pool is not None:
-            try: _jen_pool._idle_cache.clear()
-            except Exception: pass
+            try:
+                _jen_pool._idle_cache.clear()
+            except Exception:
+                pass
             _jen_pool = None
         if _kea_pool is not None:
-            try: _kea_pool._idle_cache.clear()
-            except Exception: pass
+            try:
+                _kea_pool._idle_cache.clear()
+            except Exception:
+                pass
             _kea_pool = None
         if _kea6_pool is not None:
-            try: _kea6_pool._idle_cache.clear()
-            except Exception: pass
+            try:
+                _kea6_pool._idle_cache.clear()
+            except Exception:
+                pass
             _kea6_pool = None
     logger.info("DB connection pools reset")
 
@@ -326,8 +336,8 @@ def init_jen_db() -> None:
     from jen.models.migrations import run_migrations
     from jen.models.user import hash_password  # local import avoids circular
 
-    os.makedirs("/etc/jen/ssl",  exist_ok=True)
-    os.makedirs("/etc/jen/ssh",  exist_ok=True)
+    os.makedirs("/etc/jen/ssl", exist_ok=True)
+    os.makedirs("/etc/jen/ssh", exist_ok=True)
     os.makedirs(extensions.STATIC_DIR, exist_ok=True)
 
     run_migrations()
@@ -349,15 +359,17 @@ def init_jen_db() -> None:
                     cur.execute(
                         "INSERT INTO users (username, password, role, must_change_password) "
                         "VALUES ('admin', %s, 'superadmin', 0)",
-                        (hash_password(initial_pw),)
+                        (hash_password(initial_pw),),
                     )
                     print("Created superadmin 'admin' from JEN_INITIAL_ADMIN_PASSWORD.")
                 else:
                     cur.execute(
                         "INSERT INTO users (username, password, role, must_change_password) "
                         "VALUES ('admin', %s, 'superadmin', 1)",
-                        (hash_password("admin"),)
+                        (hash_password("admin"),),
                     )
-                    print("Created default superadmin user: admin / admin — "
-                          "you will be required to change this password on first login.")
+                    print(
+                        "Created default superadmin user: admin / admin — "
+                        "you will be required to change this password on first login."
+                    )
         db.commit()

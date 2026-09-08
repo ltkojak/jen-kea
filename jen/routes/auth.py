@@ -23,9 +23,8 @@ bp = Blueprint("auth", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -44,7 +43,6 @@ def login():
             flash("Username and password are required.", "error")
             return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
 
-
         # Single DB connection for the entire login flow
         try:
             with __db.jen_db() as db:
@@ -52,7 +50,7 @@ def login():
                     # User lookup
                     cur.execute(
                         "SELECT id, username, role, session_timeout, password, subnet_access, token_version, must_change_password FROM users WHERE username=%s",
-                        (username,)
+                        (username,),
                     )
                     row = cur.fetchone()
 
@@ -63,8 +61,8 @@ def login():
                     )
                     settings = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
 
-                    rl_mode     = settings.get("rl_mode", "both")
-                    max_att     = int(settings.get("rl_max_attempts", "10"))
+                    rl_mode = settings.get("rl_mode", "both")
+                    max_att = int(settings.get("rl_max_attempts", "10"))
                     lockout_min = int(settings.get("rl_lockout_minutes", "15"))
 
                     locked = False
@@ -75,12 +73,16 @@ def login():
                         if rl_mode in ("ip", "both"):
                             cur.execute(
                                 f"SELECT COUNT(*) as cnt FROM login_attempts "
-                                f"WHERE ip_address=%s AND attempted_at >= {window}", (ip,))
+                                f"WHERE ip_address=%s AND attempted_at >= {window}",
+                                (ip,),
+                            )
                             count = max(count, cur.fetchone()["cnt"])
                         if rl_mode in ("username", "both"):
                             cur.execute(
                                 f"SELECT COUNT(*) as cnt FROM login_attempts "
-                                f"WHERE username=%s AND attempted_at >= {window}", (username,))
+                                f"WHERE username=%s AND attempted_at >= {window}",
+                                (username,),
+                            )
                             count = max(count, cur.fetchone()["cnt"])
                         if count >= max_att:
                             locked = True
@@ -91,7 +93,7 @@ def login():
                         cur.execute(
                             "SELECT (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) + "
                             "(SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as cnt",
-                            (row["id"], row["id"])
+                            (row["id"], row["id"]),
                         )
                         mfa_enrolled = cur.fetchone()["cnt"] > 0
 
@@ -109,13 +111,11 @@ def login():
 
         if row and __user.verify_password(row["password"], password):
             # Upgrade legacy SHA-256 or rehash slow iterations — fire and forget
-            needs_upgrade = (
-                not row["password"].startswith("pbkdf2:")
-                or __user.needs_rehash(row["password"])
-            )
+            needs_upgrade = not row["password"].startswith("pbkdf2:") or __user.needs_rehash(row["password"])
             if needs_upgrade:
                 _uid = row["id"]
                 _new_hash = __user.hash_password(password)
+
                 def _rehash(_uid=_uid, _hash=_new_hash):
                     try:
                         with __db.jen_db() as db2:
@@ -124,56 +124,65 @@ def login():
                             db2.commit()
                     except Exception as e:
                         logger.error(f"Password rehash error: {e}")
+
                 threading.Thread(target=_rehash, daemon=True).start()
 
             # Clear rate limit attempts
             __auth.clear_login_attempts(ip, username)
 
-            user = User(row["id"], row["username"], row["role"],
-                        row["session_timeout"], row.get("subnet_access"),
-                        row.get("must_change_password"))
+            user = User(
+                row["id"],
+                row["username"],
+                row["role"],
+                row["session_timeout"],
+                row.get("subnet_access"),
+                row.get("must_change_password"),
+            )
 
             # MFA check
             mfa_mode = settings.get("mfa_mode", "off")
-            needs_mfa = (
-                mfa_mode == "required_all" or
-                (mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin"))
+            needs_mfa = mfa_mode == "required_all" or (
+                mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin")
             )
             if mfa_enrolled or needs_mfa:
                 if mfa_enrolled and not __mfa.is_trusted_device(row["id"], request):
-                    session["mfa_pending_user_id"]  = row["id"]
+                    session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
                     _next = request.args.get("next", "")
                     if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
                         _next = ""
-                    session["mfa_next"] = _next or url_for('dashboard.dashboard')
-                    return redirect(url_for('mfa_routes.mfa_verify'))
+                    session["mfa_next"] = _next or url_for("dashboard.dashboard")
+                    return redirect(url_for("mfa_routes.mfa_verify"))
                 elif needs_mfa and not mfa_enrolled:
                     session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
                     login_user(user)
                     session["last_active"] = datetime.now(timezone.utc).isoformat()
                     session["_user_cache"] = {
-                        "id": user.id, "username": user.username,
-                        "role": user.role, "session_timeout": user.session_timeout,
+                        "id": user.id,
+                        "username": user.username,
+                        "role": user.role,
+                        "session_timeout": user.session_timeout,
                         "subnet_access": row.get("subnet_access"),
                         "token_version": row.get("token_version", 0),
-                        "must_change_password": bool(row.get("must_change_password"))
+                        "must_change_password": bool(row.get("must_change_password")),
                     }
                     flash("MFA is required for your account. Please enroll now.", "warning")
-                    return redirect(url_for('mfa_routes.mfa_enroll'))
+                    return redirect(url_for("mfa_routes.mfa_enroll"))
 
             login_user(user)
             session["last_active"] = datetime.now(timezone.utc).isoformat()
             session["_user_cache"] = {
-                "id": user.id, "username": user.username,
-                "role": user.role, "session_timeout": user.session_timeout,
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "session_timeout": user.session_timeout,
                 "subnet_access": row.get("subnet_access"),
                 "token_version": row.get("token_version", 0),
-                "must_change_password": bool(row.get("must_change_password"))
+                "must_change_password": bool(row.get("must_change_password")),
             }
             __user.audit("LOGIN", "auth", f"User {username} logged in from {ip}")
-            return redirect(url_for('dashboard.dashboard'))
+            return redirect(url_for("dashboard.dashboard"))
 
         # Failed login — record attempt (async, don't block response)
         __auth.record_login_attempt(ip, username)
@@ -182,6 +191,7 @@ def login():
 
     return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username="")
 
+
 @bp.route("/logout")
 @login_required
 def logout():
@@ -189,7 +199,7 @@ def logout():
     session.pop("_user_cache", None)
     session.pop("_avatar_url", None)
     logout_user()
-    return redirect(url_for('auth.login'))
+    return redirect(url_for("auth.login"))
 
 
 @bp.route("/force-password-change", methods=["GET", "POST"])
@@ -240,18 +250,22 @@ def force_password_change():
             with db.cursor() as cur:
                 cur.execute(
                     "UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
-                    (__user.hash_password(new_pw), current_user.id)
+                    (__user.hash_password(new_pw), current_user.id),
                 )
             db.commit()
         session.pop("_user_cache", None)
-        __user.audit("CHANGE_PASSWORD", current_user.username,
-                     "Password changed (forced — first login or admin-assigned password)")
+        __user.audit(
+            "CHANGE_PASSWORD",
+            current_user.username,
+            "Password changed (forced — first login or admin-assigned password)",
+        )
         flash("Password changed successfully.", "success")
-        return redirect(url_for('dashboard.dashboard'))
+        return redirect(url_for("dashboard.dashboard"))
     except Exception as e:
         logger.error(f"Forced password change error: {e}")
         flash("Error changing password. Please try again.", "error")
         return render_template("force_password_change.html")
+
 
 # ─────────────────────────────────────────
 # Dashboard

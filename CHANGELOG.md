@@ -2,7 +2,7 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.6.0] - Unreleased
+## [5.6.0] - 2026-09-08
 
 ### Docker configuration unified on `.env`, plus a hygiene pass
 
@@ -62,13 +62,31 @@ redundant change of a password the operator had just chosen).
   the path" comment predated the `JEN_ROOT` override (5.3.3) — removing
   them proves the override actually works.
 - **Dependabot** now watches `pip` (the stale note said Jen pins deps
-  inline in install.sh — true until 5.4.1's `requirements.txt`).
+  inline in install.sh — true until 5.4.1's `requirements.txt`), and its
+  first round of bumps landed: gunicorn, cryptography, requests, authlib,
+  werkzeug floors raised; `actions/setup-python` and
+  `softprops/action-gh-release` pinned SHAs moved forward (fixes the
+  Node 20 deprecation warning).
 - **Docs reconciliation:** `ARCHITECTURE.md` §3.4 (API keys have been
   per-key subnet-scopable since migration 13, not global-only), §3.5/§6
   (the self-updater runs pip as of 5.5.0). README: MFA line no longer
   claims WebAuthn/passkey (the page says "coming soon"); Flask badge
   3.0 → 3.1+. `jen.service` description "Internet" → "Kea DHCP" to match
   the README.
+
+### Ruff is now a CI gate
+
+The whole codebase was run through `ruff format` + `ruff check --fix` —
+one mechanical, zero-behaviour-change pass (verified: bandit shows no
+new findings, the full suite is green). The ~71 backlog findings
+(compound one-liners, unsorted imports, one unused var, thirteen
+ambiguous `l` names) are gone.
+
+CI now runs `ruff check .` and `ruff format --check .` as a job, so new
+lint or format regressions fail the build. `ruff` is pinned exact in
+`requirements-dev.txt` — its formatter output drifts subtly between
+releases, so an unpinned bump could fail `format --check` on a no-op;
+Dependabot PRs the bump and we reformat in that same PR if needed.
 
 ## [5.5.0] - 2026-09-08
 

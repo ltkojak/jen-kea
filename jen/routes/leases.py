@@ -25,9 +25,8 @@ bp = Blueprint("leases", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -70,7 +69,7 @@ def leases():
     except ValueError:
         page = 1
     if per_page is None:
-        page = 1   # no pagination = always page 1
+        page = 1  # no pagination = always page 1
     if subnet_filter != "all":
         try:
             if int(subnet_filter) not in extensions.SUBNET_MAP:
@@ -97,6 +96,7 @@ def leases():
                 elif not current_user.all_subnets:
                     # Restrict to accessible subnets
                     from jen.services.access import add_subnet_restriction
+
                     where, params = add_subnet_restriction(where, params, "l", "subnet_id")
                 if minutes:
                     try:
@@ -117,7 +117,8 @@ def leases():
                     limit_clause = f"LIMIT {per_page} OFFSET {offset}"
                 else:
                     limit_clause = ""
-                cur.execute(f"""
+                cur.execute(
+                    f"""
                     SELECT inet_ntoa(l.address) AS ip, l.hostname,
                            HEX(l.hwaddr) AS mac_hex, l.subnet_id, l.state,
                            l.expire,
@@ -126,42 +127,58 @@ def leases():
                     FROM lease4 l WHERE {where_str}
                     ORDER BY {sort_col} {direction}
                     {limit_clause}
-                """, params)
+                """,
+                    params,
+                )
                 for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
-                    leases_list.append({**row, "mac": mac,
-                                        "subnet_id": row["subnet_id"],
-                                        "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
-                                        "expired": row.get("state", 0) != 0})
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    leases_list.append(
+                        {
+                            **row,
+                            "mac": mac,
+                            "subnet_id": row["subnet_id"],
+                            "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
+                            "expired": row.get("state", 0) != 0,
+                        }
+                    )
             # Build set of MACs that have reservations — single query, O(1) lookup per lease
             reserved_macs = set()
             if leases_list:
-                mac_hexes = [l["mac"].replace(":", "") for l in leases_list if l.get("mac")]
+                mac_hexes = [row["mac"].replace(":", "") for row in leases_list if row.get("mac")]
                 if mac_hexes:
                     placeholders = ",".join(["%s"] * len(mac_hexes))
                     with db.cursor() as res_cur:
                         res_cur.execute(
                             f"SELECT HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE HEX(dhcp_identifier) IN ({placeholders})",
-                            mac_hexes
+                            mac_hexes,
                         )
                         reserved_macs = {row["mac_hex"].upper() for row in res_cur.fetchall()}
-            for l in leases_list:
-                l["has_reservation"] = l["mac"].replace(":", "").upper() in reserved_macs
+            for lease in leases_list:
+                lease["has_reservation"] = lease["mac"].replace(":", "").upper() in reserved_macs
     except Exception as e:
         logger.error(f"Could not load leases: {e}")
         flash("Could not load leases. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
-    mac_list = [l["mac"] for l in leases_list if l.get("mac")]
+    mac_list = [row["mac"] for row in leases_list if row.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
     template_vars = dict(
-        leases=leases_list, page=page, pages=pages, total=total,
-        subnet_filter=subnet_filter, minutes=minutes, search=search,
-        show_expired=show_expired, subnet_map=accessible_subnet_map,
-        sort=sort, direction=direction, device_info=device_info,
+        leases=leases_list,
+        page=page,
+        pages=pages,
+        total=total,
+        subnet_filter=subnet_filter,
+        minutes=minutes,
+        search=search,
+        show_expired=show_expired,
+        subnet_map=accessible_subnet_map,
+        sort=sort,
+        direction=direction,
+        device_info=device_info,
         per_page=per_page_param,
         get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
         device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-        view_mode="v4", subnet6_map=extensions.SUBNET6_MAP,
+        view_mode="v4",
+        subnet6_map=extensions.SUBNET6_MAP,
     )
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
@@ -197,7 +214,7 @@ def _leases_v6():
         # is hidden whenever SUBNET6_MAP is empty (see leases.html) — but
         # guard directly in case of a stale bookmark or direct URL hit.
         flash("No IPv6 subnets are configured.", "error")
-        return redirect(url_for('leases.leases'))
+        return redirect(url_for("leases.leases"))
 
     subnet_filter = request.args.get("subnet", "all")
     search = __auth.sanitize_search(request.args.get("search", "").strip())
@@ -217,11 +234,9 @@ def _leases_v6():
             # matching the same rule global search already uses.
             info = extensions.SUBNET6_MAP.get(subnet_id)
             paired = info.get("paired_subnet4_id") if info else None
-            allowed = (
-                info is not None and (
-                    current_user.all_subnets or
-                    (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-                )
+            allowed = info is not None and (
+                current_user.all_subnets
+                or (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
             )
             if not allowed:
                 subnet_filter = "all"
@@ -231,22 +246,26 @@ def _leases_v6():
 
     leases_list = []
     try:
-        leases_list = __kea6.list_lease6(subnet_id=subnet_id, search=search or None,
-                                         show_expired=show_expired)
-        for l in leases_list:
-            l["subnet_name"] = extensions.SUBNET6_MAP.get(l["subnet_id"], {}).get("name", "")
+        leases_list = __kea6.list_lease6(subnet_id=subnet_id, search=search or None, show_expired=show_expired)
+        for lease in leases_list:
+            lease["subnet_name"] = extensions.SUBNET6_MAP.get(lease["subnet_id"], {}).get("name", "")
     except Exception as e:
         logger.error(f"Could not load IPv6 leases: {e}")
         flash("Could not load IPv6 leases. Check server logs for details.", "error")
 
     template_vars = dict(
-        leases6=leases_list, total=len(leases_list),
-        subnet_filter=subnet_filter, search=search, show_expired=show_expired,
-        subnet6_map=extensions.SUBNET6_MAP, view_mode="v6",
+        leases6=leases_list,
+        total=len(leases_list),
+        subnet_filter=subnet_filter,
+        search=search,
+        show_expired=show_expired,
+        subnet6_map=extensions.SUBNET6_MAP,
+        view_mode="v6",
     )
     if request.headers.get("HX-Request") == "true":
         return render_template("_leases6_results.html", **template_vars), 200
     return render_template("leases.html", **template_vars)
+
 
 @bp.route("/leases/delete-stale", methods=["POST"])
 @login_required
@@ -259,6 +278,7 @@ def delete_stale_leases():
     # own subnets. Scoped to accessible subnets, same pattern as every
     # read-side subnet restriction elsewhere in the app.
     from jen.services.access import add_subnet_restriction
+
     where, params = ["state != 0"], []
     where, params = add_subnet_restriction(where, params, "", "subnet_id")
     # add_subnet_restriction prefixes the column with "{table_alias}.",
@@ -276,7 +296,8 @@ def delete_stale_leases():
     except Exception as e:
         logger.error(f"Error deleting stale leases: {e}")
         flash("Error deleting stale leases. Check server logs for details.", "error")
-    return redirect(url_for('leases.leases'))
+    return redirect(url_for("leases.leases"))
+
 
 @bp.route("/leases/release", methods=["POST"])
 @login_required
@@ -285,7 +306,7 @@ def release_lease():
     ip = request.form.get("ip", "").strip()
     if not ip:
         flash("No IP address specified.", "error")
-        return redirect(url_for('leases.leases'))
+        return redirect(url_for("leases.leases"))
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
@@ -296,10 +317,10 @@ def release_lease():
                 row = cur.fetchone()
                 if not row:
                     flash(f"No active lease found for {ip}.", "warning")
-                    return redirect(url_for('leases.leases'))
+                    return redirect(url_for("leases.leases"))
                 if not current_user.can_access_subnet(row["subnet_id"]):
                     flash("You do not have access to that subnet.", "error")
-                    return redirect(url_for('leases.leases'))
+                    return redirect(url_for("leases.leases"))
                 cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
                 affected = cur.rowcount
             db.commit()
@@ -311,7 +332,7 @@ def release_lease():
     except Exception as e:
         logger.error(f"Error releasing lease {ip}: {e}")
         flash("Error releasing lease. Check server logs for details.", "error")
-    return redirect(url_for('leases.leases'))
+    return redirect(url_for("leases.leases"))
 
 
 @bp.route("/leases/bulk-release", methods=["POST"])
@@ -338,7 +359,7 @@ def bulk_release_leases():
     ips = request.form.getlist("ips[]")
     if not ips:
         flash("No leases selected.", "error")
-        return redirect(url_for('leases.leases'))
+        return redirect(url_for("leases.leases"))
 
     released = 0
     errors = 0
@@ -352,7 +373,7 @@ def bulk_release_leases():
                             "LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id "
                             "AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0 "
                             "WHERE inet_ntoa(l.address)=%s AND l.state=0 AND h.host_id IS NULL",
-                            (ip,)
+                            (ip,),
                         )
                         row = cur.fetchone()
                         if not row:
@@ -372,12 +393,15 @@ def bulk_release_leases():
     except Exception as e:
         logger.error(f"Bulk release leases error: {e}")
         flash("Bulk release failed. Check server logs for details.", "error")
-        return redirect(url_for('leases.leases'))
+        return redirect(url_for("leases.leases"))
 
-    flash(f"Released {released} lease(s)." + (f" {errors} failed or skipped." if errors else ""),
-          "success" if errors == 0 else "warning")
+    flash(
+        f"Released {released} lease(s)." + (f" {errors} failed or skipped." if errors else ""),
+        "success" if errors == 0 else "warning",
+    )
     __user.audit("BULK_RELEASE_LEASES", "leases", f"Released={released} Errors={errors} by {current_user.username}")
-    return redirect(url_for('leases.leases'))
+    return redirect(url_for("leases.leases"))
+
 
 MAX_IPMAP_ADDRESSES = 2048  # sanity cap so a misconfigured huge pool can't render tens of thousands of cells
 
@@ -445,7 +469,11 @@ def ipmap():
     # but the URL parameter itself wasn't enforced, so a restricted user
     # could edit the URL and view leases/reservations for any subnet.
     accessible_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
-    default_subnet = list(accessible_map.keys())[0] if accessible_map else (list(extensions.SUBNET_MAP.keys())[0] if extensions.SUBNET_MAP else 1)
+    default_subnet = (
+        list(accessible_map.keys())[0]
+        if accessible_map
+        else (list(extensions.SUBNET_MAP.keys())[0] if extensions.SUBNET_MAP else 1)
+    )
     subnet_filter = request.args.get("subnet", default_subnet)
     try:
         subnet_filter = int(subnet_filter)
@@ -459,13 +487,19 @@ def ipmap():
     try:
         with __db.kea_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_filter,))
+                cur.execute(
+                    "SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s",
+                    (subnet_filter,),
+                )
                 for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                     leases_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "dynamic"}
-                cur.execute("SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_filter,))
+                cur.execute(
+                    "SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s",
+                    (subnet_filter,),
+                )
                 for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                     reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
     except Exception as e:
         logger.error(f"Could not load IP map: {e}")
@@ -477,11 +511,20 @@ def ipmap():
     used.update(leases_by_ip)
     used.update(reservations_by_ip)  # a reservation on a leased IP shows as "reserved"
 
-    return render_template("ipmap.html", leases=leases_by_ip, reservations=reservations_by_ip,
-                           used=used, pool_blocks=pool_blocks, pool_truncated=pool_truncated,
-                           max_ipmap_addresses=MAX_IPMAP_ADDRESSES,
-                           subnet_filter=subnet_filter, subnet_id=subnet_filter,
-                           subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), cidr=cidr)
+    return render_template(
+        "ipmap.html",
+        leases=leases_by_ip,
+        reservations=reservations_by_ip,
+        used=used,
+        pool_blocks=pool_blocks,
+        pool_truncated=pool_truncated,
+        max_ipmap_addresses=MAX_IPMAP_ADDRESSES,
+        subnet_filter=subnet_filter,
+        subnet_id=subnet_filter,
+        subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
+        cidr=cidr,
+    )
+
 
 # ─────────────────────────────────────────
 # Reservations

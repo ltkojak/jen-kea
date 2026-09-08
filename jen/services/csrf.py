@@ -27,7 +27,7 @@ import secrets
 from flask import request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-CSRF_SALT    = "jen-csrf"
+CSRF_SALT = "jen-csrf"
 CSRF_MAX_AGE = 4 * 60 * 60  # 4 hours
 
 

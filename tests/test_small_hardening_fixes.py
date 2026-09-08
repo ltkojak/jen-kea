@@ -37,7 +37,6 @@ import re
 
 
 class TestTrustedDeviceCookieSecureFlag:
-
     def _mfa_routes_source(self):
         return pathlib.Path("jen/routes/mfa_routes.py").read_text()
 
@@ -53,8 +52,7 @@ class TestTrustedDeviceCookieSecureFlag:
         )
         missing_secure = [c for c in calls if "secure=" not in c]
         assert not missing_secure, (
-            f"{len(missing_secure)} of 4 jen_trusted cookie calls are "
-            f"missing the secure= flag: {missing_secure}"
+            f"{len(missing_secure)} of 4 jen_trusted cookie calls are missing the secure= flag: {missing_secure}"
         )
 
     def test_secure_flag_is_conditioned_on_ssl_not_hardcoded(self):
@@ -65,9 +63,7 @@ class TestTrustedDeviceCookieSecureFlag:
         source = self._mfa_routes_source()
         calls = re.findall(r'set_cookie\("jen_trusted".*?\)', source, re.DOTALL)
         for call in calls:
-            assert "secure=__config.ssl_configured()" in call, (
-                f"expected secure=__config.ssl_configured(), got: {call}"
-            )
+            assert "secure=__config.ssl_configured()" in call, f"expected secure=__config.ssl_configured(), got: {call}"
 
     def test_httponly_and_samesite_are_still_present(self):
         """Regression guard: fixing the missing Secure flag shouldn't
@@ -105,6 +101,7 @@ class TestDockerHealthcheckUsesRealShellLogic:
         match = re.search(r'test:\s*(\["CMD-SHELL".*?\])\s*$', text, re.MULTILINE)
         assert match, f"could not find the jen service's CMD-SHELL healthcheck line in {compose_file}"
         import json
+
         return json.loads(match.group(1))
 
     def test_docker_compose_yml_uses_cmd_shell(self):
@@ -157,13 +154,11 @@ class TestDockerHealthcheckUsesRealShellLogic:
         thread.start()
         try:
             command_string = (
-                f"curl -sf http://localhost:1/ > /dev/null "
-                f"|| curl -sf http://localhost:{port}/ > /dev/null"
+                f"curl -sf http://localhost:1/ > /dev/null || curl -sf http://localhost:{port}/ > /dev/null"
             )
             result = subprocess.run(["/bin/sh", "-c", command_string], timeout=5)
             assert result.returncode == 0, (
-                "shell should have fallen through to the working fallback "
-                "target and succeeded"
+                "shell should have fallen through to the working fallback target and succeeded"
             )
         finally:
             httpd.shutdown()

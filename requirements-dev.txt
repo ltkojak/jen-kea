@@ -1,13 +1,13 @@
-# Jen development + CI tooling (v5.4.1).
+# Jen development + CI tooling.
 #
 # Runtime dependencies come in via the -r include below — this file is
-# only the extra tools CI and contributors need. Left unpinned to match
-# how CI has always installed them; the runtime set in requirements.txt
-# is the one that's floor-pinned.
+# only the extra tools CI and contributors need. Mostly unpinned; ruff
+# is pinned exact (v5.6.0) so `ruff format --check .` in CI is a stable
+# gate — its output shifts subtly between releases.
 
 -r requirements.txt
 
 pytest
 bandit
 pip-audit
-ruff
+ruff==0.16.6

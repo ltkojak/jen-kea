@@ -81,10 +81,13 @@ class TestAlertSummaryApi:
         """Returns at most 10 alerts."""
         with db.cursor() as cur:
             for i in range(15):
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO alert_log (channel_type, alert_type, message, status)
                     VALUES ('telegram', 'kea_down', %s, 'sent')
-                """, (f"Alert {i}",))
+                """,
+                    (f"Alert {i}",),
+                )
         db.commit()
 
         r = logged_in_client.get("/api/alert-summary")
@@ -128,9 +131,9 @@ class TestDashboardStatsApi:
     def test_servers_always_present(self, logged_in_client, monkeypatch):
         """servers key present even when Kea DB query fails."""
         from jen.services import kea as kea_svc
+
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
-        monkeypatch.setattr(kea_svc, "kea_command",
-                           lambda *a, **kw: {"result": 1, "text": "error"})
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "error"})
         monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
 
         r = logged_in_client.get("/api/stats")

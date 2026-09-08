@@ -12,26 +12,31 @@ needed, since _validate_tables() takes plain lists/sets.
 class TestValidateTables:
     def test_drops_unknown_table_names(self):
         from jen.services.dbexport import _validate_tables
+
         known = {"users", "devices", "settings"}
         result = _validate_tables(["users", "devices", "x`; DROP TABLE users;--"], known)
         assert result == ["users", "devices"]
 
     def test_keeps_all_known_tables(self):
         from jen.services.dbexport import _validate_tables
+
         known = {"users", "devices"}
         result = _validate_tables(["users", "devices"], known)
         assert result == ["users", "devices"]
 
     def test_none_passes_through_as_none(self):
         from jen.services.dbexport import _validate_tables
+
         assert _validate_tables(None, {"users"}) is None
 
     def test_empty_list_returns_empty_list(self):
         from jen.services.dbexport import _validate_tables
+
         assert _validate_tables([], {"users"}) == []
 
     def test_all_invalid_returns_empty_list_not_the_originals(self):
         from jen.services.dbexport import _validate_tables
+
         result = _validate_tables(["`x` UNION SELECT * FROM users--"], {"users", "devices"})
         assert result == []
 
@@ -39,6 +44,7 @@ class TestValidateTables:
         """The exact shape of attack this fix closes: a crafted table name
         designed to break out of backticks in `SELECT * FROM `{table}``."""
         from jen.services.dbexport import _validate_tables
+
         known = {"users", "devices", "settings"}
         payload = "x` UNION SELECT username,password_hash,3,4 FROM users-- "
         result = _validate_tables([payload], known)
@@ -49,6 +55,7 @@ class TestValidateTables:
 class TestKeaAllTables:
     def test_kea_all_tables_flattens_every_group(self):
         from jen.services.dbexport import KEA_ALL_TABLES, KEA_EXPORT_GROUPS
+
         expected = {t for grp in KEA_EXPORT_GROUPS.values() for t in grp["tables"]}
         assert KEA_ALL_TABLES == expected
         # sanity: the known real tables are present
@@ -57,6 +64,7 @@ class TestKeaAllTables:
 
     def test_injected_table_name_not_in_kea_all_tables(self):
         from jen.services.dbexport import KEA_ALL_TABLES
+
         assert "hosts`; DROP TABLE hosts;--" not in KEA_ALL_TABLES
 
 

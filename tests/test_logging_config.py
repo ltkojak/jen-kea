@@ -66,12 +66,13 @@ class TestPlainFormat:
 class TestJsonFormat:
     def test_output_is_valid_json_per_line(self, capsys):
         import configparser
+
         cfg = configparser.ConfigParser()
         cfg["server"] = {"log_format": "json"}
         configure_logging(cfg)
         logging.getLogger("test.json").warning("structured message")
         captured = capsys.readouterr()
-        lines = [l for l in captured.out.strip().splitlines() if l]
+        lines = [ln for ln in captured.out.strip().splitlines() if ln]
         # The "Logging configured: ..." line from configure_logging()
         # itself is also JSON now — every line should parse.
         for line in lines:
@@ -84,8 +85,13 @@ class TestJsonFormat:
     def test_extra_fields_are_included(self):
         formatter = JsonFormatter()
         record = logging.LogRecord(
-            name="test.extra", level=logging.INFO, pathname=__file__,
-            lineno=1, msg="with extra data", args=(), exc_info=None,
+            name="test.extra",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="with extra data",
+            args=(),
+            exc_info=None,
         )
         record.subnet_id = 5
         record.user = "admin"
@@ -97,8 +103,13 @@ class TestJsonFormat:
     def test_non_serializable_extra_falls_back_to_string(self):
         formatter = JsonFormatter()
         record = logging.LogRecord(
-            name="test.extra", level=logging.INFO, pathname=__file__,
-            lineno=1, msg="with an object", args=(), exc_info=None,
+            name="test.extra",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="with an object",
+            args=(),
+            exc_info=None,
         )
         record.weird = object()  # not JSON-serializable
         output_str = formatter.format(record)
@@ -109,6 +120,7 @@ class TestJsonFormat:
 class TestConfigVsEnvFallback:
     def test_config_value_takes_priority_over_env(self, monkeypatch):
         import configparser
+
         monkeypatch.setenv("JEN_LOG_LEVEL", "ERROR")
         cfg = configparser.ConfigParser()
         cfg["server"] = {"log_level": "DEBUG"}
@@ -124,6 +136,7 @@ class TestConfigVsEnvFallback:
 class TestFileHandler:
     def test_creates_log_file_and_writes_to_it(self, tmp_path):
         import configparser
+
         log_path = tmp_path / "sub" / "jen.log"
         cfg = configparser.ConfigParser()
         cfg["server"] = {"log_file": str(log_path)}
@@ -137,6 +150,7 @@ class TestFileHandler:
 
     def test_bad_log_file_path_does_not_crash_configure_logging(self):
         import configparser
+
         cfg = configparser.ConfigParser()
         # A path under a location this process can't create — should be
         # caught and logged as a warning, not raised.

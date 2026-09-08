@@ -8,7 +8,6 @@ init_jen_db call), so these verify recorded state, idempotency,
 registry integrity, and the admin-role regression fix.
 """
 
-
 from jen.models.db import jen_db
 from jen.models.migrations import (
     MIGRATIONS,
@@ -19,7 +18,6 @@ from jen.models.migrations import (
 
 
 class TestRegistry:
-
     def test_versions_strictly_increasing(self):
         versions = [v for v, _, _ in MIGRATIONS]
         assert versions == sorted(set(versions))
@@ -32,7 +30,6 @@ class TestRegistry:
 
 
 class TestAppliedState:
-
     def test_schema_migrations_table_exists(self):
         with jen_db() as db:
             with db.cursor() as cur:
@@ -67,18 +64,13 @@ class TestAdminRoleRegression:
         with jen_db() as db:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM users WHERE username='_mig_admin_probe'")
-                cur.execute(
-                    "INSERT INTO users (username, password, role) "
-                    "VALUES ('_mig_admin_probe', 'x', 'admin')"
-                )
+                cur.execute("INSERT INTO users (username, password, role) VALUES ('_mig_admin_probe', 'x', 'admin')")
             db.commit()
         try:
-            run_migrations()   # simulates a restart
+            run_migrations()  # simulates a restart
             with jen_db() as db:
                 with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT role FROM users WHERE username='_mig_admin_probe'"
-                    )
+                    cur.execute("SELECT role FROM users WHERE username='_mig_admin_probe'")
                     assert cur.fetchone()["role"] == "admin"
         finally:
             with jen_db() as db:
@@ -113,16 +105,23 @@ class TestBackfillMustChangePasswordMigration:
             def __init__(self, rows):
                 self.rows = rows
                 self.executed = []
+
             def execute(self, sql, params=None):
                 self.executed.append((sql, params))
+
             def fetchall(self):
                 return self.rows
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
 
         class FakeDB:
             def __init__(self, cursor):
                 self._cursor = cursor
+
             def cursor(self):
                 return self._cursor
 
@@ -142,8 +141,9 @@ class TestBackfillMustChangePasswordMigration:
 
         select_calls = [e for e in cur.executed if e[0].startswith("SELECT")]
         assert len(select_calls) == 1
-        assert "must_change_password = 0" in select_calls[0][0], \
+        assert "must_change_password = 0" in select_calls[0][0], (
             "must scope to unflagged rows — no need to re-check users already flagged"
+        )
 
     def test_end_to_end_against_real_database(self):
         """Real-DB integration test: an existing user (simulating an
@@ -160,12 +160,12 @@ class TestBackfillMustChangePasswordMigration:
                 cur.execute(
                     "INSERT INTO users (username, password, role, must_change_password) "
                     "VALUES ('_mig16_stale_default', %s, 'admin', 0)",
-                    (hash_password("admin"),)
+                    (hash_password("admin"),),
                 )
                 cur.execute(
                     "INSERT INTO users (username, password, role, must_change_password) "
                     "VALUES ('_mig16_real_pw', %s, 'admin', 0)",
-                    (hash_password("ActuallyChangedThis456!"),)
+                    (hash_password("ActuallyChangedThis456!"),),
                 )
             db.commit()
         try:

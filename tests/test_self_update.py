@@ -45,8 +45,9 @@ class TestSelfUpdateRouteIsNowJustATrigger:
             return result
 
         with patch("jen.routes.settings.subprocess.run", side_effect=fake_run):
-            r = logged_in_client.post("/settings/infrastructure/self-update",
-                                      data={"db_backup": "0"}, follow_redirects=True)
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
+            )
 
         assert r.status_code == 200
         assert "cmd" in captured, "self_update() never reached the point of triggering the service"
@@ -64,8 +65,9 @@ class TestSelfUpdateRouteIsNowJustATrigger:
 
         with patch("jen.routes.settings.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
-            logged_in_client.post("/settings/infrastructure/self-update",
-                                  data={"db_backup": "0"}, follow_redirects=True)
+            logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
+            )
 
         assert not __import__("os").path.exists(sentinel), (
             "self_update() wrote to /tmp/jen_update_install.sh — this is exactly "
@@ -77,32 +79,36 @@ class TestSelfUpdateRouteIsNowJustATrigger:
         extract work at all — that's entirely the root script's job
         now. A regression here would mean someone partially reverted
         this fix."""
-        with patch("jen.routes.settings.subprocess.run") as mock_run, \
-             patch("requests.get") as mock_requests_get, \
-             patch("tarfile.open") as mock_tarfile_open:
+        with (
+            patch("jen.routes.settings.subprocess.run") as mock_run,
+            patch("requests.get") as mock_requests_get,
+            patch("tarfile.open") as mock_tarfile_open,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
-            logged_in_client.post("/settings/infrastructure/self-update",
-                                  data={"db_backup": "0"}, follow_redirects=True)
+            logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
+            )
         mock_requests_get.assert_not_called()
         mock_tarfile_open.assert_not_called()
 
     def test_service_start_failure_is_reported_without_leaking_raw_output(self, logged_in_client):
         with patch("jen.routes.settings.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stderr="some internal systemd detail")
-            r = logged_in_client.post("/settings/infrastructure/self-update",
-                                      data={"db_backup": "0"}, follow_redirects=True)
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
+            )
         assert r.status_code == 200
         assert b"Could not start the update" in r.data
         assert b"some internal systemd detail" not in r.data
 
     def test_requires_superadmin(self, client, db):
         from tests.conftest import restricted_client
+
         # restricted_client creates a plain 'admin'-role session, not superadmin
         restricted_client(client, db, allowed_subnets=[1], role="admin")
         with patch("jen.routes.settings.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
-            r = client.post("/settings/infrastructure/self-update",
-                            data={"db_backup": "0"}, follow_redirects=True)
+            r = client.post("/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True)
         assert r.status_code == 200
         assert b"SuperAdmin access required" in r.data
         mock_run.assert_not_called()
@@ -127,22 +133,28 @@ class TestSelfUpdateOptionalDbBackup:
             calls.append("write_backup")
             return f"/opt/jen/backups/{fname}"
 
-        with patch("jen.services.dbexport.export_jen", side_effect=fake_export_jen), \
-             patch("jen.services.dbexport._write_backup", side_effect=fake_write_backup), \
-             patch("jen.routes.settings.subprocess.run") as mock_run:
+        with (
+            patch("jen.services.dbexport.export_jen", side_effect=fake_export_jen),
+            patch("jen.services.dbexport._write_backup", side_effect=fake_write_backup),
+            patch("jen.routes.settings.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
-            r = logged_in_client.post("/settings/infrastructure/self-update",
-                                      data={"db_backup": "1"}, follow_redirects=True)
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "1"}, follow_redirects=True
+            )
 
         assert r.status_code == 200
         assert calls == ["export_jen", "write_backup"]
         assert mock_run.called, "update must still be triggered after a successful backup"
 
     def test_backup_failure_aborts_before_triggering_update(self, logged_in_client):
-        with patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")), \
-             patch("jen.routes.settings.subprocess.run") as mock_run:
-            r = logged_in_client.post("/settings/infrastructure/self-update",
-                                      data={"db_backup": "1"}, follow_redirects=True)
+        with (
+            patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")),
+            patch("jen.routes.settings.subprocess.run") as mock_run,
+        ):
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "1"}, follow_redirects=True
+            )
 
         assert r.status_code == 200
         assert b"Database backup failed" in r.data
@@ -150,9 +162,12 @@ class TestSelfUpdateOptionalDbBackup:
         mock_run.assert_not_called()
 
     def test_backup_not_requested_skips_export_entirely(self, logged_in_client):
-        with patch("jen.services.dbexport.export_jen") as mock_export, \
-             patch("jen.routes.settings.subprocess.run") as mock_run:
+        with (
+            patch("jen.services.dbexport.export_jen") as mock_export,
+            patch("jen.routes.settings.subprocess.run") as mock_run,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
-            logged_in_client.post("/settings/infrastructure/self-update",
-                                  data={"db_backup": "0"}, follow_redirects=True)
+            logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
+            )
         mock_export.assert_not_called()

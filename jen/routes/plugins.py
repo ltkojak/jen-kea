@@ -9,6 +9,7 @@ process — DB credentials, sudoers-permitted commands, everything. That's
 a much bigger blast radius than a subnet-restricted admin was ever meant
 to have, so this follows the same rule as database.py.
 """
+
 import logging
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, url_for
@@ -25,6 +26,7 @@ bp = Blueprint("plugins", __name__)
 
 # ── Plugins page ──────────────────────────────────────────────────────────────
 
+
 @bp.route("/settings/plugins")
 @login_required
 @_superadmin_required
@@ -40,33 +42,29 @@ def plugins_page():
 
     # Annotate installed plugins with update availability and changelog URL
     from jen.services.plugins import _parse_version
+
     for p in installed:
         reg = registry_map.get(p["id"], {})
         p["registry_version"] = reg.get("version", "")
         p["update_available"] = bool(
-            p["registry_version"] and
-            _parse_version(p["registry_version"]) > _parse_version(p["version"])
+            p["registry_version"] and _parse_version(p["registry_version"]) > _parse_version(p["version"])
         )
         p["changelog_url"] = reg.get("changelog_url", "")
 
     # Annotate registry entries with install/update status
     for entry in registry:
         inst = installed_map.get(entry["id"])
-        entry["installed"]      = inst is not None
+        entry["installed"] = inst is not None
         entry["update_available"] = bool(
-            inst and _parse_version(entry.get("version","")) > _parse_version(inst.get("version",""))
+            inst and _parse_version(entry.get("version", "")) > _parse_version(inst.get("version", ""))
         )
-        entry["version_ok"]     = __plugins.jen_version_meets(
-            entry.get("requires_jen", "0.0.0")
-        )
+        entry["version_ok"] = __plugins.jen_version_meets(entry.get("requires_jen", "0.0.0"))
 
-    return render_template("plugins.html",
-                           installed=installed,
-                           registry=registry,
-                           fetch_error=fetch_error)
+    return render_template("plugins.html", installed=installed, registry=registry, fetch_error=fetch_error)
 
 
 # ── Install ───────────────────────────────────────────────────────────────────
+
 
 @bp.route("/settings/plugins/install/<plugin_id>", methods=["POST"])
 @login_required
@@ -92,8 +90,7 @@ def install_plugin(plugin_id):
         # Record in plugins DB table
         _record_plugin(entry)
         __user.set_global_setting("restart_pending", "true")
-        __user.audit("PLUGIN_INSTALL", plugin_id,
-                     f"Installed {entry.get('name')} v{entry.get('version')}")
+        __user.audit("PLUGIN_INSTALL", plugin_id, f"Installed {entry.get('name')} v{entry.get('version')}")
         flash(msg, "success")
     else:
         flash(msg, "error")
@@ -123,8 +120,7 @@ def update_plugin(plugin_id):
     if ok:
         _record_plugin(entry)
         __user.set_global_setting("restart_pending", "true")
-        __user.audit("PLUGIN_UPDATE", plugin_id,
-                     f"Updated {entry.get('name')} to v{entry.get('version')}")
+        __user.audit("PLUGIN_UPDATE", plugin_id, f"Updated {entry.get('name')} to v{entry.get('version')}")
         flash(msg, "success")
     else:
         flash(msg, "error")
@@ -132,6 +128,7 @@ def update_plugin(plugin_id):
 
 
 # ── Enable / Disable ──────────────────────────────────────────────────────────
+
 
 @bp.route("/settings/plugins/enable/<plugin_id>", methods=["POST"])
 @login_required
@@ -163,6 +160,7 @@ def disable_plugin(plugin_id):
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 
+
 @bp.route("/settings/plugins/uninstall/<plugin_id>", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -182,6 +180,7 @@ def uninstall_plugin(plugin_id):
 
 # ── Registry refresh (AJAX) ───────────────────────────────────────────────────
 
+
 @bp.route("/api/plugins/registry")
 @login_required
 @_superadmin_required
@@ -190,27 +189,34 @@ def api_registry():
     installed_ids = {p["id"] for p in __plugins.discover_plugins()}
     for e in entries:
         e["installed"] = e["id"] in installed_ids
-        e["version_ok"] = __plugins.jen_version_meets(
-            e.get("requires_jen", "0.0.0")
-        )
+        e["version_ok"] = __plugins.jen_version_meets(e.get("requires_jen", "0.0.0"))
     return jsonify({"plugins": entries, "error": err})
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
+
 def _record_plugin(entry: dict):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled)
                     VALUES (%s, %s, %s, %s, %s, %s, 1)
                     ON DUPLICATE KEY UPDATE
                         name=VALUES(name), version=VALUES(version),
                         description=VALUES(description), enabled=1
-                """, (entry.get("id"), entry.get("name"), entry.get("version"),
-                      entry.get("description"), entry.get("author"),
-                      entry.get("requires_jen")))
+                """,
+                    (
+                        entry.get("id"),
+                        entry.get("name"),
+                        entry.get("version"),
+                        entry.get("description"),
+                        entry.get("author"),
+                        entry.get("requires_jen"),
+                    ),
+                )
             db.commit()
     except Exception as e:
         logger.error(f"Failed to record plugin in DB: {e}")

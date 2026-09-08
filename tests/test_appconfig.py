@@ -21,7 +21,7 @@ def isolated_config(tmp_path):
     """Point AppConfig at a throwaway config file, restore afterwards."""
     original_path = extensions.CONFIG_FILE
     cfg = configparser.ConfigParser()
-    cfg["kea"]    = {"api_url": "http://1.2.3.4:8000", "api_user": "u1", "api_pass": "p1"}
+    cfg["kea"] = {"api_url": "http://1.2.3.4:8000", "api_user": "u1", "api_pass": "p1"}
     cfg["kea_db"] = {"host": "dbhost", "user": "du", "password": "dp", "database": "kea"}
     cfg["jen_db"] = {"host": "dbhost", "user": "ju", "password": "jp", "database": "jen"}
     cfg["server"] = {"http_port": "5050", "https_port": "8443"}
@@ -35,11 +35,11 @@ def isolated_config(tmp_path):
     extensions.CONFIG_FILE = original_path
     # Restore in-memory state for subsequent tests (conftest values)
     from tests.conftest import _patch_extensions
+
     _patch_extensions()
 
 
 class TestAppConfig:
-
     def test_reload_derives_all_globals(self, isolated_config):
         assert extensions.KEA_API_URL == "http://1.2.3.4:8000"
         assert extensions.HTTP_PORT == 5050
@@ -67,6 +67,7 @@ class TestAppConfig:
             p.add_section("kea_server_2")
             p.set("kea_server_2", "api_url", "http://9.9.9.9:8000")
             p.set("kea_server_2", "name", "Standby")
+
         app_config.mutate(add_server)
         assert len(extensions.KEA_SERVERS) == 2
         assert extensions.KEA_SERVERS[1]["name"] == "Standby"
@@ -77,14 +78,14 @@ class TestAppConfig:
         def add_then_check(p):
             p.add_section("kea_server_2")
             p.set("kea_server_2", "api_url", "http://9.9.9.9:8000")
+
         app_config.mutate(add_then_check)
         app_config.mutate(lambda p: p.remove_section("kea_server_2"))
         assert len(extensions.KEA_SERVERS) == 1
         assert not extensions.cfg.has_section("kea_server_2")
 
     def test_write_values_batch(self, isolated_config):
-        app_config.write_values([("kea_db", "host", "newhost"),
-                                 ("jen_db", "host", "newhost")])
+        app_config.write_values([("kea_db", "host", "newhost"), ("jen_db", "host", "newhost")])
         assert extensions.KEA_DB_HOST == "newhost"
         assert extensions.JEN_DB_HOST == "newhost"
 

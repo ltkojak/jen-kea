@@ -29,12 +29,10 @@ built out of order, rather than only checking against already-sorted
 input like every test here previously did.
 """
 
-
 from jen.services.changelog import _inline_markdown_to_html, _version_sort_key, parse_changelog
 
 
 class TestInlineMarkdown:
-
     def test_bold(self):
         assert _inline_markdown_to_html("some **bold** text") == "some <strong>bold</strong> text"
 
@@ -74,7 +72,6 @@ class TestInlineMarkdown:
 
 
 class TestVersionSortKey:
-
     def test_simple_three_part_version(self):
         assert _version_sort_key("5.2.2") == (5, 2, 2)
 
@@ -95,7 +92,6 @@ class TestVersionSortKey:
 
 
 class TestParseChangelog:
-
     def _write_changelog(self, tmp_path, content):
         p = tmp_path / "CHANGELOG.md"
         p.write_text(content, encoding="utf-8")
@@ -155,9 +151,7 @@ Oldest content.
         assert releases[1]["version"] == "4.0.0"
 
     def test_no_limit_returns_all_releases(self, tmp_path):
-        content = "# Changelog\n\n" + "".join(
-            f"## [{i}.0.0] - 2026-01-0{i}\n\nBody {i}.\n\n" for i in range(1, 4)
-        )
+        content = "# Changelog\n\n" + "".join(f"## [{i}.0.0] - 2026-01-0{i}\n\nBody {i}.\n\n" for i in range(1, 4))
         path = self._write_changelog(tmp_path, content)
         releases = parse_changelog(path=path)
         assert len(releases) == 3

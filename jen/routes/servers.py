@@ -22,9 +22,8 @@ bp = Blueprint("servers", __name__)
 
 def _JEN_VERSION():
     from jen import JEN_VERSION
+
     return JEN_VERSION
-
-
 
 
 def __ip_to_int(ip):
@@ -44,7 +43,9 @@ def servers():
             s["version"] = s["version"].splitlines()[0] if s["version"] else ""
             # Get lease stats per server
             stats_result = __kea.kea_command("stat-lease4-get", server=s["server"])
-            s["lease_stats"] = stats_result.get("arguments", {}).get("result-set", {}) if stats_result.get("result") == 0 else {}
+            s["lease_stats"] = (
+                stats_result.get("arguments", {}).get("result-set", {}) if stats_result.get("result") == 0 else {}
+            )
         else:
             s["version"] = ""
             s["lease_stats"] = {}
@@ -105,16 +106,21 @@ def servers():
             else:
                 reported = {s["ha_state"] for s in statuses if s["ha_state"]}
                 ha_degraded_reason = (
-                    f"reported state: {', '.join(sorted(reported))}" if reported
+                    f"reported state: {', '.join(sorted(reported))}"
+                    if reported
                     else "no server has reported an HA state yet"
                 )
 
-    return render_template("servers.html", statuses=statuses,
-                           single_server=single_server,
-                           ha_mode=ha_mode,
-                           ha_degraded=ha_degraded,
-                           ha_degraded_reason=ha_degraded_reason,
-                           subnet_map=extensions.SUBNET_MAP)
+    return render_template(
+        "servers.html",
+        statuses=statuses,
+        single_server=single_server,
+        ha_mode=ha_mode,
+        ha_degraded=ha_degraded,
+        ha_degraded_reason=ha_degraded_reason,
+        subnet_map=extensions.SUBNET_MAP,
+    )
+
 
 @bp.route("/servers/restart/<int:server_id>", methods=["POST"])
 @login_required
@@ -123,16 +129,17 @@ def restart_kea_server(server_id):
     server = next((s for s in extensions.KEA_SERVERS if s["id"] == server_id), None)
     if not server:
         flash("Server not found.", "error")
-        return redirect(url_for('servers.servers'))
+        return redirect(url_for("servers.servers"))
     if not server["ssh_host"]:
         flash("SSH not configured for this server.", "error")
-        return redirect(url_for('servers.servers'))
+        return redirect(url_for("servers.servers"))
     try:
         result = subprocess.run(
-            ["ssh"] + __auth.ssh_cli_opts() +
-            [f"{server['ssh_user']}@{server['ssh_host']}",
-             "sudo systemctl restart isc-kea-dhcp4-server"],
-            capture_output=True, timeout=15
+            ["ssh"]
+            + __auth.ssh_cli_opts()
+            + [f"{server['ssh_user']}@{server['ssh_host']}", "sudo systemctl restart isc-kea-dhcp4-server"],
+            capture_output=True,
+            timeout=15,
         )
         if result.returncode == 0:
             flash(f"Kea restarted on {server['name']}.", "success")
@@ -142,4 +149,4 @@ def restart_kea_server(server_id):
     except Exception as e:
         logger.error(f"SSH error restarting Kea on {server['name']}: {e}")
         flash(f"Could not reach {server['name']} — check server logs for details.", "error")
-    return redirect(url_for('servers.servers'))
+    return redirect(url_for("servers.servers"))

@@ -47,12 +47,15 @@ def _static_registry():
 class TestFetchRegistryLiveOverlay:
     def test_live_version_overlays_stale_static_version(self):
         registry_resp = _mock_response(200, _static_registry())
-        live_manifest_resp = _mock_response(200, {
-            "id": "ipam", "version": "1.3.3",
-            "description": "current real description",
-        })
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, live_manifest_resp]):
+        live_manifest_resp = _mock_response(
+            200,
+            {
+                "id": "ipam",
+                "version": "1.3.3",
+                "description": "current real description",
+            },
+        )
+        with patch("jen.services.plugins.requests.get", side_effect=[registry_resp, live_manifest_resp]):
             entries, err = plugins_svc.fetch_registry()
 
         assert err is None
@@ -62,8 +65,7 @@ class TestFetchRegistryLiveOverlay:
     def test_live_fetch_url_is_built_correctly(self):
         registry_resp = _mock_response(200, _static_registry())
         live_manifest_resp = _mock_response(200, {"id": "ipam", "version": "1.3.3"})
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, live_manifest_resp]) as mock_get:
+        with patch("jen.services.plugins.requests.get", side_effect=[registry_resp, live_manifest_resp]) as mock_get:
             plugins_svc.fetch_registry()
 
         second_call_args = mock_get.call_args_list[1]
@@ -71,8 +73,9 @@ class TestFetchRegistryLiveOverlay:
 
     def test_per_plugin_fetch_failure_falls_back_to_static_version(self):
         registry_resp = _mock_response(200, _static_registry())
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, ConnectionError("plugin repo unreachable")]):
+        with patch(
+            "jen.services.plugins.requests.get", side_effect=[registry_resp, ConnectionError("plugin repo unreachable")]
+        ):
             entries, err = plugins_svc.fetch_registry()
 
         # The whole call still succeeds — one plugin's connectivity
@@ -83,8 +86,7 @@ class TestFetchRegistryLiveOverlay:
     def test_per_plugin_fetch_404_falls_back_to_static_version(self):
         registry_resp = _mock_response(200, _static_registry())
         live_manifest_resp = _mock_response(404)
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, live_manifest_resp]):
+        with patch("jen.services.plugins.requests.get", side_effect=[registry_resp, live_manifest_resp]):
             entries, err = plugins_svc.fetch_registry()
 
         assert err is None
@@ -96,8 +98,7 @@ class TestFetchRegistryLiveOverlay:
         # with an unrelated plugin's data.
         registry_resp = _mock_response(200, _static_registry())
         wrong_manifest_resp = _mock_response(200, {"id": "network-discovery", "version": "9.9.9"})
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, wrong_manifest_resp]):
+        with patch("jen.services.plugins.requests.get", side_effect=[registry_resp, wrong_manifest_resp]):
             entries, err = plugins_svc.fetch_registry()
 
         assert err is None
@@ -113,13 +114,16 @@ class TestFetchRegistryLiveOverlay:
             "nav": [{"section": "network", "label": "IPAM", "endpoint": "ipam.index"}],
         }
         registry_resp = _mock_response(200, [static_entry])
-        malicious_manifest_resp = _mock_response(200, {
-            "id": "ipam", "version": "1.3.3",
-            "download_url": "https://evil.example.com/payload",
-            "nav": [{"section": "network", "label": "Definitely Not IPAM", "endpoint": "evil.route"}],
-        })
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, malicious_manifest_resp]):
+        malicious_manifest_resp = _mock_response(
+            200,
+            {
+                "id": "ipam",
+                "version": "1.3.3",
+                "download_url": "https://evil.example.com/payload",
+                "nav": [{"section": "network", "label": "Definitely Not IPAM", "endpoint": "evil.route"}],
+            },
+        )
+        with patch("jen.services.plugins.requests.get", side_effect=[registry_resp, malicious_manifest_resp]):
             entries, err = plugins_svc.fetch_registry()
 
         assert err is None
@@ -139,16 +143,17 @@ class TestFetchRegistryLiveOverlay:
 
     def test_multiple_plugins_each_overlaid_independently(self):
         static = [
-            {"id": "ipam", "version": "1.2.3",
-             "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/main"},
-            {"id": "network-discovery", "version": "0.9.0",
-             "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/main"},
+            {"id": "ipam", "version": "1.2.3", "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/main"},
+            {
+                "id": "network-discovery",
+                "version": "0.9.0",
+                "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/main",
+            },
         ]
         registry_resp = _mock_response(200, static)
         ipam_live = _mock_response(200, {"id": "ipam", "version": "1.3.3"})
         nd_live = _mock_response(200, {"id": "network-discovery", "version": "1.0.1"})
-        with patch("jen.services.plugins.requests.get",
-                   side_effect=[registry_resp, ipam_live, nd_live]):
+        with patch("jen.services.plugins.requests.get", side_effect=[registry_resp, ipam_live, nd_live]):
             entries, err = plugins_svc.fetch_registry()
 
         assert err is None

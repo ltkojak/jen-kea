@@ -23,12 +23,13 @@ line-length = 120
 # noise.
 exclude = ["legacy"]
 
-# This is an existing, actively-used codebase being linted for the
-# first time, not a greenfield project — the goal is catching real
-# mistakes (dead imports, undefined names, obvious bugs) and keeping
-# formatting consistent going forward, not retroactively imposing a
-# strict style regime that would force rewriting working code purely
-# for compliance. Rule selection is deliberately conservative:
+# v5.6.0 — the whole codebase was run through `ruff format` +
+# `ruff check --fix` (one mechanical, zero-behaviour-change pass), and
+# CI now gates on `ruff check .` and `ruff format --check .` (see
+# .github/workflows/tests.yml). New lint/format regressions fail the
+# build. Rule selection stays deliberately conservative — the goal is
+# real mistakes (dead imports, undefined names, obvious bugs) plus
+# consistent formatting, not a maximal style regime:
 #   F   — pyflakes: unused imports/variables, undefined names, etc.
 #   E/W — pycodestyle: whitespace, basic style consistency
 #   I   — isort: import ordering

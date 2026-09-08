@@ -22,11 +22,14 @@ from flask_login import current_user
 
 # ── Role check helpers ────────────────────────────────────────────────────────
 
+
 def is_superadmin():
     return current_user.is_authenticated and current_user.role == "superadmin"
 
+
 def is_admin_or_above():
     return current_user.is_authenticated and current_user.role in ("superadmin", "admin")
+
 
 def is_any_role():
     return current_user.is_authenticated
@@ -34,8 +37,10 @@ def is_any_role():
 
 # ── Decorators ────────────────────────────────────────────────────────────────
 
+
 def superadmin_required(f):
     """Restrict to superadmin only (user management, role assignment)."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not current_user.is_authenticated:
@@ -44,11 +49,13 @@ def superadmin_required(f):
             flash("SuperAdmin access required.", "error")
             return redirect(url_for("dashboard.dashboard"))
         return f(*args, **kwargs)
+
     return decorated
 
 
 def admin_required(f):
     """Restrict to admin or superadmin (settings, database, subnet editing, etc.)."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not current_user.is_authenticated:
@@ -57,20 +64,24 @@ def admin_required(f):
             flash("Admin access required.", "error")
             return redirect(url_for("dashboard.dashboard"))
         return f(*args, **kwargs)
+
     return decorated
 
 
 def viewer_or_above(f):
     """Any authenticated user (superadmin, admin, viewer)."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         if not current_user.is_authenticated:
             return redirect(url_for("auth.login"))
         return f(*args, **kwargs)
+
     return decorated
 
 
 # ── Subnet access helpers ─────────────────────────────────────────────────────
+
 
 def get_accessible_subnet_map():
     """
@@ -78,6 +89,7 @@ def get_accessible_subnet_map():
     SuperAdmins and users with subnet_access=None get the full map.
     """
     from jen import extensions
+
     return current_user.filter_subnet_map(extensions.SUBNET_MAP)
 
 
@@ -92,8 +104,7 @@ def assert_subnet_access(subnet_id):
     return False
 
 
-def add_subnet_restriction(where_clauses, params, table_alias="l",
-                           column="subnet_id"):
+def add_subnet_restriction(where_clauses, params, table_alias="l", column="subnet_id"):
     """
     If the current user has restricted subnet access, append a
     WHERE clause limiting results to their assigned subnets.
@@ -102,6 +113,7 @@ def add_subnet_restriction(where_clauses, params, table_alias="l",
         where, params = add_subnet_restriction(where, params, "l", "subnet_id")
     """
     from jen import extensions
+
     if not current_user.all_subnets:
         ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
         if not ids:
@@ -109,8 +121,6 @@ def add_subnet_restriction(where_clauses, params, table_alias="l",
             where_clauses.append("1=0")
         else:
             placeholders = ",".join(["%s"] * len(ids))
-            where_clauses.append(
-                f"{table_alias}.{column} IN ({placeholders})"
-            )
+            where_clauses.append(f"{table_alias}.{column} IN ({placeholders})")
             params.extend(ids)
     return where_clauses, params

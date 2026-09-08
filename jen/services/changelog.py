@@ -45,10 +45,7 @@ def _inline_markdown_to_html(text: str) -> str:
     consumed before the italic pass looks for lone *."""
     escaped = html.escape(text, quote=False)
     escaped = _LINK_RE.sub(
-        lambda m: (
-            f'<a href="{html.escape(m.group(2), quote=True)}" '
-            f'target="_blank" rel="noopener">{m.group(1)}</a>'
-        ),
+        lambda m: f'<a href="{html.escape(m.group(2), quote=True)}" target="_blank" rel="noopener">{m.group(1)}</a>',
         escaped,
     )
     escaped = _BOLD_RE.sub(r"<strong>\1</strong>", escaped)

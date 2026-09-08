@@ -75,7 +75,7 @@ _loaded_plugins: dict[str, dict] = {}
 # os.remove()/shutil.rmtree() against os.path.join(PLUGIN_DIR, plugin_id).
 # install_plugin()/update_plugin() already had this check at the route
 # layer; enable/disable/uninstall didn't (v4.4.4).
-_PLUGIN_ID_RE = re.compile(r'^[a-z0-9\-]{1,64}$')
+_PLUGIN_ID_RE = re.compile(r"^[a-z0-9\-]{1,64}$")
 
 
 def valid_plugin_id(plugin_id: str) -> bool:
@@ -83,6 +83,7 @@ def valid_plugin_id(plugin_id: str) -> bool:
 
 
 # ── Versioning helper ─────────────────────────────────────────────────────────
+
 
 def _parse_version(v: str) -> tuple:
     """Parse 'X.Y.Z' into (X, Y, Z) tuple for comparison."""
@@ -95,10 +96,12 @@ def _parse_version(v: str) -> tuple:
 def jen_version_meets(required: str) -> bool:
     """Return True if the running Jen version satisfies required minimum."""
     from jen import JEN_VERSION
+
     return _parse_version(JEN_VERSION) >= _parse_version(required)
 
 
 # ── Plugin discovery & loading ────────────────────────────────────────────────
+
 
 def discover_plugins() -> list[dict]:
     """
@@ -118,9 +121,7 @@ def discover_plugins() -> list[dict]:
                 manifest = json.load(f)
             manifest["path"] = path
             manifest["enabled"] = _is_enabled(manifest["id"])
-            manifest["version_ok"] = jen_version_meets(
-                manifest.get("requires_jen", "0.0.0")
-            )
+            manifest["version_ok"] = jen_version_meets(manifest.get("requires_jen", "0.0.0"))
             plugins.append(manifest)
         except Exception as e:
             logger.warning(f"Could not load plugin manifest from {path}: {e}")
@@ -147,8 +148,7 @@ def load_plugins(app) -> None:
             continue
         if not plugin.get("version_ok", True):
             logger.warning(
-                f"Plugin '{plugin['id']}' requires Jen {plugin.get('requires_jen')} "
-                f"— skipping (version mismatch)"
+                f"Plugin '{plugin['id']}' requires Jen {plugin.get('requires_jen')} — skipping (version mismatch)"
             )
             continue
         mig_ok, mig_msg, mig_count = run_plugin_migrations(plugin)
@@ -176,14 +176,12 @@ def _load_plugin(app, manifest: dict) -> bool:
     Returns True on success.
     """
     plugin_id = manifest["id"]
-    path      = manifest["path"]
+    path = manifest["path"]
     plugin_py = os.path.join(path, "plugin.py")
 
     try:
         if os.path.isfile(plugin_py):
-            spec   = importlib.util.spec_from_file_location(
-                f"jen_plugin_{plugin_id}", plugin_py
-            )
+            spec = importlib.util.spec_from_file_location(f"jen_plugin_{plugin_id}", plugin_py)
             module = importlib.util.module_from_spec(spec)
             sys.modules[f"jen_plugin_{plugin_id}"] = module
             spec.loader.exec_module(module)
@@ -205,6 +203,7 @@ def _load_plugin(app, manifest: dict) -> bool:
 
 
 # ── Enable / disable ──────────────────────────────────────────────────────────
+
 
 def _enabled_file(plugin_id: str) -> str:
     return os.path.join(extensions.PLUGIN_DIR, plugin_id, ".enabled")
@@ -234,6 +233,7 @@ def disable_plugin(plugin_id: str) -> None:
 
 # ── Install / uninstall ───────────────────────────────────────────────────────
 
+
 def _safe_extract(zf, dest_dir: str) -> None:
     """Extract a ZipFile to dest_dir, refusing any member whose resolved
     path would land outside dest_dir (a.k.a. "Zip Slip") — an entry named
@@ -244,8 +244,7 @@ def _safe_extract(zf, dest_dir: str) -> None:
     os.makedirs(dest_dir_real, exist_ok=True)
     for member in zf.infolist():
         member_path = os.path.realpath(os.path.join(dest_dir_real, member.filename))
-        if member_path != dest_dir_real and \
-                not member_path.startswith(dest_dir_real + os.sep):
+        if member_path != dest_dir_real and not member_path.startswith(dest_dir_real + os.sep):
             raise ValueError(f"Unsafe path in plugin archive: {member.filename!r}")
     zf.extractall(dest_dir_real)
 
@@ -295,7 +294,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 
     # Expect a zip archive at download_url/plugin.zip
     zip_url = f"{download_url}/plugin.zip"
-    dest    = os.path.join(extensions.PLUGIN_DIR, plugin_id)
+    dest = os.path.join(extensions.PLUGIN_DIR, plugin_id)
 
     try:
         resp = requests.get(zip_url, timeout=30)
@@ -344,6 +343,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
         if not jen_version_meets(required):
             shutil.rmtree(tmp_dest)
             from jen import JEN_VERSION
+
             return False, f"Plugin requires Jen {required} (running {JEN_VERSION})."
 
         # Replace existing install if present
@@ -361,8 +361,10 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
         # Enable by default on fresh install
         enable_plugin(plugin_id)
 
-        logger.info(f"Plugin '{plugin_id}' v{manifest.get('version')} installed"
-                   + (f" ({mig_count} migration(s) applied)" if mig_count else ""))
+        logger.info(
+            f"Plugin '{plugin_id}' v{manifest.get('version')} installed"
+            + (f" ({mig_count} migration(s) applied)" if mig_count else "")
+        )
         return True, f"Plugin '{manifest['name']}' v{manifest.get('version')} installed. Restart Jen to activate."
 
     except Exception as e:
@@ -372,6 +374,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
     """Remove plugin directory. Does not remove DB tables (data preservation)."""
     import shutil
+
     if not valid_plugin_id(plugin_id):
         return False, "Invalid plugin ID."
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
@@ -393,15 +396,13 @@ def _plugin_applied_versions(plugin_id: str) -> set:
     core migration run creates it, but this stays defensive in case
     plugin loading is ever reachable before that)."""
     from jen.models.db import jen_db
+
     with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("SHOW TABLES LIKE 'plugin_schema_migrations'")
             if not cur.fetchone():
                 return set()
-            cur.execute(
-                "SELECT version FROM plugin_schema_migrations WHERE plugin_id=%s",
-                (plugin_id,)
-            )
+            cur.execute("SELECT version FROM plugin_schema_migrations WHERE plugin_id=%s", (plugin_id,))
             return {r["version"] for r in cur.fetchall()}
 
 
@@ -457,11 +458,15 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
         elif isinstance(m, dict) and "version" in m and "sql" in m:
             normalized.append(m)
         else:
-            return False, (
-                f"Plugin '{plugin_id}' manifest db_migrations entries must be "
-                f'either a raw SQL string or a {{"version": int, "sql": str}} '
-                f"object — got {m!r}"
-            ), 0
+            return (
+                False,
+                (
+                    f"Plugin '{plugin_id}' manifest db_migrations entries must be "
+                    f'either a raw SQL string or a {{"version": int, "sql": str}} '
+                    f"object — got {m!r}"
+                ),
+                0,
+            )
     raw_migrations = normalized
 
     migrations = sorted(raw_migrations, key=lambda m: m["version"])
@@ -472,6 +477,7 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
         return False, f"Plugin '{plugin_id}' manifest migration versions must be integers.", 0
 
     from jen.models.db import jen_db
+
     with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("""
@@ -496,9 +502,8 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
                 with db.cursor() as cur:
                     cur.execute(m["sql"])
                     cur.execute(
-                        "INSERT INTO plugin_schema_migrations "
-                        "(plugin_id, version, description) VALUES (%s, %s, %s)",
-                        (plugin_id, version, description)
+                        "INSERT INTO plugin_schema_migrations (plugin_id, version, description) VALUES (%s, %s, %s)",
+                        (plugin_id, version, description),
                     )
             count += 1
             logger.info(f"Plugin '{plugin_id}' migration {version} applied: {description}")
@@ -511,6 +516,7 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
+
 
 def fetch_registry(timeout: int = 10) -> tuple[list, str | None]:
     """

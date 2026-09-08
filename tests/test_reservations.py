@@ -12,19 +12,25 @@ import pytest
 def _kea_add_ok(*a, **kw):
     return {"result": 0, "text": "Host added", "arguments": {}}
 
+
 def _kea_del_ok(*a, **kw):
     return {"result": 0, "text": "Host deleted", "arguments": {}}
+
 
 def _kea_list(*a, **kw):
     return {
         "result": 0,
-        "arguments": {"hosts": [
-            {"hw-address": "aa:bb:cc:dd:ee:01",
-             "ip-address": "10.99.0.10",
-             "hostname": "test-host-1",
-             "dhcp4-subnet-id": 1,
-             "id": 101},
-        ]}
+        "arguments": {
+            "hosts": [
+                {
+                    "hw-address": "aa:bb:cc:dd:ee:01",
+                    "ip-address": "10.99.0.10",
+                    "hostname": "test-host-1",
+                    "dhcp4-subnet-id": 1,
+                    "id": 101,
+                },
+            ]
+        },
     }
 
 
@@ -32,16 +38,26 @@ def _kea_list(*a, **kw):
 def mock_kea_reservations(monkeypatch):
     """Mock Kea API for reservation operations."""
     from jen.services import kea as kea_svc
-    monkeypatch.setattr(kea_svc, "kea_command", lambda cmd, *a, **kw:
-        _kea_list()   if "get-all" in cmd or "get-by" in cmd
-        else _kea_add_ok() if "add"    in cmd
-        else _kea_del_ok() if "del"    in cmd
-        else {"result": 0, "arguments": {}}
+
+    monkeypatch.setattr(
+        kea_svc,
+        "kea_command",
+        lambda cmd, *a, **kw: (
+            _kea_list()
+            if "get-all" in cmd or "get-by" in cmd
+            else _kea_add_ok()
+            if "add" in cmd
+            else _kea_del_ok()
+            if "del" in cmd
+            else {"result": 0, "arguments": {}}
+        ),
     )
     monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: True)
-    monkeypatch.setattr(kea_svc, "get_active_kea_server",
-                        lambda: {"id": 1, "api_url": "http://localhost:18000",
-                                 "api_user": "test", "api_pass": "test"})
+    monkeypatch.setattr(
+        kea_svc,
+        "get_active_kea_server",
+        lambda: {"id": 1, "api_url": "http://localhost:18000", "api_user": "test", "api_pass": "test"},
+    )
 
 
 class TestReservationsList:
@@ -63,44 +79,60 @@ class TestAddReservation:
 
     def test_add_reservation_success(self, logged_in_client, mock_kea_reservations):
         """Valid reservation POST succeeds."""
-        r = logged_in_client.post("/reservations/add", data={
-            "subnet_id": "1",
-            "mac": "aa:bb:cc:dd:ee:ff",
-            "ip": "10.99.0.50",
-            "hostname": "test-device",
-        }, follow_redirects=True)
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "ip": "10.99.0.50",
+                "hostname": "test-device",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
 
     def test_add_reservation_invalid_mac(self, logged_in_client, mock_kea_reservations):
         """Invalid MAC address is rejected."""
-        r = logged_in_client.post("/reservations/add", data={
-            "subnet_id": "1",
-            "mac": "not-a-mac",
-            "ip": "10.99.0.50",
-            "hostname": "test-device",
-        }, follow_redirects=True)
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "not-a-mac",
+                "ip": "10.99.0.50",
+                "hostname": "test-device",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
         assert b"invalid" in r.data.lower() or b"error" in r.data.lower()
 
     def test_add_reservation_invalid_ip(self, logged_in_client, mock_kea_reservations):
         """Invalid IP address is rejected."""
-        r = logged_in_client.post("/reservations/add", data={
-            "subnet_id": "1",
-            "mac": "aa:bb:cc:dd:ee:ff",
-            "ip": "999.999.999.999",
-            "hostname": "test-device",
-        }, follow_redirects=True)
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "ip": "999.999.999.999",
+                "hostname": "test-device",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
         assert b"invalid" in r.data.lower() or b"error" in r.data.lower()
 
     def test_add_reservation_missing_fields(self, logged_in_client, mock_kea_reservations):
         """Missing required fields are rejected."""
-        r = logged_in_client.post("/reservations/add", data={
-            "subnet_id": "1",
-            "mac": "",
-            "ip": "",
-            "hostname": "",
-        }, follow_redirects=True)
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "",
+                "ip": "",
+                "hostname": "",
+            },
+            follow_redirects=True,
+        )
         assert r.status_code == 200
 
 
@@ -178,9 +210,7 @@ class TestDeleteReservation:
 
     def test_delete_reservation(self, logged_in_client, mock_kea_reservations):
         """Delete reservation returns success."""
-        r = logged_in_client.post("/reservations/delete/101", data={
-            "subnet_id": "1"
-        }, follow_redirects=True)
+        r = logged_in_client.post("/reservations/delete/101", data={"subnet_id": "1"}, follow_redirects=True)
         assert r.status_code == 200
 
 
@@ -191,8 +221,7 @@ class TestReservationStatus:
     against the real test DB rather than mocking Kea, since this is
     Jen's own read-side computation, not a Kea API call."""
 
-    def _insert_reservation(self, db, mac_hex="aabbccddee01", ip="10.99.1.10",
-                            hostname="status-test", subnet_id=1):
+    def _insert_reservation(self, db, mac_hex="aabbccddee01", ip="10.99.1.10", hostname="status-test", subnet_id=1):
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
@@ -338,10 +367,11 @@ class TestSettings:
         """Viewer role cannot access admin settings."""
         # Create a viewer
         from jen.models.user import hash_password
+
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO users (username, password, role) VALUES (%s, %s, 'viewer')",
-                ("viewer1", hash_password("viewpass"))
+                ("viewer1", hash_password("viewpass")),
             )
         db.commit()
 
@@ -364,14 +394,13 @@ class TestBulkReservationActions:
     present in a real rendered page.
     """
 
-    def _insert_host(self, db, mac_hex="aabbccddee10", ip="10.99.0.40",
-                      subnet_id=1, hostname="bulk-test-host"):
+    def _insert_host(self, db, mac_hex="aabbccddee10", ip="10.99.0.40", subnet_id=1, hostname="bulk-test-host"):
         with db.cursor() as cur:
             cur.execute(
                 "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, "
                 "dhcp4_subnet_id, ipv4_address, hostname) "
                 "VALUES (UNHEX(%s), 0, %s, INET_ATON(%s), %s)",
-                (mac_hex, subnet_id, ip, hostname)
+                (mac_hex, subnet_id, ip, hostname),
             )
             host_id = cur.lastrowid
         db.commit()
@@ -408,9 +437,9 @@ class TestBulkReservationActions:
 
         monkeypatch.setattr("jen.services.kea.kea_command", fake_kea_command)
 
-        r = logged_in_client.post("/reservations/bulk-delete",
-                                  data={"host_ids[]": [str(host_id)]},
-                                  follow_redirects=True)
+        r = logged_in_client.post(
+            "/reservations/bulk-delete", data={"host_ids[]": [str(host_id)]}, follow_redirects=True
+        )
         assert r.status_code == 200
         assert b"Deleted 1 reservation" in r.data
 
@@ -431,11 +460,10 @@ class TestBulkReservationActions:
         admin couldn't touch one at a time — same guard as the
         single-item delete route, checked per host_id in the loop."""
         from tests.conftest import restricted_client
+
         host_id = self._insert_host(db, mac_hex="aabbccddee11", ip="10.99.0.41", subnet_id=1)
         restricted_client(client, db, allowed_subnets=[999])
-        r = client.post("/reservations/bulk-delete",
-                        data={"host_ids[]": [str(host_id)]},
-                        follow_redirects=True)
+        r = client.post("/reservations/bulk-delete", data={"host_ids[]": [str(host_id)]}, follow_redirects=True)
         assert r.status_code == 200
         with db.cursor() as cur:
             cur.execute("SELECT * FROM hosts WHERE host_id=%s", (host_id,))
@@ -443,8 +471,7 @@ class TestBulkReservationActions:
 
     def test_bulk_export_returns_csv_of_selected_reservations(self, logged_in_client, db, mock_kea):
         host_id = self._insert_host(db, mac_hex="aabbccddee12", ip="10.99.0.42", hostname="export-target")
-        r = logged_in_client.post("/reservations/bulk-export",
-                                  data={"host_ids[]": [str(host_id)]})
+        r = logged_in_client.post("/reservations/bulk-export", data={"host_ids[]": [str(host_id)]})
         assert r.status_code == 200
         assert b"export-target" in r.data
         assert b"10.99.0.42" in r.data
