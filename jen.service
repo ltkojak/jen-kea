@@ -1,5 +1,5 @@
 [Unit]
-Description=Jen - The Internet Management Console
+Description=Jen - Kea DHCP Management Console
 After=network.target
 
 [Service]

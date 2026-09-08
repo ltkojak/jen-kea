@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.6.0] - Unreleased
+
+### Hygiene pass: TLS floor, metrics token, CI matrix, docs reconciliation
+
+A round of loose-end fixes from two more third-party reviews. No new
+features; the interesting security work already shipped in 5.4.x/5.5.0.
+
+- **gunicorn SSL path had no TLS-version floor.** It passed `--ciphers`
+  but nothing pinned the minimum protocol, so the production path was
+  weaker than run.py's werkzeug fallback (which sets `TLSv1_2`). New
+  `jen/gunicorn_conf.py` with an `ssl_context` hook restores the
+  `TLSv1_2` minimum; `run.py` always passes
+  `--config python:jen.gunicorn_conf`.
+- **`/metrics` token check hardened.** Constant-time comparison
+  (`secrets.compare_digest`) instead of `==`; the `?token=` query-string
+  form is dropped (it would land verbatim in gunicorn's access log,
+  which 5.5.0 routes to stdout/journald) — Bearer header only; and the
+  "not configured" 401 body no longer spells out which config keys to
+  set.
+- **`_build_config_from_env()`** now reads an existing `jen.config` with
+  `interpolation=None`, matching `AppConfig` — a DB/API password
+  containing a literal `%` no longer trips `ConfigParser`.
+- **CI now tests Python 3.10 as well as 3.12** (matrix). The README
+  claims 3.10+ / Ubuntu 22.04; with floor-pinned deps a future
+  "latest compatible" package could drop 3.10 while CI stayed green.
+- **CI uses `JEN_ROOT` instead of symlinking the checkout into
+  `/opt/jen`.** The old `ln -sf` step and its "create_app() hardcodes
+  the path" comment predated the `JEN_ROOT` override (5.3.3) — removing
+  them proves the override actually works.
+- **Dependabot** now watches `pip` (the stale note said Jen pins deps
+  inline in install.sh — true until 5.4.1's `requirements.txt`).
+- **Docs reconciliation:** `ARCHITECTURE.md` §3.4 (API keys have been
+  per-key subnet-scopable since migration 13, not global-only), §3.5/§6
+  (the self-updater runs pip as of 5.5.0). README: MFA line no longer
+  claims WebAuthn/passkey (the page says "coming soon"); Flask badge
+  3.0 → 3.1+. `jen.service` description "Internet" → "Kea DHCP" to match
+  the README.
+
 ## [5.5.0] - 2026-09-08
 
 ### gunicorn replaces the werkzeug dev server

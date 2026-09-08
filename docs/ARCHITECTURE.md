@@ -147,16 +147,17 @@ version, Jen's script-generation logic needs to be updated to match —
 there's no API contract protecting against that the way there would be
 with native hook-based integration.
 
-### 3.4 API keys are global-scope by design
+### 3.4 API key scope
 
-Jen's API keys (`api_keys` table) have no subnet-restriction column and
-aren't tied to a user's own subnet access — a key can read anything the
-`/api/v1/*` endpoints expose, regardless of who created it. This is
-intentional: API keys are treated as integration credentials (scripts,
-external tooling), not as a way to hand a restricted human user
-programmatic access. If per-key subnet scoping is ever needed, it's a
-schema change (`api_keys` needs a `subnet_access` column, and every
-`/api/v1/*` route needs to check it) — not currently planned.
+Originally API keys were deliberately global-scope (integration
+credentials, not restricted-human access). v5.1.11 (migration 13) added
+a per-key `subnet_access` column: `api_keys_create` clamps a key's
+scope to what the creating user can themselves see (any "all" or
+out-of-access subnet in the submitted form is dropped server-side), and
+the `/api/v1/*` routes apply the same subnet restriction as the human
+UI. A key with `subnet_access = NULL` is still global — that's the
+default for a key created by an unrestricted admin, and remains a valid
+"this is a trusted integration credential" choice.
 
 ### 3.5 Floor-pinned (not exact-pinned) Python dependencies
 
@@ -185,12 +186,13 @@ whatever actually gets installed against known CVEs on every push, so a
 newly-disclosed vulnerability in a floor-pinned dependency gets caught
 even without a version bump.
 
-**Not yet solved:** the in-app self-updater (`jen-update-root.py`) never
-runs `pip` — it only copies files. A release that adds or raises a
-dependency floor reaches an install through `sudo ./install.sh
---upgrade`, not the in-app update button. `requirements.txt` is copied
-to `/opt/jen/` on install so a future updater enhancement (or a manual
-`pip install -r`) has the current list.
+v5.5.0 — the self-updater does now run `pip`
+(`install_python_dependencies()` in `jen-update-root.py`,
+`pip install -r /opt/jen/requirements.txt` after the file install,
+non-fatal). It runs as root against the system Python, matching
+`install.sh`. Making that a dedicated venv, and making the whole update
+transactional (stage → validate → switch) rather than
+replace-then-try-deps, is a tracked follow-up — see §6.
 
 ### 3.6 MFA secret encryption at rest (v5.4.0)
 
@@ -447,6 +449,17 @@ needs gunicorn), so `install_python_dependencies()` runs
 `pip install -r /opt/jen/requirements.txt` after the file install,
 non-fatally (a failure is logged; the werkzeug fallback covers a
 genuinely missing package until a `sudo ./install.sh --upgrade`).
+
+**Known-weaker-than-ideal, tracked for a future major:** pip runs as
+root against the system Python (matching `install.sh`), not a dedicated
+`/opt/jen/venv`; and the update is *replace-then-try-deps* rather than
+*stage → validate → switch*. Non-fatal dependency install is fine for
+the gunicorn transition (the werkzeug fallback catches a missing
+package) but won't be when a future release genuinely requires a new
+library or API. A venv plus a transactional updater — ideally with
+versioned release directories and an atomic `current` symlink, which
+also closes the "tarball deploy can't delete files" gap in §7 — is the
+deployment architecture to steer toward.
 
 **Still not offered:** a reverse proxy is not required and not
 configured by the installer. Terminating TLS in nginx/caddy and running

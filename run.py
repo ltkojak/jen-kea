@@ -82,7 +82,10 @@ def _build_config_from_env():
         try:
             import configparser
 
-            cfg = configparser.ConfigParser()
+            # interpolation=None — same reason as AppConfig.load(): a DB/API
+            # password can legitimately contain a literal '%', which default
+            # BasicInterpolation chokes on when reading the value back.
+            cfg = configparser.ConfigParser(interpolation=None)
             cfg.read(config_path)
             if cfg.get("kea", "api_url", fallback="").strip():
                 return  # Valid config exists, don't overwrite
@@ -162,6 +165,8 @@ def gunicorn_argv(bind: str, threads: int, certfile: str = "", keyfile: str = ""
         "-m",
         "gunicorn",
         "jen.wsgi:application",
+        "--config",
+        "python:jen.gunicorn_conf",
         "--workers",
         "1",
         "--threads",
@@ -178,6 +183,8 @@ def gunicorn_argv(bind: str, threads: int, certfile: str = "", keyfile: str = ""
         "jen",
     ]
     if certfile:
+        # --ciphers + the TLS 1.2 floor from jen/gunicorn_conf.py's
+        # ssl_context hook (gunicorn has no CLI flag for the version floor).
         argv += ["--certfile", certfile, "--keyfile", keyfile, "--ciphers", _TLS_CIPHERS]
     argv += ["--bind", bind]
     return argv

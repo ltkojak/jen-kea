@@ -8,7 +8,7 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 
 [![Version](https://img.shields.io/badge/Version-5.5.0-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
-[![Flask](https://img.shields.io/badge/Flask-3.0-green?style=flat)](https://flask.palletsprojects.com)
+[![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
 
 
@@ -69,7 +69,7 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 ### Security & Access Control
 - Three-tier role system: SuperAdmin / Admin / Viewer
 - Subnet-level access control per user
-- MFA (TOTP + WebAuthn/passkey)
+- MFA — TOTP authenticator apps (secrets encrypted at rest); WebAuthn/passkey support is planned
 - Trusted device management
 - Login rate limiting
 - Session timeout (global default with per-user override)

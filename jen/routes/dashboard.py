@@ -6,6 +6,7 @@ Dashboard and stats routes.
 
 import json
 import logging
+import secrets
 
 from flask import Blueprint, Response, jsonify, render_template, request
 from flask_login import current_user, login_required
@@ -574,16 +575,19 @@ def prometheus_metrics():
     metrics_open = extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False
 
     if expected_token:
+        # Bearer header only — a ?token= query string ends up verbatim in
+        # gunicorn's access log (which v5.5.0 sends to stdout/journald).
+        # Constant-time compare so a wrong token can't be timed byte-by-byte.
         auth = request.headers.get("Authorization", "")
-        token = auth[7:].strip() if auth.startswith("Bearer ") else request.args.get("token", "")
-        if token != expected_token:
+        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
+        # .encode() — compare_digest on str rejects non-ASCII; bytes is safe
+        # for any token an admin might have configured.
+        if not secrets.compare_digest(token.encode(), expected_token.encode()):
             return Response("Unauthorized\n", status=401, mimetype="text/plain")
     elif not metrics_open:
-        return Response(
-            "Unauthorized — set metrics_token or metrics_open=true in jen.config [server] "
-            "to enable this endpoint.\n",
-            status=401, mimetype="text/plain"
-        )
+        # Deliberately terse — don't hand an unauthenticated caller the
+        # exact config keys to flip. The upgrade note is in the CHANGELOG.
+        return Response("Unauthorized\n", status=401, mimetype="text/plain")
 
     lines = []
 

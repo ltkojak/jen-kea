@@ -28,6 +28,13 @@ class TestGunicornArgv:
         assert argv[argv.index("--threads") + 1] == "12"
         assert argv[-2:] == ["--bind", "0.0.0.0:8443"]
 
+    def test_config_module_always_passed_for_tls_floor(self):
+        # jen/gunicorn_conf.py's ssl_context hook is what restores the
+        # TLS 1.2 minimum on the SSL path (gunicorn has no CLI flag for it).
+        for kw in ({}, {"certfile": "/c.crt", "keyfile": "/c.key"}):
+            argv = run.gunicorn_argv("x", 8, **kw)
+            assert argv[argv.index("--config") + 1] == "python:jen.gunicorn_conf"
+
     def test_thread_count_is_clamped(self):
         assert run.gunicorn_argv("x", 0)[run.gunicorn_argv("x", 0).index("--threads") + 1] == "1"
         assert run.gunicorn_argv("x", 999)[run.gunicorn_argv("x", 999).index("--threads") + 1] == "64"

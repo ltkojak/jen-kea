@@ -9,6 +9,20 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
 
+    # README claims Python 3.10+ / Ubuntu 22.04 (which ships 3.10). With
+    # floor-pinned deps a future "latest compatible" package could quietly
+    # drop 3.10 while CI stayed green on 3.12 — so test the real floor too.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12']
+
+    # v5.5.x — JEN_ROOT (v5.3.3) points the app's static/template/plugin
+    # paths at the checkout, replacing the old `ln -sf` into /opt/jen.
+    # If the override didn't work, these tests wouldn't run at all.
+    env:
+      JEN_ROOT: ${{ github.workspace }}
+
     services:
       mariadb:
         image: mariadb:10.11
@@ -32,24 +46,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         # Runtime pins come from requirements.txt (the single source of
         # truth, shared with install.sh and Dockerfile). Never re-list
         # packages here — tests/test_dependency_consistency.py enforces it.
         run: pip install -q -r requirements.txt pytest
-
-      - name: Point /opt/jen at the checkout
-        # create_app() hardcodes template_folder="/opt/jen/templates" —
-        # correct for how Jen is actually deployed, but it means tests
-        # need the checkout reachable at that path regardless of where the
-        # runner clones it.
-        run: |
-          sudo mkdir -p /opt/jen
-          sudo ln -sf "$GITHUB_WORKSPACE/templates" /opt/jen/templates
-          sudo ln -sf "$GITHUB_WORKSPACE/static" /opt/jen/static
-          sudo chown -R "$(whoami)" /opt/jen
 
       - name: Provision /etc/jen
         # init_jen_db() unconditionally does os.makedirs("/etc/jen/ssl")

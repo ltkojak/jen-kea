@@ -188,6 +188,11 @@ def _patch_extensions():
     extensions.HTTPS_PORT = 8499
     extensions.WORKER_THREADS = 8
     extensions.CONFIG_FILE = "/tmp/jen_test.config"
+    # Keep load_plugins() a no-op inside the app fixture — tests must not
+    # pull the real shipped plugins (ipam has a .enabled marker) into the
+    # test app. CI used to get this for free by not symlinking plugins/
+    # into /opt/jen; now that JEN_ROOT points at the checkout, pin it.
+    extensions.PLUGIN_DIR = "/tmp/jen_test_plugins_absent"
     # v5.4.0 — repoint the MFA-secret encryption key off /etc/jen so the
     # suite works on a dev box where /etc/jen isn't writable (CI creates
     # it, a laptop running pytest may not). Same direct-assignment pattern
