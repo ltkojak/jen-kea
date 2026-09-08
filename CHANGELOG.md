@@ -4,10 +4,40 @@
 
 ## [5.6.0] - Unreleased
 
-### Hygiene pass: TLS floor, metrics token, CI matrix, docs reconciliation
+### Docker configuration unified on `.env`, plus a hygiene pass
 
-A round of loose-end fixes from two more third-party reviews. No new
-features; the interesting security work already shipped in 5.4.x/5.5.0.
+Two more third-party reviews. No new application features; the
+interesting security work already shipped in 5.4.x/5.5.0. Both flagged
+the Docker install path as the one thing to fix before pointing new
+users at it.
+
+**Docker is now `.env` / `JEN_*` only.** The installer's Docker path
+built a `jen.config`; the compose files used `env_file: .env` with the
+config mount commented out; the README told you to edit `jen.config`.
+Following any of the three documented paths left Jen unable to start.
+
+- `install.sh --docker` now writes `.env` (not `jen.config`): the
+  guided wizard for the Kea side, a generated MariaDB password for the
+  bundled path, and the admin password you choose.
+- `docker-compose.mysql.yml` wires the `jen` container to the
+  `jen-mysql` container via `environment:` (`JEN_DB_HOST=jen-mysql`,
+  `JEN_DB_PASS=${JEN_MYSQL_PASSWORD}`) — `.env` no longer carries (or
+  drifts on) the bundled DB credentials, just `JEN_MYSQL_PASSWORD` once.
+- `.env.example`, `README.md`, and `docs/docker.md` rewritten to match.
+- New `tests/test_docker_config.py` fails CI if the pieces drift apart
+  again.
+
+**First-run admin password for Docker.** The bare-metal installer sets
+an admin password during setup; the Docker path never did and its
+summary still said `admin/admin`. New `JEN_INITIAL_ADMIN_PASSWORD` env
+var: `init_jen_db()` seeds the `admin` account from it (with
+`must_change_password=0` — the operator picked it) on first boot only,
+then never reads it again. `install.sh` writes it into the Docker `.env`
+and, on bare metal, `_set_admin_password()` now also clears
+`must_change_password` (it was leaving bare-metal installs to force a
+redundant change of a password the operator had just chosen).
+
+### Hygiene pass: TLS floor, metrics token, CI matrix, docs reconciliation
 
 - **gunicorn SSL path had no TLS-version floor.** It passed `--ciphers`
   but nothing pinned the minimum protocol, so the production path was

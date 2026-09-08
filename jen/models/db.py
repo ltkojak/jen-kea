@@ -333,15 +333,31 @@ def init_jen_db() -> None:
     run_migrations()
 
     # ── Default admin user (runtime seed, not a migration) ────────────────
+    # JEN_INITIAL_ADMIN_PASSWORD (v5.6.0): the Docker install path can't run
+    # install.sh's _set_admin_password() the way bare metal does, so it
+    # passes the operator-chosen password through this env var for the
+    # first-boot seed only. When it's set we seed with that password and
+    # must_change_password=0 (they picked it deliberately); otherwise the
+    # old admin/admin seed with the forced-change flag. The env var is only
+    # read here, at initial seed — it is never stored.
     with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) as cnt FROM users")
             if cur.fetchone()["cnt"] == 0:
-                cur.execute(
-                    "INSERT INTO users (username, password, role, must_change_password) "
-                    "VALUES (%s, %s, 'superadmin', 1)",
-                    ("admin", hash_password("admin"))
-                )
-                print("Created default superadmin user: admin / admin — "
-                      "you will be required to change this password on first login.")
+                initial_pw = os.environ.get("JEN_INITIAL_ADMIN_PASSWORD", "").strip()
+                if initial_pw:
+                    cur.execute(
+                        "INSERT INTO users (username, password, role, must_change_password) "
+                        "VALUES ('admin', %s, 'superadmin', 0)",
+                        (hash_password(initial_pw),)
+                    )
+                    print("Created superadmin 'admin' from JEN_INITIAL_ADMIN_PASSWORD.")
+                else:
+                    cur.execute(
+                        "INSERT INTO users (username, password, role, must_change_password) "
+                        "VALUES ('admin', %s, 'superadmin', 1)",
+                        (hash_password("admin"),)
+                    )
+                    print("Created default superadmin user: admin / admin — "
+                          "you will be required to change this password on first login.")
         db.commit()

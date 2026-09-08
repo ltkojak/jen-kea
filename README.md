@@ -6,7 +6,7 @@
 
 A full-featured web-based management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built with Python and Flask. Jen provides a comprehensive UI for managing DHCP leases, reservations, subnets, and infrastructure — accessible from any browser including mobile and iPad.
 
-[![Version](https://img.shields.io/badge/Version-5.5.0-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
+[![Version](https://img.shields.io/badge/Version-5.6.0-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
@@ -103,30 +103,39 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 ### Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v5.5.0.tar.gz
+tar xzf jen-v5.6.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
 
 The installer checks requirements, walks through configuration interactively, tests Kea API and database connections, and starts the service.
 
-### Docker (external MySQL)
+### Docker
+
+Docker is configured entirely through `.env` (`JEN_*` variables) — `run.py`
+generates `jen.config` inside the container on first start. The guided
+installer writes `.env` for you:
 
 ```bash
 cd jen
-cp jen.config.example jen.config
-nano jen.config
+sudo ./install.sh --docker
+```
+
+Or by hand — **external** database (Jen's own DB lives on a server you run):
+
+```bash
+cd jen
+cp .env.example .env      # fill in JEN_* (Kea + Jen DB + JEN_INITIAL_ADMIN_PASSWORD)
 docker compose up -d
 ```
 
-### Docker (bundled MySQL)
+**Bundled** database (Docker runs MariaDB for Jen):
 
 ```bash
 cd jen
-cp jen.config.example jen.config
-nano jen.config
-cp .env.example .env
-nano .env
+cp .env.example .env      # fill in the Kea section, MYSQL_ROOT_PASSWORD,
+                          # JEN_MYSQL_PASSWORD, JEN_INITIAL_ADMIN_PASSWORD
+                          # (leave the JEN_DB_* lines blank)
 docker compose -f docker-compose.mysql.yml up -d
 ```
 
@@ -134,20 +143,19 @@ docker compose -f docker-compose.mysql.yml up -d
 
 ## First Login
 
-Open `http://your-server:5050`
+Open `http://your-server:5050` and sign in as **`admin`**.
 
-| Username | Password |
-|----------|----------|
-| admin | admin |
-
-Change your password immediately after first login.
+- If you set an admin password during install (`JEN_INITIAL_ADMIN_PASSWORD`,
+  or the bare-metal wizard), use that.
+- Otherwise the password is `admin` and Jen will require you to change it
+  immediately.
 
 ---
 
 ## Upgrading
 
 ```bash
-tar xzf jen-v5.5.0.tar.gz
+tar xzf jen-v5.6.0.tar.gz
 cd jen
 sudo ./install.sh
 ```

@@ -2,21 +2,25 @@
 # Jen - The Kea DHCP Management Console
 # Docker Compose — Bundled MariaDB
 #
-# Use when you want Docker to manage the Jen database locally.
-# The Kea database still connects to your external Kea server.
+# Docker runs a MariaDB container for Jen's own data (users, audit log,
+# settings). The Kea database still connects to your external Kea server.
 #
 # Quick start:
-#   cp .env.example .env
-#   # Edit .env — set JEN_DB_HOST=jen-mysql
+#   sudo ./install.sh --docker         # writes .env for you, pick "Bundled"
+#   # or, by hand:
+#   cp .env.example .env               # fill in the Kea section +
+#   #   MYSQL_ROOT_PASSWORD + JEN_MYSQL_PASSWORD + JEN_INITIAL_ADMIN_PASSWORD
 #   docker compose -f docker-compose.mysql.yml up -d
 #
-# Important: In .env, set JEN_DB_HOST=jen-mysql
+# The jen service's Jen-DB connection is wired to the jen-mysql container
+# below via `environment:` — you do NOT set JEN_DB_HOST/USER/PASS/NAME for
+# the bundled path, only JEN_MYSQL_PASSWORD (used on both sides).
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
   jen:
     build: .
-    image: jen-dhcp:5.5.0
+    image: jen-dhcp:5.6.0
     container_name: jen
     restart: unless-stopped
     ports:
@@ -25,10 +29,18 @@ services:
     volumes:
       - jen-config:/etc/jen
       - jen-icons:/opt/jen/static/icons/custom
-      # Option B: mount your own jen.config (uncomment to use)
+      # Escape hatch: mount a hand-written jen.config instead of using env vars.
       # - ./jen.config:/etc/jen/jen.config:ro
     env_file:
       - .env
+    environment:
+      # Bundled-DB wiring — always points at the jen-mysql service, so .env
+      # doesn't carry (or drift on) these four. JEN_MYSQL_PASSWORD is shared
+      # with the jen-mysql container's MARIADB_PASSWORD below.
+      JEN_DB_HOST: jen-mysql
+      JEN_DB_USER: jen
+      JEN_DB_NAME: jen
+      JEN_DB_PASS: ${JEN_MYSQL_PASSWORD:?Set JEN_MYSQL_PASSWORD in .env}
     depends_on:
       jen-mysql:
         condition: service_healthy

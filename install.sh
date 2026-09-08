@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.5.0"
+JEN_VERSION="5.6.0"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -432,27 +432,33 @@ collect_config() {
     fi
 
     # ── Jen DB ────────────────────────────────────────────────────────────────
-    blank
-    echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
-    blank
-    JEN_DB_HOST=$(prompt_input  "Host"     "${KEA_DB_HOST:-localhost}")
-    JEN_DB_USER=$(prompt_input  "Username" "jen")
-    JEN_DB_PASS=$(prompt_secret "Password")
-    JEN_DB_NAME=$(prompt_input  "Database" "jen")
-    blank
-    spinner_start "Testing Jen database connection..."
-    sleep 0.5
-    if test_mysql "$JEN_DB_HOST" "$JEN_DB_USER" "$JEN_DB_PASS" "$JEN_DB_NAME"; then
-        spinner_stop; ok "Jen database connection successful"
+    # Skipped for the Docker "bundled MariaDB" path — docker-compose.mysql.yml
+    # owns those credentials and wires them into the jen container itself.
+    if [[ "${SKIP_JEN_DB:-false}" == "true" ]]; then
+        JEN_DB_HOST="jen-mysql"; JEN_DB_USER="jen"; JEN_DB_PASS=""; JEN_DB_NAME="jen"
     else
-        spinner_stop
-        warn "Could not connect to Jen database. Create it with:"
         blank
-        echo -e "    ${C}CREATE DATABASE ${JEN_DB_NAME};${NC}"
-        echo -e "    ${C}CREATE USER '${JEN_DB_USER}'@'%' IDENTIFIED BY 'yourpassword';${NC}"
-        echo -e "    ${C}GRANT ALL PRIVILEGES ON ${JEN_DB_NAME}.* TO '${JEN_DB_USER}'@'%';${NC}"
-        echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
+        echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
         blank
+        JEN_DB_HOST=$(prompt_input  "Host"     "${KEA_DB_HOST:-localhost}")
+        JEN_DB_USER=$(prompt_input  "Username" "jen")
+        JEN_DB_PASS=$(prompt_secret "Password")
+        JEN_DB_NAME=$(prompt_input  "Database" "jen")
+        blank
+        spinner_start "Testing Jen database connection..."
+        sleep 0.5
+        if test_mysql "$JEN_DB_HOST" "$JEN_DB_USER" "$JEN_DB_PASS" "$JEN_DB_NAME"; then
+            spinner_stop; ok "Jen database connection successful"
+        else
+            spinner_stop
+            warn "Could not connect to Jen database. Create it with:"
+            blank
+            echo -e "    ${C}CREATE DATABASE ${JEN_DB_NAME};${NC}"
+            echo -e "    ${C}CREATE USER '${JEN_DB_USER}'@'%' IDENTIFIED BY 'yourpassword';${NC}"
+            echo -e "    ${C}GRANT ALL PRIVILEGES ON ${JEN_DB_NAME}.* TO '${JEN_DB_USER}'@'%';${NC}"
+            echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
+            blank
+        fi
     fi
 
     # ── Admin password ────────────────────────────────────────────────────────
@@ -646,7 +652,11 @@ try:
     pw = os.environ['JEN_INSTALL_ADMIN_PASS']
     hashed = generate_password_hash(pw, method='pbkdf2:sha256')
     with db.cursor() as cur:
-        cur.execute("UPDATE users SET password=%s WHERE username='admin'", (hashed,))
+        # v5.6.0 — also clear must_change_password: the operator picked
+        # this password in the wizard, so don't make them change it again
+        # on first login. (The seed sets the flag; nothing cleared it,
+        # so bare-metal installs forced a redundant change.)
+        cur.execute("UPDATE users SET password=%s, must_change_password=0 WHERE username='admin'", (hashed,))
     db.commit(); db.close()
     print("  Admin password updated.")
 except Exception as e:
@@ -1018,79 +1028,114 @@ docker_install() {
         || fatal "Docker Compose plugin not found — install with: sudo apt install docker-compose-plugin"
     ok "Docker Compose available"
 
-    if [[ ! -f "./jen.config" ]]; then
-        if [[ -f "./jen.config.example" ]]; then
-            warn "jen.config not found in current directory"
-            blank
-            echo -e "    ${B}1)${NC}  Run guided setup wizard now"
-            echo -e "    ${B}2)${NC}  Copy example and edit manually"
-            blank
-            local ch; ch=$(prompt_choice "1")
-            if [[ "$ch" == "1" ]]; then
-                IS_UPGRADE=false; CONFIGURE=true
-                collect_config
-                # write to ./jen.config
-                cat > "./jen.config" << CONFEOF
-[kea]
-api_url  = ${KEA_API_URL}
-api_user = ${KEA_API_USER}
-api_pass = ${KEA_API_PASS}
+    cd "$SCRIPT_DIR"
 
-[kea_db]
-host     = ${KEA_DB_HOST}
-user     = ${KEA_DB_USER}
-password = ${KEA_DB_PASS}
-database = ${KEA_DB_NAME}
-
-[jen_db]
-host     = ${JEN_DB_HOST}
-user     = ${JEN_DB_USER}
-password = ${JEN_DB_PASS}
-database = ${JEN_DB_NAME}
-
-[server]
-http_port  = ${HTTP_PORT}
-https_port = ${HTTPS_PORT}
-
-[kea_ssh]
-host     = ${KEA_SSH_HOST}
-user     = ${KEA_SSH_USER}
-key_path = /etc/jen/ssh/jen_rsa
-kea_conf = ${KEA_CONF_PATH}
-
-[subnets]
-$(echo -e "$SUBNET_LINES")
-[ddns]
-log_path    = ${DDNS_LOG}
-provider    = ${DDNS_PROVIDER}
-api_url     = ${DDNS_URL}
-api_token   = ${DDNS_TOKEN}
-forward_zone = ${DDNS_ZONE}
-CONFEOF
-                ok "jen.config written"
-            else
-                info "Copy jen.config.example to jen.config and edit it, then re-run."
-                fatal "jen.config required for Docker install."
-            fi
-        else
-            fatal "jen.config not found — copy jen.config.example to jen.config and edit it."
+    # ── Reuse an existing .env? ──────────────────────────────────────────────
+    if [[ -f "./.env" ]]; then
+        ok ".env found in $(pwd)"
+        if [[ "$(prompt_yn "Reuse the existing .env?" "y")" == "y" ]]; then
+            _docker_pick_compose_and_run
+            return
         fi
-    else
-        ok "jen.config found"
+        info "Re-running configuration — the existing .env will be overwritten."
     fi
 
+    # ── Database mode ───────────────────────────────────────────────────────
     blank
     echo -e "  ${B}Database Mode:${NC}"
     blank
-    echo -e "    ${B}1)${NC}  External MySQL  ${DIM}(connect to existing server)${NC}"
-    echo -e "    ${B}2)${NC}  Bundled MySQL   ${DIM}(Docker manages a local container)${NC}"
+    echo -e "    ${B}1)${NC}  External MySQL/MariaDB  ${DIM}(connect to an existing server)${NC}"
+    echo -e "    ${B}2)${NC}  Bundled MariaDB         ${DIM}(Docker runs one locally for Jen)${NC}"
     blank
     local db_choice; db_choice=$(prompt_choice "1")
-    local compose_file="docker-compose.yml"
+    local bundled=false
+    DOCKER_COMPOSE_FILE="docker-compose.yml"
     if [[ "$db_choice" == "2" ]]; then
-        compose_file="docker-compose.mysql.yml"
-        warn "Bundled MySQL: ensure [jen_db] host = jen-mysql in jen.config"
-        [[ ! -f ".env" ]] && cp .env.example .env 2>/dev/null || true
+        bundled=true
+        DOCKER_COMPOSE_FILE="docker-compose.mysql.yml"
+        SKIP_JEN_DB=true
+    fi
+
+    # ── Guided setup wizard → .env ─────────────────────────────────────────
+    IS_UPGRADE=false; CONFIGURE=true
+    collect_config
+
+    local mysql_root_pw="" jen_mysql_pw=""
+    if [[ "$bundled" == "true" ]]; then
+        mysql_root_pw=$(openssl rand -hex 24 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')
+        jen_mysql_pw=$(openssl rand -hex 24 2>/dev/null   || head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')
+    fi
+
+    # SUBNET_LINES is "id = Name, CIDR" per line; JEN_SUBNETS wants
+    # "id=Name,CIDR;id=Name,CIDR" (run.py::_build_config_from_env parses it).
+    local jen_subnets
+    jen_subnets=$(echo -e "$SUBNET_LINES" | sed 's/^#.*//; s/ *= */=/; s/, */,/g; /^$/d' | paste -sd ';' -)
+
+    umask 077
+    cat > "./.env" << ENVEOF
+# Jen — Docker configuration (generated by install.sh $(date +%Y-%m-%d))
+# run.py turns these JEN_* vars into /etc/jen/jen.config on first start.
+
+JEN_KEA_API_URL=${KEA_API_URL}
+JEN_KEA_API_USER=${KEA_API_USER}
+JEN_KEA_API_PASS=${KEA_API_PASS}
+JEN_KEA_NAME=Kea Server 1
+JEN_KEA_ROLE=primary
+JEN_HA_MODE=
+
+JEN_KEA_DB_HOST=${KEA_DB_HOST}
+JEN_KEA_DB_USER=${KEA_DB_USER}
+JEN_KEA_DB_PASS=${KEA_DB_PASS}
+JEN_KEA_DB_NAME=${KEA_DB_NAME}
+
+JEN_DB_HOST=${JEN_DB_HOST}
+JEN_DB_USER=${JEN_DB_USER}
+JEN_DB_PASS=${JEN_DB_PASS}
+JEN_DB_NAME=${JEN_DB_NAME}
+
+JEN_KEA_SSH_HOST=${KEA_SSH_HOST}
+JEN_KEA_SSH_USER=${KEA_SSH_USER}
+JEN_KEA_CONF=${KEA_CONF_PATH}
+
+JEN_DDNS_PROVIDER=${DDNS_PROVIDER}
+JEN_DDNS_URL=${DDNS_URL}
+JEN_DDNS_TOKEN=${DDNS_TOKEN}
+JEN_DDNS_ZONE=${DDNS_ZONE}
+JEN_DDNS_LOG=${DDNS_LOG}
+
+JEN_SUBNETS=${jen_subnets}
+
+JEN_HTTP_PORT=${HTTP_PORT}
+JEN_HTTPS_PORT=${HTTPS_PORT}
+HTTP_PORT=${HTTP_PORT}
+HTTPS_PORT=${HTTPS_PORT}
+
+# One-time: seeds the 'admin' superadmin on first start, then never read again.
+JEN_INITIAL_ADMIN_PASSWORD=${ADMIN_PASS}
+
+# Bundled MariaDB (docker-compose.mysql.yml) — ignored by docker-compose.yml.
+MYSQL_ROOT_PASSWORD=${mysql_root_pw}
+JEN_MYSQL_PASSWORD=${jen_mysql_pw}
+ENVEOF
+    umask 022
+    # .env holds DB + API passwords. Lock it to the operator (the user who
+    # sudo'd, so plain `docker compose` still works for them) — not world.
+    chown "${SUDO_USER:-root}:${SUDO_USER:-root}" "./.env" 2>/dev/null || true
+    chmod 600 "./.env" 2>/dev/null || true
+    ok ".env written → ${DIM}$(pwd)/.env${NC}"
+
+    _docker_pick_compose_and_run
+}
+
+_docker_pick_compose_and_run() {
+    local compose_file="${DOCKER_COMPOSE_FILE:-docker-compose.yml}"
+    # If reusing an existing .env, DOCKER_COMPOSE_FILE isn't set — infer it.
+    if [[ -z "${DOCKER_COMPOSE_FILE:-}" ]]; then
+        if grep -q '^JEN_DB_HOST=jen-mysql' ./.env 2>/dev/null || grep -q '^JEN_MYSQL_PASSWORD=..' ./.env 2>/dev/null; then
+            compose_file="docker-compose.mysql.yml"
+        fi
+        blank
+        info "Using ${compose_file} (override: re-run and reconfigure)."
     fi
 
     blank
@@ -1108,20 +1153,24 @@ CONFEOF
         && ok "Jen container running" \
         || { err "Container failed to start"; docker compose -f "$compose_file" logs --tail=20; exit 1; }
 
-    local server_ip
+    local server_ip login_line
     server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "your-server")
+    if grep -q '^JEN_INITIAL_ADMIN_PASSWORD=.\+' ./.env 2>/dev/null; then
+        login_line="  ${B}Login:${NC}   admin  ${DIM}(the password you set during setup)${NC}"
+    else
+        login_line="  ${B}Login:${NC}   admin / admin  ${Y}(change immediately!)${NC}"
+    fi
     blank
-    echo -e "  ${C}╔══════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${C}║${NC}  ${G}${B}  Jen Docker installation complete!${NC}                  ${C}║${NC}"
-    echo -e "  ${C}╠══════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${C}║${NC}  ${B}Access:${NC}  ${C}http://${server_ip}:5050${NC}                          ${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${B}Login:${NC}   admin / admin  ${Y}(change immediately!)${NC}       ${C}║${NC}"
-    echo -e "  ${C}║${NC}                                                      ${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${DIM}Logs:     docker compose -f ${compose_file} logs -f${NC}   ${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${DIM}Restart:  docker compose -f ${compose_file} restart jen${NC}${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${DIM}Stop:     docker compose -f ${compose_file} down${NC}       ${C}║${NC}"
-    echo -e "  ${C}╚══════════════════════════════════════════════════════╝${NC}"
-    echo ""
+    echo -e "  ${G}${B}Jen Docker installation complete!${NC}"
+    divider
+    echo -e "  ${B}Access:${NC}  ${C}http://${server_ip}:${HTTP_PORT:-5050}${NC}"
+    echo -e "$login_line"
+    blank
+    echo -e "  ${DIM}Config:   $(pwd)/.env    (edit + 'docker compose -f ${compose_file} up -d' to apply)${NC}"
+    echo -e "  ${DIM}Logs:     docker compose -f ${compose_file} logs -f${NC}"
+    echo -e "  ${DIM}Restart:  docker compose -f ${compose_file} restart jen${NC}"
+    echo -e "  ${DIM}Stop:     docker compose -f ${compose_file} down${NC}"
+    blank
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

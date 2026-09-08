@@ -1,26 +1,25 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Jen - The Kea DHCP Management Console
-# Docker Compose — External MySQL
+# Docker Compose — External MySQL/MariaDB
 #
-# Use when connecting Jen to an existing MySQL/MariaDB server.
+# Use when Jen's own database lives on a server you already run. (For a
+# Docker-managed database, use docker-compose.mysql.yml.)
 #
 # Quick start:
-#   cp .env.example .env
-#   # Edit .env with your Kea and database details
+#   sudo ./install.sh --docker     # writes .env for you
+#   # or, by hand:
+#   cp .env.example .env           # fill in JEN_* (Kea + both DBs + admin pw)
 #   docker compose up -d
 #
-# Config options (choose one):
-#   A) Environment variables (recommended for Docker):
-#      Fill in JEN_* vars in .env — config is auto-generated on first start
-#
-#   B) Mount your own jen.config:
-#      Uncomment the jen.config volume line below and comment out env_file
+# run.py turns the JEN_* vars from .env into /etc/jen/jen.config on the
+# first start. To skip env vars entirely, uncomment the jen.config mount
+# below and provide your own file.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
   jen:
     build: .
-    image: jen-dhcp:5.5.0
+    image: jen-dhcp:5.6.0
     container_name: jen
     restart: unless-stopped
     ports:
@@ -31,7 +30,7 @@ services:
       - jen-config:/etc/jen
       # Persistent custom brand icons — survives container updates
       - jen-icons:/opt/jen/static/icons/custom
-      # Option B: mount your own jen.config (uncomment to use)
+      # Escape hatch: mount a hand-written jen.config instead of using env vars.
       # - ./jen.config:/etc/jen/jen.config:ro
     env_file:
       - .env

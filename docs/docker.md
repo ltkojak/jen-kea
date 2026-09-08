@@ -4,43 +4,85 @@
 
 ## Overview
 
-Jen supports two Docker deployment modes:
+Jen supports two Docker deployment modes. **Both are configured through
+`.env`** (`JEN_*` environment variables); `run.py` turns those into
+`/etc/jen/jen.config` inside the container on first start.
 
-| Mode | Jen DB | Kea DB |
+| Mode | Jen's own DB | Kea DB |
 |---|---|---|
-| **External MySQL** (`docker-compose.yml`) | Your existing MySQL server | Your existing MySQL server |
-| **Bundled MySQL** (`docker-compose.mysql.yml`) | MariaDB container managed by Docker | Your existing MySQL server |
+| **External** (`docker-compose.yml`) | a MySQL/MariaDB server you already run | a server you already run |
+| **Bundled** (`docker-compose.mysql.yml`) | a MariaDB container Docker manages | a server you already run |
 
-The Kea database **always** connects to your external Kea server — Docker does not manage that.
+The Kea database **always** connects to your external Kea server — Docker
+never manages that.
 
 ---
 
 ## Prerequisites
 
-- Docker installed: `curl -fsSL https://get.docker.com | sudo sh`
+- Docker: `curl -fsSL https://get.docker.com | sudo sh`
 - Docker Compose plugin: `sudo apt install docker-compose-plugin`
-- Kea server MySQL accessible from your Docker host
-- Jen database created on your MySQL server (or use bundled MySQL mode)
+- Network reachability from the Docker host to the Kea Control Agent API
+  and the Kea database
+- For External mode: a database + user created for Jen's own data
 
 ---
 
-## Mode 1 — External MySQL
-
-Use this when you already have a MySQL server running and want Jen to connect to it for its own database (same server as Kea DB is fine, just a different database).
-
-### Setup
+## Guided install (recommended)
 
 ```bash
 cd jen
-cp jen.config.example jen.config
-nano jen.config
+sudo ./install.sh --docker
 ```
 
-Fill in all sections. The `[jen_db]` section should point to your external MySQL server.
+Pick External or Bundled; the installer runs the config wizard, writes
+`.env` (with a generated MariaDB password for Bundled mode and the admin
+password you choose), builds the image, and starts the stack.
+
+---
+
+## By hand
+
+### Mode 1 — External database
+
+```bash
+cd jen
+cp .env.example .env
+```
+
+Fill in:
+
+- the **Kea** section (`JEN_KEA_API_*`, `JEN_KEA_DB_*`)
+- **`JEN_DB_HOST` / `JEN_DB_USER` / `JEN_DB_PASS` / `JEN_DB_NAME`** — your
+  server
+- **`JEN_INITIAL_ADMIN_PASSWORD`** — the first-login `admin` password
+  (leave blank for legacy `admin`/`admin` + forced change)
 
 ```bash
 docker compose up -d
 ```
+
+### Mode 2 — Bundled database
+
+```bash
+cd jen
+cp .env.example .env
+```
+
+Fill in the **Kea** section, plus:
+
+- **`MYSQL_ROOT_PASSWORD`** and **`JEN_MYSQL_PASSWORD`** (any strong
+  values; compose refuses to start if either is blank)
+- **`JEN_INITIAL_ADMIN_PASSWORD`**
+- **leave the `JEN_DB_*` lines blank** — `docker-compose.mysql.yml` wires
+  the `jen` container to the `jen-mysql` container itself (`JEN_DB_HOST=jen-mysql`,
+  `JEN_DB_PASS=${JEN_MYSQL_PASSWORD}`).
+
+```bash
+docker compose -f docker-compose.mysql.yml up -d
+```
+
+Jen waits for the MariaDB container to be healthy before starting.
 
 ### Verify
 
@@ -51,108 +93,76 @@ docker logs jen
 
 ---
 
-## Mode 2 — Bundled MySQL
+## Escape hatch: mount your own `jen.config`
 
-Use this when you don't have an external MySQL server available for the Jen database, or you want Jen's data fully self-contained in Docker.
+If you'd rather not use env vars, uncomment the mount in the compose file
+and provide a file (`jen.config.example` is the template):
 
-### Setup
-
-```bash
-cd jen
-cp jen.config.example jen.config
-nano jen.config
+```yaml
+volumes:
+  - ./jen.config:/etc/jen/jen.config:ro
 ```
 
-In `jen.config`, set the `[jen_db]` host to `jen-mysql`:
-
-```ini
-[jen_db]
-host     = jen-mysql
-user     = jen
-password = your-jen-db-password
-database = jen
-```
-
-Set the MySQL passwords:
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-```ini
-MYSQL_ROOT_PASSWORD=your-root-password
-JEN_MYSQL_PASSWORD=your-jen-db-password
-```
-
-The `JEN_MYSQL_PASSWORD` here must match the password in `jen.config [jen_db]`.
-
-Start:
-
-```bash
-docker compose -f docker-compose.mysql.yml up -d
-```
-
-Jen waits for the MariaDB container to be healthy before starting.
+`run.py` skips env-var generation when a valid `jen.config` is present.
 
 ---
 
-## Persistent Data
-
-Both compose files use Docker volumes for persistent storage:
+## Persistent data
 
 | Volume | Contents |
 |---|---|
-| `jen-config` | `/etc/jen` — SSL certs, SSH keys, backups |
-| `jen-icons` | `/opt/jen/static/icons/custom` — user-uploaded brand icons |
-| `jen-mysql-data` | MariaDB data (bundled MySQL mode only) |
+| `jen-config` | `/etc/jen` — SSL certs, SSH keys, secret key, backups |
+| `jen-icons` | `/opt/jen/static/icons/custom` — uploaded brand icons |
+| `jen-mysql-data` | MariaDB data (Bundled mode only) |
 
-Your `jen.config` is mounted read-only from the current directory into the container. Edit it on the host and restart the container to apply changes.
+`/etc/jen/jen.config` lives in the `jen-config` volume. To change
+configuration, edit `.env` and re-run `docker compose ... up -d` — on the
+next start `run.py` only regenerates the config if it's missing or has no
+`api_url`, so **to force a rewrite, delete the file first**:
+`docker compose exec jen rm /etc/jen/jen.config && docker compose restart jen`.
 
 ---
 
-## Port Configuration
+## Ports
 
-By default Jen listens on 5050 (HTTP) and 8443 (HTTPS). Override in `.env`:
+Defaults: 5050 (HTTP), 8443 (HTTPS). Override in `.env`:
 
 ```ini
-HTTP_PORT=5050
+HTTP_PORT=5050        # host side
 HTTPS_PORT=8443
+JEN_HTTP_PORT=5050    # container side (rarely changed)
+JEN_HTTPS_PORT=8443
 ```
 
 ---
 
-## Common Docker Commands
+## Common commands
 
 ```bash
-# View logs
 docker compose logs -f jen
-
-# Restart Jen
 docker compose restart jen
-
-# Stop everything
 docker compose down
-
-# Stop and remove volumes (WARNING: deletes all data)
-docker compose down -v
-
-# Rebuild after code changes
-docker compose build
-docker compose up -d
+docker compose down -v          # WARNING: deletes all data
+docker compose build && docker compose up -d
 ```
 
----
-
-## HTTPS in Docker
-
-Upload your SSL certificate through the Jen Settings UI — it's stored in the `jen-config` volume at `/etc/jen/ssl/`. No special Docker configuration needed.
+(Add `-f docker-compose.mysql.yml` for the Bundled stack.)
 
 ---
 
-## SSH Keys for Subnet Editing
+## HTTPS
 
-SSH keys are stored in the `jen-config` volume at `/etc/jen/ssh/`. Generate them through the Jen Settings UI. The public key needs to be added to your Kea server's `authorized_keys` as with a bare metal install.
+Upload your certificate through **Settings → System** — it's stored in the
+`jen-config` volume at `/etc/jen/ssl/`. gunicorn picks it up on the next
+restart. No Docker-specific configuration.
+
+---
+
+## SSH keys for subnet editing
+
+Generated through **Settings → Infrastructure**, stored in the
+`jen-config` volume at `/etc/jen/ssh/`. Add the public key to the Kea
+server's `authorized_keys`, same as a bare-metal install.
 
 ---
 
@@ -160,9 +170,9 @@ SSH keys are stored in the `jen-config` volume at `/etc/jen/ssh/`. Generate them
 
 ```bash
 cd jen
-docker compose pull   # if using a registry
-docker compose build  # if building locally
+docker compose build          # rebuild the image from the new source
 docker compose up -d
 ```
 
-Your data in volumes is preserved across updates.
+Volume data is preserved. (There is no published image registry yet, so
+`build` is the update step.)
