@@ -35,8 +35,6 @@ single-file changes with zero interaction risk.
 import pathlib
 import re
 
-import yaml
-
 
 class TestTrustedDeviceCookieSecureFlag:
 
@@ -82,11 +80,32 @@ class TestTrustedDeviceCookieSecureFlag:
 
 
 class TestDockerHealthcheckUsesRealShellLogic:
+    """
+    Deliberately does not use a YAML parsing library. pyyaml isn't an
+    actual dependency of this project anywhere (install.sh never
+    installs it, nothing else imports it) — it only happened to be
+    present in the sandbox this test was originally developed in,
+    which is exactly why this test failed to even collect in CI the
+    first time it shipped: ModuleNotFoundError: No module named
+    'yaml'. The fix is the same discipline already applied to
+    jen/services/changelog.py: don't add a general-purpose parsing
+    dependency for a narrow, well-known, fully-under-our-control
+    format — the specific line this test needs is a single-line YAML
+    flow sequence, which is also valid JSON, so the stdlib json module
+    parses it directly once isolated by a targeted regex.
+    """
 
     def _healthcheck_test_value(self, compose_file):
-        with open(compose_file) as f:
-            data = yaml.safe_load(f)
-        return data["services"]["jen"]["healthcheck"]["test"]
+        text = pathlib.Path(compose_file).read_text()
+        # Anchored on the jen service's actual healthcheck content
+        # (checking its own two ports) rather than a generic "test:"
+        # match, which would also match the separate MariaDB
+        # healthcheck present in docker-compose.mysql.yml
+        # ("CMD", "healthcheck.sh", "--connect", ...).
+        match = re.search(r'test:\s*(\["CMD-SHELL".*?\])\s*$', text, re.MULTILINE)
+        assert match, f"could not find the jen service's CMD-SHELL healthcheck line in {compose_file}"
+        import json
+        return json.loads(match.group(1))
 
     def test_docker_compose_yml_uses_cmd_shell(self):
         test_value = self._healthcheck_test_value("docker-compose.yml")
@@ -120,7 +139,7 @@ class TestDockerHealthcheckUsesRealShellLogic:
         assert "https://localhost:8443" in command_string
 
     def test_healthcheck_shell_logic_actually_works(self):
-        """Not just checking the YAML text — actually runs the exact
+        """Not just checking the file text — actually runs the exact
         command Docker would run (via /bin/sh -c, matching CMD-SHELL's
         real behavior) against a real local HTTP server standing in
         for the primary port, confirming the shell genuinely falls

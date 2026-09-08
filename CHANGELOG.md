@@ -2,6 +2,40 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.13] - 2026-09-08
+
+### Fix CI failure in 5.2.12's test suite
+
+`tests/test_small_hardening_fixes.py` failed to even collect in CI:
+`ModuleNotFoundError: No module named 'yaml'`.
+
+**Cause:** the Docker healthcheck tests in that file used `import yaml`
+(PyYAML) to parse `docker-compose.yml`. PyYAML isn't an actual
+dependency of this project anywhere — `install.sh` never installs it,
+nothing else in the codebase imports it — it only happened to be
+present in the environment the test was originally written and
+checked in, which is exactly why the gap wasn't caught before the
+tests reached CI.
+
+**Fix:** removed the PyYAML dependency entirely, applying the same
+discipline already used for `jen/services/changelog.py` — don't reach
+for a general-purpose parsing library for a narrow, well-known, fully
+self-authored format. The specific line these tests need (`test:
+["CMD-SHELL", "..."]`) is a single-line YAML flow sequence, which is
+also valid JSON, so a targeted regex isolates it and the stdlib `json`
+module parses it directly. The regex is anchored on the actual
+`CMD-SHELL` content rather than a generic `test:` match, so it doesn't
+accidentally pick up the separate MariaDB healthcheck present in
+`docker-compose.mysql.yml`, which uses plain `CMD`.
+
+Verified properly this time, not just re-run: uninstalled PyYAML from
+the development environment entirely (not just avoided calling it) and
+confirmed both that `pytest --collect-only` succeeds — the exact
+failure mode from the CI log — and that the corrected parsing logic
+still returns the right values from both compose files.
+
+No application behavior changed; this is a test-only fix.
+
 ## [5.2.12] - 2026-09-08
 
 ### Two small hardening fixes: trusted-device cookie, Docker healthcheck
