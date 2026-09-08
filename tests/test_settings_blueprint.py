@@ -89,6 +89,14 @@ class TestSettingsBlueprintSplit:
         assert "/settings/system" in r.headers["Location"]
 
     def test_a_route_from_each_split_module_responds(self, logged_in_client, mock_kea):
-        # one GET route per module, smoke-level
+        # one GET route per module, smoke-level. settings_icons (the
+        # branding module's only GET) lists the custom-icon dir, which a
+        # bare checkout / CI workspace doesn't have — create it so this
+        # exercises the route, not the environment.
+        import os
+
+        from jen import extensions
+
+        os.makedirs(extensions.ICONS_CUSTOM_DIR, exist_ok=True)
         for path in ("/settings/system", "/settings/alerts", "/settings/infrastructure", "/settings/icons"):
             assert logged_in_client.get(path).status_code == 200

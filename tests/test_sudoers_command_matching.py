@@ -21,15 +21,20 @@ not just during the one expected transition-release gap, because the
 mismatch was permanent, not transitional.
 
 This test parses jen-sudoers directly and cross-checks every
-sudo-invoking subprocess.run() call in jen/routes/settings.py against
-it via AST — not string-matching on source text, which would be
+sudo-invoking subprocess.run() call in the jen/routes/settings/ package
+against it via AST — not string-matching on source text, which would be
 fragile against reformatting — so any future addition or edit to a
 sudo command is checked against what's actually authorized, not just
 assumed to match.
 """
 
 import ast
+import glob
 import pathlib
+
+# Every module under the settings package that can shell out to sudo.
+# (Was a single jen/routes/settings.py before the v5.6.1 package split.)
+SETTINGS_SOURCE_FILES = sorted(glob.glob("jen/routes/settings/*.py"))
 
 
 def _parse_sudoers_authorized_commands(path="jen-sudoers"):
@@ -49,9 +54,9 @@ def _parse_sudoers_authorized_commands(path="jen-sudoers"):
     return commands
 
 
-def _find_sudo_invocations(path="jen/routes/settings.py"):
+def _find_sudo_invocations(paths=None):
     """
-    Walk the AST of the given file and return every argument list
+    Walk the AST of each given file and return every argument list
     passed to subprocess.run() (or subprocess.Popen()) whose first
     element is "/usr/bin/sudo", as a list of the literal string
     arguments. Only picks up calls where every argument is a plain
@@ -59,7 +64,8 @@ def _find_sudo_invocations(path="jen/routes/settings.py"):
     codebase — none of them build the command from a variable or an
     f-string, which is itself a property worth it being true).
     """
-    tree = ast.parse(pathlib.Path(path).read_text())
+    if paths is None:
+        paths = SETTINGS_SOURCE_FILES
     invocations = []
 
     class Visitor(ast.NodeVisitor):
@@ -76,7 +82,8 @@ def _find_sudo_invocations(path="jen/routes/settings.py"):
                             invocations.append(values)
             self.generic_visit(node)
 
-    Visitor().visit(tree)
+    for path in paths:
+        Visitor().visit(ast.parse(pathlib.Path(path).read_text()))
     return invocations
 
 
@@ -86,6 +93,7 @@ class TestEverySudoInvocationMatchesAnAuthorizedCommand:
         something — if either comes back empty, the rest of this
         test class would trivially (and misleadingly) pass."""
         assert len(_parse_sudoers_authorized_commands()) >= 1
+        assert len(SETTINGS_SOURCE_FILES) >= 1
         assert len(_find_sudo_invocations()) >= 1
 
     def test_every_invoked_sudo_command_is_authorized_in_sudoers(self):
@@ -100,8 +108,8 @@ class TestEverySudoInvocationMatchesAnAuthorizedCommand:
             if invoked_command not in authorized:
                 mismatches.append(invoked_command)
         assert not mismatches, (
-            f"The following command(s) are invoked via sudo in "
-            f"jen/routes/settings.py but do not exactly match any "
+            f"The following command(s) are invoked via sudo in the "
+            f"jen/routes/settings/ package but do not exactly match any "
             f"command authorized in jen-sudoers (sudo matches "
             f"literally — any difference, including an added/removed "
             f"flag, causes a permission denial at runtime): {mismatches}. "

@@ -116,27 +116,39 @@ ALLOWED_RAW_EXCEPTION_LINES = [
         "submitted DUID — see that function's own docstring.",
     ),
     (
-        "jen/routes/settings.py",
+        "jen/routes/settings/alerts.py",
         'flash(f"Test error: {str(e)}"',
         "wraps sending a test message to a webhook/ntfy/Discord channel the "
         "admin themselves configured — the failure reason is the actionable "
         "diagnostic they need, not an internal leak.",
     ),
     (
-        "jen/routes/settings.py",
+        "jen/routes/settings/authoring.py",
         "Could not connect to {target_server",
         "SSH connection failure to a server the admin themselves configured in Settings — same category as above.",
     ),
-    ("jen/routes/settings.py", '"message": str(e)}', "SSH config-test failure against an admin-configured server."),
     (
-        "jen/routes/settings.py",
+        "jen/routes/settings/authoring.py",
+        '"message": str(e)}',
+        "SSH config-test failure against an admin-configured server.",
+    ),
+    (
+        "jen/routes/settings/authoring.py",
         'errors.append(f"❌ {name}: {str(e)}")',
         "SSH config-write failure against an admin-configured server.",
     ),
-    ("jen/routes/settings.py", '"error": str(e)}', "SSH binary-check failure against an admin-configured server."),
-    ("jen/routes/settings.py", '"output": str(e)}', "SSH binary-install failure against an admin-configured server."),
     (
-        "jen/routes/settings.py",
+        "jen/routes/settings/authoring.py",
+        '"error": str(e)}',
+        "SSH binary-check failure against an admin-configured server.",
+    ),
+    (
+        "jen/routes/settings/authoring.py",
+        '"output": str(e)}',
+        "SSH binary-install failure against an admin-configured server.",
+    ),
+    (
+        "jen/routes/settings/alerts.py",
         'flash(f"Telegram error {error_code}',
         "Telegram's own API error response (code + description) — the "
         "admin's own integration's diagnostic text, not a Python exception.",
