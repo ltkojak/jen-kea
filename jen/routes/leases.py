@@ -165,7 +165,8 @@ def leases():
             for l in leases_list:
                 l["has_reservation"] = l["mac"].replace(":", "").upper() in reserved_macs
     except Exception as e:
-        flash(f"Could not load leases: {str(e)}", "error")
+        logger.error(f"Could not load leases: {e}")
+        flash("Could not load leases. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     mac_list = [l["mac"] for l in leases_list if l.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
@@ -252,7 +253,8 @@ def _leases_v6():
         for l in leases_list:
             l["subnet_name"] = extensions.SUBNET6_MAP.get(l["subnet_id"], {}).get("name", "")
     except Exception as e:
-        flash(f"Could not load IPv6 leases: {str(e)}", "error")
+        logger.error(f"Could not load IPv6 leases: {e}")
+        flash("Could not load IPv6 leases. Check server logs for details.", "error")
 
     template_vars = dict(
         leases6=leases_list, total=len(leases_list),
@@ -289,7 +291,8 @@ def delete_stale_leases():
         flash(f"Deleted {deleted} expired/stale lease(s).", "success")
         __user.audit("DELETE_STALE_LEASES", "leases", f"Deleted {deleted}")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error deleting stale leases: {e}")
+        flash("Error deleting stale leases. Check server logs for details.", "error")
     return redirect(url_for('leases.leases'))
 
 @bp.route("/leases/release", methods=["POST"])
@@ -323,7 +326,8 @@ def release_lease():
         else:
             flash(f"No active lease found for {ip}.", "warning")
     except Exception as e:
-        flash(f"Error releasing lease: {str(e)}", "error")
+        logger.error(f"Error releasing lease {ip}: {e}")
+        flash("Error releasing lease. Check server logs for details.", "error")
     return redirect(url_for('leases.leases'))
 
 
@@ -383,7 +387,8 @@ def bulk_release_leases():
                         errors += 1
             db.commit()
     except Exception as e:
-        flash(f"Bulk release error: {str(e)}", "error")
+        logger.error(f"Bulk release leases error: {e}")
+        flash("Bulk release failed. Check server logs for details.", "error")
         return redirect(url_for('leases.leases'))
 
     flash(f"Released {released} lease(s)." + (f" {errors} failed or skipped." if errors else ""),
@@ -480,7 +485,8 @@ def ipmap():
                     mac = ":".join(row["mac_hex"][i:i+2] for i in range(0,12,2)) if row["mac_hex"] else ""
                     reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
     except Exception as e:
-        flash(f"Could not load IP map: {str(e)}", "error")
+        logger.error(f"Could not load IP map: {e}")
+        flash("Could not load IP map. Check server logs for details.", "error")
 
     pools = _get_pools(subnet_filter)
     pool_blocks, pool_truncated = _build_pool_blocks(pools)

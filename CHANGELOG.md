@@ -2,6 +2,62 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.2.14] - 2026-09-08
+
+### SECURITY: stop leaking raw exception text across the app
+
+Final finding from the third-party security review that also produced
+v5.2.6, v5.2.7, v5.2.10, and v5.2.12: raw Python exception text —
+potentially including internal file paths, database schema details,
+or connection info — was shown directly to users and API clients in
+roughly 60 places across 14 route files, including several introduced
+in this project's own 5.2.2 bulk-action work.
+
+**Rule applied throughout:** fix anything wrapping a database or
+file-system operation, since the exception text there can reveal
+internal implementation details that are actionable for nobody except
+someone probing the app. Leave alone anything that's a deliberate,
+already-constructed message about the user's own submitted input (a
+form-validation error), or an error communicating with infrastructure
+the admin themselves configured — an SSH target, a webhook/Discord/
+ntfy/Telegram integration. That text is the actionable diagnostic an
+admin managing their own gear actually needs; hiding it behind "check
+server logs" would make the app measurably less useful without
+addressing any real security concern.
+
+Fixed: `database.py`, `devices.py`, `leases.py`, `dashboard.py`,
+`mfa_routes.py`, `plugins.py` (fixed at the shared `fetch_registry()`
+source rather than patching each caller separately), `reports.py`,
+`reservations.py`, `search.py`, `servers.py`, `subnets.py`, `users.py`,
+`settings.py`, and the REST API v1 endpoints in `api.py` (separate
+from the API-key management routes already fixed in v5.2.10).
+
+Deliberately left alone, with the specific reason documented in each
+case: `parse_import_file()`'s message about a malformed uploaded file,
+`normalize_duid()`'s validation error about a submitted DUID, a
+`configparser` error parsing an admin's own submitted subnet textarea,
+and roughly ten SSH/webhook/Telegram cases where the error text is
+about infrastructure the admin configured themselves.
+
+Caught and fixed a real mistake in this exact release before it
+shipped: one edit accidentally dropped a line while restructuring an
+exception handler in `api.py`, leaving an unclosed dict literal — a
+genuine syntax error. Found immediately via `ast.parse()`, and rather
+than trusting the one-line fix, re-verified every remaining function in
+that file individually, ran a full codebase-wide AST sweep, and spot-
+checked several of the more complex multi-line edits from earlier in
+this same pass.
+
+Added `tests/test_no_raw_exception_leaks.py`: a regression scanner
+(same approach as v5.2.9's sudoers-matching test) that greps every
+route file for the leak pattern and fails on anything not in an
+explicit, individually-justified allowlist, plus spot-check tests
+across a representative sample of files that mock the database layer
+to raise a distinctively-marked exception and confirm that marker
+never reaches the response. Verified the scanner has real teeth, not
+just coincidental passing, by planting a fake leak in a throwaway file
+and confirming it's caught.
+
 ## [5.2.13] - 2026-09-08
 
 ### Fix CI failure in 5.2.12's test suite

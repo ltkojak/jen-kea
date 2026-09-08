@@ -168,7 +168,7 @@ def devices():
                             devices_list.append(row)
     except Exception as e:
         logger.error(f"Devices error: {e}")
-        flash(f"Could not load device inventory: {str(e)}", "error")
+        flash("Could not load device inventory. Check server logs for details.", "error")
 
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     bundled_icons = sorted([f.replace(".svg","") for f in os.listdir(extensions.ICONS_BUNDLED_DIR) if f.endswith(".svg")]) if os.path.exists(extensions.ICONS_BUNDLED_DIR) else []
@@ -242,7 +242,8 @@ def _devices_v6():
         for d in devices_list:
             d["subnet_name"] = extensions.SUBNET6_MAP.get(d["subnet_id"], {}).get("name", "")
     except Exception as e:
-        flash(f"Could not load IPv6 devices: {str(e)}", "error")
+        logger.error(f"Could not load IPv6 devices: {e}")
+        flash("Could not load IPv6 devices. Check server logs for details.", "error")
 
     template_vars = dict(
         devices6=devices_list, total=len(devices_list),
@@ -322,7 +323,8 @@ def edit_device(device_id):
             db.commit()
         return jsonify({"ok": True, "override": override_info})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        logger.error(f"Error editing device {device_id}: {e}")
+        return jsonify({"ok": False, "error": "Could not save device. Check server logs for details."})
 
 @bp.route("/devices/delete/<int:device_id>", methods=["POST"])
 @login_required
@@ -342,7 +344,8 @@ def delete_device(device_id):
         flash("Device removed from inventory.", "success")
         __user.audit("DELETE_DEVICE", str(device_id), "Removed from device inventory")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error deleting device {device_id}: {e}")
+        flash("Error deleting device. Check server logs for details.", "error")
     return redirect(url_for('devices.devices'))
 
 
@@ -389,7 +392,8 @@ def bulk_delete_devices():
                         errors += 1
             db.commit()
     except Exception as e:
-        flash(f"Bulk delete error: {str(e)}", "error")
+        logger.error(f"Bulk delete devices error: {e}")
+        flash("Bulk delete failed. Check server logs for details.", "error")
         return redirect(url_for('devices.devices'))
 
     flash(f"Removed {deleted} device(s) from inventory." + (f" {errors} failed or skipped." if errors else ""),

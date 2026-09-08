@@ -182,7 +182,8 @@ def global_search():
                                 pass
 
         except Exception as e:
-            flash(f"Search error: {str(e)}", "error")
+            logger.error(f"Search error: {e}")
+            flash("Search failed. Check server logs for details.", "error")
 
     total = sum(len(v) for v in results.values())
     subnet_names = {sid: info["name"] for sid, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items()}
@@ -229,7 +230,8 @@ def save_search():
             db.commit()
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error saving search for {current_user.username}: {e}")
+        return jsonify({"error": "Could not save search."}), 500
 
 @bp.route("/saved-searches/delete/<int:search_id>", methods=["POST"])
 @login_required

@@ -80,7 +80,7 @@ def reports():
                     }
     except Exception as e:
         logger.error(f"Reports error: {e}")
-        flash(f"Could not load history data: {str(e)}", "error")
+        flash("Could not load history data. Check server logs for details.", "error")
 
     # Summary stats
     summary = {}

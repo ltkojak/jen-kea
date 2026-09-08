@@ -70,7 +70,8 @@ def export_jen():
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     except Exception as e:
-        flash(f"Export failed: {e}", "error")
+        logger.error(f"Jen DB export failed: {e}")
+        flash("Export failed. Check server logs for details.", "error")
         return redirect(url_for("database.database", tab="export"))
 
 
@@ -91,7 +92,8 @@ def export_kea():
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     except Exception as e:
-        flash(f"Kea export failed: {e}", "error")
+        logger.error(f"Kea DB export failed: {e}")
+        flash("Kea export failed. Check server logs for details.", "error")
         return redirect(url_for("database.database", tab="export"))
 
 
@@ -126,7 +128,8 @@ def delete_backup(filename):
         __user.audit("DB_BACKUP_DELETE", safe, "")
         flash(f"Backup '{safe}' deleted.", "success")
     except Exception as e:
-        flash(f"Could not delete backup: {e}", "error")
+        logger.error(f"Could not delete backup '{safe}': {e}")
+        flash("Could not delete backup. Check server logs for details.", "error")
     return redirect(url_for("database.database", tab="backups"))
 
 
@@ -225,7 +228,8 @@ def import_confirm():
         for r in results:
             flash(r, "success" if r.startswith("✅") else "warning")
     except Exception as e:
-        flash(f"Import failed: {e}", "error")
+        logger.error(f"DB import failed: {e}")
+        flash("Import failed. Check server logs for details.", "error")
     return redirect(url_for("database.database", tab="import"))
 
 
@@ -245,7 +249,8 @@ def save_schedule():
         flash("Backup schedule saved.", "success")
         __user.audit("DB_SCHEDULE", "backup", f"enabled={enabled} freq={frequency} hour={hour}")
     except Exception as e:
-        flash(f"Could not save schedule: {e}", "error")
+        logger.error(f"Could not save backup schedule: {e}")
+        flash("Could not save schedule. Check server logs for details.", "error")
     return redirect(url_for("database.database", tab="schedule"))
 
 

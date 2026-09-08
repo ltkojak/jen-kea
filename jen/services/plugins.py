@@ -507,7 +507,8 @@ def fetch_registry(timeout: int = 10) -> tuple[list, Optional[str]]:
     except requests.Timeout:
         return [], "Registry fetch timed out."
     except Exception as e:
-        return [], f"Registry fetch error: {e}"
+        logger.error(f"Registry fetch error: {e}")
+        return [], "Registry fetch failed. Check server logs for details."
 
     for entry in entries:
         download_url = entry.get("download_url", "").rstrip("/")

@@ -190,7 +190,8 @@ def reservations():
                                           "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
                                           "is_active": is_active, "is_conflict": is_conflict})
     except Exception as e:
-        flash(f"Could not load reservations: {str(e)}", "error")
+        logger.error(f"Could not load reservations: {e}")
+        flash("Could not load reservations. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     stale_days = int(__user.get_global_setting("stale_device_days", "30"))
     mac_list = [h["mac"] for h in hosts if h.get("mac")]
@@ -266,7 +267,8 @@ def _reservations_v6():
         for h in hosts6:
             h["subnet_name"] = extensions.SUBNET6_MAP.get(h["subnet_id"], {}).get("name", "")
     except Exception as e:
-        flash(f"Could not load IPv6 reservations: {str(e)}", "error")
+        logger.error(f"Could not load IPv6 reservations: {e}")
+        flash("Could not load IPv6 reservations. Check server logs for details.", "error")
 
     template_vars = dict(
         hosts6=hosts6, total=len(hosts6),
@@ -368,7 +370,8 @@ def edit_reservation(host_id):
                     note = jcur.fetchone()
                     host["notes"] = note["notes"] if note else ""
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error loading reservation {host_id} for edit: {e}")
+        flash("Error loading reservation. Check server logs for details.", "error")
         return redirect(url_for('reservations.reservations'))
     return render_template("edit_reservation.html", host=host, subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP))
 
@@ -424,7 +427,8 @@ def edit_reservation_post(host_id):
         flash("Reservation updated.", "success")
         __user.audit("EDIT_RESERVATION", host["ip"], f"hostname={hostname}")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error editing reservation {host_id}: {e}")
+        flash("Error saving reservation. Check server logs for details.", "error")
     return redirect(url_for('reservations.reservations'))
 
 @bp.route("/reservations/delete/<int:host_id>", methods=["POST"])
@@ -460,9 +464,10 @@ def delete_reservation(host_id):
                             return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Kea error: {result.get("text")}</td></tr>', 422
                         flash(f"Kea error: {result.get('text')}", "error")
     except Exception as e:
+        logger.error(f"Error deleting reservation {host_id}: {e}")
         if is_htmx:
-            return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Error: {str(e)}</td></tr>', 500
-        flash(f"Error: {str(e)}", "error")
+            return f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Error deleting reservation — check server logs.</td></tr>', 500
+        flash("Error deleting reservation. Check server logs for details.", "error")
     return redirect(url_for('reservations.reservations'))
 
 
@@ -610,7 +615,8 @@ def export_reservations():
         return Response(output.getvalue(), mimetype="text/csv",
                         headers={"Content-Disposition": "attachment;filename=reservations.csv"})
     except Exception as e:
-        flash(f"Export error: {str(e)}", "error")
+        logger.error(f"Error exporting reservations: {e}")
+        flash("Export failed. Check server logs for details.", "error")
         return redirect(url_for('reservations.reservations'))
 
 @bp.route("/reservations/import", methods=["POST"])
@@ -672,7 +678,8 @@ def import_reservations():
         for err in results["errors"][:10]:
             flash(err, "warning")
     except Exception as e:
-        flash(f"Import error: {str(e)}", "error")
+        logger.error(f"Error importing reservations: {e}")
+        flash("Import failed. Check server logs for details.", "error")
     return redirect(url_for('reservations.reservations'))
 
 # ─────────────────────────────────────────
@@ -718,7 +725,8 @@ def bulk_delete_reservations():
                             errors += 1
                 jdb.commit()
     except Exception as e:
-        flash(f"Bulk delete error: {str(e)}", "error")
+        logger.error(f"Bulk delete reservations error: {e}")
+        flash("Bulk delete failed. Check server logs for details.", "error")
         return redirect(url_for('reservations.reservations'))
 
     flash(f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""), 
@@ -770,7 +778,8 @@ def bulk_export_reservations():
         return Response(output.getvalue(), mimetype="text/csv",
                         headers={"Content-Disposition": "attachment;filename=reservations_selected.csv"})
     except Exception as e:
-        flash(f"Export error: {str(e)}", "error")
+        logger.error(f"Error exporting selected reservations: {e}")
+        flash("Export failed. Check server logs for details.", "error")
         return redirect(url_for('reservations.reservations'))
 
 # ─────────────────────────────────────────

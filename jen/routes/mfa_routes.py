@@ -211,7 +211,8 @@ def mfa_enroll():
                 flash("Authenticator enrolled successfully!", "success")
                 return render_template("mfa_backup_codes.html", codes=codes)
             except Exception as e:
-                flash(f"Enrollment error: {str(e)}", "error")
+                logger.error(f"MFA enrollment error for {current_user.username}: {e}")
+                flash("Enrollment error. Check server logs for details.", "error")
                 return redirect(url_for('mfa_routes.mfa_enroll'))
         elif action in ("remove", "remove_totp"):
             method_id = request.form.get("method_id") or request.form.get("mfa_id")
@@ -223,7 +224,8 @@ def mfa_enroll():
                 __user.audit("MFA_REMOVE", "auth", f"{current_user.username} method_id={method_id}")
                 flash("Authenticator removed.", "success")
             except Exception as e:
-                flash(f"Error: {str(e)}", "error")
+                logger.error(f"MFA removal error for {current_user.username}: {e}")
+                flash("Error removing authenticator. Check server logs for details.", "error")
             return redirect(url_for('mfa_routes.mfa_enroll'))
         elif action == "new_backup_codes":
             codes = __mfa.generate_backup_codes(current_user.id)
@@ -291,7 +293,8 @@ def remove_trusted_device(device_id):
         flash("Trusted device removed.", "success")
         __user.audit("REMOVE_TRUSTED_DEVICE", "auth", f"device_id={device_id}")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error removing trusted device {device_id}: {e}")
+        flash("Error removing trusted device. Check server logs for details.", "error")
     return redirect(url_for('mfa_routes.mfa_trusted_devices'))
 
 @bp.route("/mfa/revoke-all-devices", methods=["POST"])
@@ -306,7 +309,8 @@ def revoke_all_trusted_devices():
         flash(f"All {deleted} trusted device(s) revoked.", "success")
         __user.audit("REVOKE_ALL_TRUSTED_DEVICES", "auth", current_user.username)
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error revoking all trusted devices for {current_user.username}: {e}")
+        flash("Error revoking trusted devices. Check server logs for details.", "error")
     return redirect(url_for('mfa_routes.mfa_trusted_devices'))
 
 @bp.route("/mfa/admin-reset/<int:user_id>", methods=["POST"])
@@ -323,7 +327,8 @@ def admin_reset_mfa(user_id):
         flash(f"MFA reset for user ID {user_id}.", "success")
         __user.audit("ADMIN_RESET_MFA", str(user_id), f"Reset by {current_user.username}")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error resetting MFA for user {user_id}: {e}")
+        flash("Error resetting MFA. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 # ─────────────────────────────────────────

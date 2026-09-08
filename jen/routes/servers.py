@@ -157,5 +157,6 @@ def restart_kea_server(server_id):
         else:
             flash(f"Restart failed on {server['name']}: {result.stderr.decode()}", "error")
     except Exception as e:
-        flash(f"SSH error: {str(e)}", "error")
+        logger.error(f"SSH error restarting Kea on {server['name']}: {e}")
+        flash(f"Could not reach {server['name']} — check server logs for details.", "error")
     return redirect(url_for('servers.servers'))

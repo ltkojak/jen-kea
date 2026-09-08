@@ -226,7 +226,8 @@ def save_dashboard_prefs():
             db.commit()
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Error saving dashboard prefs: {e}")
+        return jsonify({"error": "Could not save preferences."}), 500
 
 @bp.route("/api/dashboard/get-prefs")
 @login_required
@@ -317,8 +318,9 @@ def api_stats():
             "servers": server_statuses,
         })
     except Exception as e:
+        logger.error(f"api_stats error: {e}")
         return jsonify({"subnets": {}, "pool_sizes": {}, "kea_up": False,
-                        "servers": [], "error": str(e)})
+                        "servers": [], "error": "Could not load dashboard stats."})
 
 
 @bp.route("/api/lease-history")
@@ -396,7 +398,8 @@ def api_lease_history():
             })
         return jsonify({"history": history, "days": days})
     except Exception as e:
-        return jsonify({"history": {}, "error": str(e)})
+        logger.error(f"api_lease_history error: {e}")
+        return jsonify({"history": {}, "error": "Could not load lease history."})
 
 
 @bp.route("/api/top-devices")
@@ -457,7 +460,8 @@ def api_top_devices():
                     })
         return jsonify({"devices": devices})
     except Exception as e:
-        return jsonify({"devices": [], "error": str(e)})
+        logger.error(f"api_top_devices error: {e}")
+        return jsonify({"devices": [], "error": "Could not load top devices."})
 
 
 @bp.route("/api/alert-summary")
@@ -495,7 +499,8 @@ def api_alert_summary():
             })
         return jsonify({"alerts": alerts})
     except Exception as e:
-        return jsonify({"alerts": [], "error": str(e)})
+        logger.error(f"api_alert_summary error: {e}")
+        return jsonify({"alerts": [], "error": "Could not load alert summary."})
 
 @bp.route("/api/recent-leases")
 @login_required

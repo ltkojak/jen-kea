@@ -110,7 +110,8 @@ def subnets():
                         "dns_servers": kea.get("dns_servers", ""),
                     })
     except Exception as e:
-        flash(f"Could not load subnet data: {str(e)}", "error")
+        logger.error(f"Could not load subnet data: {e}")
+        flash("Could not load subnet data. Check server logs for details.", "error")
     ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
     subnet_notes = {}
     try:
@@ -571,7 +572,8 @@ def delete_subnet(subnet_id):
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                 reservations = cur.fetchone()["cnt"]
     except Exception as e:
-        flash(f"Could not verify subnet is safe to delete: {e}", "error")
+        logger.error(f"Could not verify subnet {subnet_id} is safe to delete: {e}")
+        flash("Could not verify subnet is safe to delete. Check server logs for details.", "error")
         return redirect(url_for('subnets.subnets'))
 
     if active_leases > 0 or reservations > 0:
@@ -1253,4 +1255,5 @@ def save_subnet_note():
         __user.audit("SAVE_SUBNET_NOTE", str(subnet_id), "Note updated")
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        logger.error(f"Error saving note for subnet {subnet_id}: {e}")
+        return jsonify({"ok": False, "error": "Could not save note."})

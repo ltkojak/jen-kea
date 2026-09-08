@@ -154,7 +154,8 @@ def api_v1_subnets():
         except Exception:
             pass
     except Exception as e:
-        return api_error(str(e), 500)
+        logger.error(f"api_v1_subnets error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
     return api_ok({"subnets": result, "count": len(result)})
 
 
@@ -216,7 +217,8 @@ def api_v1_leases():
             r["manufacturer"] = info.get("manufacturer", "")
             r["device_type"]  = info.get("device_type",  "unknown")
     except Exception as e:
-        return api_error(str(e), 500)
+        logger.error(f"api_v1_leases error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
     return api_ok({"leases": result, "count": len(result)})
 
 
@@ -254,7 +256,8 @@ def api_v1_lease_by_mac(mac):
                         "expires":  row["expires"].isoformat()  if row["expires"]  else None,
                         "valid_lifetime": row["valid_lifetime"], "active": active})
     except Exception as e:
-        return api_error(str(e), 500)
+        logger.error(f"api_v1_lease_by_mac error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
 
 
 @bp.route("/api/v1/devices")
@@ -311,7 +314,8 @@ def api_v1_devices_endpoint():
                                     "last_seen":  row["last_seen"].isoformat()  if row["last_seen"]  else None,
                                     "days_inactive": row["days_inactive"]})
     except Exception as e:
-        return api_error(str(e), 500)
+        logger.error(f"api_v1_devices_endpoint error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
     return api_ok({"devices": result, "count": len(result)})
 
 
@@ -355,7 +359,8 @@ def api_v1_device_by_mac(mac):
             }
         return api_ok(result)
     except Exception as e:
-        return api_error(str(e), 500)
+        logger.error(f"api_v1_device_by_mac error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
 
 
 @bp.route("/api/v1/reservations")
@@ -399,7 +404,8 @@ def api_v1_reservations():
                     result.append({"ip": row["ip"], "mac": mf, "hostname": row["hostname"] or "",
                                     "subnet_id": row["subnet_id"], "subnet_name": si.get("name", "")})
     except Exception as e:
-        return api_error(str(e), 500)
+        logger.error(f"api_v1_reservations error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
     return api_ok({"reservations": result, "count": len(result)})
 
 

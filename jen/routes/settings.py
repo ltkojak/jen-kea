@@ -76,7 +76,8 @@ def settings_system():
                 elif line.startswith("notAfter="): cert_info["expires"] = line.replace("notAfter=", "").strip()
                 elif line.startswith("issuer="): cert_info["issuer"] = line.replace("issuer=", "").strip()
         except Exception as e:
-            cert_info["error"] = str(e)
+            logger.error(f"Error reading SSL certificate info: {e}")
+            cert_info["error"] = "Could not read certificate info. Check server logs for details."
 
     ssh_pub_key = ""
     if os.path.exists(extensions.SSH_KEY_PATH + ".pub"):
@@ -188,7 +189,8 @@ def save_audit_retention():
                 db.commit()
             flash(f"Audit log retention set to {days} days. {deleted} old entries removed.", "success")
         except Exception as e:
-            flash(f"Setting saved but cleanup failed: {e}", "warning")
+            logger.error(f"Audit log cleanup failed: {e}")
+            flash("Setting saved, but cleanup of old entries failed. Check server logs for details.", "warning")
     else:
         flash("Audit log retention set to keep forever (0 = no limit).", "success")
     __user.audit("SETTINGS", "audit_retention", f"retention_days={days}")
@@ -236,7 +238,8 @@ def settings_alerts():
                 for row in cur.fetchall():
                     templates[row["alert_type"]] = row["template_text"]
     except Exception as e:
-        flash(f"Error loading alert settings: {e}", "error")
+        logger.error(f"Error loading alert settings: {e}")
+        flash("Error loading alert settings. Check server logs for details.", "error")
 
     # Recent alert log with error details
     recent_alerts = []
@@ -391,7 +394,8 @@ def save_alert_channel():
         flash(f"Alert channel '{channel_name}' saved.", "success")
         __user.audit("SAVE_ALERT_CHANNEL", channel_name, f"type={channel_type} enabled={enabled}")
     except Exception as e:
-        flash(f"Error saving channel: {str(e)}", "error")
+        logger.error(f"Error saving alert channel '{channel_name}': {e}")
+        flash("Error saving channel. Check server logs for details.", "error")
     return redirect(url_for('settings.settings_alerts'))
 
 @bp.route("/settings/alerts/delete-channel/<int:channel_id>", methods=["POST"])
@@ -409,7 +413,8 @@ def delete_alert_channel(channel_id):
         flash(f"Alert channel '{name}' deleted.", "success")
         __user.audit("DELETE_ALERT_CHANNEL", str(channel_id), f"name={name}")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error deleting alert channel {channel_id}: {e}")
+        flash("Error deleting channel. Check server logs for details.", "error")
     return redirect(url_for('settings.settings_alerts'))
 
 @bp.route("/settings/alerts/test-channel/<int:channel_id>", methods=["POST"])
@@ -470,7 +475,8 @@ def save_alert_template():
         flash(f"Template for '{ALERT_TYPE_LABELS.get(alert_type, alert_type)}' saved.", "success")
         __user.audit("SAVE_ALERT_TEMPLATE", alert_type, "Template updated")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error saving alert template '{alert_type}': {e}")
+        flash("Error saving template. Check server logs for details.", "error")
     return redirect(url_for('settings.settings_alerts'))
 
 @bp.route("/settings/alerts/reset-template", methods=["POST"])
@@ -485,7 +491,8 @@ def reset_alert_template():
             db.commit()
         flash("Template reset to default.", "success")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error resetting alert template '{alert_type}': {e}")
+        flash("Error resetting template. Check server logs for details.", "error")
     return redirect(url_for('settings.settings_alerts'))
 
 @bp.route("/settings/alerts/save-global", methods=["POST"])
@@ -1043,7 +1050,8 @@ def check_config_drift_route():
         issues = check_config_drift()
         return jsonify({"ok": True, "issues": issues})
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        logger.error(f"Error checking config drift: {e}")
+        return jsonify({"ok": False, "error": "Could not check config drift. Check server logs for details."})
 
 
 @bp.route("/settings/infrastructure/install-kea-binary/<service>", methods=["POST"])
@@ -1317,9 +1325,11 @@ def generate_ssh_key():
         flash(f"SSH key generated. Add this public key to your-kea-server:\n{pub_key}", "success")
         __user.audit("GENERATE_SSH_KEY", "settings", "SSH key pair generated")
     except subprocess.CalledProcessError as e:
-        flash(f"Failed to generate SSH key: {e.stderr.decode() if e.stderr else str(e)}", "error")
+        logger.error(f"Failed to generate SSH key: {e.stderr.decode() if e.stderr else e}")
+        flash("Failed to generate SSH key. Check server logs for details.", "error")
     except Exception as e:
-        flash(f"Error: {str(e)}", "error")
+        logger.error(f"Error generating SSH key: {e}")
+        flash("Error generating SSH key. Check server logs for details.", "error")
     return redirect(url_for('settings.settings'))
 
 @bp.route("/settings/save-telegram", methods=["POST"])
@@ -1376,7 +1386,8 @@ def test_telegram():
     except requests.exceptions.Timeout:
         flash("Telegram API request timed out.", "error")
     except Exception as e:
-        flash(f"Unexpected error: {str(e)}", "error")
+        logger.error(f"Unexpected error testing Telegram: {e}")
+        flash("Unexpected error. Check server logs for details.", "error")
     return redirect(url_for('settings.settings'))
 
 @bp.route("/settings/save-session", methods=["POST"])
@@ -1441,7 +1452,8 @@ def clear_lockouts():
         flash("All login attempt records cleared.", "success")
         __user.audit("CLEAR_LOCKOUTS", "settings", "All login attempts cleared")
     except Exception as e:
-        flash(f"Error clearing lockouts: {str(e)}", "error")
+        logger.error(f"Error clearing lockouts: {e}")
+        flash("Error clearing lockouts. Check server logs for details.", "error")
     return redirect(url_for('settings.settings'))
 
 @bp.route("/settings/upload-cert", methods=["POST"])
@@ -1487,7 +1499,8 @@ def upload_cert():
     except UnicodeDecodeError:
         flash("Certificate files must be PEM format (text), not DER (binary).", "error")
     except Exception as e:
-        flash(f"Error uploading certificate: {str(e)}", "error")
+        logger.error(f"Error uploading certificate: {e}")
+        flash("Error uploading certificate. Check server logs for details.", "error")
     return redirect(url_for('settings.settings'))
 
 @bp.route("/settings/remove-cert", methods=["POST"])
@@ -1519,7 +1532,8 @@ def upload_favicon():
         favicon_file.save(extensions.FAVICON_PATH)
         flash("Favicon updated.", "success")
     except Exception as e:
-        flash(f"Error saving favicon: {str(e)}", "error")
+        logger.error(f"Error saving favicon: {e}")
+        flash("Error saving favicon. Check server logs for details.", "error")
     return redirect(url_for('settings.settings'))
 
 @bp.route("/settings/remove-favicon", methods=["POST"])
@@ -1624,7 +1638,8 @@ def upload_nav_logo():
         __user.audit("BRANDING", "settings", f"Nav logo uploaded by {current_user.username}")
         flash("Nav logo updated.", "success")
     except Exception as e:
-        flash(f"Error saving logo: {str(e)}", "error")
+        logger.error(f"Error saving nav logo: {e}")
+        flash("Error saving logo. Check server logs for details.", "error")
     return redirect(url_for('settings.settings_system'))
 
 @bp.route("/settings/remove-nav-logo", methods=["POST"])
@@ -1709,7 +1724,8 @@ def check_update():
             "latest":  latest_tag,
         })
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        logger.error(f"Error checking for updates: {e}")
+        return jsonify({"status": "error", "message": "Could not check for updates. Check server logs for details."})
 
 
 @bp.route("/settings/infrastructure/self-update", methods=["POST"])

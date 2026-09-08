@@ -80,7 +80,8 @@ def audit_log():
                 cur.execute(f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}", params)
                 logs = cur.fetchall()
     except Exception as e:
-        flash(f"Could not load audit log: {str(e)}", "error")
+        logger.error(f"Could not load audit log: {e}")
+        flash("Could not load audit log. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page)
     return render_template("audit.html", logs=logs, page=page, pages=pages,
                            total=total, search=search)
@@ -142,7 +143,8 @@ def user_profile():
                 """, (current_user.id,))
                 trusted_count = cur.fetchone()["cnt"]
     except Exception as e:
-        flash(f"Error loading profile: {str(e)}", "error")
+        logger.error(f"Error loading profile for {current_user.username}: {e}")
+        flash("Error loading profile. Check server logs for details.", "error")
         user_data = None
         totp_count = passkey_count = backup_count = trusted_count = 0
     return render_template("user_profile.html",
@@ -179,7 +181,8 @@ def users():
                     except Exception:
                         u["subnet_ids"] = None
     except Exception as e:
-        flash(f"Could not load users: {str(e)}", "error")
+        logger.error(f"Could not load users: {e}")
+        flash("Could not load users. Check server logs for details.", "error")
         all_users = []
     global_timeout = __user.get_global_setting("session_timeout_minutes", "60")
     mfa_mode = __mfa.get_mfa_mode()
@@ -233,7 +236,8 @@ def add_user():
     except pymysql.IntegrityError:
         flash(f"Username '{username}' already exists.", "error")
     except Exception as e:
-        flash(f"Error creating user: {str(e)}", "error")
+        logger.error(f"Error creating user '{username}': {e}")
+        flash("Error creating user. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 @bp.route("/users/delete/<int:user_id>", methods=["POST"])
@@ -262,7 +266,8 @@ def delete_user(user_id):
         flash(f"User '{row['username']}' deleted.", "success")
         __user.audit("DELETE_USER", row["username"], "User deleted")
     except Exception as e:
-        flash(f"Error deleting user: {str(e)}", "error")
+        logger.error(f"Error deleting user {user_id}: {e}")
+        flash("Error deleting user. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 @bp.route("/users/upload-avatar", methods=["POST"])
@@ -288,7 +293,8 @@ def upload_avatar():
             __user.audit("UPDATE_AVATAR", "user", current_user.username)
             session.pop("_avatar_url", None)  # invalidate avatar cache
         except Exception as e:
-            flash(f"Error saving avatar: {str(e)}", "error")
+            logger.error(f"Error saving avatar for {current_user.username}: {e}")
+            flash("Error saving avatar. Check server logs for details.", "error")
     elif data_url == "":
         # Remove avatar
         try:
@@ -299,7 +305,8 @@ def upload_avatar():
             flash("Profile picture removed.", "success")
             session.pop("_avatar_url", None)  # invalidate avatar cache
         except Exception as e:
-            flash(f"Error removing avatar: {str(e)}", "error")
+            logger.error(f"Error removing avatar for {current_user.username}: {e}")
+            flash("Error removing avatar. Check server logs for details.", "error")
     return redirect(url_for('users.user_profile'))
 
 @bp.route("/users/change-password", methods=["POST"])
@@ -332,7 +339,8 @@ def change_password():
         flash("Password changed successfully.", "success")
         __user.audit("CHANGE_PASSWORD", current_user.username, "Password changed")
     except Exception as e:
-        flash(f"Error changing password: {str(e)}", "error")
+        logger.error(f"Error changing password for {current_user.username}: {e}")
+        flash("Error changing password. Check server logs for details.", "error")
     return redirect(url_for('users.user_profile'))
 
 @bp.route("/users/set-timeout/<int:user_id>", methods=["POST"])
@@ -354,7 +362,8 @@ def set_user_timeout(user_id):
         session.pop("_user_cache", None)
         flash("Session timeout updated.", "success")
     except Exception as e:
-        flash(f"Error updating timeout: {str(e)}", "error")
+        logger.error(f"Error updating timeout for user {user_id}: {e}")
+        flash("Error updating timeout. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 @bp.route("/users/set-role/<int:user_id>", methods=["POST"])
@@ -394,7 +403,8 @@ def set_user_role(user_id):
         flash(f"Role for '{row['username']}' updated to {role}.", "success")
         __user.audit("SET_ROLE", row["username"], f"role={role}")
     except Exception as e:
-        flash(f"Error updating role: {str(e)}", "error")
+        logger.error(f"Error updating role for user {user_id}: {e}")
+        flash("Error updating role. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 
@@ -429,7 +439,8 @@ def set_user_subnets(user_id):
         flash(f"Subnet access for '{row['username']}' set to {label}.", "success")
         __user.audit("SET_SUBNETS", row["username"], f"subnet_access={subnet_access or 'all'}")
     except Exception as e:
-        flash(f"Error updating subnet access: {str(e)}", "error")
+        logger.error(f"Error updating subnet access for user {user_id}: {e}")
+        flash("Error updating subnet access. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 
@@ -522,7 +533,8 @@ def edit_user(user_id):
         session.pop("_user_cache", None)
         flash(f"User '{row['username']}' updated.", "success")
     except Exception as e:
-        flash(f"Error updating user: {str(e)}", "error")
+        logger.error(f"Error updating user {user_id}: {e}")
+        flash("Error updating user. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
 
 
@@ -547,5 +559,6 @@ def reset_user_mfa(user_id):
         __user.audit("RESET_MFA", row["username"],
                      f"MFA reset by {current_user.username}")
     except Exception as e:
-        flash(f"Error resetting MFA: {str(e)}", "error")
+        logger.error(f"Error resetting MFA for user {user_id}: {e}")
+        flash("Error resetting MFA. Check server logs for details.", "error")
     return redirect(url_for('users.users'))
