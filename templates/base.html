@@ -58,7 +58,7 @@
         .nav-brand span { color: var(--text-muted); font-size: 11px; font-weight: 400; display: block; }
         /* Branding logo: side-by-side with version label, strict height containment */
         .nav-brand-logo-wrap { display: inline-flex; align-items: center; gap: 6px; height: 32px; line-height: 1; vertical-align: middle; }
-        .nav-brand-logo { height: 28px; width: auto; max-width: 120px; display: block; object-fit: contain; }
+        .nav-brand-logo { height: 32px; width: auto; max-width: 120px; display: block; object-fit: contain; }
         .nav-brand-version { color: var(--text-muted); font-size: 11px; font-weight: 400; display: inline-block; white-space: nowrap; }
         .nav a.nav-link { color: var(--text-muted); padding: 6px 10px; border-radius: var(--radius); font-size: 13px; display: flex; align-items: center; gap: 5px; text-decoration: none; white-space: nowrap; }
         .nav a.nav-link:hover, .nav a.nav-link.active { background: var(--surface2); color: var(--text); text-decoration: none; }
@@ -373,7 +373,7 @@
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
         <span class="nav-brand-logo-wrap">
-            <img src="{{ branding_nav_logo or '/static/icons/jen-logo-wide.png' }}" alt="Jen" class="nav-brand-logo">
+            <img src="{{ branding_nav_logo or '/static/icons/jen-logo-navbar.png' }}" alt="Jen" class="nav-brand-logo">
             <span class="nav-brand-version">v{{ jen_version }}</span>
         </span>
     </a>

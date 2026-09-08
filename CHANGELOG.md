@@ -2,6 +2,32 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.3.2] - 2026-09-08
+
+### Rebrand follow-up: About page missed, dedicated navbar asset
+
+Two gaps from v5.3.0's rebrand, both reported directly after checking
+the deployed app rather than caught beforehand.
+
+**The About page still showed the old branding** — a CSS gradient-text
+"Jen" heading, the exact same pattern already replaced on the login
+and MFA verification pages in v5.3.0, just missed there. Confirmed via
+a repo-wide search for the specific gradient CSS this time, not just
+the handful of templates checked in the original pass — login.html and
+mfa_challenge.html were already clean; about.html was the only
+remaining instance. Replaced with the same wide wordmark image used
+elsewhere.
+
+**Navbar logo replaced with a dedicated, hand-tuned asset.** v5.3.0
+used the same wide wordmark image everywhere, relying on CSS to scale
+it down to navbar size (28px tall). A purpose-built 99×32 export,
+tuned specifically for legibility at that exact small size, now ships
+instead — `static/icons/jen-logo-navbar.png`. The navbar's CSS height
+now matches this asset's native size (32px, up from 28px).
+
+No application behavior changed — this release is template and asset
+content only, matching the scope of v5.3.0 itself.
+
 ## [5.3.1] - 2026-09-08
 
 ### Fix CI failure carried over from 5.2.14 (also present in 5.3.0)
