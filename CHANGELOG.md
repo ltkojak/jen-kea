@@ -2,6 +2,105 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.3.1] - 2026-09-08
+
+### Fix CI failure carried over from 5.2.14 (also present in 5.3.0)
+
+Three tests in `tests/test_no_raw_exception_leaks.py` failed —
+present in 5.2.14's own CI run, and still present in 5.3.0 since that
+release never touched this test file or the routes it covers.
+
+**Root cause, found by actually reading the failure rather than
+re-running and hoping:** `jen.__init__.load_user()` (Flask-Login's own
+per-request user-loading callback) does a *local*, per-call `from
+jen.models.db import jen_db` — meaning it always resolves whatever the
+*current* attribute on the `jen.models.db` module is, not a reference
+captured once at import time. Three of this file's tests patched
+`jen.routes.X.__db.jen_db` to simulate one route's own database
+failure — but for any route module that imports the db layer as
+`import jen.models.db as __db` (as opposed to `api.py`'s `from
+jen.models.db import jen_db`, which creates an independent local
+name), `__db.jen_db` **is** `jen.models.db.jen_db`, not a copy. Patching
+it broke authentication itself for the duration of the mock:
+`load_user()` also calls `jen_db()` on every request, before the route
+body ever runs, so every request in those three tests appeared
+unauthenticated and got redirected to login (302) — the route's own
+exception-handling was never actually reached or exercised at all.
+
+**A second, distinct bug found while fixing the first:** the
+dashboard-stats test mocked `jen_db()`, but `api_stats()` actually
+calls `__db.kea_db()` in its own logic — confirmed by reading the
+route directly. That test's mock was never touching the code path it
+claimed to test; the assertion would have passed regardless of whether
+the underlying exception-hiding fix (from v5.2.14) worked at all. Fixed
+by mocking the function the route actually calls, which also needed
+none of the load_user() workaround below, since `kea_db()` is never
+touched by `load_user()`.
+
+**The fix** for the remaining two: a `side_effect` wrapper that walks the
+*entire* call stack (not just the immediate caller) looking for a
+frame named `load_user`, delegating to the real function when found so
+authentication proceeds normally, and raising the test's exception for
+any call that isn't. Walking the full stack rather than checking one level up
+was necessary because `unittest.mock`'s own call machinery
+(`__call__` → `_mock_call` → `_execute_mock_call` → the side_effect)
+introduces several frames of its own — an initial version of this fix
+checked only the immediate caller and never actually matched
+`load_user` when run through a real `patch(..., side_effect=...)`,
+only when called directly in isolation. Verified the corrected version
+through actual `unittest.mock.patch` machinery, not just a bare
+function call, before trusting it — confirming `load_user()` gets the
+real result while a simulated route handler still raises.
+
+No application behavior changed; this is a test-only fix.
+
+## [5.3.0] - 2026-09-08
+
+### Rebrand — new logo across the entire app
+
+Jen's first real visual identity: a wordmark plus a standalone router-
+icon mark, replacing the plain-text "Jen" and generic default icons
+used everywhere until now.
+
+**A design problem found before it shipped:** the full wordmark, which
+looks good at normal sizes, was tested directly at actual favicon size
+(16×16, 32×32) and turned out nearly illegible — just a green smudge,
+not a recognizable mark. Rather than ship that, the red router icon
+(with its radiating signal lines) was isolated from the wordmark via
+color-based pixel analysis and confirmed legible at 16×16 through
+direct visual inspection. App icons now consistently use this
+standalone mark; the full wordmark is reserved for wide contexts
+where there's room to show it properly.
+
+**Assets replaced**, all generated from the source artwork rather than
+hand-drawn: `favicon.ico` (a genuine multi-resolution ICO — verified
+by parsing its byte structure directly, not just trusting the save
+call, since an earlier attempt silently produced a single-size file),
+`icon-192.png`, `icon-512.png`, `apple-touch-icon.png` — all using the
+icon-only mark on a dark background matching the PWA manifest's own
+declared `background_color` (`#0d0d0d`, chosen to match Jen's overall
+dark UI theme rather than the older teal accent color). A new
+`jen-logo-wide.png` (transparent background, full wordmark, trimmed to
+its actual content and resized to a sensible file size) is used for
+the nav bar, login page, and MFA verification page.
+
+**Where it now appears:**
+- Nav bar — this is now the default logo shown to everyone, not
+  hidden behind the existing "upload a custom nav logo" admin setting.
+  That setting is untouched and still works exactly as before; it now
+  overrides this new default instead of overriding plain text.
+- Login page and MFA verification page — both previously showed a CSS
+  gradient-text "Jen" wordmark; both now show the real logo image.
+- Browser tab icon, PWA home-screen icon, iOS "Add to Home Screen"
+  icon — all updated to the new mark.
+- README header, using the same wide wordmark asset.
+
+No application behavior changed — this release is asset and template
+content only. Verified every touched template still renders correctly
+after the edits, and confirmed the PWA manifest's icon references
+still resolve to real files on disk with no path or structural changes
+needed.
+
 ## [5.2.14] - 2026-09-08
 
 ### SECURITY: stop leaking raw exception text across the app

@@ -37,6 +37,60 @@ import re
 from unittest.mock import patch
 
 
+def _raise_only_outside_load_user(original_fn, exc):
+    """v5.3.1 fix — a side_effect for mocking jen_db()/kea_db() that
+    only raises when NOT called from jen/__init__.py's load_user().
+
+    The bug this fixes: jen.__init__.load_user() does a LOCAL,
+    per-call `from jen.models.db import jen_db` — meaning it always
+    resolves the CURRENT attribute on the jen.models.db module, not a
+    reference captured once at import time. For any route module that
+    imports the db layer as `import jen.models.db as __db` (users.py,
+    devices.py, dashboard.py — as opposed to api.py's
+    `from jen.models.db import jen_db`, which creates an independent
+    local name), patching `jen.routes.X.__db.jen_db` IS patching
+    `jen.models.db.jen_db` directly, since `__db` is that exact module
+    object, just aliased. That breaks authentication itself for the
+    duration of the mock: Flask-Login's own load_user() callback runs
+    on every request before the route body executes, and it also
+    calls jen_db() (both a "fast path" token_version freshness check
+    and, if that fails, a "slow path" full lookup) — so a mock meant
+    to simulate ONE route's own database failure was actually making
+    every request in the test appear unauthenticated, redirecting to
+    login (302) before the route was ever reached at all, rather than
+    exercising the exception-handling this test suite exists to check.
+
+    Frame inspection distinguishes the two cases deterministically,
+    without depending on exact call counts or the test user's current
+    token_version state (both of which a naive "let the first N calls
+    through" fix would have been fragile against): calls whose
+    immediate caller is load_user() are delegated to the real
+    function, so authentication proceeds normally; every other call
+    (the route's own query) raises the test's distinctive exception.
+    """
+    import inspect
+
+    def _inner(*args, **kwargs):
+        # Walk the whole stack rather than checking f_back once — a
+        # single-level check lands on unittest.mock's own internal
+        # call machinery (__call__ -> _mock_call -> _execute_mock_call
+        # -> this function), not the real caller, since MagicMock
+        # introduces several frames of its own between the actual
+        # caller and a side_effect function. Confirmed this the hard
+        # way: an earlier version of this fix checked only
+        # currentframe().f_back and never actually matched load_user
+        # at all when run through a real patch(..., side_effect=...),
+        # rather than a direct call — the frame it saw belonged to
+        # mock.py, so it always raised regardless of the real caller.
+        frame = inspect.currentframe().f_back
+        while frame is not None:
+            if frame.f_code.co_name == "load_user":
+                return original_fn(*args, **kwargs)
+            frame = frame.f_back
+        raise exc
+    return _inner
+
+
 # Each entry: (file, line-content substring, reason it's intentionally safe)
 ALLOWED_RAW_EXCEPTION_LINES = [
     ("jen/routes/database.py", 'flash(f"Cannot read file: {err}"',
@@ -153,8 +207,10 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
         assert b"Could not load API keys" in r.data
 
     def test_users_list_error_is_generic(self, logged_in_client):
-        with patch("jen.routes.users.__db.jen_db") as mock_db:
-            mock_db.side_effect = RuntimeError("Access denied for user 'jen'@'10.10.11.251' — internal detail xyz456")
+        import jen.models.db as db_module
+        original = db_module.jen_db
+        exc = RuntimeError("Access denied for user 'jen'@'10.10.11.251' — internal detail xyz456")
+        with patch("jen.routes.users.__db.jen_db", side_effect=_raise_only_outside_load_user(original, exc)):
             r = logged_in_client.get("/users")
         assert r.status_code == 200
         assert b"xyz456" not in r.data
@@ -178,8 +234,10 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
         assert b"Could not load leases" in r.data
 
     def test_devices_list_error_is_generic(self, logged_in_client):
-        with patch("jen.routes.devices.__db.jen_db") as mock_db:
-            mock_db.side_effect = RuntimeError("Deadlock found marker_ghi345")
+        import jen.models.db as db_module
+        original = db_module.jen_db
+        exc = RuntimeError("Deadlock found marker_ghi345")
+        with patch("jen.routes.devices.__db.jen_db", side_effect=_raise_only_outside_load_user(original, exc)):
             r = logged_in_client.get("/devices")
         assert r.status_code == 200
         assert b"marker_ghi345" not in r.data
@@ -206,7 +264,13 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
         assert b"Internal error" in r.data
 
     def test_dashboard_stats_widget_error_is_generic_json(self, logged_in_client):
-        with patch("jen.routes.dashboard.__db.jen_db") as mock_db:
+        """api_stats() uses __db.kea_db(), not jen_db() — confirmed by
+        reading the route directly rather than assuming. kea_db() is
+        never touched by load_user() (only jen_db() is), so this can
+        use a plain mock with no risk of also breaking authentication,
+        matching the same safe pattern already used for the
+        reservations/leases tests above."""
+        with patch("jen.routes.dashboard.__db.kea_db") as mock_db:
             mock_db.side_effect = RuntimeError("Sensitive schema marker mno901")
             r = logged_in_client.get("/api/stats")
         assert r.status_code == 200

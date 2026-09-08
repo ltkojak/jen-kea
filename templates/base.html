@@ -372,14 +372,10 @@
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
-        {% if branding_nav_logo %}
         <span class="nav-brand-logo-wrap">
-            <img src="{{ branding_nav_logo }}" alt="Jen" class="nav-brand-logo">
+            <img src="{{ branding_nav_logo or '/static/icons/jen-logo-wide.png' }}" alt="Jen" class="nav-brand-logo">
             <span class="nav-brand-version">v{{ jen_version }}</span>
         </span>
-        {% else %}
-        {{ branding_name }} <span>v{{ jen_version }}</span>
-        {% endif %}
     </a>
 
     {% if current_user.is_authenticated %}
