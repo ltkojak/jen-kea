@@ -29,5 +29,5 @@ pillow>=12.3.0
 pymysql>=1.2.0
 pyotp>=2.10.0
 qrcode[pil]>=8.2
-requests>=2.33.1
+requests>=2.34.2
 werkzeug>=3.1.7
