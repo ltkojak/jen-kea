@@ -264,8 +264,8 @@ defaults to `false` on every install — new and existing. Every v6 code
 path is written to check it first: `SUBNET6_MAP` is never populated for
 display, no v6 nav/UI element renders, and no v6 Kea command fires unless
 it's explicitly on. This isn't just a design intention — it's the single
-most heavily tested property in the v6 test suite (`tests/test_kea6.py`,
-`TestZeroBehaviorChange` and equivalents throughout), because a
+most heavily tested property in the v6 test suite (`tests/test_kea6_*.py`,
+`test_kea6_config.py::TestZeroBehaviorChange` and equivalents throughout), because a
 regression here would mean every v4-only install silently starts doing
 extra work or showing broken UI on upgrade. `[kea6]`/`[kea6_db]`/
 `[subnets6]` are all optional `jen.config` sections; when absent, every

@@ -137,8 +137,11 @@ Off by default and *verified* off by default. Gated on the `ipv6_enabled` key in
 `settings` table (NOT a config value) — checked before any v6 code path runs, UI element
 renders, or v6 Kea command fires. `[kea6]`/`[kea6_db]`/`[subnets6]` config sections are
 optional and each value falls back to its v4 counterpart. v6 subnet IDs are a separate
-numbering space from v4 (`SUBNET6_MAP` vs `SUBNET_MAP`). `tests/test_kea6.py`
-`TestZeroBehaviorChange` guards the "nothing changes for v4-only installs" property.
+numbering space from v4 (`SUBNET6_MAP` vs `SUBNET_MAP`). The v6 suite is
+`tests/test_kea6_*.py` (+ `tests/test_kea_authoring.py`), split by feature
+area from the old monolithic `test_kea6.py` in v5.6.1;
+`test_kea6_config.py::TestZeroBehaviorChange` guards the "nothing changes
+for v4-only installs" property.
 
 ### Plugins
 

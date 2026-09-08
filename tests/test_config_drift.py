@@ -15,7 +15,7 @@ function (no I/O) — the actual value of this feature lives entirely in
 that comparison logic being correct, so it gets the most thorough
 coverage. fetch_live_subnet_map() and check_config_drift() are tested
 with mocked Kea responses, matching the mocking convention already
-used throughout tests/test_kea6.py.
+used throughout tests/test_kea6_*.py.
 """
 
 from jen.services.config_drift import (

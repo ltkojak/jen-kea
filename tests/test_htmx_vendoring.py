@@ -24,7 +24,7 @@ immediately instead of shipping invisibly for years.
 
 Why this specific bug produced no visible test failures despite 617
 prior passing tests: every htmx-behavior test in this suite (e.g.
-test_alerts.py's TestHTMXRoutes, test_kea6.py's htmx-partial tests)
+test_alerts.py's TestHTMXRoutes, test_kea6_*.py's htmx-partial tests)
 sends a raw HX-Request header directly via the Flask test client and
 asserts on the server's response shape. That's a legitimate way to
 test the server-side "is this an htmx request" branch, but it never

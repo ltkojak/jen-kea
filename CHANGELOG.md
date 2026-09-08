@@ -19,7 +19,9 @@ which is much nicer on a split module than a 2,060-line one.
   package root for their existing importers. Dropped one dead helper
   (`__ip_to_int`, defined and never called).
   `tests/test_settings_blueprint.py` freezes the full 48-endpoint set as
-  a drift guard.
+  a drift guard. Three sibling tests that locate route code by file path
+  (`test_no_raw_exception_leaks`, `test_sudoers_command_matching`) now
+  scan the package instead of the old single file.
 - **`tests/test_kea6.py` → `tests/test_kea6_*.py`** by feature area
   (config, service toggle, leases/devices, reservations, subnets,
   search/metrics) plus `tests/test_kea_authoring.py` for the
