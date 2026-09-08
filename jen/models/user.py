@@ -80,31 +80,41 @@ class User(UserMixin):
         return self._subnet_access
 
 
+# werkzeug 3.1's own default. n=2**15, r=8, p=1 → ~32 MB and ~50-100ms
+# per hash on homelab hardware: memory-hard (unlike pbkdf2, which a GPU
+# chews through), still fast enough for interactive login. The transient
+# 32 MB is per in-flight hash — at the default 8 worker threads a burst
+# of simultaneous logins costs ~256 MB briefly, freed the moment each
+# hash returns.
+_SCRYPT_METHOD = "scrypt:32768:8:1"
+
+
 def hash_password(p: str) -> str:
     """
-    Hash a password using pbkdf2:sha256 with 260,000 iterations.
+    Hash a password with scrypt (werkzeug's current default KDF), pinned
+    to explicit cost parameters so a future werkzeug default change is a
+    deliberate `needs_rehash()` bump here, not a silent one.
 
-    Iteration count is explicitly pinned rather than using werkzeug's default
-    because werkzeug 3.x raised the default from 260,000 to 1,000,000, making
-    login take 2-3 seconds on typical homelab hardware. 260,000 meets the NIST
-    SP 800-132 minimum and keeps login sub-200ms.
-
-    check_password_hash reads parameters from the stored hash, so existing
-    hashes at any iteration count continue to verify correctly.
+    History: Jen used pbkdf2:sha256:260000 through v5.6.x — pbkdf2 because
+    that was werkzeug 2.x's default, pinned at 260k because werkzeug 3.x
+    raised its default to 1,000,000 (2-3s logins). v5.7.0 moves new and
+    re-hashed passwords to scrypt for its memory-hardness; existing pbkdf2
+    hashes keep verifying and are upgraded on next login (see needs_rehash).
     """
-    return generate_password_hash(p, method="pbkdf2:sha256:260000")
+    return generate_password_hash(p, method=_SCRYPT_METHOD)
 
 
 def verify_password(stored_hash: str, provided_password: str) -> bool:
     """
     Verify a password against a stored hash.
     Supports:
-      - pbkdf2:sha256 hashes at any iteration count (werkzeug 2.x and 3.x)
+      - scrypt hashes (v5.7.0+ default)
+      - pbkdf2:sha256 hashes at any iteration count (v2.x-v5.6.x, werkzeug 2.x/3.x)
       - Legacy plain SHA-256 hex hashes (pre-2.5.2)
-    check_password_hash reads cost parameters from the stored hash, so
-    hashes at any iteration count verify correctly without migration.
+    check_password_hash reads the algorithm and cost parameters from the
+    stored hash itself, so every format above verifies without migration.
     """
-    if stored_hash and stored_hash.startswith("pbkdf2:"):
+    if stored_hash and stored_hash.startswith(("scrypt:", "pbkdf2:")):
         return check_password_hash(stored_hash, provided_password)
     # Legacy SHA-256 — accept and flag for upgrade. Constant-time compare:
     # this is a straight string equality check, not a proper KDF, so it's
@@ -117,18 +127,25 @@ def verify_password(stored_hash: str, provided_password: str) -> bool:
 
 def needs_rehash(stored_hash: str) -> bool:
     """
-    Return True if the stored hash should be upgraded to 260K iterations.
-    Parses the iteration count directly from the hash string rather than
-    relying on werkzeug's check_needs_rehash (not available in all versions).
+    Return True if the stored hash should be re-generated with the current
+    scheme (`_SCRYPT_METHOD`) on the next successful login. Parses the hash
+    string directly rather than relying on werkzeug's check_needs_rehash
+    (not available in all versions).
+
+    - Any `pbkdf2:*` hash          → True  (v5.7.0 moved off pbkdf2)
+    - `scrypt:*` at other params   → True
+    - `scrypt:32768:8:1`           → False (already current)
+    - anything else / empty        → False (legacy SHA-256 is handled by
+                                     the caller's own not-a-KDF check)
     """
-    if not stored_hash or not stored_hash.startswith("pbkdf2:sha256:"):
+    if not stored_hash:
         return False
-    try:
-        # Hash format: pbkdf2:sha256:ITERATIONS$salt$hash
-        iterations = int(stored_hash.split(":")[2].split("$")[0])
-        return iterations != 260000
-    except (IndexError, ValueError):
-        return False
+    if stored_hash.startswith("pbkdf2:"):
+        return True
+    if stored_hash.startswith("scrypt:"):
+        # Hash format: scrypt:N:r:p$salt$hash
+        return stored_hash.split("$", 1)[0] != _SCRYPT_METHOD
+    return False
 
 
 _settings_cache: dict = {}

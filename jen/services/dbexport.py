@@ -27,7 +27,12 @@ JEN_TABLES = {
     "devices": "Device inventory (MAC, hostname, manufacturer, notes)",
     "reservation_notes": "Notes attached to Kea reservations",
     "settings": "All Jen application settings",
-    "alert_channels": "Alert channel configuration (Telegram etc.)",
+    "alert_channels": (
+        "Alert channel configuration (Telegram etc.). Delivery tokens in the "
+        "config column are encrypted at rest; the key lives in /etc/jen, NOT in "
+        "this export — channels will not deliver after restore onto a different "
+        "install until their tokens are re-entered."
+    ),
     "alert_templates": "Custom alert message templates",
     "alert_log": "Historical alert delivery log",
     "saved_searches": "Saved filter presets",

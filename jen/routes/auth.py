@@ -110,8 +110,8 @@ def login():
             return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
 
         if row and __user.verify_password(row["password"], password):
-            # Upgrade legacy SHA-256 or rehash slow iterations — fire and forget
-            needs_upgrade = not row["password"].startswith("pbkdf2:") or __user.needs_rehash(row["password"])
+            # Upgrade legacy SHA-256 / pbkdf2 / off-param scrypt — fire and forget
+            needs_upgrade = not row["password"].startswith("scrypt:") or __user.needs_rehash(row["password"])
             if needs_upgrade:
                 _uid = row["id"]
                 _new_hash = __user.hash_password(password)

@@ -634,6 +634,50 @@ def _m017_encrypt_mfa_secrets(db):
             logger.warning("Migration 17: encrypted %d existing MFA secret(s) at rest", len(rows))
 
 
+def _m018_encrypt_alert_channel_config(db):
+    """
+    v5.7.0 — `alert_channels.config` is a JSON blob holding every
+    notification channel's delivery credentials: Telegram bot tokens,
+    SMTP passwords, Pushover keys, ntfy tokens, Slack/Discord/webhook
+    URLs (which themselves embed a secret). Stored as plaintext it had
+    the same exposure as the pre-v5.4.0 TOTP secrets — any read of that
+    one column (a stray DB export, a read replica, SQL injection, a
+    shared DB host) hands over working credentials for every channel.
+
+    Same fix as migration 17: wrap the value with crypto.encrypt_secret()
+    so it becomes a `v1:`-prefixed Fernet token, key kept in /etc/jen
+    outside the database. The whole blob is encrypted (not per-field) so
+    a new channel type with new secret fields is covered automatically.
+    New saves encrypt at write time (jen/routes/settings/alerts.py via
+    alerts.encode_channel_config); every read goes through
+    alerts.get_channel_config(), which decrypts, with a legacy-plaintext
+    passthrough for any row this migration hasn't reached.
+
+    Idempotent: the WHERE clause skips rows already in `v1:` form, so a
+    re-run or a crash partway through (the UPDATEs and the
+    schema_migrations INSERT share one transaction) is safe. If the
+    encryption key can't be created/persisted, encode_channel_config()
+    raises and startup aborts rather than recording this as applied.
+    """
+    from jen.services.alerts import encode_channel_config, get_channel_config
+    from jen.services.crypto import PREFIX
+
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, config FROM alert_channels WHERE config IS NOT NULL AND config <> '' AND config NOT LIKE %s",
+            (PREFIX + "%",),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            parsed = get_channel_config(row)  # legacy plaintext JSON → dict
+            cur.execute(
+                "UPDATE alert_channels SET config = %s WHERE id = %s",
+                (encode_channel_config(parsed), row["id"]),
+            )
+        if rows:
+            logger.warning("Migration 18: encrypted %d alert channel config blob(s) at rest", len(rows))
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -658,6 +702,7 @@ MIGRATIONS = [
         _m016_backfill_must_change_password_for_existing_admin_admin,
     ),
     (17, "Encrypt existing plaintext mfa_methods.secret values at rest (v5.4.0)", _m017_encrypt_mfa_secrets),
+    (18, "Encrypt existing plaintext alert_channels.config blobs at rest (v5.7.0)", _m018_encrypt_alert_channel_config),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

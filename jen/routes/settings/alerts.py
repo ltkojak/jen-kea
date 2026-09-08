@@ -36,11 +36,9 @@ def settings_alerts():
                 channels = cur.fetchall()
                 # Parse JSON fields
                 for ch in channels:
-                    if isinstance(ch.get("config"), str):
-                        try:
-                            ch["config"] = json.loads(ch["config"])
-                        except (json.JSONDecodeError, ValueError):
-                            ch["config"] = {}
+                    # config is encrypted at rest (v5.7.0) — decode via the
+                    # service helper, which also handles legacy plaintext rows
+                    ch["config"] = __alerts.get_channel_config(ch)
                     if isinstance(ch.get("alert_types"), str):
                         try:
                             ch["alert_types"] = json.loads(ch["alert_types"])
@@ -177,8 +175,7 @@ def save_alert_channel():
                         cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
                         row = cur.fetchone()
                         if row:
-                            existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
-                            config["api_token"] = existing.get("api_token", "")
+                            config["api_token"] = __alerts.get_channel_config(row).get("api_token", "")
             except Exception:
                 pass
     elif channel_type == "discord":
@@ -194,12 +191,13 @@ def save_alert_channel():
                     cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
                     row = cur.fetchone()
                     if row:
-                        existing = json.loads(row["config"]) if isinstance(row["config"], str) else row["config"]
-                        config["smtp_pass"] = existing.get("smtp_pass", "")
+                        config["smtp_pass"] = __alerts.get_channel_config(row).get("smtp_pass", "")
         except Exception:
             pass
 
     try:
+        # config carries the channel's notification tokens — encrypt at rest (v5.7.0)
+        config_blob = __alerts.encode_channel_config(config)
         with __db.jen_db() as db:
             with db.cursor() as cur:
                 if channel_id:
@@ -208,7 +206,7 @@ def save_alert_channel():
                         UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s, subnet_scope=%s
                         WHERE id=%s
                     """,
-                        (channel_name, enabled, json.dumps(config), json.dumps(alert_types), subnet_scope, channel_id),
+                        (channel_name, enabled, config_blob, json.dumps(alert_types), subnet_scope, channel_id),
                     )
                 else:
                     cur.execute(
@@ -220,7 +218,7 @@ def save_alert_channel():
                             channel_type,
                             channel_name,
                             enabled,
-                            json.dumps(config),
+                            config_blob,
                             json.dumps(alert_types),
                             subnet_scope,
                         ),
@@ -267,7 +265,7 @@ def test_alert_channel(channel_id):
         if not channel:
             flash("Channel not found.", "error")
             return redirect(url_for("settings.settings_alerts"))
-        config = json.loads(channel["config"]) if isinstance(channel["config"], str) else channel["config"]
+        config = __alerts.get_channel_config(channel)
         ctype = channel["channel_type"]
         test_msg = f"🔔 <b>Jen Test</b>\nTest message from channel: {channel['channel_name']}"
         if ctype == "telegram":

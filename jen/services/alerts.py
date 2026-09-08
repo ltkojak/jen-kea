@@ -318,18 +318,40 @@ def channel_allows_subnet(channel, subnet_id):
 
 
 def get_channel_config(channel):
-    """Parse channel config JSON."""
-    try:
-        cfg_data = channel.get("config")
-        if not cfg_data:
-            return {}
-        if isinstance(cfg_data, str):
-            import json
+    """Return a channel's config as a dict, decrypting it first if it's
+    stored in the v5.7.0 encrypted-at-rest form (`v1:` prefix — see
+    jen/services/crypto.py). A legacy plaintext JSON string still parses
+    unchanged. Any failure (bad key, corrupt row, JSON typo) yields `{}`
+    so a misconfigured channel goes quiet rather than crashing dispatch —
+    the same fail-soft stance as channel_allows_subnet()."""
+    import json
 
-            return json.loads(cfg_data)
-        return cfg_data
-    except Exception:
+    cfg_data = channel.get("config")
+    if not cfg_data:
         return {}
+    if isinstance(cfg_data, dict):
+        return cfg_data
+    try:
+        from jen.services import crypto
+
+        if crypto.is_encrypted(cfg_data):
+            cfg_data = crypto.decrypt_secret(cfg_data, what="alert channel config")
+        return json.loads(cfg_data)
+    except Exception as e:
+        logger.error("Could not decode config for alert channel %r: %s", channel.get("channel_name"), e)
+        return {}
+
+
+def encode_channel_config(config):
+    """Serialise a channel config dict for storage, encrypted at rest.
+    Raises (MfaKeyUnavailable) if the encryption key can't be loaded —
+    callers surface that as a save error rather than silently writing the
+    tokens in plaintext."""
+    import json
+
+    from jen.services import crypto
+
+    return crypto.encrypt_secret(json.dumps(config))
 
 
 def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):

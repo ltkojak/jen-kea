@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.7.0] - 2026-09-08
+
+### Alert-channel tokens encrypted at rest
+
+`alert_channels.config` — a JSON blob holding every notification
+channel's delivery credentials (Telegram bot tokens, SMTP passwords,
+Pushover user/API keys, ntfy tokens, and the Slack/Discord/webhook URLs
+that themselves embed a secret) — was stored as plaintext. Any read of
+that one column (a stray database export, a read replica, SQL injection,
+a shared DB host) handed over working credentials for every channel. This
+was the same exposure the v5.4.0 work closed for TOTP secrets, on the
+last unprotected reversible-secret surface in `jen_db`.
+
+- The whole `config` blob is now encrypted with the existing Fernet key
+  (`jen/services/crypto.py`, key at `/etc/jen/mfa_key`, outside the
+  database) — whole-blob rather than per-field, so a new channel type
+  with new secret fields is covered automatically.
+- **Migration 18** wraps every existing plaintext blob on upgrade,
+  idempotently. New saves encrypt at write time; every read goes through
+  `alerts.get_channel_config()`, which decrypts, with a legacy-plaintext
+  passthrough for any row the migration hasn't reached.
+- A blob that can't be decrypted (a DB restored onto a new install
+  without copying `/etc/jen/mfa_key`) makes that channel go quiet rather
+  than crashing alert dispatch — the tokens must be re-entered, same as
+  MFA secrets in that situation. The database-export screen now says so.
+
+### New passwords hashed with scrypt
+
+`hash_password()` moves from `pbkdf2:sha256:260000` to scrypt
+(`scrypt:32768:8:1`, werkzeug's current default). scrypt is memory-hard —
+~32 MB per hash — where pbkdf2 is not, which is what makes it meaningfully
+harder to attack with GPUs or ASICs, while staying fast enough for
+interactive login (~50–100 ms).
+
+- Existing pbkdf2 hashes keep verifying and are transparently upgraded to
+  scrypt on the user's next successful login — the same
+  rehash-on-login path that already handled iteration-count bumps and the
+  original SHA-256 → pbkdf2 move. No forced password resets.
+- `needs_rehash()` now flags any pbkdf2 hash (and any scrypt hash at
+  non-current cost parameters) for upgrade.
+
+### Documentation
+
+- **README:** new "How Jen talks to Kea" section (the three channels —
+  Control Agent HTTP, the Kea database, SSH — and what each is for), and
+  a "Jen compared to ISC Stork" table laying out the agentless-vs-agent,
+  management-vs-monitoring, MySQL-vs-PostgreSQL tradeoffs so people can
+  tell quickly which tool they actually want.
+- **`CONTRIBUTING.md`** added: dev setup, the CI gates, and a candid list
+  of what does and doesn't fit the project's direction.
+
 ## [5.6.1] - 2026-09-08
 
 ### Split the two monolith files (`settings.py`, `test_kea6.py`)

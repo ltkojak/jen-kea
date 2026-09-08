@@ -10,10 +10,10 @@ from jen.models.user import hash_password, needs_rehash, verify_password
 class TestPasswordHashing:
     """Unit tests for password hashing functions."""
 
-    def test_hash_password_produces_pbkdf2(self):
-        """hash_password uses pbkdf2:sha256:260000."""
+    def test_hash_password_produces_scrypt(self):
+        """v5.7.0 — hash_password uses scrypt:32768:8:1."""
         h = hash_password("testpassword")
-        assert h.startswith("pbkdf2:sha256:260000")
+        assert h.startswith("scrypt:32768:8:1$")
 
     def test_hash_password_is_salted(self):
         """Two hashes of same password are different (different salts)."""
@@ -31,27 +31,33 @@ class TestPasswordHashing:
         h = hash_password("mypassword")
         assert verify_password(h, "wrongpassword") is False
 
-    def test_needs_rehash_false_for_260k(self):
-        """260K hash does not need rehash."""
+    def test_needs_rehash_true_for_legacy_pbkdf2_260k(self):
+        """v5.7.0 — a pbkdf2:260000 hash (Jen's old default) now needs
+        upgrading to scrypt on next login."""
         from werkzeug.security import generate_password_hash
 
         h = generate_password_hash("test", method="pbkdf2:sha256:260000")
-        assert needs_rehash(h) is False
+        assert needs_rehash(h) is True
 
     def test_needs_rehash_true_for_1m(self):
-        """1M iteration hash needs rehash."""
+        """1M iteration pbkdf2 hash needs rehash."""
         from werkzeug.security import generate_password_hash
 
         h = generate_password_hash("test", method="pbkdf2:sha256:1000000")
         assert needs_rehash(h) is True
 
-    def test_needs_rehash_false_for_scrypt(self):
-        """scrypt hash does not need rehash (different algorithm, already fast)."""
+    def test_needs_rehash_false_for_current_scrypt(self):
+        """A hash at the current scrypt params does not need rehash."""
+        h = hash_password("test")
+        assert h.startswith("scrypt:32768:8:1$")
+        assert needs_rehash(h) is False
+
+    def test_needs_rehash_true_for_offparam_scrypt(self):
+        """scrypt at non-current cost parameters is upgraded on next login."""
         from werkzeug.security import generate_password_hash
 
-        h = generate_password_hash("test")  # default = scrypt
-        if h.startswith("scrypt:"):
-            assert needs_rehash(h) is False
+        h = generate_password_hash("test", method="scrypt:16384:8:1")
+        assert needs_rehash(h) is True
 
     def test_needs_rehash_false_for_empty(self):
         """Empty string does not need rehash."""

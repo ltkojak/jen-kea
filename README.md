@@ -6,7 +6,7 @@
 
 A full-featured web-based management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built with Python and Flask. Jen provides a comprehensive UI for managing DHCP leases, reservations, subnets, and infrastructure — accessible from any browser including mobile and iPad.
 
-[![Version](https://img.shields.io/badge/Version-5.6.1-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
+[![Version](https://img.shields.io/badge/Version-5.7.0-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
@@ -89,6 +89,28 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 
 ---
 
+## How Jen talks to Kea
+
+Jen is **agentless** — nothing runs on your Kea servers. One Flask
+process reaches out to each Kea box over three channels:
+
+| Channel | Used for | Direction |
+|---------|----------|-----------|
+| **Kea Control Agent HTTP API** | Live status, config reads, HA state, lease statistics | Jen → Kea, read-mostly |
+| **Kea database (MySQL/MariaDB)** | Lease and reservation data, written only through the same tables/commands Kea's own tooling uses (mostly the `host_cmds` hook, never raw schema changes) | Jen ↔ Kea DB |
+| **SSH** | Applying subnet/pool edits to `kea-dhcp*.conf`, validating the new config, restarting the service, reading logs | Jen → Kea host |
+
+Every config change is validated against Kea before the service is
+restarted, with an automatic backup and rollback on failure. Jen never
+modifies Kea's database schema — only its data.
+
+The tradeoff: this is deliberately built for a homelab-to-small-business
+operator running a handful of servers, not a fleet. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
+threat model.
+
+---
+
 ## Requirements
 
 - Ubuntu 22.04 or 24.04 (bare metal or Docker)
@@ -103,7 +125,7 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 ### Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v5.6.1.tar.gz
+tar xzf jen-v5.7.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -155,7 +177,7 @@ Open `http://your-server:5050` and sign in as **`admin`**.
 ## Upgrading
 
 ```bash
-tar xzf jen-v5.6.1.tar.gz
+tar xzf jen-v5.7.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -172,6 +194,29 @@ Jen supports optional plugins installable from **Settings → Plugins**.
 |--------|-------------|------|
 | Network Discovery | Scan subnets for devices not in Kea. Detects rogue devices, fires alerts. Requires nmap. | [jen-plugin-network-discovery](https://github.com/ltkojak/jen-plugin-network-discovery) |
 | IPAM Lite | Full IP address space view. See every IP — available, dynamic, reserved, or static. Add labels, owners, notes. CSV export. | [jen-plugin-ipam](https://github.com/ltkojak/jen-plugin-ipam) |
+
+---
+
+## Jen compared to ISC Stork
+
+[ISC Stork](https://www.isc.org/stork/) is the official monitoring
+dashboard for Kea and BIND. It and Jen solve overlapping problems from
+opposite directions.
+
+| | **Jen** | **ISC Stork** |
+|---|---|---|
+| Architecture | Agentless — one process connects out to each server | Agent (`stork-agent`) on every managed server |
+| Primary focus | Day-to-day **management**: edit subnets/pools/reservations, manage leases and devices | **Monitoring** and metrics, with configuration editing added more recently |
+| Config changes | Validated SSH push to `kea-dhcp*.conf`, backup + rollback | Kea config-management API |
+| Scale target | Homelab to small business, a handful of servers | Small to large fleets |
+| Access control | Three roles + per-subnet scoping, built-in MFA (TOTP) | RBAC; auth via LDAP or local |
+| Database | MySQL / MariaDB | PostgreSQL |
+| Extras | Device inventory & OUI fingerprinting, multi-channel alerting, plugin system, custom branding | Grafana/Prometheus integration, BIND 9 support |
+| License | GPL v3 | MPL 2.0 |
+
+If you run a fleet, want Prometheus/Grafana dashboards, or also manage
+BIND, use Stork. If you want a single-process console to *operate* a
+small number of Kea servers from any browser, that's what Jen is for.
 
 ---
 

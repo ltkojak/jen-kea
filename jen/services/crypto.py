@@ -2,8 +2,9 @@
 jen/services/crypto.py
 ──────────────────────
 Symmetric encryption at rest for reversible secrets that Jen must be
-able to read back in cleartext — currently just TOTP shared secrets
-(`mfa_methods.secret`), added in v5.4.0.
+able to read back in cleartext: TOTP shared secrets (`mfa_methods.secret`,
+v5.4.0) and alert-channel notification tokens (`alert_channels.config`,
+v5.7.0). One Fernet key (`/etc/jen/mfa_key`) protects both.
 
 Why encryption and not hashing
 ──────────────────────────────
@@ -194,17 +195,20 @@ def is_encrypted(stored: str) -> bool:
     return bool(stored) and stored.startswith(PREFIX)
 
 
-def decrypt_secret(stored: str) -> str:
+def decrypt_secret(stored: str, what: str = "MFA secret") -> str:
     """Return the cleartext secret for a stored value.
 
     - `v1:…`             → Fernet-decrypt (SecretDecryptError on failure)
     - a bare legacy value → returned unchanged
     - empty / None        → returned unchanged
+
+    `what` only names the value in the SecretDecryptError message, so the
+    same primitive can serve callers other than MFA (alert-channel tokens).
     """
     if not stored:
         return stored
     if not stored.startswith(PREFIX):
-        return stored  # legacy plaintext — migration 17 hasn't reached it
+        return stored  # legacy plaintext — the backfill migration hasn't reached it
     from cryptography.fernet import InvalidToken
 
     token = stored[len(PREFIX) :]
@@ -212,8 +216,8 @@ def decrypt_secret(stored: str) -> str:
         return get_fernet().decrypt(token.encode()).decode()
     except InvalidToken as e:
         raise SecretDecryptError(
-            "Stored MFA secret could not be decrypted with the current key. "
+            f"Stored {what} could not be decrypted with the current key. "
             "If this database was restored or migrated from another install, "
-            "its /etc/jen/mfa_key must be copied across too; otherwise affected "
-            "users must re-enrol their authenticator."
+            "its /etc/jen/mfa_key must be copied across too; otherwise the "
+            "affected secret must be re-entered."
         ) from e
