@@ -123,15 +123,34 @@ class TestMetricsSettings:
     requiring config-file edits for anything a settings toggle can
     cover instead, so this exists to make that new requirement
     configurable from the UI. No restart involved (unlike save_ports
-    above), so no threading mock needed here."""
+    above), so no threading mock needed here.
+
+    jen.config is a real file on disk, not reset between individual
+    tests the way the database fixture is — a write from one test
+    genuinely persists and affects whichever test runs next. An
+    earlier version of this class assumed each test could rely on
+    "the default" or "the prior test's state," and CI caught the
+    result directly: test_short_token_rejected failed because the
+    previous test in file order had left metrics_open=true behind,
+    so /metrics was open (200) when the test expected its assumed
+    default of closed (401). Every test below now explicitly
+    establishes its own starting state via a setup POST first, rather
+    than assuming one — correct regardless of execution order, and
+    not dependent on these five tests staying in this exact sequence.
+    """
+
+    def _reset_to_closed(self, logged_in_client):
+        logged_in_client.post("/settings/save-metrics", data={})
 
     def test_settings_page_shows_closed_state_by_default(self, logged_in_client):
+        self._reset_to_closed(logged_in_client)
         r = logged_in_client.get("/settings/infrastructure")
         assert r.status_code == 200
         assert b"currently" in r.data
         assert b"closed" in r.data
 
     def test_setting_a_token_actually_protects_the_endpoint(self, logged_in_client):
+        self._reset_to_closed(logged_in_client)
         r = logged_in_client.post("/settings/save-metrics", data={
             "metrics_token": "a-valid-long-token-value",
         }, follow_redirects=True)
@@ -146,6 +165,7 @@ class TestMetricsSettings:
         assert r3.status_code == 200
 
     def test_enabling_open_access_actually_opens_the_endpoint(self, logged_in_client):
+        self._reset_to_closed(logged_in_client)
         r = logged_in_client.post("/settings/save-metrics", data={
             "metrics_open": "1",
         }, follow_redirects=True)
@@ -156,14 +176,17 @@ class TestMetricsSettings:
         assert r2.status_code == 200
 
     def test_short_token_rejected(self, logged_in_client):
+        self._reset_to_closed(logged_in_client)
         r = logged_in_client.post("/settings/save-metrics", data={
             "metrics_token": "short",
         }, follow_redirects=True)
         assert r.status_code == 200
         assert b"at least 8 characters" in r.data
 
-        # Confirms the rejected value was never actually written —
-        # /metrics should still be in its prior (closed) state.
+        # Confirms the rejected value was never actually written — this
+        # test explicitly established a closed starting state above,
+        # rather than assuming one, so this assertion is meaningful
+        # regardless of what any other test in this class did first.
         r2 = logged_in_client.get("/metrics")
         assert r2.status_code == 401
 

@@ -256,6 +256,23 @@ covered `test_dashboard.py`; a repo-wide search afterward found this
 second file. All nine now fixed and individually re-verified directly
 before repackaging, not just re-run and trusted.
 
+A second CI run, against the same still-untagged release, caught one
+more: the new `TestMetricsSettings` class assumed each test could
+rely on a predictable starting state — "default closed," or "whatever
+the previous test in file order left behind." `jen.config` is a real
+file on disk, not reset between individual tests the way the database
+fixture is, so a write from one test genuinely persists into the
+next. `test_short_token_rejected` expected `/metrics` to still be
+closed after its own (correctly rejected) short token, but the
+previous test in file order had left `metrics_open=true` behind, so
+the endpoint was actually open — an assertion of 401 got a 200
+instead. Fixed by having every test in the class explicitly establish
+its own starting state via a setup call first, rather than assuming
+one; verified by simulating the exact five-test sequence against the
+real route logic both before and after the fix, reproducing the
+identical 200-instead-of-401 failure from CI on the unfixed version
+before confirming the fixed version resolves it.
+
 ## [5.3.2] - 2026-09-08
 
 ### Rebrand follow-up: About page missed, dedicated navbar asset
