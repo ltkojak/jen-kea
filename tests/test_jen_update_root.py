@@ -29,8 +29,7 @@ directly verifiable than mocking urllib at multiple call sites.
 import importlib.util
 import os
 import pathlib
-import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -265,3 +264,156 @@ class TestInstallExtractedFiles:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
         assert (install_dir / "run.py").exists()
+
+
+class TestInstallSelfUpdateFiles:
+    """
+    v5.3.3 — regression tests for the gap a third-party review found in
+    the v5.2.6 redesign: install_extracted_files() installed the
+    application but never a new copy of this script or of
+    jen-update.service, so a fix to the updater itself could never
+    reach a running instance via the in-app update button.
+
+    os.chown is the only thing mocked here — it genuinely requires
+    root to change ownership to uid/gid 0, which a CI test runner
+    doesn't have. Everything else (file writes, chmod, os.replace) runs
+    for real against tmp_path, so these tests verify actual resulting
+    file content and mode, not just that a function was called with
+    the right-looking arguments.
+    """
+
+    def _make_extracted_dir_with_self_update_files(self, tmp_path, script_content=b"# fake v2 updater\n",
+                                                     service_content=b"[Unit]\nDescription=fake v2\n"):
+        extracted = tmp_path / "extracted"
+        extracted.mkdir(exist_ok=True)
+        (extracted / "jen-update-root.py").write_bytes(script_content)
+        (extracted / "jen-update.service").write_bytes(service_content)
+        return extracted
+
+    def test_installs_new_script_content(self, jen_update_root, tmp_path):
+        extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        dest_dir = tmp_path / "sbin"
+        dest_dir.mkdir()
+        self_install_path = dest_dir / "jen-update-root.py"
+        with patch("os.chown"):
+            jen_update_root.install_self_update_files(
+                str(extracted), self_install_path=str(self_install_path),
+                update_service_path=str(tmp_path / "jen-update.service"),
+            )
+        assert self_install_path.read_bytes() == b"# fake v2 updater\n"
+
+    def test_installed_script_is_root_owned_and_mode_0700(self, jen_update_root, tmp_path):
+        """The specific regression a third-party review asked for
+        directly: 'A verified release containing a newer root updater
+        installs it root-owned and non-writable by www-data.'"""
+        extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        dest_dir = tmp_path / "sbin"
+        dest_dir.mkdir()
+        self_install_path = dest_dir / "jen-update-root.py"
+        with patch("os.chown") as mock_chown, patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            jen_update_root.install_self_update_files(
+                str(extracted), self_install_path=str(self_install_path),
+                update_service_path=str(tmp_path / "jen-update.service"),
+            )
+        # os.chown targets the TEMP file (before the atomic rename to
+        # self_install_path), not self_install_path itself — filter by
+        # the script's distinct temp-file prefix to isolate its chown
+        # call from the service file's separate one.
+        script_chown_calls = [c for c in mock_chown.call_args_list if ".jen-update-root-" in c[0][0]]
+        assert len(script_chown_calls) == 1
+        _, uid, gid = script_chown_calls[0][0]
+        assert uid == 0 and gid == 0
+        # Mode is checked for real, against the actual installed file —
+        # os.chmod doesn't require root, only ownership of the file,
+        # which the test process has since it just created it.
+        mode = os.stat(self_install_path).st_mode & 0o777
+        assert mode == 0o700, f"expected mode 0o700 (root-only, unreadable/unwritable by www-data), got {oct(mode)}"
+
+    def test_installs_new_service_content_and_reloads_daemon(self, jen_update_root, tmp_path):
+        extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        update_service_path = tmp_path / "jen-update.service"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return MagicMock(returncode=0)
+
+        with patch("os.chown"), patch("subprocess.run", side_effect=fake_run):
+            jen_update_root.install_self_update_files(
+                str(extracted), self_install_path=str(tmp_path / "sbin" / "jen-update-root.py"),
+                update_service_path=str(update_service_path),
+            )
+        assert update_service_path.read_bytes() == b"[Unit]\nDescription=fake v2\n"
+        assert ["/usr/bin/systemctl", "daemon-reload"] in calls
+
+    def test_service_file_mode_is_0644_not_owner_only(self, jen_update_root, tmp_path):
+        """A systemd unit file needs to be world-readable (systemd
+        itself reads it as root, but 0644 is the conventional,
+        expected mode for unit files) — unlike the script itself,
+        which is deliberately 0700 since it's the thing www-data must
+        never be able to read or modify."""
+        extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        update_service_path = tmp_path / "jen-update.service"
+        with patch("os.chown"), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            jen_update_root.install_self_update_files(
+                str(extracted), self_install_path=str(tmp_path / "sbin" / "jen-update-root.py"),
+                update_service_path=str(update_service_path),
+            )
+        mode = os.stat(update_service_path).st_mode & 0o777
+        assert mode == 0o644
+
+    def test_uses_atomic_replace_not_in_place_overwrite(self, jen_update_root, tmp_path):
+        """Confirms the actual safety property, not just that the file
+        ends up with the right content: os.replace must be the
+        mechanism, not shutil.copy2 (which would overwrite the
+        destination's existing inode in place rather than atomically
+        swapping in a fully-written replacement)."""
+        extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        self_install_path = tmp_path / "sbin" / "jen-update-root.py"
+        self_install_path.parent.mkdir()
+        self_install_path.write_bytes(b"# old v1 updater\n")
+
+        with patch("os.chown"), patch("os.replace", side_effect=os.replace) as mock_replace:
+            jen_update_root.install_self_update_files(
+                str(extracted), self_install_path=str(self_install_path),
+                update_service_path=str(tmp_path / "jen-update.service"),
+            )
+        assert mock_replace.called, "expected os.replace to be used for the atomic swap"
+        # And confirm the end result is still correct through the real
+        # os.replace call (side_effect delegates to it for real).
+        assert self_install_path.read_bytes() == b"# fake v2 updater\n"
+
+    def test_missing_self_update_files_in_extracted_dir_does_not_crash(self, jen_update_root, tmp_path):
+        """An older-shaped release, or one that genuinely doesn't touch
+        the updater, shouldn't crash — this must be a no-op, not an
+        error, when the extracted tarball simply doesn't contain these
+        two files."""
+        extracted = tmp_path / "extracted"
+        extracted.mkdir()
+        self_install_path = tmp_path / "sbin" / "jen-update-root.py"
+        self_install_path.parent.mkdir()
+        self_install_path.write_bytes(b"# untouched existing v1\n")
+        update_service_path = tmp_path / "jen-update.service"
+
+        with patch("os.chown"), patch("subprocess.run") as mock_run:
+            jen_update_root.install_self_update_files(
+                str(extracted), self_install_path=str(self_install_path),
+                update_service_path=str(update_service_path),
+            )
+        assert self_install_path.read_bytes() == b"# untouched existing v1\n"
+        assert not update_service_path.exists()
+        mock_run.assert_not_called()
+
+    def test_main_calls_install_self_update_files_after_install_extracted_files(self, jen_update_root):
+        """Confirms main() actually wires this in — the whole point of
+        this fix is useless if the new function exists but is never
+        called from the real update flow."""
+        import inspect
+        main_source = inspect.getsource(jen_update_root.main)
+        install_pos = main_source.find("install_extracted_files(")
+        self_update_pos = main_source.find("install_self_update_files(")
+        assert install_pos != -1, "main() no longer calls install_extracted_files()"
+        assert self_update_pos != -1, "main() does not call install_self_update_files() at all"
+        assert self_update_pos > install_pos, "install_self_update_files() should run after the main application install"

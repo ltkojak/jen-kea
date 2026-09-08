@@ -3,18 +3,17 @@ IPAM Lite plugin for Jen — v1.0.0
 Full IP address space management.
 Shows every IP in each subnet: available, dynamic lease, reserved, or static.
 """
-import ipaddress
 import csv
 import io
+import ipaddress
 import logging
+import os as _os
 
-from flask import (Blueprint, flash, jsonify, make_response,
-                   redirect, render_template, request, url_for)
+from flask import Blueprint, flash, jsonify, make_response, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 logger = logging.getLogger(__name__)
 
-import os as _os
 bp = Blueprint("ipam", __name__,
                template_folder="templates",
                root_path=_os.path.dirname(_os.path.abspath(__file__)),
@@ -179,7 +178,7 @@ def index():
             counts["used"] = counts["dynamic"] + counts["reserved"] + counts["static"]
             counts["pct"] = round(counts["used"] / counts["total"] * 100) if counts["total"] else 0
             summaries[sid] = counts
-        except Exception as e:
+        except Exception:
             summaries[sid] = {}
     return render_template("ipam/index.html", subnet_map=subnet_map, summaries=summaries)
 
@@ -251,8 +250,8 @@ def export_csv(subnet_id):
 @login_required
 def save_entry(subnet_id):
     """Create or update a static IPAM entry."""
-    from jen.services.access import assert_subnet_access
     from jen.models import user as __user
+    from jen.services.access import assert_subnet_access
     if not assert_subnet_access(subnet_id):
         return jsonify({"error": "Access denied"}), 403
 
@@ -335,8 +334,8 @@ def save_entry(subnet_id):
 @bp.route("/entry/<int:subnet_id>/delete", methods=["POST"])
 @login_required
 def delete_entry(subnet_id):
-    from jen.services.access import assert_subnet_access
     from jen.models import user as __user
+    from jen.services.access import assert_subnet_access
     if not assert_subnet_access(subnet_id):
         return jsonify({"error": "Access denied"}), 403
 

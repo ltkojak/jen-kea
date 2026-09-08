@@ -8,7 +8,6 @@ backup codes, trusted devices.
 import hashlib
 import logging
 import secrets
-import time
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -55,7 +54,6 @@ def user_has_mfa(user_id):
 
 def generate_backup_codes(user_id):
     """Generate 8 single-use backup codes."""
-    import secrets
     codes = [secrets.token_hex(4).upper() + "-" + secrets.token_hex(4).upper() for _ in range(8)]
     try:
         with __jen_db_ctx() as db:
@@ -192,7 +190,6 @@ def is_trusted_device(user_id, request):
 
 def create_trusted_device_token(user_id, remember_days, device_name="Unknown Device",
                                 ip_address=None, user_agent=None):
-    import secrets
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     expires_at = None

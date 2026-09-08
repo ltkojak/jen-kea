@@ -12,10 +12,7 @@ this mirrors.
 
 import json
 
-import pymysql
-import pytest
-
-from jen.services.plugins import run_plugin_migrations, _plugin_applied_versions
+from jen.services.plugins import _plugin_applied_versions, run_plugin_migrations
 
 
 def _t1_manifest(plugin_id="test_plugin_a"):
@@ -298,7 +295,6 @@ class TestLoadPluginsDoesNotSkipOnMigrationFailure:
     and nav entry."""
 
     def test_migration_failure_does_not_prevent_plugin_load(self, db, monkeypatch, app):
-        from jen import extensions
         from jen.services import plugins as plugins_mod
 
         fake_manifest = {

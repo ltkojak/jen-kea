@@ -128,6 +128,7 @@ def _connect_ssh(server: dict):
     hosts loading, AutoAddPolicy, key-based auth from extensions.SSH_KEY_PATH,
     save_host_keys best-effort)."""
     import paramiko
+
     from jen.services import auth as __auth
 
     ssh = paramiko.SSHClient()
@@ -502,8 +503,8 @@ def normalize_duid(duid: str) -> str:
         raise ValueError(f"DUID must be a whole number of bytes: {duid!r}")
     try:
         int(hex_only, 16)
-    except ValueError:
-        raise ValueError(f"DUID must be hex: {duid!r}")
+    except ValueError as e:
+        raise ValueError(f"DUID must be hex: {duid!r}") from e
     return ":".join(hex_only[i:i + 2] for i in range(0, len(hex_only), 2))
 
 

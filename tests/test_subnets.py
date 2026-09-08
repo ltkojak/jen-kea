@@ -1,4 +1,3 @@
-import pytest
 
 
 class TestSaveSubnetNoteAccessControl:
@@ -208,6 +207,7 @@ print('ok')
 
     def test_both_modes_produce_valid_python(self):
         import ast
+
         from jen.routes.subnets import _build_subnet_patch_script
         for dry_run in (False, True):
             script = _build_subnet_patch_script(
@@ -222,7 +222,9 @@ print('ok')
         confirm via a real file hash that dry_run=True genuinely never
         touches the original config — the guarantee the whole preview
         feature depends on."""
-        import subprocess, hashlib, os
+        import hashlib
+        import os
+        import subprocess
         conf_path = tmp_path / "kea-dhcp4.conf"
         conf_path.write_text('{"Dhcp4": {"subnet4": [{"id": 5, "pools": [{"pool": "10.0.0.10-10.0.0.100"}]}]}}')
         original_hash = hashlib.md5(conf_path.read_bytes()).hexdigest()
@@ -251,7 +253,9 @@ print('ok')
         assert list(tmp_path.glob("*.jen_backup")) == []
 
     def test_dry_run_true_on_failing_test_also_never_writes(self, tmp_path):
-        import subprocess, hashlib, os
+        import hashlib
+        import os
+        import subprocess
         conf_path = tmp_path / "kea-dhcp4.conf"
         conf_path.write_text('{"Dhcp4": {"subnet4": [{"id": 5, "pools": [{"pool": "10.0.0.10-10.0.0.100"}]}]}}')
         original_hash = hashlib.md5(conf_path.read_bytes()).hexdigest()
@@ -357,8 +361,9 @@ class TestEditSubnetPreviewRoute:
         assert data["all_passed"] is True
 
     def test_ssh_test_pass_reports_ok(self, logged_in_client, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
         from jen import extensions
-        from unittest.mock import patch, MagicMock
         monkeypatch.setattr(extensions, "KEA_SERVERS",
                              [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
         monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data",
@@ -381,8 +386,9 @@ class TestEditSubnetPreviewRoute:
         assert data["servers"][0]["message"] == "Config test passed"
 
     def test_ssh_test_fail_reports_error_and_all_passed_false(self, logged_in_client, monkeypatch):
+        from unittest.mock import MagicMock, patch
+
         from jen import extensions
-        from unittest.mock import patch, MagicMock
         monkeypatch.setattr(extensions, "KEA_SERVERS",
                              [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
         monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data",
@@ -434,8 +440,8 @@ class TestGetSubnetKeaData:
     first whenever the edit form was submitted."""
 
     def test_returns_all_pools_for_multi_pool_subnet(self, monkeypatch):
-        from jen.services import kea as kea_svc
         from jen.routes import subnets as subnets_mod
+        from jen.services import kea as kea_svc
 
         fake_config = {
             "result": 0,
@@ -467,8 +473,8 @@ class TestGetSubnetKeaData:
         assert data["pool_str"] == "10.10.10.50 - 10.10.10.250"
 
     def test_single_pool_subnet_unaffected(self, monkeypatch):
-        from jen.services import kea as kea_svc
         from jen.routes import subnets as subnets_mod
+        from jen.services import kea as kea_svc
 
         fake_config = {
             "result": 0,

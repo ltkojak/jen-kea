@@ -6,7 +6,6 @@ recent leases, and dashboard stats.
 """
 
 import json
-import pytest
 
 
 class TestLeaseHistoryApi:

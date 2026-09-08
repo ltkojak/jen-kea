@@ -11,7 +11,6 @@ Pool is initialised lazily on first use so startup doesn't block if the
 DB is temporarily unavailable.
 """
 
-import json
 import logging
 import os
 import threading
@@ -324,8 +323,8 @@ def init_jen_db() -> None:
     CREATE TABLE or ALTER statements here; append a new numbered
     migration instead.
     """
-    from jen.models.user import hash_password       # local import avoids circular
     from jen.models.migrations import run_migrations
+    from jen.models.user import hash_password  # local import avoids circular
 
     os.makedirs("/etc/jen/ssl",  exist_ok=True)
     os.makedirs("/etc/jen/ssh",  exist_ok=True)

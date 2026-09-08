@@ -5,6 +5,7 @@ Tests for dashboard page and api/stats endpoint.
 """
 
 import json
+
 import pytest
 
 
@@ -88,15 +89,45 @@ class TestApiStats:
 
 class TestPrometheusMetrics:
     """v4.4.15: /metrics expanded from 2 metric families to 7. This
-    endpoint has no auth (by design, for scraper compatibility), so it's
-    reachable with a bare `client` fixture, not `logged_in_client`."""
+    endpoint never required Flask-Login session auth (by design, for
+    scraper compatibility) — that's still true — but as of v5.3.3 it
+    does require either a configured metrics_token or an explicit
+    metrics_open=true opt-in; neither configured means 401. Tests
+    whose actual focus is the metric OUTPUT (not the auth behavior
+    itself) use the metrics_open fixture below to get past that check
+    without needing to fabricate a token for every single test."""
 
-    def test_unauthenticated_access_allowed(self, client, mock_kea):
+    @pytest.fixture
+    def metrics_open(self, monkeypatch):
+        """Opts into the old default-open behavior for tests that are
+        actually about metric content/format, not about the access
+        control this class also tests directly."""
+        import configparser
+
+        from jen import extensions
+        test_cfg = configparser.ConfigParser()
+        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
+        if "server" not in test_cfg:
+            test_cfg["server"] = {}
+        test_cfg["server"]["metrics_open"] = "true"
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+
+    def test_default_denies_access_with_no_configuration(self, client, mock_kea):
+        """v5.3.3 — the actual behavior change: no metrics_token and no
+        metrics_open means denied, not the old wide-open default."""
+        r = client.get("/metrics")
+        assert r.status_code == 401
+
+    def test_metrics_open_true_restores_old_behavior_without_a_token(self, client, mock_kea, metrics_open):
+        """The explicit opt-out for someone who's already decided the
+        old default-open tradeoff is fine for their setup — confirms
+        this doesn't ALSO require Flask-Login session auth, just that
+        it's reachable at all once opted in."""
         r = client.get("/metrics")
         assert r.status_code == 200
         assert r.mimetype == "text/plain"
 
-    def test_output_is_valid_prometheus_exposition_format(self, client, mock_kea):
+    def test_output_is_valid_prometheus_exposition_format(self, client, mock_kea, metrics_open):
         r = client.get("/metrics")
         text = r.data.decode()
         # Every metric line must be preceded by its own HELP and TYPE
@@ -108,7 +139,7 @@ class TestPrometheusMetrics:
             assert f"# HELP {family}" in text, f"missing HELP for {family}"
             assert f"# TYPE {family}" in text, f"missing TYPE for {family}"
 
-    def test_alerts_sent_total_is_declared_a_counter(self, client, mock_kea):
+    def test_alerts_sent_total_is_declared_a_counter(self, client, mock_kea, metrics_open):
         # The one genuinely-monotonic metric here — everything else is a
         # gauge. Getting this TYPE line wrong would make Grafana's
         # rate()/increase() panels silently misbehave.
@@ -116,14 +147,15 @@ class TestPrometheusMetrics:
         text = r.data.decode()
         assert "# TYPE jen_alerts_sent_total counter" in text
 
-    def test_server_up_reflects_mock_kea_server(self, client, mock_kea):
+    def test_server_up_reflects_mock_kea_server(self, client, mock_kea, metrics_open):
         r = client.get("/metrics")
         text = r.data.decode()
         assert 'jen_server_up{server="Test Kea"} 1' in text
 
     def test_token_protection_when_configured(self, client, mock_kea, monkeypatch):
-        from jen import extensions
         import configparser
+
+        from jen import extensions
         test_cfg = configparser.ConfigParser()
         test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
         test_cfg["server"] = {"metrics_token": "s3cret"}
@@ -138,7 +170,7 @@ class TestPrometheusMetrics:
         r_right_token = client.get("/metrics", headers={"Authorization": "Bearer s3cret"})
         assert r_right_token.status_code == 200
 
-    def test_survives_kea_down(self, client, monkeypatch):
+    def test_survives_kea_down(self, client, monkeypatch, metrics_open):
         from jen.services import kea as kea_svc
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
         monkeypatch.setattr(kea_svc, "kea_command",

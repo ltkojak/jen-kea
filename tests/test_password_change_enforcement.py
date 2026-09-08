@@ -15,7 +15,6 @@ the flag correctly propagates via the existing session-cache
 invalidation already used for password changes.
 """
 
-import json
 from datetime import datetime, timezone
 
 from jen.models.user import hash_password
@@ -55,6 +54,7 @@ class TestDefaultAdminSeedSetsFlag:
         the test DB never is once conftest has run once. Confirms the
         actual INSERT text sets the flag, rather than assuming."""
         import inspect
+
         import jen.models.db as db_module
         source = inspect.getsource(db_module.init_jen_db)
         assert "must_change_password" in source
@@ -242,6 +242,7 @@ class TestGeneralChangePasswordSqlAlsoClearsFlag:
 
     def test_change_password_update_statement_clears_flag(self):
         import inspect
+
         import jen.routes.users as users_module
         source = inspect.getsource(users_module.change_password)
         assert "must_change_password=0" in source, (

@@ -4,38 +4,31 @@ jen/routes/settings.py
 All Settings routes.
 """
 
-import hashlib
-import io
 import json
 import logging
-import requests
 import os
 import re
-import secrets
 import subprocess
 import threading
-from datetime import datetime, timezone
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
-from flask import (Blueprint, Response, flash, jsonify, redirect,
-                   render_template, request, send_from_directory,
-                   session, url_for)
-from flask_login import current_user, login_required, login_user, logout_user
+import requests
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
 
-from jen import extensions
-from jen.config import init_extensions_from_config, load_config, AppConfig
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.alerts as __alerts
+import jen.services.auth as __auth
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
-import jen.services.alerts as __alerts
-from jen.services.alerts import DEFAULT_TEMPLATES, ALERT_TYPE_LABELS
-import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
-import jen.services.auth as __auth
-
+from jen import extensions
+from jen.config import AppConfig
+from jen.services.access import admin_required as _admin_required
+from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("settings", __name__)
@@ -1169,7 +1162,8 @@ def save_extra_servers():
             n += 1
         # Add new ones
         for i, (name, role, api_url, api_user, api_pass, ssh_host, ssh_user, kea_conf) in enumerate(
-            zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs), start=2
+            zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs, strict=True),
+            start=2
         ):
             if not api_url.strip():
                 continue
@@ -1192,7 +1186,18 @@ def save_extra_servers():
             cfg.set(sec, "ssh_user", ssh_user.strip())
             cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
 
-    __config.app_config.mutate(_rewrite_extra_servers)
+    try:
+        __config.app_config.mutate(_rewrite_extra_servers)
+    except ValueError as e:
+        # strict=True on the zip() inside _rewrite_extra_servers means a
+        # form submission whose extra_*[] fields don't all have the same
+        # number of entries — malformed or tampered, since Jen's own
+        # template always submits all eight together per server row —
+        # raises here instead of silently truncating to the shortest
+        # list and misaligning one server's fields with another's.
+        logger.error(f"Mismatched extra-server form field lengths: {e}")
+        flash("Could not save additional servers — form data was inconsistent. Please try again.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
 
     count = len(extensions.KEA_SERVERS) - 1
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
@@ -1660,7 +1665,6 @@ def save_nav_color():
     # Accept value from either the color picker or the text field
     color = request.form.get("nav_color_hex", "").strip() or request.form.get("nav_color", "").strip()
     # Validate — must be empty or a valid hex color
-    import re
     if color and not re.match(r'^#[0-9a-fA-F]{3,6}$', color):
         flash("Invalid color value. Use a hex code like #1a1a2a.", "error")
         return redirect(url_for('settings.settings_system'))
@@ -1682,6 +1686,7 @@ GITHUB_RELEASES_API  = f"https://api.github.com/repos/{GITHUB_REPO}/releases/lat
 def check_update():
     """Check GitHub releases API for a newer version of Jen."""
     import requests as _req
+
     from jen import JEN_VERSION
     try:
         resp = _req.get(
@@ -1701,7 +1706,7 @@ def check_update():
 
         def _ver(v):
             try: return tuple(int(x) for x in v.split(".")[:3])
-            except: return (0,0,0)
+            except Exception: return (0,0,0)
 
         if _ver(latest_tag) > _ver(JEN_VERSION):
             # Find the tarball asset

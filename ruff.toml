@@ -1,0 +1,53 @@
+# ruff.toml
+# ─────────
+# v5.3.3 — Ruff added to this project for the first time, per a
+# third-party review's recommendation. Deliberately kept as a
+# standalone config file rather than a [tool.ruff] section inside a
+# new pyproject.toml: dependency management (pyproject.toml +
+# lockfile as the actual source of truth for install.sh/Docker/CI) is
+# a separate, larger piece of work this project has intentionally
+# deferred — this file exists purely for lint/format configuration and
+# shouldn't be conflated with that later effort. If/when a
+# pyproject.toml is introduced for dependencies, this config can move
+# into it at that time.
+
+target-version = "py310"
+line-length = 120
+
+# legacy/jen.py is explicitly documented (see its own header comment)
+# as the pre-v2.6.0 monolith, retained for reference only and never
+# imported or executed by the live application. Linting it would only
+# add noise for a file nobody should be actively maintaining, and
+# could mask real findings in the active jen/ package underneath that
+# noise.
+exclude = ["legacy"]
+
+# This is an existing, actively-used codebase being linted for the
+# first time, not a greenfield project — the goal is catching real
+# mistakes (dead imports, undefined names, obvious bugs) and keeping
+# formatting consistent going forward, not retroactively imposing a
+# strict style regime that would force rewriting working code purely
+# for compliance. Rule selection is deliberately conservative:
+#   F   — pyflakes: unused imports/variables, undefined names, etc.
+#   E/W — pycodestyle: whitespace, basic style consistency
+#   I   — isort: import ordering
+#   UP  — pyupgrade: modernize syntax for the target Python version
+#   B   — bugbear: common real bugs (mutable default args, bare
+#         except, etc.) that aren't already covered by pyflakes
+[lint]
+select = ["F", "E", "W", "I", "UP", "B"]
+ignore = [
+    "E501",   # line-too-long — line-length above is a soft target for
+              # new/reformatted code, not a hard gate on 10k+ existing
+              # lines; letting the formatter (not manual rewrapping)
+              # handle this over time avoids a wall of unrelated diffs
+    "B008",   # function calls in default arguments — Flask route
+              # decorators and similar patterns in this codebase rely
+              # on this and it isn't a real bug in that context
+]
+
+[lint.isort]
+known-first-party = ["jen"]
+
+[format]
+quote-style = "double"

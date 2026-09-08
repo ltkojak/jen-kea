@@ -4,34 +4,15 @@ jen/routes/reports.py
 Reports routes.
 """
 
-import hashlib
-import io
-import json
 import logging
-import os
-import re
-import secrets
-import subprocess
-import threading
-from datetime import datetime, timezone
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
-from flask import (Blueprint, Response, flash, jsonify, redirect,
-                   render_template, request, send_from_directory,
-                   session, url_for)
-from flask_login import current_user, login_required, login_user, logout_user
+from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
 
-from jen import extensions
-from jen.config import init_extensions_from_config, load_config
-import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
-import jen.services.kea as __kea
-import jen.services.alerts as __alerts
-import jen.services.fingerprint as __fp
-import jen.services.mfa as __mfa
-import jen.services.auth as __auth
-
+from jen import extensions
+from jen.services.access import admin_required as _admin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reports", __name__)

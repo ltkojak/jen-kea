@@ -5,12 +5,10 @@ Alert channel management: templates, sending, and the background
 check_alerts loop that monitors Kea health and HA state.
 """
 
-import json
+import html
 import logging
 import re
-import threading
 import time
-import html
 
 import requests
 
@@ -385,8 +383,8 @@ def _send_telegram_channel(message, config):
 
 def _send_email_channel(message, alert_type, config):
     import smtplib
-    from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
     host = config.get("smtp_host", "")
     port = int(config.get("smtp_port", 587))
     user = config.get("smtp_user", "")
@@ -396,7 +394,6 @@ def _send_email_channel(message, alert_type, config):
     if not host or not to_addr:
         return False
     # Strip HTML tags for email subject, keep for body
-    import re
     subject_text = re.sub(r'<[^>]+>', '', message.split('\n')[0])
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Jen Alert: {subject_text}"
@@ -422,7 +419,6 @@ def _send_slack_channel(message, config):
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
         return False
-    import re
     import html
     # Convert HTML bold to Slack bold
     slack_text = message.replace('<b>', '*').replace('</b>', '*')
@@ -441,7 +437,6 @@ def _send_webhook_channel(message, alert_type, config):
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
         return False
-    import re
     import html
     # v5.1.15 — same unescape-for-plain-text reasoning as Slack/ntfy/
     # Discord. The "html" field below intentionally keeps the raw
@@ -464,7 +459,6 @@ def _send_webhook_channel(message, alert_type, config):
 
 def _send_ntfy_channel(message, config):
     """Send alert via ntfy.sh or self-hosted ntfy."""
-    import re
     import html
     url = config.get("url", "https://ntfy.sh").rstrip("/")
     topic = config.get("topic", "")
@@ -488,7 +482,6 @@ def _send_ntfy_channel(message, config):
 
 def _send_pushover_channel(message, config):
     """Send alert via Pushover."""
-    import re
     user_key = config.get("user_key", "")
     api_token = config.get("api_token", "")
     if not user_key or not api_token:
@@ -516,7 +509,6 @@ def _send_pushover_channel(message, config):
 
 def _send_discord_channel(message, config):
     """Send alert via Discord webhook."""
-    import re
     import html
     webhook_url = config.get("webhook_url", "")
     if not webhook_url:
@@ -550,7 +542,7 @@ def take_lease_snapshot():
 
                 with kdb.cursor() as kcur:
                     with jdb.cursor() as jcur:
-                        for subnet_id, info in extensions.SUBNET_MAP.items():
+                        for subnet_id, _info in extensions.SUBNET_MAP.items():
                             kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
                             active = kcur.fetchone()["cnt"]
                             kcur.execute("""

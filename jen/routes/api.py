@@ -9,15 +9,14 @@ import logging
 import secrets
 from datetime import datetime
 
-from flask import (Blueprint, jsonify, redirect, render_template,
-                   request, session, url_for, flash)
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
 from jen import extensions
-from jen.models.db import get_jen_db, get_kea_db, jen_db, kea_db
+from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
 from jen.services.fingerprint import get_device_info_map
-from jen.services.kea import kea_command, kea_is_up, get_active_kea_server
+from jen.services.kea import get_active_kea_server, kea_command, kea_is_up
 
 bp = Blueprint("api", __name__)
 

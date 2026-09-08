@@ -86,8 +86,8 @@ def _run_audit_cleanup(app):
     """Called at 00:05 daily — prune audit_log based on retention setting."""
     with app.app_context():
         try:
-            from jen.models import user as __user
             from jen.models import db as __db
+            from jen.models import user as __user
             days_str = __user.get_global_setting("audit_retention_days", "90")
             days = int(days_str) if days_str else 90
             if days <= 0:

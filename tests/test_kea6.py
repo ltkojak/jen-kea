@@ -23,7 +23,6 @@ from jen import extensions
 from jen.config import AppConfig
 from jen.models import migrations as migrations_module
 
-
 # ── SUBNET6_MAP derivation ──────────────────────────────────────────────────
 
 class TestDeriveSubnet6Map:
@@ -168,14 +167,14 @@ class TestKea6ConfigFallback:
 class TestIsIpv6Enabled:
 
     def test_defaults_false(self, db):
-        from jen.services.kea6 import is_ipv6_enabled
         from jen.models.user import _invalidate_settings_cache
+        from jen.services.kea6 import is_ipv6_enabled
         _invalidate_settings_cache()
         assert is_ipv6_enabled() is False
 
     def test_true_after_setting_flipped(self, db):
-        from jen.services.kea6 import is_ipv6_enabled
         from jen.models.user import set_global_setting
+        from jen.services.kea6 import is_ipv6_enabled
         set_global_setting("ipv6_enabled", "true")
         try:
             assert is_ipv6_enabled() is True
@@ -189,10 +188,11 @@ class TestIsIpv6Enabled:
             raise RuntimeError("db unreachable")
         monkeypatch.setattr(user_module, "get_global_setting", boom)
 
-        from jen.services import kea6 as kea6_module
         # is_ipv6_enabled imports get_global_setting locally, so patch via
         # the module it's imported from at call time.
         import importlib
+
+        from jen.services import kea6 as kea6_module
         importlib.reload(kea6_module)
         monkeypatch.setattr(user_module, "get_global_setting", boom)
         assert kea6_module.is_ipv6_enabled() is False
@@ -400,8 +400,8 @@ class TestToggleIpv6Route:
         resp = c.post("/settings/infrastructure/toggle-ipv6",
                       data={"enable": "true"}, follow_redirects=False)
         assert resp.status_code == 302  # redirected away, access denied
-        from jen.services.kea6 import is_ipv6_enabled
         from jen.models.user import _invalidate_settings_cache
+        from jen.services.kea6 import is_ipv6_enabled
         _invalidate_settings_cache()
         assert is_ipv6_enabled() is False
 
@@ -411,8 +411,8 @@ class TestToggleIpv6Route:
         resp = logged_in_client.post("/settings/infrastructure/toggle-ipv6",
                                      data={"enable": "true"}, follow_redirects=False)
         assert resp.status_code == 302
-        from jen.services.kea6 import is_ipv6_enabled
         from jen.models.user import _invalidate_settings_cache
+        from jen.services.kea6 import is_ipv6_enabled
         _invalidate_settings_cache()
         assert is_ipv6_enabled() is False
 
@@ -447,7 +447,7 @@ class TestToggleIpv6Route:
 
     def test_disable_always_flips_flag_off_even_on_partial_failure(self, logged_in_client, monkeypatch, db):
         import jen.services.kea6 as kea6_module
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "KEA_SERVERS",
                             [{"id": 1, "name": "s1", "ssh_host": "1.2.3.4"}])
@@ -494,7 +494,7 @@ class TestSettingsInfrastructureTemplate:
         assert b"Kea6 Control Agent API" not in resp.data
 
     def test_enabled_state_shows_disable_button(self, logged_in_client, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         try:
             _invalidate_settings_cache()
@@ -760,7 +760,7 @@ class TestKea6DbPooling:
 class TestLeasesV6View:
 
     def test_segmented_control_absent_when_no_v6_subnets(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         try:
@@ -780,7 +780,7 @@ class TestLeasesV6View:
         assert b"segmented-control" not in resp.data
 
     def test_segmented_control_present_when_enabled_and_configured(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         try:
@@ -844,7 +844,7 @@ class TestSubnetsV6View:
         assert b"2001:db8::/64" not in resp.data
 
     def test_unpaired_v6_subnet_renders_standalone_card(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -858,7 +858,7 @@ class TestSubnetsV6View:
             set_global_setting("ipv6_enabled", "false")
 
     def test_paired_v6_subnet_nests_under_v4_card(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET_MAP",
                             {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
@@ -977,8 +977,8 @@ class TestListLease6Devices:
         """DUID-LL with a real Apple OUI prefix should resolve a
         manufacturer via the existing fingerprint.lookup_oui table."""
         import jen.models.db as db_mod
-        from jen.services.kea6 import list_lease6_devices
         from jen.services import fingerprint as fp
+        from jen.services.kea6 import list_lease6_devices
         monkeypatch.setattr(db_mod, "get_kea6_db", lambda: db)
         monkeypatch.setattr(db, "close", lambda: None)
         # Pick a real OUI prefix from the loaded DB so this test doesn't
@@ -1134,7 +1134,7 @@ class TestDashboardV6Summary:
 
     def test_returns_none_when_no_v6_subnets(self, monkeypatch, db):
         import jen.routes.dashboard as dashboard_module
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         try:
@@ -1145,7 +1145,7 @@ class TestDashboardV6Summary:
 
     def test_returns_counts_when_enabled_and_configured(self, monkeypatch, db):
         import jen.routes.dashboard as dashboard_module
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {9: {"name": "V6LAN", "cidr": "2001:db8:9::/64", "paired_subnet4_id": None}})
@@ -1169,7 +1169,7 @@ class TestDashboardV6Summary:
     def test_returns_none_on_error_rather_than_partial_counts(self, monkeypatch, db):
         import jen.routes.dashboard as dashboard_module
         import jen.services.kea6 as kea6_module
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1191,7 +1191,7 @@ class TestDashboardV6Summary:
         assert b"IPv4 only" in resp.data
 
     def test_dashboard_shows_ipv6_card_when_enabled(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1625,7 +1625,6 @@ class TestEditSubnet6PostRoute:
         assert resp.status_code == 302
 
     def test_successful_apply_restarts_kea6(self, logged_in_client, monkeypatch):
-        import jen.routes.subnets as subnets_module
         import jen.services.kea6 as kea6_module
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1714,7 +1713,7 @@ class TestGlobalSearchV6:
         assert b"IPv6 Reservations" not in resp.data
 
     def test_v6_lease_found_when_enabled_superadmin(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1738,7 +1737,7 @@ class TestGlobalSearchV6:
             set_global_setting("ipv6_enabled", "false")
 
     def test_v6_reservation_found_when_enabled(self, logged_in_client, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1768,8 +1767,8 @@ class TestGlobalSearchV6:
         """A restricted (non-all_subnets) user must not see results from
         an unpaired v6 subnet — there's no v4 subnet to inherit access
         from, so it's admin/all_subnets-only, not guessed at."""
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         from tests.conftest import restricted_client
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {5: {"name": "Unpaired", "cidr": "2001:db8:5::/64", "paired_subnet4_id": None}})
@@ -1796,8 +1795,8 @@ class TestGlobalSearchV6:
             set_global_setting("ipv6_enabled", "false")
 
     def test_paired_v6_subnet_visible_to_user_with_v4_access(self, client, db, monkeypatch):
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         from tests.conftest import restricted_client
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
@@ -1846,8 +1845,8 @@ class TestPrometheusMetricsV6:
         assert "# TYPE jen_kea6_up" not in text
 
     def test_v6_subnet_metrics_present_when_enabled_and_configured(self, client, mock_kea, monkeypatch, db):
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
         import jen.services.kea6 as kea6_module
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1879,7 +1878,7 @@ class TestPrometheusMetricsV6:
         from Phase 0/1): no finite comparable 'pool size' concept for a
         /64, so no jen_subnet6_pool_size/utilization_ratio metric exists
         at all — confirm that omission is intentional, not a bug."""
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1896,7 +1895,7 @@ class TestPrometheusMetricsV6:
         """Zero behavior change for the v4 path — every existing metric
         family must still be present and correctly formatted regardless
         of the v6 state."""
-        from jen.models.user import set_global_setting, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -2245,7 +2244,7 @@ class TestSubnetsToLines:
         """What gets rendered for the textarea must parse back to the
         exact same subnet dict — the wizard's pre-fill and its own
         submission must agree on the format."""
-        from jen.routes.settings import _subnets_to_lines, _parse_subnet_lines
+        from jen.routes.settings import _parse_subnet_lines, _subnets_to_lines
         original = {1: {"name": "LAN6", "cidr": "2001:db8::/64", "paired_subnet4_id": 3}}
         lines = _subnets_to_lines(original, "dhcp6")
         parsed, error = _parse_subnet_lines(lines, "dhcp6")
@@ -2470,9 +2469,10 @@ class TestMissingBinaryScriptHandling:
         """Guard against the fix itself introducing a syntax error into
         the script that actually runs on the remote Kea server."""
         import ast
-        from jen.services.kea_authoring import render_author_config_script
-        from jen.services.kea6 import build_subnet6_patch_script
+
         import jen.routes.subnets as subnets_module
+        from jen.services.kea6 import build_subnet6_patch_script
+        from jen.services.kea_authoring import render_author_config_script
 
         scripts = [
             render_author_config_script("dhcp6", "/x", {"Dhcp6": {}}, False, True),
@@ -2616,8 +2616,8 @@ class TestAuthorKeaConfigPostRoute:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})  # nothing in Jen yet
         fake_ssh = FakeSSHClient([("ok", "")])
-        import jen.services.kea6 as kea6_module
         import jen.routes.settings as settings_module
+        import jen.services.kea6 as kea6_module
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
         captured = {}
         monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config",
@@ -2636,8 +2636,8 @@ class TestAuthorKeaConfigPostRoute:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         fake_ssh = FakeSSHClient([("testerror:bad", "")])
-        import jen.services.kea6 as kea6_module
         import jen.routes.settings as settings_module
+        import jen.services.kea6 as kea6_module
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
         called = {"count": 0}
         monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config",
@@ -2655,8 +2655,8 @@ class TestAuthorKeaConfigPostRoute:
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
         fake_ssh = FakeSSHClient([("ok", "")])
-        import jen.services.kea6 as kea6_module
         import jen.routes.settings as settings_module
+        import jen.services.kea6 as kea6_module
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
         monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config", lambda d: None)
         resp = logged_in_client.post("/settings/infrastructure/author-kea/dhcp6", data={
@@ -2691,8 +2691,8 @@ class TestZeroBehaviorChange:
     or not [kea6]/[subnets6] are present in config at all."""
 
     def test_disabled_by_default_regardless_of_kea6_presence(self, db):
-        from jen.services.kea6 import is_ipv6_enabled
         from jen.models.user import _invalidate_settings_cache
+        from jen.services.kea6 import is_ipv6_enabled
         _invalidate_settings_cache()
         assert is_ipv6_enabled() is False
 
@@ -2735,8 +2735,8 @@ class TestZeroBehaviorChange:
         monkeypatch.setattr(kea_module, "http", type("X", (), {
             "post": fail_if_called
         }))
-        from jen.services.kea6 import is_ipv6_enabled
         from jen.models.user import _invalidate_settings_cache
+        from jen.services.kea6 import is_ipv6_enabled
         _invalidate_settings_cache()
         if not is_ipv6_enabled():
             pass  # a real route would return here without calling kea6_command

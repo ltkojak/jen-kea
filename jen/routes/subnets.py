@@ -4,35 +4,22 @@ jen/routes/subnets.py
 Subnet view and editing routes.
 """
 
-import hashlib
-import io
 import json
 import logging
 import os
 import re
-import secrets
-import subprocess
-import threading
-from datetime import datetime, timezone
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
-from flask import (Blueprint, Response, flash, jsonify, redirect,
-                   render_template, request, send_from_directory,
-                   session, url_for)
-from flask_login import current_user, login_required, login_user, logout_user
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
 
-from jen import extensions
-from jen.config import init_extensions_from_config, load_config
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.auth as __auth
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
-import jen.services.alerts as __alerts
-import jen.services.fingerprint as __fp
-import jen.services.mfa as __mfa
-import jen.services.auth as __auth
-
+from jen import extensions
+from jen.services.access import admin_required as _admin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("subnets", __name__)
@@ -385,7 +372,7 @@ def add_subnet_post():
         return redirect(url_for('subnets.add_subnet'))
 
     # Check for CIDR overlap against every subnet Jen already knows about
-    for sid, info in extensions.SUBNET_MAP.items():
+    for _sid, info in extensions.SUBNET_MAP.items():
         try:
             existing_net = ipaddress.IPv4Network(info["cidr"], strict=False)
             if network.overlaps(existing_net):
@@ -435,6 +422,7 @@ def add_subnet_post():
             continue
         try:
             import base64
+
             import paramiko
             ssh = paramiko.SSHClient()
             __auth.paramiko_load_known_hosts(ssh)
@@ -591,6 +579,7 @@ def delete_subnet(subnet_id):
             continue
         try:
             import base64
+
             import paramiko
             ssh = paramiko.SSHClient()
             __auth.paramiko_load_known_hosts(ssh)
@@ -847,6 +836,7 @@ def edit_subnet_preview(subnet_id):
         name = server.get("name", server["ssh_host"])
         try:
             import base64
+
             import paramiko
             ssh = paramiko.SSHClient()
             __auth.paramiko_load_known_hosts(ssh)
@@ -922,6 +912,7 @@ def edit_subnet_post(subnet_id):
             continue
         try:
             import base64
+
             import paramiko
             ssh = paramiko.SSHClient()
             __auth.paramiko_load_known_hosts(ssh)

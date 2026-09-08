@@ -36,11 +36,10 @@ import threading
 from flask import Flask, redirect, request
 from werkzeug.serving import make_server
 
-from jen import JEN_VERSION, create_app
-from jen import extensions
+from jen import JEN_VERSION, create_app, extensions
 from jen.config import ssl_configured
-from jen.services.alerts import check_alerts
 from jen.logging_config import configure_logging
+from jen.services.alerts import check_alerts
 
 
 def _build_config_from_env():
@@ -164,7 +163,19 @@ def main():
         cert = extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) \
                else extensions.SSL_CERT
         ssl_ctx.load_cert_chain(cert, extensions.SSL_KEY)
-        https_server = make_server("0.0.0.0", HTTPS_PORT, app, ssl_context=ssl_ctx)
+        # threaded=True (v5.3.3 fix) — without it, werkzeug's
+        # make_server() handles exactly one request at a time, across
+        # every single user of the app. One slow request (a SSH-backed
+        # config apply, a slow Kea API call) blocks every other
+        # concurrent user, including basic page loads, until it
+        # finishes. This doesn't turn Jen into a multi-process
+        # production server — that's a larger, deliberate migration to
+        # gunicorn, tracked separately, since it needs to solve the
+        # background alert thread firing once per worker process
+        # rather than once total — but it does fix the specific,
+        # acute symptom of the app appearing to hang under even light
+        # concurrent use.
+        https_server = make_server("0.0.0.0", HTTPS_PORT, app, ssl_context=ssl_ctx, threaded=True)
         http_redirect = Flask("http_redirect")
 
         @http_redirect.route("/", defaults={"path": ""})
@@ -173,13 +184,18 @@ def main():
             host = request.host.split(":")[0]
             return redirect(f"https://{host}:{HTTPS_PORT}/{path}", code=301)
 
-        http_server = make_server("0.0.0.0", HTTP_PORT, http_redirect)
+        http_server = make_server("0.0.0.0", HTTP_PORT, http_redirect, threaded=True)
         t1 = threading.Thread(target=https_server.serve_forever, daemon=True)
         t2 = threading.Thread(target=http_server.serve_forever, daemon=True)
         t1.start(); t2.start(); t1.join()
     else:
         print(f"Jen v{JEN_VERSION} — HTTP only, port {HTTP_PORT}")
-        app.run(host="0.0.0.0", port=HTTP_PORT, debug=False)
+        # threaded=True — same fix and same reasoning as the HTTPS
+        # path above; Flask's app.run() defaults to single-threaded
+        # too, and this is the path taken whenever SSL isn't
+        # configured, so it needs the identical fix, not just the
+        # HTTPS branch.
+        app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":

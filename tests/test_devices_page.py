@@ -11,7 +11,6 @@ either a working "Create reservation" link or a disabled "Reservation
 exists" label — never an omitted icon.
 """
 
-import pytest
 
 
 def _insert_device(db, mac_hex="aabbccddee01", last_ip="10.10.10.50", subnet_id=None):

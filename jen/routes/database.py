@@ -10,23 +10,20 @@ Menu item hidden for non-superadmin users in base.html.
 """
 
 import gzip
-import io
 import json
 import logging
 import os
 import queue
 import threading
 from datetime import datetime
-from jen.services.access import superadmin_required as _superadmin_required
 
-from flask import (Blueprint, Response, flash, redirect, render_template,
-                   request, stream_with_context, url_for)
-from flask_login import current_user, login_required
+from flask import Blueprint, Response, flash, redirect, render_template, request, stream_with_context, url_for
+from flask_login import login_required
 
 from jen import extensions
-from jen.models import db as __db
 from jen.models import user as __user
 from jen.services import dbexport
+from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("database", __name__)
@@ -180,7 +177,8 @@ def import_inspect():
         flash(f"Cannot read file: {err}", "error")
         return redirect(url_for("database.database", tab="export"))
     # Store bytes in session-style temp file for the confirm step
-    import tempfile, base64
+    import base64
+    import tempfile
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz",
                                      dir="/tmp", prefix="jen_import_")
     tmp.write(file_bytes)
@@ -199,7 +197,7 @@ def import_inspect():
 @login_required
 @_superadmin_required
 def import_confirm():
-    import base64, tempfile
+    import base64
     tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
     # Validate path is within the expected temp directory — prevent path traversal
     if not tmp_path or not tmp_path.startswith("/tmp/jen_import_") or not os.path.isfile(tmp_path):

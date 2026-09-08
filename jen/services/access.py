@@ -16,9 +16,9 @@ Import decorators from here rather than defining them per-route-file.
 """
 
 from functools import wraps
+
 from flask import flash, redirect, url_for
 from flask_login import current_user
-
 
 # ── Role check helpers ────────────────────────────────────────────────────────
 

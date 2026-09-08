@@ -12,20 +12,18 @@ Usage:
 import logging
 import os
 from datetime import datetime, timezone
-from functools import wraps
 
 from flask import Flask, flash, redirect, request, session, url_for
-from flask_login import (LoginManager, current_user, login_required,
-                         logout_user)
+from flask_login import LoginManager, current_user, logout_user
 
 from jen import extensions
 from jen.config import app_config, ssl_configured
-from jen.models.user import User, audit, get_global_setting
+from jen.models.user import User, get_global_setting
 from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.3.2"
+JEN_VERSION = "5.3.3"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -50,8 +48,8 @@ def create_app() -> Flask:
 
     # ── Flask app ─────────────────────────────────────────────────────────────
     app = Flask(__name__,
-                static_folder="/opt/jen/static",
-                template_folder="/opt/jen/templates")
+                static_folder=extensions.STATIC_DIR,
+                template_folder=extensions.TEMPLATE_DIR)
     app.secret_key = _load_secret_key()
 
     # ── Session cookie hardening (v4.4.2) ─────────────────────────────────────
@@ -110,6 +108,7 @@ def create_app() -> Flask:
     @login_manager.user_loader
     def load_user(user_id):
         from flask import g as _g
+
         from jen.models.db import jen_db
 
         # Fast path: check g cache first (within same request)
@@ -193,6 +192,7 @@ def create_app() -> Flask:
     @app.before_request
     def _time_request_start():
         import time
+
         from flask import g
         g._request_start = time.time()
         g._after_load_user = time.time()  # overwritten by load_user
@@ -200,6 +200,7 @@ def create_app() -> Flask:
     @app.after_request
     def _time_request_end(response):
         import time
+
         from flask import g
         if hasattr(g, '_request_start') and not request.path.startswith('/static/'):
             elapsed = (time.time() - g._request_start) * 1000
@@ -418,9 +419,22 @@ def create_app() -> Flask:
     @app.errorhandler(Exception)
     def handle_exception(e):
         from flask import render_template
+        # v5.3.3 fix — this previously interpolated the raw exception
+        # into the user-facing message (f"An error occurred: {e}"),
+        # which is exactly the class of leak the entire
+        # tests/test_no_raw_exception_leaks.py effort (v5.2.14) exists
+        # to prevent — missed here specifically because that scanner
+        # only checked flash()/jsonify()/api_error() call patterns,
+        # never a message built from an interpolated exception string,
+        # since this is a single global catch-all rather than a
+        # per-route pattern. Full traceback still goes to the server
+        # log via logger.exception() below — nothing about debugging
+        # capability is lost, only what reaches the browser. Matches
+        # the same generic-message convention the 404 and explicit 500
+        # handlers right above this one already correctly use.
         logger.exception(f"Unhandled exception: {e}")
         return render_template("error.html", code=500,
-                               message=f"An error occurred: {e}"), 500
+                               message="An unexpected error occurred. Check server logs for details."), 500
 
     # ── Favicon ───────────────────────────────────────────────────────────────
     @app.route("/favicon.ico")
@@ -434,7 +448,7 @@ def create_app() -> Flask:
     _register_blueprints(app)
 
     # ── Plugin loader — after core blueprints, before DB init ─────────────────
-    from jen.services.plugins import load_plugins, get_nav_items
+    from jen.services.plugins import get_nav_items, load_plugins
     load_plugins(app)
 
     # ── Plugin nav injection context processor ────────────────────────────────
@@ -476,22 +490,22 @@ def create_app() -> Flask:
 
 def _register_blueprints(app: Flask) -> None:
     """Import and register all route blueprints."""
-    from jen.routes.api       import bp as api_bp
-    from jen.routes.auth      import bp as auth_bp
+    from jen.routes.api import bp as api_bp
+    from jen.routes.auth import bp as auth_bp
     from jen.routes.dashboard import bp as dashboard_bp
-    from jen.routes.database  import bp as database_bp
-    from jen.routes.ddns      import bp as ddns_bp
-    from jen.routes.devices   import bp as devices_bp
-    from jen.routes.leases    import bp as leases_bp
+    from jen.routes.database import bp as database_bp
+    from jen.routes.ddns import bp as ddns_bp
+    from jen.routes.devices import bp as devices_bp
+    from jen.routes.leases import bp as leases_bp
     from jen.routes.mfa_routes import bp as mfa_bp
-    from jen.routes.plugins   import bp as plugins_bp
-    from jen.routes.reports   import bp as reports_bp
+    from jen.routes.plugins import bp as plugins_bp
+    from jen.routes.reports import bp as reports_bp
     from jen.routes.reservations import bp as reservations_bp
-    from jen.routes.search    import bp as search_bp
-    from jen.routes.servers   import bp as servers_bp
-    from jen.routes.settings  import bp as settings_bp
-    from jen.routes.subnets   import bp as subnets_bp
-    from jen.routes.users     import bp as users_bp
+    from jen.routes.search import bp as search_bp
+    from jen.routes.servers import bp as servers_bp
+    from jen.routes.settings import bp as settings_bp
+    from jen.routes.subnets import bp as subnets_bp
+    from jen.routes.users import bp as users_bp
 
     for blueprint in [
         api_bp, auth_bp, dashboard_bp, database_bp, ddns_bp, devices_bp,
@@ -511,7 +525,7 @@ def _load_secret_key() -> str:
     session on every single restart, which is a confusing "why do I keep
     getting logged out" bug for the person running this (v4.4.2).
     """
-    candidates = ["/etc/jen/secret_key", "/opt/jen/.secret_key"]
+    candidates = ["/etc/jen/secret_key", os.path.join(extensions.JEN_ROOT, ".secret_key")]
     for key_file in candidates:
         try:
             if os.path.exists(key_file):
@@ -534,6 +548,6 @@ def _load_secret_key() -> str:
         "ephemeral in-memory key — EVERY user will be logged out on the next "
         "restart of this process, and this will repeat every restart until "
         "the permissions issue is fixed. Check that www-data can write to "
-        "/etc/jen or /opt/jen.", " or ".join(candidates)
+        "either of these paths.", " or ".join(candidates)
     )
     return os.urandom(32).hex()

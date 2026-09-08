@@ -16,7 +16,6 @@ established for htmx.min.js — confirmed here rather than assumed.
 """
 
 import pathlib
-import pytest
 
 
 class TestReportsChartJsVendoring:

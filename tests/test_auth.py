@@ -4,7 +4,6 @@ tests/test_auth.py
 Tests for login, logout, session handling, and rate limiting.
 """
 
-import pytest
 
 
 class TestLogin:

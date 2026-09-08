@@ -7,7 +7,6 @@ Pytest fixtures shared across all test modules.
 import configparser
 import os
 import sys
-import time
 from datetime import datetime, timezone
 
 import pymysql
@@ -207,12 +206,12 @@ def _patch_extensions():
 @pytest.fixture(scope="session", autouse=True)
 def test_database():
     _patch_extensions()
-    from jen.models.db import reset_pools, init_jen_db
+    import jen
 
     # Fix 1: patch ssl_configured to always return False in tests
     # so redirect_to_https never fires a 301
     import jen.config as jen_config
-    import jen
+    from jen.models.db import init_jen_db, reset_pools
     jen_config.ssl_configured = lambda: False
     # Also patch the cached version in __init__
     jen._ssl_configured_cache = False
@@ -298,7 +297,7 @@ def clean_tables(db):
         cur.execute("DELETE FROM saved_searches")
         cur.execute("DELETE FROM alert_channels")
         cur.execute("DELETE FROM alert_log")
-        from jen.models.user import hash_password, _invalidate_settings_cache
+        from jen.models.user import _invalidate_settings_cache, hash_password
         cur.execute(
             "UPDATE users SET password=%s, role='superadmin', session_timeout=NULL "
             "WHERE username='admin'",
@@ -356,6 +355,7 @@ def restricted_client(client, db, allowed_subnets, role="admin", username="restr
     `logged_in_client` fixture)."""
     import json as _json
     from datetime import datetime, timezone
+
     from jen.models.user import hash_password
     with db.cursor() as cur:
         cur.execute(

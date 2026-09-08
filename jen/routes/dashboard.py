@@ -4,36 +4,18 @@ jen/routes/dashboard.py
 Dashboard and stats routes.
 """
 
-import hashlib
-import io
 import json
 import logging
-import os
-import re
-import secrets
-import subprocess
-import threading
-from datetime import datetime, timezone
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
-from flask import (Blueprint, Response, flash, jsonify, redirect,
-                   render_template, request, send_from_directory,
-                   session, url_for)
-from flask_login import current_user, login_required, login_user, logout_user
+from flask import Blueprint, Response, jsonify, render_template, request
+from flask_login import current_user, login_required
 
-from jen import extensions
-from jen.config import init_extensions_from_config, load_config
-import jen.config as __config
 import jen.models.db as __db
-import jen.models.user as __user
+import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
-import jen.services.alerts as __alerts
-import jen.services.fingerprint as __fp
+from jen import extensions
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
-import jen.services.mfa as __mfa
-import jen.services.auth as __auth
-
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("dashboard", __name__)
@@ -209,7 +191,6 @@ def api_saved_searches():
 @bp.route("/api/dashboard/save-prefs", methods=["POST"])
 @login_required
 def save_dashboard_prefs():
-    import json
     widgets = request.json.get("widgets", ["subnet_stats", "recent_leases"])
     valid = {"subnet_stats", "recent_leases", "top_devices", "lease_sparklines",
              "alert_summary", "server_status", "lease_history_chart", "totals"}
@@ -232,7 +213,6 @@ def save_dashboard_prefs():
 @bp.route("/api/dashboard/get-prefs")
 @login_required
 def get_dashboard_prefs():
-    import json
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -506,7 +486,7 @@ def api_alert_summary():
 @login_required
 def api_recent_leases():
     """Recent leases for dashboard widget — returns HTML fragment."""
-    from jen.services.fingerprint import get_device_info_map, get_manufacturer_icon_url, DEVICE_TYPE_DISPLAY
+    from jen.services.fingerprint import get_device_info_map, get_manufacturer_icon_url
     try:
         hours = float(request.args.get("hours", "0.5"))
     except ValueError:
@@ -556,8 +536,8 @@ def api_recent_leases():
 @bp.route("/metrics")
 def prometheus_metrics():
     """
-    Prometheus metrics endpoint. Unauthenticated by design for scraper compatibility.
-    Protect with a Bearer token by setting metrics_token in jen.config [jen] section,
+    Prometheus metrics endpoint.
+    Protect with a Bearer token by setting metrics_token in jen.config [server] section,
     or by restricting /metrics at the reverse proxy level.
     Only exposes aggregate counts — no individual MACs, IPs, or hostnames.
 
@@ -574,14 +554,36 @@ def prometheus_metrics():
     Prometheus's own scrape-and-store model needs to produce a real
     trend line in Grafana — Jen doesn't need to compute a "trend"
     itself, repeated scrapes of a gauge over time already are one.
+
+    v5.3.3 — this endpoint used to default to fully open (no
+    metrics_token configured meant no auth at all) — a third-party
+    review correctly called this out as backwards from a secure-by-
+    default posture, even though the data exposed is deliberately
+    limited to aggregate counts, never individual MACs/IPs/hostnames.
+    Now defaults to closed: with neither metrics_token NOR the new
+    metrics_open=true set, requests get 401. This IS a breaking change
+    for anyone currently scraping without a token — see the changelog
+    for exact upgrade instructions. metrics_open exists specifically
+    to restore the old behavior for someone who's already decided that
+    tradeoff is fine for their network (e.g. Jen bound to localhost
+    behind their own scrape-time ACL), without silently reopening it
+    for everyone on every upgrade.
     """
-    # Optional token protection — set metrics_token in jen.config [jen] to enable
+    # Optional token protection — set metrics_token in jen.config [server] to enable
     expected_token = extensions.cfg.get("server", "metrics_token", fallback="").strip() if extensions.cfg else ""
+    metrics_open = extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False
+
     if expected_token:
         auth = request.headers.get("Authorization", "")
         token = auth[7:].strip() if auth.startswith("Bearer ") else request.args.get("token", "")
         if token != expected_token:
             return Response("Unauthorized\n", status=401, mimetype="text/plain")
+    elif not metrics_open:
+        return Response(
+            "Unauthorized — set metrics_token or metrics_open=true in jen.config [server] "
+            "to enable this endpoint.\n",
+            status=401, mimetype="text/plain"
+        )
 
     lines = []
 

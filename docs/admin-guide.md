@@ -23,7 +23,7 @@ Before starting Jen for the first time, work through this checklist:
 
 **Run the installer:**
 ```bash
-tar xzf jen-v5.3.2.tar.gz
+tar xzf jen-v5.3.3.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -393,11 +393,38 @@ sudo journalctl -u jen -n 50 --no-pager
 
 ## Prometheus Metrics
 
-Jen exposes a Prometheus-compatible metrics endpoint at `/metrics` (no authentication required):
+Jen exposes a Prometheus-compatible metrics endpoint at `/metrics`.
 
+**As of v5.3.3, this endpoint is closed by default** — a security
+review correctly pointed out that defaulting to fully open access,
+even though the data exposed is deliberately limited to aggregate
+counts (never individual MACs, IPs, or hostnames), is backwards from
+a secure-by-default posture. You need to explicitly enable it one of
+two ways, in `jen.config`'s `[server]` section:
+
+**Option 1 — token-protected (recommended):**
+```ini
+[server]
+metrics_token = some-long-random-string
+```
+```bash
+curl -k -H "Authorization: Bearer some-long-random-string" https://your-jen-server:8443/metrics
+```
+
+**Option 2 — open access (if you're already restricting `/metrics` at
+the network or reverse-proxy level and want the old behavior back):**
+```ini
+[server]
+metrics_open = true
+```
 ```bash
 curl -k https://your-jen-server:8443/metrics
 ```
+
+If neither is set, `/metrics` returns 401. **If you were already
+scraping `/metrics` without a token before upgrading to v5.3.3, your
+scrapes will start failing until you set one of the two options
+above.**
 
 Available metrics:
 - `jen_subnet_active_leases` — active lease count per subnet (with subnet name and CIDR labels)

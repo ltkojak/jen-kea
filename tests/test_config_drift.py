@@ -18,12 +18,11 @@ with mocked Kea responses, matching the mocking convention already
 used throughout tests/test_kea6.py.
 """
 
-import pytest
 
 from jen.services.config_drift import (
+    check_config_drift,
     detect_subnet_drift,
     fetch_live_subnet_map,
-    check_config_drift,
     issue_key,
 )
 
@@ -182,8 +181,8 @@ class TestFetchLiveSubnetMap:
 class TestCheckConfigDrift:
 
     def test_v4_drift_detected_end_to_end(self, monkeypatch):
-        from jen import extensions
         import jen.services.kea as kea_module
+        from jen import extensions
         monkeypatch.setattr(extensions, "SUBNET_MAP", {24: {"name": "IoT", "cidr": "10.10.30.0/24"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
 
@@ -199,8 +198,8 @@ class TestCheckConfigDrift:
         assert issues[0]["family"] == "v4"
 
     def test_no_drift_returns_empty_list(self, monkeypatch):
-        from jen import extensions
         import jen.services.kea as kea_module
+        from jen import extensions
         monkeypatch.setattr(extensions, "SUBNET_MAP", {10: {"name": "Production", "cidr": "10.10.10.0/23"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
 
@@ -216,8 +215,8 @@ class TestCheckConfigDrift:
         """An empty live_map from a failed fetch must not be treated as
         'Kea genuinely has zero subnets' — that would report every one
         of Jen's real subnets as 'missing_in_kea', which is false."""
-        from jen import extensions
         import jen.services.kea as kea_module
+        from jen import extensions
         monkeypatch.setattr(extensions, "SUBNET_MAP", {10: {"name": "Production", "cidr": "10.10.10.0/23"}})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
 
@@ -228,9 +227,9 @@ class TestCheckConfigDrift:
         assert check_config_drift() == []
 
     def test_v6_checked_when_enabled_and_configured(self, monkeypatch):
-        from jen import extensions
         import jen.services.kea as kea_module
         import jen.services.kea6 as kea6_module
+        from jen import extensions
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         monkeypatch.setattr(kea6_module, "is_ipv6_enabled", lambda: True)
@@ -251,9 +250,9 @@ class TestCheckConfigDrift:
         assert issues[0]["type"] == "cidr_mismatch"
 
     def test_v6_skipped_when_disabled(self, monkeypatch):
-        from jen import extensions
         import jen.services.kea as kea_module
         import jen.services.kea6 as kea6_module
+        from jen import extensions
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         monkeypatch.setattr(kea6_module, "is_ipv6_enabled", lambda: False)

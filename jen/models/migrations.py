@@ -545,6 +545,53 @@ def _m015_users_must_change_password(db):
             cur.execute("ALTER TABLE users ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0")
 
 
+def _m016_backfill_must_change_password_for_existing_admin_admin(db):
+    """
+    v5.3.3 fix — a real gap in migration 15 found by a third-party
+    review: that migration only ADDED the must_change_password column
+    with DEFAULT 0, which is correct for brand-new rows going forward,
+    but means every row that ALREADY existed at the moment migration
+    15 ran got the "already fine, no need to change" default — even
+    one whose password was, and still is, the literal string "admin".
+    Only a genuinely FRESH install was actually protected (db.py's
+    seed logic explicitly sets the flag at INSERT time); an
+    already-running instance that upgraded through migration 15
+    without anyone ever having changed the default admin/admin
+    credential got a new column that quietly did nothing for them.
+
+    This can't be fixed by editing migration 15's own function body —
+    the migration runner tracks applied versions in schema_migrations
+    and never re-invokes an already-applied migration, which by now
+    describes most of the currently-deployed installations (anything
+    that reached v5.2.7 or later already has migration 15 recorded as
+    applied). A new, separate migration is the only way to reach
+    those installations: it runs exactly once, the first time each
+    database applies it, regardless of how long ago migration 15 ran
+    there.
+
+    Checks every user row whose flag isn't already set, and verifies
+    (not compares hashes directly — hashes are salted, so identical
+    passwords never produce identical hashes) whether the stored
+    password still matches the literal string "admin". Deliberately
+    checks every user, not just the superadmin/admin username: an
+    admin-created account is just as much a "someone else knows this
+    password" concern as the default seed itself (matching the same
+    reasoning migration 15's own docstring already gives for why
+    add_user() sets this flag too).
+    """
+    from jen.models.user import verify_password
+
+    with db.cursor() as cur:
+        cur.execute("SELECT id, password FROM users WHERE must_change_password = 0")
+        rows = cur.fetchall()
+        flagged_ids = [
+            row["id"] for row in rows
+            if row["password"] and verify_password(row["password"], "admin")
+        ]
+        for user_id in flagged_ids:
+            cur.execute("UPDATE users SET must_change_password = 1 WHERE id = %s", (user_id,))
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -567,10 +614,16 @@ MIGRATIONS = [
                                                               _m014_alert_subnet_scope),
     (15, "users.must_change_password column for forced password-change enforcement",
                                                               _m015_users_must_change_password),
+    (16, "backfill must_change_password for existing users still on the literal default password",
+                                                              _m016_backfill_must_change_password_for_existing_admin_admin),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
-assert all(a[0] < b[0] for a, b in zip(MIGRATIONS, MIGRATIONS[1:])), \
+# strict=False here is deliberate, not an oversight — MIGRATIONS and
+# MIGRATIONS[1:] are intentionally different lengths (by exactly one
+# element, by construction, to compare each adjacent pair); strict=True
+# would make this assertion always raise.
+assert all(a[0] < b[0] for a, b in zip(MIGRATIONS, MIGRATIONS[1:], strict=False)), \
     "MIGRATIONS versions must be strictly increasing"
 
 

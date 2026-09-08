@@ -6,13 +6,10 @@ All operations clearly labelled by which database they touch (Jen or Kea).
 """
 
 import gzip
-import hashlib
 import json
 import logging
 import os
-import threading
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pymysql
 import pymysql.cursors
@@ -21,7 +18,7 @@ from jen import extensions
 
 logger = logging.getLogger(__name__)
 
-BACKUP_DIR   = "/opt/jen/backups"
+BACKUP_DIR   = os.path.join(extensions.JEN_ROOT, "backups")
 SCHEMA_VERSION = 1   # bump when export format changes
 
 # ── Jen tables available for export ──────────────────────────────────────────
@@ -192,7 +189,7 @@ def _read_backup(path):
             return json.load(f)
     except Exception:
         # Try uncompressed (older exports)
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
 
 
@@ -323,7 +320,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        raise RuntimeError(f"Import failed and was rolled back: {e}")
+        raise RuntimeError(f"Import failed and was rolled back: {e}") from e
     finally:
         conn.close()
     return results
@@ -382,7 +379,7 @@ def import_kea(file_bytes, duplicate_mode="skip"):
         conn.commit()
     except Exception as e:
         conn.rollback()
-        raise RuntimeError(f"Kea import failed and was rolled back: {e}")
+        raise RuntimeError(f"Kea import failed and was rolled back: {e}") from e
     finally:
         conn.close()
     return results
@@ -433,7 +430,7 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
         dst = _direct_conn(target_host, target_port, target_user, target_password, target_db)
     except Exception as e:
         src.close()
-        raise RuntimeError(f"Cannot connect to target DB: {e}")
+        raise RuntimeError(f"Cannot connect to target DB: {e}") from e
 
     try:
         # Get source schema DDL for selected tables and recreate on target
@@ -509,7 +506,7 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
             pass
         src.close()
         dst.close()
-        raise RuntimeError(f"Migration failed — target DB rolled back and cleaned up. Error: {e}")
+        raise RuntimeError(f"Migration failed — target DB rolled back and cleaned up. Error: {e}") from e
 
     src.close()
     dst.close()
@@ -538,7 +535,7 @@ def migrate_kea(target_host, target_port, target_user, target_password, target_d
         dst = _direct_conn(target_host, target_port, target_user, target_password, target_db)
     except Exception as e:
         src.close()
-        raise RuntimeError(f"Cannot connect to target DB: {e}")
+        raise RuntimeError(f"Cannot connect to target DB: {e}") from e
 
     created_tables = []
     try:
@@ -599,7 +596,7 @@ def migrate_kea(target_host, target_port, target_user, target_password, target_d
             pass
         dst.close()
         src.close()
-        raise RuntimeError(f"Kea migration failed — rolled back. Error: {e}")
+        raise RuntimeError(f"Kea migration failed — rolled back. Error: {e}") from e
 
     dst.close()
 

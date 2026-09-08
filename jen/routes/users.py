@@ -4,37 +4,21 @@ jen/routes/users.py
 User management and profile routes.
 """
 
-import hashlib
-import io
-import json
 import logging
-import os
 import re
-import secrets
-import subprocess
-import threading
-from datetime import datetime, timezone
 
 import pymysql
+from flask import Blueprint, flash, redirect, render_template, request, session, url_for
+from flask_login import current_user, login_required
 
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
-
-from flask import (Blueprint, Response, flash, jsonify, redirect,
-                   render_template, request, send_from_directory,
-                   session, url_for)
-from flask_login import current_user, login_required, login_user, logout_user
-
-from jen import extensions
-from jen.config import init_extensions_from_config, load_config
-import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
-import jen.services.kea as __kea
-import jen.services.alerts as __alerts
-import jen.services.fingerprint as __fp
-import jen.services.mfa as __mfa
 import jen.services.auth as __auth
-
+import jen.services.kea as __kea
+import jen.services.mfa as __mfa
+from jen import extensions
+from jen.services.access import admin_required as _admin_required
+from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("users", __name__)
@@ -273,7 +257,7 @@ def delete_user(user_id):
 @bp.route("/users/upload-avatar", methods=["POST"])
 @login_required
 def upload_avatar():
-    import base64, re
+    import re
     data_url = request.form.get("avatar_data_url", "").strip()
     if data_url and data_url.startswith("data:image/"):
         # Validate it's a reasonable size (max ~200KB base64)

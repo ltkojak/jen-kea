@@ -9,9 +9,7 @@ boundary on both routes and the restart route's error-handling paths
 without ever actually invoking a real SSH connection.
 """
 
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from tests.conftest import restricted_client as _restricted_client
 

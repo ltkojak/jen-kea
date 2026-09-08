@@ -22,6 +22,21 @@ patches these globals directly to point at the jen_test database.)
 """
 
 import configparser
+import os
+
+# ── Install root (v5.3.3) ───────────────────────────────────────────────────
+# Every path below that lives under the application's install directory
+# (as opposed to /etc/jen, which is the separate CONFIGURATION directory
+# convention and is deliberately untouched by this) is derived from this
+# one constant instead of hardcoding "/opt/jen" repeatedly — a third-party
+# review correctly pointed out that a hardcoded absolute path here makes a
+# local clone-and-run hostile (nothing under /opt/jen exists outside a real
+# install) and forces CI to work around it with a symlink. Defaults to
+# /opt/jen, so every existing production install's behavior is completely
+# unchanged; set JEN_ROOT to override for local development or a
+# CI checkout that isn't (and shouldn't need to be) installed to
+# /opt/jen at all.
+JEN_ROOT = os.environ.get("JEN_ROOT", "/opt/jen")
 
 # ── Config ──────────────────────────────────────────────────────────────────
 cfg: configparser.ConfigParser = None   # loaded by app factory
@@ -86,14 +101,15 @@ SSL_CERT      = "/etc/jen/ssl/certificate.crt"
 SSL_KEY       = "/etc/jen/ssl/private.key"
 SSL_CA        = "/etc/jen/ssl/ca_bundle.crt"
 SSL_COMBINED  = "/etc/jen/ssl/combined.crt"
-FAVICON_PATH  = "/opt/jen/static/favicon.ico"
-STATIC_DIR    = "/opt/jen/static"
-ICONS_BUNDLED_DIR = "/opt/jen/static/icons/brands"
-ICONS_CUSTOM_DIR  = "/opt/jen/static/icons/custom"
-NAV_LOGO_PATH = "/opt/jen/static/nav_logo"
+FAVICON_PATH  = os.path.join(JEN_ROOT, "static", "favicon.ico")
+STATIC_DIR    = os.path.join(JEN_ROOT, "static")
+TEMPLATE_DIR  = os.path.join(JEN_ROOT, "templates")
+ICONS_BUNDLED_DIR = os.path.join(JEN_ROOT, "static", "icons", "brands")
+ICONS_CUSTOM_DIR  = os.path.join(JEN_ROOT, "static", "icons", "custom")
+NAV_LOGO_PATH = os.path.join(JEN_ROOT, "static", "nav_logo")
 
 # Plugin system
-PLUGIN_DIR     = "/opt/jen/plugins"          # installed plugin directories
+PLUGIN_DIR     = os.path.join(JEN_ROOT, "plugins")          # installed plugin directories
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 SSH_KEY_PATH  = "/etc/jen/ssh/jen_rsa"
 SSH_KNOWN_HOSTS = "/etc/jen/ssh/known_hosts"

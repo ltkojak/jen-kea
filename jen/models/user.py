@@ -10,7 +10,7 @@ import logging
 import secrets
 
 from flask_login import UserMixin
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +191,10 @@ def audit(action: str, entity: str, details: str = "") -> None:
     Write an entry to the audit log asynchronously.
     Runs in a background thread so it never blocks the HTTP response.
     """
+    import threading
+
     from flask import request
     from flask_login import current_user
-    import threading
 
     # Capture request context values now, before the thread runs
     try:

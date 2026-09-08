@@ -16,9 +16,7 @@ network, and never depends on GitHub actually being reachable or
 jen-plugin-ipam's real content matching what these tests assert.
 """
 
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from jen.services import plugins as plugins_svc
 

@@ -59,7 +59,6 @@ import logging
 import os
 import re
 import sys
-from typing import Optional
 
 import requests
 
@@ -255,8 +254,35 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     """
     Download and install a plugin from its registry entry.
     Returns (success, message).
+
+    v5.3.3 — checksum verification added, mirroring the same principle
+    already applied to the self-updater in v5.2.6: HTTPS-only, manifest
+    ID matching, and zip-slip-safe extraction were all already present
+    here, but nothing verified the downloaded zip's integrity against
+    anything published alongside it. A compromised registry.json (or a
+    compromised plugin repository) could otherwise serve arbitrary code
+    that gets executed as www-data, plus whatever db_migrations the
+    manifest declares.
+
+    Deliberately NOT fail-closed on a MISSING checksum, unlike the
+    self-updater — the two plugins that exist today (network-discovery,
+    ipam) don't have one in the registry yet, and I have no way to
+    manufacture a trustworthy hash for zip files hosted in separate
+    repositories I don't have a verified, out-of-band copy of; computing
+    one from what this function just downloaded would be circular and
+    add no real security. A registry entry WITHOUT a sha256 field logs
+    a warning and installs anyway — a deliberate, visible transition
+    state, not a silent gap. A registry entry WITH a sha256 field that
+    doesn't match is a hard failure, no exceptions, matching the
+    self-updater's fail-closed behavior for actual verification
+    failures. The goal is for every registry entry to carry a real
+    checksum going forward, at which point removing the "missing is
+    OK" branch entirely becomes the natural next step.
     """
-    import zipfile, io, shutil
+    import hashlib
+    import io
+    import shutil
+    import zipfile
 
     if not valid_plugin_id(plugin_id):
         return False, "Invalid plugin ID."
@@ -275,6 +301,21 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
         resp = requests.get(zip_url, timeout=30)
         if resp.status_code != 200:
             return False, f"Download failed: HTTP {resp.status_code}"
+
+        expected_sha256 = registry_entry.get("sha256", "").strip().lower()
+        actual_sha256 = hashlib.sha256(resp.content).hexdigest()
+        if expected_sha256:
+            if actual_sha256 != expected_sha256:
+                logger.error(
+                    f"Plugin '{plugin_id}' checksum mismatch: expected {expected_sha256}, "
+                    f"got {actual_sha256} — refusing to install."
+                )
+                return False, "Plugin package failed checksum verification. Refusing to install."
+        else:
+            logger.warning(
+                f"Plugin '{plugin_id}' has no sha256 in its registry entry — "
+                f"installing without integrity verification (actual hash: {actual_sha256})."
+            )
 
         os.makedirs(extensions.PLUGIN_DIR, exist_ok=True)
 
@@ -471,7 +512,7 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 
-def fetch_registry(timeout: int = 10) -> tuple[list, Optional[str]]:
+def fetch_registry(timeout: int = 10) -> tuple[list, str | None]:
     """
     Fetch the plugin registry from GitHub, then overlay each plugin's
     genuinely current version/description/db_migrations by live-fetching

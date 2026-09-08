@@ -5,7 +5,6 @@ Tests for reservation CRUD — add, edit, delete, bulk delete.
 These tests mock the Kea API so no real Kea server is needed.
 """
 
-import json
 import pytest
 
 

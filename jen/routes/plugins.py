@@ -9,17 +9,15 @@ process — DB credentials, sudoers-permitted commands, everything. That's
 a much bigger blast radius than a subnet-restricted admin was ever meant
 to have, so this follows the same rule as database.py.
 """
-import json
 import logging
 
-from flask import (Blueprint, flash, jsonify, redirect,
-                   render_template, request, url_for)
-from flask_login import current_user, login_required
+from flask import Blueprint, flash, jsonify, redirect, render_template, url_for
+from flask_login import login_required
 
 from jen.models import db as __db
 from jen.models import user as __user
-from jen.services.access import superadmin_required as _superadmin_required
 from jen.services import plugins as __plugins
+from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("plugins", __name__)

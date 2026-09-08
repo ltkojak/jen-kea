@@ -29,10 +29,8 @@ built out of order, rather than only checking against already-sorted
 input like every test here previously did.
 """
 
-import pathlib
-import tempfile
 
-from jen.services.changelog import parse_changelog, _inline_markdown_to_html, _version_sort_key
+from jen.services.changelog import _inline_markdown_to_html, _version_sort_key, parse_changelog
 
 
 class TestInlineMarkdown:

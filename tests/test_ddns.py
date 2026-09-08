@@ -12,9 +12,7 @@ hardened auth.ssh_cli_opts() (StrictHostKeyChecking=accept-new) rather
 than the old inline StrictHostKeyChecking=no flags fixed in v4.4.8.
 """
 
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 
 class TestDdnsPageAuth:
@@ -59,6 +57,7 @@ class TestDdnsLogFetch:
 
     def test_ssh_timeout(self, logged_in_client, monkeypatch):
         import subprocess
+
         from jen import extensions
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
         monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
@@ -75,6 +74,7 @@ class TestDdnsSshLookupProvider:
 
     def test_ssh_lookup_uses_hardened_ssh_opts(self, logged_in_client, monkeypatch):
         import configparser
+
         from jen import extensions
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")  # skip log fetch branch
 

@@ -4,8 +4,7 @@ tests/test_users.py
 Tests for user management — create, password change, role, session timeout.
 """
 
-import pytest
-from jen.models.user import hash_password, verify_password, needs_rehash
+from jen.models.user import hash_password, needs_rehash, verify_password
 
 
 class TestPasswordHashing:

@@ -10,13 +10,12 @@ fallback, and that JSON output is actually valid, parseable JSON with
 the fields it claims to have.
 """
 
-import io
 import json
 import logging
 
 import pytest
 
-from jen.logging_config import configure_logging, JsonFormatter
+from jen.logging_config import JsonFormatter, configure_logging
 
 
 @pytest.fixture(autouse=True)

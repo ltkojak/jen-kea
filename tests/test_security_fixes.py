@@ -9,7 +9,6 @@ Regression coverage for the v4.4.2 security fixes:
      inputs that previously reached a remote shell unvalidated.
 """
 
-import json
 import time
 
 import pytest
@@ -163,7 +162,7 @@ class TestMfaLockout:
         db.commit()
 
     def test_clear_mfa_attempts(self, db):
-        from jen.services.auth import clear_mfa_attempts, is_mfa_locked_out, MFA_MAX_ATTEMPTS
+        from jen.services.auth import MFA_MAX_ATTEMPTS, clear_mfa_attempts, is_mfa_locked_out
         user_id = 3
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS):
@@ -306,7 +305,8 @@ class TestPluginZipSlip:
     its own plugin directory via ../ path traversal or absolute paths."""
 
     def _make_zip(self, entries):
-        import zipfile, io
+        import io
+        import zipfile
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
             for name, content in entries.items():
@@ -458,16 +458,16 @@ class TestPluginIdValidationOnAllLifecycleFunctions:
         assert valid_plugin_id(None) is False
 
     def test_uninstall_plugin_rejects_invalid_id_without_touching_disk(self, tmp_path, monkeypatch):
-        from jen.services import plugins as plugins_svc
         from jen import extensions
+        from jen.services import plugins as plugins_svc
         monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path))
         ok, msg = plugins_svc.uninstall_plugin("../../evil")
         assert ok is False
         assert "invalid" in msg.lower()
 
     def test_enable_disable_plugin_noop_on_invalid_id(self, tmp_path, monkeypatch):
-        from jen.services import plugins as plugins_svc
         from jen import extensions
+        from jen.services import plugins as plugins_svc
         monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path))
         # Should not raise, and should not create anything outside tmp_path.
         plugins_svc.enable_plugin("../escape")
@@ -488,12 +488,14 @@ class TestConstantTimeLegacyPasswordCompare:
 
     def test_correct_legacy_password_still_verifies(self):
         import hashlib
+
         from jen.models.user import verify_password
         legacy_hash = hashlib.sha256(b"correcthorse").hexdigest()
         assert verify_password(legacy_hash, "correcthorse") is True
 
     def test_wrong_legacy_password_rejected(self):
         import hashlib
+
         from jen.models.user import verify_password
         legacy_hash = hashlib.sha256(b"correcthorse").hexdigest()
         assert verify_password(legacy_hash, "wrongpassword") is False

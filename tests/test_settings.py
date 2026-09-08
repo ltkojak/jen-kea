@@ -5,8 +5,7 @@ Tests for global settings — branding, session timeout, MFA mode,
 alert templates, and the settings cache.
 """
 
-import pytest
-from jen.models.user import get_global_setting, set_global_setting, _invalidate_settings_cache
+from jen.models.user import _invalidate_settings_cache, get_global_setting, set_global_setting
 
 
 class TestRestartPendingClearedOnStartup:
@@ -160,8 +159,9 @@ class TestMfaModeAndNavLogoRoutesRegression:
         assert b"admin access required" in r.data.lower()
 
     def test_upload_nav_logo_route_is_registered(self, logged_in_client, tmp_path, monkeypatch):
-        from jen import extensions
         from io import BytesIO
+
+        from jen import extensions
         # Redirect the logo write path to a tmp dir — don't touch the
         # real /opt/jen/static path during a test run.
         monkeypatch.setattr(extensions, "NAV_LOGO_PATH", str(tmp_path / "nav_logo"))
@@ -187,8 +187,9 @@ class TestMfaModeAndNavLogoRoutesRegression:
         assert (tmp_path / "nav_logo.png").exists()
 
     def test_upload_nav_logo_requires_admin(self, client, db):
-        from tests.conftest import restricted_client as _restricted_client
         from io import BytesIO
+
+        from tests.conftest import restricted_client as _restricted_client
         _restricted_client(client, db, allowed_subnets=None, role="viewer",
                             username="navlogo_viewer1")
         r = client.post(

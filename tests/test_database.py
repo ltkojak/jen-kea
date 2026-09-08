@@ -21,7 +21,6 @@ import pytest
 
 from tests.conftest import restricted_client as _restricted_client
 
-
 # Every route in jen/routes/database.py, with its method and a form/body
 # that gets it as far as the auth check (not necessarily further — we're
 # testing the gate, not full functional behavior).
@@ -149,6 +148,7 @@ class TestImportConfirmTmpPathValidation:
 
     def test_accepts_and_consumes_a_real_tmp_import_file(self, logged_in_client, tmp_path, monkeypatch):
         import tempfile
+
         from jen.services import dbexport
         # A minimal, syntactically valid export payload so parse_import_file
         # doesn't error out before we even reach the path-validation logic

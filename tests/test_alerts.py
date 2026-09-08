@@ -7,6 +7,7 @@ alert log, and HTMX partial responses.
 
 import json
 import time
+
 import pytest
 
 
@@ -111,8 +112,8 @@ class TestHTMXRoutes:
     def test_delete_reservation_htmx_returns_empty(self, logged_in_client,
                                                     monkeypatch):
         """Deleting a reservation via HTMX returns empty string (removes row)."""
-        from jen.services import kea as kea_svc
         from jen.models import db as db_mod
+        from jen.services import kea as kea_svc
 
         # Mock Kea to return the host for lookup and success for delete
         def mock_kea_cmd(cmd, *a, server=None, **kw):
@@ -233,7 +234,7 @@ class TestUntrustedHostnameHtmlEscaping:
     def test_new_lease_message_with_problematic_hostname_is_valid_html(self):
         """The actual bug: a hostname containing '&' used to produce a
         message Telegram would reject outright."""
-        from jen.services.alerts import render_template_str, safe_text, DEFAULT_TEMPLATES
+        from jen.services.alerts import DEFAULT_TEMPLATES, render_template_str, safe_text
         hostname = safe_text("AT&T-Hotspot")
         msg = render_template_str(DEFAULT_TEMPLATES["new_lease"], ip="10.10.10.50",
                                   mac="aa:bb:cc:dd:ee:ff", hostname=hostname, subnet="IoT")
@@ -245,7 +246,7 @@ class TestUntrustedHostnameHtmlEscaping:
         """The fix must NOT touch daily_summary's pre-built <b> tags —
         this is the regression the naive "escape every kwarg" approach
         would have caused."""
-        from jen.services.alerts import render_template_str, DEFAULT_TEMPLATES
+        from jen.services.alerts import DEFAULT_TEMPLATES, render_template_str
         summary = "<b>Daily Network Summary</b>\n\n<b>Production</b> (10.10.10.0/23): 65 active"
         msg = render_template_str(DEFAULT_TEMPLATES["daily_summary"], summary=summary)
         assert "<b>Daily Network Summary</b>" in msg

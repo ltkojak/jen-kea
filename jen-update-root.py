@@ -38,6 +38,18 @@ proceeded with an UNVERIFIED update if a checksum file was missing, had
 no matching entry, or failed to parse — logging a warning and
 continuing anyway. This script fails closed: no valid checksum match,
 no update, full stop.
+
+v5.3.3 — a third-party review of this whole redesign correctly pointed
+out a maintainability gap it introduced: this script installed the
+application it updates, but never a new copy of itself, or of
+jen-update.service. A fix shipped inside jen-update-root.py would
+therefore never reach an already-running instance via the in-app
+update button — only a manual `sudo ./install.sh --upgrade` would ever
+pick it up, quietly recreating the exact "self-update can't fix
+itself" trap this redesign exists to close for the application. See
+install_self_update_files() below for the fix and the safety reasoning
+for replacing this script's own installed copy while it's the one
+currently running.
 """
 
 import hashlib
@@ -54,6 +66,8 @@ GITHUB_REPO = "ltkojak/jen-kea"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_ASSET_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
 INSTALL_DIR = "/opt/jen"
+SELF_INSTALL_PATH = "/usr/local/sbin/jen-update-root.py"
+UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
 
 
 def log(msg):
@@ -148,7 +162,7 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
             preserved_favicon = tempfile.NamedTemporaryFile(delete=False)
             preserved_favicon.close()
             shutil.copy2(existing_favicon, preserved_favicon.name)
-        for root, dirs, files in os.walk(static_src):
+        for root, _dirs, files in os.walk(static_src):
             rel = os.path.relpath(root, static_src)
             dest_root = static_dest if rel == "." else os.path.join(static_dest, rel)
             os.makedirs(dest_root, exist_ok=True)
@@ -185,6 +199,71 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
          os.path.join(install_dir, "templates"), os.path.join(install_dir, "static")],
         check=False,
     )
+
+
+def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH,
+                               update_service_path=UPDATE_SERVICE_PATH):
+    """
+    v5.3.3 fix — a real gap found by a third-party review of the v5.2.6
+    redesign: install_extracted_files() above installs the application
+    (jen/, run.py, templates/, static/, jen.service, jen-sudoers), but
+    never installed a new copy of THIS script or of jen-update.service
+    itself. A fix shipped inside jen-update-root.py would never reach
+    an already-running instance via the in-app update button — only a
+    manual `sudo ./install.sh --upgrade` would pick it up, silently
+    reintroducing the exact "self-update can't fix itself" maintenance
+    trap this whole redesign was meant to close for the application it
+    updates.
+
+    Safe to do while this exact script is the one currently running:
+    the interpreter already read this script's full source into memory
+    before execution began, so replacing the file on disk has no
+    effect on the process executing right now — only the *next*
+    invocation (the next time jen-update.service starts) sees the new
+    content. Confirmed this reasoning is standard, correct POSIX
+    behavior, not just assumed.
+
+    Writes to a temp file in the SAME directory as the real
+    destination, then uses os.replace() (atomic on POSIX, and
+    guaranteed atomic specifically because source and destination
+    share a filesystem) rather than overwriting in place — so a
+    concurrent invocation can never observe a partially-written file.
+    Ownership and mode are set on the temp file BEFORE the rename, so
+    there is no window where the installed path exists with the wrong
+    permissions either. Both this script and the systemd unit that
+    invokes it must remain root-owned and unwritable by www-data at
+    every point in time, not just at the end of this function.
+    """
+    new_script_src = os.path.join(extracted, "jen-update-root.py")
+    if os.path.isfile(new_script_src):
+        dest_dir = os.path.dirname(self_install_path)
+        fd, tmp_path = tempfile.mkstemp(dir=dest_dir, prefix=".jen-update-root-", suffix=".tmp")
+        try:
+            with open(new_script_src, "rb") as src_f:
+                content = src_f.read()
+            os.write(fd, content)
+        finally:
+            os.close(fd)
+        os.chown(tmp_path, 0, 0)
+        os.chmod(tmp_path, 0o700)
+        os.replace(tmp_path, self_install_path)
+        log(f"Updated {self_install_path} from this release.")
+
+    new_service_src = os.path.join(extracted, "jen-update.service")
+    if os.path.isfile(new_service_src):
+        dest_dir = os.path.dirname(update_service_path)
+        fd, tmp_path = tempfile.mkstemp(dir=dest_dir, prefix=".jen-update-service-", suffix=".tmp")
+        try:
+            with open(new_service_src, "rb") as src_f:
+                content = src_f.read()
+            os.write(fd, content)
+        finally:
+            os.close(fd)
+        os.chown(tmp_path, 0, 0)
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, update_service_path)
+        subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
+        log(f"Updated {update_service_path} and reloaded systemd.")
 
 
 def verify_release_checksum(tarball_name, actual_hash, checksum_text):
@@ -295,6 +374,7 @@ def main():
 
         log("Installing files…")
         install_extracted_files(extracted, INSTALL_DIR)
+        install_self_update_files(extracted)
 
         log(f"Update to v{version} installed. Restarting jen…")
         subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)

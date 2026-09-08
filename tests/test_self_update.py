@@ -25,7 +25,7 @@ privilege-boundary concern) and triggers
 no attacker-controllable parameters at all.
 """
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 class TestSelfUpdateRouteIsNowJustATrigger:

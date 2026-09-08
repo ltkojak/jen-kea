@@ -11,8 +11,6 @@ import pytest
 @pytest.fixture
 def mock_kea_db(monkeypatch):
     """Mock get_kea_db to return empty results for lease queries."""
-    import pymysql
-    import pymysql.cursors
 
     class MockCursor:
         def __init__(self): self._rows = []
@@ -85,7 +83,7 @@ class TestIpMapPoolBlocks:
         assert not truncated
 
     def test_oversized_pool_is_truncated_not_hung(self):
-        from jen.routes.leases import _build_pool_blocks, MAX_IPMAP_ADDRESSES
+        from jen.routes.leases import MAX_IPMAP_ADDRESSES, _build_pool_blocks
         blocks, truncated = _build_pool_blocks([("10.0.0.0", "10.0.255.255")])
         assert truncated is True
         assert sum(len(b["ips"]) for b in blocks) == MAX_IPMAP_ADDRESSES

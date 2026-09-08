@@ -5,8 +5,7 @@ Trusted-device identification (v4.3.0): user-agent parsing and the
 friendly description format used for MFA trusted devices.
 """
 
-from jen.services.fingerprint import friendly_user_agent, describe_client_device
-
+from jen.services.fingerprint import describe_client_device, friendly_user_agent
 
 IPHONE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) "
           "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")

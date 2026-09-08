@@ -4,20 +4,17 @@ Scans subnets for devices not in the Kea lease table.
 Requires nmap on the Jen host (sudo apt install nmap).
 """
 import ipaddress
-import json
 import logging
+import os as _os
 import shutil
 import subprocess
 import threading
-from datetime import datetime, timezone
 
-from flask import (Blueprint, flash, jsonify, redirect,
-                   render_template, request, url_for)
-from flask_login import current_user, login_required
+from flask import Blueprint, flash, jsonify, redirect, render_template, url_for
+from flask_login import login_required
 
 logger = logging.getLogger(__name__)
 
-import os as _os
 bp = Blueprint("network_discovery", __name__,
                template_folder="templates",
                root_path=_os.path.dirname(_os.path.abspath(__file__)),

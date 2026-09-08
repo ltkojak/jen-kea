@@ -33,7 +33,6 @@ Two kinds of test here:
 
 import pathlib
 import re
-
 from unittest.mock import patch
 
 
@@ -144,7 +143,17 @@ def _scan_route_file_for_raw_exception_leaks(path):
     text = pathlib.Path(path).read_text()
     leak_pattern = re.compile(
         r'(flash\(f".*\{e\}|flash\(f".*\{str\(e\)\}|flash\(f".*\{err\}|'
-        r'flash\(str\(e\)|jsonify\(.*str\(e\)|api_error\(str\(e\))'
+        r'flash\(str\(e\)|jsonify\(.*str\(e\)|api_error\(str\(e\)|'
+        # v5.3.3 addition — catches the exact shape that slipped past
+        # every other pattern here: jen/__init__.py's global
+        # @app.errorhandler(Exception) interpolated the raw exception
+        # into a render_template(..., message=f"...{e}") call. Missed
+        # originally because this scanner only checked jen/routes/*.py
+        # (a route-file-shaped assumption), not the whole jen/ package
+        # — see the widened glob in the test below — and because the
+        # regex itself had no case for a bare `message=f"...{e}"`
+        # keyword argument, only specific call-shapes like flash().
+        r'message\s*=\s*f".*\{e\}|message\s*=\s*f".*\{str\(e\)\})'
     )
     for lineno, line in enumerate(text.splitlines(), start=1):
         if not leak_pattern.search(line):
@@ -161,8 +170,14 @@ class TestNoUnexplainedRawExceptionLeaksInRoutes:
 
     def test_every_route_file_is_clean_or_explicitly_allowlisted(self):
         import glob
-        route_files = sorted(glob.glob("jen/routes/*.py"))
-        assert len(route_files) >= 10, "sanity check that glob actually found the route files"
+        # v5.3.3 — widened from "jen/routes/*.py" to the whole jen/
+        # package (recursively). The exact bug that prompted this
+        # widening lived in jen/__init__.py, outside jen/routes/
+        # entirely — a global error handler, not a per-route pattern —
+        # so scoping this scanner to "routes only" was itself part of
+        # the gap, not just the regex pattern.
+        route_files = sorted(glob.glob("jen/**/*.py", recursive=True))
+        assert len(route_files) >= 10, "sanity check that glob actually found real files"
 
         all_findings = {}
         for path in route_files:

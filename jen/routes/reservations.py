@@ -5,36 +5,28 @@ Reservation management routes including bulk operations.
 """
 
 import csv
-import hashlib
 import io
-import json
 import logging
-import os
-import re
-import secrets
-import subprocess
-import threading
-from datetime import datetime, timezone
-from jen.services.access import admin_required as _admin_required, superadmin_required as _superadmin_required
 
-from flask import (Blueprint, Response, flash, jsonify, redirect,
-                   render_template, request, send_from_directory,
-                   session, url_for)
-from flask_login import current_user, login_required, login_user, logout_user
+from flask import (
+    Blueprint,
+    Response,
+    flash,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from flask_login import current_user, login_required
 
-from jen import extensions
-from jen.config import init_extensions_from_config, load_config
-import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.auth as __auth
+import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
-import jen.services.alerts as __alerts
-import jen.services.fingerprint as __fp
-from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
-import jen.services.mfa as __mfa
-import jen.services.auth as __auth
-
+from jen import extensions
+from jen.services.access import admin_required as _admin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reservations", __name__)
@@ -729,7 +721,7 @@ def bulk_delete_reservations():
         flash("Bulk delete failed. Check server logs for details.", "error")
         return redirect(url_for('reservations.reservations'))
 
-    flash(f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""), 
+    flash(f"Deleted {deleted} reservation(s)." + (f" {errors} failed." if errors else ""),
           "success" if errors == 0 else "warning")
     __user.audit("BULK_DELETE_RESERVATIONS", "reservations", f"Deleted={deleted} Errors={errors}")
     return redirect(url_for('reservations.reservations'))
