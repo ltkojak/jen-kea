@@ -2,6 +2,30 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.6.1] - 2026-09-08
+
+### Split the two monolith files (`settings.py`, `test_kea6.py`)
+
+Pure refactor — no behaviour change, no route or endpoint renamed.
+Both reviews flagged these as the maintainability frontier, and the
+next feature (Kea CA-less support) adds routes and fields to Settings,
+which is much nicer on a split module than a 2,060-line one.
+
+- **`jen/routes/settings.py` → `jen/routes/settings/`** (a package):
+  `alerts`, `infrastructure`, `authoring`, `branding`, `security`,
+  `updates`, each registering on the one `bp` so every endpoint stays
+  `settings.<fn>` and every `url_for("settings.…")` resolves unchanged.
+  `_parse_subnet_lines` / `_subnets_to_lines` are re-exported from the
+  package root for their existing importers. Dropped one dead helper
+  (`__ip_to_int`, defined and never called).
+  `tests/test_settings_blueprint.py` freezes the full 48-endpoint set as
+  a drift guard.
+- **`tests/test_kea6.py` → `tests/test_kea6_*.py`** by feature area
+  (config, service toggle, leases/devices, reservations, subnets,
+  search/metrics) plus `tests/test_kea_authoring.py` for the
+  Kea-config-authoring flow. Shared `FakeSSHClient` helper moved to
+  `tests/_kea6_helpers.py`.
+
 ## [5.6.0] - 2026-09-08
 
 ### Docker configuration unified on `.env`, plus a hygiene pass
