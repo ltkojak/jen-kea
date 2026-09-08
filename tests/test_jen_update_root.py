@@ -177,39 +177,6 @@ class TestInstallExtractedFiles:
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
         assert (install_dir / "requirements.txt").read_text() == "flask>=3.1.3\n"
 
-
-class TestInstallPythonDependencies:
-    """v5.5.0 — the self-update flow now runs pip, because run.py went
-    from werkzeug to gunicorn and a file-only update would land run.py
-    expecting a package that isn't installed."""
-
-    def test_runs_pip_install_against_installed_requirements(self, jen_update_root, tmp_path):
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-        (install_dir / "requirements.txt").write_text("gunicorn>=23.0.0\n")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stderr="")
-            jen_update_root.install_python_dependencies(str(install_dir))
-        joined = " ".join(str(c) for c in mock_run.call_args_list)
-        assert "pip" in joined and "install" in joined
-        assert str(install_dir / "requirements.txt") in joined
-
-    def test_missing_requirements_file_is_a_no_op(self, jen_update_root, tmp_path):
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-        with patch("subprocess.run") as mock_run:
-            jen_update_root.install_python_dependencies(str(install_dir))
-        mock_run.assert_not_called()
-
-    def test_pip_failure_is_non_fatal(self, jen_update_root, tmp_path):
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-        (install_dir / "requirements.txt").write_text("gunicorn>=23.0.0\n")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="boom")
-            # must not raise
-            jen_update_root.install_python_dependencies(str(install_dir))
-
     def test_templates_replaced_wholesale(self, jen_update_root, tmp_path):
         extracted = self._make_extracted_dir(tmp_path, with_static=False, with_service=False, with_sudoers=False)
         install_dir = tmp_path / "install"
@@ -309,6 +276,39 @@ class TestInstallPythonDependencies:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
         assert (install_dir / "run.py").exists()
+
+
+class TestInstallPythonDependencies:
+    """v5.5.0 — the self-update flow now runs pip, because run.py went
+    from werkzeug to gunicorn and a file-only update would land run.py
+    expecting a package that isn't installed."""
+
+    def test_runs_pip_install_against_installed_requirements(self, jen_update_root, tmp_path):
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        (install_dir / "requirements.txt").write_text("gunicorn>=23.0.0\n")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            jen_update_root.install_python_dependencies(str(install_dir))
+        joined = " ".join(str(c) for c in mock_run.call_args_list)
+        assert "pip" in joined and "install" in joined
+        assert str(install_dir / "requirements.txt") in joined
+
+    def test_missing_requirements_file_is_a_no_op(self, jen_update_root, tmp_path):
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        with patch("subprocess.run") as mock_run:
+            jen_update_root.install_python_dependencies(str(install_dir))
+        mock_run.assert_not_called()
+
+    def test_pip_failure_is_non_fatal(self, jen_update_root, tmp_path):
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        (install_dir / "requirements.txt").write_text("gunicorn>=23.0.0\n")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr="boom")
+            # must not raise
+            jen_update_root.install_python_dependencies(str(install_dir))
 
 
 class TestInstallSelfUpdateFiles:

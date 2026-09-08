@@ -45,7 +45,11 @@ def _make_handler(https_port: int):
 
 def make_server(http_port: int, https_port: int) -> ThreadingHTTPServer:
     """Build (but don't start) the redirect server."""
-    return ThreadingHTTPServer(("0.0.0.0", http_port), _make_handler(https_port))
+    # nosec B104 — binding all interfaces is intentional and matches what
+    # gunicorn (and the pre-v5.5.0 werkzeug server) already do: Jen is a
+    # LAN admin console meant to be reached on whatever interface the box
+    # has. This listener only ever emits 301s to HTTPS — no app, no data.
+    return ThreadingHTTPServer(("0.0.0.0", http_port), _make_handler(https_port))  # nosec B104
 
 
 def serve_forever(http_port: int, https_port: int) -> None:
