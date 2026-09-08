@@ -117,6 +117,68 @@ class TestSystemSettings:
         assert r.status_code == 200
 
 
+class TestMetricsSettings:
+    """v5.3.3 — /metrics now defaults to closed unless metrics_token or
+    metrics_open is configured. This project deliberately avoids
+    requiring config-file edits for anything a settings toggle can
+    cover instead, so this exists to make that new requirement
+    configurable from the UI. No restart involved (unlike save_ports
+    above), so no threading mock needed here."""
+
+    def test_settings_page_shows_closed_state_by_default(self, logged_in_client):
+        r = logged_in_client.get("/settings/infrastructure")
+        assert r.status_code == 200
+        assert b"currently" in r.data
+        assert b"closed" in r.data
+
+    def test_setting_a_token_actually_protects_the_endpoint(self, logged_in_client):
+        r = logged_in_client.post("/settings/save-metrics", data={
+            "metrics_token": "a-valid-long-token-value",
+        }, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"now requires this token" in r.data
+
+        # Confirms this took effect immediately — no restart step
+        # exists in this route at all, unlike save_ports.
+        r2 = logged_in_client.get("/metrics")
+        assert r2.status_code == 401
+        r3 = logged_in_client.get("/metrics", headers={"Authorization": "Bearer a-valid-long-token-value"})
+        assert r3.status_code == 200
+
+    def test_enabling_open_access_actually_opens_the_endpoint(self, logged_in_client):
+        r = logged_in_client.post("/settings/save-metrics", data={
+            "metrics_open": "1",
+        }, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"is open" in r.data
+
+        r2 = logged_in_client.get("/metrics")
+        assert r2.status_code == 200
+
+    def test_short_token_rejected(self, logged_in_client):
+        r = logged_in_client.post("/settings/save-metrics", data={
+            "metrics_token": "short",
+        }, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"at least 8 characters" in r.data
+
+        # Confirms the rejected value was never actually written —
+        # /metrics should still be in its prior (closed) state.
+        r2 = logged_in_client.get("/metrics")
+        assert r2.status_code == 401
+
+    def test_blank_form_reverts_to_closed(self, logged_in_client):
+        """Saving with neither field set is a valid, supported choice
+        — the default-secure state — not something the form should
+        block."""
+        logged_in_client.post("/settings/save-metrics", data={"metrics_open": "1"})
+        r = logged_in_client.post("/settings/save-metrics", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"will return 401" in r.data
+        r2 = logged_in_client.get("/metrics")
+        assert r2.status_code == 401
+
+
 class TestMfaModeAndNavLogoRoutesRegression:
     """v4.4.9 regression guard: both save_mfa_mode() and upload_nav_logo()
     were missing their @bp.route(...) decorator entirely — Flask never

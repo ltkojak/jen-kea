@@ -399,8 +399,16 @@ Jen exposes a Prometheus-compatible metrics endpoint at `/metrics`.
 review correctly pointed out that defaulting to fully open access,
 even though the data exposed is deliberately limited to aggregate
 counts (never individual MACs, IPs, or hostnames), is backwards from
-a secure-by-default posture. You need to explicitly enable it one of
-two ways, in `jen.config`'s `[server]` section:
+a secure-by-default posture. You need to explicitly enable it, and
+the easiest way is directly from the UI:
+
+**From Settings → Infrastructure → Prometheus Metrics** — enter a
+token (or click Generate for a random one) and save, or check "Allow
+open access" if you're already restricting `/metrics` at the network
+or reverse-proxy level. Takes effect immediately, no restart needed.
+
+If you'd rather edit `jen.config` directly, the same two options are
+available under `[server]`:
 
 **Option 1 — token-protected (recommended):**
 ```ini

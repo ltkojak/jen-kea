@@ -295,7 +295,8 @@ class TestInstallSelfUpdateFiles:
         dest_dir = tmp_path / "sbin"
         dest_dir.mkdir()
         self_install_path = dest_dir / "jen-update-root.py"
-        with patch("os.chown"):
+        with patch("os.chown"), patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_self_update_files(
                 str(extracted), self_install_path=str(self_install_path),
                 update_service_path=str(tmp_path / "jen-update.service"),
@@ -332,6 +333,7 @@ class TestInstallSelfUpdateFiles:
 
     def test_installs_new_service_content_and_reloads_daemon(self, jen_update_root, tmp_path):
         extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        (tmp_path / "sbin").mkdir()
         update_service_path = tmp_path / "jen-update.service"
         calls = []
 
@@ -354,6 +356,7 @@ class TestInstallSelfUpdateFiles:
         which is deliberately 0700 since it's the thing www-data must
         never be able to read or modify."""
         extracted = self._make_extracted_dir_with_self_update_files(tmp_path)
+        (tmp_path / "sbin").mkdir()
         update_service_path = tmp_path / "jen-update.service"
         with patch("os.chown"), patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -375,7 +378,9 @@ class TestInstallSelfUpdateFiles:
         self_install_path.parent.mkdir()
         self_install_path.write_bytes(b"# old v1 updater\n")
 
-        with patch("os.chown"), patch("os.replace", side_effect=os.replace) as mock_replace:
+        with patch("os.chown"), patch("subprocess.run") as mock_run, \
+             patch("os.replace", side_effect=os.replace) as mock_replace:
+            mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_self_update_files(
                 str(extracted), self_install_path=str(self_install_path),
                 update_service_path=str(tmp_path / "jen-update.service"),

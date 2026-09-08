@@ -214,7 +214,14 @@ anyone who's already decided that tradeoff is fine given their network
 setup) in `jen.config`'s `[server]` section. With neither set,
 `/metrics` now returns 401. Updated `docs/admin-guide.md`, which had
 also drifted to claim the wrong config section name (`[jen]` instead of
-the actual `[server]`) on top of describing the old default.
+the actual `[server]`) on top of describing the old default. Also
+added a proper Settings UI for this (Settings → Infrastructure →
+Prometheus Metrics — token field with a "Generate" button, plus an
+"Allow open access" checkbox), rather than requiring a config-file
+edit for something this project has consistently kept
+UI-driven. No restart needed, unlike the ports card right above it in
+the same page — `extensions.cfg` is read fresh on every `/metrics`
+request, so the setting takes effect on the very next scrape.
 
 **`CHANGELOG.md` trimmed from ~330KB to ~100KB.** It had become an
 audit log rather than a changelog — every release since v1.0.0, all in
@@ -227,6 +234,27 @@ byte-for-byte before writing anything, then separately verified entry
 counts on both sides and spot-checked specific entries for content
 integrity. The in-app "What's New" viewer only ever shows the 5 most
 recent entries regardless, so this has no effect on it.
+
+### Test fixes caught by CI before this ever got tagged
+
+Since this release was never actually pushed or tagged, CI on the
+first attempt at it caught real mistakes worth being honest about
+rather than quietly folding away: four of the new updater self-update
+tests either called the real `systemctl daemon-reload` (unmocked,
+which fails outside a real systemd environment) or referenced a
+destination directory that was never created with `.mkdir()` first —
+both classes of mistake I'd actually already caught and fixed once in
+ad-hoc scratch testing while writing these tests, but didn't correctly
+carry into every corresponding formal test method. Separately, three
+tests in `test_kea6.py`'s own Prometheus v6 metrics suite broke
+outright from the `/metrics` default-closed change, and two more in
+that same class were passing for the wrong reason — asserting specific
+text was *absent*, which is trivially true of a 401 page too, not a
+meaningful confirmation of what they claimed to test. All were missed
+because the search for `/metrics` usages when making that change only
+covered `test_dashboard.py`; a repo-wide search afterward found this
+second file. All nine now fixed and individually re-verified directly
+before repackaging, not just re-run and trusted.
 
 ## [5.3.2] - 2026-09-08
 

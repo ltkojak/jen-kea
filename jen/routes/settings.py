@@ -582,7 +582,9 @@ def settings_infrastructure():
                            ipv6_enabled=ipv6_enabled,
                            http_port=extensions.HTTP_PORT,
                            https_port=extensions.HTTPS_PORT,
-                           ssl_configured=__config.ssl_configured())
+                           ssl_configured=__config.ssl_configured(),
+                           metrics_token=extensions.cfg.get("server", "metrics_token", fallback="") if extensions.cfg else "",
+                           metrics_open=extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False)
 
 @bp.route("/settings/infrastructure/save-kea", methods=["POST"])
 @login_required
@@ -1309,6 +1311,52 @@ def save_ports():
         import time; time.sleep(2)
         subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
     threading.Thread(target=do_restart, daemon=True).start()
+
+    return redirect(url_for('settings.settings_infrastructure'))
+
+
+@bp.route("/settings/save-metrics", methods=["POST"])
+@login_required
+@_admin_required
+def save_metrics_settings():
+    """
+    v5.3.3 — /metrics started defaulting to closed (401) unless
+    metrics_token or metrics_open is set, per the change in
+    jen/routes/dashboard.py's prometheus_metrics(). This project has
+    deliberately avoided requiring config-file edits for anything a
+    settings-page toggle can cover instead — some people genuinely
+    don't want to touch a text file over SSH — so this exists
+    specifically to make that new requirement configurable from the
+    UI, not just documented as something to go edit jen.config for.
+
+    No restart needed, unlike save_ports() above: extensions.cfg is
+    read fresh on every single /metrics request
+    (extensions.cfg.get("server", "metrics_token", ...)), and
+    write_values() reloads AppConfig immediately by default — so this
+    takes effect on the very next scrape, not after a restart.
+    """
+    metrics_token = request.form.get("metrics_token", "").strip()
+    metrics_open = request.form.get("metrics_open", "0") == "1"
+
+    if metrics_token and len(metrics_token) < 8:
+        flash("Metrics token must be at least 8 characters — or leave it blank.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    items = [
+        ("server", "metrics_token", metrics_token),
+        ("server", "metrics_open", "true" if metrics_open else "false"),
+    ]
+    __config.app_config.write_values(items)
+
+    __user.audit("SAVE_METRICS_SETTINGS", "settings",
+                 f"metrics_token={'set' if metrics_token else 'empty'} metrics_open={metrics_open} by {current_user.username}")
+
+    if metrics_token:
+        flash("Metrics settings saved — /metrics now requires this token.", "success")
+    elif metrics_open:
+        flash("Metrics settings saved — /metrics is open, no token required.", "success")
+    else:
+        flash("Metrics settings saved — /metrics will return 401 until a token or open access is set below.", "success")
 
     return redirect(url_for('settings.settings_infrastructure'))
 

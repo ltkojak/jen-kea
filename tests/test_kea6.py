@@ -1825,7 +1825,29 @@ class TestGlobalSearchV6:
 
 class TestPrometheusMetricsV6:
 
-    def test_ipv6_enabled_gauge_always_present_even_when_off(self, client, mock_kea, db):
+    @pytest.fixture
+    def metrics_open(self, monkeypatch):
+        """v5.3.3 — /metrics now defaults to closed (401) without a
+        configured metrics_token or explicit metrics_open=true. Every
+        test in this class hits /metrics directly and needs to opt
+        into the old open behavior to test what it actually intends to
+        test — metric content/format, not access control (which has
+        its own dedicated tests in test_dashboard.py). Two of these
+        five tests didn't fail outright when this changed, since they
+        assert specific text is ABSENT, and that's also (trivially,
+        uselessly) true of a 401 page — but they were not actually
+        testing what they claim to without this fixture."""
+        import configparser
+
+        from jen import extensions
+        test_cfg = configparser.ConfigParser()
+        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
+        if "server" not in test_cfg:
+            test_cfg["server"] = {}
+        test_cfg["server"]["metrics_open"] = "true"
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+
+    def test_ipv6_enabled_gauge_always_present_even_when_off(self, client, mock_kea, db, metrics_open):
         from jen.models.user import _invalidate_settings_cache
         _invalidate_settings_cache()
         r = client.get("/metrics")
@@ -1833,7 +1855,7 @@ class TestPrometheusMetricsV6:
         assert "# TYPE jen_ipv6_enabled gauge" in text
         assert "jen_ipv6_enabled 0" in text
 
-    def test_v6_subnet_metrics_absent_when_disabled(self, client, mock_kea, monkeypatch, db):
+    def test_v6_subnet_metrics_absent_when_disabled(self, client, mock_kea, monkeypatch, db, metrics_open):
         from jen.models.user import _invalidate_settings_cache
         monkeypatch.setattr(extensions, "SUBNET6_MAP",
                             {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}})
@@ -1844,7 +1866,7 @@ class TestPrometheusMetricsV6:
         assert "jen_subnet6_reserved_hosts" not in text
         assert "# TYPE jen_kea6_up" not in text
 
-    def test_v6_subnet_metrics_present_when_enabled_and_configured(self, client, mock_kea, monkeypatch, db):
+    def test_v6_subnet_metrics_present_when_enabled_and_configured(self, client, mock_kea, monkeypatch, db, metrics_open):
         import jen.services.kea6 as kea6_module
         from jen.models.user import _invalidate_settings_cache, set_global_setting
         set_global_setting("ipv6_enabled", "true")
@@ -1873,7 +1895,7 @@ class TestPrometheusMetricsV6:
         finally:
             set_global_setting("ipv6_enabled", "false")
 
-    def test_no_pool_size_or_utilization_metric_for_v6(self, client, mock_kea, monkeypatch, db):
+    def test_no_pool_size_or_utilization_metric_for_v6(self, client, mock_kea, monkeypatch, db, metrics_open):
         """Deliberate scope decision (matches the lease6_history schema
         from Phase 0/1): no finite comparable 'pool size' concept for a
         /64, so no jen_subnet6_pool_size/utilization_ratio metric exists
@@ -1891,7 +1913,7 @@ class TestPrometheusMetricsV6:
         finally:
             set_global_setting("ipv6_enabled", "false")
 
-    def test_v4_metric_families_unaffected_by_v6_addition(self, client, mock_kea, monkeypatch, db):
+    def test_v4_metric_families_unaffected_by_v6_addition(self, client, mock_kea, monkeypatch, db, metrics_open):
         """Zero behavior change for the v4 path — every existing metric
         family must still be present and correctly formatted regardless
         of the v6 state."""

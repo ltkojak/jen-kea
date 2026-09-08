@@ -801,8 +801,56 @@ async function checkConfigDrift() {
     </form>
 </div>
 
+<!-- Prometheus Metrics -->
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">📊 Prometheus Metrics</span>
+    </div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        The <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">/metrics</code>
+        endpoint requires either a token or explicit open access —
+        {% if metrics_token %}
+        currently <strong style="color:var(--success);">token-protected</strong>.
+        {% elif metrics_open %}
+        currently <strong style="color:var(--warning);">open</strong> (no token required).
+        {% else %}
+        currently <strong style="color:var(--danger);">closed</strong> — scrapes get 401 until one of the options below is set.
+        {% endif %}
+        Takes effect immediately on save, no restart needed.
+    </p>
+    <form method="POST" action="{{ url_for('settings.save_metrics_settings') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Metrics Token <span style="color:var(--text-muted);font-weight:400;">(leave blank for no token)</span></label>
+            <div style="display:flex;gap:8px;max-width:460px;">
+                <input type="text" name="metrics_token" id="metrics-token-input" value="{{ metrics_token }}"
+                       placeholder="e.g. a long random string" style="flex:1;" autocomplete="off">
+                <button type="button" class="btn" onclick="generateMetricsToken()">Generate</button>
+            </div>
+            <div class="form-hint">Scrape with: <code>curl -H "Authorization: Bearer &lt;token&gt;" https://.../metrics</code></div>
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;">
+                <input type="checkbox" name="metrics_open" value="1" {% if metrics_open %}checked{% endif %}>
+                Allow open access (no token required) — only if <code>/metrics</code> is already restricted at the network or reverse-proxy level
+            </label>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save Metrics Settings</button>
+    </form>
+</div>
+
 {% endblock %}
 {% block scripts %}
+function generateMetricsToken() {
+    // crypto.getRandomValues is cryptographically secure in every
+    // modern browser — no server round trip needed for this, unlike
+    // an API key (which needs a matching DB row created server-side).
+    // This is just filling in a config value the admin is about to
+    // save themselves.
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    document.getElementById('metrics-token-input').value = token;
+}
 function showDnsFields(provider) {
     ['technitium','pihole','adguard','ssh'].forEach(p => {
         const el = document.getElementById('dns-fields-' + p);
