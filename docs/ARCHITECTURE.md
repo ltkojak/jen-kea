@@ -398,7 +398,62 @@ Stated plainly rather than left to be discovered mid-implementation:
   or two) well. A full PD-relay-chain setup is a different, harder
   problem that would need its own scoping.
 
-## 6. Known gaps (as of this writing)
+## 6. Serving model (v5.5.0)
+
+Through v5.4.x, `run.py` *was* the server — `werkzeug.serving.make_server`
+/ `app.run`, i.e. the Flask development server. `threaded=True` (v5.3.3)
+stopped one slow request from blocking every other user, but it was
+still the dev server: unbounded thread spawning, no request timeouts,
+no graceful drain on restart.
+
+v5.5.0 puts **gunicorn** in front. `run.py` is now a launcher, not a
+server:
+
+- **No SSL:** `os.execvp` gunicorn bound to the HTTP port. `run.py` is
+  replaced by the process; systemd owns gunicorn directly and SIGTERM
+  goes straight to it.
+- **SSL:** gunicorn runs as a child process (`--certfile/--keyfile`,
+  HTTPS port); `run.py` stays as the parent, runs the HTTP→HTTPS 301
+  redirect (`jen/httpredirect.py`, stdlib only) on its main thread, and
+  forwards SIGTERM/SIGINT to gunicorn. gunicorn can only terminate TLS
+  process-wide, so the plain-HTTP redirect genuinely can't share its
+  process — hence the split. A `systemctl restart jen` now drains
+  in-flight requests (gunicorn `--graceful-timeout 30`,
+  `jen.service` `TimeoutStopSec=40`) instead of cutting them.
+
+**Single worker, many threads.** `--workers 1 --threads N` (N =
+`[server] threads`, default 8, Settings → Infrastructure). Jen is
+I/O-bound — DB, Kea Control Agent API, SSH — not CPU-bound, so threads
+carry the concurrency fine. `-w 1` is also load-bearing for correctness:
+the backup scheduler and the `check_alerts` loop are **single-process**
+background work. They were started by `create_app()` before v5.5.0 —
+which would have run them once per gunicorn worker. Now the factory only
+builds the app; `jen/wsgi.py` (imported once by the single worker) calls
+`jen.services.background.start_background_workers()`. A multi-worker
+gunicorn would reopen the "scheduler runs N times, alerts fire N times"
+problem and is deliberately not offered — that's a separate project
+needing a dedicated worker process or a distributed lock.
+
+**Werkzeug fallback.** If gunicorn can't be imported or spawned — a
+botched dependency install, a non-Linux dev box — `run.py` logs a
+CRITICAL and falls back to the old werkzeug path (which then starts the
+background workers itself). This is a safety net so the console never
+goes dark on a bad update; it is not a supported way to run in
+production, and it says so, loudly, in the log on every start.
+
+**The self-updater now runs pip.** `jen-update-root.py` copied files but
+never installed packages. v5.5.0 made that a hard problem (`run.py` now
+needs gunicorn), so `install_python_dependencies()` runs
+`pip install -r /opt/jen/requirements.txt` after the file install,
+non-fatally (a failure is logged; the werkzeug fallback covers a
+genuinely missing package until a `sudo ./install.sh --upgrade`).
+
+**Still not offered:** a reverse proxy is not required and not
+configured by the installer. Terminating TLS in nginx/caddy and running
+gunicorn HTTP-only behind it is a valid deployment, just not the
+default — the default keeps the "one `install.sh` and done" story.
+
+## 7. Known gaps (as of this writing)
 
 Documenting these here rather than letting them go unstated:
 

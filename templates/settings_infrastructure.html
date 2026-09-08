@@ -751,13 +751,13 @@ async function checkConfigDrift() {
     </form>
 </div>
 
-<!-- Server Ports -->
+<!-- Server Ports & Performance -->
 <div class="card">
     <div class="card-header">
-        <span class="card-title">🔌 Server Ports</span>
+        <span class="card-title">🔌 Server Ports &amp; Performance</span>
     </div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
-        Changing ports requires a Jen restart — this happens automatically when you save.
+        Changing any of these requires a Jen restart — this happens automatically when you save.
         {% if ssl_configured %}
         HTTPS is active. HTTP requests on port {{ http_port }} are automatically redirected to HTTPS on port {{ https_port }}.
         {% else %}
@@ -796,8 +796,18 @@ async function checkConfigDrift() {
                 <div class="form-hint">Configure SSL first to enable HTTPS</div>
             </div>
             {% endif %}
+            <div class="form-group">
+                <label>Worker Threads</label>
+                <input type="number" name="threads" value="{{ worker_threads }}"
+                       min="1" max="64" style="max-width:160px;">
+                <div class="form-hint">
+                    Concurrent requests the server handles at once (gunicorn
+                    <code>--threads</code>). Default: 8. Higher helps when many
+                    users load pages together; most homelabs never need to change it.
+                </div>
+            </div>
         </div>
-        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save Ports &amp; Restart</button>
+        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save &amp; Restart</button>
     </form>
 </div>
 

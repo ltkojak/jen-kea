@@ -2,6 +2,59 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.5.0] - 2026-09-08
+
+### gunicorn replaces the werkzeug dev server
+
+Through 5.4.x, `run.py` *was* the server — `werkzeug.serving.make_server`
+/ `app.run`, the Flask development server. `threaded=True` (5.3.3)
+stopped one slow request from blocking every other user, but it was
+still the dev server: no request timeouts, no graceful drain, unbounded
+thread spawning. For something marketed as a management console that's
+the first thing a skeptical network engineer dings.
+
+**`run.py` is now a launcher, not a server.** It loads config and then
+runs gunicorn (`jen.wsgi:application`):
+
+- **No SSL:** `os.execvp` gunicorn on the HTTP port — the process is
+  replaced, systemd owns gunicorn directly.
+- **SSL:** gunicorn runs as a child (HTTPS, `--certfile/--keyfile`);
+  `run.py` stays parent, serves the HTTP→HTTPS 301 redirect
+  (`jen/httpredirect.py`, stdlib only) and forwards SIGTERM to gunicorn.
+  A `systemctl restart jen` now **drains** in-flight requests
+  (`--graceful-timeout 30`, `jen.service` `TimeoutStopSec=40`) instead
+  of cutting them.
+
+**`--workers 1 --threads N`** (N = `[server] threads` in jen.config,
+default 8, editable in Settings → Infrastructure → Server Ports &
+Performance; a restart applies it). Jen is I/O-bound (DB, Kea API, SSH),
+so threads carry the concurrency and a single worker keeps the backup
+scheduler and the alert loop single-process. Those were started by
+`create_app()` before — which under gunicorn would have run them once
+per worker. Now the factory only builds the app; `jen/wsgi.py` starts
+the background workers once, in the sole worker. Multi-worker gunicorn
+is deliberately not offered (it reopens "scheduler runs N times").
+
+**Werkzeug fallback, safety-net only.** If gunicorn can't be imported or
+launched (a bad dependency install, a non-Linux dev box), `run.py` logs
+a CRITICAL and falls back to the old werkzeug path so the console
+doesn't go dark. It is not a supported production path and says so on
+every start.
+
+**The self-updater now runs pip.** `jen-update-root.py` copied files but
+never installed dependencies — so a file-only self-update to 5.5.0 would
+land a `run.py` that expects gunicorn to be present. It now runs
+`pip install -r /opt/jen/requirements.txt` after the file install,
+non-fatally (logged on failure; the werkzeug fallback covers a missing
+package until a `sudo ./install.sh --upgrade`). This closes the PENDING
+"self-updater doesn't run pip" gap.
+
+`gunicorn>=23.0.0` added to `requirements.txt`. New tests:
+`test_run_launcher.py` (command-line construction, SSL/non-SSL
+branching, thread clamping), `test_background.py` (the factory starts
+nothing; `start_background_workers` is idempotent), and self-updater
+pip-step coverage in `test_jen_update_root.py`.
+
 ## [5.4.1] - 2026-09-08
 
 ### One dependency list instead of four

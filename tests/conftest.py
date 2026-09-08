@@ -186,6 +186,7 @@ def _patch_extensions():
     }
     extensions.HTTP_PORT  = 5099
     extensions.HTTPS_PORT = 8499
+    extensions.WORKER_THREADS = 8
     extensions.CONFIG_FILE = "/tmp/jen_test.config"
     # v5.4.0 — repoint the MFA-secret encryption key off /etc/jen so the
     # suite works on a dev box where /etc/jen isn't writable (CI creates

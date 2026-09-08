@@ -582,6 +582,7 @@ def settings_infrastructure():
                            ipv6_enabled=ipv6_enabled,
                            http_port=extensions.HTTP_PORT,
                            https_port=extensions.HTTPS_PORT,
+                           worker_threads=extensions.WORKER_THREADS,
                            ssl_configured=__config.ssl_configured(),
                            metrics_token=extensions.cfg.get("server", "metrics_token", fallback="") if extensions.cfg else "",
                            metrics_open=extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False)
@@ -1277,8 +1278,9 @@ def save_ports():
     try:
         http_port  = int(request.form.get("http_port",  str(extensions.HTTP_PORT)))
         https_port = int(request.form.get("https_port", str(extensions.HTTPS_PORT)))
+        threads    = int(request.form.get("threads", str(extensions.WORKER_THREADS)))
     except ValueError:
-        flash("Ports must be valid numbers.", "error")
+        flash("Ports and thread count must be valid numbers.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
 
     if not (1024 <= http_port <= 65535):
@@ -1293,18 +1295,22 @@ def save_ports():
         flash("HTTP and HTTPS ports must be different.", "error")
         return redirect(url_for('settings.settings_infrastructure'))
 
-    items = [("server", "http_port", str(http_port))]
+    if not (1 <= threads <= 64):
+        flash("Worker threads must be between 1 and 64.", "error")
+        return redirect(url_for('settings.settings_infrastructure'))
+
+    items = [("server", "http_port", str(http_port)), ("server", "threads", str(threads))]
     if ssl_on:
         items.append(("server", "https_port", str(https_port)))
     __config.app_config.write_values(items)
 
     if ssl_on:
-        msg = f"Ports updated — HTTP: {http_port} (redirect), HTTPS: {https_port}. Restarting Jen..."
+        msg = f"Server settings updated — HTTP: {http_port} (redirect), HTTPS: {https_port}, {threads} worker threads. Restarting Jen..."
     else:
-        msg = f"HTTP port updated to {http_port}. Restarting Jen..."
+        msg = f"Server settings updated — HTTP port {http_port}, {threads} worker threads. Restarting Jen..."
 
     __user.audit("SAVE_PORTS", "settings",
-                 f"Ports updated to HTTP:{http_port} HTTPS:{https_port} by {current_user.username}")
+                 f"Server: HTTP:{http_port} HTTPS:{https_port} threads:{threads} by {current_user.username}")
     flash(msg, "success")
 
     def do_restart():

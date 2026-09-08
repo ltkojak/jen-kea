@@ -62,6 +62,13 @@ JEN_DB_SSL_CA: str = ""  # v4.4.5 — same idea, independent of KEA_DB_SSL_CA
 HTTP_PORT:  int = 5050
 HTTPS_PORT: int = 8443
 
+# v5.5.0 — worker thread count for the gunicorn server (run.py launches
+# `gunicorn --workers 1 --threads N`). One worker keeps the background
+# scheduler + alert loop a single-process concern; threads carry the
+# I/O-bound concurrency (DB, Kea API, SSH). Configurable via
+# [server] threads in jen.config and Settings → Infrastructure.
+WORKER_THREADS: int = 8
+
 KEA_SSH_HOST: str = ""
 KEA_SSH_USER: str = ""
 KEA_CONF:     str = "/etc/kea/kea-dhcp4.conf"

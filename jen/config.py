@@ -100,6 +100,11 @@ class AppConfig:
         extensions.HTTP_PORT  = cfg.getint("server", "http_port",  fallback=5050)
         extensions.HTTPS_PORT = cfg.getint("server", "https_port", fallback=8443)
 
+        # v5.5.0 — clamp to a sane range; a typo of 0 or 5000 shouldn't
+        # translate straight into a gunicorn --threads argument.
+        _threads = cfg.getint("server", "threads", fallback=8)
+        extensions.WORKER_THREADS = max(1, min(_threads, 64))
+
         extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host",     fallback="")
         extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user",     fallback="")
         extensions.KEA_CONF     = cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf")

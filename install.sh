@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.4.1"
+JEN_VERSION="5.5.0"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -315,7 +315,7 @@ install_dependencies() {
     fi
 
     local missing_py=()
-    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode PIL authlib cryptography jinja2 werkzeug paramiko apscheduler; do
+    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode PIL authlib cryptography gunicorn jinja2 werkzeug paramiko apscheduler; do
         python3 -c "import ${pkg}" 2>/dev/null || missing_py+=("${pkg/-/_}")
     done
 

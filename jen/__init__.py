@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.4.1"
+JEN_VERSION = "5.5.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -479,9 +479,12 @@ def create_app() -> Flask:
     except Exception as e:
         logger.warning(f"Could not clear restart_pending flag at startup: {e}")
 
-    # ── Backup scheduler ──────────────────────────────────────────────────────
-    from jen.services.scheduler import start_scheduler
-    start_scheduler(app)
+    # ── Background workers ────────────────────────────────────────────────────
+    # v5.5.0 — the scheduler and alert loop are NOT started here anymore.
+    # The factory only builds the app; the entrypoint that owns this
+    # process (jen/wsgi.py under gunicorn, or run.py's fallback path)
+    # calls jen.services.background.start_background_workers(). The test
+    # suite imports this factory and must not spin up threads.
 
     return app
 

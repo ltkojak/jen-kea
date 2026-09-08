@@ -78,9 +78,17 @@ writes to disk *and* re-derives every global atomically, so disk and memory can'
 
 `jen/__init__.py::create_app()` builds the Flask app: loads config, registers all
 blueprints from `jen/routes/`, loads plugins, runs DB migrations, clears the
-`restart_pending` flag, starts the backup scheduler. `run.py` is the entry point
-(werkzeug `make_server`, `threaded=True`, optional TLS, HTTP→HTTPS redirect, and the
-background `check_alerts` thread).
+`restart_pending` flag. It does **not** start background work (v5.5.0) — the
+factory is pure so the test suite and every gunicorn worker can import it freely.
+
+Serving (v5.5.0 — see `docs/ARCHITECTURE.md` §6): `run.py` is a *launcher*, not a
+server. It loads config then runs **gunicorn** `jen.wsgi:application`
+(`--workers 1 --threads N`, N = `[server] threads`): `os.execvp` when there's no
+SSL, or gunicorn-as-child + a stdlib HTTP→HTTPS redirect (`jen/httpredirect.py`)
+when there is. `jen/wsgi.py` calls `jen.services.background.start_background_workers()`
+once (the scheduler + the `check_alerts` loop) — `-w 1` keeps that single-process.
+If gunicorn can't load, `run.py` falls back to the old werkzeug server with a loud
+CRITICAL — safety net only, never the intended path.
 
 `before_request` middleware, in order: request timing, session-timeout enforcement,
 HTTPS redirect (only if SSL configured), forced-password-change gate

@@ -11,5 +11,13 @@ Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 
+# v5.5.0 — run.py now launches gunicorn (directly via exec when there's
+# no SSL, or as a child alongside the HTTP->HTTPS redirect when there
+# is). Give gunicorn's graceful shutdown (--graceful-timeout 30) room
+# to finish before systemd escalates to SIGKILL, and send the stop
+# signal to the whole process group so the redirect child goes too.
+KillMode=mixed
+TimeoutStopSec=40
+
 [Install]
 WantedBy=multi-user.target

@@ -274,6 +274,41 @@ def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH,
         log(f"Updated {update_service_path} and reloaded systemd.")
 
 
+def install_python_dependencies(install_dir=INSTALL_DIR):
+    """
+    v5.5.0 — the self-update flow now runs pip.
+
+    Before this, a release that added or raised a runtime dependency
+    floor only reached an install via `sudo ./install.sh --upgrade`;
+    the in-app update button copied files but never touched packages.
+    v5.5.0 made that a hard problem — run.py now expects gunicorn — so
+    the updater installs `-r <install_dir>/requirements.txt` (copied in
+    by install_extracted_files, one step earlier).
+
+    Deliberately non-fatal: a pip failure is logged, and the update
+    proceeds to the restart. run.py's werkzeug fallback keeps the
+    console reachable if a needed package genuinely didn't land, and
+    the operator can then fix it with a normal `install.sh --upgrade`.
+    """
+    req = os.path.join(install_dir, "requirements.txt")
+    if not os.path.isfile(req):
+        log(f"WARNING: {req} not found — skipping dependency install.")
+        return
+    log("Installing Python dependencies (pip install -r requirements.txt)…")
+    base = ["/usr/bin/python3", "-m", "pip", "install", "--upgrade", "-r", req]
+    # --break-system-packages exists only on pip >= 23 (Ubuntu 24.04+);
+    # try with it, fall back to plain for older pip, same as install.sh.
+    result = subprocess.run(base + ["--break-system-packages"], capture_output=True, text=True)
+    if result.returncode != 0:
+        result = subprocess.run(base, capture_output=True, text=True)
+    if result.returncode == 0:
+        log("Dependencies up to date.")
+    else:
+        log("WARNING: pip install failed — the app will start on whatever is "
+            "already present (run.py falls back to werkzeug if gunicorn is "
+            f"missing). Fix with `sudo ./install.sh --upgrade`. pip said:\n{result.stderr.strip()}")
+
+
 def verify_release_checksum(tarball_name, actual_hash, checksum_text):
     """
     Pure function: given the checksum file's text content, confirm it
@@ -383,6 +418,7 @@ def main():
         log("Installing files…")
         install_extracted_files(extracted, INSTALL_DIR)
         install_self_update_files(extracted)
+        install_python_dependencies(INSTALL_DIR)
 
         log(f"Update to v{version} installed. Restarting jen…")
         subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)

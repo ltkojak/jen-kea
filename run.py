@@ -1,12 +1,33 @@
 #!/usr/bin/env python3
 """
-run.py — Jen entry point (v2.6.x+)
-────────────────────────────────────
-Starts the Jen application via the jen package factory.
+run.py — Jen entrypoint / launcher (v5.5.0)
+──────────────────────────────────────────
+Not a server anymore. `run.py` loads configuration and then launches
+**gunicorn** (`jen.wsgi:application`, `--workers 1 --threads N`):
 
-Environment variable support (Docker / .env):
-  If JEN_KEA_API_URL is set, a config file is auto-generated from env vars
-  so Docker users don't need to mount a jen.config manually.
+  no SSL : `os.execvp` gunicorn on the HTTP port — this process is
+           replaced, systemd owns gunicorn directly, SIGTERM flows
+           straight to it.
+  SSL    : spawn gunicorn (HTTPS) as a child, run the HTTP->HTTPS
+           redirect (jen/httpredirect.py) on the main thread, and
+           forward SIGTERM/SIGINT to gunicorn so a `systemctl restart`
+           drains in-flight requests instead of cutting them.
+
+One worker keeps the backup scheduler and alert loop a single-process
+concern (they're started from jen/wsgi.py); `--threads` carries the
+I/O-bound concurrency. The thread count is `[server] threads` in
+jen.config (Settings -> Infrastructure), clamped 1-64.
+
+**Werkzeug fallback.** If gunicorn can't be imported or launched — a
+botched dependency install, a non-Linux dev box — `run.py` falls back
+to the werkzeug server with a loud CRITICAL log. That path is a safety
+net so the console never goes dark on a bad update; it is NOT a
+supported way to run Jen in production.
+
+Docker / .env auto-config
+─────────────────────────
+  If JEN_KEA_API_URL is set, a config file is auto-generated from env
+  vars so Docker users don't need to mount a jen.config manually.
 
   Required env vars for auto-config:
     JEN_KEA_API_URL, JEN_KEA_API_USER, JEN_KEA_API_PASS
@@ -29,17 +50,19 @@ Environment variable support (Docker / .env):
     JEN_SUBNETS            (format: "1=Production,10.10.10.0/24;30=IoT,10.10.30.0/24")
 """
 
+import logging
 import os
-import ssl
-import threading
-
-from flask import Flask, redirect, request
-from werkzeug.serving import make_server
+import signal
+import subprocess
+import sys
 
 from jen import JEN_VERSION, create_app, extensions
-from jen.config import ssl_configured
+from jen.config import app_config, ssl_configured
 from jen.logging_config import configure_logging
-from jen.services.alerts import check_alerts
+
+logger = logging.getLogger("jen.launch")
+
+_TLS_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
 
 
 def _build_config_from_env():
@@ -58,6 +81,7 @@ def _build_config_from_env():
     if os.path.exists(config_path):
         try:
             import configparser
+
             cfg = configparser.ConfigParser()
             cfg.read(config_path)
             if cfg.get("kea", "api_url", fallback="").strip():
@@ -78,43 +102,43 @@ def _build_config_from_env():
     os.makedirs("/etc/jen", exist_ok=True)
     config_content = f"""# Jen - auto-generated from environment variables
 [kea]
-api_url  = {os.environ.get('JEN_KEA_API_URL', '')}
-api_user = {os.environ.get('JEN_KEA_API_USER', '')}
-api_pass = {os.environ.get('JEN_KEA_API_PASS', '')}
-name     = {os.environ.get('JEN_KEA_NAME', 'Kea Server 1')}
-role     = {os.environ.get('JEN_KEA_ROLE', 'primary')}
-ha_mode  = {os.environ.get('JEN_HA_MODE', '')}
+api_url  = {os.environ.get("JEN_KEA_API_URL", "")}
+api_user = {os.environ.get("JEN_KEA_API_USER", "")}
+api_pass = {os.environ.get("JEN_KEA_API_PASS", "")}
+name     = {os.environ.get("JEN_KEA_NAME", "Kea Server 1")}
+role     = {os.environ.get("JEN_KEA_ROLE", "primary")}
+ha_mode  = {os.environ.get("JEN_HA_MODE", "")}
 
 [kea_db]
-host     = {os.environ.get('JEN_KEA_DB_HOST', '')}
-user     = {os.environ.get('JEN_KEA_DB_USER', '')}
-password = {os.environ.get('JEN_KEA_DB_PASS', '')}
-database = {os.environ.get('JEN_KEA_DB_NAME', 'kea')}
+host     = {os.environ.get("JEN_KEA_DB_HOST", "")}
+user     = {os.environ.get("JEN_KEA_DB_USER", "")}
+password = {os.environ.get("JEN_KEA_DB_PASS", "")}
+database = {os.environ.get("JEN_KEA_DB_NAME", "kea")}
 
 [jen_db]
-host     = {os.environ.get('JEN_DB_HOST', '')}
-user     = {os.environ.get('JEN_DB_USER', '')}
-password = {os.environ.get('JEN_DB_PASS', '')}
-database = {os.environ.get('JEN_DB_NAME', 'jen')}
+host     = {os.environ.get("JEN_DB_HOST", "")}
+user     = {os.environ.get("JEN_DB_USER", "")}
+password = {os.environ.get("JEN_DB_PASS", "")}
+database = {os.environ.get("JEN_DB_NAME", "jen")}
 
 [server]
-http_port  = {os.environ.get('JEN_HTTP_PORT', '5050')}
-https_port = {os.environ.get('JEN_HTTPS_PORT', '8443')}
+http_port  = {os.environ.get("JEN_HTTP_PORT", "5050")}
+https_port = {os.environ.get("JEN_HTTPS_PORT", "8443")}
 
 [kea_ssh]
-host     = {os.environ.get('JEN_KEA_SSH_HOST', '')}
-user     = {os.environ.get('JEN_KEA_SSH_USER', '')}
+host     = {os.environ.get("JEN_KEA_SSH_HOST", "")}
+user     = {os.environ.get("JEN_KEA_SSH_USER", "")}
 key_path = /etc/jen/ssh/jen_rsa
-kea_conf = {os.environ.get('JEN_KEA_CONF', '/etc/kea/kea-dhcp4.conf')}
+kea_conf = {os.environ.get("JEN_KEA_CONF", "/etc/kea/kea-dhcp4.conf")}
 
 [subnets]
 {subnet_lines}
 [ddns]
-log_path     = {os.environ.get('JEN_DDNS_LOG', '/var/log/kea/kea-ddns.log')}
-provider     = {os.environ.get('JEN_DDNS_PROVIDER', 'none')}
-api_url      = {os.environ.get('JEN_DDNS_URL', '')}
-api_token    = {os.environ.get('JEN_DDNS_TOKEN', '')}
-forward_zone = {os.environ.get('JEN_DDNS_ZONE', '')}
+log_path     = {os.environ.get("JEN_DDNS_LOG", "/var/log/kea/kea-ddns.log")}
+provider     = {os.environ.get("JEN_DDNS_PROVIDER", "none")}
+api_url      = {os.environ.get("JEN_DDNS_URL", "")}
+api_token    = {os.environ.get("JEN_DDNS_TOKEN", "")}
+forward_zone = {os.environ.get("JEN_DDNS_ZONE", "")}
 """
     with open(config_path, "w") as f:
         f.write(config_content)
@@ -128,74 +152,162 @@ forward_zone = {os.environ.get('JEN_DDNS_ZONE', '')}
     print(f"Jen: config generated from environment variables → {config_path}")
 
 
+# ── gunicorn launch ─────────────────────────────────────────────────────────
+
+
+def gunicorn_argv(bind: str, threads: int, certfile: str = "", keyfile: str = "") -> list[str]:
+    """Build the gunicorn command line. Pure — unit-tested directly."""
+    argv = [
+        sys.executable,
+        "-m",
+        "gunicorn",
+        "jen.wsgi:application",
+        "--workers",
+        "1",
+        "--threads",
+        str(max(1, min(int(threads), 64))),
+        "--timeout",
+        "120",
+        "--graceful-timeout",
+        "30",
+        "--access-logfile",
+        "-",
+        "--error-logfile",
+        "-",
+        "--name",
+        "jen",
+    ]
+    if certfile:
+        argv += ["--certfile", certfile, "--keyfile", keyfile, "--ciphers", _TLS_CIPHERS]
+    argv += ["--bind", bind]
+    return argv
+
+
+def _ssl_cert_paths() -> tuple[str, str]:
+    cert = extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) else extensions.SSL_CERT
+    return cert, extensions.SSL_KEY
+
+
+def _gunicorn_importable() -> bool:
+    try:
+        import gunicorn  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
 def main():
-    # Configure logging first, from env vars only — create_app() below
-    # logs its own DB pool setup before extensions.cfg is populated, so
-    # this has to happen before create_app() runs, not after. Once
-    # create_app() returns, extensions.cfg is loaded — reconfigure with
-    # it so any file-based [server] log_level/log_format/log_file
-    # settings take effect for everything logged from here on.
+    # Logging from env only first — create_app()/config load below log
+    # before extensions.cfg exists. Reconfigure once it's populated.
     configure_logging()
-
-    # Auto-generate config from env vars if running in Docker
     _build_config_from_env()
-
-    app = create_app()
-
+    app_config.reload()
     configure_logging(extensions.cfg)
 
-    HTTP_PORT  = extensions.HTTP_PORT
-    HTTPS_PORT = extensions.HTTPS_PORT
+    http_port = extensions.HTTP_PORT
+    https_port = extensions.HTTPS_PORT
+    threads = extensions.WORKER_THREADS
+    use_ssl = ssl_configured()
 
-    # Start background alert/monitoring loop
-    threading.Thread(target=check_alerts, daemon=True).start()
-
-    if ssl_configured():
-        print(f"Jen v{JEN_VERSION} — HTTPS:{HTTPS_PORT}  HTTP redirect:{HTTP_PORT}")
-        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        # Enforce TLS 1.2 minimum, prefer TLS 1.3
-        ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        # Session resumption — reduces handshake to 1 round trip on repeat connections
-        ssl_ctx.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3
-        ssl_ctx.set_ciphers(
-            "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
+    if not _gunicorn_importable():
+        logger.critical(
+            "gunicorn is not importable — falling back to the werkzeug development "
+            "server. This is NOT a supported way to run Jen in production. Install "
+            "dependencies (pip install -r /opt/jen/requirements.txt) and restart. "
+            "Running on werkzeug for now so the console stays up."
         )
-        cert = extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) \
-               else extensions.SSL_CERT
-        ssl_ctx.load_cert_chain(cert, extensions.SSL_KEY)
-        # threaded=True (v5.3.3 fix) — without it, werkzeug's
-        # make_server() handles exactly one request at a time, across
-        # every single user of the app. One slow request (a SSH-backed
-        # config apply, a slow Kea API call) blocks every other
-        # concurrent user, including basic page loads, until it
-        # finishes. This doesn't turn Jen into a multi-process
-        # production server — that's a larger, deliberate migration to
-        # gunicorn, tracked separately, since it needs to solve the
-        # background alert thread firing once per worker process
-        # rather than once total — but it does fix the specific,
-        # acute symptom of the app appearing to hang under even light
-        # concurrent use.
-        https_server = make_server("0.0.0.0", HTTPS_PORT, app, ssl_context=ssl_ctx, threaded=True)
+        return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
+
+    if use_ssl:
+        cert, key = _ssl_cert_paths()
+        argv = gunicorn_argv(f"0.0.0.0:{https_port}", threads, certfile=cert, keyfile=key)
+        print(f"Jen v{JEN_VERSION} — gunicorn HTTPS:{https_port}  HTTP redirect:{http_port}  threads:{threads}")
+        try:
+            proc = subprocess.Popen(argv)
+        except (OSError, ValueError) as e:
+            logger.critical("Could not start gunicorn (%s) — werkzeug fallback.", e)
+            return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
+
+        def _forward(_signum, _frame):
+            try:
+                proc.send_signal(signal.SIGTERM)
+            except Exception:
+                pass
+
+        signal.signal(signal.SIGTERM, _forward)
+        signal.signal(signal.SIGINT, _forward)
+
+        # Redirect responder in the background; main thread waits on gunicorn.
+        import threading
+
+        from jen.httpredirect import serve_forever
+
+        threading.Thread(
+            target=serve_forever,
+            args=(http_port, https_port),
+            name="jen-http-redirect",
+            daemon=True,
+        ).start()
+
+        try:
+            rc = proc.wait()
+        except KeyboardInterrupt:
+            proc.wait()
+            rc = proc.returncode
+        sys.exit(rc if rc is not None else 0)
+
+    argv = gunicorn_argv(f"0.0.0.0:{http_port}", threads)
+    print(f"Jen v{JEN_VERSION} — gunicorn HTTP:{http_port}  threads:{threads}")
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as e:
+        logger.critical("Could not exec gunicorn (%s) — werkzeug fallback.", e)
+        return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
+
+
+def _serve_werkzeug_fallback(use_ssl: bool, http_port: int, https_port: int):
+    """The pre-v5.5.0 server, kept only as a safety net (see module
+    docstring). Starts the background workers in-process since there's
+    no gunicorn worker to do it."""
+    import ssl
+    import threading
+
+    from flask import Flask, redirect, request
+    from werkzeug.serving import make_server
+
+    from jen.services.background import start_background_workers
+
+    app = create_app()
+    start_background_workers(app)
+
+    if use_ssl:
+        print(f"Jen v{JEN_VERSION} — [FALLBACK] werkzeug HTTPS:{https_port}  HTTP redirect:{http_port}")
+        ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ssl_ctx.options |= ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3
+        ssl_ctx.set_ciphers(_TLS_CIPHERS)
+        cert, key = _ssl_cert_paths()
+        ssl_ctx.load_cert_chain(cert, key)
+        https_server = make_server("0.0.0.0", https_port, app, ssl_context=ssl_ctx, threaded=True)
+
         http_redirect = Flask("http_redirect")
 
         @http_redirect.route("/", defaults={"path": ""})
         @http_redirect.route("/<path:path>")
         def _redirect(path):
             host = request.host.split(":")[0]
-            return redirect(f"https://{host}:{HTTPS_PORT}/{path}", code=301)
+            return redirect(f"https://{host}:{https_port}/{path}", code=301)
 
-        http_server = make_server("0.0.0.0", HTTP_PORT, http_redirect, threaded=True)
+        http_server = make_server("0.0.0.0", http_port, http_redirect, threaded=True)
         t1 = threading.Thread(target=https_server.serve_forever, daemon=True)
         t2 = threading.Thread(target=http_server.serve_forever, daemon=True)
-        t1.start(); t2.start(); t1.join()
+        t1.start()
+        t2.start()
+        t1.join()
     else:
-        print(f"Jen v{JEN_VERSION} — HTTP only, port {HTTP_PORT}")
-        # threaded=True — same fix and same reasoning as the HTTPS
-        # path above; Flask's app.run() defaults to single-threaded
-        # too, and this is the path taken whenever SSL isn't
-        # configured, so it needs the identical fix, not just the
-        # HTTPS branch.
-        app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, threaded=True)
+        print(f"Jen v{JEN_VERSION} — [FALLBACK] werkzeug HTTP only, port {http_port}")
+        app.run(host="0.0.0.0", port=http_port, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
