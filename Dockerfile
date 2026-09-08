@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="jen-dhcp"
 LABEL description="Jen - The Kea DHCP Management Console"
-LABEL version="5.3.3"
+LABEL version="5.4.1"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -19,22 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     openssl \
     curl \
-    && pip3 install --break-system-packages --no-cache-dir \
-        "flask>=3.1.3" \
-        "flask-login>=0.6.3" \
-        "pymysql>=1.2.0" \
-        "dbutils>=3.1.2" \
-        "requests>=2.33.1" \
-        "pyotp>=2.10.0" \
-        "qrcode[pil]>=8.2" \
-        "pillow>=12.3.0" \
-        "authlib>=1.7.2" \
-        "cryptography>=46.0.6" \
-        "werkzeug>=3.1.7" \
-        "paramiko>=5.0.0" \
-        "apscheduler<4,>=3.11.3" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies — pinned list lives in requirements.txt (the single
+# source of truth, shared with install.sh and CI; never re-listed inline).
+# Copied first so this layer caches independently of the app source.
+COPY requirements.txt /opt/jen/requirements.txt
+RUN pip3 install --break-system-packages --no-cache-dir -r /opt/jen/requirements.txt
 
 # Create app user matching bare metal setup
 RUN groupadd -r www-data 2>/dev/null || true && \

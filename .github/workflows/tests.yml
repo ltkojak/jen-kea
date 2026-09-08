@@ -35,11 +35,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: |
-          pip install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
-            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
-            "authlib>=1.7.2" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3" \
-            "cryptography" "werkzeug" pytest
+        # Runtime pins come from requirements.txt (the single source of
+        # truth, shared with install.sh and Dockerfile). Never re-list
+        # packages here — tests/test_dependency_consistency.py enforces it.
+        run: pip install -q -r requirements.txt pytest
 
       - name: Point /opt/jen at the checkout
         # create_app() hardcodes template_folder="/opt/jen/templates" —
@@ -111,12 +110,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies + pip-audit
+        # Runtime pins come from requirements.txt (see note in the pytest
+        # job). pip-audit then checks whatever actually got installed.
         run: |
           pip install -q --upgrade pip
-          pip install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
-            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
-            "authlib>=1.7.2" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3" \
-            "cryptography" "werkzeug" pip-audit
+          pip install -q -r requirements.txt pip-audit
 
       - name: Run pip-audit
         # Floor-pinned deps (jen/config.py) mean the *installed* version can

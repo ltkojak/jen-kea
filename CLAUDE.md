@@ -21,6 +21,12 @@ The app itself only runs on Linux (hardcoded `/opt/jen`, `/etc/jen`, `/tmp` path
 SSH; systemd). On Windows, work through WSL or a Linux box for anything that executes.
 
 ```bash
+# Install deps — requirements.txt is the single source of truth (v5.4.1),
+# shared by install.sh, Dockerfile, and CI. requirements-dev.txt adds the
+# test/lint tooling. Never re-list packages inline anywhere else —
+# tests/test_dependency_consistency.py fails CI if you do.
+pip install -r requirements-dev.txt
+
 # Tests — needs a running MariaDB/MySQL with a `jen_test` database reachable.
 # jen_test serves as BOTH jen_db and kea_db in tests; conftest.py creates the
 # Kea-side tables and patches jen/extensions.py globals to point at it.
@@ -178,8 +184,12 @@ templates are `_`-prefixed and returned for HTMX swaps.
 
 Process:
 
-- The three version strings (`jen/__init__.py` `JEN_VERSION`, `install.sh`
-  `JEN_VERSION`, README badges) move together in the **same commit**.
+- The version strings move together in the **same commit**: `jen/__init__.py`
+  `JEN_VERSION`, `install.sh` `JEN_VERSION`, `Dockerfile` `LABEL version`, the
+  `jen-dhcp:` image tag in `docker-compose.yml` and `docker-compose.mysql.yml`,
+  the README badge, and the two `jen-vX.Y.Z.tar.gz` examples in the README.
+  `tests/test_dependency_consistency.py` enforces this — it will fail on the
+  next release until every one is bumped.
 - Bump only at release time, bundled with the `CHANGELOG.md` entry — never per-fix on a
   working branch.
 - Once a version has been described as deployed it is frozen; see rule 4 below.

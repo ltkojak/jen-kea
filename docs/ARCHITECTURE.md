@@ -160,20 +160,37 @@ schema change (`api_keys` needs a `subnet_access` column, and every
 
 ### 3.5 Floor-pinned (not exact-pinned) Python dependencies
 
-`install.sh` pins dependencies with a floor (`flask>=3.1.3`) rather than
-an exact version (`flask==3.1.3`). This is deliberate: it means fresh
-installs automatically pick up security patches without a maintainer
-re-reviewing and re-pinning every dependency on every release.
+Runtime dependencies are declared once, in `requirements.txt` at the
+repo root (v5.4.1 — before that the same list was duplicated across
+`install.sh`, `Dockerfile`, and `.github/workflows/tests.yml`, which had
+already drifted). `install.sh`, the Docker build, and both CI jobs all
+`pip install -r requirements.txt`; `requirements-dev.txt` adds the
+test/lint tooling. `tests/test_dependency_consistency.py` fails CI if
+any of those files re-introduces an inline package pin.
 
-**The tradeoff:** it means installs aren't fully reproducible — two
-installs done weeks apart could resolve to different exact versions —
-and there's no protection against a hypothetically-compromised newest
-release of a dependency (a supply-chain risk floor-pinning doesn't
-address, only exact-pinning + manual review would). `pip-audit` in CI
-(see below) is the compensating control: it checks whatever actually
-gets installed against known CVEs on every push, so a newly-disclosed
-vulnerability in a floor-pinned dependency gets caught even without a
-version bump.
+Each pin is a floor (`flask>=3.1.3`) rather than an exact version
+(`flask==3.1.3`). This is deliberate: fresh installs automatically pick
+up security patches without a maintainer re-reviewing and re-pinning
+every dependency on every release. A full lockfile was considered and
+rejected for this project's size and solo-maintenance model — it would
+mean a deliberate re-lock for every security update, which won't happen
+reliably, so stale-by-neglect deps would be the real outcome.
+
+**The tradeoff:** installs aren't fully reproducible — two installs done
+weeks apart could resolve to different exact versions — and there's no
+protection against a hypothetically-compromised *newest* release of a
+dependency (only exact-pinning + manual review addresses that).
+`pip-audit` in CI (see below) is the compensating control: it checks
+whatever actually gets installed against known CVEs on every push, so a
+newly-disclosed vulnerability in a floor-pinned dependency gets caught
+even without a version bump.
+
+**Not yet solved:** the in-app self-updater (`jen-update-root.py`) never
+runs `pip` — it only copies files. A release that adds or raises a
+dependency floor reaches an install through `sudo ./install.sh
+--upgrade`, not the in-app update button. `requirements.txt` is copied
+to `/opt/jen/` on install so a future updater enhancement (or a manual
+`pip install -r`) has the current list.
 
 ### 3.6 MFA secret encryption at rest (v5.4.0)
 

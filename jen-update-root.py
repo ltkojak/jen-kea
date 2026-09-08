@@ -142,6 +142,14 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
     if os.path.isfile(changelog_src):
         shutil.copy2(changelog_src, os.path.join(install_dir, "CHANGELOG.md"))
 
+    # requirements.txt (v5.4.1) — keep the pinned dependency list current
+    # beside the installed app. Note this flow still does NOT run pip; a
+    # release that adds or bumps a dependency floor needs a
+    # `sudo ./install.sh --upgrade`, not just the in-app update button.
+    requirements_src = os.path.join(extracted, "requirements.txt")
+    if os.path.isfile(requirements_src):
+        shutil.copy2(requirements_src, os.path.join(install_dir, "requirements.txt"))
+
     # Templates
     templates_src = os.path.join(extracted, "templates")
     if os.path.isdir(templates_src):

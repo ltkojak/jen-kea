@@ -2,6 +2,40 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.4.1] - 2026-09-08
+
+### One dependency list instead of four
+
+The same ~14 runtime packages were pinned independently in `install.sh`,
+`Dockerfile`, and both jobs of `.github/workflows/tests.yml`. They had
+already drifted: `werkzeug` was pinned in the Dockerfile, missing from
+`install.sh` (relying on flask to pull it), and unpinned in CI;
+`cryptography` (added in 5.4.0) was pinned in two places and unpinned in
+CI. The `Dockerfile` `LABEL version` had also sat at `5.3.3` through the
+entire 5.4.0 release.
+
+- **`requirements.txt`** at the repo root is now the single source of
+  truth — floor-pinned (`>=`), the deliberate choice documented in
+  `docs/ARCHITECTURE.md` §3.5 (a lockfile was considered and rejected
+  for this project's solo-maintenance model; `pip-audit` in CI is the
+  compensating control). `install.sh`, the Docker build, and both CI
+  jobs now `pip install -r requirements.txt`. `requirements-dev.txt`
+  adds the test/lint tooling.
+- **`jinja2>=3.1.6`** and **`werkzeug>=3.1.7`** are now pinned
+  explicitly rather than left as transitive flask dependencies, so a
+  security floor (e.g. jinja2 3.1.6 for CVE-2025-27516) doesn't depend
+  on flask happening to require it.
+- **`tests/test_dependency_consistency.py`** fails CI if any consumer
+  re-inlines a package pin, and if the version strings that must move
+  together (`jen/__init__.py`, `install.sh`, `Dockerfile` LABEL, README
+  badge, CHANGELOG) fall out of sync.
+- `requirements.txt` now travels with each release and is copied to
+  `/opt/jen/`. The in-app self-updater still does **not** run `pip` —
+  a release that adds or raises a dependency floor needs a
+  `sudo ./install.sh --upgrade`, noted in §3.5 and `PENDING`.
+
+No runtime behavior change — this is a build/packaging refactor.
+
 ## [5.4.0] - 2026-09-08
 
 ### TOTP secrets are now encrypted at rest

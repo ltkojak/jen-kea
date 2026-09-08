@@ -1,0 +1,32 @@
+# Jen runtime dependencies — the single source of truth (v5.4.1).
+#
+# Consumed verbatim by install.sh, Dockerfile, and
+# .github/workflows/tests.yml. Do NOT re-list these packages inline in
+# any of those files — tests/test_dependency_consistency.py fails CI if
+# you do.
+#
+# Floor-pinned (`>=`) by deliberate design — see docs/ARCHITECTURE.md
+# §3.5: fresh installs pick up security patches without a maintainer
+# re-pinning on every release, and `pip-audit` in CI is the
+# compensating control against a hypothetically-bad newest release. A
+# full lockfile was considered and rejected for this project's size and
+# maintenance model.
+#
+# jinja2 and werkzeug are hard dependencies of flask; they're pinned
+# explicitly here anyway so a security floor (e.g. jinja2 3.1.6 for
+# CVE-2025-27516) doesn't depend on flask happening to require it.
+
+apscheduler>=3.11.3,<4
+authlib>=1.7.2
+cryptography>=46.0.6
+dbutils>=3.1.2
+flask>=3.1.3
+flask-login>=0.6.3
+jinja2>=3.1.6
+paramiko>=5.0.0
+pillow>=12.3.0
+pymysql>=1.2.0
+pyotp>=2.10.0
+qrcode[pil]>=8.2
+requests>=2.33.1
+werkzeug>=3.1.7

@@ -130,6 +130,7 @@ class TestInstallExtractedFiles:
         (extracted / "jen" / "__init__.py").write_text('JEN_VERSION = "5.2.6"\n')
         (extracted / "run.py").write_text("# fake run.py\n")
         (extracted / "CHANGELOG.md").write_text("# Changelog\n\n## [5.2.6] - 2026-01-01\n\nFake.\n")
+        (extracted / "requirements.txt").write_text("flask>=3.1.3\n")
         (extracted / "templates").mkdir()
         (extracted / "templates" / "index.html").write_text("<html></html>\n")
         if with_static:
@@ -164,6 +165,18 @@ class TestInstallExtractedFiles:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
         assert "5.2.6" in (install_dir / "CHANGELOG.md").read_text()
+
+    def test_requirements_txt_installed(self, jen_update_root, tmp_path):
+        """v5.4.1 — requirements.txt travels with the release so the
+        installed copy at /opt/jen stays current (the updater still does
+        not run pip itself; see the function's own comment)."""
+        extracted = self._make_extracted_dir(tmp_path, with_static=False, with_service=False, with_sudoers=False)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            jen_update_root.install_extracted_files(str(extracted), str(install_dir))
+        assert (install_dir / "requirements.txt").read_text() == "flask>=3.1.3\n"
 
     def test_templates_replaced_wholesale(self, jen_update_root, tmp_path):
         extracted = self._make_extracted_dir(tmp_path, with_static=False, with_service=False, with_sudoers=False)

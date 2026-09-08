@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.4.0"
+JEN_VERSION="5.4.1"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -319,15 +319,15 @@ install_dependencies() {
         python3 -c "import ${pkg}" 2>/dev/null || missing_py+=("${pkg/-/_}")
     done
 
+    # v5.4.1 — the pinned package list lives in requirements.txt (the
+    # single source of truth, shared with Dockerfile and CI), never
+    # inline here. The import probe above stays as a fast "everything
+    # already present?" skip.
+    local req_file="$SCRIPT_DIR/requirements.txt"
     if [[ ${#missing_py[@]} -gt 0 ]]; then
         spinner_start "Installing Python packages..."
-        pip3 install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
-            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
-            "authlib>=1.7.2" "cryptography>=46.0.6" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3" \
-            --break-system-packages 2>/dev/null || \
-        pip3 install -q "flask>=3.1.3" "flask-login>=0.6.3" "pymysql>=1.2.0" "dbutils>=3.1.2" \
-            "requests>=2.33.1" "pyotp>=2.10.0" "qrcode[pil]>=8.2" "pillow>=12.3.0" \
-            "authlib>=1.7.2" "cryptography>=46.0.6" "paramiko>=5.0.0" "apscheduler<4,>=3.11.3"
+        pip3 install -q -r "$req_file" --break-system-packages 2>/dev/null || \
+        pip3 install -q -r "$req_file"
         spinner_stop
         ok "Python packages installed"
     else
@@ -727,6 +727,13 @@ install_files() {
     # releases ship after it.
     if [[ -f "$SCRIPT_DIR/CHANGELOG.md" ]]; then
         cp "$SCRIPT_DIR/CHANGELOG.md" "$INSTALL_DIR/CHANGELOG.md"
+    fi
+    # v5.4.1 — keep the pinned dependency list beside the installed app
+    # for the record and for a future updater that reinstalls deps (the
+    # in-app self-update flow does not run pip today — see PENDING /
+    # jen-update-root.py).
+    if [[ -f "$SCRIPT_DIR/requirements.txt" ]]; then
+        cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/requirements.txt"
     fi
     # Copy legacy monolith for reference (not executed)
     if [[ -f "$SCRIPT_DIR/legacy/jen.py" ]]; then

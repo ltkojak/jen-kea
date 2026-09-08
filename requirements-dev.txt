@@ -1,0 +1,13 @@
+# Jen development + CI tooling (v5.4.1).
+#
+# Runtime dependencies come in via the -r include below — this file is
+# only the extra tools CI and contributors need. Left unpinned to match
+# how CI has always installed them; the runtime set in requirements.txt
+# is the one that's floor-pinned.
+
+-r requirements.txt
+
+pytest
+bandit
+pip-audit
+ruff

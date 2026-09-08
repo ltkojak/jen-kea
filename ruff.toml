@@ -3,13 +3,14 @@
 # v5.3.3 — Ruff added to this project for the first time, per a
 # third-party review's recommendation. Deliberately kept as a
 # standalone config file rather than a [tool.ruff] section inside a
-# new pyproject.toml: dependency management (pyproject.toml +
-# lockfile as the actual source of truth for install.sh/Docker/CI) is
-# a separate, larger piece of work this project has intentionally
-# deferred — this file exists purely for lint/format configuration and
-# shouldn't be conflated with that later effort. If/when a
-# pyproject.toml is introduced for dependencies, this config can move
-# into it at that time.
+# pyproject.toml.
+#
+# v5.4.1 — dependency declarations were consolidated into
+# requirements.txt / requirements-dev.txt (see docs/ARCHITECTURE.md
+# §3.5), NOT a pyproject.toml: Jen is still a run-from-checkout app,
+# not a pip-installable package, so there's no [project]/[build-system]
+# to attach this config to. If Jen ever becomes a real package, this
+# config can move into that pyproject.toml at that time.
 
 target-version = "py310"
 line-length = 120
