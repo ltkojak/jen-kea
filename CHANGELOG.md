@@ -18,7 +18,9 @@ last unprotected reversible-secret surface in `jen_db`.
 - The whole `config` blob is now encrypted with the existing Fernet key
   (`jen/services/crypto.py`, key at `/etc/jen/mfa_key`, outside the
   database) — whole-blob rather than per-field, so a new channel type
-  with new secret fields is covered automatically.
+  with new secret fields is covered automatically. The `v1:` token is
+  stored as a JSON string literal so the column stays valid JSON
+  (MariaDB enforces `json_valid()` on it).
 - **Migration 18** wraps every existing plaintext blob on upgrade,
   idempotently. New saves encrypt at write time; every read goes through
   `alerts.get_channel_config()`, which decrypts, with a legacy-plaintext

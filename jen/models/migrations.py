@@ -653,23 +653,27 @@ def _m018_encrypt_alert_channel_config(db):
     alerts.get_channel_config(), which decrypts, with a legacy-plaintext
     passthrough for any row this migration hasn't reached.
 
-    Idempotent: the WHERE clause skips rows already in `v1:` form, so a
-    re-run or a crash partway through (the UPDATEs and the
-    schema_migrations INSERT share one transaction) is safe. If the
-    encryption key can't be created/persisted, encode_channel_config()
-    raises and startup aborts rather than recording this as applied.
+    The `config` column is MySQL `JSON` (MariaDB enforces `json_valid()`
+    on it), so the encrypted value is stored as a JSON string *literal*
+    — `json.dumps("v1:…")`, i.e. the token in double quotes — which stays
+    valid JSON. encode_channel_config() does that wrapping; the WHERE
+    clause below matches its `"v1:…` shape.
+
+    Idempotent: rows already wrapped are skipped, so a re-run or a crash
+    partway through is safe. If the encryption key can't be
+    created/persisted, encode_channel_config() raises and startup aborts
+    rather than recording this as applied.
     """
     from jen.services.alerts import encode_channel_config, get_channel_config
-    from jen.services.crypto import PREFIX
 
     with db.cursor() as cur:
         cur.execute(
             "SELECT id, config FROM alert_channels WHERE config IS NOT NULL AND config <> '' AND config NOT LIKE %s",
-            (PREFIX + "%",),
+            ('"v1:%',),
         )
         rows = cur.fetchall()
         for row in rows:
-            parsed = get_channel_config(row)  # legacy plaintext JSON → dict
+            parsed = get_channel_config(row)  # legacy plaintext JSON object → dict
             cur.execute(
                 "UPDATE alert_channels SET config = %s WHERE id = %s",
                 (encode_channel_config(parsed), row["id"]),

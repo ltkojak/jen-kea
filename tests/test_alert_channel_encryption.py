@@ -33,7 +33,9 @@ class TestChannelConfigCodec:
     def test_round_trip_and_ciphertext_hides_token(self):
         cfg = {"token": "123456:AAExampleBotToken", "chat_id": "-1001234"}
         blob = alerts.encode_channel_config(cfg)
-        assert blob.startswith("v1:")
+        # stored as a JSON string literal so the JSON column stays valid
+        assert blob.startswith('"v1:')
+        assert json.loads(blob).startswith("v1:")
         assert "AAExampleBotToken" not in blob
         assert alerts.get_channel_config({"config": blob}) == cfg
 
@@ -53,8 +55,10 @@ class TestChannelConfigCodec:
     def test_undecryptable_blob_is_soft_empty_not_raise(self):
         """A ciphertext this key can't open (DB moved without /etc/jen)
         yields {} so dispatch skips the channel, never throws."""
-        out = alerts.get_channel_config({"config": "v1:gAAAAABmangled", "channel_name": "x"})
+        out = alerts.get_channel_config({"config": '"v1:gAAAAABmangled"', "channel_name": "x"})
         assert out == {}
+        # a genuinely corrupt (non-JSON) column value is also soft-empty
+        assert alerts.get_channel_config({"config": "not json at all", "channel_name": "x"}) == {}
 
     def test_wrong_key_does_not_silently_pass_through(self, tmp_path, monkeypatch):
         from jen import extensions
@@ -94,7 +98,7 @@ class TestMigration18:
                 with db.cursor() as cur:
                     cur.execute("SELECT config FROM alert_channels WHERE channel_name='_enc_probe'")
                     after_first = cur.fetchone()["config"]
-            assert after_first.startswith("v1:")
+            assert after_first.startswith('"v1:')
             assert "PlainBotToken" not in after_first
             assert alerts.get_channel_config({"config": after_first}) == cfg
 
@@ -158,7 +162,7 @@ class TestSaveChannelRoute:
                     cur.execute("SELECT config FROM alert_channels WHERE channel_name='_save_probe'")
                     row = cur.fetchone()
             assert row is not None, "channel did not persist"
-            assert row["config"].startswith("v1:")
+            assert row["config"].startswith('"v1:')
             assert "SubmittedBotToken" not in row["config"]
             assert alerts.get_channel_config({"config": row["config"]}) == {
                 "token": "111:SubmittedBotToken",

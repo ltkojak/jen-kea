@@ -319,11 +319,11 @@ def channel_allows_subnet(channel, subnet_id):
 
 def get_channel_config(channel):
     """Return a channel's config as a dict, decrypting it first if it's
-    stored in the v5.7.0 encrypted-at-rest form (`v1:` prefix — see
-    jen/services/crypto.py). A legacy plaintext JSON string still parses
-    unchanged. Any failure (bad key, corrupt row, JSON typo) yields `{}`
-    so a misconfigured channel goes quiet rather than crashing dispatch —
-    the same fail-soft stance as channel_allows_subnet()."""
+    stored in the v5.7.0 encrypted-at-rest form (see jen/services/crypto.py
+    and encode_channel_config below). A legacy plaintext JSON object still
+    parses unchanged. Any failure (bad key, corrupt row, JSON typo) yields
+    `{}` so a misconfigured channel goes quiet rather than crashing
+    dispatch — the same fail-soft stance as channel_allows_subnet()."""
     import json
 
     cfg_data = channel.get("config")
@@ -334,9 +334,12 @@ def get_channel_config(channel):
     try:
         from jen.services import crypto
 
-        if crypto.is_encrypted(cfg_data):
-            cfg_data = crypto.decrypt_secret(cfg_data, what="alert channel config")
-        return json.loads(cfg_data)
+        value = json.loads(cfg_data)
+        # New form: the JSON column holds a *string* — the `v1:` token.
+        # Legacy form: it holds the config object directly.
+        if isinstance(value, str) and crypto.is_encrypted(value):
+            value = json.loads(crypto.decrypt_secret(value, what="alert channel config"))
+        return value if isinstance(value, dict) else {}
     except Exception as e:
         logger.error("Could not decode config for alert channel %r: %s", channel.get("channel_name"), e)
         return {}
@@ -344,14 +347,20 @@ def get_channel_config(channel):
 
 def encode_channel_config(config):
     """Serialise a channel config dict for storage, encrypted at rest.
+
+    Returns a JSON string *literal* — `json.dumps("v1:…")` — so the value
+    still satisfies the `config` column's JSON validity (MariaDB enforces
+    `json_valid()` on a JSON column; a bare Fernet token would fail it).
+
     Raises (MfaKeyUnavailable) if the encryption key can't be loaded —
     callers surface that as a save error rather than silently writing the
-    tokens in plaintext."""
+    tokens in plaintext.
+    """
     import json
 
     from jen.services import crypto
 
-    return crypto.encrypt_secret(json.dumps(config))
+    return json.dumps(crypto.encrypt_secret(json.dumps(config)))
 
 
 def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
