@@ -161,6 +161,11 @@ Notes:
   HA commands — Jen must talk to each daemon's *own* control socket.
 - The **Probe** button on Settings → Kea reports the running Kea version
   and whether `ca` or `direct` answered, with a recommendation.
+- For a **brand-new** Kea with no config yet, "Author a starting
+  kea-dhcpX.conf" (Settings → Kea, superadmin) writes the `control-sockets`
+  list above for you when `connection_mode = direct` — port and basic-auth
+  credentials come from `[kea]` / `[kea6] api_url` / `api_user` / `api_pass`,
+  so set those first.
 
 ### [kea_db] section
 

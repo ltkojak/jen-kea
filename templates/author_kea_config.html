@@ -8,6 +8,14 @@
 
 <div class="alert alert-warning">⚠️ This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
 
+{% if direct_mode %}
+{% if http_socket_info %}
+<div class="alert alert-info">🔌 Jen is in <strong>direct</strong> connection mode, so the generated config includes an <code>http</code> control socket — <code>{{ http_socket_info.address }}:{{ http_socket_info.port }}</code>, basic auth as user <code>{{ http_socket_info.user }}</code> (port and credentials from your {{ 'Kea6' if service == 'dhcp6' else 'Kea' }} API settings) — alongside the unix socket below, so Jen can reach this daemon once it's running.</div>
+{% else %}
+<div class="alert alert-warning">⚠️ Jen is in <strong>direct</strong> connection mode but has no {{ 'Kea6' if service == 'dhcp6' else 'Kea' }} API username/password set — those are needed as the http control socket's basic-auth credentials. Set them under Settings → Kea first, or the preview will refuse.</div>
+{% endif %}
+{% endif %}
+
 {% if detected.found %}
 <div class="alert alert-info">
     ℹ️ Found an existing <code>{{ 'kea-dhcp6.conf' if service == 'dhcp4' else 'kea-dhcp4.conf' }}</code> on this server — interfaces and database info below were pulled from it rather than guessed. Review and adjust if needed.
@@ -29,9 +37,9 @@
             <div class="form-hint">Comma-separated interface names Kea should listen on.</div>
         </div>
         <div class="form-group">
-            <label>Control Socket Path</label>
+            <label>{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
             <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" style="font-family:monospace;">
-            <div class="form-hint">Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.</div>
+            <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the http socket above for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
         </div>
         <div class="form-row">
             <div class="form-group">

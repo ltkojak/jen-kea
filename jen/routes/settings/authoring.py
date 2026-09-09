@@ -139,7 +139,12 @@ def author_kea_config(service):
 
     existing_subnets, default_db = _author_kea_subnets_and_db(service)
     conf_path = __authoring.conf_path_for(target_server, service)
-    default_socket = ca_socket or f"/run/kea/kea-{service}-ctrl-socket"
+    # ISC's conventional per-daemon unix socket name when there's no
+    # Control Agent config to read the real one from (the common case in
+    # direct mode). Editable in the form; kea-dhcpX -t validates it.
+    default_socket = ca_socket or f"/run/kea/kea{'4' if service == 'dhcp4' else '6'}-ctrl-socket"
+    direct_mode = extensions.KEA_CONNECTION_MODE == "direct"
+    http_socket_info = _direct_http_socket(service) if direct_mode else None
     subnet_lines = _subnets_to_lines(existing_subnets, service)
     return render_template(
         "author_kea_config.html",
@@ -149,10 +154,43 @@ def author_kea_config(service):
         detected=detected,
         autodetected_interfaces=autodetected_interfaces,
         default_socket=default_socket,
+        direct_mode=direct_mode,
+        http_socket_info=http_socket_info,
         subnet_lines=subnet_lines,
         has_existing_subnets=bool(existing_subnets),
         default_db=default_db,
     )
+
+
+def _direct_http_socket(service: str):
+    """The `http` control-socket entry an authored config needs in
+    connection_mode = direct — address 0.0.0.0 so the Jen host can reach
+    it, port from the daemon's own [kea]/[kea6] api_url, basic-auth creds
+    from api_user/api_pass. Returns None when the creds aren't set (the
+    caller turns that into a form error rather than authoring an
+    unauthenticated socket on 0.0.0.0)."""
+    if service == "dhcp4":
+        api_url, api_user, api_pass, fallback_port = (
+            extensions.KEA_API_URL,
+            extensions.KEA_API_USER,
+            extensions.KEA_API_PASS,
+            8000,
+        )
+    else:
+        api_url, api_user, api_pass, fallback_port = (
+            extensions.KEA6_API_URL,
+            extensions.KEA6_API_USER,
+            extensions.KEA6_API_PASS,
+            8006,
+        )
+    if not (api_user and api_pass):
+        return None
+    return {
+        "address": "0.0.0.0",
+        "port": __authoring.socket_port_from_url(api_url, fallback_port),
+        "user": api_user,
+        "password": api_pass,
+    }
 
 
 def _author_kea_build_config(service, form):
@@ -169,6 +207,23 @@ def _author_kea_build_config(service, form):
     if not (db_host and db_user and db_name):
         return None, None, "Database host, username, and name are required."
 
+    # v5.10.1 — in direct mode the generated config must expose the
+    # daemon's own http command socket, or Jen can't talk to the Kea it
+    # just authored (Kea 3.2 removed the Control Agent).
+    http_socket = None
+    if extensions.KEA_CONNECTION_MODE == "direct":
+        http_socket = _direct_http_socket(service)
+        if http_socket is None:
+            return (
+                None,
+                None,
+                (
+                    "Direct connection mode needs a Kea API username and password "
+                    f"(Settings → Kea{' → Kea6' if service == 'dhcp6' else ''}) — they become the "
+                    "http control socket's basic-auth credentials in the generated config."
+                ),
+            )
+
     subnets, error = _parse_subnet_lines(form.get("subnets", ""), service)
     if error:
         return None, None, error
@@ -180,7 +235,9 @@ def _author_kea_build_config(service, form):
         "name": db_name,
         "password": default_db["password"],
     }  # Jen's own stored password — never re-typed in the form
-    config = __authoring.build_new_kea_config(service, interfaces, lease_db, control_socket_path, subnets)
+    config = __authoring.build_new_kea_config(
+        service, interfaces, lease_db, control_socket_path, subnets, http_socket=http_socket
+    )
     return config, subnets, None
 
 

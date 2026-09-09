@@ -206,6 +206,19 @@ def _pool_for_cidr(cidr: str) -> str:
     return f"{first}-{last}"
 
 
+def socket_port_from_url(url: str, fallback: int) -> int:
+    """Pull the port out of a direct-mode api_url (``http://host:8004`` →
+    8004) for the authored ``http`` control-socket entry. Falls back when
+    the URL has no explicit port or doesn't parse."""
+    from urllib.parse import urlparse
+
+    try:
+        port = urlparse(url).port
+    except ValueError:
+        port = None
+    return port or fallback
+
+
 def build_new_kea_config(
     service: str,
     interfaces: list,
@@ -213,6 +226,7 @@ def build_new_kea_config(
     control_socket_path: str,
     subnets: dict,
     hooks_dir: str = "/usr/lib/x86_64-linux-gnu/kea/hooks",
+    http_socket: dict = None,
 ) -> dict:
     """
     Build a complete Dhcp4/Dhcp6 config dict from scratch. `subnets` is
@@ -222,6 +236,15 @@ def build_new_kea_config(
     `lease_db` carries host/user/password/name — password comes from
     Jen's own extensions.KEA_DB_PASS/KEA6_DB_PASS (Jen already knows
     it), never re-asked or left as a placeholder.
+
+    `http_socket` (v5.10.1) — when Jen is in `connection_mode = direct`
+    (Kea 3.2 removed the Control Agent), the generated config must expose
+    the daemon's own HTTP command socket or Jen can't reach it after
+    it's running. Pass {"address", "port", "user", "password"} and the
+    config gets a `control-sockets` LIST: the unix socket above (still
+    needed for kea-shell / some hooks) plus an `http` entry with basic
+    auth. When None (the `ca` default), the config keeps the singular
+    `control-socket` map exactly as every prior release emitted.
     """
     timers = DEFAULT_TIMERS[service]
     hooks_libraries = [{"library": os.path.join(hooks_dir, f"libdhcp_{h}.so")} for h in REQUIRED_HOOKS]
@@ -246,9 +269,28 @@ def build_new_kea_config(
                 }
             )
 
+    if http_socket:
+        control = {
+            "control-sockets": [
+                {"socket-type": "unix", "socket-name": control_socket_path},
+                {
+                    "socket-type": "http",
+                    "socket-address": http_socket.get("address", "0.0.0.0"),
+                    "socket-port": int(http_socket["port"]),
+                    "authentication": {
+                        "type": "basic",
+                        "realm": "kea",
+                        "clients": [{"user": http_socket["user"], "password": http_socket["password"]}],
+                    },
+                },
+            ]
+        }
+    else:
+        control = {"control-socket": {"socket-type": "unix", "socket-name": control_socket_path}}
+
     section = {
         "interfaces-config": {"interfaces": interfaces},
-        "control-socket": {"socket-type": "unix", "socket-name": control_socket_path},
+        **control,
         "lease-database": {
             "type": lease_db.get("type", "mysql"),
             "host": lease_db["host"],

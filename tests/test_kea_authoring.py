@@ -8,6 +8,8 @@ Split out of the monolithic tests/test_kea6.py in v5.6.1.
 
 import json
 
+import pytest
+
 from jen import extensions
 from tests._kea6_helpers import FakeSSHClient
 
@@ -239,6 +241,65 @@ class TestBuildNewKeaConfig:
         cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", subnets)
         ids = {s["id"] for s in cfg["Dhcp6"]["subnet6"]}
         assert ids == {1, 7}
+
+    def test_ca_mode_keeps_the_singular_control_socket_map(self):
+        """v5.10.1 — no http_socket (the ca default) must produce exactly
+        what every prior release did: the singular control-socket map,
+        never a control-sockets list."""
+        from jen.services.kea_authoring import build_new_kea_config
+
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/kea/kea4.sock", {})
+        section = cfg["Dhcp4"]
+        assert section["control-socket"] == {"socket-type": "unix", "socket-name": "/run/kea/kea4.sock"}
+        assert "control-sockets" not in section
+
+    def test_direct_mode_emits_control_sockets_list_with_http_entry(self):
+        from jen.services.kea_authoring import build_new_kea_config
+
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        http_socket = {"address": "0.0.0.0", "port": 8004, "user": "kea-api", "password": "s3cret"}
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/kea/kea4.sock", {}, http_socket=http_socket)
+        section = cfg["Dhcp4"]
+        assert "control-socket" not in section
+        socks = section["control-sockets"]
+        assert {s["socket-type"] for s in socks} == {"unix", "http"}
+        unix = next(s for s in socks if s["socket-type"] == "unix")
+        assert unix["socket-name"] == "/run/kea/kea4.sock"  # kept alongside
+        http = next(s for s in socks if s["socket-type"] == "http")
+        assert http["socket-address"] == "0.0.0.0"
+        assert http["socket-port"] == 8004
+        assert http["authentication"] == {
+            "type": "basic",
+            "realm": "kea",
+            "clients": [{"user": "kea-api", "password": "s3cret"}],
+        }
+
+    def test_direct_mode_still_never_includes_ha(self):
+        from jen.services.kea_authoring import build_new_kea_config
+
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        http_socket = {"port": 8006, "user": "u", "password": "p"}
+        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", {}, http_socket=http_socket)
+        libs = [h["library"] for h in cfg["Dhcp6"]["hooks-libraries"]]
+        assert not any("libdhcp_ha" in lib for lib in libs)
+
+
+class TestSocketPortFromUrl:
+    @pytest.mark.parametrize(
+        "url,fallback,expected",
+        [
+            ("http://kea:8004", 8000, 8004),
+            ("https://kea.example:9443", 8000, 9443),
+            ("http://kea", 8000, 8000),  # no explicit port
+            ("", 8006, 8006),
+            ("not a url", 8000, 8000),
+        ],
+    )
+    def test_parse(self, url, fallback, expected):
+        from jen.services.kea_authoring import socket_port_from_url
+
+        assert socket_port_from_url(url, fallback) == expected
 
 
 class TestRenderAuthorConfigScript:
@@ -472,6 +533,57 @@ class TestAuthorKeaConfigPreviewRoute:
         data = resp.get_json()
         assert data["servers"][0]["ok"] is True
         assert len(fake_ssh.calls) == 1
+
+    def test_direct_mode_preview_config_carries_the_http_control_socket(self, logged_in_client, monkeypatch):
+        """v5.10.1 — in connection_mode = direct the previewed (and later
+        written) config must expose the daemon's own http command socket,
+        or Jen can't reach the Kea it just authored."""
+        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "kea-api")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "s3cret")
+        import jen.services.kea6 as kea6_module
+
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("preview-ok", "")]))
+        resp = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data={
+                "interfaces": "eth0",
+                "control_socket": "/run/kea/kea4-ctrl-socket",
+                "db_host": "h",
+                "db_user": "u",
+                "db_name": "kea",
+                "subnets": "1 = LAN, 192.168.1.0/24",
+            },
+        )
+        assert resp.status_code == 200
+        socks = resp.get_json()["config"]["Dhcp4"]["control-sockets"]
+        http = next(s for s in socks if s["socket-type"] == "http")
+        assert http["socket-port"] == 8004
+        assert http["authentication"]["clients"] == [{"user": "kea-api", "password": "s3cret"}]
+
+    def test_direct_mode_without_api_credentials_is_refused(self, logged_in_client, monkeypatch):
+        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "")
+        resp = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data={
+                "interfaces": "eth0",
+                "control_socket": "/run/kea/kea4-ctrl-socket",
+                "db_host": "h",
+                "db_user": "u",
+                "db_name": "kea",
+                "subnets": "1 = LAN, 192.168.1.0/24",
+            },
+        )
+        assert resp.status_code == 400
+        assert "username and password" in resp.get_json()["error"]
 
 
 class TestDetectInstalledKeaServices:
