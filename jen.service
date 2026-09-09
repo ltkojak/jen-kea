@@ -6,6 +6,10 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=/opt/jen
+# v5.8.0 — Jen's Python deps live in /opt/jen/venv, but this stays on the
+# system python3 on purpose: run.py re-execs into the venv interpreter
+# itself (see its header), so the unit never has to change and an in-app
+# update from a pre-venv install can't strand systemd on a missing venv.
 ExecStart=/usr/bin/python3 /opt/jen/run.py
 Restart=always
 RestartSec=5

@@ -28,6 +28,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLLBACK_JEN=""
 ROLLBACK_PKG=""
 
+# v5.8.0 — bare-metal Jen runs from its own venv, not system site-packages
+# (no more --break-system-packages). VENV_PY is the interpreter jen.service
+# ends up using (via bin/jen-run); PYBIN is whatever's usable right now for
+# the installer's own inline python helpers (venv if built, else system).
+VENV_DIR="$INSTALL_DIR/venv"
+VENV_PY="$VENV_DIR/bin/python"
+PYBIN="python3"
+[[ -x "$VENV_PY" ]] && PYBIN="$VENV_PY"
+
 # ── Mode flags ────────────────────────────────────────────────────────────────
 MODE_UPGRADE=false
 MODE_CONFIGURE=false
@@ -260,6 +269,14 @@ preflight_checks() {
     command -v pip3 &>/dev/null || python3 -m pip --version &>/dev/null 2>&1 \
         && ok "pip3" || warn "pip3 not found — will attempt install"
 
+    # venv (v5.8.0 — Jen installs into /opt/jen/venv). Ubuntu ships this
+    # as a separate python3-venv package; install_dependencies pulls it.
+    if python3 -c 'import venv, ensurepip' &>/dev/null; then
+        ok "python3 venv"
+    else
+        warn "python3-venv not available — will install"
+    fi
+
     # Tools
     command -v ssh-keygen &>/dev/null && ok "ssh-keygen" || warn "ssh-keygen not found — will install"
     command -v curl       &>/dev/null && ok "curl"       || warn "curl not found — connection tests unavailable"
@@ -304,6 +321,7 @@ install_dependencies() {
     command -v ssh-keygen  &>/dev/null || pkgs+=(openssh-client)
     command -v curl        &>/dev/null || pkgs+=(curl)
     command -v openssl     &>/dev/null || pkgs+=(openssl)
+    python3 -c 'import venv, ensurepip' &>/dev/null || pkgs+=(python3-venv)
 
     if [[ ${#pkgs[@]} -gt 0 ]]; then
         spinner_start "Installing system packages: ${pkgs[*]}"
@@ -313,26 +331,54 @@ install_dependencies() {
     else
         ok "All system packages present"
     fi
+    blank
+}
 
-    local missing_py=()
-    for pkg in flask flask_login pymysql dbutils requests pyotp qrcode PIL authlib cryptography gunicorn jinja2 werkzeug paramiko apscheduler; do
-        python3 -c "import ${pkg}" 2>/dev/null || missing_py+=("${pkg/-/_}")
-    done
+# ── Python virtualenv ────────────────────────────────────────────────────────
+# v5.8.0 — Jen's Python dependencies live in /opt/jen/venv, isolated from
+# apt-managed site-packages. Replaces the old `pip install
+# --break-system-packages` into system python. Idempotent: re-run on every
+# install/upgrade; `venv --upgrade` re-points an existing venv at the
+# current system python (so an OS python bump doesn't strand it), and pip
+# is a fast no-op when the pins are already satisfied.
+setup_venv() {
+    blank
+    echo -e "  ${B}${C}PYTHON ENVIRONMENT${NC}"
+    divider
+    blank
 
-    # v5.4.1 — the pinned package list lives in requirements.txt (the
-    # single source of truth, shared with Dockerfile and CI), never
-    # inline here. The import probe above stays as a fast "everything
-    # already present?" skip.
+    mkdir -p "$INSTALL_DIR"
     local req_file="$SCRIPT_DIR/requirements.txt"
-    if [[ ${#missing_py[@]} -gt 0 ]]; then
-        spinner_start "Installing Python packages..."
-        pip3 install -q -r "$req_file" --break-system-packages 2>/dev/null || \
-        pip3 install -q -r "$req_file"
-        spinner_stop
-        ok "Python packages installed"
+    [[ -f "$req_file" ]] || fatal "requirements.txt not found beside install.sh"
+
+    if [[ -x "$VENV_PY" ]] && "$VENV_PY" -c '' 2>/dev/null; then
+        spinner_start "Refreshing virtualenv (/opt/jen/venv)..."
+        python3 -m venv --upgrade "$VENV_DIR" 2>/dev/null || true
     else
-        ok "All Python packages present"
+        [[ -e "$VENV_DIR" ]] && rm -rf "$VENV_DIR"
+        spinner_start "Creating virtualenv (/opt/jen/venv)..."
+        if ! python3 -m venv "$VENV_DIR"; then
+            spinner_stop
+            fatal "Could not create /opt/jen/venv — is python3-venv installed?"
+        fi
     fi
+    "$VENV_PY" -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+    spinner_stop
+    ok "Virtualenv ready  ${DIM}($("$VENV_PY" --version 2>&1))${NC}"
+
+    spinner_start "Installing Python dependencies into the venv..."
+    if "$VENV_PY" -m pip install -q -r "$req_file"; then
+        spinner_stop
+        ok "Python dependencies installed"
+    else
+        spinner_stop
+        fatal "pip install into the venv failed — see output above"
+    fi
+
+    # PYBIN now points at the venv for the rest of this run (admin
+    # password hashing, template/module verification).
+    PYBIN="$VENV_PY"
+    chown -R "$JEN_USER:$JEN_USER" "$VENV_DIR" 2>/dev/null || true
     blank
 }
 
@@ -635,12 +681,14 @@ _set_admin_password() {
     # with os.environ sidesteps quoting entirely — no character in the
     # password can break the Python source, because it's never embedded
     # in the source at all.
-    JEN_INSTALL_ADMIN_PASS="$pass" python3 << PYEOF 2>/dev/null || true
+    JEN_INSTALL_ADMIN_PASS="$pass" "$PYBIN" << PYEOF 2>/dev/null || true
 import os
 import sys
 sys.path.insert(0, '$INSTALL_DIR')
 try:
-    from werkzeug.security import generate_password_hash
+    # Use Jen's own hasher (scrypt as of v5.8.0) so the installer and the
+    # app never disagree on the password-hash format.
+    from jen.models.user import hash_password
     import pymysql, configparser
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.read('$CONFIG_FILE')
@@ -650,7 +698,7 @@ try:
         cursorclass=pymysql.cursors.DictCursor, connect_timeout=5
     )
     pw = os.environ['JEN_INSTALL_ADMIN_PASS']
-    hashed = generate_password_hash(pw, method='pbkdf2:sha256')
+    hashed = hash_password(pw)
     with db.cursor() as cur:
         # v5.6.0 — also clear must_change_password: the operator picked
         # this password in the wizard, so don't make them change it again
@@ -894,7 +942,7 @@ verify_install() {
 
     # Templates
     local tpl_result
-    tpl_result=$(python3 -c "
+    tpl_result=$("$PYBIN" -c "
 from jinja2 import Environment, FileSystemLoader
 import os, sys
 env = Environment(loader=FileSystemLoader('$INSTALL_DIR/templates'))
@@ -921,7 +969,7 @@ else:
     # Modules
     if [[ -d "$INSTALL_DIR/jen" ]]; then
         local mod_result
-        mod_result=$(python3 -c "
+        mod_result=$("$PYBIN" -c "
 import sys; sys.path.insert(0, '$INSTALL_DIR')
 errors = []
 for m in ['jen.extensions','jen.config','jen.models.db','jen.models.user',
@@ -1202,6 +1250,7 @@ main() {
         CONFIGURE=false
         backup_existing
         install_files
+        setup_venv
         start_service
         verify_install
         print_summary
@@ -1245,7 +1294,9 @@ main() {
         if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
             spinner_start "Backing up Jen and Kea databases..."
             mkdir -p /opt/jen/backups
-            if python3 -c "
+            # $PYBIN is the venv python on a 5.8.x→ upgrade, else system
+            # python3 (which a pre-5.8.0 install populated with pymysql).
+            if "$PYBIN" -c "
 import sys, json, gzip, datetime, pymysql, pymysql.cursors, configparser
 cfg = configparser.ConfigParser()
 cfg.read('/etc/jen/jen.config')
@@ -1291,6 +1342,7 @@ for which in ['jen','kea']:
     collect_config
     backup_existing
     install_files
+    setup_venv
     write_config
     start_service
     verify_install

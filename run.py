@@ -50,15 +50,42 @@ Docker / .env auto-config
     JEN_SUBNETS            (format: "1=Production,10.10.10.0/24;30=IoT,10.10.30.0/24")
 """
 
-import logging
 import os
-import signal
-import subprocess
 import sys
 
-from jen import JEN_VERSION, create_app, extensions
-from jen.config import app_config, ssl_configured
-from jen.logging_config import configure_logging
+# ── venv re-exec (v5.8.0) ───────────────────────────────────────────────────
+# Bare-metal Jen keeps its Python dependencies in /opt/jen/venv (built by
+# install.sh, kept current by the self-updater) rather than system
+# site-packages. jen.service still invokes the *system* python3 — so this
+# file must be importable there — and we re-exec into the venv interpreter
+# here, before `from jen import …` below pulls in a single dependency.
+#
+# Deliberately a re-exec and not a jen.service ExecStart change: the unit
+# file then never has to change, and an in-app update from a pre-5.8.0
+# install can't leave systemd pointing at a venv that isn't there yet. A
+# missing venv (not built yet) or a broken one (an OS python bump stranded
+# it — `sudo ./install.sh --repair` rebuilds) simply falls through to the
+# current interpreter. Set JEN_NO_VENV_REEXEC=1 to opt out.
+_VENV_PYTHON = "/opt/jen/venv/bin/python"
+if (
+    os.environ.get("JEN_NO_VENV_REEXEC") != "1"
+    and os.path.exists(_VENV_PYTHON)
+    and os.path.realpath(sys.executable) != os.path.realpath(_VENV_PYTHON)
+):
+    try:
+        os.execv(_VENV_PYTHON, [_VENV_PYTHON, os.path.abspath(__file__), *sys.argv[1:]])
+    except OSError:
+        # Broken venv (dangling interpreter symlink, etc.) — continue on
+        # whatever interpreter we're already running under.
+        pass
+
+import logging  # noqa: E402
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+
+from jen import JEN_VERSION, create_app, extensions  # noqa: E402
+from jen.config import app_config, ssl_configured  # noqa: E402
+from jen.logging_config import configure_logging  # noqa: E402
 
 logger = logging.getLogger("jen.launch")
 
