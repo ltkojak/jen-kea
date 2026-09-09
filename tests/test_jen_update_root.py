@@ -548,6 +548,42 @@ class TestSnapshotRollback:
         assert "/opt/jen untouched" in after
         assert "return 1" in after
 
+    def test_prunes_stale_rollback_dirs_at_start(self, jen_update_root, tmp_path):
+        """v5.9.0 — bigben had four `.rollback-*` dirs from failed 5.8.2
+        attempts. Anything from an earlier run is stale once a new one
+        starts."""
+        install = tmp_path / "opt-jen"
+        install.mkdir()
+        for ts in ("1", "2", "3"):
+            (install / f".rollback-{ts}").mkdir()
+            (install / f".rollback-{ts}" / "x").write_text("x")
+        (install / "jen").mkdir()
+        assert jen_update_root._prune_stale_snapshots(str(install)) == 3
+        assert not any(p.name.startswith(".rollback-") for p in install.iterdir())
+        assert (install / "jen").exists()
+
+    def test_main_baselines_the_probe_before_the_snapshot(self, jen_update_root):
+        """v5.9.0 — a probe that can't see the currently-running Jen must
+        abort BEFORE the swap (nothing to roll back), not install and then
+        roll a good release back on a false negative."""
+        import inspect
+
+        src = inspect.getsource(jen_update_root.main)
+        i_validate = src.index("validate_staged_release(extracted")
+        i_probe = src.index("_probe_once(_local_opener(), probe_url)")
+        i_snapshot = src.index("snapshot_install(snapshot_dir)")
+        assert i_validate < i_probe < i_snapshot
+        after = src[i_probe : i_probe + 700]
+        assert "/opt/jen untouched" in after and "return 1" in after
+
+    def test_probe_once_treats_redirect_as_alive(self, jen_update_root):
+        port, stop = _serve(_AppLike.handler())
+        try:
+            assert jen_update_root._probe_once(jen_update_root._local_opener(), f"http://127.0.0.1:{port}/") is True
+        finally:
+            stop()
+        assert jen_update_root._probe_once(jen_update_root._local_opener(), "http://127.0.0.1:5999/") is False
+
     def test_main_exits_zero_without_downloading_when_already_current(self, jen_update_root):
         with (
             patch.object(jen_update_root, "fetch_json", return_value={"tag_name": "v9.9.9", "assets": []}),

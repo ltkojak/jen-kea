@@ -1,0 +1,14 @@
+{#
+  v5.9.0 — sub-tab row inside a Settings group (Databases, Access &
+  Security, Logs, System). Items come from nav.subtabs[group], already
+  role-filtered. Usage:
+      {% from '_settings_subtabs.html' import subtabs %}
+      {{ subtabs(nav.subtabs['security'], 'users') }}
+#}
+{% macro subtabs(items, active_id) %}
+<div class="subtabs">
+  {% for t in items %}
+  <a href="{{ t.url }}" class="subtab {% if t.id == active_id %}active{% endif %}">{{ t.label }}</a>
+  {% endfor %}
+</div>
+{% endmacro %}

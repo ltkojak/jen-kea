@@ -31,9 +31,9 @@ sudo ./install.sh
 **After installation:**
 - [ ] Log in with `admin / admin`
 - [ ] Change the default admin password immediately
-- [ ] Upload SSL certificate in Settings → SSL Certificate
+- [ ] Upload SSL certificate in Settings → Access & Security → SSL Certificate
 - [ ] Configure Telegram alerts if desired
-- [ ] Generate SSH key in Settings → Infrastructure → SSH Key Management
+- [ ] Generate SSH key in Settings → Kea → SSH
 - [ ] Add the public key to your Kea server's authorized_keys
 
 ---
@@ -169,16 +169,16 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 | Role | Access |
 |---|---|
 | **SuperAdmin** | Full access to everything, all subnets, always — the only role that can manage users or use Database (export/import/backup/migrate) |
-| **Admin** | Full management on assigned subnets — Settings and Audit Log, but not Database or user management. Can be restricted to specific subnets (**Settings → Users → subnet access**); unrestricted by default |
+| **Admin** | Full management on assigned subnets — Settings (except the Databases tools and user management). Can be restricted to specific subnets (**Settings → Access & Security → Users → subnet access**); unrestricted by default |
 | **Viewer** | Read-only access to Dashboard, Leases, Reservations, Subnets, DDNS, scoped to assigned subnets the same way as Admin |
 
 ### Adding Users
 
-Go to **Settings → Users → Add User**. Enter a username, password (minimum 8 characters), and select a role.
+Go to **Settings → Access & Security → Users → Add User**. Enter a username, password (minimum 8 characters), and select a role.
 
 ### Session Timeout
 
-Go to **Settings → System** to set the global default timeout in minutes. Individual users can have their own timeout override set from the Users page.
+Go to **Settings → Access & Security → Session Timeout** to set the global default timeout in minutes. Individual users can have their own timeout override set from the Users page.
 
 ---
 
@@ -188,7 +188,7 @@ Jen supports TOTP-based MFA (Google Authenticator, Authy, 1Password, etc.).
 
 ### MFA Policy
 
-Go to **Settings → System → MFA Policy** to set the policy:
+Go to **Settings → Access & Security → MFA policy** to set the policy:
 
 | Policy | Behaviour |
 |---|---|
@@ -225,7 +225,7 @@ Authorization: Bearer jen_your_key_here
 
 ### Managing API Keys
 
-Go to **Settings → API Keys** to generate, view, and revoke keys. A key is shown only once at creation — copy it immediately.
+Go to **Settings → Access & Security → API Keys** to generate, view, and revoke keys. A key is shown only once at creation — copy it immediately.
 
 ### Endpoints
 
@@ -239,7 +239,7 @@ Go to **Settings → API Keys** to generate, view, and revoke keys. A key is sho
 | GET | `/api/v1/devices/{mac}` | Single device with online status and current lease |
 | GET | `/api/v1/reservations` | Reservations — params: subnet, limit |
 
-Full documentation with examples is available at **Settings → API Docs** in the Jen interface.
+Full documentation with examples is available at **Settings → Access & Security → API Docs** in the Jen interface.
 
 ### Home Assistant Quick Start
 
@@ -273,7 +273,7 @@ To override the auto-detected type for a device, click the edit (✏) button on 
 
 ### Custom Brand Icons
 
-Go to **Settings → Icons** to:
+Go to **Settings → Appearance → Brand Icons** to:
 - View the 24 bundled brand logos
 - Upload a custom SVG to override any bundled icon or add a new manufacturer
 - Remove custom icons to revert to bundled versions
@@ -287,7 +287,7 @@ Custom icons are stored in `/opt/jen/static/icons/custom/` and survive upgrades.
 ### Uploading a Certificate
 
 1. Obtain an SSL certificate for your Jen server hostname (ZeroSSL, Let's Encrypt, or internal CA)
-2. Go to **Settings → SSL Certificate**
+2. Go to **Settings → Access & Security → SSL Certificate**
 3. Upload `certificate.crt`, `private.key`, and `ca_bundle.crt`
 4. Click **Enable HTTPS** — Jen restarts automatically
 
@@ -295,7 +295,7 @@ After restart, HTTP on port 5050 redirects to HTTPS on port 8443.
 
 ### Renewing a Certificate
 
-1. Go to **Settings → SSL Certificate → Replace Certificate**
+1. Go to **Settings → Access & Security → SSL Certificate → Replace Certificate**
 2. Upload the three new files
 3. Jen restarts automatically
 
@@ -303,7 +303,7 @@ After restart, HTTP on port 5050 redirects to HTTPS on port 8443.
 
 ## Rate Limiting
 
-Configure in **Settings → System → Login Rate Limiting**.
+Configure in **Settings → Access & Security → Login Rate Limiting**.
 
 | Setting | Description | Default |
 |---|---|---|
@@ -315,7 +315,7 @@ Configure in **Settings → System → Login Rate Limiting**.
 
 ## Telegram Alerts
 
-Configure in **Settings → Alerts**.
+Configure in **Settings → Alerts & Integrations**.
 
 ### Setting Up a Bot
 
@@ -337,7 +337,7 @@ Configure in **Settings → Alerts**.
 
 ### Generate the Key
 
-1. Go to **Settings → Infrastructure → SSH Key Management**
+1. Go to **Settings → Kea → SSH**
 2. Click **Generate SSH Key**
 3. Copy the public key displayed
 
@@ -423,7 +423,7 @@ counts (never individual MACs, IPs, or hostnames), is backwards from
 a secure-by-default posture. You need to explicitly enable it, and
 the easiest way is directly from the UI:
 
-**From Settings → Infrastructure → Prometheus Metrics** — enter a
+**From Settings → Alerts & Integrations → Prometheus Metrics** — enter a
 token (or click Generate for a random one) and save, or check "Allow
 open access" if you're already restricting `/metrics` at the network
 or reverse-proxy level. Takes effect immediately, no restart needed.
@@ -484,7 +484,7 @@ Available metrics:
 
 ### Enabling HA Mode
 
-Go to **Settings → Infrastructure → High Availability** and set:
+Go to **Settings → Kea → Servers & High Availability** and set:
 
 - **Primary Server Name** — friendly name shown in the UI and alerts
 - **HA Mode** — must match the `ha-mode` configured in `kea-dhcp4.conf` on your Kea servers
@@ -507,7 +507,7 @@ ha_mode = hot-standby
 
 ### Adding a Standby Server
 
-Go to **Settings → Infrastructure → Additional Servers** and add your standby node, or add it to `jen.config`:
+Go to **Settings → Kea → Servers & High Availability → Additional servers** and add your standby node, or add it to `jen.config`:
 
 ```ini
 [kea_server_2]
@@ -537,7 +537,7 @@ The DDNS page shows Kea DNS update log activity and supports hostname lookup. Th
 
 ### Setting the DNS Provider
 
-Go to **Settings → Infrastructure → DDNS Configuration** and choose:
+Go to **Settings → Alerts & Integrations → DDNS & DNS Provider** and choose:
 
 | Provider | Description |
 |---|---|
@@ -562,7 +562,7 @@ forward_zone = your.domain.com
 
 ### ntfy Setup
 
-1. Go to **Settings → Alerts → Add Channel**
+1. Go to **Settings → Alerts & Integrations → Add Channel**
 2. Choose **ntfy** as the channel type
 3. Enter your ntfy server URL (use `https://ntfy.sh` for the public server, or your self-hosted URL)
 4. Enter the topic name (e.g. `jen-alerts`)
@@ -574,5 +574,5 @@ No app configuration needed — ntfy delivers to any subscribed device automatic
 
 1. In your Discord server, go to **Server Settings → Integrations → Webhooks → New Webhook**
 2. Choose the channel and copy the webhook URL
-3. Go to **Settings → Alerts → Add Channel** in Jen
+3. Go to **Settings → Alerts & Integrations → Add Channel** in Jen
 4. Choose **Discord** and paste the webhook URL

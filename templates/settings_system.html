@@ -1,244 +1,167 @@
 {% extends "base.html" %}
-{% block title %}System Settings{% endblock %}
+{% block title %}System{% endblock %}
 {% block content %}
-{% from '_icons.html' import icon_trash %}
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>⚙️ System Settings</h1>
-    <p>SSL, session management, security, and appearance</p>
+    <h1>⚙️ System</h1>
+    <p>Updates for Jen and its plugins, the ports Jen listens on, restart, and log retention.</p>
 </div>
 
-<!-- Custom Branding -->
-<div class="card">
+{{ subtabs(nav.subtabs['system'], 'system') }}
+
+{% set toc = [('sys-updates', 'Jen updates'), ('sys-plugins', 'Plugins'), ('sys-ports', 'Ports & threads'), ('sys-restart', 'Restart'), ('sys-retention', 'Retention')] %}
+{% include '_card_toc.html' %}
+
+<!-- Jen Update -->
+<div class="card" id="sys-updates">
     <div class="card-header">
-        <span class="card-title">🎨 Custom Branding</span>
+        <span class="card-title">⬆ Jen Updates</span>
+        <span style="font-size:12px;color:var(--text-muted);">Running v{{ jen_version }}</span>
     </div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:20px;">
-        Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar colour to distinguish environments.
-    </p>
-    <div class="form-row">
-        <!-- Nav logo upload -->
-        <div class="form-group">
-            <label>Nav Logo</label>
-            {% if branding.nav_logo %}
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-                <img src="{{ branding.nav_logo }}" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
-                <form method="POST" action="/settings/remove-nav-logo" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn-act btn-act-del" onclick="jenConfirm('Remove logo?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">{{ icon_trash() }}</button>
-                </form>
+    <div id="update-status" style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+        Click "Check for Updates" to see if a newer version is available.
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="checkForUpdates()" id="check-btn">
+            🔍 Check for Updates
+        </button>
+        {% if current_user.role == 'superadmin' %}
+        <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
+              style="display:none;" onsubmit="return startUpdate(event)"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" id="update-version">
+            <div style="margin-bottom:10px;">
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+                    <input type="checkbox" name="db_backup" value="1" checked>
+                    Back up database before updating <span style="font-size:11px;color:var(--text-muted);">(recommended)</span>
+                </label>
             </div>
-            {% endif %}
-            <form method="POST" action="/settings/upload-nav-logo" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" style="flex:1;">
-                    <button type="submit" class="btn btn-primary btn-sm">⬆ Upload</button>
-                </div>
-                <div class="form-hint">PNG, SVG, JPG, or WebP — max 200KB. Replaces "Jen" text in the nav bar. Recommended height: 28–36px.</div>
-            </form>
+            <button type="submit" class="btn btn-primary" id="update-btn">
+                ⬆ Update Now
+            </button>
+        </form>
+        {% else %}
+        <span id="update-form" style="display:none;font-size:12px;color:var(--text-muted);">A superadmin can install it from here.</span>
+        {% endif %}
+        <a id="release-notes-link" href="#" target="_blank"
+           style="display:none;font-size:12px;color:var(--primary);">
+            📋 Release notes
+        </a>
+    </div>
+    <div class="form-hint" style="margin-top:10px;">The updater stages the release, installs its dependencies into <code>/opt/jen/venv</code>, validates it, snapshots the current install, swaps, restarts, and rolls back on any failure. Progress: <code>sudo journalctl -u jen-update.service -f</code>.</div>
+</div>
+
+<!-- Update progress overlay -->
+<div id="update-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);
+     z-index:2000;align-items:center;justify-content:center;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+                padding:32px 36px;max-width:380px;width:90%;text-align:center;
+                box-shadow:0 16px 48px rgba(0,0,0,.6);">
+        <div id="update-spinner" style="width:36px;height:36px;border:3px solid var(--border);
+             border-top-color:var(--primary);border-radius:50%;margin:0 auto 18px;
+             animation:jen-spin 0.8s linear infinite;"></div>
+        <div id="update-overlay-title" style="font-size:15px;font-weight:600;margin-bottom:6px;">
+            Updating Jen…
         </div>
-        <!-- Nav colour -->
-        <div class="form-group">
-            <label>Nav Bar Colour</label>
-            <form method="POST" action="/settings/save-nav-color"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-                    <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">
-                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" style="flex:1;">
-                    <button type="submit" class="btn btn-primary btn-sm">💾 Save</button>
-                </div>
-                <div class="form-hint">Useful for distinguishing prod vs dev environments. Leave blank for default.</div>
-            </form>
-            <form method="POST" action="/settings/save-nav-color" style="margin-top:8px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="nav_color" value="">
-                <input type="hidden" name="nav_color_hex" value="">
-                <button type="submit" class="btn btn-sm btn-secondary" {% if not branding.nav_color %}disabled style="opacity:0.4;cursor:not-allowed;"{% endif %}>↺ Reset to Default</button>
-            </form>
+        <div id="update-overlay-msg" style="font-size:13px;color:var(--text-muted);">
+            Downloading update package…
         </div>
     </div>
 </div>
+<style>
+@keyframes jen-spin { to { transform: rotate(360deg); } }
+</style>
 
-<!-- MFA Settings -->
-<div class="card">
+<!-- Plugins summary -->
+<div class="card" id="sys-plugins">
     <div class="card-header">
-        <span class="card-title">🔐 Multi-Factor Authentication</span>
-        {% if mfa_mode == 'off' %}
-        <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
-        {% elif mfa_mode == 'optional' %}
-        <span class="badge badge-dynamic">Optional</span>
-        {% elif mfa_mode == 'required_admins' %}
-        <span class="badge badge-reserved">Required for Admins</span>
-        {% else %}
-        <span class="badge badge-reserved">Required for All</span>
+        <span class="card-title">🧩 Plugins</span>
+        {% if current_user.role == 'superadmin' %}
+        <a href="/settings/plugins" class="btn btn-sm btn-secondary">Open plugin manager →</a>
         {% endif %}
     </div>
-    <form method="POST" action="/settings/system/save-mfa-mode"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group">
-            <label>MFA Policy</label>
-            <select name="mfa_mode" style="max-width:280px;">
-                <option value="off" {% if mfa_mode=='off' %}selected{% endif %}>Off — MFA not required</option>
-                <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %}>Optional — users can enroll if they want</option>
-                <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %}>Required for Admins</option>
-                <option value="required_all" {% if mfa_mode=='required_all' %}selected{% endif %}>Required for All Users</option>
-            </select>
-            <div class="form-hint">When required, users without MFA enrolled will be forced to enroll on next login.</div>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;">
-            <button type="submit" class="btn btn-primary">Save MFA Policy</button>
-            <a href="/mfa/enroll" class="btn btn-secondary">🔐 My MFA Settings</a>
-        </div>
-    </form>
-</div>
-
-<!-- SSL Certificate -->
-<div class="card" style="grid-column:1/-1;">
-    <div class="card-header">
-        <span class="card-title">🔒 SSL Certificate</span>
-        {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
-        {% else %}<span class="badge" style="background:#2a2a1a;color:var(--warning);">HTTP Only — port {{ http_port }}</span>{% endif %}
+    {% if plugins %}
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Plugin</th><th>Installed</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for p in plugins %}
+        <tr>
+            <td><strong>{{ p.name }}</strong><div style="font-size:12px;color:var(--text-muted);">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div></td>
+            <td style="white-space:nowrap;">v{{ p.version }}</td>
+            <td>
+                {% if not p.version_ok %}<span style="color:var(--warning);font-size:12px;">⚠ Jen version mismatch</span>
+                {% elif p.enabled %}<span style="color:var(--success);font-size:12px;">● Enabled</span>
+                {% else %}<span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
     </div>
-    {% if ssl_configured and cert_info %}
-    <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
-        {% if cert_info.subject %}<div><div class="stat-label">Subject</div><div class="mono" style="font-size:11px;">{{ cert_info.subject }}</div></div>{% endif %}
-        {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono" style="font-size:11px;">{{ cert_info.issuer }}</div></div>{% endif %}
-        {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
-    </div>
-    <form method="POST" action="/settings/remove-cert" onsubmit="return false;" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-danger btn-sm" style="margin-bottom:16px;">🗑️ Remove Certificate</button>
-    </form>
+    <div class="form-hint" style="margin-top:10px;">Plugin updates are checked against the registry in the plugin manager (it contacts GitHub, so it isn't done on every page load).</div>
+    {% else %}
+    <p style="color:var(--text-muted);font-size:13px;">No plugins installed.{% if current_user.role == 'superadmin' %} Browse the registry in the plugin manager.{% endif %}</p>
     {% endif %}
-    <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">{% if ssl_configured %}Replace current certificate:{% else %}Upload certificate to enable HTTPS:{% endif %}</div>
-        <div class="form-row">
-            <div class="form-group"><label>Certificate *</label><input type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
-            <div class="form-group"><label>Private Key *</label><input type="file" name="private_key" accept=".key,.pem" required><div class="form-hint">private.key</div></div>
-            <div class="form-group"><label>CA Bundle</label><input type="file" name="ca_bundle" accept=".crt,.pem"><div class="form-hint">ca_bundle.crt — required for ZeroSSL</div></div>
-        </div>
-        <button type="submit" class="btn btn-primary">{% if ssl_configured %}🔄 Replace Certificate{% else %}🔒 Enable HTTPS{% endif %}</button>
-    </form>
 </div>
 
-<!-- SSH Key Management -->
-<div class="card">
+<!-- Server Ports & Performance — the ONE ports card (was on two tabs before v5.9.0) -->
+<div class="card" id="sys-ports">
     <div class="card-header">
-        <span class="card-title">🔑 SSH Key Management</span>
-        {% if ssh_configured %}<span class="badge badge-reserved">Key Generated</span>{% else %}<span class="badge badge-dynamic">Not Configured</span>{% endif %}
+        <span class="card-title">🔌 Ports &amp; Threads</span>
+        <span class="badge badge-dynamic">Restart on save</span>
     </div>
-    {% if ssh_configured %}
-    <div style="margin-bottom:12px;">
-        <div class="stat-label" style="margin-bottom:6px;">Public Key — add to your-kea-server authorized_keys</div>
-        <div style="background:var(--surface2);border-radius:var(--radius);padding:10px;font-family:monospace;font-size:11px;word-break:break-all;color:var(--text-muted);">{{ ssh_pub_key }}</div>
-    </div>
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Add to: <code>~/.ssh/authorized_keys</code> on {{ kea_ssh_user }}@{{ kea_ssh_host }}</div>
-    {% endif %}
-    <form method="POST" action="/settings/generate-ssh-key" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will be replaced and you will need to update authorized_keys on your-kea-server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-primary">{% if ssh_configured %}🔄 Regenerate Key{% else %}🔑 Generate SSH Key{% endif %}</button>
-    </form>
-</div>
-
-<!-- Server Ports -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">🔌 Server Ports</span>
-        <span class="badge badge-dynamic">Restart required on change</span>
-    </div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
-        Change the ports Jen listens on. Jen will restart automatically after saving.
-        {% if ssl_configured %}HTTP traffic is forwarded to HTTPS automatically.{% endif %}
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        Changing any of these restarts Jen automatically when you save.
+        {% if ssl_configured %}
+        HTTPS is active. HTTP requests on port {{ http_port }} are redirected to HTTPS on port {{ https_port }}.
+        {% else %}
+        HTTPS is not configured. Upload a certificate under <a href="/settings/security#sec-ssl">Access &amp; Security</a>.
+        {% endif %}
     </p>
-    <form method="POST" action="/settings/save-ports"
-          onsubmit="return false;" data-confirm="Changing ports will restart Jen. You may need to update any bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row" style="max-width:400px;">
+    <form method="POST" action="{{ url_for('settings.save_ports') }}" onsubmit="return false;" data-confirm="Changing ports or threads will restart Jen. You may need to update bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
             <div class="form-group">
-                <label>HTTP Port</label>
-                <input type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" required>
-                <div class="form-hint">{% if ssl_configured %}Used for redirect to HTTPS{% else %}Jen listens here{% endif %}</div>
+                <label>HTTP Port{% if ssl_configured %} <span style="color:var(--text-muted);font-weight:400;">(redirect only)</span>{% endif %}</label>
+                <input type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" style="max-width:160px;">
+                <div class="form-hint">Default: 5050</div>
             </div>
             {% if ssl_configured %}
             <div class="form-group">
                 <label>HTTPS Port</label>
-                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" required>
-                <div class="form-hint">Jen listens here (SSL active)</div>
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" style="max-width:160px;">
+                <div class="form-hint">Default: 8443</div>
             </div>
             {% else %}
-            <input type="hidden" name="https_port" value="{{ https_port }}">
+            <div class="form-group">
+                <label>HTTPS Port <span style="color:var(--text-muted);font-weight:400;">(not active)</span></label>
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" style="max-width:160px;" disabled>
+                <div class="form-hint">Configure SSL first to enable HTTPS</div>
+            </div>
             {% endif %}
+            <div class="form-group">
+                <label>Worker Threads</label>
+                <input type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" style="max-width:160px;">
+                <div class="form-hint">Concurrent requests (gunicorn <code>--threads</code>). Default: 8.</div>
+            </div>
         </div>
-        <button type="submit" class="btn btn-primary">💾 Save Ports</button>
+        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save &amp; Restart</button>
     </form>
 </div>
 
-<!-- Session Settings -->
-<div class="card">
+<!-- Restart -->
+<div class="card" id="sys-restart">
     <div class="card-header">
-        <span class="card-title">⏱️ Session Timeout</span>
-        {% if session.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>
-        {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>{% endif %}
+        <span class="card-title">🔄 Restart Jen</span>
+        {% if restart_pending %}<span class="badge" style="background:#2a1f00;color:var(--warning);">Restart pending</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row">
-            <div class="form-group">
-                <label>Enable Session Timeout</label>
-                <select name="timeout_enabled" style="max-width:180px;">
-                    <option value="true" {% if session.enabled == 'true' %}selected{% endif %}>Enabled</option>
-                    <option value="false" {% if session.enabled == 'false' %}selected{% endif %}>Disabled</option>
-                </select>
-                <div class="form-hint">Disabled = sessions never expire</div>
-            </div>
-            <div class="form-group">
-                <label>Timeout Duration (minutes)</label>
-                <input type="number" name="timeout_minutes" value="{{ session.timeout }}" min="0" max="1440" style="max-width:140px;">
-                <div class="form-hint">0 = never expire. Per-user overrides set in Users page.</div>
-            </div>
-        </div>
-        <button type="submit" class="btn btn-primary">Save</button>
-    </form>
-</div>
-
-<!-- Rate Limiting -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">🛡️ Login Rate Limiting</span>
-        {% if rl.mode == 'off' or rl.max_attempts == '0' %}
-        <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
-        {% else %}
-        <span class="badge badge-reserved">Enabled</span>
-        {% endif %}
-    </div>
-    <form method="POST" action="/settings/save-rate-limit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row">
-            <div class="form-group">
-                <label>Max Failed Attempts</label>
-                <input type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100">
-                <div class="form-hint">0 = disabled</div>
-            </div>
-            <div class="form-group">
-                <label>Lockout Duration (minutes)</label>
-                <input type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440">
-                <div class="form-hint">0 = permanent until admin clears</div>
-            </div>
-            <div class="form-group">
-                <label>Lockout Mode</label>
-                <select name="mode">
-                    <option value="both" {% if rl.mode == 'both' %}selected{% endif %}>Both IP and Username</option>
-                    <option value="ip" {% if rl.mode == 'ip' %}selected{% endif %}>IP Address only</option>
-                    <option value="username" {% if rl.mode == 'username' %}selected{% endif %}>Username only</option>
-                    <option value="off" {% if rl.mode == 'off' %}selected{% endif %}>Off</option>
-                </select>
-            </div>
-        </div>
-        <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12px;display:flex;gap:24px;">
-            <div><span class="stat-label">Failed attempts (last hour)</span><br><strong style="color:var(--warning);">{{ rl_attempts_1h }}</strong></div>
-            <div><span class="stat-label">Unique IPs affected</span><br><strong style="color:var(--warning);">{{ rl_active_ips }}</strong></div>
-        </div>
-        <div style="display:flex;gap:8px;">
-            <button type="submit" class="btn btn-primary">Save</button>
-            <form method="POST" action="/settings/clear-lockouts" style="display:inline;" onsubmit="return false;" data-confirm="Clear all login attempt records? This will unlock all locked accounts."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-secondary">🔓 Clear All Lockouts</button>
-            </form>
-        </div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">Restarts the <code>jen</code> service. Takes a few seconds; in-flight requests finish first.</p>
+    <form method="POST" action="/settings/infrastructure/restart" onsubmit="return false;" data-confirm="Restart Jen now?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn {% if restart_pending %}btn-warning{% else %}btn-secondary{% endif %}">🔄 Restart Jen</button>
     </form>
 </div>
 
 <!-- Audit Log Retention -->
-<div class="card">
+<div class="card" id="sys-retention">
     <div class="card-header">
         <span class="card-title">📋 Audit Log Retention</span>
     </div>
@@ -247,36 +170,152 @@
             <div class="form-group">
                 <label>Keep audit log entries for (days)</label>
                 <input type="number" name="audit_retention_days"
-                       value="{{ audit_retention_days }}" min="7" max="3650">
-                <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries.</div>
+                       value="{{ audit_retention_days }}" min="0" max="3650">
+                <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries — <a href="/settings/logs">view</a>.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">💾 Save</button>
     </form>
 </div>
 
-<!-- Favicon -->
-<div class="card">
-    <div class="card-header">
-        <span class="card-title">🖼️ Custom Icon</span>
-        {% if has_favicon %}<span class="badge badge-reserved">Custom</span>{% endif %}
-    </div>
-    {% if has_favicon %}
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
-        <img src="/favicon.ico" style="width:32px;height:32px;border-radius:4px;background:var(--surface2);padding:2px;">
-        <form method="POST" action="/settings/remove-favicon" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-danger btn-sm">Remove</button>
-        </form>
-    </div>
-    {% endif %}
-    <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group">
-            <label>Upload Favicon</label>
-            <input type="file" name="favicon" accept=".ico,.png">
-            <div class="form-hint">.ico or .png — 32x32 or 64x64 recommended</div>
-        </div>
-        <button type="submit" class="btn btn-primary">Upload</button>
-    </form>
-</div>
+<script>
+function checkForUpdates() {
+    var btn = document.getElementById('check-btn');
+    var status = document.getElementById('update-status');
+    btn.disabled = true;
+    btn.textContent = '⏳ Checking…';
+    status.textContent = 'Contacting GitHub…';
+    status.style.color = 'var(--text-muted)';
 
+    fetch('/settings/infrastructure/check-update')
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            btn.disabled = false;
+            btn.textContent = '🔍 Check for Updates';
+
+            if (d.status === 'up_to_date') {
+                status.style.color = 'var(--success)';
+                status.textContent = '✓ You are running the latest version (v' + d.current + ').';
+                document.getElementById('update-form').style.display = 'none';
+                document.getElementById('release-notes-link').style.display = 'none';
+
+            } else if (d.status === 'update_available') {
+                status.style.color = 'var(--warning)';
+                status.textContent = '⬆ Jen v' + d.latest + ' is available (published ' + d.published + '). You are running v' + d.current + '.';
+                var uv = document.getElementById('update-version');
+                if (uv) uv.value = d.latest;
+                document.getElementById('update-form').style.display = '';
+                var link = document.getElementById('release-notes-link');
+                link.href = d.release_url;
+                link.style.display = '';
+
+            } else if (d.status === 'no_releases') {
+                status.style.color = 'var(--text-muted)';
+                status.textContent = 'No releases published yet on GitHub.';
+
+            } else {
+                status.style.color = 'var(--danger)';
+                status.textContent = '✗ Could not check for updates: ' + (d.message || 'unknown error');
+            }
+        })
+        .catch(function(e) {
+            btn.disabled = false;
+            btn.textContent = '🔍 Check for Updates';
+            status.style.color = 'var(--danger)';
+            status.textContent = '✗ Network error: ' + e.message;
+        });
+}
+
+function startUpdate(evt) {
+    var overlay = document.getElementById('update-overlay');
+    var title   = document.getElementById('update-overlay-title');
+    var msg     = document.getElementById('update-overlay-msg');
+    var version = document.getElementById('update-version').value;
+
+    // The server can't report a target version in its redirect (the
+    // root-privileged unit re-derives "latest" on its own — see
+    // settings/updates.py), so sessionStorage carries it across the reload.
+    try { sessionStorage.setItem('jen_update_target_version', version); } catch (e) {}
+
+    overlay.style.display = 'flex';
+    title.textContent = 'Updating to v' + version + '…';
+    msg.textContent = 'Downloading update package…';
+
+    setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Installing files…'; }, 2500);
+    setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Restarting Jen…'; }, 5500);
+    return true;
+}
+
+// On page load: only show the restart-polling overlay if the server
+// confirmed the update was actually triggered via ?updating=1.
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    var pending = params.get('updating');
+    if (!pending) return;
+
+    var targetVersion = '';
+    try { targetVersion = sessionStorage.getItem('jen_update_target_version') || ''; } catch (e) {}
+
+    var cleanUrl = window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+
+    var overlay = document.getElementById('update-overlay');
+    var title   = document.getElementById('update-overlay-title');
+    var msg     = document.getElementById('update-overlay-msg');
+    overlay.style.display = 'flex';
+    title.textContent = targetVersion ? ('Updating to v' + targetVersion + '…') : 'Updating Jen…';
+    msg.textContent = 'Restarting Jen…';
+
+    var runningVersion = {{ jen_version|tojson }};
+    var attempts = 0;
+    var poll = setInterval(function() {
+        attempts++;
+        // v5.8.4 — ask systemd how jen-update.service is doing before
+        // asking Jen what version it is, so a crash before the restart is
+        // reported as a failure instead of "still reports vX".
+        fetch('/settings/infrastructure/update-status', { cache: 'no-store' })
+            .then(function(r) { return r.ok ? r.json() : {}; })
+            .catch(function() { return {}; })
+            .then(function(s) {
+                if (s && s.failed && attempts > 1) {
+                    clearInterval(poll);
+                    title.textContent = 'Update failed';
+                    msg.textContent = 'The update service exited with an error' +
+                        (s.exit_status ? ' (exit ' + s.exit_status + ')' : '') +
+                        '. Jen is still on v' + runningVersion +
+                        '. On the server: sudo journalctl -u jen-update.service -n 100';
+                    return null;
+                }
+                if (s && (s.active_state === 'activating' || s.active_state === 'active')) {
+                    msg.textContent = 'Installing update (' + (s.sub_state || 'running') + ')…';
+                }
+                return fetch('/settings/infrastructure/check-update', { cache: 'no-store' });
+            })
+            .then(function(r) {
+                if (r === null) return null;
+                if (!r.ok) throw new Error('not ready');
+                return r.json();
+            })
+            .then(function(d) {
+                if (d === null) return;
+                if (targetVersion ? d.current === targetVersion : true) {
+                    try { sessionStorage.removeItem('jen_update_target_version'); } catch (e) {}
+                    clearInterval(poll);
+                    msg.textContent = 'Update complete — reloading…';
+                    setTimeout(function() { window.location.reload(); }, 800);
+                } else if (attempts > 45) {
+                    clearInterval(poll);
+                    title.textContent = 'Update still not confirmed';
+                    msg.textContent = 'Jen still reports v' + d.current + '. The update service may still be running, or it rolled back. On the server: sudo journalctl -u jen-update.service -n 100';
+                }
+            })
+            .catch(function() {
+                if (attempts > 30) {
+                    clearInterval(poll);
+                    msg.textContent = 'Taking longer than expected — refresh manually if needed.';
+                }
+            });
+    }, 2000);
+})();
+</script>
 {% endblock %}

@@ -25,7 +25,8 @@ from tests.conftest import restricted_client as _restricted_client
 # that gets it as far as the auth check (not necessarily further — we're
 # testing the gate, not full functional behavior).
 _DATABASE_ROUTES = [
-    ("GET", "/database", {}),
+    # ("GET", "/database") — v5.9.0: the page itself (Settings → Databases) is admin-visible for the
+    # Connections tab; every tool below stays superadmin-only and is what this list guards.
     ("POST", "/database/export/jen", {}),
     ("POST", "/database/export/kea", {}),
     ("GET", "/database/backup/download/somefile.json.gz", {}),
@@ -34,7 +35,7 @@ _DATABASE_ROUTES = [
     ("POST", "/database/import/inspect", {}),
     ("POST", "/database/import/confirm", {}),
     ("POST", "/database/schedule", {}),
-    ("GET", "/database/migrate", {}),
+    ("GET", "/settings/databases/migrate", {}),
     ("POST", "/database/migrate/test", {}),
     # /database/migrate/run deliberately excluded — it spawns a background
     # thread and streams SSE; the auth decorator runs before any of that,
@@ -79,11 +80,11 @@ class TestDatabaseRoutesRejectPlainAdmin:
 
 class TestDatabaseMainPageLoadsForSuperadmin:
     def test_database_page_loads(self, logged_in_client):
-        r = logged_in_client.get("/database")
+        r = logged_in_client.get("/settings/databases")
         assert r.status_code == 200
 
     def test_migrate_page_loads(self, logged_in_client):
-        r = logged_in_client.get("/database/migrate")
+        r = logged_in_client.get("/settings/databases/migrate")
         assert r.status_code == 200
 
 

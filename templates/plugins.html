@@ -3,10 +3,13 @@
 {% block content %}
 {% from '_icons.html' import icon_trash %}
 
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>🧩 Plugins</h1>
-    <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen.</p>
+    <h1>🧩 Plugin Manager</h1>
+    <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen. Jen's own updates are on <a href="/settings/system#sys-updates">System → Jen Updates</a>.</p>
 </div>
+
+{{ subtabs(nav.subtabs['system'], 'plugins') }}
 
 <!-- Installed plugins -->
 {% if installed %}

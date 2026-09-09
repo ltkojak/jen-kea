@@ -2,6 +2,7 @@
 {% block title %}Users{% endblock %}
 {% block content %}
 
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
     <div>
         <h1>👤 Users</h1>
@@ -9,6 +10,8 @@
     </div>
     <button class="btn btn-primary" onclick="openAddModal()">＋ Add User</button>
 </div>
+
+{{ subtabs(nav.subtabs['security'], 'users') }}
 
 <!-- User table -->
 <div class="card" style="padding:0;">

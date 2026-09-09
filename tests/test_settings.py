@@ -158,7 +158,7 @@ class TestMetricsSettings:
 
     def test_settings_page_shows_closed_state_by_default(self, logged_in_client):
         self._reset_to_closed(logged_in_client)
-        r = logged_in_client.get("/settings/infrastructure")
+        r = logged_in_client.get("/settings/alerts")  # v5.9.0: the metrics card lives on Alerts & Integrations
         assert r.status_code == 200
         assert b"currently" in r.data
         assert b"closed" in r.data

@@ -2,6 +2,70 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.9.0] - 2026-09-09
+
+Settings, reorganised. Plus three small hardenings of the in-app
+updater from watching a real box go through the 5.8.4 update.
+
+### Settings is seven groups, not nine tabs and a junk drawer
+
+The old Settings area had grown by accretion: an Infrastructure tab
+with fourteen cards, a System tab with nine, the same Ports card on
+both, SSH split across two tabs, branding in three places, and Jen
+updates, plugin updates and Kea package installs each somewhere
+different. Users, the audit log, API keys and API docs lived under
+Settings because there was nowhere else. On a phone the nine-tab strip
+overflowed and a fourteen-card page was a long blind scroll.
+
+It's now organised by what you're trying to do:
+
+| Group | What's there |
+|---|---|
+| **Kea** | Control Agent (v4 + v6), SSH — host, user, path *and* the key, one card — servers & HA, package status, config drift |
+| **Databases** | Jen / Kea connection settings, plus the export, import, backups, schedule and migrate tools as tabs (superadmin) |
+| **Access & Security** | MFA policy, session timeout, rate limiting, SSL certificate; Users, API Keys and API Docs as sub-tabs |
+| **Alerts & Integrations** | Thresholds, channels, templates, DDNS/DNS provider, Prometheus |
+| **Appearance** | Logo, nav colour, favicon, brand icons |
+| **System** | Jen updates and the plugin summary in one place, ports & threads (one card), restart, audit retention |
+| **Logs** | Audit log and the alert delivery log |
+
+- `/settings` is a **landing page** — a grid of the groups with a live
+  hint on each (Kea reachable, certificate expiry, users, enabled
+  channels, backups, pending restart). On a phone that grid *is* the
+  Settings navigation; group pages get an "All settings" link back and a
+  jump list of their cards.
+- **Database left the top nav.** The top bar is the same for admin and
+  superadmin: Dashboard · Management · Network · Settings · About.
+  Superadmin-only tools are gated per card, not by hiding menus.
+- The navigation is defined **once**, in `jen/routes/settings/nav.py`,
+  and `base.html` renders the top links, the mobile drawer and every
+  section strip from it. Before, each was a hand-maintained list of
+  endpoint names repeated three times and they had drifted.
+- Section strips scroll horizontally on narrow screens instead of
+  wrapping.
+
+**Nothing changed for forms, bookmarks or the updater:** every POST
+endpoint URL is unchanged; the old page URLs (`/settings/infrastructure`,
+`/settings/icons`, `/database`, `/users`, `/audit`) redirect permanently
+to their new homes, query strings intact. `tests/test_settings_ia.py`
+pins all of that — every old URL's redirect, every group's active state,
+and that every literal form action in the settings templates still
+resolves.
+
+### Updater
+
+- **The health probe is baselined before the swap.** The updater now
+  probes the currently-running Jen first; if it can't see a known-good
+  app it aborts with `/opt/jen` untouched and says why, instead of
+  installing a release and then rolling it back on a false negative —
+  which is exactly what the 5.8.2 updater did to a healthy 5.8.4 on an
+  SSL box.
+- Stale `.rollback-*` snapshots from earlier failed runs are pruned at
+  the start of each run (one box had four).
+- The CRITICAL "rollback restart also unhealthy" line now names the
+  probe URL and says plainly that if `systemctl is-active jen` reports
+  active, the probe is what's wrong, not the restored app.
+
 ## [5.8.4] - 2026-09-09
 
 Correctness, docs and small security fixes from a full code review of

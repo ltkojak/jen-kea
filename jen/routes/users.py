@@ -37,8 +37,34 @@ def __ip_to_int(ip):
 
 @bp.route("/audit")
 @login_required
+def audit_legacy():
+    """Pre-5.9.0 URL — 301 to Settings → Logs, keeping ?page=/?search=."""
+    return redirect(url_for("users.audit_log", **request.args.to_dict()), code=301)
+
+
+@bp.route("/settings/logs")
+@login_required
 @_admin_required
 def audit_log():
+    """v5.9.0 — Settings → Logs: the audit log (tab=audit, default) and the
+    alert delivery log (tab=alerts, which used to be a card at the bottom
+    of the Alerts page)."""
+    tab = request.args.get("tab", "audit")
+    if tab == "alerts":
+        recent_alerts = []
+        try:
+            with __db.jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "SELECT alert_type, channel_type, status, error, sent_at FROM alert_log "
+                        "ORDER BY sent_at DESC LIMIT 100"
+                    )
+                    recent_alerts = cur.fetchall()
+        except Exception as e:
+            logger.error(f"Could not load alert log: {e}")
+            flash("Could not load the alert log. Check server logs for details.", "error")
+        return render_template("logs.html", tab="alerts", recent_alerts=recent_alerts, total=0, search="")
+
     try:
         page = max(1, int(request.args.get("page", 1)))
     except ValueError:
@@ -69,7 +95,7 @@ def audit_log():
         logger.error(f"Could not load audit log: {e}")
         flash("Could not load audit log. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page)
-    return render_template("audit.html", logs=logs, page=page, pages=pages, total=total, search=search)
+    return render_template("logs.html", tab="audit", logs=logs, page=page, pages=pages, total=total, search=search)
 
 
 # ─────────────────────────────────────────
@@ -163,6 +189,13 @@ def user_profile():
 # Users
 # ─────────────────────────────────────────
 @bp.route("/users")
+@login_required
+def users_legacy():
+    """Pre-5.9.0 URL — 301 to Settings → Access & Security → Users."""
+    return redirect(url_for("users.users"), code=301)
+
+
+@bp.route("/settings/users")
 @login_required
 @_superadmin_required
 def users():

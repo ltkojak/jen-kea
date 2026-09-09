@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Appearance{% endblock %}
+{% block content %}
+{% from '_icons.html' import icon_trash %}
+<div class="page-header">
+    <h1>🎨 Appearance</h1>
+    <p>Logo, nav colour, favicon, and the brand icons shown in the device inventory.</p>
+</div>
+
+{% set toc = [('app-branding', 'Branding'), ('app-favicon', 'Favicon'), ('app-icons', 'Brand icons')] %}
+{% include '_card_toc.html' %}
+
+<!-- Custom Branding -->
+<div class="card" id="app-branding">
+    <div class="card-header">
+        <span class="card-title">🎨 Branding</span>
+    </div>
+    <p style="color:var(--text-muted);font-size:12px;margin-bottom:20px;">
+        Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar colour to distinguish environments.
+    </p>
+    <div class="form-row">
+        <div class="form-group">
+            <label>Nav Logo</label>
+            {% if branding.nav_logo %}
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+                <img src="{{ branding.nav_logo }}" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
+                <form method="POST" action="/settings/remove-nav-logo" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn-act btn-act-del" onclick="jenConfirm('Remove logo?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">{{ icon_trash() }}</button>
+                </form>
+            </div>
+            {% endif %}
+            <form method="POST" action="/settings/upload-nav-logo" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" style="flex:1;">
+                    <button type="submit" class="btn btn-primary btn-sm">⬆ Upload</button>
+                </div>
+                <div class="form-hint">PNG, SVG, JPG, or WebP — max 200KB. SVGs with scripts or event handlers are refused. Recommended height: 28–36px.</div>
+            </form>
+        </div>
+        <div class="form-group">
+            <label>Nav Bar Colour</label>
+            <form method="POST" action="/settings/save-nav-color"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                    <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">
+                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" style="flex:1;">
+                    <button type="submit" class="btn btn-primary btn-sm">💾 Save</button>
+                </div>
+                <div class="form-hint">Useful for distinguishing prod vs dev environments. Leave blank for default.</div>
+            </form>
+            <form method="POST" action="/settings/save-nav-color" style="margin-top:8px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="nav_color" value="">
+                <input type="hidden" name="nav_color_hex" value="">
+                <button type="submit" class="btn btn-sm btn-secondary" {% if not branding.nav_color %}disabled style="opacity:0.4;cursor:not-allowed;"{% endif %}>↺ Reset to Default</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Favicon -->
+<div class="card" id="app-favicon">
+    <div class="card-header">
+        <span class="card-title">🖼️ Favicon</span>
+        {% if has_favicon %}<span class="badge badge-reserved">Custom</span>{% endif %}
+    </div>
+    {% if has_favicon %}
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <img src="/favicon.ico" style="width:32px;height:32px;border-radius:4px;background:var(--surface2);padding:2px;">
+        <form method="POST" action="/settings/remove-favicon" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+        </form>
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/upload-favicon" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Upload Favicon</label>
+            <input type="file" name="favicon" accept=".ico,.png">
+            <div class="form-hint">.ico or .png — 32x32 or 64x64 recommended. Survives upgrades.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+</div>
+
+<!-- Brand icons -->
+<div class="card" id="app-icons">
+    <div class="card-header"><span class="card-title">🏷️ Brand Icons</span>
+        <span style="font-size:12px;color:var(--text-muted);">Used in the Device Inventory</span>
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+        Upload an SVG to override a bundled icon or add a new manufacturer. The icon name must match a key in the
+        manufacturer map (e.g. <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">amazon</code>,
+        <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">apple</code>,
+        <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">mydevice</code>).
+        Custom icons take priority over bundled ones. SVG only, max 100KB, no scripts or event handlers.
+    </p>
+    <form method="POST" action="/settings/icons/upload" enctype="multipart/form-data"
+          style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:20px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group" style="margin:0;min-width:180px;">
+            <label>Icon Name</label>
+            <input type="text" name="icon_name" placeholder="e.g. amazon, mydevice" maxlength="50" required>
+        </div>
+        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+            <label>SVG File</label>
+            <input type="file" name="icon" accept=".svg" required>
+        </div>
+        <button type="submit" class="btn btn-primary">⬆ Upload</button>
+    </form>
+
+    {% if custom %}
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px;">Custom Icons ({{ custom|length }})</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;">
+        {% for icon in custom %}
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;
+                    background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
+                    padding:12px 16px;min-width:100px;">
+            <img src="/static/icons/custom/{{ icon.file }}" alt="{{ icon.name }}"
+                 style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
+            <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
+            <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn-act btn-act-del"
+                        onclick="jenConfirm('Delete custom icon {{ icon.name }}?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">{{ icon_trash() }} Remove</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <details>
+        <summary style="cursor:pointer;font-weight:600;font-size:13px;margin-bottom:8px;">Bundled Icons ({{ bundled|length }})</summary>
+        <p style="font-size:12px;color:var(--text-muted);margin:8px 0 12px;">
+            Included with Jen. Upload a custom icon with the same name to override any of them.
+        </p>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;">
+            {% for icon in bundled %}
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;
+                        background:var(--surface2);border:1px solid {{ 'var(--primary)' if icon.custom_override else 'var(--border)' }};
+                        border-radius:var(--radius);padding:12px 16px;min-width:100px;position:relative;">
+                {% if icon.custom_override %}
+                <span style="position:absolute;top:4px;right:4px;font-size:9px;background:var(--primary);color:#000;
+                              padding:1px 5px;border-radius:3px;">overridden</span>
+                {% endif %}
+                <img src="/static/icons/brands/{{ icon.file }}" alt="{{ icon.name }}"
+                     style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
+                <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+</div>
+{% endblock %}

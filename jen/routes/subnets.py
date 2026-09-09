@@ -339,7 +339,7 @@ def add_subnet():
     suggested_id = max(existing_ids, default=0) + 1
     ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
     if not ssh_ready:
-        flash("Subnet creation requires SSH to be configured. Go to Settings → Infrastructure to set it up.", "error")
+        flash("Subnet creation requires SSH to be configured. Go to Settings → Kea → SSH to set it up.", "error")
         return redirect(url_for("subnets.subnets"))
     return render_template("add_subnet.html", suggested_id=suggested_id)
 

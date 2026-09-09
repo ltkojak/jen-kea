@@ -57,20 +57,17 @@ def settings_alerts():
         logger.error(f"Error loading alert settings: {e}")
         flash("Error loading alert settings. Check server logs for details.", "error")
 
-    # Recent alert log with error details
-    recent_alerts = []
-    try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("""
-                    SELECT alert_type, channel_type, status, error, sent_at
-                    FROM alert_log
-                    ORDER BY sent_at DESC
-                    LIMIT 20
-                """)
-                recent_alerts = cur.fetchall()
-    except Exception:
-        pass
+    # v5.9.0 — the delivery log moved to Settings → Logs → Alert log; the
+    # DDNS/DNS-provider and Prometheus cards moved here from Infrastructure
+    # (they're integrations, not Kea plumbing).
+    cfg = extensions.cfg
+    infra = {
+        "ddns_log": cfg.get("ddns", "log_path", fallback=""),
+        "ddns_url": cfg.get("ddns", "api_url", fallback=""),
+        "ddns_user": cfg.get("ddns", "api_user", fallback=""),
+        "ddns_zone": cfg.get("ddns", "forward_zone", fallback=""),
+        "dns_provider": cfg.get("ddns", "dns_provider", fallback="technitium"),
+    }
 
     summary_time = __user.get_global_setting("daily_summary_time", "07:00")
     pool_exhaustion_free = __user.get_global_setting("pool_exhaustion_free", "5")
@@ -89,7 +86,9 @@ def settings_alerts():
         reserved_lease_mode=reserved_lease_mode,
         subnet_map=accessible_subnet_map,
         can_grant_all_subnets=current_user.all_subnets,
-        recent_alerts=recent_alerts,
+        infra=infra,
+        metrics_token=cfg.get("server", "metrics_token", fallback="") if cfg else "",
+        metrics_open=cfg.getboolean("server", "metrics_open", fallback=False) if cfg else False,
     )
 
 

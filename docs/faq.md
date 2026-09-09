@@ -110,7 +110,7 @@ If T1 and T2 are not set, devices calculate them from the valid lifetime automat
 
 The new lease alert works by polling the database every 30 seconds for leases that didn't exist in the previous poll. Make sure:
 
-1. "New device lease" is checked and saved in Settings → Telegram Alerts
+1. "New device lease" is checked and saved in Settings → Alerts & Integrations
 2. "Enable Telegram alerts" is checked
 3. The Jen service has been restarted since you saved (the polling thread starts at launch)
 
@@ -188,7 +188,7 @@ Yes. Click the **✏** edit button on any device in the Device Inventory and cho
 
 Yes — two ways:
 
-1. **Custom icon**: Go to Settings → Icons and upload an SVG with the appropriate manufacturer name. This adds the icon but doesn't add OUI entries.
+1. **Custom icon**: Go to Settings → Appearance → Brand Icons and upload an SVG with the appropriate manufacturer name. This adds the icon but doesn't add OUI entries.
 2. **Report it**: Open an issue on GitHub with the OUI prefix (`xx:xx:xx`) and manufacturer name and it will be added to the next release's database.
 
 ---
@@ -197,7 +197,7 @@ Yes — two ways:
 
 ### Does Jen have an API?
 
-Yes. Jen provides a read-only REST API at `/api/v1/`. Go to **Settings → API Docs** for full documentation.
+Yes. Jen provides a read-only REST API at `/api/v1/`. Go to **Settings → Access & Security → API Docs** for full documentation.
 
 ### What can the API be used for?
 
@@ -212,7 +212,7 @@ Yes. All API keys are read-only — they cannot modify reservations, leases, or 
 
 ### How do I create an API key?
 
-Go to **Settings → API Keys**, click **Generate Key**, give it a name. The key is shown once — copy it immediately.
+Go to **Settings → Access & Security → API Keys**, click **Generate Key**, give it a name. The key is shown once — copy it immediately.
 
 ---
 
@@ -224,7 +224,7 @@ TOTP (Time-based One-Time Password) — compatible with Google Authenticator, Au
 
 ### What if I lose access to my authenticator app?
 
-Use one of your backup codes. Each code works once. After using one, generate a fresh set from Profile → Security. If you lose both your authenticator and your backup codes, an admin can reset your MFA from Settings → Users.
+Use one of your backup codes. Each code works once. After using one, generate a fresh set from Profile → Security. If you lose both your authenticator and your backup codes, an admin can reset your MFA from Settings → Access & Security → Users.
 
 ### Can MFA be required for all users?
 
@@ -245,7 +245,7 @@ This was a bug in versions before 2.5.7 caused by iOS's 300ms tap delay. Upgrade
 ## High Availability
 
 ### Does Jen support Kea HA?
-Yes, as of v2.5.0. Add your standby server in **Settings → Infrastructure → Additional Servers** and configure HA mode in **Settings → Infrastructure → High Availability**. Jen automatically routes config and subnet editing commands to the active node.
+Yes, as of v2.5.0. Add your standby server and set HA mode in **Settings → Kea → Servers & High Availability**. Jen automatically routes config and subnet editing commands to the active node.
 
 ### What HA modes does Jen support?
 Hot-standby, load-balancing, and passive-backup — matching Kea's supported HA modes.
@@ -257,14 +257,14 @@ Jen queries `ha-heartbeat` on all configured servers every 10 seconds (cached) a
 Yes — enable the **HA failover / state change** alert type on any alert channel. Jen fires this alert any time a server's HA state changes.
 
 ### I added a second server but forgot to set HA mode — what happens?
-Jen will show a warning on the Servers page and will always use Server 1 for config and subnet editing. Set HA mode in **Settings → Infrastructure → High Availability** to enable automatic active node routing.
+Jen will show a warning on the Servers page and will always use Server 1 for config and subnet editing. Set HA mode in **Settings → Kea → Servers & High Availability** to enable automatic active node routing.
 
 ---
 
 ## DDNS Providers
 
 ### Which DNS providers does Jen support?
-Technitium DNS, Pi-hole (v5 and v6), AdGuard Home, and any DNS server reachable via SSH (Bind9, Unbound, etc.). Configure in **Settings → Infrastructure → DDNS Configuration**.
+Technitium DNS, Pi-hole (v5 and v6), AdGuard Home, and any DNS server reachable via SSH (Bind9, Unbound, etc.). Configure in **Settings → Alerts & Integrations → DDNS & DNS Provider**.
 
 ### I don't use Technitium — can I still use the DDNS log viewer?
 Yes. Set the DNS provider to **DNS via SSH** or **None** — the log viewer works regardless of DNS provider since it just reads the Kea DDNS log file over SSH.

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Access & Security{% endblock %}
+{% block content %}
+{% from '_settings_subtabs.html' import subtabs %}
+<div class="page-header">
+    <h1>🔐 Access &amp; Security</h1>
+    <p>Who can sign in, how, and for how long — plus the certificate Jen serves.</p>
+</div>
+
+{{ subtabs(nav.subtabs['security'], 'policies') }}
+
+{% set toc = [('sec-mfa', 'MFA policy'), ('sec-session', 'Sessions'), ('sec-ratelimit', 'Rate limiting'), ('sec-ssl', 'SSL certificate')] %}
+{% include '_card_toc.html' %}
+
+<!-- MFA Settings -->
+<div class="card" id="sec-mfa">
+    <div class="card-header">
+        <span class="card-title">🔐 Multi-Factor Authentication</span>
+        {% if mfa_mode == 'off' %}
+        <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
+        {% elif mfa_mode == 'optional' %}
+        <span class="badge badge-dynamic">Optional</span>
+        {% elif mfa_mode == 'required_admins' %}
+        <span class="badge badge-reserved">Required for Admins</span>
+        {% else %}
+        <span class="badge badge-reserved">Required for All</span>
+        {% endif %}
+    </div>
+    <form method="POST" action="/settings/system/save-mfa-mode"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>MFA Policy</label>
+            <select name="mfa_mode" style="max-width:280px;">
+                <option value="off" {% if mfa_mode=='off' %}selected{% endif %}>Off — MFA not required</option>
+                <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %}>Optional — users can enroll if they want</option>
+                <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %}>Required for Admins</option>
+                <option value="required_all" {% if mfa_mode=='required_all' %}selected{% endif %}>Required for All Users</option>
+            </select>
+            <div class="form-hint">When required, users without MFA enrolled will be forced to enroll on next login.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+            <button type="submit" class="btn btn-primary">Save MFA Policy</button>
+            <a href="/mfa/enroll" class="btn btn-secondary">🔐 My MFA Settings</a>
+        </div>
+    </form>
+</div>
+
+<!-- Session Settings -->
+<div class="card" id="sec-session">
+    <div class="card-header">
+        <span class="card-title">⏱️ Session Timeout</span>
+        {% if session.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>
+        {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>{% endif %}
+    </div>
+    <form method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Enable Session Timeout</label>
+                <select name="timeout_enabled" style="max-width:180px;">
+                    <option value="true" {% if session.enabled == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if session.enabled == 'false' %}selected{% endif %}>Disabled</option>
+                </select>
+                <div class="form-hint">Disabled = sessions never expire</div>
+            </div>
+            <div class="form-group">
+                <label>Timeout Duration (minutes)</label>
+                <input type="number" name="timeout_minutes" value="{{ session.timeout }}" min="0" max="1440" style="max-width:140px;">
+                <div class="form-hint">0 = never expire. Per-user overrides are set on the Users tab.</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+    </form>
+</div>
+
+<!-- Rate Limiting -->
+<div class="card" id="sec-ratelimit">
+    <div class="card-header">
+        <span class="card-title">🛡️ Login Rate Limiting</span>
+        {% if rl.mode == 'off' or rl.max_attempts == '0' %}
+        <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
+        {% else %}
+        <span class="badge badge-reserved">Enabled</span>
+        {% endif %}
+    </div>
+    <form method="POST" action="/settings/save-rate-limit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Max Failed Attempts</label>
+                <input type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100">
+                <div class="form-hint">0 = disabled</div>
+            </div>
+            <div class="form-group">
+                <label>Lockout Duration (minutes)</label>
+                <input type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440">
+                <div class="form-hint">0 = permanent until admin clears</div>
+            </div>
+            <div class="form-group">
+                <label>Lockout Mode</label>
+                <select name="mode">
+                    <option value="both" {% if rl.mode == 'both' %}selected{% endif %}>Both IP and Username</option>
+                    <option value="ip" {% if rl.mode == 'ip' %}selected{% endif %}>IP Address only</option>
+                    <option value="username" {% if rl.mode == 'username' %}selected{% endif %}>Username only</option>
+                    <option value="off" {% if rl.mode == 'off' %}selected{% endif %}>Off</option>
+                </select>
+            </div>
+        </div>
+        <div style="background:var(--surface2);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:12px;display:flex;gap:24px;">
+            <div><span class="stat-label">Failed attempts (last hour)</span><br><strong style="color:var(--warning);">{{ rl_attempts_1h }}</strong></div>
+            <div><span class="stat-label">Unique IPs affected</span><br><strong style="color:var(--warning);">{{ rl_active_ips }}</strong></div>
+        </div>
+        <div style="display:flex;gap:8px;">
+            <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+    </form>
+    <form method="POST" action="/settings/clear-lockouts" style="display:inline;margin-top:8px;" onsubmit="return false;" data-confirm="Clear all login attempt records? This will unlock all locked accounts."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-secondary">🔓 Clear All Lockouts</button>
+    </form>
+</div>
+
+<!-- SSL Certificate -->
+<div class="card" id="sec-ssl">
+    <div class="card-header">
+        <span class="card-title">🔒 SSL Certificate</span>
+        {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
+        {% else %}<span class="badge" style="background:#2a2a1a;color:var(--warning);">HTTP Only — port {{ http_port }}</span>{% endif %}
+    </div>
+    {% if ssl_configured and cert_info %}
+    <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+        {% if cert_info.subject %}<div><div class="stat-label">Subject</div><div class="mono" style="font-size:11px;">{{ cert_info.subject }}</div></div>{% endif %}
+        {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono" style="font-size:11px;">{{ cert_info.issuer }}</div></div>{% endif %}
+        {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
+    </div>
+    <form method="POST" action="/settings/remove-cert" onsubmit="return false;" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger btn-sm" style="margin-bottom:16px;">🗑️ Remove Certificate</button>
+    </form>
+    {% endif %}
+    <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">{% if ssl_configured %}Replace current certificate:{% else %}Upload certificate to enable HTTPS:{% endif %}</div>
+        <div class="form-row">
+            <div class="form-group"><label>Certificate *</label><input type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
+            <div class="form-group"><label>Private Key *</label><input type="file" name="private_key" accept=".key,.pem" required><div class="form-hint">private.key</div></div>
+            <div class="form-group"><label>CA Bundle</label><input type="file" name="ca_bundle" accept=".crt,.pem"><div class="form-hint">ca_bundle.crt — required for ZeroSSL</div></div>
+        </div>
+        <button type="submit" class="btn btn-primary">{% if ssl_configured %}🔄 Replace Certificate{% else %}🔒 Enable HTTPS{% endif %}</button>
+    </form>
+    <div class="form-hint" style="margin-top:8px;">Ports are set on <a href="/settings/system#sys-ports">System → Ports &amp; threads</a>.</div>
+</div>
+{% endblock %}

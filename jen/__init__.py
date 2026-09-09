@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.8.4"
+JEN_VERSION = "5.9.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -489,7 +489,15 @@ def create_app() -> Flask:
     # ── Plugin nav injection context processor ────────────────────────────────
     @app.context_processor
     def inject_plugin_nav():
-        return {"plugin_nav_items": get_nav_items()}
+        # v5.9.0 — the whole navigation (top links, drawer, section strip,
+        # Settings groups + sub-tabs) is computed once per request from
+        # jen/routes/settings/nav.py. base.html renders `nav`; nothing else
+        # hand-lists endpoint names anymore.
+        from jen.routes.settings.nav import nav_context
+
+        items = get_nav_items()
+        role = current_user.role if current_user and current_user.is_authenticated else None
+        return {"plugin_nav_items": items, "nav": nav_context(request.endpoint, role, items)}
 
     # ── DB init ───────────────────────────────────────────────────────────────
     from jen.models.db import init_jen_db

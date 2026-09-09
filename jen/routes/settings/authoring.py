@@ -126,7 +126,7 @@ def _parse_subnet_lines(text: str, service: str):
 def author_kea_config(service):
     if service not in ("dhcp4", "dhcp6"):
         flash("Invalid service.", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
+        return redirect(url_for("settings.settings_kea"))
 
     target_server, detected, autodetected_interfaces, ca_socket = _author_kea_detect(service)
     if not target_server:
@@ -135,7 +135,7 @@ def author_kea_config(service):
             "Configure SSH under Kea Server settings first.",
             "error",
         )
-        return redirect(url_for("settings.settings_infrastructure"))
+        return redirect(url_for("settings.settings_kea"))
 
     existing_subnets, default_db = _author_kea_subnets_and_db(service)
     conf_path = __authoring.conf_path_for(target_server, service)
@@ -244,7 +244,7 @@ def author_kea_config_preview(service):
 def author_kea_config_post(service):
     if service not in ("dhcp4", "dhcp6"):
         flash("Invalid service.", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
+        return redirect(url_for("settings.settings_kea"))
 
     config, subnets, error = _author_kea_build_config(service, request.form)
     if error:
@@ -307,7 +307,7 @@ def author_kea_config_post(service):
     for e in errors:
         flash(e, "error")
     __user.audit("AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(results) + len(errors)}")
-    return redirect(url_for("settings.settings_infrastructure"))
+    return redirect(url_for("settings.settings_kea"))
 
 
 @bp.route("/settings/infrastructure/check-kea-binaries", methods=["POST"])

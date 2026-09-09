@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>⚙️ Settings</h1>
+    <p>Everything about this Jen install, grouped by what you're trying to do.</p>
+</div>
+
+<div class="settings-grid">
+    {% for g in nav.settings_groups %}
+    <a href="{{ g.url }}" class="settings-tile">
+        <div class="settings-tile-head">
+            <span class="settings-tile-icon">{{ g.icon }}</span>
+            <span class="settings-tile-label">{{ g.label }}</span>
+        </div>
+        <div class="settings-tile-blurb">{{ g.blurb }}</div>
+        {% set h = hints.get(g.id) %}
+        {% if h %}
+        <div class="settings-tile-hints">
+            {% for text, tone in h %}
+            <span class="settings-hint settings-hint-{{ tone }}">{{ text }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </a>
+    {% endfor %}
+</div>
+{% endblock %}

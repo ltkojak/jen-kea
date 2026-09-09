@@ -60,6 +60,11 @@ EXPECTED_ENDPOINTS = {
     "settings.check_update",
     "settings.update_status",
     "settings.self_update",
+    # v5.9.0 — Settings IA rework: the new group pages. settings_infrastructure
+    # and settings_icons above are now 301 shims to settings_kea / settings_appearance.
+    "settings.settings_kea",
+    "settings.settings_security",
+    "settings.settings_appearance",
 }
 
 
@@ -84,20 +89,25 @@ class TestSettingsBlueprintSplit:
         assert callable(_parse_subnet_lines)
         assert callable(_subnets_to_lines)
 
-    def test_landing_route_still_redirects_to_system(self, logged_in_client):
+    def test_landing_route_renders_the_settings_grid(self, logged_in_client, mock_kea):
+        """v5.9.0 — /settings is a landing page (a grid of the groups), no
+        longer a redirect to the System tab."""
         r = logged_in_client.get("/settings")
-        assert r.status_code in (301, 302)
-        assert "/settings/system" in r.headers["Location"]
+        assert r.status_code == 200
+        assert b"settings-grid" in r.data
 
     def test_a_route_from_each_split_module_responds(self, logged_in_client, mock_kea):
-        # one GET route per module, smoke-level. settings_icons (the
-        # branding module's only GET) lists the custom-icon dir, which a
-        # bare checkout / CI workspace doesn't have — create it so this
-        # exercises the route, not the environment.
+        # one GET route per module, smoke-level.
         import os
 
         from jen import extensions
 
         os.makedirs(extensions.ICONS_CUSTOM_DIR, exist_ok=True)
-        for path in ("/settings/system", "/settings/alerts", "/settings/infrastructure", "/settings/icons"):
-            assert logged_in_client.get(path).status_code == 200
+        for path in (
+            "/settings/system",
+            "/settings/alerts",
+            "/settings/kea",
+            "/settings/appearance",
+            "/settings/security",
+        ):
+            assert logged_in_client.get(path).status_code == 200, path

@@ -1,0 +1,11 @@
+{#
+  v5.9.0 — sticky in-page jump list for a Settings group page. Each entry
+  is (anchor id, label); the matching card has id="<anchor>". Usage:
+      {% set toc = [('kea-api', 'Control Agent'), ('ssh', 'SSH')] %}
+      {% include '_card_toc.html' %}
+#}
+{% if toc and toc|length > 2 %}
+<div class="card-toc" aria-label="On this page">
+  {% for anchor, label in toc %}<a href="#{{ anchor }}">{{ label }}</a>{% endfor %}
+</div>
+{% endif %}

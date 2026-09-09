@@ -203,7 +203,7 @@ def self_update():
         except Exception as e:
             logger.error(f"Pre-update database backup failed: {e}")
             flash("Database backup failed — aborting update. Check server logs for details.", "error")
-            return redirect(url_for("settings.settings_infrastructure"))
+            return redirect(url_for("settings.settings_kea"))
 
     try:
         result = subprocess.run(
@@ -215,13 +215,13 @@ def self_update():
     except Exception as e:
         logger.error(f"Failed to trigger jen-update.service: {e}")
         flash("Could not start the update — check server logs for details.", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
+        return redirect(url_for("settings.settings_kea"))
 
     if result.returncode != 0:
         logger.error(f"jen-update.service failed to start: {result.stderr}")
         flash("Could not start the update — check server logs for details.", "error")
-        return redirect(url_for("settings.settings_infrastructure"))
+        return redirect(url_for("settings.settings_kea"))
 
     __user.audit("SELF_UPDATE", "jen", "Triggered update via jen-update.service")
     flash("Update started. This page will refresh automatically once Jen is back.", "success")
-    return redirect(url_for("settings.settings_infrastructure", updating="1"))
+    return redirect(url_for("settings.settings_kea", updating="1"))

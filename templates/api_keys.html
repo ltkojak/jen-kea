@@ -2,10 +2,13 @@
 {% block title %}API Keys{% endblock %}
 {% block content %}
 {% from '_icons.html' import icon_trash, icon_pause, icon_dots %}
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
     <h1>🔑 API Keys</h1>
-    <p>Manage read-only API keys for integrations with Home Assistant, Zabbix, and other tools.</p>
+    <p>Manage read-only API keys for integrations with Home Assistant, Zabbix, and similar tools.</p>
 </div>
+
+{{ subtabs(nav.subtabs['security'], 'api-keys') }}
 
 {% if session.get('new_api_key') %}
 <div class="alert alert-success" style="font-family:monospace;word-break:break-all;">

@@ -69,7 +69,7 @@ class TestUserManagement:
 
     def test_user_list_requires_admin(self, logged_in_client):
         """User list is accessible to admin."""
-        r = logged_in_client.get("/users")
+        r = logged_in_client.get("/settings/users")
         assert r.status_code == 200
 
     def test_create_user(self, logged_in_client, db):

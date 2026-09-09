@@ -32,7 +32,7 @@ def save_session_settings():
 
     if not timeout.isdigit() or not (0 <= int(timeout) <= 1440):
         flash("Session timeout must be between 0 and 1440 minutes (0 = never).", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_security"))
 
     __user.set_global_setting("session_timeout_minutes", timeout)
     __user.set_global_setting("session_timeout_enabled", enabled)
@@ -44,7 +44,7 @@ def save_session_settings():
     else:
         flash(f"Session timeout set to {timeout} minutes.", "success")
     __user.audit("SAVE_SETTINGS", "session", f"enabled={enabled} timeout={timeout}min")
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_security"))
 
 
 @bp.route("/settings/save-rate-limit", methods=["POST"])
@@ -57,20 +57,20 @@ def save_rate_limit():
 
     if not max_attempts.isdigit() or int(max_attempts) < 0:
         flash("Max attempts must be 0 or a positive number.", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_security"))
     if not lockout_minutes.isdigit() or int(lockout_minutes) < 0:
         flash("Lockout duration must be 0 or a positive number.", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_security"))
     if mode not in ("ip", "username", "both", "off"):
         flash("Invalid lockout mode.", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_security"))
 
     __user.set_global_setting("rl_max_attempts", max_attempts)
     __user.set_global_setting("rl_lockout_minutes", lockout_minutes)
     __user.set_global_setting("rl_mode", mode)
     flash("Rate limiting settings saved.", "success")
     __user.audit("SAVE_SETTINGS", "rate_limit", f"max={max_attempts} lockout={lockout_minutes}min mode={mode}")
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_security"))
 
 
 @bp.route("/settings/clear-lockouts", methods=["POST"])
@@ -87,7 +87,7 @@ def clear_lockouts():
     except Exception as e:
         logger.error(f"Error clearing lockouts: {e}")
         flash("Error clearing lockouts. Check server logs for details.", "error")
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_security"))
 
 
 @bp.route("/settings/upload-cert", methods=["POST"])
@@ -99,17 +99,17 @@ def upload_cert():
     ca_file = request.files.get("ca_bundle")
     if not cert_file or not key_file:
         flash("Certificate and private key are required.", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_security"))
     os.makedirs("/etc/jen/ssl", exist_ok=True)
     try:
         cert_data = cert_file.read().decode("utf-8")
         key_data = key_file.read().decode("utf-8")
         if "BEGIN CERTIFICATE" not in cert_data:
             flash("Invalid certificate file — does not appear to be a PEM certificate.", "error")
-            return redirect(url_for("settings.settings"))
+            return redirect(url_for("settings.settings_security"))
         if "BEGIN" not in key_data or "PRIVATE KEY" not in key_data:
             flash("Invalid private key file.", "error")
-            return redirect(url_for("settings.settings"))
+            return redirect(url_for("settings.settings_security"))
         with open(extensions.SSL_CERT, "w") as f:
             f.write(cert_data)
         with open(extensions.SSL_KEY, "w") as f:
@@ -144,7 +144,7 @@ def upload_cert():
     except Exception as e:
         logger.error(f"Error uploading certificate: {e}")
         flash("Error uploading certificate. Check server logs for details.", "error")
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_security"))
 
 
 @bp.route("/settings/remove-cert", methods=["POST"])
@@ -163,4 +163,4 @@ def remove_cert():
         subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
 
     threading.Thread(target=restart, daemon=True).start()
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_security"))

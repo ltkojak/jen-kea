@@ -345,7 +345,7 @@ proxying both `kea-dhcp4` and `kea-dhcp6`, and one shared MySQL database.
 
 ### 5.3 The enable/disable toggle reaches real infrastructure
 
-Flipping "Enable IPv6 support" (Settings → Infrastructure, superadmin
+Flipping "Enable IPv6 support" (Settings → Kea, superadmin
 only) is two layers, not one: the `ipv6_enabled` display flag above, and
 actual SSH-driven service-state orchestration
 (`jen/services/kea6.py::set_ipv6_service_state()`) that connects to
@@ -450,7 +450,7 @@ server:
   `jen.service` `TimeoutStopSec=40`) instead of cutting them.
 
 **Single worker, many threads.** `--workers 1 --threads N` (N =
-`[server] threads`, default 8, Settings → Infrastructure). Jen is
+`[server] threads`, default 8, Settings → System). Jen is
 I/O-bound — DB, Kea Control Agent API, SSH — not CPU-bound, so threads
 carry the concurrency fine. `-w 1` is also load-bearing for correctness:
 the backup scheduler and the `check_alerts` loop are **single-process**

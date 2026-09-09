@@ -3,12 +3,15 @@
 {% block content %}
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots, icon_test %}
 <div class="page-header">
-    <h1>🔔 Alert Settings</h1>
-    <p>Configure notification channels, alert types, and message templates</p>
+    <h1>🔔 Alerts &amp; Integrations</h1>
+    <p>Notification channels, thresholds and templates — plus the DNS provider and Prometheus hooks. Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.</p>
 </div>
 
+{% set toc = [('al-global', 'Thresholds'), ('al-channels', 'Channels'), ('al-templates', 'Templates'), ('al-ddns', 'DDNS / DNS'), ('al-metrics', 'Prometheus')] %}
+{% include '_card_toc.html' %}
+
 <!-- Global alert settings -->
-<div class="card">
+<div class="card" id="al-global">
     <div class="card-header"><span class="card-title">⚙️ Global Alert Settings</span></div>
     <form method="POST" action="/settings/alerts/save-global"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -41,7 +44,7 @@
 </div>
 
 <!-- Alert Channels -->
-<div class="card">
+<div class="card" id="al-channels">
     <div class="card-header">
         <span class="card-title">📡 Alert Channels</span>
         <button class="btn btn-sm btn-primary" onclick="showAddChannel()">+ Add Channel</button>
@@ -123,7 +126,7 @@ var JEN_CHANNELS = {
 </div>
 
 <!-- Message Templates -->
-<div class="card">
+<div class="card" id="al-templates">
     <div class="card-header"><span class="card-title">✏️ Message Templates</span></div>
     <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
         Customize alert messages. Available variables: <code>{ip}</code> <code>{mac}</code> <code>{hostname}</code> <code>{subnet}</code> <code>{cidr}</code> <code>{pct}</code> <code>{used}</code> <code>{total}</code> <code>{free}</code> <code>{days}</code> <code>{details}</code> <code>{summary}</code>
@@ -371,54 +374,144 @@ var JEN_CHANNELS = {
 </div>
 
 
-<!-- Recent Alert Log -->
-<div class="card" style="margin-top:24px;">
+<!-- DDNS / DNS provider (moved from Infrastructure in v5.9.0) -->
+<div class="card" id="al-ddns">
+    <div class="card-header"><span class="card-title">🔗 DDNS &amp; DNS Provider</span>
+        <span style="font-size:12px;color:var(--text-muted);">Powers the <a href="/ddns">Network → DDNS</a> page</span>
+    </div>
+    <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Log File Path</label>
+                <input type="text" name="log_path" value="{{ infra.ddns_log }}">
+                <div class="form-hint">Path on the Kea server — read via SSH</div>
+            </div>
+            <div class="form-group">
+                <label>DNS Provider</label>
+                <select name="dns_provider" id="dnsProvider" onchange="showDnsFields(this.value)">
+                    <option value="technitium" {% if infra.dns_provider == 'technitium' %}selected{% endif %}>Technitium DNS</option>
+                    <option value="pihole" {% if infra.dns_provider == 'pihole' %}selected{% endif %}>Pi-hole</option>
+                    <option value="adguard" {% if infra.dns_provider == 'adguard' %}selected{% endif %}>AdGuard Home</option>
+                    <option value="ssh" {% if infra.dns_provider == 'ssh' %}selected{% endif %}>DNS via SSH (Bind9, Unbound, etc.)</option>
+                    <option value="none" {% if infra.dns_provider == 'none' %}selected{% endif %}>None (log viewer only)</option>
+                </select>
+                <div class="form-hint">Used for hostname lookup on the DDNS page</div>
+            </div>
+        </div>
+
+        <div id="dns-fields-technitium" style="display:none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>API URL</label>
+                    <input type="text" name="api_url" value="{{ infra.ddns_url }}" placeholder="https://dns.example.com">
+                </div>
+                <div class="form-group">
+                    <label>API Token</label>
+                    <input type="password" name="api_token" placeholder="(unchanged)">
+                    <div class="form-hint">Leave blank to keep existing token</div>
+                </div>
+                <div class="form-group">
+                    <label>Forward Zone</label>
+                    <input type="text" name="forward_zone" value="{{ infra.ddns_zone }}" placeholder="example.com">
+                </div>
+            </div>
+        </div>
+
+        <div id="dns-fields-pihole" style="display:none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Pi-hole URL</label>
+                    <input type="text" name="api_url" value="{{ infra.ddns_url }}" placeholder="http://pi.hole">
+                    <div class="form-hint">Supports Pi-hole v5 and v6</div>
+                </div>
+                <div class="form-group">
+                    <label>Password / API Token</label>
+                    <input type="password" name="api_token" placeholder="(unchanged)">
+                    <div class="form-hint">Pi-hole web password (v5) or API token (v6)</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="dns-fields-adguard" style="display:none;">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>AdGuard Home URL</label>
+                    <input type="text" name="api_url" value="{{ infra.ddns_url }}" placeholder="http://adguard.local:3000">
+                </div>
+                <div class="form-group">
+                    <label>Username</label>
+                    <input type="text" name="api_user" value="{{ infra.ddns_user }}" placeholder="admin">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" name="api_token" placeholder="(unchanged)">
+                </div>
+            </div>
+        </div>
+
+        <div id="dns-fields-ssh" style="display:none;">
+            <div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius);font-size:13px;color:var(--text-muted);">
+                ℹ️ Uses the SSH connection configured under <a href="/settings/kea#kea-ssh">Kea → SSH</a> to run <code>dig</code> on your Kea server.
+                No additional configuration required.
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px;">Save DDNS</button>
+    </form>
+</div>
+
+<!-- Prometheus Metrics (moved from Infrastructure in v5.9.0) -->
+<div class="card" id="al-metrics">
     <div class="card-header">
-        <span class="card-title">📋 Recent Alert Log</span>
-        <span style="font-size:12px;color:var(--text-muted);">Last 20 alerts — shows delivery status and any errors</span>
+        <span class="card-title">📊 Prometheus Metrics</span>
     </div>
-    {% if recent_alerts %}
-    <div class="table-wrap">
-    <table style="width:100%;font-size:12px;">
-        <thead><tr>
-            <th style="text-align:left;padding:6px 8px;">Time</th>
-            <th style="text-align:left;padding:6px 8px;">Type</th>
-            <th style="text-align:left;padding:6px 8px;">Channel</th>
-            <th style="text-align:left;padding:6px 8px;">Status</th>
-            <th style="text-align:left;padding:6px 8px;">Error</th>
-        </tr></thead>
-        <tbody>
-        {% for a in recent_alerts %}
-        <tr style="border-top:1px solid var(--border);">
-            <td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">
-                {{ a.sent_at|utcfmt }}
-            </td>
-            <td style="padding:6px 8px;">{{ a.alert_type or '—' }}</td>
-            <td style="padding:6px 8px;color:var(--text-muted);">{{ a.channel_type or '—' }}</td>
-            <td style="padding:6px 8px;">
-                {% if a.status == 'ok' or a.status == 'sent' %}
-                <span style="color:var(--success);">✓ {{ a.status }}</span>
-                {% else %}
-                <span style="color:var(--danger);">✗ {{ a.status }}</span>
-                {% endif %}
-            </td>
-            <td style="padding:6px 8px;color:var(--danger);font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ a.error or '' }}">
-                {{ a.error or '' }}
-            </td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    </div>
-    {% else %}
-    <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:24px;">
-        No alerts have been sent yet.
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+        The <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">/metrics</code>
+        endpoint requires either a token or explicit open access —
+        {% if metrics_token %}
+        currently <strong style="color:var(--success);">token-protected</strong>.
+        {% elif metrics_open %}
+        currently <strong style="color:var(--warning);">open</strong> (no token required).
+        {% else %}
+        currently <strong style="color:var(--danger);">closed</strong> — scrapes get 401 until one of the options below is set.
+        {% endif %}
+        Takes effect immediately on save, no restart needed.
     </p>
-    {% endif %}
+    <form method="POST" action="{{ url_for('settings.save_metrics_settings') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Metrics Token <span style="color:var(--text-muted);font-weight:400;">(leave blank for no token)</span></label>
+            <div style="display:flex;gap:8px;max-width:460px;">
+                <input type="text" name="metrics_token" id="metrics-token-input" value="{{ metrics_token }}"
+                       placeholder="e.g. a long random string" style="flex:1;" autocomplete="off">
+                <button type="button" class="btn" onclick="generateMetricsToken()">Generate</button>
+            </div>
+            <div class="form-hint">Scrape with: <code>curl -H "Authorization: Bearer &lt;token&gt;" https://.../metrics</code></div>
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;">
+                <input type="checkbox" name="metrics_open" value="1" {% if metrics_open %}checked{% endif %}>
+                Allow open access (no token required) — only if <code>/metrics</code> is already restricted at the network or reverse-proxy level
+            </label>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save Metrics Settings</button>
+    </form>
 </div>
 {% endblock %}
 {% block scripts %}
 const ALERT_TYPE_LABELS = {{ alert_type_labels | tojson }};
+
+function generateMetricsToken() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    document.getElementById('metrics-token-input').value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+function showDnsFields(provider) {
+    ['technitium','pihole','adguard','ssh'].forEach(p => {
+        const el = document.getElementById('dns-fields-' + p);
+        if (el) el.style.display = (p === provider) ? 'block' : 'none';
+    });
+}
+showDnsFields(document.getElementById('dnsProvider') ? document.getElementById('dnsProvider').value : 'technitium');
 
 function showChannelFields(type) {
     ['telegram','email','slack','webhook','ntfy','pushover','discord'].forEach(t => {

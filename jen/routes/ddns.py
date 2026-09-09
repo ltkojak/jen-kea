@@ -38,7 +38,7 @@ def ddns():
     log_message = ""
     if not extensions.KEA_SSH_HOST:
         log_status = "error"
-        log_message = "SSH host not configured. Set it in Settings → Infrastructure → SSH."
+        log_message = "SSH host not configured. Set it in Settings → Kea → SSH."
     else:
         try:
             result = subprocess.run(

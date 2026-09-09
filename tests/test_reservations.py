@@ -354,8 +354,8 @@ class TestSettings:
         assert r.status_code == 200
 
     def test_settings_infrastructure_loads(self, logged_in_client, mock_kea):
-        """Settings infrastructure page loads."""
-        r = logged_in_client.get("/settings/infrastructure")
+        """Settings Kea page loads (was Infrastructure before v5.9.0)."""
+        r = logged_in_client.get("/settings/kea")
         assert r.status_code == 200
 
     def test_settings_alerts_loads(self, logged_in_client):

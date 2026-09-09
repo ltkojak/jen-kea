@@ -161,7 +161,7 @@ docker compose build && docker compose up -d
 
 ## HTTPS
 
-Upload your certificate through **Settings → System** — it's stored in the
+Upload your certificate through **Settings → Access & Security** — it's stored in the
 `jen-config` volume at `/etc/jen/ssl/`. gunicorn picks it up on the next
 restart. No Docker-specific configuration.
 
@@ -169,7 +169,7 @@ restart. No Docker-specific configuration.
 
 ## SSH keys for subnet editing
 
-Generated through **Settings → Infrastructure**, stored in the
+Generated through **Settings → Kea → SSH**, stored in the
 `jen-config` volume at `/etc/jen/ssh/`. Add the public key to the Kea
 server's `authorized_keys`, same as a bare-metal install.
 

@@ -85,6 +85,32 @@
         .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; -webkit-touch-callout: none; }
         .section-tab:hover { color: var(--text); text-decoration: none; }
         .section-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+        /* fade hint that the strip scrolls (v5.9.0) */
+        .section-tabs-wrap { position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; }
+        .section-tabs-wrap::after { content: ""; position: absolute; right: 0; top: 0; bottom: 1px; width: 28px; pointer-events: none; background: linear-gradient(to right, transparent, var(--surface)); }
+
+        /* ── Settings IA (v5.9.0) ── */
+        .settings-back { display: none; padding: 8px 0 0; font-size: 13px; }
+        .settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+        .settings-tile { display: block; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; color: var(--text); text-decoration: none; transition: border-color .15s, background .15s; min-height: 118px; }
+        .settings-tile:hover { border-color: var(--primary); background: var(--surface2); text-decoration: none; }
+        .settings-tile-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+        .settings-tile-icon { font-size: 20px; line-height: 1; }
+        .settings-tile-label { font-weight: 600; font-size: 15px; }
+        .settings-tile-blurb { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+        .settings-tile-hints { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .settings-hint { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); }
+        .settings-hint-ok { color: var(--success); border-color: #2ecc7144; }
+        .settings-hint-warn { color: var(--warning); border-color: #f39c1244; }
+        .settings-hint-bad { color: var(--danger); border-color: #e74c3c44; }
+        .subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+        .subtab { padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 12px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+        .subtab:hover { color: var(--text); text-decoration: none; }
+        .subtab.active { color: var(--primary); border-color: var(--primary); background: var(--surface2); }
+        .card-toc { display: flex; gap: 4px; flex-wrap: wrap; margin: -8px 0 16px; font-size: 12px; }
+        .card-toc a { color: var(--text-muted); padding: 3px 9px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); text-decoration: none; }
+        .card-toc a:hover { color: var(--text); text-decoration: none; }
+        .card[id] { scroll-margin-top: 110px; }
 
         /* Layout */
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
@@ -314,6 +340,10 @@
             /* Section tabs */
             .section-tabs { padding: 0 12px; }
             .section-tab { padding: 10px 12px; font-size: 12px; min-height: 44px; }
+            /* Settings on a phone: the landing grid is the nav; group pages get a way back */
+            .settings-back { display: block; }
+            .settings-grid { grid-template-columns: 1fr; }
+            .card-toc { margin-top: 0; }
 
             /* Pagination */
             .pagination a, .pagination span { min-height: 44px; padding: 10px 14px; font-size: 13px; }
@@ -379,18 +409,13 @@
     </a>
 
     {% if current_user.is_authenticated %}
-    <!-- Desktop nav links — hidden on mobile -->
+    <!-- Desktop nav links — hidden on mobile. Defined once in
+         jen/routes/settings/nav.py (v5.9.0); the drawer and the strips
+         below render from the same `nav` object. -->
     <div class="nav-links" style="display:flex;align-items:center;gap:2px;flex:1;">
-        <a href="/" class="nav-link {% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}">📊 Dashboard</a>
-        <a href="/leases" class="nav-link {% if request.endpoint in ['leases.leases','leases.ipmap','reservations.reservations','reservations.add_reservation','reservations.edit_reservation','devices.devices','reports.reports'] %}active{% endif %}">📋 Management</a>
-        <a href="/subnets" class="nav-link {% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] or (plugin_nav_items and request.endpoint in plugin_nav_items|map(attribute='endpoint')|list) %}active{% endif %}">🌐 Network</a>
-        {% if current_user.role == 'superadmin' %}
-        <a href="/database" class="nav-link {% if request.endpoint in ['database.database','database.migrate_page'] %}active{% endif %}">🗄️ Database</a>
-        {% endif %}
-        {% if current_user.role in ('superadmin','admin') %}
-        <a href="/settings/system" class="nav-link {% if request.endpoint in ['settings.settings_system','settings.settings_alerts','settings.settings_infrastructure','users.users','users.audit_log','api.api_keys','api.api_docs','settings.settings_icons','plugins.plugins_page'] %}active{% endif %}">⚙️ Settings</a>
-        {% endif %}
-        <a href="/about" class="nav-link {% if request.endpoint == 'users.about' %}active{% endif %}">ℹ️ About</a>
+        {% for item in nav.top %}
+        <a href="{{ item.url }}" class="nav-link {% if item.active %}active{% endif %}">{{ item.icon }} {{ item.label }}</a>
+        {% endfor %}
     </div>
 
     <div class="nav-right">
@@ -455,68 +480,23 @@
 <!-- Mobile nav drawer — slides down on hamburger tap -->
 {% if current_user.is_authenticated %}
 <div class="nav-mobile-drawer" id="nav-mobile-drawer">
-    <a href="/" class="{% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}">📊 Dashboard</a>
-    <a href="/leases" class="{% if request.endpoint in ['leases.leases','leases.ipmap','reservations.reservations','reservations.add_reservation','reservations.edit_reservation','devices.devices','reports.reports'] %}active{% endif %}">📋 Management</a>
-    <a href="/subnets" class="{% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] or (plugin_nav_items and request.endpoint in plugin_nav_items|map(attribute='endpoint')|list) %}active{% endif %}">🌐 Network</a>
-    {% if current_user.role == 'superadmin' %}
-    <a href="/database" class="{% if request.endpoint in ['database.database','database.migrate_page'] %}active{% endif %}">🗄️ Database</a>
-    {% endif %}
-    {% if current_user.role in ('superadmin','admin') %}
-    <a href="/settings/system" class="{% if request.endpoint in ['settings.settings_system','settings.settings_alerts','settings.settings_infrastructure','users.users','users.audit_log','api.api_keys','api.api_docs','settings.settings_icons','plugins.plugins_page'] %}active{% endif %}">⚙️ Settings</a>
-    {% endif %}
-    <a href="/about" class="{% if request.endpoint == 'users.about' %}active{% endif %}">ℹ️ About</a>
-</div>
-{% endif %}
-
-<!-- Section sub-tab bars — shown contextually -->
-{% if current_user.is_authenticated %}
-
-{% if request.endpoint in ['leases.leases','leases.ipmap','reservations.reservations','reservations.add_reservation','reservations.edit_reservation','devices.devices','reports.reports'] %}
-<div class="section-tabs">
-    <a href="/leases" class="section-tab {% if request.endpoint in ['leases.leases','leases.ipmap'] %}active{% endif %}">📋 Leases</a>
-    <a href="/reservations" class="section-tab {% if request.endpoint in ['reservations.reservations','reservations.add_reservation','reservations.edit_reservation'] %}active{% endif %}">📌 Reservations</a>
-    <a href="/devices" class="section-tab {% if request.endpoint == 'devices.devices' %}active{% endif %}">📱 Devices</a>
-    <a href="/reports" class="section-tab {% if request.endpoint == 'reports.reports' %}active{% endif %}">📈 Reports</a>
-</div>
-{% endif %}
-
-{% if current_user.role == 'superadmin' and request.endpoint in ['database.database','database.migrate_page'] %}
-<div class="section-tabs">
-    <a href="/database?tab=export"   class="section-tab {% if request.args.get('tab','export') == 'export'   %}active{% endif %}">📤 Export</a>
-    <a href="/database?tab=import"   class="section-tab {% if request.args.get('tab') == 'import'             %}active{% endif %}">📥 Import</a>
-    <a href="/database?tab=backups"  class="section-tab {% if request.args.get('tab') == 'backups'            %}active{% endif %}">💾 Backups</a>
-    <a href="/database?tab=schedule" class="section-tab {% if request.args.get('tab') == 'schedule'           %}active{% endif %}">🕐 Schedule</a>
-    <a href="/database?tab=migrate"  class="section-tab {% if request.args.get('tab') == 'migrate' or request.endpoint == 'database.migrate_page' %}active{% endif %}">🔀 Migrate</a>
-</div>
-{% endif %}
-
-{% if request.endpoint in ['subnets.subnets','subnets.edit_subnet','ddns.ddns','servers.servers'] or (plugin_nav_items and request.endpoint in plugin_nav_items|map(attribute='endpoint')|list) %}
-<div class="section-tabs">
-    <a href="/subnets" class="section-tab {% if request.endpoint in ['subnets.subnets','subnets.edit_subnet'] %}active{% endif %}">🌐 Subnets</a>
-    <a href="/servers" class="section-tab {% if request.endpoint == 'servers.servers' %}active{% endif %}">🖥️ Servers</a>
-    <a href="/ddns" class="section-tab {% if request.endpoint == 'ddns.ddns' %}active{% endif %}">🔗 DDNS</a>
-    {% for item in plugin_nav_items if item.section == 'network' %}
-    <a href="{{ url_for(item.endpoint) }}" class="section-tab {% if request.endpoint == item.endpoint %}active{% endif %}">{{ item.icon }} {{ item.label }}</a>
+    {% for item in nav.top %}
+    <a href="{{ item.url }}" class="{% if item.active %}active{% endif %}">{{ item.icon }} {{ item.label }}</a>
     {% endfor %}
 </div>
 {% endif %}
 
-{% if current_user.role in ('superadmin','admin') and request.endpoint in ['settings.settings_system','settings.settings_alerts','settings.settings_infrastructure','users.users','users.audit_log','api.api_keys','api.api_docs','settings.settings_icons','plugins.plugins_page'] %}
+<!-- Section sub-tab strip — one template for every section, driven by
+     nav.strip (jen/routes/settings/nav.py, v5.9.0). Scrolls horizontally on
+     narrow screens rather than wrapping. -->
+{% if current_user.is_authenticated and nav.strip %}
+<div class="section-tabs-wrap">
 <div class="section-tabs">
-    <a href="/settings/system" class="section-tab {% if request.endpoint == 'settings.settings_system' %}active{% endif %}">⚙️ System</a>
-    <a href="/settings/alerts" class="section-tab {% if request.endpoint == 'settings.settings_alerts' %}active{% endif %}">🔔 Alerts</a>
-    <a href="/settings/infrastructure" class="section-tab {% if request.endpoint == 'settings.settings_infrastructure' %}active{% endif %}">🔧 Infrastructure</a>
-    <a href="/users" class="section-tab {% if request.endpoint == 'users.users' %}active{% endif %}">👤 Users</a>
-    <a href="/audit" class="section-tab {% if request.endpoint == 'users.audit_log' %}active{% endif %}">📝 Audit Log</a>
-    <a href="/settings/api-keys" class="section-tab {% if request.endpoint in ['api.api_keys'] %}active{% endif %}">🔑 API Keys</a>
-    <a href="/settings/api-docs" class="section-tab {% if request.endpoint == 'api.api_docs' %}active{% endif %}">📖 API Docs</a>
-    <a href="/settings/icons" class="section-tab {% if request.endpoint == 'settings.settings_icons' %}active{% endif %}">🎨 Icons</a>
-    {% if current_user.role == 'superadmin' %}
-    <a href="/settings/plugins" class="section-tab {% if request.endpoint == 'plugins.plugins_page' %}active{% endif %}">🧩 Plugins</a>
-    {% endif %}
+    {% for t in nav.strip %}
+    <a href="{{ t.url if t.url is defined else url_for(t.endpoint) }}" class="section-tab {% if t.active %}active{% endif %}">{{ t.icon }} {{ t.label }}</a>
+    {% endfor %}
 </div>
-{% endif %}
-
+</div>
 {% endif %}
 
 <div class="container">
@@ -548,6 +528,9 @@
     {% endfor %}
     {% endif %}
     {% endwith %}
+    {% if nav.in_settings and request.endpoint != 'settings.settings' %}
+    <a href="/settings" class="settings-back">‹ All settings</a>
+    {% endif %}
     {% block content %}{% endblock %}
 </div>
 

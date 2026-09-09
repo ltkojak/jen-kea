@@ -3,12 +3,48 @@
 {% block content %}
 {% from '_icons.html' import icon_download, icon_trash, icon_dots %}
 
-{% set active_tab = request.args.get('tab', 'export') %}
+{% from '_settings_subtabs.html' import subtabs %}
 
 <div class="page-header">
-    <h1>🗄️ Database Management</h1>
-    <p>Export, import, back up, and migrate your Jen and Kea databases. All operations require admin access and are fully logged.</p>
+    <h1>🗄️ Databases</h1>
+    <p>Where Jen's own data and Kea's data live{% if current_user.role == 'superadmin' %} — and export, import, backups and migration for both. Tools are superadmin-only and fully logged.{% else %}. Export, import, backups and migration are superadmin tools.{% endif %}</p>
 </div>
+
+{{ subtabs(nav.subtabs['databases'], active_tab) }}
+
+{% if active_tab == 'connections' %}
+<div class="card">
+    <div class="card-header"><span class="card-title">🟢 Jen MySQL Database</span>
+        <span style="font-size:12px;color:var(--text-muted);">Users, devices, settings, alerts, audit log, API keys</span>
+    </div>
+    <form method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.jen_db_host }}"></div>
+            <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.jen_db_user }}"></div>
+            <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="(unchanged)"><div class="form-hint">Leave blank to keep existing password</div></div>
+            <div class="form-group"><label>Database Name</label><input type="text" name="database" value="{{ conn.jen_db_name }}"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Jen DB</button>
+    </form>
+</div>
+<div class="card">
+    <div class="card-header"><span class="card-title">🟡 Kea MySQL Database</span>
+        <span style="font-size:12px;color:var(--text-muted);">Reservations (hosts), DHCP options, active leases — Kea owns this schema</span>
+    </div>
+    <form method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group"><label>Host</label><input type="text" name="host" value="{{ conn.kea_db_host }}"></div>
+            <div class="form-group"><label>Username</label><input type="text" name="user" value="{{ conn.kea_db_user }}"></div>
+            <div class="form-group"><label>Password</label><input type="password" name="password" placeholder="(unchanged)"><div class="form-hint">Leave blank to keep existing password</div></div>
+            <div class="form-group"><label>Database Name</label><input type="text" name="database" value="{{ conn.kea_db_name }}"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Kea DB</button>
+    </form>
+    <div class="form-hint" style="margin-top:10px;">A separate IPv6 lease database, if you run one, is configured under <a href="/settings/kea#kea6">Kea → Kea6</a>. Connection changes take effect after a restart.</div>
+</div>
+{% endif %}
+
+{% if current_user.role == 'superadmin' and active_tab != 'connections' %}
 
 <!-- DB identity banner — always visible so user knows what they're working with -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
@@ -256,9 +292,10 @@
     <div class="alert alert-warning" style="margin-bottom:18px;">
         ⚠️ Migration copies data to a new database server. The source is never modified. If migration fails at any point, the target is rolled back and left clean. Progress is shown in real-time below.
     </div>
-    <a href="/database/migrate" class="btn btn-primary">🔀 Open Migration Wizard</a>
+    <a href="/settings/databases/migrate" class="btn btn-primary">🔀 Open Migration Wizard</a>
 </div>
 {% endif %}
+{% endif %}{# superadmin tools #}
 
 <script>
 function toggleAll(groupId, cb) {

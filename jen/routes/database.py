@@ -23,6 +23,7 @@ from flask_login import login_required
 from jen import extensions
 from jen.models import user as __user
 from jen.services import dbexport
+from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -33,14 +34,38 @@ bp = Blueprint("database", __name__)
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────
-@bp.route("/database")
+@bp.route("/settings/databases")
 @login_required
-@_superadmin_required
+@_admin_required
 def database():
-    backups = dbexport.list_backups()
-    schedule = dbexport.get_schedule()
+    """
+    v5.9.0 — Settings → Databases. The Connections tab (the Jen / Kea DB
+    connection settings that used to sit on the Infrastructure tab) is
+    admin-visible; the export/import/backup/schedule/migrate tools are
+    superadmin-only, gated per tab in the template AND on every POST route
+    below exactly as before — the page moving under Settings changes no
+    privilege boundary.
+    """
+    from flask_login import current_user
+
+    tab = request.args.get("tab", "connections")
+    if current_user.role != "superadmin":
+        tab = "connections"
+    backups = dbexport.list_backups() if current_user.role == "superadmin" else []
+    schedule = dbexport.get_schedule() if current_user.role == "superadmin" else None
+    cfg = extensions.cfg
+    conn = {
+        "jen_db_host": cfg.get("jen_db", "host", fallback=""),
+        "jen_db_user": cfg.get("jen_db", "user", fallback=""),
+        "jen_db_name": cfg.get("jen_db", "database", fallback="jen"),
+        "kea_db_host": cfg.get("kea_db", "host", fallback=""),
+        "kea_db_user": cfg.get("kea_db", "user", fallback=""),
+        "kea_db_name": cfg.get("kea_db", "database", fallback="kea"),
+    }
     return render_template(
         "database.html",
+        active_tab=tab,
+        conn=conn,
         backups=backups,
         schedule=schedule,
         jen_tables=dbexport.JEN_TABLES,
@@ -50,6 +75,19 @@ def database():
         kea_db_host=extensions.KEA_DB_HOST,
         kea_db_name=extensions.KEA_DB_NAME,
     )
+
+
+@bp.route("/database")
+@login_required
+def database_legacy():
+    """Pre-5.9.0 URL — 301 to Settings → Databases, keeping ?tab=."""
+    return redirect(url_for("database.database", **request.args.to_dict()), code=301)
+
+
+@bp.route("/database/migrate")
+@login_required
+def migrate_legacy():
+    return redirect(url_for("database.migrate_page"), code=301)
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
@@ -250,7 +288,7 @@ def save_schedule():
 
 
 # ── Migration — SSE progress ───────────────────────────────────────────────────
-@bp.route("/database/migrate", methods=["GET"])
+@bp.route("/settings/databases/migrate", methods=["GET"])
 @login_required
 @_superadmin_required
 def migrate_page():

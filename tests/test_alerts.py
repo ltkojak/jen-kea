@@ -60,7 +60,7 @@ class TestAlertEndpoints:
         assert r.status_code == 200
 
     def test_settings_alerts_shows_recent_log(self, logged_in_client, db):
-        """Settings → Alerts page shows recent alert log."""
+        """Settings → Logs → Alert log shows recent deliveries (moved off the Alerts page in v5.9.0)."""
         with db.cursor() as cur:
             cur.execute("""
                 INSERT INTO alert_log (channel_type, alert_type, message, status)
@@ -68,7 +68,7 @@ class TestAlertEndpoints:
             """)
         db.commit()
 
-        r = logged_in_client.get("/settings/alerts")
+        r = logged_in_client.get("/settings/logs?tab=alerts")
         assert r.status_code == 200
         assert b"kea_up" in r.data or b"kea up" in r.data
 

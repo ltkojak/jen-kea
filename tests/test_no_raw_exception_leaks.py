@@ -257,7 +257,7 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
         original = db_module.jen_db
         exc = RuntimeError("Access denied for user 'jen'@'10.10.11.251' — internal detail xyz456")
         with patch("jen.routes.users.__db.jen_db", side_effect=_raise_only_outside_load_user(original, exc)):
-            r = logged_in_client.get("/users")
+            r = logged_in_client.get("/settings/users")
         assert r.status_code == 200
         assert b"xyz456" not in r.data
         assert b"10.10.11.251" not in r.data

@@ -43,7 +43,7 @@ function saveNote(id) {
 </div>
 
 {% if not ssh_ready %}
-<div class="alert alert-warning">💡 Subnet editing requires SSH to be configured. Go to <a href="/settings">Settings → SSH Key Management</a> to set it up.</div>
+<div class="alert alert-warning">💡 Subnet editing requires SSH to be configured. Go to <a href="/settings/kea#kea-ssh">Settings → Kea → SSH Key Management</a> to set it up.</div>
 {% endif %}
 
 {% for s in subnets %}

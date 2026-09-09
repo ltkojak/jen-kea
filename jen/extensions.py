@@ -66,7 +66,7 @@ HTTPS_PORT: int = 8443
 # `gunicorn --workers 1 --threads N`). One worker keeps the background
 # scheduler + alert loop a single-process concern; threads carry the
 # I/O-bound concurrency (DB, Kea API, SSH). Configurable via
-# [server] threads in jen.config and Settings → Infrastructure.
+# [server] threads in jen.config and Settings → System.
 WORKER_THREADS: int = 8
 
 KEA_SSH_HOST: str = ""

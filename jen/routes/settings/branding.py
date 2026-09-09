@@ -8,7 +8,7 @@ import logging
 import os
 import re
 
-from flask import flash, redirect, render_template, request, url_for
+from flask import flash, redirect, request, url_for
 from flask_login import current_user, login_required
 
 import jen.models.user as __user
@@ -59,10 +59,10 @@ def upload_favicon():
     favicon_file = request.files.get("favicon")
     if not favicon_file or not favicon_file.filename:
         flash("No file selected.", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_appearance"))
     if not favicon_file.filename.lower().endswith((".ico", ".png")):
         flash("Favicon must be a .ico or .png file.", "error")
-        return redirect(url_for("settings.settings"))
+        return redirect(url_for("settings.settings_appearance"))
     os.makedirs(extensions.STATIC_DIR, exist_ok=True)
     try:
         favicon_file.save(extensions.FAVICON_PATH)
@@ -70,7 +70,7 @@ def upload_favicon():
     except Exception as e:
         logger.error(f"Error saving favicon: {e}")
         flash("Error saving favicon. Check server logs for details.", "error")
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_appearance"))
 
 
 @bp.route("/settings/remove-favicon", methods=["POST"])
@@ -80,25 +80,33 @@ def remove_favicon():
     if os.path.exists(extensions.FAVICON_PATH):
         os.remove(extensions.FAVICON_PATH)
     flash("Favicon removed.", "success")
-    return redirect(url_for("settings.settings"))
+    return redirect(url_for("settings.settings_appearance"))
+
+
+def icon_lists():
+    """(bundled, custom) brand-icon lists for the Appearance page. A
+    missing custom dir (fresh checkout, CI) is simply "no custom icons"."""
+    bundled = []
+    if os.path.isdir(extensions.ICONS_BUNDLED_DIR):
+        for f in sorted(os.listdir(extensions.ICONS_BUNDLED_DIR)):
+            if f.endswith(".svg"):
+                name = f.replace(".svg", "")
+                custom_override = os.path.exists(f"{extensions.ICONS_CUSTOM_DIR}/{f}")
+                bundled.append({"name": name, "file": f, "custom_override": custom_override})
+    custom = []
+    if os.path.isdir(extensions.ICONS_CUSTOM_DIR):
+        for f in sorted(os.listdir(extensions.ICONS_CUSTOM_DIR)):
+            if f.endswith(".svg"):
+                custom.append({"name": f.replace(".svg", ""), "file": f})
+    return bundled, custom
 
 
 @bp.route("/settings/icons")
 @login_required
 @_admin_required
 def settings_icons():
-    """Custom brand icon management page."""
-    bundled = []
-    for f in sorted(os.listdir(extensions.ICONS_BUNDLED_DIR)):
-        if f.endswith(".svg"):
-            name = f.replace(".svg", "")
-            custom_override = os.path.exists(f"{extensions.ICONS_CUSTOM_DIR}/{f}")
-            bundled.append({"name": name, "file": f, "custom_override": custom_override})
-    custom = []
-    for f in sorted(os.listdir(extensions.ICONS_CUSTOM_DIR)):
-        if f.endswith(".svg"):
-            custom.append({"name": f.replace(".svg", ""), "file": f})
-    return render_template("settings_icons.html", bundled=bundled, custom=custom)
+    """v5.9.0 — brand icons live on the Appearance page now."""
+    return redirect(url_for("settings.settings_appearance") + "#app-icons", code=301)
 
 
 @bp.route("/settings/icons/upload", methods=["POST"])
@@ -109,24 +117,24 @@ def upload_custom_icon():
     icon_name = request.form.get("icon_name", "").strip().lower()
     if not svg_file or not icon_name:
         flash("Icon file and name are required.", "error")
-        return redirect(url_for("settings.settings_icons"))
+        return redirect(url_for("settings.settings_appearance"))
     if not icon_name.replace("-", "").replace("_", "").isalnum():
         flash("Icon name must be alphanumeric (hyphens/underscores allowed).", "error")
-        return redirect(url_for("settings.settings_icons"))
+        return redirect(url_for("settings.settings_appearance"))
     if not svg_file.filename.endswith(".svg"):
         flash("Only SVG files are accepted.", "error")
-        return redirect(url_for("settings.settings_icons"))
+        return redirect(url_for("settings.settings_appearance"))
     svg_file.seek(0, 2)
     size = svg_file.tell()
     svg_file.seek(0)
     if size > 100 * 1024:
         flash("SVG file must be under 100KB.", "error")
-        return redirect(url_for("settings.settings_icons"))
+        return redirect(url_for("settings.settings_appearance"))
     data = svg_file.read()
     reason = svg_upload_rejection(data)
     if reason:
         flash(f"SVG rejected — {reason}. Icons must be plain vector graphics with no scripts or handlers.", "error")
-        return redirect(url_for("settings.settings_icons"))
+        return redirect(url_for("settings.settings_appearance"))
     os.makedirs(extensions.ICONS_CUSTOM_DIR, exist_ok=True)
     dest = f"{extensions.ICONS_CUSTOM_DIR}/{icon_name}.svg"
     with open(dest, "wb") as f:
@@ -134,7 +142,7 @@ def upload_custom_icon():
     # Update MANUFACTURER_ICON_MAP if name matches a known manufacturer
     __user.audit("UPLOAD_ICON", "settings", f"Custom icon '{icon_name}.svg' uploaded by {current_user.username}")
     flash(f"Icon '{icon_name}.svg' uploaded. It will be used for any manufacturer mapped to '{icon_name}'.", "success")
-    return redirect(url_for("settings.settings_icons"))
+    return redirect(url_for("settings.settings_appearance"))
 
 
 @bp.route("/settings/icons/delete/<name>", methods=["POST"])
@@ -147,7 +155,7 @@ def delete_custom_icon(name):
     # belongs here regardless in case the route ever changes to <path:name>.
     if not name or not name.replace("-", "").replace("_", "").isalnum():
         flash("Invalid icon name.", "error")
-        return redirect(url_for("settings.settings_icons"))
+        return redirect(url_for("settings.settings_appearance"))
     path = f"{extensions.ICONS_CUSTOM_DIR}/{name}.svg"
     if os.path.exists(path):
         os.remove(path)
@@ -155,7 +163,7 @@ def delete_custom_icon(name):
         flash(f"Custom icon '{name}.svg' removed.", "success")
     else:
         flash("Icon not found.", "error")
-    return redirect(url_for("settings.settings_icons"))
+    return redirect(url_for("settings.settings_appearance"))
 
 
 @bp.route("/settings/upload-nav-logo", methods=["POST"])
@@ -165,23 +173,23 @@ def upload_nav_logo():
     logo_file = request.files.get("logo")
     if not logo_file or not logo_file.filename:
         flash("No file selected.", "error")
-        return redirect(url_for("settings.settings_system"))
+        return redirect(url_for("settings.settings_appearance"))
     ext = logo_file.filename.rsplit(".", 1)[-1].lower()
     if ext not in ("png", "svg", "jpg", "jpeg", "webp"):
         flash("Logo must be PNG, SVG, JPG, or WebP.", "error")
-        return redirect(url_for("settings.settings_system"))
+        return redirect(url_for("settings.settings_appearance"))
     logo_file.seek(0, 2)
     size = logo_file.tell()
     logo_file.seek(0)
     if size > 200 * 1024:
         flash("Logo file must be under 200KB.", "error")
-        return redirect(url_for("settings.settings_system"))
+        return redirect(url_for("settings.settings_appearance"))
     if ext == "svg":
         reason = svg_upload_rejection(logo_file.read())
         logo_file.seek(0)
         if reason:
             flash(f"SVG rejected — {reason}. Use a plain vector logo, or a PNG/JPG/WebP.", "error")
-            return redirect(url_for("settings.settings_system"))
+            return redirect(url_for("settings.settings_appearance"))
     # Remove any existing logo files
     for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
         old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"
@@ -195,7 +203,7 @@ def upload_nav_logo():
     except Exception as e:
         logger.error(f"Error saving nav logo: {e}")
         flash("Error saving logo. Check server logs for details.", "error")
-    return redirect(url_for("settings.settings_system"))
+    return redirect(url_for("settings.settings_appearance"))
 
 
 @bp.route("/settings/remove-nav-logo", methods=["POST"])
@@ -208,7 +216,7 @@ def remove_nav_logo():
             os.remove(f)
     __user.audit("BRANDING", "settings", f"Nav logo removed by {current_user.username}")
     flash("Nav logo removed.", "success")
-    return redirect(url_for("settings.settings_system"))
+    return redirect(url_for("settings.settings_appearance"))
 
 
 @bp.route("/settings/save-nav-color", methods=["POST"])
@@ -220,8 +228,8 @@ def save_nav_color():
     # Validate — must be empty or a valid hex color
     if color and not re.match(r"^#[0-9a-fA-F]{3,6}$", color):
         flash("Invalid color value. Use a hex code like #1a1a2a.", "error")
-        return redirect(url_for("settings.settings_system"))
+        return redirect(url_for("settings.settings_appearance"))
     __user.set_global_setting("branding_nav_color", color)
     __user.audit("BRANDING", "settings", f"Nav color set to '{color}' by {current_user.username}")
     flash("Nav bar color updated." if color else "Nav bar color reset to default.", "success")
-    return redirect(url_for("settings.settings_system"))
+    return redirect(url_for("settings.settings_appearance"))

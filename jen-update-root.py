@@ -656,21 +656,28 @@ def service_healthy(timeout=None):
         timeout = _server_cfg("update_health_timeout", 90)
     opener = _local_opener()
     url = f"{_local_base_url()}/"
+    log(f"Waiting up to {timeout}s for jen at {url} …")
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
         if subprocess.run(["/usr/bin/systemctl", "is-active", "--quiet", "jen"]).returncode != 0:
             continue
-        try:
-            resp = opener.open(url, timeout=5)
-            if resp.status < 500:
-                return True
-        except urllib.error.HTTPError as e:
-            if e.code < 500:
-                return True
-        except (urllib.error.URLError, OSError):
-            pass
+        if _probe_once(opener, url):
+            return True
     return False
+
+
+def _probe_once(opener, url):
+    """One HTTP probe: anything below 500 (200, a 301/302 to login, a 401)
+    means the app is serving. Used by service_healthy() and, since v5.9.0,
+    as the pre-swap baseline."""
+    try:
+        resp = opener.open(url, timeout=5)
+        return resp.status < 500
+    except urllib.error.HTTPError as e:
+        return e.code < 500
+    except (urllib.error.URLError, OSError):
+        return False
 
 
 def verify_release_checksum(tarball_name, actual_hash, checksum_text):
@@ -693,7 +700,27 @@ def verify_release_checksum(tarball_name, actual_hash, checksum_text):
     return expected_hash is not None and expected_hash == actual_hash
 
 
+def _prune_stale_snapshots(install_dir=INSTALL_DIR):
+    """v5.9.0 — older updaters left a `.rollback-<ts>` directory behind on
+    every failed attempt (a snapshot-step crash never reached cleanup; the
+    CRITICAL path keeps its snapshot on purpose). Anything from a previous
+    run is stale by the time a new run starts: prune it, keep the log
+    honest about what went."""
+    removed = 0
+    try:
+        for name in sorted(os.listdir(install_dir)):
+            if name.startswith(".rollback-"):
+                shutil.rmtree(os.path.join(install_dir, name), ignore_errors=True)
+                removed += 1
+    except OSError:
+        return 0
+    if removed:
+        log(f"Pruned {removed} stale rollback snapshot(s) from earlier runs.")
+    return removed
+
+
 def main():
+    _prune_stale_snapshots()
     log("Checking GitHub for the latest release…")
     data = fetch_json(GITHUB_RELEASES_API)
     version = data.get("tag_name", "").lstrip("v")
@@ -814,6 +841,21 @@ def main():
         if not validate_staged_release(extracted, python_bin):
             return 1
 
+        # v5.9.0 — baseline the health probe against the app that's
+        # running NOW, before anything is touched. If the probe can't see
+        # a known-good Jen, it can't be trusted to judge the new one
+        # either: the 5.8.2 updater on an SSL box installed a healthy
+        # 5.8.4 and then rolled it back on exactly that false negative.
+        probe_url = f"{_local_base_url()}/"
+        if not _probe_once(_local_opener(), probe_url):
+            log(
+                f"ERROR: the health probe cannot reach the currently-running Jen at {probe_url} "
+                "— it would wrongly roll back a good update. Aborting before the swap; /opt/jen untouched. "
+                "Check `systemctl status jen`, the [server] ports in /etc/jen/jen.config, and whether "
+                "/etc/jen/ssl/certificate.crt + private.key match how Jen is actually serving."
+            )
+            return 1
+
         snapshot_dir = os.path.join(INSTALL_DIR, f".rollback-{int(time.time())}")
         log(f"Snapshotting current install → {snapshot_dir}")
         try:
@@ -870,7 +912,9 @@ def main():
             else:
                 log(
                     "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
-                    f"{snapshot_dir}; check `journalctl -u jen`."
+                    f"{snapshot_dir}; check `journalctl -u jen`. If `systemctl is-active jen` says active, "
+                    f"the PROBE is what's failing (it used {_local_base_url()}/), not the app — the previous "
+                    "version is restored and running; fix the probe's view of the ports/SSL and retry."
                 )
             return 1
 

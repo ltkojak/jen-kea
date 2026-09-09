@@ -223,12 +223,12 @@ class TestIpv6ContextProcessor:
         assert resp.request.path == "/"
 
 
-class TestSettingsInfrastructureTemplate:
+class TestSettingsKeaTemplate:
     def test_superadmin_sees_kea6_card(self, logged_in_client, db):
         from jen.models.user import _invalidate_settings_cache
 
         _invalidate_settings_cache()
-        resp = logged_in_client.get("/settings/infrastructure")
+        resp = logged_in_client.get("/settings/kea")
         assert resp.status_code == 200
         assert b"Kea6 Control Agent API" in resp.data
         assert b"Enable IPv6" in resp.data
@@ -237,7 +237,7 @@ class TestSettingsInfrastructureTemplate:
         from tests.conftest import restricted_client
 
         c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
-        resp = c.get("/settings/infrastructure")
+        resp = c.get("/settings/kea")
         assert resp.status_code == 200
         assert b"Kea6 Control Agent API" not in resp.data
 
@@ -247,7 +247,7 @@ class TestSettingsInfrastructureTemplate:
         set_global_setting("ipv6_enabled", "true")
         try:
             _invalidate_settings_cache()
-            resp = logged_in_client.get("/settings/infrastructure")
+            resp = logged_in_client.get("/settings/kea")
             assert b"Disable IPv6" in resp.data
             assert b'value="false"' in resp.data
         finally:
@@ -257,5 +257,5 @@ class TestSettingsInfrastructureTemplate:
         from jen.models.user import _invalidate_settings_cache
 
         _invalidate_settings_cache()
-        resp = logged_in_client.get("/settings/infrastructure")
+        resp = logged_in_client.get("/settings/kea")
         assert b"Enable IPv6" in resp.data

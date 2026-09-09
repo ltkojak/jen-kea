@@ -268,11 +268,16 @@ class TestDatabaseSuperadminOnly:
     def _admin_client(self, client, db):
         return _restricted_client(client, db, allowed_subnets=None, role="admin", username="plainadmin1")
 
-    def test_database_page_forbidden_for_plain_admin(self, client, db):
+    def test_database_page_shows_plain_admin_connections_but_no_tools(self, client, db):
+        """v5.9.0 — Settings → Databases is admin-visible (the Jen/Kea DB
+        connection settings moved there); the export/import/backup/migrate
+        tools stay superadmin-only, enforced on every POST route below."""
         self._admin_client(client, db)
         r = client.get("/database", follow_redirects=True)
         assert r.status_code == 200
-        assert b"superadmin access required" in r.data.lower()
+        assert b"Save Jen DB" in r.data
+        assert b"Run Backup Now" not in r.data
+        assert b"Download Jen Export" not in r.data
 
     def test_export_jen_forbidden_for_plain_admin(self, client, db):
         self._admin_client(client, db)
@@ -293,9 +298,10 @@ class TestDatabaseSuperadminOnly:
         assert b"superadmin access required" in r.data.lower()
 
     def test_database_page_allowed_for_superadmin(self, logged_in_client):
-        r = logged_in_client.get("/database")
+        r = logged_in_client.get("/settings/databases?tab=export")
         assert r.status_code == 200
         assert b"superadmin access required" not in r.data.lower()
+        assert b"Download Jen Export" in r.data
 
 
 class TestPluginsSuperadminOnly:
