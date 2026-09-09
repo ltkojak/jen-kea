@@ -84,6 +84,16 @@ process reports the new version via /api/v1/health — either failing
 rolls back. The post-restart health-check window is 90s (was 45),
 overridable with `[server] update_health_timeout`.
 
+v5.8.3 — the 5.8.2 health/version probes hit the plain-HTTP port and let
+urllib follow redirects, so on an SSL install they chased
+jen/httpredirect.py's 301 into a TLS handshake against a cert that
+doesn't name 127.0.0.1, failed, and rolled back a *healthy* HTTPS
+upgrade. Both probes now talk to the app's real port (HTTPS directly when
+certs are present), don't follow redirects (a 301/302/401 is itself
+proof-of-life), and don't verify TLS on the loopback call. Also:
+`apt-get update` + one more retry if the python3-venv install fails on a
+box with stale indices.
+
 The shared venv still means a rollback keeps the (forward-compatible,
 floor-pinned) newer deps — a true atomic switch waits for the versioned
 release directories tracked for a future major (see docs/ARCHITECTURE.md
@@ -95,6 +105,7 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -112,12 +123,20 @@ SYSTEM_PYTHON = "/usr/bin/python3"
 SELF_INSTALL_PATH = "/usr/local/sbin/jen-update-root.py"
 UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
 CONFIG_FILE = "/etc/jen/jen.config"
+# Hardcoded in jen/extensions.py — not configurable. Their presence is
+# exactly what jen.config.ssl_configured() keys on, so the updater can
+# read the same signal without importing the jen package.
+SSL_CERT = "/etc/jen/ssl/certificate.crt"
+SSL_KEY = "/etc/jen/ssl/private.key"
 
 # The parts of /opt/jen that install_extracted_files() replaces wholesale
 # (rmtree + recopy) rather than merging — so a failed update has to be
 # able to put exactly these back. static/ is an additive copy (never
-# rmtree'd) and holds user icon uploads, so it's deliberately not here:
-# a rolled-back app just leaves the new static files sitting unused.
+# rmtree'd) and mixes shipped assets with user icon/favicon uploads, so
+# it's NOT here: a rollback leaves the new JS/CSS in place against the
+# old templates. Real fix is separating release-owned static from
+# user-uploaded content — tracked against the 6.0.0 versioned-release-dir
+# work (see PENDING / docs/ARCHITECTURE.md §6).
 _ROLLBACK_ITEMS = ("jen", "run.py", "templates", "requirements.txt", "CHANGELOG.md")
 
 # Files an update also replaces that live OUTSIDE /opt/jen. A bad
@@ -387,15 +406,25 @@ def ensure_venv(venv_dir=VENV_DIR):
     # Most common cause on Debian/Ubuntu: python3-venv isn't installed
     # (an install that has only ever used the in-app update button).
     log("Installing python3-venv / python3-full and retrying…")
-    apt = subprocess.run(
-        ["/usr/bin/apt-get", "install", "-y", "-qq", "python3-venv", "python3-full"],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
-    )
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+    pkgs = ["python3-venv", "python3-full"]
+
+    def _apt_install():
+        return subprocess.run(
+            ["/usr/bin/apt-get", "install", "-y", "-qq", *pkgs], capture_output=True, text=True, env=env
+        )
+
+    apt = _apt_install()
     if apt.returncode != 0:
-        log(f"  apt-get failed: {(apt.stderr or apt.stdout).strip()}")
-    elif _try_build_venv(venv_dir):
+        # A box old enough to be in this state often has stale package
+        # indices — the install fails with "Unable to locate package" or a
+        # 404 on an old pool URL. `apt-get update` once, then one last try.
+        log(f"  apt-get install failed ({(apt.stderr or apt.stdout).strip()}); refreshing indices and retrying…")
+        subprocess.run(["/usr/bin/apt-get", "update", "-qq"], capture_output=True, text=True, env=env)
+        apt = _apt_install()
+        if apt.returncode != 0:
+            log(f"  apt-get install still failed: {(apt.stderr or apt.stdout).strip()}")
+    if apt.returncode == 0 and _try_build_venv(venv_dir):
         return venv_py
 
     log(
@@ -552,46 +581,83 @@ def _installed_version():
     return "?"
 
 
+def _ssl_enabled():
+    """Same signal jen.config.ssl_configured() uses — cert + key present."""
+    return os.path.exists(SSL_CERT) and os.path.exists(SSL_KEY)
+
+
+def _local_base_url():
+    """
+    scheme://127.0.0.1:port the running app actually answers on. When SSL
+    is on we talk to the HTTPS port directly rather than the plain-HTTP
+    port — that port serves only jen/httpredirect.py's 301 to
+    `https://<host>:<https_port>/`, and chasing that redirect means a TLS
+    handshake against a cert that names a hostname (or is self-signed),
+    not 127.0.0.1, which fails and made a healthy HTTPS upgrade look dead.
+    """
+    if _ssl_enabled():
+        return f"https://127.0.0.1:{_server_cfg('https_port', 8443)}"
+    return f"http://127.0.0.1:{_server_cfg('http_port', 5050)}"
+
+
+def _local_opener():
+    """
+    An opener for probing the local instance that (1) does NOT follow
+    redirects — a 301/302 is itself proof the app is serving — and (2)
+    does NOT verify TLS: this is a loopback call and Jen's cert
+    legitimately won't validate against 127.0.0.1 anyway.
+    """
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ctx))
+
+
 def _running_version():
     """
     Version reported by the *running* process, via the public
     /api/v1/health endpoint. This is the real proof the restart picked up
     the new code — the on-disk string is near-tautological right after we
-    wrote it. Returns None when the endpoint can't be read as JSON (e.g.
-    SSL is on and the HTTP port only serves a redirect); the caller then
-    falls back to the on-disk string.
+    wrote it. Returns None if the endpoint can't be read as JSON; the
+    caller then falls back to the on-disk string.
     """
-    port = _server_cfg("http_port", 5050)
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/health", timeout=5) as resp:
-            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        resp = _local_opener().open(f"{_local_base_url()}/api/v1/health", timeout=5)
+        payload = json.loads(resp.read().decode("utf-8", "replace"))
         if isinstance(payload, dict):
             return payload.get("jen_version") or None
-        return None
     except (urllib.error.URLError, OSError, ValueError):
-        return None
+        pass
+    return None
 
 
 def service_healthy(timeout=None):
     """
     After the restart, wait up to `timeout`s for jen to be back: the unit
-    active AND the HTTP port answering with anything below 500 (a 200, or
-    a 301/302 to login when SSL is on — both mean the app is serving).
-    Default is 90s (a slow homelab box + migrations + background-worker
-    init + gunicorn spawn), override with `[server] update_health_timeout`.
+    active AND the app answering on its real port (HTTPS when SSL is
+    configured, HTTP otherwise) with anything below 500 — a 200, or a
+    301/302/401 all mean it's serving. Default is 90s (a slow homelab box
+    + migrations + background-worker init + gunicorn spawn), override with
+    `[server] update_health_timeout`.
     """
     if timeout is None:
         timeout = _server_cfg("update_health_timeout", 90)
-    port = _server_cfg("http_port", 5050)
+    opener = _local_opener()
+    url = f"{_local_base_url()}/"
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
         if subprocess.run(["/usr/bin/systemctl", "is-active", "--quiet", "jen"]).returncode != 0:
             continue
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
-                if resp.status < 500:
-                    return True
+            resp = opener.open(url, timeout=5)
+            if resp.status < 500:
+                return True
         except urllib.error.HTTPError as e:
             if e.code < 500:
                 return True

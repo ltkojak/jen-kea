@@ -2,6 +2,52 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.8.3] - 2026-09-09
+
+Fixes a bug in 5.8.2's own new post-restart checks, plus two smaller
+follow-ups from external review.
+
+### The updater's health check failed on SSL installs
+
+5.8.2 added `service_healthy()` and `_running_version()`, both probing
+`http://127.0.0.1:<http_port>/`. On an SSL install that port serves only
+`jen/httpredirect.py`'s **301 to `https://<host>:<https_port>/`**, and
+`urllib` follows redirects by default — so the probe chased the 301 into
+a TLS handshake against a certificate issued for a hostname (or
+self-signed), not `127.0.0.1`, which fails validation. The result:
+`service_healthy()` timed out and **a perfectly healthy HTTPS upgrade
+was rolled back**; `_running_version()` silently fell back to reading the
+on-disk string, defeating the point of checking the running process.
+
+Both probes now:
+
+- talk to the app's **real port** — HTTPS directly when
+  `/etc/jen/ssl/certificate.crt` + `private.key` are present, HTTP
+  otherwise — bypassing the redirect listener entirely;
+- **don't follow redirects** — a 301/302/401 is itself proof the app is
+  serving;
+- **don't verify TLS** on the loopback call (Jen's cert legitimately
+  won't match `127.0.0.1`, and this is localhost).
+
+The old `test_redirect_counts_as_healthy` mocked `urlopen` *raising*
+`HTTPError(302)`, which never happens for a real redirect — it's replaced
+with an integration test that stands up a real `jen/httpredirect.py`
+listener and a real HTTPS server with a deliberately wrong-CN
+certificate.
+
+### Also
+
+- `ensure_venv()`: if `apt-get install python3-venv` fails (a box old
+  enough to be missing it often has stale package indices too), run
+  `apt-get update` and retry the install once more before giving up.
+- Docs: `docs/manual-install.md` and `ARCHITECTURE.md` §6 no longer call
+  the updater flatly "transactional" — it's staged and rollback-capable,
+  with the shared-venv and `static/` caveats stated inline. `static/` is
+  a merge copy holding user favicon uploads, so a rollback leaves the new
+  release's JS/CSS against the old templates; separating release-owned
+  assets from uploads is tracked with the 6.0.0 versioned-release-dir
+  work.
+
 ## [5.8.2] - 2026-09-09
 
 In-app updater hardening, from a real deployment failure. A long-running

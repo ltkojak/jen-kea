@@ -110,5 +110,8 @@ seed), it's `admin` / `admin` and Jen forces a change on first login.
 
 Repeat steps 2, 3, and 5 with the new tarball (config in `/etc/jen` is
 untouched), then `sudo systemctl restart jen`. Or use the in-app update
-button, which runs the transactional updater at
-`/usr/local/sbin/jen-update-root.py`.
+button, which runs the staged, rollback-capable updater at
+`/usr/local/sbin/jen-update-root.py` (it stages and validates the new
+release before touching `/opt/jen` and restores a snapshot on any
+failure — with the one caveat that the venv is shared, so a rollback
+keeps the newer dependencies; see `docs/ARCHITECTURE.md` §6).

@@ -27,6 +27,7 @@ directly verifiable than mocking urllib at multiple call sites.
 """
 
 import importlib.util
+import json
 import os
 import pathlib
 from unittest.mock import MagicMock, patch
@@ -369,6 +370,33 @@ class TestEnsureVenv:
         assert out == str(venv / "bin" / "python")
         assert apt_calls and "python3-venv" in apt_calls[0]
 
+    def test_apt_get_update_then_one_more_retry_when_install_first_fails(self, jen_update_root, tmp_path):
+        """v5.8.3 — a box old enough to be missing python3-venv often has
+        stale indices too, so `apt-get install` fails once, `apt-get
+        update` runs, and the install is retried a final time."""
+        venv = tmp_path / "venv"
+        runs = iter(
+            [
+                MagicMock(returncode=1, stderr="Unable to locate package python3-venv", stdout=""),  # install #1
+                MagicMock(returncode=0, stderr="", stdout=""),  # apt-get update
+                MagicMock(returncode=0, stderr="", stdout=""),  # install #2
+            ]
+        )
+        seen = []
+
+        def fake_run(argv, **kw):
+            seen.append(" ".join(argv))
+            return next(runs)
+
+        with (
+            patch.object(jen_update_root, "_venv_usable", return_value=False),
+            patch.object(jen_update_root, "_try_build_venv", side_effect=[False, True]),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            out = jen_update_root.ensure_venv(str(venv))
+        assert out == str(venv / "bin" / "python")
+        assert any("apt-get update" in c for c in seen), seen
+
     def test_returns_none_when_even_apt_and_retry_fail(self, jen_update_root, tmp_path):
         with (
             patch.object(jen_update_root, "_venv_usable", return_value=False),
@@ -491,16 +519,92 @@ class TestSnapshotRollback:
         assert region.index("install_extracted_files(extracted") < region.index("except Exception")
 
 
-class TestServiceHealthy:
-    def test_true_when_active_and_http_ok(self, jen_update_root):
-        with (
-            patch("subprocess.run", return_value=MagicMock(returncode=0)),
-            patch("urllib.request.urlopen") as mock_open,
-            patch("time.sleep"),
-        ):
-            mock_open.return_value.__enter__.return_value = MagicMock(status=200)
-            assert jen_update_root.service_healthy(timeout=1) is True
+def _self_signed_cert(tmp_path, cn="jen.example.com"):
+    """A throwaway cert whose CN is deliberately NOT 127.0.0.1 — the whole
+    point of the v5.8.3 fix is that the updater's loopback probe still
+    works against a cert like this."""
+    import datetime
 
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    crt = tmp_path / "certificate.crt"
+    keyf = tmp_path / "private.key"
+    crt.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    keyf.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.TraditionalOpenSSL,
+            serialization.NoEncryption(),
+        )
+    )
+    return str(crt), str(keyf)
+
+
+def _serve(handler_cls, certfile=None, keyfile=None):
+    """Start a throwaway localhost HTTP(S) server on an ephemeral port.
+    Returns (port, stop_fn)."""
+    import http.server
+    import ssl as _ssl
+    import threading
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    if certfile:
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile, keyfile)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t.start()
+    return srv.server_address[1], srv.shutdown
+
+
+class _AppLike:
+    """GET / -> 302 to /login (like Jen unauthenticated); /api/v1/health -> JSON."""
+
+    version = "5.8.3"
+
+    @classmethod
+    def handler(cls):
+        import http.server
+
+        class H(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                if self.path.startswith("/api/v1/health"):
+                    body = json.dumps({"jen_version": cls.version, "kea_up": True}).encode()
+                    self.send_response(200)
+                else:
+                    body = b"go to login\n"
+                    self.send_response(302)
+                    self.send_header("Location", "/login")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        return H
+
+
+class TestServiceHealthy:
     def test_false_when_unit_never_active(self, jen_update_root):
         with (
             patch("subprocess.run", return_value=MagicMock(returncode=1)),
@@ -508,15 +612,47 @@ class TestServiceHealthy:
         ):
             assert jen_update_root.service_healthy(timeout=0.01) is False
 
-    def test_redirect_counts_as_healthy(self, jen_update_root):
-        import urllib.error
+    def test_http_302_to_login_counts_as_healthy(self, jen_update_root, monkeypatch):
+        """A real 302 — not a mocked HTTPError. urllib would normally follow
+        it; the probe must NOT, and must read the 302 as proof-of-life."""
+        port, stop = _serve(_AppLike.handler())
+        try:
+            monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: False)
+            monkeypatch.setattr(jen_update_root, "_server_cfg", lambda k, f: port if k == "http_port" else f)
+            with patch("subprocess.run", return_value=MagicMock(returncode=0)), patch("time.sleep"):
+                assert jen_update_root.service_healthy(timeout=5) is True
+        finally:
+            stop()
 
-        with (
-            patch("subprocess.run", return_value=MagicMock(returncode=0)),
-            patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", 302, "Found", {}, None)),
-            patch("time.sleep"),
-        ):
-            assert jen_update_root.service_healthy(timeout=1) is True
+    def test_ssl_install_probes_https_port_and_ignores_a_wrong_cn_cert(self, jen_update_root, tmp_path, monkeypatch):
+        """THE v5.8.3 regression test. 5.8.2 hit the plain-HTTP port, let
+        urllib follow jen/httpredirect.py's 301 to https://<hostname>, and
+        died on cert validation — rolling back a healthy HTTPS upgrade.
+        Here the HTTPS server uses a cert for `jen.example.com`; the probe
+        connects to 127.0.0.1 and must still succeed."""
+        crt, key = _self_signed_cert(tmp_path)
+        https_port, stop_https = _serve(_AppLike.handler(), certfile=crt, keyfile=key)
+
+        # a real jen/httpredirect.py listener on the "HTTP" port — if the
+        # probe touched this one and followed the redirect it would fail.
+        from jen.httpredirect import make_server
+
+        redir = make_server(0, https_port)
+        import threading
+
+        threading.Thread(target=redir.serve_forever, daemon=True).start()
+        try:
+            monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: True)
+            monkeypatch.setattr(
+                jen_update_root,
+                "_server_cfg",
+                lambda k, f: https_port if k == "https_port" else (redir.server_address[1] if k == "http_port" else f),
+            )
+            with patch("subprocess.run", return_value=MagicMock(returncode=0)), patch("time.sleep"):
+                assert jen_update_root.service_healthy(timeout=5) is True
+        finally:
+            stop_https()
+            redir.shutdown()
 
     def test_default_timeout_is_read_from_jen_config(self, jen_update_root, tmp_path, monkeypatch):
         cfg = tmp_path / "jen.config"
@@ -531,27 +667,74 @@ class TestServiceHealthy:
         assert jen_update_root._server_cfg("update_health_timeout", 90) == 90
 
 
+class TestLocalBaseUrl:
+    def test_plain_http_when_no_certs(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: False)
+        monkeypatch.setattr(jen_update_root, "_server_cfg", lambda k, f: 5050 if k == "http_port" else f)
+        assert jen_update_root._local_base_url() == "http://127.0.0.1:5050"
+
+    def test_https_port_when_certs_present(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: True)
+        monkeypatch.setattr(jen_update_root, "_server_cfg", lambda k, f: 8443 if k == "https_port" else f)
+        assert jen_update_root._local_base_url() == "https://127.0.0.1:8443"
+
+    def test_ssl_enabled_keys_on_both_cert_and_key(self, jen_update_root, tmp_path, monkeypatch):
+        crt = tmp_path / "certificate.crt"
+        monkeypatch.setattr(jen_update_root, "SSL_CERT", str(crt))
+        monkeypatch.setattr(jen_update_root, "SSL_KEY", str(tmp_path / "private.key"))
+        assert jen_update_root._ssl_enabled() is False
+        crt.write_text("x")
+        assert jen_update_root._ssl_enabled() is False  # key still missing
+        (tmp_path / "private.key").write_text("x")
+        assert jen_update_root._ssl_enabled() is True
+
+
 class TestRunningVersion:
     """v5.8.2 — the post-restart check queries the running process, not
-    just the string we just wrote to disk (bigben's failure looked fine
-    on disk but the process never picked it up)."""
+    just the string we just wrote to disk. v5.8.3 — over the app's real
+    (HTTPS) port, tolerating a loopback cert mismatch."""
 
-    def test_parses_jen_version_from_the_health_endpoint(self, jen_update_root):
-        body = b'{"jen_version": "5.8.2", "kea_up": true}'
-        with patch("urllib.request.urlopen") as mock_open:
-            mock_open.return_value.__enter__.return_value = MagicMock(read=lambda: body)
-            assert jen_update_root._running_version() == "5.8.2"
+    def test_reads_version_over_https_with_a_wrong_cn_cert(self, jen_update_root, tmp_path, monkeypatch):
+        crt, key = _self_signed_cert(tmp_path)
+        _AppLike.version = "5.8.3"
+        port, stop = _serve(_AppLike.handler(), certfile=crt, keyfile=key)
+        try:
+            monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: True)
+            monkeypatch.setattr(jen_update_root, "_server_cfg", lambda k, f: port if k == "https_port" else f)
+            assert jen_update_root._running_version() == "5.8.3"
+        finally:
+            stop()
 
-    def test_returns_none_when_endpoint_is_unreachable(self, jen_update_root):
-        import urllib.error
+    def test_returns_none_when_endpoint_is_unreachable(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: False)
+        # nothing listening on this port
+        monkeypatch.setattr(jen_update_root, "_server_cfg", lambda k, f: 5999 if k == "http_port" else f)
+        assert jen_update_root._running_version() is None
 
-        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
+    def test_returns_none_on_non_json_body(self, jen_update_root, monkeypatch):
+        import http.server
+
+        class Html(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                body = b"<html>not json</html>"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        port, stop = _serve(Html)
+        try:
+            monkeypatch.setattr(jen_update_root, "_ssl_enabled", lambda: False)
+            monkeypatch.setattr(jen_update_root, "_server_cfg", lambda k, f: port if k == "http_port" else f)
             assert jen_update_root._running_version() is None
-
-    def test_returns_none_on_non_json_body(self, jen_update_root):
-        with patch("urllib.request.urlopen") as mock_open:
-            mock_open.return_value.__enter__.return_value = MagicMock(read=lambda: b"<html>redirect</html>")
-            assert jen_update_root._running_version() is None
+        finally:
+            stop()
 
 
 class TestMainPostRestartChecks:

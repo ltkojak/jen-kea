@@ -468,28 +468,37 @@ genuinely needed a new library. It's now
 verify → stage → `pip` into the venv → compile+import the staged
 package → snapshot → switch → restart → health-check → version-confirm.
 **Any failure from the switch onward** — an exception mid-copy, a service
-that doesn't come back healthy (unit active + HTTP answering), a failed
-byte-compile of the installed tree, or a running process that doesn't
-report the expected version via `/api/v1/health` — **restores the
-snapshot and restarts the previous version**. The snapshot covers the
-replace-wholesale parts of `/opt/jen` *and* the files an update replaces
-outside it (`jen.service`, `/etc/sudoers.d/jen`, the updater itself,
-`jen-update.service`), so a bad unit file can't survive the rollback.
-Deps and code are both proven against each other before a single file in
-`/opt/jen` is touched.
+that doesn't come back healthy (unit active + the app answering on its
+real port), a failed byte-compile of the installed tree, or a running
+process that doesn't report the expected version via `/api/v1/health` —
+**restores the snapshot and restarts the previous version**. The snapshot
+covers the replace-wholesale parts of `/opt/jen` *and* the files an
+update replaces outside it (`jen.service`, `/etc/sudoers.d/jen`, the
+updater itself, `jen-update.service`), so a bad unit file can't survive
+the rollback. Deps and code are both proven against each other before a
+single file in `/opt/jen` is touched.
 
 v5.8.2 hardened the venv build: `ensure_venv()` requires a venv with a
 *working `pip`* (a half-built venv from a failed `python3 -m venv` is
 wiped and rebuilt), and — running as root already — `apt-get install`s
-`python3-venv` and retries once before falling back to the system
-interpreter. The post-restart health-check timeout is 90s (was 45),
-overridable via `[server] update_health_timeout`.
+`python3-venv` (v5.8.3: `apt-get update` + one more retry on a box with
+stale indices) and falls back to the system interpreter only if that
+also fails. The post-restart health-check timeout is 90s (was 45),
+overridable via `[server] update_health_timeout`. The health and
+version probes talk to the app's real port — HTTPS directly when certs
+are present — and neither follows redirects nor verifies TLS on the
+loopback call, so an SSL install with a hostname cert isn't mistaken for
+a dead one (v5.8.2 chased `jen/httpredirect.py`'s 301 into a failing TLS
+handshake and rolled back healthy HTTPS upgrades).
 
 **Still weaker than ideal, tracked for a future major:** the venv is
 shared, so a rollback keeps the newer dependencies (fine because they're
 floor-pinned and forward-compatible, but not a true point-in-time
-revert); and the "switch" is still an in-place file copy, not an atomic
-pointer flip. Versioned release directories (`/opt/jen/releases/X.Y.Z` +
+revert); the "switch" is still an in-place file copy, not an atomic
+pointer flip; and `static/` is a merge copy (it holds user favicon
+uploads), so a rollback leaves the new release's JS/CSS on disk against
+the old templates. Separating release-owned static assets from
+user-uploaded content is part of that same versioned-release-dir work. Versioned release directories (`/opt/jen/releases/X.Y.Z` +
 an atomic `current` symlink), which also close the "tarball deploy can't
 delete files" gap in §7, are the next step.
 
