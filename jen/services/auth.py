@@ -145,20 +145,21 @@ def get_rate_limit_settings():
 
 
 def record_login_attempt(ip, username):
-    """Fire-and-forget — don't block the response."""
-    import threading
-
-    def _record():
-        try:
-            with __jen_db_ctx() as db:
-                with db.cursor() as cur:
-                    cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
-                    cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
-                db.commit()
-        except Exception as e:
-            logger.error(f"Rate limit record error: {e}")
-
-    threading.Thread(target=_record, daemon=True).start()
+    """Record a failed login attempt. Synchronous (v5.8.0): the previous
+    fire-and-forget thread meant a burst of parallel requests could each
+    run its `is_locked_out()` check before any of their failures had
+    actually reached the DB, so the lockout never engaged. The write is
+    one INSERT + a bounded cleanup DELETE — a few ms against a DB round
+    trip we're already making, and trivial next to the password hash that
+    just ran."""
+    try:
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
+                cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+            db.commit()
+    except Exception as e:
+        logger.error(f"Rate limit record error: {e}")
 
 
 def clear_login_attempts(ip, username):
@@ -257,20 +258,17 @@ MFA_LOCKOUT_MINUTES = 15
 
 
 def record_mfa_attempt(user_id):
-    """Fire-and-forget — don't block the response."""
-    import threading
-
-    def _record():
-        try:
-            with __jen_db_ctx() as db:
-                with db.cursor() as cur:
-                    cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (%s)", (user_id,))
-                    cur.execute("DELETE FROM mfa_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
-                db.commit()
-        except Exception as e:
-            logger.error(f"MFA rate limit record error: {e}")
-
-    threading.Thread(target=_record, daemon=True).start()
+    """Record a failed MFA code attempt. Synchronous (v5.8.0) — see
+    record_login_attempt(); the argument is even stronger for a 6-digit
+    code, where a parallel burst is a realistic brute-force shape."""
+    try:
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (%s)", (user_id,))
+                cur.execute("DELETE FROM mfa_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+            db.commit()
+    except Exception as e:
+        logger.error(f"MFA rate limit record error: {e}")
 
 
 def clear_mfa_attempts(user_id):
@@ -302,14 +300,19 @@ def is_mfa_locked_out(user_id):
                 )
                 count = cur.fetchone()["cnt"]
                 if count >= MFA_MAX_ATTEMPTS:
+                    # Seconds until the OLDEST attempt in the window ages out,
+                    # converted to minutes in Python — same shape as the
+                    # password-side calc above. The old query divided elapsed
+                    # time by 60 *inside* the subtraction (900 - mins), so it
+                    # reported ~900 "minutes remaining" right after lockout.
                     cur.execute(
-                        "SELECT CEIL(%s - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) / 60) as remaining "
+                        "SELECT (%s * 60) - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) as remaining_secs "
                         "FROM mfa_attempts WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
-                        (MFA_LOCKOUT_MINUTES * 60, user_id, MFA_LOCKOUT_MINUTES),
+                        (MFA_LOCKOUT_MINUTES, user_id, MFA_LOCKOUT_MINUTES),
                     )
                     row = cur.fetchone()
-                    remaining = max(1, int(row["remaining"] or 1)) if row else MFA_LOCKOUT_MINUTES
-                    return True, remaining
+                    remaining_secs = max(0, int(row["remaining_secs"] or 0)) if row else 0
+                    return True, max(1, (remaining_secs + 59) // 60)
         return False, 0
     except Exception as e:
         logger.error(f"MFA rate limit check error: {e}")

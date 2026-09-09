@@ -121,7 +121,7 @@ class TestMfaLockout:
     """/mfa/verify — brute-force throttling added in v4.4.2."""
 
     def test_locked_out_after_max_attempts(self, client, db):
-        from jen.services.auth import MFA_MAX_ATTEMPTS, is_mfa_locked_out
+        from jen.services.auth import MFA_LOCKOUT_MINUTES, MFA_MAX_ATTEMPTS, is_mfa_locked_out
 
         user_id = 1
         with db.cursor() as cur:
@@ -132,6 +132,10 @@ class TestMfaLockout:
         locked, remaining = is_mfa_locked_out(user_id)
         assert locked is True
         assert remaining > 0
+        # v5.8.0 — the old query divided elapsed time by 60 inside the
+        # subtraction and reported ~900 minutes remaining just after
+        # lockout. Fresh attempts → remaining must be the full window.
+        assert remaining <= MFA_LOCKOUT_MINUTES
 
         with db.cursor() as cur:
             cur.execute("DELETE FROM mfa_attempts WHERE user_id=%s", (user_id,))

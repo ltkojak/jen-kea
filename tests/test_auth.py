@@ -60,6 +60,72 @@ class TestLogin:
             assert "last_active" in sess
 
 
+class TestPasswordRehashOnLogin:
+    """v5.8.0 — a legacy hash is upgraded to the current scheme on a
+    successful login, synchronously and conditionally so a concurrent
+    password change can't be clobbered by a stale rehash."""
+
+    def _mk_user(self, db, username, stored_hash):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE username=%s", (username,))
+            cur.execute(
+                "INSERT INTO users (username, password, role, must_change_password) VALUES (%s, %s, 'viewer', 0)",
+                (username, stored_hash),
+            )
+        db.commit()
+
+    def _password_of(self, db, username):
+        with db.cursor() as cur:
+            cur.execute("SELECT password FROM users WHERE username=%s", (username,))
+            return cur.fetchone()["password"]
+
+    def test_legacy_pbkdf2_is_upgraded_to_scrypt_on_login(self, client, db):
+        from werkzeug.security import generate_password_hash
+
+        old = generate_password_hash("rehashme123", method="pbkdf2:sha256:260000")
+        self._mk_user(db, "_rehash_probe", old)
+        try:
+            r = client.post(
+                "/login", data={"username": "_rehash_probe", "password": "rehashme123"}, follow_redirects=False
+            )
+            assert r.status_code in (302, 303)
+            after = self._password_of(db, "_rehash_probe")
+            assert after.startswith("scrypt:")
+            assert after != old
+            # the same password still verifies against the upgraded hash
+            from jen.models.user import verify_password
+
+            assert verify_password(after, "rehashme123")
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE username='_rehash_probe'")
+            db.commit()
+
+    def test_current_scrypt_hash_is_left_untouched(self, client, db):
+        from jen.models.user import hash_password
+
+        current = hash_password("alreadygood123")
+        self._mk_user(db, "_rehash_noop", current)
+        try:
+            client.post("/login", data={"username": "_rehash_noop", "password": "alreadygood123"})
+            assert self._password_of(db, "_rehash_noop") == current
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE username='_rehash_noop'")
+            db.commit()
+
+    def test_rehash_update_is_conditional_on_the_verified_hash(self):
+        """The write must be scoped to the hash we just verified so a
+        password change landing mid-login isn't overwritten by the old one."""
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "auth.py").read_text(
+            encoding="utf-8"
+        )
+        assert "UPDATE users SET password=%s WHERE id=%s AND password=%s" in src
+        assert "threading.Thread(target=_rehash" not in src  # no more fire-and-forget
+
+
 class TestLogout:
     """Logout route — GET /logout"""
 
@@ -112,16 +178,26 @@ class TestRateLimiting:
     """Login rate limiting."""
 
     def test_rate_limit_tracks_attempts(self, client, db):
-        """Failed logins are recorded in login_attempts."""
-        import time
-
+        """Failed logins are recorded in login_attempts — synchronously
+        as of v5.8.0 (no sleep needed; a parallel burst can no longer
+        outrun its own failure records)."""
         for _ in range(3):
             client.post("/login", data={"username": "admin", "password": "wrong"})
-        time.sleep(0.5)  # record_login_attempt is async
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) as cnt FROM login_attempts WHERE username='admin'")
             count = cur.fetchone()["cnt"]
         assert count == 3
+
+    def test_failure_recording_is_synchronous(self):
+        """The record_* functions must not defer the INSERT to a thread —
+        that's the race that let a parallel burst skip the lockout."""
+        import inspect
+
+        from jen.services import auth
+
+        for fn in (auth.record_login_attempt, auth.record_mfa_attempt):
+            src = inspect.getsource(fn)
+            assert "threading" not in src and "Thread(" not in src, f"{fn.__name__} still defers its write"
 
     def test_rate_limit_lockout(self, client, db):
         """Exceed max attempts triggers lockout message."""

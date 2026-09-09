@@ -5,7 +5,6 @@ Authentication routes: login, logout.
 """
 
 import logging
-import threading
 from datetime import datetime, timezone
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
@@ -110,22 +109,25 @@ def login():
             return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
 
         if row and __user.verify_password(row["password"], password):
-            # Upgrade legacy SHA-256 / pbkdf2 / off-param scrypt — fire and forget
-            needs_upgrade = not row["password"].startswith("scrypt:") or __user.needs_rehash(row["password"])
-            if needs_upgrade:
-                _uid = row["id"]
-                _new_hash = __user.hash_password(password)
-
-                def _rehash(_uid=_uid, _hash=_new_hash):
-                    try:
-                        with __db.jen_db() as db2:
-                            with db2.cursor() as cur:
-                                cur.execute("UPDATE users SET password=%s WHERE id=%s", (_hash, _uid))
-                            db2.commit()
-                    except Exception as e:
-                        logger.error(f"Password rehash error: {e}")
-
-                threading.Thread(target=_rehash, daemon=True).start()
+            # Upgrade legacy SHA-256 / pbkdf2 / off-param scrypt to the current
+            # scheme. The expensive part (hashing) is already done above via
+            # verify_password + here; the write is a single UPDATE, done
+            # synchronously and *conditionally* on the hash we just verified
+            # still being the stored one — so a password change that lands
+            # between here and the write is never clobbered by a stale rehash
+            # (the old fire-and-forget thread did an unconditional UPDATE).
+            old_hash = row["password"]
+            if not old_hash.startswith("scrypt:") or __user.needs_rehash(old_hash):
+                try:
+                    with __db.jen_db() as db2:
+                        with db2.cursor() as cur:
+                            cur.execute(
+                                "UPDATE users SET password=%s WHERE id=%s AND password=%s",
+                                (__user.hash_password(password), row["id"], old_hash),
+                            )
+                        db2.commit()
+                except Exception as e:
+                    logger.error(f"Password rehash error: {e}")
 
             # Clear rate limit attempts
             __auth.clear_login_attempts(ip, username)
