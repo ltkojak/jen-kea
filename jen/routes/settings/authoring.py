@@ -186,7 +186,11 @@ def _direct_http_socket(service: str):
     if not (api_user and api_pass):
         return None
     return {
-        "address": "0.0.0.0",
+        # nosec B104 — goes into the authored Kea daemon's own config, not
+        # a bind Jen performs; Kea must listen on all interfaces for the
+        # (remote) Jen host to reach it, and the http socket carries
+        # required basic auth. See build_new_kea_config().
+        "address": "0.0.0.0",  # nosec B104
         "port": __authoring.socket_port_from_url(api_url, fallback_port),
         "user": api_user,
         "password": api_pass,

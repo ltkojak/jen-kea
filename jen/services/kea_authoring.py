@@ -270,12 +270,19 @@ def build_new_kea_config(
             )
 
     if http_socket:
+        # nosec B104 — "0.0.0.0" here is a value written into the Kea
+        # daemon's OWN config file, not a socket Jen binds. Kea listens on
+        # it so the Jen host (a different machine) can reach the command
+        # API; basic auth (required — the route refuses without creds)
+        # protects it, and the operator reviews the generated file in the
+        # preview step before it's applied.
+        socket_address = http_socket.get("address") or "0.0.0.0"  # nosec B104
         control = {
             "control-sockets": [
                 {"socket-type": "unix", "socket-name": control_socket_path},
                 {
                     "socket-type": "http",
-                    "socket-address": http_socket.get("address", "0.0.0.0"),
+                    "socket-address": socket_address,
                     "socket-port": int(http_socket["port"]),
                     "authentication": {
                         "type": "basic",
