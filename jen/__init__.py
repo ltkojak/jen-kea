@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.8.0"
+JEN_VERSION = "5.8.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -34,6 +34,27 @@ def _ssl_configured_cached() -> bool:
     if _ssl_configured_cache is None:
         _ssl_configured_cache = ssl_configured()
     return _ssl_configured_cache
+
+
+def _venv_migration_incomplete() -> bool:
+    """v5.8.1 — a bare-metal /opt/jen install running on the *system*
+    interpreter with no /opt/jen/venv: the v5.8.0 venv migration didn't
+    finish (an older box without python3-venv, or a failed build), so Jen
+    is running without the isolation it advertises. `sudo ./install.sh
+    --repair` rebuilds it. Docker and dev checkouts deliberately have no
+    venv and are not flagged."""
+    import sys
+
+    if sys.prefix != sys.base_prefix:
+        return False  # already running inside a venv
+    if os.path.exists("/.dockerenv") or os.environ.get("JEN_ROOT"):
+        return False  # container / dev checkout
+    return os.path.isfile("/opt/jen/run.py") and not os.path.exists("/opt/jen/venv/bin/python")
+
+
+# Static for the process lifetime — a --repair that builds the venv also
+# restarts the service.
+_VENV_MIGRATION_INCOMPLETE = _venv_migration_incomplete()
 
 
 # ── Login manager (module-level so decorators can reference it) ───────────────
@@ -401,6 +422,7 @@ def create_app() -> Flask:
             "current_user_avatar": avatar_url,
             "jen_version": JEN_VERSION,
             "restart_pending": restart_pending,
+            "venv_migration_incomplete": _VENV_MIGRATION_INCOMPLETE,
             "ipv6_enabled": ipv6_enabled,
             "csrf_token": lambda: csrf_svc.generate_csrf_token(app),
         }

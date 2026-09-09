@@ -631,6 +631,12 @@ def main():
         # and the venv only; /opt/jen's own files are not touched until
         # the release has been proven to install its deps and import.
         python_bin = ensure_venv() or SYSTEM_PYTHON
+        if python_bin == SYSTEM_PYTHON and not os.path.exists("/.dockerenv"):
+            log(
+                "WARNING: running WITHOUT /opt/jen/venv — installing to system python. "
+                "Jen is not isolated. Run `sudo ./install.sh --repair` after this update "
+                "to finish the venv migration (the app shows a banner about this too)."
+            )
 
         if not install_python_dependencies(os.path.join(extracted, "requirements.txt"), python_bin):
             return 1

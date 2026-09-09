@@ -120,3 +120,33 @@ class TestServiceFileUnchanged:
 
     def test_comment_explains_the_venv_reexec_choice(self):
         assert "re-execs into the venv" in SERVICE
+
+
+class TestVenvMigrationBanner:
+    """v5.8.1 — surface a bare-metal install running without its venv."""
+
+    def test_not_flagged_in_a_dev_checkout(self):
+        import jen
+
+        # JEN_ROOT is set for the test suite → dev/CI → never flagged
+        assert jen._venv_migration_incomplete() is False
+
+    def test_not_flagged_when_running_inside_a_venv(self, monkeypatch):
+        import jen
+
+        monkeypatch.setattr(sys, "base_prefix", sys.prefix + "-other")
+        assert jen._venv_migration_incomplete() is False
+
+    def test_flagged_for_a_bare_metal_install_with_no_venv(self, monkeypatch):
+        import jen
+
+        monkeypatch.setattr(sys, "base_prefix", sys.prefix)  # not in a venv
+        monkeypatch.delenv("JEN_ROOT", raising=False)
+        monkeypatch.setattr(jen.os.path, "exists", lambda p: p == "/opt/jen/run.py")
+        monkeypatch.setattr(jen.os.path, "isfile", lambda p: p == "/opt/jen/run.py")
+        assert jen._venv_migration_incomplete() is True
+
+    def test_base_html_has_the_banner(self):
+        base = (REPO / "templates" / "base.html").read_text(encoding="utf-8")
+        assert "venv_migration_incomplete" in base
+        assert "install.sh --repair" in base

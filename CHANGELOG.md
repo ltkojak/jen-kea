@@ -2,6 +2,58 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.8.1] - 2026-09-09
+
+Fixes for two regressions in 5.8.0 plus the deployment-transaction gaps
+from that release's review.
+
+### The venv wasn't actually being used (bare-metal)
+
+`run.py` decided "am I already the venv interpreter?" with
+`os.path.realpath(sys.executable) != os.path.realpath(...venv/bin/python)`.
+On Linux a venv's `bin/python` is a symlink chain back to the base
+interpreter, so **both sides resolve to `/usr/bin/pythonX.Y`**, the guard
+was always false, and the re-exec never happened — `jen.service` kept
+running the system interpreter. Since 5.8.0 installs dependencies only
+into `/opt/jen/venv`, a **fresh bare-metal install would crash-loop**
+(and an upgrade quietly ran unisolated on leftover system packages). The
+guard is now `sys.prefix == /opt/jen/venv`. The updater and the
+installer had the same realpath mistake in a couple of spots; fixed.
+
+If a bare-metal install is somehow running without its venv (an older
+box that never had `python3-venv`, a failed build), Jen now shows an
+admin banner and the updater logs it: `sudo ./install.sh --repair`.
+
+### Docker `.env` quoting
+
+5.8.0 wrapped **every** generated `.env` value in quotes. Docker Compose
+before 2.24 doesn't strip quotes from `env_file:` values, so
+`JEN_DB_PASS='plainpass'` reached the container with the quotes and auth
+failed — a regression for anyone on older Compose with an ordinary
+password. Values are now emitted bare unless they actually contain a
+`$`, whitespace, `#`, a quote or a backslash; the Docker path checks for
+Compose ≥ 2.24. And the "reuse an existing `.env`" path now reads an
+explicit `JEN_DATABASE_MODE=external|bundled` marker instead of sniffing
+credentials — the old heuristic matched the empty `JEN_MYSQL_PASSWORD=''`
+that external installs write and could start an unwanted MariaDB
+container.
+
+### Self-updater is closer to actually transactional
+
+- **Any** failure from the file-swap onward now rolls back — an
+  exception mid-copy, not just a failed post-restart health check (5.8.0
+  left `/opt/jen` half-updated in that case).
+- The rollback snapshot now includes the files an update replaces
+  *outside* `/opt/jen` — `jen.service`, `/etc/sudoers.d/jen`, the updater
+  script, `jen-update.service` — with a `daemon-reload` on restore. A
+  bad `jen.service` previously survived the rollback.
+
+### Also
+
+- MFA: `_remaining_mfa_factor_count()` now fails **closed** — if it can't
+  count the user's remaining factors, a required-MFA user isn't allowed
+  to remove one.
+
 ## [5.8.0] - 2026-09-09
 
 ### Bare-metal Jen runs from its own venv

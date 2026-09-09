@@ -533,6 +533,14 @@
         </form>
     </div>
     {% endif %}
+    {% if venv_migration_incomplete and current_user.is_authenticated and current_user.role in ('superadmin','admin') %}
+    <div style="background:#2a1f00;border:1px solid var(--warning);border-radius:var(--radius);
+                padding:10px 16px;margin-bottom:12px;font-size:13px;">
+        ⚠️ <strong>Python environment migration incomplete</strong> — Jen is running on the
+        system interpreter without its <code>/opt/jen/venv</code>. Run
+        <code>sudo ./install.sh --repair</code> on the host to finish it.
+    </div>
+    {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}

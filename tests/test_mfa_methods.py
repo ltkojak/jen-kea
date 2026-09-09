@@ -136,3 +136,26 @@ class TestLastFactorProtection:
             "/mfa/enroll", data={"action": "remove", "method_id": ids["_probe_iPhone"]}, follow_redirects=True
         )
         assert _probe_count() == 0
+
+    def test_count_helper_returns_none_on_db_error_and_removal_is_blocked(self, logged_in_client, two_totp_methods):
+        """v5.8.1 — fail CLOSED: if we can't count the remaining factors,
+        a required-MFA user is not allowed to remove one."""
+        from unittest.mock import patch
+
+        from jen.routes import mfa_routes
+
+        with patch("jen.models.db.jen_db", side_effect=RuntimeError("db down")):
+            assert mfa_routes._remaining_mfa_factor_count(1, None) is None
+
+        self._set_mode("required_all")
+        try:
+            ids = _probe_ids()
+            with patch("jen.routes.mfa_routes._remaining_mfa_factor_count", return_value=None):
+                logged_in_client.post(
+                    "/mfa/enroll",
+                    data={"action": "remove", "method_id": ids["_probe_iPhone"]},
+                    follow_redirects=True,
+                )
+            assert _probe_count() == 2, "removal went through despite an unknown factor count"
+        finally:
+            self._set_mode("off")
