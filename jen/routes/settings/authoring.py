@@ -4,13 +4,16 @@ jen/routes/settings/authoring.py
 Generate a starter Kea config over SSH; check/install Kea binaries.
 """
 
+import ipaddress
 import logging
+from urllib.parse import urlparse
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
 from flask_login import login_required
 
 import jen.config as __config
 import jen.models.user as __user
+import jen.services.auth as __auth
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
 from jen import extensions
@@ -21,16 +24,26 @@ from jen.services.access import superadmin_required as _superadmin_required
 logger = logging.getLogger(__name__)
 
 
+def _looks_like_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
 def _author_kea_detect(service: str):
     """Shared detection logic for the GET form and both POST routes below —
     connects to the first server with ssh_host configured, prefers reading
     the sibling protocol's real config over autodetecting, and only
     autodetects live interfaces when there's nothing to inherit from.
-    Returns (target_server, detected, autodetected_interfaces, ca_socket)
-    or (None, ...) if no server has SSH configured at all."""
+    Returns (target_server, detected, autodetected_interfaces, ca_socket,
+    detected_addresses) or (None, ...) if no server has SSH configured.
+    detected_addresses is only populated in direct mode (for the
+    bind-address picker) — one extra exec_command on the same session."""
     target_server = next((s for s in extensions.KEA_SERVERS if s.get("ssh_host")), None)
     if not target_server:
-        return None, None, [], None
+        return None, None, [], None, []
     detected = {
         "found": False,
         "interfaces": [],
@@ -41,6 +54,8 @@ def _author_kea_detect(service: str):
     }
     autodetected_interfaces = []
     ca_socket = None
+    detected_addresses = []
+    direct_mode = extensions.KEA_CONNECTION_MODE == "direct"
     try:
         ssh = __kea6._connect_ssh(target_server)
         try:
@@ -48,11 +63,13 @@ def _author_kea_detect(service: str):
             if not detected["found"]:
                 autodetected_interfaces = __authoring.autodetect_interfaces(ssh, service)
             ca_socket = __authoring.detect_ca_socket_path(ssh, target_server, service)
+            if direct_mode:
+                detected_addresses = __authoring.autodetect_addresses(ssh)
         finally:
             ssh.close()
     except Exception as e:
         flash(f"Could not connect to {target_server.get('name', target_server.get('ssh_host'))}: {e}", "error")
-    return target_server, detected, autodetected_interfaces, ca_socket
+    return target_server, detected, autodetected_interfaces, ca_socket, detected_addresses
 
 
 def _author_kea_subnets_and_db(service: str):
@@ -128,7 +145,7 @@ def author_kea_config(service):
         flash("Invalid service.", "error")
         return redirect(url_for("settings.settings_kea"))
 
-    target_server, detected, autodetected_interfaces, ca_socket = _author_kea_detect(service)
+    target_server, detected, autodetected_interfaces, ca_socket, detected_addresses = _author_kea_detect(service)
     if not target_server:
         flash(
             "No Kea server has SSH configured — nothing to author against. "
@@ -144,7 +161,34 @@ def author_kea_config(service):
     # direct mode). Editable in the form; kea-dhcpX -t validates it.
     default_socket = ca_socket or f"/run/kea/kea{'4' if service == 'dhcp4' else '6'}-ctrl-socket"
     direct_mode = extensions.KEA_CONNECTION_MODE == "direct"
-    http_socket_info = _direct_http_socket(service) if direct_mode else None
+
+    # v5.10.2 — what Jen will actually dial for this server, so the form
+    # knows the scheme (whether to ask for TLS paths) and can preselect a
+    # bind address matching the endpoint host.
+    endpoint_scheme = "http"
+    endpoint_host = ""
+    if direct_mode:
+        from jen.services.kea import _endpoint_for
+
+        _ep = _endpoint_for(target_server, service)
+        if not isinstance(_ep, dict):
+            _url = _ep[0] or ""
+            _p = urlparse(_url)
+            endpoint_scheme = _p.scheme or "http"
+            endpoint_host = _p.hostname or ""
+
+    bind_options = list(detected_addresses)
+    bind_preselect = ""
+    if direct_mode:
+        _is_ip = _looks_like_ip(endpoint_host)
+        if _is_ip:
+            bind_preselect = endpoint_host
+            if endpoint_host not in bind_options:
+                bind_options = [endpoint_host, *bind_options]
+        elif bind_options:
+            bind_preselect = bind_options[0]
+
+    cert_required = bool(extensions.KEA_API_CLIENT_CERT and extensions.KEA_API_CLIENT_KEY)
     subnet_lines = _subnets_to_lines(existing_subnets, service)
     return render_template(
         "author_kea_config.html",
@@ -155,51 +199,62 @@ def author_kea_config(service):
         autodetected_interfaces=autodetected_interfaces,
         default_socket=default_socket,
         direct_mode=direct_mode,
-        http_socket_info=http_socket_info,
+        endpoint_scheme=endpoint_scheme,
+        endpoint_host=endpoint_host,
+        endpoint_host_is_ip=_looks_like_ip(endpoint_host),
+        bind_options=bind_options,
+        bind_preselect=bind_preselect,
+        cert_required=cert_required,
         subnet_lines=subnet_lines,
         has_existing_subnets=bool(existing_subnets),
         default_db=default_db,
     )
 
 
-def _direct_http_socket(service: str):
-    """The `http` control-socket entry an authored config needs in
-    connection_mode = direct — address 0.0.0.0 so the Jen host can reach
-    it, port from the daemon's own [kea]/[kea6] api_url, basic-auth creds
-    from api_user/api_pass. Returns None when the creds aren't set or the
-    API URL has no explicit port (the caller turns that into a form error
-    rather than authoring an unauthenticated / mis-ported socket).
+def _direct_control_socket(service: str, server: dict, form_tls: dict):
+    """v5.10.2 — the http/https control-socket entry an authored config
+    needs in connection_mode = direct, for ONE server. URL / scheme /
+    port / credentials come from kea._endpoint_for(server, service) — the
+    exact endpoint Jen will dial for this server — never from globals, so
+    a standby with its own api_url/creds gets a config Jen can actually
+    reach. The bind address is added by the caller (_author_kea_config_for).
 
-    v5.10.2 note: this whole function is superseded in step 3 by
-    _direct_control_socket(), which derives per-server from
-    kea._endpoint_for() and is scheme-aware. Kept minimal here only so
-    step 1's socket_port_from_url() signature change doesn't crash."""
-    if service == "dhcp4":
-        api_url, api_user, api_pass = (
-            extensions.KEA_API_URL,
-            extensions.KEA_API_USER,
-            extensions.KEA_API_PASS,
+    Returns (socket_dict, None) or (None, error_text)."""
+    from jen.services.kea import _endpoint_for
+
+    name = server.get("name") or server.get("ssh_host") or "server"
+    ep = _endpoint_for(server, service)
+    if isinstance(ep, dict):  # direct + dhcp6 + no v6 URL
+        return None, f"{name}: {ep['text']}"
+    url, user, pwd = ep
+    p = urlparse(url or "")
+    if p.scheme not in ("http", "https"):
+        return None, f"{name}: API URL {url!r} must be http:// or https://."
+    port = __authoring.socket_port_from_url(url)
+    if port is None:
+        return None, (
+            f"{name}: API URL {url} has no explicit port — direct mode requires one "
+            "(Settings → Kea / Additional Servers)."
         )
-    else:
-        api_url, api_user, api_pass = (
-            extensions.KEA6_API_URL,
-            extensions.KEA6_API_USER,
-            extensions.KEA6_API_PASS,
+    if not (user and pwd):
+        return None, (
+            f"{name}: direct mode needs a Kea API username and password "
+            "(Settings → Kea) — they become the http control socket's basic-auth credentials."
         )
-    port = __authoring.socket_port_from_url(api_url)
-    if not (api_user and api_pass) or port is None:
-        return None
     return {
-        # nosec B104 — goes into the authored Kea daemon's own config, not
-        # a bind Jen performs. Replaced by a bind-address picker in step 3.
-        "address": "0.0.0.0",  # nosec B104
+        "scheme": p.scheme,
         "port": port,
-        "user": api_user,
-        "password": api_pass,
-    }
+        "user": user,
+        "password": pwd,
+        "endpoint_host": p.hostname or "",
+        "tls": form_tls if p.scheme == "https" else None,
+    }, None
 
 
-def _author_kea_build_config(service, form):
+def _author_kea_common(service, form):
+    """Form validation shared by preview + post. Returns (common, subnets,
+    error). `common` carries everything that's the same for every target
+    server; per-server config is built by _author_kea_config_for()."""
     interfaces = [i.strip() for i in form.get("interfaces", "").replace(",", "\n").splitlines() if i.strip()]
     control_socket_path = form.get("control_socket", "").strip()
     db_host = form.get("db_host", "").strip()
@@ -213,39 +268,118 @@ def _author_kea_build_config(service, form):
     if not (db_host and db_user and db_name):
         return None, None, "Database host, username, and name are required."
 
-    # v5.10.1 — in direct mode the generated config must expose the
-    # daemon's own http command socket, or Jen can't talk to the Kea it
-    # just authored (Kea 3.2 removed the Control Agent).
-    http_socket = None
-    if extensions.KEA_CONNECTION_MODE == "direct":
-        http_socket = _direct_http_socket(service)
-        if http_socket is None:
-            return (
-                None,
-                None,
-                (
-                    "Direct connection mode needs a Kea API username, password, and an explicit "
-                    f"port in the API URL (Settings → Kea{' → Kea6' if service == 'dhcp6' else ''}) — "
-                    "they become the http control socket's port and basic-auth credentials in the "
-                    "generated config."
-                ),
-            )
+    direct = extensions.KEA_CONNECTION_MODE == "direct"
+    bind_address = ""
+    tls = None
+    if direct:
+        bind_address = form.get("bind_address_custom", "").strip() or form.get("bind_address", "").strip()
+        if not _looks_like_ip(bind_address):
+            return None, None, "Bind address must be an IP address, not a hostname (Kea binds it)."
+
+        # TLS paths are required only if a target endpoint is https.
+        from jen.services.kea import _endpoint_for
+
+        any_https = False
+        for srv in extensions.KEA_SERVERS:
+            if not srv.get("ssh_host"):
+                continue
+            _ep = _endpoint_for(srv, service)
+            if not isinstance(_ep, dict) and urlparse(_ep[0] or "").scheme == "https":
+                any_https = True
+                break
+        if any_https:
+            cert_file = form.get("tls_cert_file", "").strip()
+            key_file = form.get("tls_key_file", "").strip()
+            trust_anchor = form.get("tls_trust_anchor", "").strip()
+            for label, val in (
+                ("TLS certificate file", cert_file),
+                ("TLS key file", key_file),
+                ("trust anchor", trust_anchor),
+            ):
+                if not val:
+                    return None, None, f"{label} is required — the Kea endpoint is https://."
+                if not __auth.valid_remote_path(val):
+                    return None, None, f"{label} must be an absolute path with no special characters: {val}"
+            tls = {
+                "trust_anchor": trust_anchor,
+                "cert_file": cert_file,
+                "key_file": key_file,
+                # Jen presents a client cert ⇒ Kea can demand one. Never
+                # emit cert-required:true when Jen has no client cert —
+                # that's the mTLS handshake failure authored into a file.
+                "cert_required": bool(extensions.KEA_API_CLIENT_CERT and extensions.KEA_API_CLIENT_KEY),
+            }
 
     subnets, error = _parse_subnet_lines(form.get("subnets", ""), service)
     if error:
         return None, None, error
 
     _, default_db = _author_kea_subnets_and_db(service)
-    lease_db = {
-        "host": db_host,
-        "user": db_user,
-        "name": db_name,
-        "password": default_db["password"],
-    }  # Jen's own stored password — never re-typed in the form
+    common = {
+        "interfaces": interfaces,
+        "control_socket_path": control_socket_path,
+        "bind_address": bind_address,
+        "tls": tls,
+        "lease_db": {
+            "host": db_host,
+            "user": db_user,
+            "name": db_name,
+            "password": default_db["password"],  # Jen's own stored password, never re-typed
+        },
+    }
+    return common, subnets, None
+
+
+def _author_kea_config_for(service, server, common, subnets):
+    """Build the config for ONE target server. Returns
+    (config, tls_paths, warning, error) — warning is amber (bind-address
+    mismatch / all-interfaces), error skips just this server."""
+    if extensions.KEA_CONNECTION_MODE != "direct":
+        config = __authoring.build_new_kea_config(
+            service, common["interfaces"], common["lease_db"], common["control_socket_path"], subnets, api_socket=None
+        )
+        return config, [], None, None
+
+    sock, err = _direct_control_socket(service, server, common["tls"])
+    if err:
+        return None, [], None, err
+    sock["address"] = common["bind_address"]
     config = __authoring.build_new_kea_config(
-        service, interfaces, lease_db, control_socket_path, subnets, http_socket=http_socket
+        service, common["interfaces"], common["lease_db"], common["control_socket_path"], subnets, api_socket=sock
     )
-    return config, subnets, None
+
+    tls_paths = []
+    if sock["scheme"] == "https":
+        t = common["tls"]
+        tls_paths = [(t["cert_file"], "file"), (t["key_file"], "file"), (t["trust_anchor"], "dir")]
+
+    warning = None
+    bind = common["bind_address"]
+    if bind == "0.0.0.0":  # nosec B104 — comparing an operator-chosen value to warn; not a bind Jen performs
+        warning = f"{server.get('name', 'server')}: the control API will bind every interface (0.0.0.0)."
+    elif _looks_like_ip(sock["endpoint_host"]) and bind != sock["endpoint_host"]:
+        warning = (
+            f"{server.get('name', 'server')}: Jen connects to {sock['endpoint_host']} but the socket binds {bind}."
+        )
+    return config, tls_paths, warning, None
+
+
+def _run_author_script(server, service, config, tls_paths, *, dry_run, allow_overwrite):
+    """One SSH round trip: base64 the remote script, run it under sudo
+    python3, return the stripped (out, err)."""
+    import base64
+
+    conf_path = __authoring.conf_path_for(server, service)
+    script = __authoring.render_author_config_script(
+        service, conf_path, config, allow_overwrite=allow_overwrite, dry_run=dry_run, tls_paths=tls_paths
+    )
+    ssh = __kea6._connect_ssh(server)
+    try:
+        enc = base64.b64encode(script.encode()).decode()
+        _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
+        return stdout.read().decode().strip(), stderr.read().decode().strip(), conf_path
+    finally:
+        ssh.close()
 
 
 @bp.route("/settings/infrastructure/author-kea/<service>/preview", methods=["POST"])
@@ -255,51 +389,46 @@ def author_kea_config_preview(service):
     if service not in ("dhcp4", "dhcp6"):
         return jsonify({"ok": False, "error": "Invalid service."}), 400
 
-    config, subnets, error = _author_kea_build_config(service, request.form)
+    common, subnets, error = _author_kea_common(service, request.form)
     if error:
         return jsonify({"ok": False, "error": error}), 400
 
     server_results = []
+    first_config = None
     for server in extensions.KEA_SERVERS:
         if not server.get("ssh_host"):
             continue
         name = server.get("name", server["ssh_host"])
+        config, tls_paths, warning, cfg_err = _author_kea_config_for(service, server, common, subnets)
+        if cfg_err:
+            server_results.append({"name": name, "ok": False, "message": cfg_err})
+            continue
         try:
-            conf_path = __authoring.conf_path_for(server, service)
-            script = __authoring.render_author_config_script(
-                service, conf_path, config, allow_overwrite=False, dry_run=True
-            )
-            ssh = __kea6._connect_ssh(server)
-            try:
-                import base64
-
-                enc = base64.b64encode(script.encode()).decode()
-                _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-                out = stdout.read().decode().strip()
-                err = stderr.read().decode().strip()
-            finally:
-                ssh.close()
+            out, err, _ = _run_author_script(server, service, config, tls_paths, dry_run=True, allow_overwrite=False)
+            row = {"name": name, "config": __authoring.redact_secrets(config)}
+            if warning:
+                row["warning"] = warning
             if out == "preview-ok":
-                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+                row.update({"ok": True, "message": "Config test passed"})
             elif out.startswith("missingbinary:"):
                 binary = out[len("missingbinary:") :]
-                server_results.append(
-                    {
-                        "name": name,
-                        "ok": False,
-                        "missing_binary": binary,
-                        "message": f"{binary} is not installed on this server.",
-                    }
+                row.update(
+                    {"ok": False, "missing_binary": binary, "message": f"{binary} is not installed on this server."}
                 )
+            elif out.startswith("tlsmissing:"):
+                row.update({"ok": False, "message": f"TLS file not found on this server: {out[len('tlsmissing:') :]}"})
             elif out.startswith("testerror:"):
-                server_results.append({"name": name, "ok": False, "message": out[len("testerror:") :]})
+                row.update({"ok": False, "message": out[len("testerror:") :]})
             else:
-                server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
+                row.update({"ok": False, "message": err or out or "Unknown error"})
+            server_results.append(row)
+            if first_config is None and row["ok"]:
+                first_config = row["config"]
         except Exception as e:
             server_results.append({"name": name, "ok": False, "message": str(e)})
 
     all_passed = all(r["ok"] for r in server_results) if server_results else True
-    return jsonify({"ok": True, "config": config, "servers": server_results, "all_passed": all_passed})
+    return jsonify({"ok": True, "config": first_config, "servers": server_results, "all_passed": all_passed})
 
 
 @bp.route("/settings/infrastructure/author-kea/<service>", methods=["POST"])
@@ -310,7 +439,7 @@ def author_kea_config_post(service):
         flash("Invalid service.", "error")
         return redirect(url_for("settings.settings_kea"))
 
-    config, subnets, error = _author_kea_build_config(service, request.form)
+    common, subnets, error = _author_kea_common(service, request.form)
     if error:
         flash(error, "error")
         return redirect(url_for("settings.author_kea_config", service=service))
@@ -321,21 +450,14 @@ def author_kea_config_post(service):
         if not server.get("ssh_host"):
             continue
         name = server.get("name", server["ssh_host"])
+        config, tls_paths, _warning, cfg_err = _author_kea_config_for(service, server, common, subnets)
+        if cfg_err:
+            errors.append(f"❌ {name}: {cfg_err}")
+            continue
         try:
-            conf_path = __authoring.conf_path_for(server, service)
-            script = __authoring.render_author_config_script(
-                service, conf_path, config, allow_overwrite=allow_overwrite, dry_run=False
+            out, err, conf_path = _run_author_script(
+                server, service, config, tls_paths, dry_run=False, allow_overwrite=allow_overwrite
             )
-            ssh = __kea6._connect_ssh(server)
-            try:
-                import base64
-
-                enc = base64.b64encode(script.encode()).decode()
-                _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-                out = stdout.read().decode().strip()
-                err = stderr.read().decode().strip()
-            finally:
-                ssh.close()
             if out == "ok":
                 results.append(f"✅ {name}: {conf_path} written. Enable/restart the service to use it.")
             elif out == "exists":
@@ -343,6 +465,8 @@ def author_kea_config_post(service):
             elif out.startswith("missingbinary:"):
                 binary = out[len("missingbinary:") :]
                 errors.append(f"❌ {name}: {binary} is not installed on this server — install it and try again.")
+            elif out.startswith("tlsmissing:"):
+                errors.append(f"❌ {name}: TLS file not found on this server: {out[len('tlsmissing:') :]}")
             elif out.startswith("testerror:"):
                 errors.append(f"❌ {name}: config test failed, nothing written. Error: {out[len('testerror:') :]}")
             else:

@@ -186,6 +186,45 @@ def autodetect_interfaces(ssh, service: str) -> list:
         return []
 
 
+def autodetect_addresses(ssh) -> list:
+    """v5.10.2 — global-scope IP addresses on the Kea host, for the
+    'bind the control API here' picker in direct-mode authoring. One
+    exec_command; never raises (`[]` on any failure, same contract as
+    autodetect_interfaces). Loopback / link-local are dropped."""
+    try:
+        _, stdout, _ = ssh.exec_command(
+            "ip -4 -o addr show scope global 2>/dev/null; ip -6 -o addr show scope global 2>/dev/null"
+        )
+        out = stdout.read().decode()
+        addrs = []
+        for line in out.splitlines():
+            parts = line.split()
+            # "2: eth0    inet 10.0.0.5/24 brd ..." → parts[2] == "inet", parts[3] == "10.0.0.5/24"
+            if len(parts) >= 4 and parts[2] in ("inet", "inet6"):
+                ip = parts[3].split("/")[0]
+                if ip in ("127.0.0.1", "::1") or ip.startswith("fe80") or ip in addrs:
+                    continue
+                addrs.append(ip)
+        return addrs
+    except Exception as e:
+        logger.warning(f"autodetect_addresses: {e}")
+        return []
+
+
+def redact_secrets(cfg: dict) -> dict:
+    """v5.10.2 — deep copy of a generated Kea config with every dict value
+    whose key is "password" replaced by "********". For the browser
+    preview: the server needs the real lease-database / control-socket
+    passwords to run `kea-dhcpX -t`, the human reviewing the JSON does
+    not. Generic so it covers hosts-database(s), control-sockets auth
+    clients, and whatever comes next."""
+    if isinstance(cfg, dict):
+        return {k: ("********" if k == "password" else redact_secrets(v)) for k, v in cfg.items()}
+    if isinstance(cfg, list):
+        return [redact_secrets(v) for v in cfg]
+    return cfg
+
+
 def _pool_for_cidr(cidr: str) -> str:
     """Whole-CIDR default pool (network address through broadcast/last
     address) — a conservative starting point the operator can narrow
@@ -227,7 +266,7 @@ def build_new_kea_config(
     control_socket_path: str,
     subnets: dict,
     hooks_dir: str = "/usr/lib/x86_64-linux-gnu/kea/hooks",
-    http_socket: dict = None,
+    api_socket: dict = None,
 ) -> dict:
     """
     Build a complete Dhcp4/Dhcp6 config dict from scratch. `subnets` is
@@ -238,13 +277,18 @@ def build_new_kea_config(
     Jen's own extensions.KEA_DB_PASS/KEA6_DB_PASS (Jen already knows
     it), never re-asked or left as a placeholder.
 
-    `http_socket` (v5.10.1) — when Jen is in `connection_mode = direct`
-    (Kea 3.2 removed the Control Agent), the generated config must expose
-    the daemon's own HTTP command socket or Jen can't reach it after
-    it's running. Pass {"address", "port", "user", "password"} and the
-    config gets a `control-sockets` LIST: the unix socket above (still
-    needed for kea-shell / some hooks) plus an `http` entry with basic
-    auth. When None (the `ca` default), the config keeps the singular
+    `api_socket` (v5.10.1, reworked v5.10.2) — when Jen is in
+    `connection_mode = direct` (Kea 3.2 removed the Control Agent), the
+    generated config must expose the daemon's own command socket or Jen
+    can't reach it after it's running. Pass a dict with:
+      scheme    "http" | "https" — the scheme Jen will actually dial
+      address   IP literal to bind (never a hostname; Kea binds it)
+      port      int, parsed from the API URL
+      user / password   basic-auth credentials
+      tls       (https only) {trust_anchor, cert_file, key_file, cert_required}
+    and the config gets a `control-sockets` LIST: the unix socket (still
+    needed for kea-shell / some hooks) plus the http/https entry. When
+    None (the `ca` default) the config keeps the singular
     `control-socket` map exactly as every prior release emitted.
     """
     timers = DEFAULT_TIMERS[service]
@@ -270,27 +314,35 @@ def build_new_kea_config(
                 }
             )
 
-    if http_socket:
-        # nosec B104 — "0.0.0.0" here is a value written into the Kea
-        # daemon's OWN config file, not a socket Jen binds. Kea listens on
-        # it so the Jen host (a different machine) can reach the command
-        # API; basic auth (required — the route refuses without creds)
-        # protects it, and the operator reviews the generated file in the
-        # preview step before it's applied.
-        socket_address = http_socket.get("address") or "0.0.0.0"  # nosec B104
+    if api_socket:
+        entry = {
+            "socket-type": api_socket["scheme"],  # "http" | "https"
+            # socket-address is an operator-chosen IP (the bind-address
+            # picker in the authoring form, never a Jen-side default) —
+            # written into the Kea daemon's OWN config, not a bind Jen
+            # performs. See the authoring route + the form's warnings.
+            "socket-address": api_socket["address"],
+            "socket-port": int(api_socket["port"]),
+            "authentication": {
+                "type": "basic",
+                "realm": "kea",
+                "clients": [{"user": api_socket["user"], "password": api_socket["password"]}],
+            },
+        }
+        if api_socket["scheme"] == "https":
+            t = api_socket["tls"]
+            entry.update(
+                {
+                    "trust-anchor": t["trust_anchor"],
+                    "cert-file": t["cert_file"],
+                    "key-file": t["key_file"],
+                    "cert-required": bool(t["cert_required"]),
+                }
+            )
         control = {
             "control-sockets": [
                 {"socket-type": "unix", "socket-name": control_socket_path},
-                {
-                    "socket-type": "http",
-                    "socket-address": socket_address,
-                    "socket-port": int(http_socket["port"]),
-                    "authentication": {
-                        "type": "basic",
-                        "realm": "kea",
-                        "clients": [{"user": http_socket["user"], "password": http_socket["password"]}],
-                    },
-                },
+                entry,
             ]
         }
     else:
@@ -399,7 +451,12 @@ def install_kea_service(ssh, service: str) -> tuple:
 
 
 def render_author_config_script(
-    service: str, kea_conf_path: str, config_dict: dict, allow_overwrite: bool, dry_run: bool = False
+    service: str,
+    kea_conf_path: str,
+    config_dict: dict,
+    allow_overwrite: bool,
+    dry_run: bool = False,
+    tls_paths: list = (),
 ) -> str:
     """
     Build the remote Python script that writes a brand-new Kea config,
@@ -417,9 +474,27 @@ def render_author_config_script(
       clobbering a real file. If it does exist and allow_overwrite is
       True, a backup is taken first, matching every other write path
       in this app.
+
+    tls_paths (v5.10.2) — [(path, "file"|"dir"), ...] for an https
+      control socket. `kea-dhcpX -t` validates syntax, NOT that the
+      cert/key/trust-anchor files exist, so the script checks them
+      itself — inside this one command, so the "one SSH command per
+      server" property holds — and prints 'tlsmissing:<path>' if one
+      is absent.
     """
     kea_binary = "kea-dhcp4" if service == "dhcp4" else "kea-dhcp6"
     config_json = json.dumps(config_dict, indent=2)
+    tls_check = (
+        f"""
+for _p, _kind in {list(tls_paths)!r}:
+    if not (os.path.exists(_p) if _kind == 'dir' else os.path.isfile(_p)):
+        os.unlink(tmp)
+        print('tlsmissing:' + _p)
+        sys.exit(1)
+"""
+        if tls_paths
+        else ""
+    )
 
     if dry_run:
         on_pass = "os.unlink(tmp)\nprint('preview-ok')"
@@ -445,7 +520,7 @@ tmp = path + '.jen_author_tmp'
 with open(tmp, 'w') as f:
     json.dump(cfg, f, indent=2)
 
-{exists_check}
+{exists_check}{tls_check}
 try:
     result = subprocess.run(['{kea_binary}', '-t', tmp], capture_output=True, text=True)
 except FileNotFoundError:

@@ -9,10 +9,14 @@
 <div class="alert alert-warning">⚠️ This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
 
 {% if direct_mode %}
-{% if http_socket_info %}
-<div class="alert alert-info">🔌 Jen is in <strong>direct</strong> connection mode, so the generated config includes an <code>http</code> control socket — <code>{{ http_socket_info.address }}:{{ http_socket_info.port }}</code>, basic auth as user <code>{{ http_socket_info.user }}</code> (port and credentials from your {{ 'Kea6' if service == 'dhcp6' else 'Kea' }} API settings) — alongside the unix socket below, so Jen can reach this daemon once it's running.</div>
-{% else %}
-<div class="alert alert-warning">⚠️ Jen is in <strong>direct</strong> connection mode but has no {{ 'Kea6' if service == 'dhcp6' else 'Kea' }} API username/password set — those are needed as the http control socket's basic-auth credentials. Set them under Settings → Kea first, or the preview will refuse.</div>
+<div class="alert alert-info">🔌 Jen is in <strong>direct</strong> connection mode, so the generated config gets a
+<code>{{ endpoint_scheme }}</code> control socket alongside the unix socket — the exact endpoint Jen will
+dial for {{ target_server.name or target_server.ssh_host }} ({{ endpoint_host or 'its API URL' }}), with the
+bind address you choose below. <code>cert-required</code> will be
+{% if cert_required %}<strong>true</strong> — Jen presents its client certificate (Settings → Kea){% else %}<strong>false</strong> — no client certificate is configured in Settings → Kea, so Kea will accept any client that has the password{% endif %}.
+Each server is authored from its <em>own</em> API settings; if your servers need different bind addresses, author them one at a time.</div>
+{% if endpoint_scheme == 'http' %}
+<div class="alert alert-warning">⚠️ The endpoint is plain <code>http</code>. <strong>Credentials are transmitted without encryption.</strong> Restrict this port to the Jen host or use HTTPS.</div>
 {% endif %}
 {% endif %}
 
@@ -39,8 +43,41 @@
         <div class="form-group">
             <label>{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
             <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" style="font-family:monospace;">
-            <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the http socket above for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
+            <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the {{ endpoint_scheme }} socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
         </div>
+        {% if direct_mode %}
+        <div class="form-group">
+            <label>Control API bind address</label>
+            <select name="bind_address" id="f-bind">
+                {% for a in bind_options %}<option value="{{ a }}" {% if a == bind_preselect %}selected{% endif %}>{{ a }}{% if a == endpoint_host %} — Jen connects here{% endif %}</option>{% endfor %}
+                <option value="0.0.0.0" {% if not bind_options and not bind_preselect %}selected{% endif %}>0.0.0.0 — all interfaces (not recommended)</option>
+            </select>
+            <input type="text" name="bind_address_custom" id="f-bind-custom" placeholder="or type an address" style="font-family:monospace;margin-top:6px;">
+            <div class="form-hint" id="f-bind-hint">
+                {% if endpoint_host and not endpoint_host_is_ip %}Jen connects to <code>{{ endpoint_host }}</code>, which is a hostname — pick or type the IP the daemon should bind.
+                {% elif not bind_options %}No global addresses were detected on this host — type the management IP the daemon should bind.
+                {% else %}The IP Kea's control API should listen on. Prefer a management address firewalled to the Jen host.{% endif %}
+                Same for every server in one submission; author them one at a time if they differ.
+            </div>
+        </div>
+        {% if endpoint_scheme == 'https' %}
+        <div class="form-row">
+            <div class="form-group">
+                <label>TLS certificate file</label>
+                <input type="text" name="tls_cert_file" id="f-tls-cert" value="/etc/kea/tls/server.crt" style="font-family:monospace;">
+            </div>
+            <div class="form-group">
+                <label>TLS key file</label>
+                <input type="text" name="tls_key_file" id="f-tls-key" value="/etc/kea/tls/server.key" style="font-family:monospace;">
+            </div>
+            <div class="form-group">
+                <label>Trust anchor (CA file or directory)</label>
+                <input type="text" name="tls_trust_anchor" id="f-tls-ca" value="/etc/kea/tls/ca.crt" style="font-family:monospace;">
+            </div>
+        </div>
+        <div class="form-hint" style="margin-bottom:14px;">Paths on the Kea host — Kea's own server certificate + key, and the CA that signed Jen's client certificate (trust-anchor). See the Admin Guide → Direct control sockets → TLS. <code>cert-required</code> will be <strong>{{ 'true (Jen presents /etc/jen/ssl/…)' if cert_required else 'false (no client certificate configured in Settings → Kea)' }}</strong>.</div>
+        {% endif %}
+        {% endif %}
         <div class="form-row">
             <div class="form-group">
                 <label>DB Host</label>
@@ -114,21 +151,30 @@ async function showPreview() {
             serversDiv.innerHTML = '<div style="color:var(--danger);">❌ ' + (data.error || 'Could not validate.') + '</div>';
             return;
         }
-        jsonDiv.textContent = JSON.stringify(data.config, null, 2);
+        jsonDiv.textContent = data.config ? JSON.stringify(data.config, null, 2) : '(no config generated — see per-server results)';
         if (!data.servers || data.servers.length === 0) {
             serversDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured.</span>';
             return;
         }
+        var multi = data.servers.length > 1;
         serversDiv.innerHTML = data.servers.map(function(s) {
             var icon = s.ok ? '✅' : '❌';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
-            var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+            var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
+            if (s.warning) {
+                line += '<div style="color:var(--warning);margin-left:20px;">⚠️ ' + escapeHtml(s.warning) + '</div>';
+            }
             if (s.missing_binary) {
                 line += '<div style="margin:4px 0 8px 20px;">' +
                     '<button type="button" class="btn btn-sm btn-secondary" onclick="installBinary(this, ' +
-                    JSON.stringify(s.missing_binary) + ')">📦 Install ' + s.missing_binary + ' now</button>' +
+                    JSON.stringify(s.missing_binary) + ')">📦 Install ' + escapeHtml(s.missing_binary) + ' now</button>' +
                     '<span class="install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span>' +
                     '</div>';
+            }
+            if (multi && s.config) {
+                line += '<details style="margin:2px 0 8px 20px;"><summary style="cursor:pointer;font-size:11px;">config for ' + escapeHtml(s.name) + '</summary>' +
+                    '<pre style="font-size:10px;background:var(--surface);border-radius:var(--radius);padding:8px;overflow:auto;max-height:220px;">' +
+                    escapeHtml(JSON.stringify(s.config, null, 2)) + '</pre></details>';
             }
             return line;
         }).join('');
@@ -168,6 +214,23 @@ async function installBinary(btn, binary) {
         btn.disabled = false;
     }
 }
+(function () {
+    var sel = document.getElementById('f-bind');
+    var hint = document.getElementById('f-bind-hint');
+    if (!sel || !hint) return;
+    sel.addEventListener('change', function () {
+        var old = document.getElementById('f-bind-warn');
+        if (old) old.remove();
+        if (sel.value === '0.0.0.0') {
+            var w = document.createElement('div');
+            w.id = 'f-bind-warn';
+            w.style.cssText = 'color:var(--danger);font-size:12px;margin-top:4px;';
+            w.textContent = 'Binds the control API on every interface. Only do this on an isolated management network.';
+            hint.parentNode.insertBefore(w, hint.nextSibling);
+        }
+    });
+})();
+
 function submitForm() {
     var form = document.getElementById('author-kea-form');
     var hidden = document.createElement('input');

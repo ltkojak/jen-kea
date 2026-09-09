@@ -6,6 +6,7 @@ jen/services/kea_authoring.py — generating a starting kea-dhcp4/6 config when 
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
+import base64
 import json
 
 import pytest
@@ -243,9 +244,8 @@ class TestBuildNewKeaConfig:
         assert ids == {1, 7}
 
     def test_ca_mode_keeps_the_singular_control_socket_map(self):
-        """v5.10.1 — no http_socket (the ca default) must produce exactly
-        what every prior release did: the singular control-socket map,
-        never a control-sockets list."""
+        """api_socket=None (the ca default) must produce exactly what
+        every prior release did: the singular control-socket map."""
         from jen.services.kea_authoring import build_new_kea_config
 
         lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
@@ -254,35 +254,101 @@ class TestBuildNewKeaConfig:
         assert section["control-socket"] == {"socket-type": "unix", "socket-name": "/run/kea/kea4.sock"}
         assert "control-sockets" not in section
 
-    def test_direct_mode_emits_control_sockets_list_with_http_entry(self):
+    def test_direct_http_socket_is_scheme_typed_with_no_tls_keys(self):
         from jen.services.kea_authoring import build_new_kea_config
 
         lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
-        http_socket = {"address": "0.0.0.0", "port": 8004, "user": "kea-api", "password": "s3cret"}
-        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/kea/kea4.sock", {}, http_socket=http_socket)
-        section = cfg["Dhcp4"]
-        assert "control-socket" not in section
-        socks = section["control-sockets"]
-        assert {s["socket-type"] for s in socks} == {"unix", "http"}
-        unix = next(s for s in socks if s["socket-type"] == "unix")
-        assert unix["socket-name"] == "/run/kea/kea4.sock"  # kept alongside
-        http = next(s for s in socks if s["socket-type"] == "http")
-        assert http["socket-address"] == "0.0.0.0"
-        assert http["socket-port"] == 8004
-        assert http["authentication"] == {
-            "type": "basic",
-            "realm": "kea",
-            "clients": [{"user": "kea-api", "password": "s3cret"}],
+        sock = {
+            "scheme": "http",
+            "address": "10.0.0.5",
+            "port": 8004,
+            "user": "kea-api",
+            "password": "s3cret",
+            "tls": None,
         }
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/kea/kea4.sock", {}, api_socket=sock)
+        socks = cfg["Dhcp4"]["control-sockets"]
+        assert "control-socket" not in cfg["Dhcp4"]
+        assert {s["socket-type"] for s in socks} == {"unix", "http"}
+        http = next(s for s in socks if s["socket-type"] == "http")
+        assert http["socket-address"] == "10.0.0.5"
+        assert http["socket-port"] == 8004
+        assert "trust-anchor" not in http and "cert-required" not in http
+        assert http["authentication"]["clients"] == [{"user": "kea-api", "password": "s3cret"}]
+
+    def test_direct_https_socket_carries_the_tls_keys(self):
+        from jen.services.kea_authoring import build_new_kea_config
+
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        sock = {
+            "scheme": "https",
+            "address": "10.0.0.5",
+            "port": 8004,
+            "user": "ka",
+            "password": "pw",
+            "tls": {
+                "trust_anchor": "/etc/kea/tls/ca",
+                "cert_file": "/etc/kea/tls/s.crt",
+                "key_file": "/etc/kea/tls/s.key",
+                "cert_required": False,
+            },
+        }
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/x.sock", {}, api_socket=sock)
+        https = next(s for s in cfg["Dhcp4"]["control-sockets"] if s["socket-type"] == "https")
+        assert https["trust-anchor"] == "/etc/kea/tls/ca"
+        assert https["cert-file"] == "/etc/kea/tls/s.crt"
+        assert https["key-file"] == "/etc/kea/tls/s.key"
+        assert https["cert-required"] is False
 
     def test_direct_mode_still_never_includes_ha(self):
         from jen.services.kea_authoring import build_new_kea_config
 
         lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
-        http_socket = {"port": 8006, "user": "u", "password": "p"}
-        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", {}, http_socket=http_socket)
+        sock = {"scheme": "http", "address": "10.0.0.5", "port": 8006, "user": "u", "password": "p", "tls": None}
+        cfg = build_new_kea_config("dhcp6", ["eth0"], lease_db, "/run/x.sock", {}, api_socket=sock)
         libs = [h["library"] for h in cfg["Dhcp6"]["hooks-libraries"]]
         assert not any("libdhcp_ha" in lib for lib in libs)
+
+
+class TestRedactSecrets:
+    def test_replaces_every_password_key(self):
+        from jen.services.kea_authoring import redact_secrets
+
+        cfg = {
+            "Dhcp4": {
+                "lease-database": {"password": "dbpw", "host": "h"},
+                "control-sockets": [
+                    {"socket-type": "unix"},
+                    {"authentication": {"clients": [{"user": "u", "password": "sockpw"}]}},
+                ],
+            }
+        }
+        red = redact_secrets(cfg)
+        assert red["Dhcp4"]["lease-database"]["password"] == "********"
+        assert red["Dhcp4"]["control-sockets"][1]["authentication"]["clients"][0]["password"] == "********"
+        assert red["Dhcp4"]["lease-database"]["host"] == "h"  # non-secret untouched
+        assert cfg["Dhcp4"]["lease-database"]["password"] == "dbpw"  # deep copy, original intact
+
+
+class TestAutodetectAddresses:
+    def test_parses_ip_o_addr_and_drops_loopback(self):
+        from jen.services.kea_authoring import autodetect_addresses
+
+        out = (
+            "2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0\n"
+            "3: eth0    inet6 2001:db8::5/64 scope global\n"
+            "1: lo    inet 127.0.0.1/8 scope host lo\n"
+        )
+        assert autodetect_addresses(FakeSSHClient([(out, "")])) == ["10.0.0.5", "2001:db8::5"]
+
+    def test_empty_on_ssh_failure(self):
+        from jen.services.kea_authoring import autodetect_addresses
+
+        class Boom:
+            def exec_command(self, cmd):
+                raise RuntimeError("no ssh")
+
+        assert autodetect_addresses(Boom()) == []
 
 
 class TestSocketPortFromUrl:
@@ -493,6 +559,30 @@ class TestAuthorKeaConfigRoute:
         assert b"eth0" in resp.data
         assert b"Found an existing" in resp.data
 
+    def test_direct_mode_form_renders_bind_picker_preselecting_the_endpoint_ip(self, logged_in_client, monkeypatch):
+        """v5.10.2 — direct mode: autodetect_addresses runs (a 4th
+        exec_command on the same session — the fake must not run dry),
+        the bind picker preselects the endpoint IP."""
+        server = {"id": 1, "name": "s1", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://10.0.0.5:8004")
+        addr_out = "2: eth0    inet 10.0.0.5/24 scope global eth0\n3: eth1    inet 172.16.0.9/24 scope global eth1\n"
+        import jen.services.kea6 as kea6_module
+
+        # sibling-config read, autodetect_interfaces, ca-socket read, autodetect_addresses
+        monkeypatch.setattr(
+            kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("", ""), ("", ""), ("", ""), (addr_out, "")])
+        )
+        resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp4")
+        assert resp.status_code == 200
+        body = resp.data
+        assert b'name="bind_address"' in body
+        assert b'<option value="10.0.0.5" selected>' in body
+        assert b'value="172.16.0.9"' in body
+        assert b"Credentials are transmitted without encryption" in body  # http warning
+
 
 class TestAuthorKeaConfigPreviewRoute:
     def test_requires_superadmin(self, client, db):
@@ -535,57 +625,164 @@ class TestAuthorKeaConfigPreviewRoute:
         assert data["servers"][0]["ok"] is True
         assert len(fake_ssh.calls) == 1
 
-    def test_direct_mode_preview_config_carries_the_http_control_socket(self, logged_in_client, monkeypatch):
-        """v5.10.1 — in connection_mode = direct the previewed (and later
-        written) config must expose the daemon's own http command socket,
-        or Jen can't reach the Kea it just authored."""
-        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+    # ── v5.10.2 direct-mode authoring ──────────────────────────────────────
+    def _direct_form(self, **over):
+        f = {
+            "interfaces": "eth0",
+            "control_socket": "/run/kea/kea4-ctrl-socket",
+            "db_host": "h",
+            "db_user": "u",
+            "db_name": "kea",
+            "subnets": "1 = LAN, 192.168.1.0/24",
+            "bind_address": "10.0.0.5",
+        }
+        f.update(over)
+        return f
+
+    def _direct_setup(self, monkeypatch, servers, connect_map=None):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
         monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        import jen.services.kea6 as kea6_module
+
+        cmap = connect_map or {}
+
+        def _connect(server):
+            return cmap.get(server.get("name"), FakeSSHClient([("preview-ok", "")]))
+
+        monkeypatch.setattr(kea6_module, "_connect_ssh", _connect)
+
+    def test_direct_preview_http_socket_from_this_servers_url(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
         monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
         monkeypatch.setattr(extensions, "KEA_API_USER", "kea-api")
         monkeypatch.setattr(extensions, "KEA_API_PASS", "s3cret")
-        import jen.services.kea6 as kea6_module
-
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("preview-ok", "")]))
-        resp = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp4/preview",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea/kea4-ctrl-socket",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = LAN, 192.168.1.0/24",
-            },
-        )
-        assert resp.status_code == 200
-        socks = resp.get_json()["config"]["Dhcp4"]["control-sockets"]
+        self._direct_setup(monkeypatch, [srv])
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+        ).get_json()
+        assert data["servers"][0]["ok"] is True
+        socks = data["servers"][0]["config"]["Dhcp4"]["control-sockets"]
         http = next(s for s in socks if s["socket-type"] == "http")
         assert http["socket-port"] == 8004
-        assert http["authentication"]["clients"] == [{"user": "kea-api", "password": "s3cret"}]
+        assert http["socket-address"] == "10.0.0.5"
+        # redacted in the browser payload
+        assert http["authentication"]["clients"][0]["password"] == "********"
 
-    def test_direct_mode_without_api_credentials_is_refused(self, logged_in_client, monkeypatch):
-        server = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
-        monkeypatch.setattr(extensions, "KEA_API_USER", "")
-        monkeypatch.setattr(extensions, "KEA_API_PASS", "")
-        resp = logged_in_client.post(
+    def test_direct_preview_is_per_server_not_the_primarys_socket(self, logged_in_client, monkeypatch):
+        primary = {"id": 1, "name": "p1", "ssh_host": "1.1.1.1", "api_url": "http://1.1.1.1:8004"}
+        standby = {
+            "id": 2,
+            "name": "s2",
+            "ssh_host": "2.2.2.2",
+            "api_url": "http://2.2.2.2:9004",
+            "api_user": "u2",
+            "api_pass": "p2",
+        }
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.1.1.1:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u1")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p1")
+        self._direct_setup(monkeypatch, [primary, standby])
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        p_http = next(s for s in by_name["p1"]["config"]["Dhcp4"]["control-sockets"] if s["socket-type"] == "http")
+        s_http = next(s for s in by_name["s2"]["config"]["Dhcp4"]["control-sockets"] if s["socket-type"] == "http")
+        assert p_http["socket-port"] == 8004
+        assert s_http["socket-port"] == 9004  # standby's OWN port, not the primary's
+        assert data["all_passed"] is True
+
+    def test_direct_preview_one_server_missing_a_port_only_fails_that_one(self, logged_in_client, monkeypatch):
+        good = {"id": 1, "name": "good", "ssh_host": "1.1.1.1", "api_url": "http://1.1.1.1:8004"}
+        bad = {"id": 2, "name": "bad", "ssh_host": "2.2.2.2", "api_url": "http://2.2.2.2"}  # no port
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.1.1.1:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
+        self._direct_setup(monkeypatch, [good, bad])
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        assert by_name["good"]["ok"] is True
+        assert by_name["bad"]["ok"] is False
+        assert "explicit port" in by_name["bad"]["message"]
+        assert data["all_passed"] is False
+
+    def test_direct_preview_hostname_bind_address_is_400(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004"}
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
+        self._direct_setup(monkeypatch, [srv])
+        r = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp4/preview",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea/kea4-ctrl-socket",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = LAN, 192.168.1.0/24",
-            },
+            data=self._direct_form(bind_address="kea.example.com"),
         )
-        assert resp.status_code == 400
-        err = resp.get_json()["error"]
-        assert "username" in err and "password" in err
+        assert r.status_code == 400
+        assert "IP address" in r.get_json()["error"]
+
+    def test_direct_preview_0000_bind_is_a_warning_not_a_block(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004"}
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
+        self._direct_setup(monkeypatch, [srv])
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address="0.0.0.0"),
+        ).get_json()
+        assert data["servers"][0]["ok"] is True
+        assert data["all_passed"] is True
+        assert "every interface" in data["servers"][0]["warning"]
+
+    def test_direct_preview_https_needs_tls_paths(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "https://1.2.3.4:8004"}
+        monkeypatch.setattr(extensions, "KEA_API_URL", "https://1.2.3.4:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
+        self._direct_setup(monkeypatch, [srv])
+        r = logged_in_client.post("/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form())
+        assert r.status_code == 400
+        assert "https" in r.get_json()["error"]
+
+    def test_direct_preview_https_with_tls_paths_and_tlsmissing(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "https://1.2.3.4:8004"}
+        monkeypatch.setattr(extensions, "KEA_API_URL", "https://1.2.3.4:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "u")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
+        self._direct_setup(monkeypatch, [srv], {"s1": FakeSSHClient([("tlsmissing:/etc/kea/tls/s.key", "")])})
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(
+                tls_cert_file="/etc/kea/tls/s.crt",
+                tls_key_file="/etc/kea/tls/s.key",
+                tls_trust_anchor="/etc/kea/tls/ca.crt",
+            ),
+        ).get_json()
+        assert data["servers"][0]["ok"] is False
+        assert "TLS file not found" in data["servers"][0]["message"]
+        https = next(s for s in data["servers"][0]["config"]["Dhcp4"]["control-sockets"] if s["socket-type"] == "https")
+        assert https["cert-file"] == "/etc/kea/tls/s.crt"
+
+    def test_direct_preview_never_leaks_a_password_to_the_browser(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004"}
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "kea-api")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "s3cretsock")
+        monkeypatch.setattr(extensions, "KEA_DB_PASS", "s3cretdb")
+        fake = FakeSSHClient([("preview-ok", "")])
+        self._direct_setup(monkeypatch, [srv], {"s1": fake})
+
+        body = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+        ).get_data(as_text=True)
+        assert "s3cretsock" not in body and "s3cretdb" not in body
+
+        # but the REAL passwords reached the remote script
+        b64 = fake.calls[0].split("echo ")[1].split(" |")[0]
+        script = base64.b64decode(b64).decode()
+        assert "s3cretsock" in script and "s3cretdb" in script
 
 
 class TestDetectInstalledKeaServices:
