@@ -88,15 +88,16 @@ class TestInstallerWritesEnvNotJenConfig:
 
 
 class TestEnvValueEscaping:
-    """v5.8.0 — Docker Compose interpolates unquoted .env values, so a
-    password with $, ${..}, a backtick etc. gets mangled or emptied.
-    install.sh's env_value() must quote every generated value."""
+    """v5.8.1 — env_value() emits BARE for inert values (works on every
+    Compose version, and un-breaks the reuse-detection grep) and only
+    quotes when the value actually contains $, whitespace, #, a quote,
+    or a backslash. The Docker path requires Compose >= 2.24."""
 
     _SH = (REPO / "install.sh").read_text(encoding="utf-8")
 
-    def test_every_credential_line_in_the_env_heredoc_is_escaped(self):
+    def test_every_credential_line_in_the_env_heredoc_uses_env_value(self):
         heredoc = self._SH[self._SH.index('cat > "./.env"') : self._SH.index("\nENVEOF")]
-        sensitive = [
+        for key in (
             "JEN_KEA_API_PASS",
             "JEN_KEA_DB_PASS",
             "JEN_DB_PASS",
@@ -104,11 +105,25 @@ class TestEnvValueEscaping:
             "JEN_INITIAL_ADMIN_PASSWORD",
             "MYSQL_ROOT_PASSWORD",
             "JEN_MYSQL_PASSWORD",
-        ]
-        for key in sensitive:
+        ):
             assert re.search(rf"^{key}=\$\(env_value ", heredoc, re.M), f"{key} not run through env_value()"
 
-    def test_env_value_helper_quotes_nasty_inputs(self, tmp_path):
+    def test_docker_path_requires_compose_2_24(self):
+        assert "2.24.0" in self._SH
+        assert "too old" in self._SH
+
+    def test_env_has_database_mode_marker(self):
+        heredoc = self._SH[self._SH.index('cat > "./.env"') : self._SH.index("\nENVEOF")]
+        assert re.search(r"^JEN_DATABASE_MODE=", heredoc, re.M)
+        assert 'db_mode="external"' in self._SH and 'db_mode="bundled"' in self._SH
+
+    def test_reuse_detection_reads_the_marker_not_credentials(self):
+        fn = self._SH[self._SH.index("_docker_pick_compose_and_run()") :]
+        fn = fn[: fn.index("\n}\n")]
+        assert "JEN_DATABASE_MODE" in fn
+        assert "JEN_MYSQL_PASSWORD=.." not in fn  # the buggy grep is gone
+
+    def test_env_value_helper_behaviour(self, tmp_path):
         import shutil
         import subprocess
 
@@ -117,14 +132,15 @@ class TestEnvValueEscaping:
 
             pytest.skip("bash not available")
         fn = re.search(r"^env_value\(\) \{.*?^\}", self._SH, re.S | re.M).group(0)
-        # Feed test values through a file (one per line) rather than argv —
-        # argv round-tripping through subprocess is not reliable on Windows.
         cases = {
-            "plainhex": "'plainhex'",
-            "a b": "'a b'",
-            "p$ss": "'p$ss'",  # single-quoted -> $ can't interpolate
-            "p${braces}x": "'p${braces}x'",
-            "h#h": "'h#h'",
+            "": "",  # empty -> nothing
+            "jen-mysql": "jen-mysql",  # inert -> bare (un-breaks reuse detection)
+            "5050": "5050",
+            "af3c9e0011": "af3c9e0011",  # hex password -> bare
+            "http://kea:8000/": "http://kea:8000/",
+            "p$ss": "'p$ss'",  # $ -> quoted
+            "a b": "'a b'",  # space -> quoted
+            "h#h": "'h#h'",  # # -> quoted
             'd"q': "'d\"q'",
             "b\\s": "'b\\s'",
             "it's": '"it\'s"',  # has ' -> double-quote branch
