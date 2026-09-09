@@ -23,6 +23,12 @@ OS upgrade that stranded it — `sudo ./install.sh --repair` rebuilds)
 falls through to the system interpreter. `JEN_NO_VENV_REEXEC=1` opts
 out. Docker is unchanged — the container is the isolation.
 
+The venv is left `root:root`, byte-compiled at install time: the
+`www-data` service account reads and executes it but can't write it, so
+a compromised web process can't plant persistent code in a package Jen
+loads on every restart. Only `install.sh` and the root self-updater
+touch it.
+
 ### Transactional self-updater
 
 `jen-update-root.py` went from *replace `/opt/jen`, then `pip`

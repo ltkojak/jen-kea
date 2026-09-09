@@ -56,8 +56,11 @@ class TestInstallShVenv:
     def test_pulls_python3_venv_apt_package_when_missing(self):
         assert "python3-venv" in INSTALL_SH
 
-    def test_venv_is_chowned_to_service_user(self):
-        assert 'chown -R "$JEN_USER:$JEN_USER" "$VENV_DIR"' in INSTALL_SH
+    def test_venv_is_left_root_owned_not_writable_by_the_service(self):
+        # A www-data-writable venv is a persistence foothold — install.sh
+        # and the root updater own it, the service only reads/executes it.
+        assert 'chown -R root:root "$VENV_DIR"' in INSTALL_SH
+        assert 'chown -R "$JEN_USER:$JEN_USER" "$VENV_DIR"' not in INSTALL_SH
 
     def test_setup_venv_runs_in_install_and_repair_flows(self):
         # both the standard main() flow and --repair call it (the def

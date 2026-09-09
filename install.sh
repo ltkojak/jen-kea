@@ -341,6 +341,12 @@ install_dependencies() {
 # install/upgrade; `venv --upgrade` re-points an existing venv at the
 # current system python (so an OS python bump doesn't strand it), and pip
 # is a fast no-op when the pins are already satisfied.
+#
+# The venv is left root:root — the www-data service account only needs to
+# read and execute the interpreter and site-packages, never write them.
+# A writable venv would be a persistence foothold for a compromised
+# www-data (swap a package, Jen runs it every restart). Only this script
+# and the root self-updater ever modify it.
 setup_venv() {
     blank
     echo -e "  ${B}${C}PYTHON ENVIRONMENT${NC}"
@@ -375,10 +381,16 @@ setup_venv() {
         fatal "pip install into the venv failed — see output above"
     fi
 
+    # Byte-compile now, as root — the venv is not writable by www-data, so
+    # the service can't lazily write .pyc on first import.
+    "$VENV_PY" -m compileall -q "$VENV_DIR/lib" >/dev/null 2>&1 || true
+
     # PYBIN now points at the venv for the rest of this run (admin
     # password hashing, template/module verification).
     PYBIN="$VENV_PY"
-    chown -R "$JEN_USER:$JEN_USER" "$VENV_DIR" 2>/dev/null || true
+    # Deliberately root:root — see the header comment. Undo any prior
+    # www-data ownership from a 5.8.0 pre-release install.
+    chown -R root:root "$VENV_DIR" 2>/dev/null || true
     blank
 }
 

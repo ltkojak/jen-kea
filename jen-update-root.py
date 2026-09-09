@@ -588,8 +588,11 @@ def main():
 
         if not install_python_dependencies(os.path.join(extracted, "requirements.txt"), python_bin):
             return 1
+        # The venv stays root:root (this script runs as root; www-data only
+        # reads/executes it — a writable venv is a persistence foothold).
         if os.path.realpath(python_bin) != os.path.realpath(SYSTEM_PYTHON):
-            subprocess.run(["/bin/chown", "-R", "www-data:www-data", VENV_DIR], check=False)
+            subprocess.run(["/bin/chown", "-R", "root:root", VENV_DIR], check=False)
+            subprocess.run([python_bin, "-m", "compileall", "-q", os.path.join(VENV_DIR, "lib")], capture_output=True)
 
         if not validate_staged_release(extracted, python_bin):
             return 1

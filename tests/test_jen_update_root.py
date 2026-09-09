@@ -342,6 +342,15 @@ class TestEnsureVenv:
         ):
             assert jen_update_root.ensure_venv(str(tmp_path / "venv")) is None
 
+    def test_updater_keeps_the_venv_root_owned(self):
+        # The venv must stay root-owned — a www-data-writable venv is a
+        # persistence foothold (module docstring / ARCHITECTURE §6).
+        src = _SCRIPT_PATH.read_text()
+        venv_chowns = [ln for ln in src.splitlines() if "chown" in ln and "VENV_DIR" in ln]
+        assert venv_chowns, "expected the updater to assert venv ownership"
+        assert all("root:root" in ln for ln in venv_chowns)
+        assert not any("www-data" in ln for ln in venv_chowns)
+
 
 class TestValidateStagedRelease:
     def _staged(self, tmp_path):

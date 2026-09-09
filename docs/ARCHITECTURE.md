@@ -454,6 +454,13 @@ venv that isn't there yet, and a missing or broken venv falls through to
 the system interpreter (with the werkzeug fallback still behind that).
 Docker doesn't use any of this — the container is the isolation.
 
+The venv is **`root:root`** — the `www-data` service account reads and
+executes the interpreter and site-packages but never writes them (it's
+byte-compiled as root at install time so there's no lazy `.pyc` write).
+A writable venv would be a persistence foothold for a compromised
+`www-data`: swap a package's code and Jen runs it on every restart. Only
+`install.sh` and the root self-updater modify it.
+
 *The transactional updater.* `jen-update-root.py` was
 *replace-then-try-deps*: overwrite `/opt/jen`, then `pip` non-fatally,
 then restart — which silently shipped a half-updated app if a release
