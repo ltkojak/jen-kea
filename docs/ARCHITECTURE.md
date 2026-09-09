@@ -18,18 +18,30 @@ that manages Kea DHCP servers directly:
 └──────┬───────┘                                └──────────────┘
        │ HTTPS
        ▼
-┌─────────────────┐   Kea Control Agent API   ┌───────────────┐
-│   Jen (Flask)    │──────────────────────────►│  Kea DHCP4    │
+┌─────────────────┐   Kea command HTTP API    ┌───────────────┐
+│   Jen (Flask)    │──────────────────────────►│  Kea DHCP4/6  │
 │   run.py         │   SSH (config push,       │  Server(s)    │
 │   www-data user   │   restarts, log reads)    │               │
 └─────────────────┘◄──────────────────────────┘└───────────────┘
 ```
 
+The command HTTP API is reached one of two ways, chosen by
+`[kea] connection_mode` (`jen/services/kea.py`):
+
+- **`ca`** (default) — one `kea-ctrl-agent` endpoint routes commands to
+  each daemon by a `"service"` field. Every release before v5.10.0 did
+  only this.
+- **`direct`** — Jen talks to each daemon's own `http` control socket.
+  ISC deprecated the Control Agent in Kea 3.0 and **removed it in 3.2**,
+  so `direct` is the only option on current Kea. `kea-dhcp4` and
+  `kea-dhcp6` each get their own URL (`[kea] api_url` / `[kea6] api_url`),
+  and the `"service"` field is omitted.
+
 Deliberately **not** an agent-based architecture. There's no separate
 process running on each Kea server the way Stork's `stork-agent` works —
-Jen connects out to each Kea server directly, either via the Kea Control
-Agent's HTTP API (for reads/live status) or via SSH (for config file
-changes and service restarts). This is a real, considered tradeoff:
+Jen connects out to each Kea server directly, either via the command HTTP
+API (for reads/live status) or via SSH (for config file changes and
+service restarts). This is a real, considered tradeoff:
 
 - **Why:** a single-process, no-agent design is dramatically simpler to
   deploy and maintain for a solo admin managing a handful of servers. No
@@ -299,6 +311,10 @@ v6 connection value falls back to its v4 counterpart at config-load time
 (`jen/config.py`'s `AppConfig.apply()`) rather than requiring separate
 credentials — the common real-world case is one Kea Control Agent
 proxying both `kea-dhcp4` and `kea-dhcp6`, and one shared MySQL database.
+The one exception (v5.10.0): in `connection_mode = direct` there is **no**
+fallback for `[kea6] api_url` — a `kea-dhcp4` daemon can't answer DHCPv6
+commands, so v6 needs its own control-socket URL or v6 API calls return
+an error dict.
 
 ### 5.2 Data model
 

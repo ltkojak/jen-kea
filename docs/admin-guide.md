@@ -9,8 +9,8 @@ This guide covers installation, configuration, and administration of Jen.
 Before starting Jen for the first time, work through this checklist:
 
 **On your Kea server:**
-- [ ] Kea DHCP 3.0+ installed and running
-- [ ] Kea Control Agent running on port 8000 (or your chosen port)
+- [ ] Kea DHCP installed and running
+- [ ] A reachable command API — either the Control Agent on port 8000 (Kea 3.0/3.1), **or** an `http` `control-sockets` entry on each daemon (Kea 2.7.2+; **required for 3.2+**, which removed the Control Agent — see "Direct control sockets")
 - [ ] Kea MySQL backend configured
 - [ ] Remote MySQL access enabled (`bind-address = 0.0.0.0` in MariaDB config)
 - [ ] MySQL user created for Jen's remote access to the `kea` database
@@ -98,9 +98,69 @@ All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root
 
 | Key | Description | Example |
 |---|---|---|
-| `api_url` | Kea Control Agent URL | `http://YOUR-KEA-SERVER:8000` |
+| `connection_mode` | `ca` (default) or `direct` — see "Direct control sockets" below | `ca` |
+| `api_url` | In `ca` mode: the Control Agent URL. In `direct` mode: kea-dhcp4's own HTTP control socket. | `http://YOUR-KEA-SERVER:8000` |
 | `api_user` | API authentication username | `kea-api` |
 | `api_pass` | API authentication password | `your-password` |
+| `api_ca` | Optional. Path on the Jen host to a CA bundle — pins TLS verification for an `https://` `api_url`. | `/etc/jen/ssl/kea-ca.pem` |
+| `api_tls_verify` | Optional, default `true`. Set `false` to skip TLS verification for an `https://` `api_url` (only sensible with a self-signed cert and no `api_ca`). | `true` |
+
+`connection_mode`, `api_ca`, and `api_tls_verify` are all optional and
+backward-compatible — an existing `jen.config` with none of them behaves
+exactly as it did before v5.10.0.
+
+### Direct control sockets (Kea 2.7.2+ / required for 3.2+)
+
+ISC **deprecated the Control Agent (`kea-ctrl-agent`) in Kea 3.0** and
+**removed it entirely in Kea 3.2**. Since Kea 2.7.2 each daemon
+(`kea-dhcp4`, `kea-dhcp6`, `kea-dhcp-ddns`) exposes its own HTTP command
+API through a `control-sockets` list. Set `connection_mode = direct` and
+point `api_url` at the kea-dhcp4 socket.
+
+Add an `http` entry to `control-sockets` in `kea-dhcp4.conf` — **keep the
+existing `unix` entry alongside it** (`kea-shell` and some hooks still
+use it):
+
+```json
+"control-sockets": [
+  { "socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket" },
+  {
+    "socket-type": "http",
+    "socket-address": "0.0.0.0",
+    "socket-port": 8004,
+    "authentication": {
+      "type": "basic",
+      "realm": "kea",
+      "clients": [ { "user": "kea-api", "password": "your-password" } ]
+    }
+  }
+]
+```
+
+Then in `jen.config`:
+
+```ini
+[kea]
+connection_mode = direct
+api_url  = http://YOUR-KEA-SERVER:8004
+api_user = kea-api
+api_pass = your-password
+```
+
+Notes:
+
+- ISC's own example uses port **8004** for `kea-dhcp4`. Jen's docs use
+  **8006** for `kea-dhcp6` by convention — set it under `[kea6] api_url`
+  (there is no fallback to the v4 URL in direct mode; a kea-dhcp4 daemon
+  cannot answer DHCPv6 commands).
+- Basic auth is the only authentication type Kea's HTTP sockets support.
+  For TLS, add `trust-anchor` / `cert-file` / `key-file` to the `http`
+  entry and use an `https://` `api_url` with `api_ca`.
+- **Never point `api_url` at an HA peer port.** In Kea 3.2 the HA hook's
+  `restrict-commands` defaults to `true`, so the HA listener only accepts
+  HA commands — Jen must talk to each daemon's *own* control socket.
+- The **Probe** button on Settings → Kea reports the running Kea version
+  and whether `ca` or `direct` answered, with a recommendation.
 
 ### [kea_db] section
 

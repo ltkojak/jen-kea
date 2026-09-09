@@ -96,7 +96,7 @@ process reaches out to each Kea box over three channels:
 
 | Channel | Used for | Direction |
 |---------|----------|-----------|
-| **Kea Control Agent HTTP API** | Live status, config reads, HA state, lease statistics | Jen → Kea, read-mostly |
+| **Kea command HTTP API** | Live status, config reads, HA state, lease statistics — via the Control Agent (`ca` mode) or straight to each daemon's own control socket (`direct` mode, for Kea 3.2+ which removed the Control Agent) | Jen → Kea, read-mostly |
 | **Kea database (MySQL/MariaDB)** | Lease and reservation data, written only through the same tables/commands Kea's own tooling uses (mostly the `host_cmds` hook, never raw schema changes) | Jen ↔ Kea DB |
 | **SSH** | Applying subnet/pool edits to `kea-dhcp*.conf`, validating the new config, restarting the service, reading logs | Jen → Kea host |
 
@@ -115,7 +115,9 @@ threat model.
 
 - Ubuntu 22.04 or 24.04 (bare metal or Docker)
 - Python 3.10+
-- ISC Kea DHCP 3.0+ with MySQL backend and Control Agent
+- ISC Kea DHCP with a MySQL/MariaDB backend, reachable one of two ways:
+  - **Kea 3.0+ with the Control Agent** (`kea-ctrl-agent`) — deprecated by ISC in 3.0, **removed in 3.2**
+  - **Kea 2.7.2+ with per-daemon HTTP control sockets** — required for Kea 3.2+; see the Admin Guide's "Kea → Direct control sockets"
 - MySQL or MariaDB
 
 ---

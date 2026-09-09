@@ -39,6 +39,22 @@ def settings_infrastructure():
 @_admin_required
 def settings_kea():
     kea_up = __kea.kea_is_up()
+    # v5.10.0 — fetch the Kea version so the page can warn when the
+    # configured connection mode won't survive the running Kea (ca mode
+    # against Kea >= 3.0, where ISC deprecated the Control Agent and
+    # removes it in 3.2). One extra version-get on an already-reachable
+    # server; skipped entirely when Kea is down.
+    kea_version = ""
+    kea_version_tuple = None
+    if kea_up:
+        _vr = __kea.kea_command("version-get")
+        if _vr.get("result") == 0:
+            kea_version = (_vr.get("arguments", {}).get("extended", "") or _vr.get("text", "")).splitlines()[0].strip()
+            kea_version_tuple = __kea.parse_kea_version(kea_version)
+    ca_mode = extensions.KEA_CONNECTION_MODE == "ca"
+    ca_deprecation_warning = ca_mode and kea_version_tuple is not None and kea_version_tuple >= (3, 0, 0)
+    ca_removed = ca_mode and kea_version_tuple is not None and kea_version_tuple >= (3, 2, 0)
+
     ssh_pub_key = ""
     if os.path.exists(extensions.SSH_KEY_PATH + ".pub"):
         try:
@@ -69,6 +85,10 @@ def settings_kea():
         "kea_api_url": extensions.cfg.get("kea", "api_url", fallback=""),
         "kea_api_user": extensions.cfg.get("kea", "api_user", fallback=""),
         "kea_api_pass": extensions.cfg.get("kea", "api_pass", fallback=""),
+        # v5.10.0 — Kea 3 control plane
+        "kea_connection_mode": extensions.cfg.get("kea", "connection_mode", fallback="ca"),
+        "kea_api_ca": extensions.cfg.get("kea", "api_ca", fallback=""),
+        "kea_api_tls_verify": extensions.cfg.getboolean("kea", "api_tls_verify", fallback=True),
         "kea_db_host": extensions.cfg.get("kea_db", "host", fallback=""),
         "kea_db_user": extensions.cfg.get("kea_db", "user", fallback=""),
         "kea_db_name": extensions.cfg.get("kea_db", "database", fallback="kea"),
@@ -109,6 +129,9 @@ def settings_kea():
         ssh_configured=bool(ssh_pub_key),
         restart_pending=restart_pending,
         ipv6_enabled=ipv6_enabled,
+        kea_version=kea_version,
+        ca_deprecation_warning=ca_deprecation_warning,
+        ca_removed=ca_removed,
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,
@@ -125,16 +148,39 @@ def save_infra_kea():
     api_url = request.form.get("api_url", "").strip()
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
+    # v5.10.0 — Kea 3 control plane. connection_mode defaults to 'ca'
+    # (every prior release's behaviour); api_ca / api_tls_verify only
+    # matter for an https:// socket URL.
+    connection_mode = request.form.get("connection_mode", "ca").strip().lower()
+    api_ca = request.form.get("api_ca", "").strip()
+    api_tls_verify = request.form.get("api_tls_verify", "") == "1"
+
     if not api_url:
         flash("API URL is required.", "error")
         return redirect(url_for("settings.settings_kea"))
-    items = [("kea", "api_url", api_url), ("kea", "api_user", api_user)]
+    if not api_url.startswith(("http://", "https://")):
+        flash("API URL must start with http:// or https://.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    if connection_mode not in ("ca", "direct"):
+        flash("Connection mode must be 'ca' or 'direct'.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    if api_ca and not os.path.isfile(api_ca):
+        flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
+        return redirect(url_for("settings.settings_kea"))
+
+    items = [
+        ("kea", "api_url", api_url),
+        ("kea", "api_user", api_user),
+        ("kea", "connection_mode", connection_mode),
+        ("kea", "api_ca", api_ca),
+        ("kea", "api_tls_verify", "true" if api_tls_verify else "false"),
+    ]
     if api_pass:
         items.append(("kea", "api_pass", api_pass))
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
-    __user.audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user}")
+    __user.audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user} mode={connection_mode}")
     return redirect(url_for("settings.settings_kea"))
 
 
@@ -175,6 +221,9 @@ def save_infra_kea6():
     api_url = request.form.get("api_url", "").strip()
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
+    if api_url and not api_url.startswith(("http://", "https://")):
+        flash("Kea6 API URL must start with http:// or https://.", "error")
+        return redirect(url_for("settings.settings_kea"))
     db_host = request.form.get("db_host", "").strip()
     db_user = request.form.get("db_user", "").strip()
     db_pass = request.form.get("db_pass", "").strip()
@@ -204,6 +253,123 @@ def save_infra_kea6():
     else:
         flash("No Kea6 values provided — leaving [kea6] as inheriting v4 settings.", "info")
     return redirect(url_for("settings.settings_kea"))
+
+
+def _probe_once(url, user, pwd, omit_service):
+    """One version-get against a candidate endpoint, independent of the
+    globally-configured connection mode. Returns (version_text, error):
+    exactly one is non-empty."""
+    payload = {"command": "version-get"}
+    if not omit_service:
+        payload["service"] = ["dhcp4"]
+    try:
+        resp = __kea.http.post(
+            url,
+            json=payload,
+            auth=(user, pwd),
+            timeout=8,
+            verify=extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        d = data[0] if isinstance(data, list) else data
+        if d.get("result") != 0:
+            return "", d.get("text", "Kea returned an error")
+        return (d.get("arguments", {}).get("extended", "") or d.get("text", "")).strip(), ""
+    except Exception as e:  # noqa: BLE001 — any transport failure is just "this endpoint didn't answer"
+        return "", str(e)
+
+
+@bp.route("/settings/infrastructure/probe-kea", methods=["POST"])
+@login_required
+@_admin_required
+def probe_kea():
+    """
+    v5.10.0 — reachability + version probe for the Kea command channel.
+    Tries the configured [kea] api_url in the configured mode first; if
+    that doesn't answer, tries a direct control socket at the same host
+    on port 8004 (ISC's example dhcp4 port). Reports the Kea version,
+    which mode answered, and a recommendation keyed on the version:
+    Control Agent removed in 3.2, deprecated in 3.0, and direct sockets
+    only exist from 2.7.2. Read-only — never writes config.
+    """
+    from urllib.parse import urlparse
+
+    configured_url = extensions.KEA_API_URL
+    configured_mode = extensions.KEA_CONNECTION_MODE
+    user, pwd = extensions.KEA_API_USER, extensions.KEA_API_PASS
+    attempts = []
+
+    version_text, err = _probe_once(configured_url, user, pwd, omit_service=(configured_mode == "direct"))
+    answered_mode = configured_mode if version_text else None
+    answered_url = configured_url if version_text else None
+    if not version_text:
+        attempts.append({"url": configured_url, "mode": configured_mode, "error": err})
+        host = urlparse(configured_url).hostname
+        scheme = urlparse(configured_url).scheme or "http"
+        if host and configured_mode != "direct":
+            alt = f"{scheme}://{host}:8004"
+            version_text, err2 = _probe_once(alt, user, pwd, omit_service=True)
+            if version_text:
+                answered_mode, answered_url = "direct", alt
+            else:
+                attempts.append({"url": alt, "mode": "direct", "error": err2})
+
+    if not version_text:
+        return jsonify(
+            {
+                "ok": False,
+                "configured_mode": configured_mode,
+                "attempts": attempts,
+                "recommendation": {
+                    "text": "Nothing answered a version-get. Check the URL, credentials, and that a Kea "
+                    "control socket (or Control Agent) is actually listening.",
+                    "level": "bad",
+                },
+            }
+        )
+
+    v = __kea.parse_kea_version(version_text)
+    version = ".".join(str(n) for n in v) if v else ""
+    if v is None:
+        rec = ("Reached Kea, but couldn't parse a version from its reply.", "warn")
+    elif answered_mode == "direct":
+        rec = (
+            f"Kea {version} answered on its direct control socket — this is the mode to use for Kea 3.2+.",
+            "ok",
+        )
+    elif v < (2, 7, 2):
+        rec = (
+            f"Kea {version} predates per-daemon control sockets (2.7.2), so the Control Agent is the only "
+            "option here. Plan a Kea upgrade before moving to 3.2.",
+            "warn",
+        )
+    elif v < (3, 2, 0):
+        rec = (
+            f"Kea {version} still ships the Control Agent, but ISC deprecated it in 3.0 and removes it in "
+            "3.2. Add an http control socket to each daemon and switch this to direct mode now.",
+            "warn",
+        )
+    else:
+        rec = (
+            f"Kea {version} removed the Control Agent (3.2). ca mode cannot work against this server — "
+            "switch to direct mode.",
+            "bad",
+        )
+
+    __user.audit("PROBE_KEA", "kea_api", f"version={version or '?'} answered={answered_mode}")
+    return jsonify(
+        {
+            "ok": True,
+            "version": version,
+            "version_raw": version_text.splitlines()[0] if version_text else "",
+            "configured_mode": configured_mode,
+            "answered_mode": answered_mode,
+            "answered_url": answered_url,
+            "attempts": attempts,
+            "recommendation": {"text": rec[0], "level": rec[1]},
+        }
+    )
 
 
 @bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])

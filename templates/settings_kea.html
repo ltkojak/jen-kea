@@ -11,21 +11,37 @@
 <div class="alert alert-warning">⚠️ Kea connection changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Control Agent'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
+{% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
 {% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
 {% include '_card_toc.html' %}
 
-<!-- Kea API -->
+{% if ca_removed %}
+<div class="alert alert-danger">🛑 This Kea server is <strong>{{ kea_version }}</strong>, which <strong>removed the Control Agent</strong> (ISC dropped it in Kea 3.2). Jen is set to <code>ca</code> mode and cannot talk to it. Switch Connection Mode to <strong>Direct to daemons</strong> below and point the URLs at each daemon's own HTTP control socket.</div>
+{% elif ca_deprecation_warning %}
+<div class="alert alert-warning">⚠️ This Kea server is <strong>{{ kea_version }}</strong>. ISC <strong>deprecated the Control Agent in Kea 3.0</strong> and removes it in 3.2. Jen is still using <code>ca</code> mode — plan the switch to <strong>Direct to daemons</strong> before you upgrade Kea past 3.1.</div>
+{% endif %}
+
+<!-- Kea control plane -->
 <div class="card" id="kea-api">
-    <div class="card-header"><span class="card-title">🔌 Kea Control Agent API</span>
-        {% if kea_up %}<span style="color:var(--success);font-size:12px;">● Connected</span>
+    <div class="card-header"><span class="card-title">🔌 Kea Control Plane</span>
+        {% if kea_up %}<span style="color:var(--success);font-size:12px;">● Connected{% if kea_version %} · Kea {{ kea_version }}{% endif %}</span>
         {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
     </div>
-    <form method="POST" action="/settings/infrastructure/save-kea"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/infrastructure/save-kea" id="kea-api-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>API URL</label>
-                <input type="text" name="api_url" value="{{ infra.kea_api_url }}" placeholder="http://YOUR-KEA-SERVER:8000">
+                <label>Connection Mode</label>
+                <select name="connection_mode" id="kea-connection-mode">
+                    <option value="ca" {% if infra.kea_connection_mode != 'direct' %}selected{% endif %}>Control Agent — deprecated in Kea 3.0, removed in 3.2</option>
+                    <option value="direct" {% if infra.kea_connection_mode == 'direct' %}selected{% endif %}>Direct to daemons — Kea 2.7.2+</option>
+                </select>
+                <div class="form-hint" id="kea-mode-hint"></div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label id="kea-url-label">Control Agent URL</label>
+                <input type="text" name="api_url" value="{{ infra.kea_api_url }}" placeholder="http://YOUR-KEA-SERVER:8000" id="kea-url-input">
             </div>
             <div class="form-group">
                 <label>API Username</label>
@@ -37,7 +53,24 @@
                 <div class="form-hint">Leave blank to keep existing password</div>
             </div>
         </div>
+        <div class="form-row" id="kea-tls-row">
+            <div class="form-group">
+                <label>CA bundle path (optional)</label>
+                <input type="text" name="api_ca" value="{{ infra.kea_api_ca }}" placeholder="/etc/jen/ssl/kea-ca.pem">
+                <div class="form-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
+            </div>
+            <div class="form-group">
+                <label>Verify TLS</label>
+                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;">
+                    <input type="checkbox" name="api_tls_verify" value="1" {% if infra.kea_api_tls_verify %}checked{% endif %} style="width:auto;">
+                    Verify the control socket's certificate
+                </label>
+                <div class="form-hint">Ignored for <code>http://</code>. Uncheck only for a self-signed cert with no CA bundle.</div>
+            </div>
+        </div>
         <button type="submit" class="btn btn-primary">Save Kea API</button>
+        <button type="button" class="btn btn-secondary" id="probe-kea-btn" onclick="probeKea()">🔍 Probe</button>
+        <div id="probe-kea-results" style="margin-top:12px;font-size:13px;"></div>
     </form>
     {% if current_user.role == 'superadmin' %}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
@@ -177,7 +210,7 @@
 {% if current_user.role == 'superadmin' %}
 <!-- Kea6 API / IPv6 toggle (v5.0 Phase 1) -->
 <div class="card" id="kea6">
-    <div class="card-header"><span class="card-title">🌐 Kea6 Control Agent API</span>
+    <div class="card-header"><span class="card-title">🌐 Kea6 Control Plane</span>
         {% if ipv6_enabled %}<span style="color:var(--success);font-size:12px;">● IPv6 Enabled</span>
         {% else %}<span style="color:var(--text-muted);font-size:12px;">● IPv6 Disabled</span>{% endif %}
     </div>
@@ -205,17 +238,27 @@
     </div>
 
     <div class="form-hint" style="margin-bottom:10px;">
-        Every field below is optional and falls back to the Kea Control Agent API
-        settings above when left blank — the common Kea setup is one Control
-        Agent proxying to both <code>kea-dhcp4</code> and <code>kea-dhcp6</code>.
-        Only fill these in if your v6 deployment genuinely uses a separate
+        {% if infra.kea_connection_mode == 'direct' %}
+        <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp6's own</strong> HTTP control
+        socket and is <strong>required</strong> when IPv6 is on — a kea-dhcp4 daemon can't answer v6
+        commands, so there is no fallback to the v4 URL. ISC's example uses port 8004 for dhcp4; use
+        <strong>8006</strong> for dhcp6 by convention. Username/password/DB fields still fall back to
+        the v4 settings above when blank.
+        {% else %}
+        Every field below is optional and falls back to the Kea Control Plane settings above when left
+        blank — the common Kea setup is one Control Agent proxying to both <code>kea-dhcp4</code> and
+        <code>kea-dhcp6</code>. Only fill these in if your v6 deployment genuinely uses a separate
         CA/port or a separate database.
+        {% endif %}
     </div>
+    {% if infra.kea_connection_mode == 'direct' and ipv6_enabled and not infra.kea6_api_url %}
+    <div class="alert alert-warning">⚠️ IPv6 is enabled and Jen is in <code>direct</code> mode, but no kea-dhcp6 control socket URL is set. v6 API calls will fail until you set the API URL below.</div>
+    {% endif %}
     <form method="POST" action="/settings/infrastructure/save-kea6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>API URL</label>
-                <input type="text" name="api_url" value="{{ infra.kea6_api_url }}" placeholder="{{ infra.kea_api_url }} (inherited)">
+                <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp6 control socket URL{% else %}API URL{% endif %}</label>
+                <input type="text" name="api_url" value="{{ infra.kea6_api_url }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:8006{% else %}{{ infra.kea_api_url }} (inherited){% endif %}">
             </div>
             <div class="form-group">
                 <label>API Username</label>
@@ -317,6 +360,71 @@ function serializeServers() {
             }
         });
     });
+}
+
+// v5.10.0 — Kea 3 control plane: swap the URL field label/hint with the mode.
+(function () {
+    var sel = document.getElementById('kea-connection-mode');
+    if (!sel) return;
+    var label = document.getElementById('kea-url-label');
+    var input = document.getElementById('kea-url-input');
+    var hint = document.getElementById('kea-mode-hint');
+    function sync() {
+        if (sel.value === 'direct') {
+            label.textContent = 'kea-dhcp4 control socket URL';
+            input.placeholder = 'http://YOUR-KEA-SERVER:8004';
+            hint.innerHTML = "kea-dhcp4's own HTTP control socket. Add an <code>http</code> entry to " +
+                "<code>control-sockets</code> in kea-dhcp4.conf (keep the unix socket alongside it). " +
+                "Set the kea-dhcp6 socket separately under IPv6 below. Never point this at an HA peer port.";
+        } else {
+            label.textContent = 'Control Agent URL';
+            input.placeholder = 'http://YOUR-KEA-SERVER:8000';
+            hint.innerHTML = "The kea-ctrl-agent endpoint. ISC deprecated the Control Agent in Kea 3.0 " +
+                "and removed it in 3.2 — switch to Direct mode before upgrading Kea past 3.1.";
+        }
+    }
+    sel.addEventListener('change', sync);
+    sync();
+})();
+
+async function probeKea() {
+    var btn = document.getElementById('probe-kea-btn');
+    var out = document.getElementById('probe-kea-results');
+    btn.disabled = true;
+    out.innerHTML = '<span style="color:var(--text-muted);">Probing…</span>';
+    try {
+        var resp = await fetch('/settings/infrastructure/probe-kea', {
+            method: 'POST',
+            headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
+        });
+        var data = await resp.json();
+        var colors = {ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)'};
+        var html = '';
+        if (data.ok) {
+            html += '<div>✅ Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong> via <strong>' +
+                escapeHtml(data.answered_mode) + '</strong> mode';
+            if (data.answered_mode !== data.configured_mode) {
+                html += ' <span style="color:var(--warning);">(you have <code>' + escapeHtml(data.configured_mode) +
+                    '</code> configured)</span>';
+            }
+            html += '</div>';
+        } else {
+            html += '<div style="color:var(--danger);">❌ No endpoint answered.</div>';
+        }
+        var rec = data.recommendation || {};
+        html += '<div style="margin-top:6px;color:' + (colors[rec.level] || 'var(--text-muted)') + ';">' +
+            escapeHtml(rec.text || '') + '</div>';
+        if (data.attempts && data.attempts.length) {
+            html += '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">Tried: ' +
+                data.attempts.map(function (a) {
+                    return escapeHtml(a.url) + ' (' + escapeHtml(a.mode) + ') — ' + escapeHtml(a.error);
+                }).join('<br>') + '</div>';
+        }
+        out.innerHTML = html;
+    } catch (e) {
+        out.innerHTML = '<span style="color:var(--danger);">❌ ' + escapeHtml(e.message) + '</span>';
+    }
+    btn.disabled = false;
 }
 
 {% if current_user.role == 'superadmin' %}

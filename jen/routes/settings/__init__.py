@@ -115,8 +115,17 @@ def settings():
 
     hints = {}
 
-    kea_up = __kea.kea_is_up()
+    # v5.10.0 — one version-get does double duty: reachability + the
+    # number we need to warn when ca mode won't survive the running Kea.
+    _kea_ver = __kea.kea_command("version-get")
+    kea_up = _kea_ver.get("result") == 0
     hints["kea"] = [("Kea: connected", "ok") if kea_up else ("Kea: unreachable", "bad")]
+    if kea_up and extensions.KEA_CONNECTION_MODE == "ca":
+        _vt = __kea.parse_kea_version(_kea_ver.get("arguments", {}).get("extended", "") or _kea_ver.get("text", ""))
+        if _vt is not None and _vt >= (3, 2, 0):
+            hints["kea"].append(("Control Agent removed in this Kea — switch to direct mode", "bad"))
+        elif _vt is not None and _vt >= (3, 0, 0):
+            hints["kea"].append(("Control Agent deprecated — switch to direct mode", "warn"))
     if not extensions.KEA_SSH_HOST:
         hints["kea"].append(("SSH not configured", "warn"))
 

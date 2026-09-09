@@ -20,6 +20,7 @@ Two connection modes, picked by [kea] connection_mode:
 """
 
 import logging
+import re
 import time
 
 import requests as http
@@ -27,6 +28,16 @@ import requests as http
 from jen import extensions
 
 logger = logging.getLogger(__name__)
+
+
+def parse_kea_version(text: str):
+    """Pull an (X, Y, Z) integer tuple out of a Kea version string —
+    version-get's `arguments.extended` ("3.2.0\\ntarball...") or its
+    `text` ("3.2.0"). Returns None when there's no dotted triple to find,
+    so callers can say "couldn't tell" rather than guess. The tuple
+    compares the obvious way: (3, 0, 0) < (3, 2, 0)."""
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(g) for g in m.groups()) if m else None
 
 
 def _tls_verify():

@@ -230,7 +230,7 @@ class TestSettingsKeaTemplate:
         _invalidate_settings_cache()
         resp = logged_in_client.get("/settings/kea")
         assert resp.status_code == 200
-        assert b"Kea6 Control Agent API" in resp.data
+        assert b"Kea6 Control Plane" in resp.data
         assert b"Enable IPv6" in resp.data
 
     def test_admin_does_not_see_kea6_card(self, client, db):
@@ -239,7 +239,7 @@ class TestSettingsKeaTemplate:
         c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
         resp = c.get("/settings/kea")
         assert resp.status_code == 200
-        assert b"Kea6 Control Agent API" not in resp.data
+        assert b"Kea6 Control Plane" not in resp.data
 
     def test_enabled_state_shows_disable_button(self, logged_in_client, db):
         from jen.models.user import _invalidate_settings_cache, set_global_setting
