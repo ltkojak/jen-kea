@@ -71,8 +71,22 @@
                 <div class="form-hint">Ignored for <code>http://</code>. Uncheck only for a self-signed cert with no CA bundle.</div>
             </div>
         </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Client certificate (optional)</label>
+                <input type="text" name="api_client_cert" value="{{ infra.kea_api_client_cert }}" placeholder="/etc/jen/ssl/jen-kea-client.pem">
+            </div>
+            <div class="form-group">
+                <label>Client key</label>
+                <input type="text" name="api_client_key" value="{{ infra.kea_api_client_key }}" placeholder="/etc/jen/ssl/jen-kea-client.key">
+                <div class="form-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>/etc/jen/ssl/</code>.</div>
+            </div>
+        </div>
         <button type="submit" class="btn btn-primary">Save Kea API</button>
         <button type="button" class="btn btn-secondary" id="probe-kea-btn" onclick="probeKea()">🔍 Probe</button>
+        <input type="text" id="probe-candidate-url" placeholder="optional — probe a specific direct socket URL, e.g. https://kea:8004"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();probeKea();}"
+               style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
         <div id="probe-kea-results" style="margin-top:12px;font-size:13px;"></div>
     </form>
     {% if current_user.role == 'superadmin' %}
@@ -421,26 +435,37 @@ function serializeServers() {
 async function probeKea() {
     var btn = document.getElementById('probe-kea-btn');
     var out = document.getElementById('probe-kea-results');
+    var candidate = (document.getElementById('probe-candidate-url') || {}).value || '';
     btn.disabled = true;
     out.innerHTML = '<span style="color:var(--text-muted);">Probing…</span>';
     try {
         var resp = await fetch('/settings/infrastructure/probe-kea', {
             method: 'POST',
-            headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
+            headers: {
+                'X-CSRFToken': {{ csrf_token()|tojson }},
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({candidate_url: candidate.trim()}),
         });
         var data = await resp.json();
         var colors = {ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)'};
         var html = '';
+        if (data.error) {
+            out.innerHTML = '<div style="color:var(--danger);">❌ ' + escapeHtml(data.error) + '</div>';
+            btn.disabled = false;
+            return;
+        }
+        var prefix = data.candidate ? 'Candidate: ' : '';
         if (data.ok) {
-            html += '<div>✅ Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong> via <strong>' +
+            html += '<div>✅ ' + prefix + 'Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong> via <strong>' +
                 escapeHtml(data.answered_mode) + '</strong> mode';
-            if (data.answered_mode !== data.configured_mode) {
+            if (!data.candidate && data.answered_mode !== data.configured_mode) {
                 html += ' <span style="color:var(--warning);">(you have <code>' + escapeHtml(data.configured_mode) +
                     '</code> configured)</span>';
             }
             html += '</div>';
         } else {
-            html += '<div style="color:var(--danger);">❌ No endpoint answered.</div>';
+            html += '<div style="color:var(--danger);">❌ ' + prefix + 'No endpoint answered.</div>';
         }
         var rec = data.recommendation || {};
         html += '<div style="margin-top:6px;color:' + (colors[rec.level] || 'var(--text-muted)') + ';">' +

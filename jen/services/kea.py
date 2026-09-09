@@ -48,6 +48,17 @@ def _tls_verify():
     return extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY
 
 
+def _tls_client_cert():
+    """The `cert` kwarg for the requests call — an (cert, key) pair when
+    [kea] api_client_cert AND api_client_key are both set, else None
+    (requests' own default). Kea's per-daemon https control socket
+    defaults cert-required=true, so an https:// endpoint needs this;
+    None keeps ca-mode / http:// behaviour byte-identical (v5.10.2)."""
+    if extensions.KEA_API_CLIENT_CERT and extensions.KEA_API_CLIENT_KEY:
+        return (extensions.KEA_API_CLIENT_CERT, extensions.KEA_API_CLIENT_KEY)
+    return None
+
+
 def _endpoint_for(server: dict, service: str):
     """
     Resolve (url, user, pwd) for one command — or return an error dict
@@ -101,7 +112,7 @@ def kea_command(command: str, service: str = "dhcp4", arguments: dict = None, se
     if arguments:
         payload["arguments"] = arguments
     try:
-        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10, verify=_tls_verify())
+        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10, verify=_tls_verify(), cert=_tls_client_cert())
         resp.raise_for_status()
         data = resp.json()
         return data[0] if isinstance(data, list) else data

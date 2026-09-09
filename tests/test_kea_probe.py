@@ -58,8 +58,8 @@ class _FakeHTTP:
         self.replies = replies
         self.calls = []
 
-    def post(self, url, json=None, auth=None, timeout=None, verify=None):
-        self.calls.append({"url": url, "json": json})
+    def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
+        self.calls.append({"url": url, "json": json, "cert": cert})
         for frag, body in self.replies.items():
             if frag in url:
                 if isinstance(body, Exception):
@@ -143,3 +143,59 @@ class TestProbeRoute:
     def test_requires_admin(self, client, db):
         r = client.post("/settings/infrastructure/probe-kea")
         assert r.status_code in (302, 401, 403)
+
+    def test_forwards_client_cert_when_configured(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", "/c.pem")
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", "/c.key")
+        fake = probe_http({"localhost:18000": _ok("3.0.0")})
+        logged_in_client.post("/settings/infrastructure/probe-kea")
+        assert fake.calls[0]["cert"] == ("/c.pem", "/c.key")
+
+    def test_default_fallback_keeps_the_scheme(self, logged_in_client, db, probe_http, monkeypatch):
+        """v5.10.2 — https CA that refuses → the :8004 fallback stays https,
+        never downgrades to http (would leak credentials)."""
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        monkeypatch.setattr(extensions, "KEA_API_URL", "https://localhost:18000")
+        fake = probe_http({})  # nothing answers
+        logged_in_client.post("/settings/infrastructure/probe-kea")
+        assert any(c["url"] == "https://localhost:8004" for c in fake.calls)
+        assert not any(c["url"].startswith("http://") for c in fake.calls)
+
+
+class TestProbeCandidateUrl:
+    def test_candidate_that_answers_recommends_switching(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        fake = probe_http({"kea-direct:8004": _ok("3.2.0")})
+        data = logged_in_client.post(
+            "/settings/infrastructure/probe-kea", data={"candidate_url": "https://kea-direct:8004"}
+        ).get_json()
+        assert data["ok"] is True
+        assert data["candidate"] is True
+        assert data["answered_url"] == "https://kea-direct:8004"
+        assert data["recommendation"]["level"] == "ok"
+        assert "set this as the API URL" in data["recommendation"]["text"]
+        # one call only — no configured endpoint, no :8004 auto-fallback
+        assert len(fake.calls) == 1
+        assert "service" not in fake.calls[0]["json"]
+
+    def test_candidate_that_refuses_is_ok_false_with_one_attempt(self, logged_in_client, db, probe_http, monkeypatch):
+        fake = probe_http({})  # nothing answers
+        data = logged_in_client.post(
+            "/settings/infrastructure/probe-kea", data={"candidate_url": "https://kea-direct:8004"}
+        ).get_json()
+        assert data["ok"] is False
+        assert data["candidate"] is True
+        assert len(data["attempts"]) == 1
+        assert len(fake.calls) == 1  # no :8004 auto-probe
+
+    def test_candidate_without_port_is_400(self, logged_in_client, db, probe_http, monkeypatch):
+        probe_http({})
+        r = logged_in_client.post("/settings/infrastructure/probe-kea", data={"candidate_url": "https://kea-direct"})
+        assert r.status_code == 400
+        assert r.get_json()["ok"] is False
+
+    def test_candidate_with_bad_scheme_is_400(self, logged_in_client, db, probe_http, monkeypatch):
+        probe_http({})
+        r = logged_in_client.post("/settings/infrastructure/probe-kea", data={"candidate_url": "ftp://kea:8004"})
+        assert r.status_code == 400

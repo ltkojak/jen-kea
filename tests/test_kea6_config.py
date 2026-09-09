@@ -97,6 +97,8 @@ class TestKea6ConfigFallback:
             "KEA_CONNECTION_MODE",
             "KEA_API_CA",
             "KEA_API_TLS_VERIFY",
+            "KEA_API_CLIENT_CERT",
+            "KEA_API_CLIENT_KEY",
             "KEA_DB_HOST",
             "KEA_DB_USER",
             "KEA_DB_PASS",

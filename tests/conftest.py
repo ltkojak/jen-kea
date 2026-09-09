@@ -166,6 +166,8 @@ def _patch_extensions():
     extensions.KEA_CONNECTION_MODE = "ca"
     extensions.KEA_API_CA = ""
     extensions.KEA_API_TLS_VERIFY = True
+    extensions.KEA_API_CLIENT_CERT = ""
+    extensions.KEA_API_CLIENT_KEY = ""
     # v5.0 — KEA6_* must be reset alongside their v4 counterparts. Any test
     # that calls AppConfig.reload()/apply() against an isolated config (see
     # tests/test_appconfig.py) writes directly to these extensions globals

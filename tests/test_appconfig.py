@@ -116,6 +116,8 @@ class TestKea3ConnectionMode:
         assert extensions.KEA_CONNECTION_MODE == "ca"
         assert extensions.KEA_API_CA == ""
         assert extensions.KEA_API_TLS_VERIFY is True
+        assert extensions.KEA_API_CLIENT_CERT == ""
+        assert extensions.KEA_API_CLIENT_KEY == ""
         assert extensions.KEA_SERVERS[0]["api6_url"] == ""
 
     def test_direct_mode_and_tls_options_round_trip(self, isolated_config):
@@ -124,11 +126,15 @@ class TestKea3ConnectionMode:
                 ("kea", "connection_mode", "direct"),
                 ("kea", "api_ca", "/etc/jen/ssl/kea-ca.pem"),
                 ("kea", "api_tls_verify", "false"),
+                ("kea", "api_client_cert", "/etc/jen/ssl/client.pem"),
+                ("kea", "api_client_key", "/etc/jen/ssl/client.key"),
             ]
         )
         assert extensions.KEA_CONNECTION_MODE == "direct"
         assert extensions.KEA_API_CA == "/etc/jen/ssl/kea-ca.pem"
         assert extensions.KEA_API_TLS_VERIFY is False
+        assert extensions.KEA_API_CLIENT_CERT == "/etc/jen/ssl/client.pem"
+        assert extensions.KEA_API_CLIENT_KEY == "/etc/jen/ssl/client.key"
 
     def test_derive_kea_servers_carries_api6_url_from_kea6_section(self, isolated_config):
         app_config.mutate(lambda p: (p.add_section("kea6"), p.set("kea6", "api_url", "http://kea6:8006")))

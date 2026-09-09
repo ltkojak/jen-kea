@@ -14,6 +14,8 @@
 #            in 3.0). Set [kea6] api_url to kea-dhcp6's socket if you run
 #            IPv6. Add an http entry to control-sockets in each daemon's
 #            config (see docs/admin-guide.md "Kea → Direct control sockets").
+# In direct mode api_url MUST include an explicit port (a daemon control
+# socket is never on 80/443).
 # connection_mode = ca
 api_url  = http://YOUR-KEA-SERVER:8000
 api_user = kea-api
@@ -22,8 +24,16 @@ api_pass = your-kea-api-password
 #   api_ca         — path on the Jen host to the CA bundle that signed the
 #                    Kea socket's cert. Pins verification to that CA.
 #   api_tls_verify — set false to skip verification entirely (default true).
+#   api_client_cert / api_client_key (5.10.2) — a client-cert PEM + key on
+#                    the Jen host. Kea's per-daemon https socket defaults
+#                    cert-required=true (mutual TLS), so without these an
+#                    https:// endpoint refuses the handshake. Set both or
+#                    neither; the key must be readable by www-data
+#                    (root:www-data 640 under /etc/jen/ssl/).
 # api_ca = /etc/jen/ssl/kea-ca.pem
 # api_tls_verify = true
+# api_client_cert = /etc/jen/ssl/jen-kea-client.pem
+# api_client_key  = /etc/jen/ssl/jen-kea-client.key
 # Friendly name shown in the UI and alerts
 name     = Kea Server 1
 # Role: primary or standby

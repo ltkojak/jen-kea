@@ -58,9 +58,16 @@ KEA_API_PASS: str = ""
 # KEA_API_CA / KEA_API_TLS_VERIFY only matter for an https:// socket URL:
 # a CA-bundle path pins verification to that CA, else the boolean toggle
 # (default True — the same as requests' own default).
+# KEA_API_CLIENT_CERT / KEA_API_CLIENT_KEY (v5.10.2): a client-cert PEM +
+# key on the Jen host, passed to requests as its `cert=(cert, key)` pair.
+# Kea's per-daemon https control socket defaults cert-required=true
+# (mutual TLS), so without this an https:// endpoint refuses the
+# handshake. Both or neither.
 KEA_CONNECTION_MODE: str = "ca"
 KEA_API_CA: str = ""
 KEA_API_TLS_VERIFY: bool = True
+KEA_API_CLIENT_CERT: str = ""
+KEA_API_CLIENT_KEY: str = ""
 
 KEA_DB_HOST: str = ""
 KEA_DB_USER: str = ""

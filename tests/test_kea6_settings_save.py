@@ -127,6 +127,59 @@ class TestSaveKeaPortValidation:
         assert _on_disk(isolated_config).get("kea", "api_url") == "http://kea:8004"
 
 
+class TestSaveKeaClientCert:
+    def test_one_of_two_is_rejected(self, logged_in_client, db, mock_kea, isolated_config):
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-kea",
+            data={
+                "api_url": "https://kea:8004",
+                "api_user": "u",
+                "connection_mode": "direct",
+                "api_tls_verify": "1",
+                "api_client_cert": "/etc/jen/ssl/only-cert.pem",
+            },
+            follow_redirects=True,
+        )
+        assert b"both the client certificate and key" in r.data
+        assert not _on_disk(isolated_config).has_option("kea", "api_client_cert")
+
+    def test_nonexistent_path_is_rejected(self, logged_in_client, db, mock_kea, isolated_config):
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-kea",
+            data={
+                "api_url": "https://kea:8004",
+                "api_user": "u",
+                "connection_mode": "direct",
+                "api_tls_verify": "1",
+                "api_client_cert": "/no/such/cert.pem",
+                "api_client_key": "/no/such/key.pem",
+            },
+            follow_redirects=True,
+        )
+        assert b"not found on the Jen host" in r.data
+
+    def test_existing_pair_is_saved(self, logged_in_client, db, mock_kea, isolated_config, tmp_path):
+        cert = tmp_path / "c.pem"
+        key = tmp_path / "c.key"
+        cert.write_text("x")
+        key.write_text("y")
+        logged_in_client.post(
+            "/settings/infrastructure/save-kea",
+            data={
+                "api_url": "https://kea:8004",
+                "api_user": "u",
+                "connection_mode": "direct",
+                "api_tls_verify": "1",
+                "api_client_cert": str(cert),
+                "api_client_key": str(key),
+            },
+            follow_redirects=True,
+        )
+        disk = _on_disk(isolated_config)
+        assert disk.get("kea", "api_client_cert") == str(cert)
+        assert disk.get("kea", "api_client_key") == str(key)
+
+
 class TestDirectPortWarnings:
     def test_warning_lists_a_portless_url_in_direct_mode(self, logged_in_client, db, mock_kea, isolated_config):
         # a portless URL that was valid in ca mode, now in direct mode

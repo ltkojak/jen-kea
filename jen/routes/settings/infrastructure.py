@@ -130,6 +130,8 @@ def settings_kea():
         "kea_connection_mode": extensions.cfg.get("kea", "connection_mode", fallback="ca"),
         "kea_api_ca": extensions.cfg.get("kea", "api_ca", fallback=""),
         "kea_api_tls_verify": extensions.cfg.getboolean("kea", "api_tls_verify", fallback=True),
+        "kea_api_client_cert": extensions.cfg.get("kea", "api_client_cert", fallback=""),
+        "kea_api_client_key": extensions.cfg.get("kea", "api_client_key", fallback=""),
         "kea_db_host": extensions.cfg.get("kea_db", "host", fallback=""),
         "kea_db_user": extensions.cfg.get("kea_db", "user", fallback=""),
         "kea_db_name": extensions.cfg.get("kea_db", "database", fallback="kea"),
@@ -196,6 +198,9 @@ def save_infra_kea():
     connection_mode = request.form.get("connection_mode", "ca").strip().lower()
     api_ca = request.form.get("api_ca", "").strip()
     api_tls_verify = request.form.get("api_tls_verify", "") == "1"
+    # v5.10.2 — client cert for Kea's default-mTLS https socket. Both or neither.
+    api_client_cert = request.form.get("api_client_cert", "").strip()
+    api_client_key = request.form.get("api_client_key", "").strip()
 
     if not api_url:
         flash("API URL is required.", "error")
@@ -217,6 +222,13 @@ def save_infra_kea():
     if api_ca and not os.path.isfile(api_ca):
         flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
         return redirect(url_for("settings.settings_kea"))
+    if bool(api_client_cert) != bool(api_client_key):
+        flash("Set both the client certificate and key, or neither.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    for label, path in (("client certificate", api_client_cert), ("client key", api_client_key)):
+        if path and not os.path.isfile(path):
+            flash(f"Client {label} not found on the Jen host: {path}", "error")
+            return redirect(url_for("settings.settings_kea"))
 
     items = [
         ("kea", "api_url", api_url),
@@ -224,13 +236,19 @@ def save_infra_kea():
         ("kea", "connection_mode", connection_mode),
         ("kea", "api_ca", api_ca),
         ("kea", "api_tls_verify", "true" if api_tls_verify else "false"),
+        ("kea", "api_client_cert", api_client_cert),
+        ("kea", "api_client_key", api_client_key),
     ]
     if api_pass:
         items.append(("kea", "api_pass", api_pass))
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
-    __user.audit("SAVE_INFRA", "kea_api", f"url={api_url} user={api_user} mode={connection_mode}")
+    __user.audit(
+        "SAVE_INFRA",
+        "kea_api",
+        f"url={api_url} user={api_user} mode={connection_mode} client_cert={'set' if api_client_cert else 'none'}",
+    )
     return redirect(url_for("settings.settings_kea"))
 
 
@@ -369,6 +387,7 @@ def _probe_once(url, user, pwd, omit_service):
             auth=(user, pwd),
             timeout=8,
             verify=extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY,
+            cert=__kea._tls_client_cert(),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -392,6 +411,11 @@ def probe_kea():
     which mode answered, and a recommendation keyed on the version:
     Control Agent removed in 3.2, deprecated in 3.0, and direct sockets
     only exist from 2.7.2. Read-only — never writes config.
+
+    v5.10.2 — with a `candidate_url` form field, probes ONLY that URL
+    (direct-style, no service field, no :8004 auto-fallback) so an admin
+    whose direct socket doesn't share the CA's scheme/host can test it
+    before committing. The scheme is never downgraded.
     """
     from urllib.parse import urlparse
 
@@ -400,25 +424,41 @@ def probe_kea():
     user, pwd = extensions.KEA_API_USER, extensions.KEA_API_PASS
     attempts = []
 
-    version_text, err = _probe_once(configured_url, user, pwd, omit_service=(configured_mode == "direct"))
-    answered_mode = configured_mode if version_text else None
-    answered_url = configured_url if version_text else None
-    if not version_text:
-        attempts.append({"url": configured_url, "mode": configured_mode, "error": err})
-        host = urlparse(configured_url).hostname
-        scheme = urlparse(configured_url).scheme or "http"
-        if host and configured_mode != "direct":
-            alt = f"{scheme}://{host}:8004"
-            version_text, err2 = _probe_once(alt, user, pwd, omit_service=True)
-            if version_text:
-                answered_mode, answered_url = "direct", alt
-            else:
-                attempts.append({"url": alt, "mode": "direct", "error": err2})
+    candidate = request.form.get("candidate_url", "").strip()
+    if candidate:
+        if not __auth.valid_api_url(candidate, require_port=True):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "The candidate URL must be a valid http(s):// URL with an explicit port "
+                    "(e.g. https://kea:8004).",
+                }
+            ), 400
+        version_text, err = _probe_once(candidate, user, pwd, omit_service=True)
+        attempts.append({"url": candidate, "mode": "direct", "error": err or ""})
+        answered_mode = "direct" if version_text else None
+        answered_url = candidate if version_text else None
+    else:
+        version_text, err = _probe_once(configured_url, user, pwd, omit_service=(configured_mode == "direct"))
+        answered_mode = configured_mode if version_text else None
+        answered_url = configured_url if version_text else None
+        if not version_text:
+            attempts.append({"url": configured_url, "mode": configured_mode, "error": err})
+            host = urlparse(configured_url).hostname
+            scheme = urlparse(configured_url).scheme or "http"
+            if host and configured_mode != "direct":
+                alt = f"{scheme}://{host}:8004"
+                version_text, err2 = _probe_once(alt, user, pwd, omit_service=True)
+                if version_text:
+                    answered_mode, answered_url = "direct", alt
+                else:
+                    attempts.append({"url": alt, "mode": "direct", "error": err2})
 
     if not version_text:
         return jsonify(
             {
                 "ok": False,
+                "candidate": bool(candidate),
                 "configured_mode": configured_mode,
                 "attempts": attempts,
                 "recommendation": {
@@ -433,6 +473,11 @@ def probe_kea():
     version = ".".join(str(n) for n in v) if v else ""
     if v is None:
         rec = ("Reached Kea, but couldn't parse a version from its reply.", "warn")
+    elif candidate:
+        rec = (
+            f"Kea {version} answered on {answered_url} — set this as the API URL and switch to Direct mode.",
+            "ok",
+        )
     elif answered_mode == "direct":
         rec = (
             f"Kea {version} answered on its direct control socket — this is the mode to use for Kea 3.2+.",
@@ -457,10 +502,13 @@ def probe_kea():
             "bad",
         )
 
-    __user.audit("PROBE_KEA", "kea_api", f"version={version or '?'} answered={answered_mode}")
+    __user.audit(
+        "PROBE_KEA", "kea_api", f"version={version or '?'} answered={answered_mode} candidate={bool(candidate)}"
+    )
     return jsonify(
         {
             "ok": True,
+            "candidate": bool(candidate),
             "version": version,
             "version_raw": version_text.splitlines()[0] if version_text else "",
             "configured_mode": configured_mode,

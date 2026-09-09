@@ -97,6 +97,11 @@ class AppConfig:
         extensions.KEA_CONNECTION_MODE = _mode if _mode in ("ca", "direct") else "ca"
         extensions.KEA_API_CA = cfg.get("kea", "api_ca", fallback="").strip()
         extensions.KEA_API_TLS_VERIFY = cfg.getboolean("kea", "api_tls_verify", fallback=True)
+        # v5.10.2 — client certificate for Kea's default mTLS https socket.
+        # A missing file is a save-time error (see save_infra_kea), never a
+        # load-time one — apply() must not raise on a working config.
+        extensions.KEA_API_CLIENT_CERT = cfg.get("kea", "api_client_cert", fallback="").strip()
+        extensions.KEA_API_CLIENT_KEY = cfg.get("kea", "api_client_key", fallback="").strip()
 
         extensions.KEA_DB_HOST = cfg.get("kea_db", "host")
         extensions.KEA_DB_USER = cfg.get("kea_db", "user")

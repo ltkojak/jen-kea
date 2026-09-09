@@ -45,8 +45,8 @@ class _FakeRequests:
         self.calls = []
         self.reply = [{"result": 0, "arguments": {"extended": "3.2.0"}}]
 
-    def post(self, url, json=None, auth=None, timeout=None, verify=None):
-        self.calls.append({"url": url, "json": json, "auth": auth, "timeout": timeout, "verify": verify})
+    def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
+        self.calls.append({"url": url, "json": json, "auth": auth, "timeout": timeout, "verify": verify, "cert": cert})
         return _Resp(self.reply)
 
 
@@ -69,6 +69,8 @@ def _kea_globals(monkeypatch):
     monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
     monkeypatch.setattr(extensions, "KEA_API_CA", "")
     monkeypatch.setattr(extensions, "KEA_API_TLS_VERIFY", True)
+    monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", "")
+    monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", "")
 
 
 class TestGoldenCaMode:
@@ -82,6 +84,7 @@ class TestGoldenCaMode:
         assert c["auth"] == ("u4", "p4")
         assert c["timeout"] == 10
         assert c["verify"] is True  # == requests' own default
+        assert c["cert"] is None  # == requests' own default (no client cert)
 
     def test_dhcp4_with_arguments(self, fake_http):
         kea_svc.kea_command("subnet4-get", arguments={"id": 1})
@@ -181,6 +184,33 @@ class TestResponseNormalisation:
     def test_bare_object_response_passes_through(self, fake_http):
         fake_http.reply = {"result": 0, "text": "ok"}
         assert kea_svc.kea_command("version-get") == {"result": 0, "text": "ok"}
+
+
+class TestClientCert:
+    """v5.10.2 — [kea] api_client_cert / api_client_key become requests'
+    `cert=(cert, key)` pair (Kea's https socket defaults cert-required)."""
+
+    def test_none_when_neither_is_set(self, fake_http):
+        kea_svc.kea_command("version-get")
+        assert fake_http.calls[0]["cert"] is None
+
+    def test_pair_when_both_set(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", "/etc/jen/ssl/c.pem")
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", "/etc/jen/ssl/c.key")
+        kea_svc.kea_command("version-get")
+        assert fake_http.calls[0]["cert"] == ("/etc/jen/ssl/c.pem", "/etc/jen/ssl/c.key")
+
+    def test_none_when_only_cert_set(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", "/etc/jen/ssl/c.pem")
+        kea_svc.kea_command("version-get")
+        assert fake_http.calls[0]["cert"] is None
+
+    def test_passed_in_direct_mode_too(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", "/c.pem")
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", "/c.key")
+        kea_svc.kea_command("config-get")
+        assert fake_http.calls[0]["cert"] == ("/c.pem", "/c.key")
 
 
 class TestTlsVerify:
