@@ -24,6 +24,26 @@ from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 
+# v5.10.2 — every [kea_server_N] key the Additional Servers form owns.
+# _rewrite_extra_servers() rebuilds each section from scratch, so anything
+# NOT in this set (ssh_key that derive_kea_servers reads, a hand-added
+# value) has to be copied back or it's silently lost on save.
+_EXTRA_SERVER_FORM_KEYS = frozenset(
+    {
+        "name",
+        "role",
+        "api_url",
+        "api_user",
+        "api_pass",
+        "api6_url",
+        "api6_user",
+        "api6_pass",
+        "ssh_host",
+        "ssh_user",
+        "kea_conf",
+    }
+)
+
 
 @bp.route("/settings/infrastructure")
 @login_required
@@ -73,6 +93,10 @@ def settings_kea():
                 "name": extensions.cfg.get(sec, "name", fallback=f"Kea Server {n}"),
                 "api_url": extensions.cfg.get(sec, "api_url", fallback=""),
                 "api_user": extensions.cfg.get(sec, "api_user", fallback=""),
+                # v5.10.2 — the per-server v6 endpoint, now editable. api6_pass
+                # is deliberately NOT loaded into the template (password field).
+                "api6_url": extensions.cfg.get(sec, "api6_url", fallback=""),
+                "api6_user": extensions.cfg.get(sec, "api6_user", fallback=""),
                 "ssh_host": extensions.cfg.get(sec, "ssh_host", fallback=""),
                 "ssh_user": extensions.cfg.get(sec, "ssh_user", fallback=""),
                 "kea_conf": extensions.cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
@@ -80,6 +104,23 @@ def settings_kea():
             }
         )
         n += 1
+
+    # v5.10.2 — direct mode needs an explicit port on every API URL. The
+    # save routes validate their own field; this catches a URL that was
+    # valid in ca mode and became invalid when the mode was switched.
+    direct_port_warnings = []
+    if extensions.KEA_CONNECTION_MODE == "direct":
+
+        def _needs_port(u):
+            return bool(u) and not __auth.valid_api_url(u, require_port=True)
+
+        if __kea6.is_ipv6_enabled() and _needs_port(extensions.cfg.get("kea6", "api_url", fallback="")):
+            direct_port_warnings.append(f"[kea6] api_url ({extensions.cfg.get('kea6', 'api_url')})")
+        for srv in extensions.KEA_SERVERS:
+            if _needs_port(srv.get("api_url", "")):
+                direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api_url ({srv['api_url']})")
+            if _needs_port(srv.get("api6_url", "")):
+                direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api6_url ({srv['api6_url']})")
 
     infra = {
         "kea_api_url": extensions.cfg.get("kea", "api_url", fallback=""),
@@ -132,6 +173,7 @@ def settings_kea():
         kea_version=kea_version,
         ca_deprecation_warning=ca_deprecation_warning,
         ca_removed=ca_removed,
+        direct_port_warnings=direct_port_warnings,
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,
@@ -158,11 +200,19 @@ def save_infra_kea():
     if not api_url:
         flash("API URL is required.", "error")
         return redirect(url_for("settings.settings_kea"))
-    if not api_url.startswith(("http://", "https://")):
-        flash("API URL must start with http:// or https://.", "error")
-        return redirect(url_for("settings.settings_kea"))
     if connection_mode not in ("ca", "direct"):
         flash("Connection mode must be 'ca' or 'direct'.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    # v5.10.2 — validate against the mode being SAVED, not the current global.
+    if not __auth.valid_api_url(api_url, require_port=(connection_mode == "direct")):
+        if connection_mode == "direct":
+            flash(
+                "In direct mode the API URL must include an explicit port (e.g. http://kea:8004) — "
+                "a daemon control socket is never on 80/443.",
+                "error",
+            )
+        else:
+            flash("API URL must be a valid http:// or https:// URL.", "error")
         return redirect(url_for("settings.settings_kea"))
     if api_ca and not os.path.isfile(api_ca):
         flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
@@ -210,48 +260,98 @@ def save_infra_kea_db():
 @_admin_required
 def save_infra_kea6():
     """
-    v5.0 Phase 1 — [kea6] API connection override. Every field is
-    optional; leaving them blank (or clearing a previously-set value)
-    means Jen falls back to the v4 [kea] connection info at load time
-    (jen/config.py's AppConfig.apply()) — the common same-CA case. This
-    route only ever writes to [kea6]/[kea6_db]; it does not touch the
-    ipv6_enabled display flag or the remote kea-dhcp6-server state — see
-    toggle_ipv6() for that.
+    v5.0 Phase 1 / v5.10.2 — [kea6] / [kea6_db] connection override, with
+    inheritance that actually works.
+
+    - Text fields (api_url, api_user; db_host, db_user, db_name):
+      non-empty → written; **blank → the [kea6]/[kea6_db] key is removed**,
+      so Jen genuinely falls back to the v4 [kea]/[kea_db] value at load
+      time (jen/config.py's AppConfig.apply()). Before v5.10.2 a blank
+      field wrote nothing, leaving a stale override on disk — after
+      switching direct→ca that could aim a `{"service": ["dhcp6"]}`
+      payload at the v6 daemon's own port.
+    - Password fields (api_pass; db_pass): non-empty → written; blank →
+      kept as-is (every password field in Jen behaves this way). Tick
+      "Inherit …" to actually remove it.
+    - A section with no options left is removed entirely.
+    - api_url, when set, must be a valid http(s):// URL — and in direct
+      mode it must carry an explicit port.
+    This route never touches the ipv6_enabled display flag or the remote
+    kea-dhcp6-server state — see toggle_ipv6() for that.
     """
     api_url = request.form.get("api_url", "").strip()
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
-    if api_url and not api_url.startswith(("http://", "https://")):
-        flash("Kea6 API URL must start with http:// or https://.", "error")
-        return redirect(url_for("settings.settings_kea"))
+    inherit_api_pass = request.form.get("inherit_api_pass", "") == "1"
     db_host = request.form.get("db_host", "").strip()
     db_user = request.form.get("db_user", "").strip()
     db_pass = request.form.get("db_pass", "").strip()
+    inherit_db_pass = request.form.get("inherit_db_pass", "") == "1"
     db_name = request.form.get("db_name", "").strip()
 
-    items = []
-    if api_url:
-        items.append(("kea6", "api_url", api_url))
-    if api_user:
-        items.append(("kea6", "api_user", api_user))
-    if api_pass:
-        items.append(("kea6", "api_pass", api_pass))
-    if db_host:
-        items.append(("kea6_db", "host", db_host))
-    if db_user:
-        items.append(("kea6_db", "user", db_user))
-    if db_pass:
-        items.append(("kea6_db", "password", db_pass))
-    if db_name:
-        items.append(("kea6_db", "database", db_name))
+    if api_url and not __auth.valid_api_url(api_url, require_port=(extensions.KEA_CONNECTION_MODE == "direct")):
+        if extensions.KEA_CONNECTION_MODE == "direct":
+            flash(
+                "The Kea6 API URL must be a valid http(s):// URL with an explicit port "
+                "in direct mode (e.g. http://kea:8006).",
+                "error",
+            )
+        else:
+            flash("The Kea6 API URL must be a valid http:// or https:// URL.", "error")
+        return redirect(url_for("settings.settings_kea"))
 
-    if items:
-        __config.app_config.write_values(items)
-        __user.set_global_setting("restart_pending", "true")
-        flash("Kea6 API settings saved. Restart Jen to apply.", "success")
-        __user.audit("SAVE_INFRA", "kea6_api", f"url={api_url or '(inherits v4)'}")
-    else:
-        flash("No Kea6 values provided — leaving [kea6] as inheriting v4 settings.", "info")
+    # (section, option, submitted value)
+    text_fields = [
+        ("kea6", "api_url", api_url),
+        ("kea6", "api_user", api_user),
+        ("kea6_db", "host", db_host),
+        ("kea6_db", "user", db_user),
+        ("kea6_db", "database", db_name),
+    ]
+    # (section, option, submitted value, inherit-checkbox)
+    pw_fields = [
+        ("kea6", "api_pass", api_pass, inherit_api_pass),
+        ("kea6_db", "password", db_pass, inherit_db_pass),
+    ]
+    changed: list[str] = []
+
+    def _apply(cfg):
+        for section, opt, val in text_fields:
+            has = cfg.has_section(section) and cfg.has_option(section, opt)
+            if val:
+                if not has or cfg.get(section, opt) != val:
+                    if not cfg.has_section(section):
+                        cfg.add_section(section)
+                    cfg.set(section, opt, val)
+                    changed.append(f"{section}.{opt} set")
+            elif has:
+                cfg.remove_option(section, opt)
+                changed.append(f"{section}.{opt} cleared — inherits v4")
+        for section, opt, val, inherit in pw_fields:
+            has = cfg.has_section(section) and cfg.has_option(section, opt)
+            if inherit:
+                if has:
+                    cfg.remove_option(section, opt)
+                    changed.append(f"{section}.{opt} inherits v4")
+            elif val:
+                if not cfg.has_section(section):
+                    cfg.add_section(section)
+                cfg.set(section, opt, val)
+                changed.append(f"{section}.{opt} set")
+        for section in ("kea6", "kea6_db"):
+            if cfg.has_section(section) and not cfg.options(section):
+                cfg.remove_section(section)
+
+    __config.app_config.mutate(_apply)
+
+    if not changed:
+        flash("No Kea6 changes.", "info")
+        return redirect(url_for("settings.settings_kea"))
+
+    summary = "; ".join(changed)
+    __user.set_global_setting("restart_pending", "true")
+    flash(f"Kea6 settings saved: {summary}. Restart Jen to apply.", "success")
+    __user.audit("SAVE_INFRA", "kea6_api", summary)
     return redirect(url_for("settings.settings_kea"))
 
 
@@ -519,6 +619,9 @@ def save_extra_servers():
     api_urls = request.form.getlist("extra_api_url[]")
     api_users = request.form.getlist("extra_api_user[]")
     api_passes = request.form.getlist("extra_api_pass[]")
+    api6_urls = request.form.getlist("extra_api6_url[]")
+    api6_users = request.form.getlist("extra_api6_user[]")
+    api6_passes = request.form.getlist("extra_api6_pass[]")
     ssh_hosts = request.form.getlist("extra_ssh_host[]")
     ssh_users = request.form.getlist("extra_ssh_user[]")
     kea_confs = request.form.getlist("extra_kea_conf[]")
@@ -535,16 +638,58 @@ def save_extra_servers():
         if kc.strip() and not __auth.valid_remote_path(kc.strip()):
             flash(f"Invalid Kea config path: {kc.strip()}", "error")
             return redirect(url_for("settings.settings_kea"))
+    _require_port = extensions.KEA_CONNECTION_MODE == "direct"
+    for u in api_urls:
+        if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
+            flash(f"Invalid API URL: {u.strip()}", "error")
+            return redirect(url_for("settings.settings_kea"))
+    for u in api6_urls:
+        if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
+            flash(f"Invalid IPv6 API URL: {u.strip()} (direct mode needs an explicit port)", "error")
+            return redirect(url_for("settings.settings_kea"))
 
     def _rewrite_extra_servers(cfg):
-        # Remove all existing extra server sections
+        # v5.10.2 — snapshot every current [kea_server_N] so keys the form
+        # doesn't manage (ssh_key, any hand-added value) survive the
+        # remove-and-rebuild. Preservation is by POSITION: row i ↔
+        # kea_server_{i}. Reordering/removing rows moves preserved keys
+        # with the position, not the server — the form already assumes
+        # this same position→section mapping.
+        existing = {}
         n = 2
         while cfg.has_section(f"kea_server_{n}"):
+            existing[n] = dict(cfg.items(f"kea_server_{n}"))
             cfg.remove_section(f"kea_server_{n}")
             n += 1
-        # Add new ones
-        for i, (name, role, api_url, api_user, api_pass, ssh_host, ssh_user, kea_conf) in enumerate(
-            zip(names, roles, api_urls, api_users, api_passes, ssh_hosts, ssh_users, kea_confs, strict=True), start=2
+
+        for i, (
+            name,
+            role,
+            api_url,
+            api_user,
+            api_pass,
+            api6_url,
+            api6_user,
+            api6_pass,
+            ssh_host,
+            ssh_user,
+            kea_conf,
+        ) in enumerate(
+            zip(
+                names,
+                roles,
+                api_urls,
+                api_users,
+                api_passes,
+                api6_urls,
+                api6_users,
+                api6_passes,
+                ssh_hosts,
+                ssh_users,
+                kea_confs,
+                strict=True,
+            ),
+            start=2,
         ):
             if not api_url.strip():
                 continue
@@ -563,9 +708,22 @@ def save_extra_servers():
                     cfg.set(sec, "api_pass", existing_pass)
                 except Exception:
                     cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
+            # v5.10.2 — per-server v6 endpoint. Blank managed field ⇒ key
+            # absent (that IS the clear). api6_pass blank ⇒ preserve.
+            if api6_url.strip():
+                cfg.set(sec, "api6_url", api6_url.strip())
+            if api6_user.strip():
+                cfg.set(sec, "api6_user", api6_user.strip())
+            if api6_pass.strip():
+                cfg.set(sec, "api6_pass", api6_pass.strip())
+            elif extensions.cfg.has_section(sec) and extensions.cfg.has_option(sec, "api6_pass"):
+                cfg.set(sec, "api6_pass", extensions.cfg.get(sec, "api6_pass"))
             cfg.set(sec, "ssh_host", ssh_host.strip())
             cfg.set(sec, "ssh_user", ssh_user.strip())
             cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
+            for k, v in existing.get(i, {}).items():
+                if k not in _EXTRA_SERVER_FORM_KEYS:
+                    cfg.set(sec, k, v)
 
     try:
         __config.app_config.mutate(_rewrite_extra_servers)
@@ -573,7 +731,7 @@ def save_extra_servers():
         # strict=True on the zip() inside _rewrite_extra_servers means a
         # form submission whose extra_*[] fields don't all have the same
         # number of entries — malformed or tampered, since Jen's own
-        # template always submits all eight together per server row —
+        # template always submits all eleven together per server row —
         # raises here instead of silently truncating to the shortest
         # list and misaligning one server's fields with another's.
         logger.error(f"Mismatched extra-server form field lengths: {e}")

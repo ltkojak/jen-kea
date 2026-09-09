@@ -20,6 +20,9 @@
 {% elif ca_deprecation_warning %}
 <div class="alert alert-warning">⚠️ This Kea server is <strong>{{ kea_version }}</strong>. ISC <strong>deprecated the Control Agent in Kea 3.0</strong> and removes it in 3.2. Jen is still using <code>ca</code> mode — plan the switch to <strong>Direct to daemons</strong> before you upgrade Kea past 3.1.</div>
 {% endif %}
+{% if direct_port_warnings %}
+<div class="alert alert-warning">⚠️ Direct mode needs an explicit port on every API URL — missing on: {{ direct_port_warnings | join('; ') }}. Add <code>:8004</code> (dhcp4) / <code>:8006</code> (dhcp6) and re-save.</div>
+{% endif %}
 
 <!-- Kea control plane -->
 <div class="card" id="kea-api">
@@ -183,6 +186,21 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
+                    <label>IPv6 API URL</label>
+                    <input type="text" name="extra_api6_url[]" value="{{ srv.api6_url }}" placeholder="http://YOUR-KEA-SERVER-2:8006">
+                </div>
+                <div class="form-group">
+                    <label>IPv6 API Username</label>
+                    <input type="text" name="extra_api6_user[]" value="{{ srv.api6_user }}" placeholder="(same as API username)">
+                </div>
+                <div class="form-group">
+                    <label>IPv6 API Password</label>
+                    <input type="password" name="extra_api6_pass[]" placeholder="(unchanged)">
+                </div>
+            </div>
+            <div class="form-hint" style="margin:-4px 0 10px;">Only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on (a kea-dhcp4 daemon can't answer v6 commands). Blank = use the IPv6 settings under the IPv6 card, then this server's v4 URL (ca mode only).</div>
+            <div class="form-row">
+                <div class="form-group">
                     <label>SSH Host</label>
                     <input type="text" name="extra_ssh_host[]" value="{{ srv.ssh_host }}" placeholder="10.0.0.x">
                 </div>
@@ -242,14 +260,14 @@
         <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp6's own</strong> HTTP control
         socket and is <strong>required</strong> when IPv6 is on — a kea-dhcp4 daemon can't answer v6
         commands, so there is no fallback to the v4 URL. ISC's example uses port 8004 for dhcp4; use
-        <strong>8006</strong> for dhcp6 by convention. Username/password/DB fields still fall back to
-        the v4 settings above when blank.
+        <strong>8006</strong> for dhcp6 by convention (an explicit port is required).
         {% else %}
-        Every field below is optional and falls back to the Kea Control Plane settings above when left
-        blank — the common Kea setup is one Control Agent proxying to both <code>kea-dhcp4</code> and
+        The common Kea setup is one Control Agent proxying to both <code>kea-dhcp4</code> and
         <code>kea-dhcp6</code>. Only fill these in if your v6 deployment genuinely uses a separate
         CA/port or a separate database.
         {% endif %}
+        <br>Blank text fields inherit the Kea settings above and clear any override saved here.
+        Passwords are kept unless you tick Inherit.
     </div>
     {% if infra.kea_connection_mode == 'direct' and ipv6_enabled and not infra.kea6_api_url %}
     <div class="alert alert-warning">⚠️ IPv6 is enabled and Jen is in <code>direct</code> mode, but no kea-dhcp6 control socket URL is set. v6 API calls will fail until you set the API URL below.</div>
@@ -266,8 +284,11 @@
             </div>
             <div class="form-group">
                 <label>API Password</label>
-                <input type="password" name="api_pass" placeholder="(inherited unless set)">
-                <div class="form-hint">Leave blank to inherit the Kea API password above</div>
+                <input type="password" name="api_pass" placeholder="(kept unless changed)">
+                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;">
+                    <input type="checkbox" name="inherit_api_pass" value="1" style="width:auto;">
+                    Inherit the Kea API password
+                </label>
             </div>
         </div>
         <div class="form-row">
@@ -281,7 +302,11 @@
             </div>
             <div class="form-group">
                 <label>DB Password</label>
-                <input type="password" name="db_pass" placeholder="(inherited unless set)">
+                <input type="password" name="db_pass" placeholder="(kept unless changed)">
+                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;">
+                    <input type="checkbox" name="inherit_db_pass" value="1" style="width:auto;">
+                    Inherit the Kea DB password
+                </label>
             </div>
             <div class="form-group">
                 <label>DB Name</label>
@@ -336,6 +361,12 @@ function addServerRow() {
             <div class="form-group"><label>API Password</label><input type="password" name="extra_api_pass[]" placeholder="password"></div>
         </div>
         <div class="form-row">
+            <div class="form-group"><label>IPv6 API URL</label><input type="text" name="extra_api6_url[]" placeholder="http://YOUR-KEA-SERVER-2:8006"></div>
+            <div class="form-group"><label>IPv6 API Username</label><input type="text" name="extra_api6_user[]" placeholder="(same as API username)"></div>
+            <div class="form-group"><label>IPv6 API Password</label><input type="password" name="extra_api6_pass[]" placeholder="(unchanged)"></div>
+        </div>
+        <div class="form-hint" style="margin:-4px 0 10px;">IPv6 API fields are only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on.</div>
+        <div class="form-row">
             <div class="form-group"><label>SSH Host</label><input type="text" name="extra_ssh_host[]"></div>
             <div class="form-group"><label>SSH Username</label><input type="text" name="extra_ssh_user[]"></div>
             <div class="form-group"><label>Kea Config Path</label><input type="text" name="extra_kea_conf[]" value="/etc/kea/kea-dhcp4.conf"></div>
@@ -348,7 +379,7 @@ function serializeServers() {
     const hidden = document.getElementById('extra-servers-hidden');
     hidden.innerHTML = '';
     rows.forEach((row, i) => {
-        const fields = ['extra_name', 'extra_role', 'extra_api_url', 'extra_api_user', 'extra_api_pass', 'extra_ssh_host', 'extra_ssh_user', 'extra_kea_conf'];
+        const fields = ['extra_name', 'extra_role', 'extra_api_url', 'extra_api_user', 'extra_api_pass', 'extra_api6_url', 'extra_api6_user', 'extra_api6_pass', 'extra_ssh_host', 'extra_ssh_user', 'extra_kea_conf'];
         fields.forEach(field => {
             const el = row.querySelector(`[name="${field}[]"]`);
             if (el) {

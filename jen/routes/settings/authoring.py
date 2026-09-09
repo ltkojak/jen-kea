@@ -166,32 +166,34 @@ def _direct_http_socket(service: str):
     """The `http` control-socket entry an authored config needs in
     connection_mode = direct — address 0.0.0.0 so the Jen host can reach
     it, port from the daemon's own [kea]/[kea6] api_url, basic-auth creds
-    from api_user/api_pass. Returns None when the creds aren't set (the
-    caller turns that into a form error rather than authoring an
-    unauthenticated socket on 0.0.0.0)."""
+    from api_user/api_pass. Returns None when the creds aren't set or the
+    API URL has no explicit port (the caller turns that into a form error
+    rather than authoring an unauthenticated / mis-ported socket).
+
+    v5.10.2 note: this whole function is superseded in step 3 by
+    _direct_control_socket(), which derives per-server from
+    kea._endpoint_for() and is scheme-aware. Kept minimal here only so
+    step 1's socket_port_from_url() signature change doesn't crash."""
     if service == "dhcp4":
-        api_url, api_user, api_pass, fallback_port = (
+        api_url, api_user, api_pass = (
             extensions.KEA_API_URL,
             extensions.KEA_API_USER,
             extensions.KEA_API_PASS,
-            8000,
         )
     else:
-        api_url, api_user, api_pass, fallback_port = (
+        api_url, api_user, api_pass = (
             extensions.KEA6_API_URL,
             extensions.KEA6_API_USER,
             extensions.KEA6_API_PASS,
-            8006,
         )
-    if not (api_user and api_pass):
+    port = __authoring.socket_port_from_url(api_url)
+    if not (api_user and api_pass) or port is None:
         return None
     return {
         # nosec B104 — goes into the authored Kea daemon's own config, not
-        # a bind Jen performs; Kea must listen on all interfaces for the
-        # (remote) Jen host to reach it, and the http socket carries
-        # required basic auth. See build_new_kea_config().
+        # a bind Jen performs. Replaced by a bind-address picker in step 3.
         "address": "0.0.0.0",  # nosec B104
-        "port": __authoring.socket_port_from_url(api_url, fallback_port),
+        "port": port,
         "user": api_user,
         "password": api_pass,
     }
@@ -222,9 +224,10 @@ def _author_kea_build_config(service, form):
                 None,
                 None,
                 (
-                    "Direct connection mode needs a Kea API username and password "
-                    f"(Settings → Kea{' → Kea6' if service == 'dhcp6' else ''}) — they become the "
-                    "http control socket's basic-auth credentials in the generated config."
+                    "Direct connection mode needs a Kea API username, password, and an explicit "
+                    f"port in the API URL (Settings → Kea{' → Kea6' if service == 'dhcp6' else ''}) — "
+                    "they become the http control socket's port and basic-auth credentials in the "
+                    "generated config."
                 ),
             )
 

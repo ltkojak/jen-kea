@@ -133,6 +133,29 @@ def valid_dns_lookup_host(value):
     return valid_hostname(value) or valid_ip(value)
 
 
+def valid_api_url(url: str, require_port: bool = False) -> bool:
+    """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
+    in direct mode (require_port=True) — an explicit port. A daemon
+    control socket is never on 80/443, and `http://kea` (no port) would
+    otherwise have Jen dial :80 while authoring emits a socket on :8004.
+    urlparse raises ValueError on a bad port literal like `:abc`."""
+    from urllib.parse import urlparse
+
+    value = (url or "").strip()
+    if not value:
+        return False
+    try:
+        p = urlparse(value)
+        port = p.port
+    except ValueError:
+        return False
+    if p.scheme not in ("http", "https") or not p.hostname:
+        return False
+    if require_port and port is None:
+        return False
+    return True
+
+
 # ─────────────────────────────────────────
 # Rate limiting
 # ─────────────────────────────────────────

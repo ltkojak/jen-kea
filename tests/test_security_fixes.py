@@ -240,6 +240,33 @@ class TestRemoteCommandValidators:
         assert valid_remote_path("/tmp/x`whoami`") is False
         assert valid_remote_path("relative/path") is False
 
+
+class TestValidApiUrl:
+    """v5.10.2 — the Kea command-API URL check. In direct mode a daemon
+    control socket needs an explicit port (never 80/443)."""
+
+    @pytest.mark.parametrize(
+        "url,require_port,expected",
+        [
+            ("http://kea:8004", False, True),
+            ("https://kea:8443", False, True),
+            ("http://kea", False, True),  # port optional unless direct
+            ("http://kea", True, False),  # direct: explicit port required
+            ("http://kea:8004", True, True),
+            ("https://[2001:db8::1]:8006", True, True),
+            ("ftp://kea:21", False, False),  # scheme
+            ("kea:8004", False, False),  # no scheme
+            ("http://", False, False),  # no host
+            ("http://kea:notaport", True, False),  # bad port literal
+            ("", False, False),
+            (None, False, False),
+        ],
+    )
+    def test_table(self, url, require_port, expected):
+        from jen.services.auth import valid_api_url
+
+        assert valid_api_url(url, require_port=require_port) is expected
+
     def test_valid_dns_lookup_host_accepts_hostname_and_ip(self):
         from jen.services.auth import valid_dns_lookup_host
 

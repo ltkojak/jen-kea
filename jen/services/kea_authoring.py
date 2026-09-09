@@ -206,17 +206,18 @@ def _pool_for_cidr(cidr: str) -> str:
     return f"{first}-{last}"
 
 
-def socket_port_from_url(url: str, fallback: int) -> int:
-    """Pull the port out of a direct-mode api_url (``http://host:8004`` →
-    8004) for the authored ``http`` control-socket entry. Falls back when
-    the URL has no explicit port or doesn't parse."""
+def socket_port_from_url(url: str):
+    """Pull the explicit port out of a direct-mode api_url
+    (``http://host:8004`` → 8004) for the authored control-socket entry.
+    Returns None when the URL has no explicit port or doesn't parse —
+    direct mode requires one, so the caller turns None into an error
+    rather than guessing 8000/8006 (v5.10.2)."""
     from urllib.parse import urlparse
 
     try:
-        port = urlparse(url).port
+        return urlparse(url).port
     except ValueError:
-        port = None
-    return port or fallback
+        return None
 
 
 def build_new_kea_config(

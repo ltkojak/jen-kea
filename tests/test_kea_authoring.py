@@ -287,19 +287,20 @@ class TestBuildNewKeaConfig:
 
 class TestSocketPortFromUrl:
     @pytest.mark.parametrize(
-        "url,fallback,expected",
+        "url,expected",
         [
-            ("http://kea:8004", 8000, 8004),
-            ("https://kea.example:9443", 8000, 9443),
-            ("http://kea", 8000, 8000),  # no explicit port
-            ("", 8006, 8006),
-            ("not a url", 8000, 8000),
+            ("http://kea:8004", 8004),
+            ("https://kea.example:9443", 9443),
+            ("http://kea", None),  # v5.10.2 — no explicit port is an error, not a guess
+            ("https://kea", None),
+            ("", None),
+            ("not a url", None),
         ],
     )
-    def test_parse(self, url, fallback, expected):
+    def test_parse(self, url, expected):
         from jen.services.kea_authoring import socket_port_from_url
 
-        assert socket_port_from_url(url, fallback) == expected
+        assert socket_port_from_url(url) == expected
 
 
 class TestRenderAuthorConfigScript:
@@ -583,7 +584,8 @@ class TestAuthorKeaConfigPreviewRoute:
             },
         )
         assert resp.status_code == 400
-        assert "username and password" in resp.get_json()["error"]
+        err = resp.get_json()["error"]
+        assert "username" in err and "password" in err
 
 
 class TestDetectInstalledKeaServices:

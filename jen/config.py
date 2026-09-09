@@ -248,6 +248,12 @@ class AppConfig:
                 # (jen/services/kea.py::_endpoint_for); v6 API is
                 # primary-only, so extra servers rarely set this.
                 "api6_url": cfg.get("kea6", "api_url", fallback=""),
+                # v5.10.2 — per-daemon v6 credentials. The `or` chain in
+                # _endpoint_for() (server.api6_* → KEA6_* → server.api_*)
+                # encodes precedence, so these carry the RAW [kea6] value,
+                # NOT a fallback — pre-filling would mask that chain.
+                "api6_user": cfg.get("kea6", "api_user", fallback=""),
+                "api6_pass": cfg.get("kea6", "api_pass", fallback=""),
                 "api_user": primary_user,
                 "api_pass": primary_pass,
                 "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
@@ -266,6 +272,11 @@ class AppConfig:
                     "name": cfg.get(sec, "name", fallback=f"Kea Server {n}"),
                     "api_url": cfg.get(sec, "api_url", fallback=""),
                     "api6_url": cfg.get(sec, "api6_url", fallback=""),
+                    # v5.10.2 — raw per-server value, fallback "" (see the
+                    # primary above); _endpoint_for()'s `or` chain does the
+                    # rest.
+                    "api6_user": cfg.get(sec, "api6_user", fallback=""),
+                    "api6_pass": cfg.get(sec, "api6_pass", fallback=""),
                     "api_user": cfg.get(sec, "api_user", fallback=primary_user),
                     "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
                     "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
