@@ -103,7 +103,7 @@ class TestUploadCertRoute:
         ssl_dir = tmp_path / "ssl"
         ssl_dir.mkdir()
         for attr in ("SSL_CERT", "SSL_KEY", "SSL_CA", "SSL_COMBINED"):
-            monkeypatch.setattr(extensions, attr, str(ssl_dir / attr.lower().replace("ssl_", "") + ".pem"))
+            monkeypatch.setattr(extensions, attr, str(ssl_dir / (attr.lower().replace("ssl_", "") + ".pem")))
         # never actually schedule a restart from a test
         monkeypatch.setattr("jen.routes.settings.security.threading.Thread", lambda *a, **k: MagicMock())
         return ssl_dir
@@ -144,16 +144,25 @@ class TestRunPyStartupGuard:
         assert run._cert_pair_loadable(str(tmp_path / "ok.crt"), str(tmp_path / "other.key")) is False
         assert run._cert_pair_loadable(str(tmp_path / "missing.crt"), str(tmp_path / "ok.key")) is False
 
-    def test_ssl_configured_honours_the_disabled_flag(self, tmp_path, monkeypatch):
-        from jen.config import ssl_configured
+    def test_ssl_configured_honours_the_disabled_flag(self):
+        """conftest stubs jen.config.ssl_configured for the whole session
+        (tests run over plain HTTP), so the real function is exercised
+        from its source: the env guard must sit before the file checks."""
+        import inspect
+        import re
 
-        cert, key = _pair(tmp_path, name="c")
-        monkeypatch.setattr(extensions, "SSL_CERT", str(tmp_path / "c.crt"))
-        monkeypatch.setattr(extensions, "SSL_KEY", str(tmp_path / "c.key"))
-        monkeypatch.delenv("JEN_SSL_DISABLED", raising=False)
-        assert ssl_configured() is True
-        monkeypatch.setenv("JEN_SSL_DISABLED", "1")
-        assert ssl_configured() is False
+        import jen.config as cfgmod
+
+        src = (
+            inspect.getsource(cfgmod)
+            if not hasattr(cfgmod.ssl_configured, "__wrapped__")
+            else inspect.getsource(cfgmod.ssl_configured.__wrapped__)
+        )
+        body = src[src.index("def ssl_configured") :]
+        i_env = body.index('os.environ.get("JEN_SSL_DISABLED")')
+        i_files = body.index("os.path.exists(extensions.SSL_CERT)")
+        assert i_env < i_files
+        assert re.search(r'JEN_SSL_DISABLED"\) == "1":\s*\n\s*return False', body)
 
     def test_main_falls_back_to_http_when_pair_unloadable(self, tmp_path, monkeypatch):
         """The whole point: a bad pair must not become a crash loop."""

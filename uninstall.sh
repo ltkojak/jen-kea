@@ -170,7 +170,7 @@ fi
 # ── Level 2: remove config ────────────────────────────────────────────────────
 if [[ "$REMOVAL_LEVEL" == "2" ]]; then
     if [[ -f "${CONFIG_DIR}/jen.config" ]]; then
-        local bak="${CONFIG_DIR}/jen.config.removed.$(date +%Y%m%d_%H%M%S)"
+        bak="${CONFIG_DIR}/jen.config.removed.$(date +%Y%m%d_%H%M%S)"
         cp "${CONFIG_DIR}/jen.config" "$bak"
         rm -f "${CONFIG_DIR}/jen.config"
         ok "Removed jen.config  ${DIM}(backup saved: ${bak})${NC}"

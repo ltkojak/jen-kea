@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from flask import Flask, abort, flash, redirect, request, session, url_for
+from flask import Flask, flash, redirect, request, session, url_for
 from flask_login import LoginManager, current_user, logout_user
 
 from jen import extensions
@@ -320,7 +320,10 @@ def create_app() -> Flask:
 
             host = safe_host(request.host)
             if host is None:
-                abort(400)
+                # An explicit response, not abort(): the app's generic
+                # Exception handler would turn an HTTPException here into a
+                # 500 page.
+                return "Bad Request: invalid Host header\n", 400, {"Content-Type": "text/plain"}
             qs = request.query_string.decode("utf-8", "replace")
             target = f"https://{host}:{extensions.HTTPS_PORT}{request.path}" + (f"?{qs}" if qs else "")
             return redirect(target, code=301)
