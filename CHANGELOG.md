@@ -2,6 +2,51 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.8.0] - 2026-09-09
+
+### Bare-metal Jen runs from its own venv
+
+Jen's Python dependencies move off system site-packages — no more
+`pip install --break-system-packages` — into a dedicated virtualenv at
+`/opt/jen/venv`. `install.sh` builds it (`python3 -m venv`, `--upgrade`
+on re-runs so an Ubuntu Python bump doesn't strand it), installs
+`-r requirements.txt` into it, and pulls `python3-venv` via apt when
+it's missing.
+
+`jen.service` **deliberately stays** on `/usr/bin/python3 /opt/jen/run.py`:
+`run.py` re-execs into `/opt/jen/venv/bin/python` at the very top of the
+file, before its first dependency import. Doing it as a re-exec rather
+than a unit-file change means the unit never has to move, an in-app
+update from a pre-venv install can't leave systemd pointing at a venv
+that doesn't exist yet, and a missing or broken venv (a fresh box, or an
+OS upgrade that stranded it — `sudo ./install.sh --repair` rebuilds)
+falls through to the system interpreter. `JEN_NO_VENV_REEXEC=1` opts
+out. Docker is unchanged — the container is the isolation.
+
+### Transactional self-updater
+
+`jen-update-root.py` went from *replace `/opt/jen`, then `pip`
+non-fatally, then restart* — which silently shipped a half-updated app
+if a release genuinely needed a new library — to a staged flow:
+
+1. download + checksum-verify, extract to a staging directory
+2. ensure `/opt/jen/venv` exists (create it if the install predates it)
+3. `pip install` the **staged** `requirements.txt` into the venv — a
+   failure here **aborts before any file in `/opt/jen` is touched**
+4. compile + import the staged `jen/` package under the updated venv —
+   a failure aborts, still nothing changed
+5. snapshot the replace-wholesale parts of the install, swap the files
+   in, restart
+6. health-check (unit active + the HTTP port answering below 500); if
+   the service doesn't come back healthy, **restore the snapshot and
+   restart the previous version**
+
+Dependencies and code are proven against each other before the switch.
+The venv is still shared, so a rollback keeps the newer (floor-pinned,
+forward-compatible) dependencies rather than doing a true point-in-time
+revert — a genuinely atomic switch waits for versioned release
+directories in a future major (see `docs/ARCHITECTURE.md` §6).
+
 ## [5.7.0] - 2026-09-08
 
 ### Alert-channel tokens encrypted at rest

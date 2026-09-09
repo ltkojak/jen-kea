@@ -186,13 +186,8 @@ whatever actually gets installed against known CVEs on every push, so a
 newly-disclosed vulnerability in a floor-pinned dependency gets caught
 even without a version bump.
 
-v5.5.0 — the self-updater does now run `pip`
-(`install_python_dependencies()` in `jen-update-root.py`,
-`pip install -r /opt/jen/requirements.txt` after the file install,
-non-fatal). It runs as root against the system Python, matching
-`install.sh`. Making that a dedicated venv, and making the whole update
-transactional (stage → validate → switch) rather than
-replace-then-try-deps, is a tracked follow-up — see §6.
+v5.5.0 — the self-updater started running `pip`. v5.8.0 moved that into
+a `/opt/jen/venv` and made the update transactional — see §6.
 
 ### 3.6 MFA secret encryption at rest (v5.4.0)
 
@@ -443,23 +438,40 @@ background workers itself). This is a safety net so the console never
 goes dark on a bad update; it is not a supported way to run in
 production, and it says so, loudly, in the log on every start.
 
-**The self-updater now runs pip.** `jen-update-root.py` copied files but
-never installed packages. v5.5.0 made that a hard problem (`run.py` now
-needs gunicorn), so `install_python_dependencies()` runs
-`pip install -r /opt/jen/requirements.txt` after the file install,
-non-fatally (a failure is logged; the werkzeug fallback covers a
-genuinely missing package until a `sudo ./install.sh --upgrade`).
+**venv + transactional self-update (v5.8.0).** Two paired changes to how
+Jen's code and dependencies land on bare metal.
 
-**Known-weaker-than-ideal, tracked for a future major:** pip runs as
-root against the system Python (matching `install.sh`), not a dedicated
-`/opt/jen/venv`; and the update is *replace-then-try-deps* rather than
-*stage → validate → switch*. Non-fatal dependency install is fine for
-the gunicorn transition (the werkzeug fallback catches a missing
-package) but won't be when a future release genuinely requires a new
-library or API. A venv plus a transactional updater — ideally with
-versioned release directories and an atomic `current` symlink, which
-also closes the "tarball deploy can't delete files" gap in §7 — is the
-deployment architecture to steer toward.
+*The venv.* Jen's Python dependencies live in `/opt/jen/venv`, not system
+site-packages — no more `pip --break-system-packages`. `install.sh`
+builds it (`setup_venv()`, `python3 -m venv --upgrade` on re-runs so an
+OS Python bump doesn't strand it) and installs `-r requirements.txt`
+into it. `jen.service` **still calls `/usr/bin/python3 /opt/jen/run.py`**
+on purpose: `run.py` re-execs into `/opt/jen/venv/bin/python` at the top
+of the file, before its first dependency import. Doing it as a re-exec
+rather than a unit change means the unit file never has to move, an
+in-app update from a pre-venv install can't leave systemd pointing at a
+venv that isn't there yet, and a missing or broken venv falls through to
+the system interpreter (with the werkzeug fallback still behind that).
+Docker doesn't use any of this — the container is the isolation.
+
+*The transactional updater.* `jen-update-root.py` was
+*replace-then-try-deps*: overwrite `/opt/jen`, then `pip` non-fatally,
+then restart — which silently shipped a half-updated app if a release
+genuinely needed a new library. It's now
+verify → stage → `pip` into the venv → compile+import the staged
+package → snapshot → switch → restart → health-check, and it **restores
+the snapshot and restarts the previous version** if the post-update
+service doesn't come back healthy (unit active + HTTP answering). Deps
+and code are both proven against each other before a single file in
+`/opt/jen` is touched.
+
+**Still weaker than ideal, tracked for a future major:** the venv is
+shared, so a rollback keeps the newer dependencies (fine because they're
+floor-pinned and forward-compatible, but not a true point-in-time
+revert); and the "switch" is still an in-place file copy, not an atomic
+pointer flip. Versioned release directories (`/opt/jen/releases/X.Y.Z` +
+an atomic `current` symlink), which also close the "tarball deploy can't
+delete files" gap in §7, are the next step.
 
 **Still not offered:** a reverse proxy is not required and not
 configured by the installer. Terminating TLS in nginx/caddy and running
