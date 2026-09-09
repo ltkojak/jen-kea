@@ -7,15 +7,28 @@ on:
 
 jobs:
   pytest:
+    name: pytest (py${{ matrix.python-version }} · ${{ matrix.db-image }})
     runs-on: ubuntu-latest
 
     # README claims Python 3.10+ / Ubuntu 22.04 (which ships 3.10). With
     # floor-pinned deps a future "latest compatible" package could quietly
     # drop 3.10 while CI stayed green on 3.12 — so test the real floor too.
+    # Jen also claims MySQL *or* MariaDB support; the third leg exercises
+    # MySQL 8 (only MariaDB was tested through v5.7.x). The MariaDB image
+    # honours the MYSQL_* env vars too, so one block covers both.
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.10', '3.12']
+        include:
+          - python-version: '3.10'
+            db-image: mariadb:10.11
+            db-ping: mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw
+          - python-version: '3.12'
+            db-image: mariadb:10.11
+            db-ping: mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw
+          - python-version: '3.12'
+            db-image: mysql:8.0
+            db-ping: mysqladmin ping -h 127.0.0.1 -u root -pci_root_pw
 
     # v5.5.x — JEN_ROOT (v5.3.3) points the app's static/template/plugin
     # paths at the checkout, replacing the old `ln -sf` into /opt/jen.
@@ -24,17 +37,17 @@ jobs:
       JEN_ROOT: ${{ github.workspace }}
 
     services:
-      mariadb:
-        image: mariadb:10.11
+      database:
+        image: ${{ matrix.db-image }}
         env:
-          MARIADB_ROOT_PASSWORD: ci_root_pw
-          MARIADB_DATABASE: jen_test
-          MARIADB_USER: jen
-          MARIADB_PASSWORD: ci_jen_pw
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: jen_test
+          MYSQL_USER: jen
+          MYSQL_PASSWORD: ci_jen_pw
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-cmd="${{ matrix.db-ping }}"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
