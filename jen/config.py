@@ -360,5 +360,14 @@ def ssl_configured() -> bool:
     HTTP-only with no indication why. run.py already treats
     SSL_COMBINED as optional (falls back to SSL_CERT if absent); this
     now matches that.
+
+    v5.9.1: run.py sets JEN_SSL_DISABLED=1 when the on-disk pair exists but
+    cannot be loaded (a mismatched key, a truncated PEM) and it has fallen
+    back to HTTP-only rather than crash-looping. Everything that keys on
+    "is SSL on" — the HTTPS redirect, the Secure cookie flag, the settings
+    badges — must agree with what's actually being served, so honour it
+    here, at the one choke point.
     """
+    if os.environ.get("JEN_SSL_DISABLED") == "1":
+        return False
     return os.path.exists(extensions.SSL_CERT) and os.path.exists(extensions.SSL_KEY)

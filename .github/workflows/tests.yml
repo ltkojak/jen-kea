@@ -110,6 +110,22 @@ jobs:
       - name: ruff format --check
         run: ruff format --check .
 
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      # v5.9.1 — install.sh is a load-bearing part of the deployment story
+      # and had no static-analysis gate. Severity `error` to start: the
+      # script predates this check and carries style warnings; genuine
+      # errors fail the build today, warnings get worked down over time.
+      - name: shellcheck (errors)
+        run: shellcheck -S error install.sh uninstall.sh scripts/release_check.sh
+
   bandit:
     runs-on: ubuntu-latest
     steps:

@@ -13,7 +13,7 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from flask import Flask, flash, redirect, request, session, url_for
+from flask import Flask, abort, flash, redirect, request, session, url_for
 from flask_login import LoginManager, current_user, logout_user
 
 from jen import extensions
@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.9.0"
+JEN_VERSION = "5.9.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -311,9 +311,19 @@ def create_app() -> Flask:
     def redirect_to_https():
         if request.is_secure:
             return
-        if _ssl_configured_cached() and not request.is_secure:
-            host = request.host.split(":")[0]
-            return redirect(f"https://{host}:{extensions.HTTPS_PORT}{request.path}", code=301)
+        if _ssl_configured_cached():
+            # v5.9.1 — the Host header is client-supplied; only redirect to
+            # something that is a plain hostname/IP (never `evil.example/x`
+            # or a header-injected value), and keep the query string — the
+            # Settings tabs are ?tab=… and this used to drop them.
+            from jen.httpredirect import safe_host
+
+            host = safe_host(request.host)
+            if host is None:
+                abort(400)
+            qs = request.query_string.decode("utf-8", "replace")
+            target = f"https://{host}:{extensions.HTTPS_PORT}{request.path}" + (f"?{qs}" if qs else "")
+            return redirect(target, code=301)
 
     @app.before_request
     def _enforce_password_change():

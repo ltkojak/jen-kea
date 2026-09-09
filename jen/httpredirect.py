@@ -13,9 +13,38 @@ trivial — it never touches the database, config, or the Jen app.
 """
 
 import logging
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logger = logging.getLogger(__name__)
+
+# A hostname (RFC 1123 labels), a dotted IPv4, or a bracketed IPv6 literal.
+# Anything else in a Host header is not somewhere we'll redirect a browser.
+_HOST_RE = re.compile(
+    r"^(?:\[[0-9A-Fa-f:.]+\]"
+    r"|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?)$"
+)
+
+
+def safe_host(host_header):
+    """
+    v5.9.1 — the host part of a Host header, or None if it isn't a plain
+    hostname / IPv4 / bracketed IPv6. Both redirect paths (this listener
+    and the app's before_request) build `https://<host>:<port>/…` from the
+    incoming Host; a value we'd never legitimately serve must not become a
+    Location we send a browser to. Port suffixes are stripped.
+    """
+    h = (host_header or "").strip()
+    if not h or len(h) > 253:
+        return None
+    if h.startswith("["):
+        end = h.find("]")
+        if end == -1:
+            return None
+        h = h[: end + 1]
+    else:
+        h = h.split(":", 1)[0]
+    return h if _HOST_RE.match(h) else None
 
 
 def _make_handler(https_port: int):
@@ -23,7 +52,16 @@ def _make_handler(https_port: int):
         protocol_version = "HTTP/1.1"
 
         def _redirect(self):
-            host = (self.headers.get("Host") or "").split(":")[0] or "localhost"
+            raw = self.headers.get("Host")
+            host = safe_host(raw) if raw else "localhost"
+            if host is None:
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                return
+            # self.path carries the query string too — preserved on purpose
+            # (Settings tabs are ?tab=… since v5.9.0).
             location = f"https://{host}:{https_port}{self.path}"
             body = b"Redirecting to HTTPS.\n"
             self.send_response(301)

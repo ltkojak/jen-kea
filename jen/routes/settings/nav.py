@@ -130,12 +130,12 @@ SUBTABS = {
         {"id": "migrate", "label": "Migrate", "url": "/settings/databases?tab=migrate", "roles": ("superadmin",)},
     ],
     "logs": [
-        {"id": "audit", "label": "Audit log", "url": "/settings/logs?tab=audit"},
-        {"id": "alerts", "label": "Alert log", "url": "/settings/logs?tab=alerts"},
+        {"id": "audit", "label": "Audit Log", "url": "/settings/logs?tab=audit"},
+        {"id": "alerts", "label": "Alert Log", "url": "/settings/logs?tab=alerts"},
     ],
     "system": [
-        {"id": "system", "label": "Updates & system", "url": "/settings/system"},
-        {"id": "plugins", "label": "Plugin manager", "url": "/settings/plugins", "roles": ("superadmin",)},
+        {"id": "system", "label": "Updates & System", "url": "/settings/system"},
+        {"id": "plugins", "label": "Plugin Manager", "url": "/settings/plugins", "roles": ("superadmin",)},
     ],
 }
 

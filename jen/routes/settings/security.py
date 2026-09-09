@@ -90,6 +90,65 @@ def clear_lockouts():
     return redirect(url_for("settings.settings_security"))
 
 
+def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -> str | None:
+    """
+    v5.9.1 — return None if cert + key (+ CA bundle, when given) load as a
+    real TLS server chain, else a short reason. The old check was textual
+    ("contains BEGIN CERTIFICATE"), so a valid certificate paired with the
+    wrong private key sailed through, got written to /etc/jen/ssl, and
+    gunicorn then refused to start — a self-inflicted outage. Loading the
+    material with the same API gunicorn uses catches malformed PEMs and a
+    mismatched key before anything on disk is touched. Pure — tested in
+    tests/test_ssl_material.py.
+    """
+    import ssl
+    import tempfile
+
+    if "BEGIN CERTIFICATE" not in cert_data:
+        return "the certificate file is not a PEM certificate"
+    if "PRIVATE KEY" not in key_data:
+        return "the private key file is not a PEM private key"
+    if ca_data and "BEGIN CERTIFICATE" not in ca_data:
+        return "the CA bundle is not a PEM certificate bundle"
+    with tempfile.TemporaryDirectory() as tmp:
+        chain = os.path.join(tmp, "chain.pem")
+        key = os.path.join(tmp, "key.pem")
+        with open(chain, "w") as f:
+            f.write(cert_data)
+            if ca_data:
+                f.write("\n" if not cert_data.endswith("\n") else "")
+                f.write(ca_data)
+        with open(key, "w") as f:
+            f.write(key_data)
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(chain, key)
+        except ssl.SSLError as e:
+            msg = (e.strerror or str(e)).lower()
+            if "mismatch" in msg:
+                return "the private key does not match the certificate"
+            return f"the certificate/key could not be loaded ({e.strerror or e})"
+        except (OSError, ValueError) as e:
+            return f"the certificate/key could not be loaded ({e})"
+    return None
+
+
+def _write_atomically(path: str, data: str, mode: int) -> None:
+    """Write next to the target then os.replace() it in — a reader (or a
+    restart) never sees a half-written PEM. The previous file, if any, is
+    kept beside it as `<name>.prev` for a manual recovery."""
+    if os.path.exists(path):
+        try:
+            os.replace(path, path + ".prev")
+        except OSError:
+            pass
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        f.write(data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
 @bp.route("/settings/upload-cert", methods=["POST"])
 @login_required
 @_admin_required
@@ -100,36 +159,22 @@ def upload_cert():
     if not cert_file or not key_file:
         flash("Certificate and private key are required.", "error")
         return redirect(url_for("settings.settings_security"))
-    os.makedirs("/etc/jen/ssl", exist_ok=True)
+    os.makedirs(os.path.dirname(extensions.SSL_CERT), exist_ok=True)
     try:
         cert_data = cert_file.read().decode("utf-8")
         key_data = key_file.read().decode("utf-8")
-        if "BEGIN CERTIFICATE" not in cert_data:
-            flash("Invalid certificate file — does not appear to be a PEM certificate.", "error")
+        ca_data = ca_file.read().decode("utf-8") if ca_file and ca_file.filename else None
+        reason = validate_cert_material(cert_data, key_data, ca_data)
+        if reason:
+            flash(f"Certificate rejected — {reason}. Nothing was changed.", "error")
             return redirect(url_for("settings.settings_security"))
-        if "BEGIN" not in key_data or "PRIVATE KEY" not in key_data:
-            flash("Invalid private key file.", "error")
-            return redirect(url_for("settings.settings_security"))
-        with open(extensions.SSL_CERT, "w") as f:
-            f.write(cert_data)
-        with open(extensions.SSL_KEY, "w") as f:
-            f.write(key_data)
-        if ca_file and ca_file.filename:
-            ca_data = ca_file.read().decode("utf-8")
-            with open(extensions.SSL_CA, "w") as f:
-                f.write(ca_data)
-            with open(extensions.SSL_COMBINED, "w") as f:
-                f.write(cert_data)
-                if not cert_data.endswith("\n"):
-                    f.write("\n")
-                f.write(ca_data)
-        else:
-            with open(extensions.SSL_COMBINED, "w") as f:
-                f.write(cert_data)
-        os.chmod(extensions.SSL_KEY, 0o640)
-        os.chmod(extensions.SSL_CERT, 0o644)
-        os.chmod(extensions.SSL_COMBINED, 0o644)
-        flash("Certificate uploaded. Jen is restarting...", "success")
+        combined = cert_data + ("" if cert_data.endswith("\n") else "\n") + (ca_data or "")
+        _write_atomically(extensions.SSL_CERT, cert_data, 0o644)
+        _write_atomically(extensions.SSL_KEY, key_data, 0o640)
+        if ca_data:
+            _write_atomically(extensions.SSL_CA, ca_data, 0o644)
+        _write_atomically(extensions.SSL_COMBINED, combined, 0o644)
+        flash("Certificate validated and installed. Jen is restarting...", "success")
         __user.audit("UPLOAD_CERT", "settings", "SSL certificate uploaded")
 
         def restart():

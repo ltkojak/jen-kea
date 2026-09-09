@@ -700,23 +700,59 @@ def verify_release_checksum(tarball_name, actual_hash, checksum_text):
     return expected_hash is not None and expected_hash == actual_hash
 
 
+KEEP_MARKER = ".keep"  # written into a snapshot the CRITICAL path wants preserved
+
+
 def _prune_stale_snapshots(install_dir=INSTALL_DIR):
     """v5.9.0 — older updaters left a `.rollback-<ts>` directory behind on
-    every failed attempt (a snapshot-step crash never reached cleanup; the
-    CRITICAL path keeps its snapshot on purpose). Anything from a previous
-    run is stale by the time a new run starts: prune it, keep the log
-    honest about what went."""
-    removed = 0
+    every failed attempt. v5.9.1 — prune everything EXCEPT (a) the newest
+    snapshot and (b) any snapshot carrying a `.keep` marker: the CRITICAL
+    path ("rollback restart also unhealthy") marks its snapshot because it
+    may be the only intact copy of the previous release if
+    restore_snapshot() itself died halfway. "Click Update again" must never
+    delete the one thing that can recover the box."""
     try:
-        for name in sorted(os.listdir(install_dir)):
-            if name.startswith(".rollback-"):
-                shutil.rmtree(os.path.join(install_dir, name), ignore_errors=True)
-                removed += 1
+        snaps = sorted(n for n in os.listdir(install_dir) if n.startswith(".rollback-"))
     except OSError:
         return 0
+    removed = 0
+    for name in snaps[:-1]:  # newest stays
+        path = os.path.join(install_dir, name)
+        if os.path.exists(os.path.join(path, KEEP_MARKER)):
+            log(f"Keeping {name} — marked for recovery by an earlier failed rollback.")
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
     if removed:
         log(f"Pruned {removed} stale rollback snapshot(s) from earlier runs.")
     return removed
+
+
+def _confirm_running_version(version, attempts=5, delay=3):
+    """
+    v5.9.1 — the running process must report the version we installed;
+    the on-disk JEN_VERSION only proves the copy succeeded, so it is no
+    longer accepted as "confirmed". /api/v1/health is retried a few times
+    (the app may still be warming up right after service_healthy() saw
+    the port answer) and a definite mismatch fails immediately.
+    """
+    last = None
+    for i in range(attempts):
+        running = _running_version()
+        if running == version:
+            return running
+        if running is not None:
+            raise RuntimeError(
+                f"post-restart version mismatch — expected v{version}, the running process reports v{running}"
+            )
+        last = i
+        if i < attempts - 1:
+            time.sleep(delay)
+    raise RuntimeError(
+        f"could not read the running version from {_local_base_url()}/api/v1/health after {last + 1} tries — "
+        f"refusing to call the update confirmed (the on-disk file says v{_installed_version()}, but that only "
+        "proves the files were copied)"
+    )
 
 
 def main():
@@ -895,14 +931,8 @@ def main():
             subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
             if not service_healthy():
                 raise RuntimeError("jen did not come back healthy after the update")
-            running = _running_version()
-            source = "running process"
-            if running is None:
-                running, source = _installed_version(), "on-disk"
-            if running == version:
-                log(f"Confirmed: jen is running v{running} ({source}).")
-            else:
-                raise RuntimeError(f"post-restart version mismatch — expected v{version}, {source} reports v{running}")
+            running = _confirm_running_version(version)
+            log(f"Confirmed: the running process reports v{running}.")
         except Exception as e:
             log(f"ERROR: {e} — rolling back.")
             restore_snapshot(snapshot_dir)
@@ -910,6 +940,11 @@ def main():
                 log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
                 shutil.rmtree(snapshot_dir, ignore_errors=True)
             else:
+                try:  # never auto-pruned by a later run — see _prune_stale_snapshots
+                    with open(os.path.join(snapshot_dir, KEEP_MARKER), "w") as f:
+                        f.write(f"rollback restart unhealthy after v{version} attempt; probe {_local_base_url()}/\n")
+                except OSError:
+                    pass
                 log(
                     "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
                     f"{snapshot_dir}; check `journalctl -u jen`. If `systemctl is-active jen` says active, "

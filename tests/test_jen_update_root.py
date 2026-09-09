@@ -558,9 +558,21 @@ class TestSnapshotRollback:
             (install / f".rollback-{ts}").mkdir()
             (install / f".rollback-{ts}" / "x").write_text("x")
         (install / "jen").mkdir()
-        assert jen_update_root._prune_stale_snapshots(str(install)) == 3
-        assert not any(p.name.startswith(".rollback-") for p in install.iterdir())
+        # v5.9.1 — the newest snapshot survives, and so does anything the
+        # CRITICAL path marked .keep (it may be the only intact copy of the
+        # previous release). Everything else goes.
+        (install / ".rollback-2" / jen_update_root.KEEP_MARKER).write_text("kept")
+        assert jen_update_root._prune_stale_snapshots(str(install)) == 1
+        left = sorted(p.name for p in install.iterdir() if p.name.startswith(".rollback-"))
+        assert left == [".rollback-2", ".rollback-3"]
         assert (install / "jen").exists()
+
+    def test_critical_path_marks_its_snapshot_keep(self, jen_update_root):
+        import inspect
+
+        src = inspect.getsource(jen_update_root.main)
+        i = src.index("CRITICAL: rollback restart also unhealthy")
+        assert "KEEP_MARKER" in src[i - 600 : i]
 
     def test_main_baselines_the_probe_before_the_snapshot(self, jen_update_root):
         """v5.9.0 — a probe that can't see the currently-running Jen must
@@ -823,9 +835,34 @@ class TestMainPostRestartChecks:
         src = inspect.getsource(jen_update_root.main)
         region = src[src.index("snapshot_install(snapshot_dir)") : src.rindex("return 0")]
         assert 'compileall", "-q", os.path.join(INSTALL_DIR, "jen")' in region
-        assert "_running_version()" in region
+        assert "_confirm_running_version(version)" in region
         assert region.index("compileall") < region.index("except Exception")
-        assert region.index("_running_version()") < region.index("except Exception")
+        assert region.index("_confirm_running_version(version)") < region.index("except Exception")
+        # v5.9.1 — the on-disk string is never accepted as "confirmed running"
+        assert "_installed_version(), " not in region
+
+    def test_confirm_running_version_retries_then_accepts(self, jen_update_root):
+        with (
+            patch.object(jen_update_root, "_running_version", side_effect=[None, None, "9.9.9"]),
+            patch("time.sleep") as slp,
+        ):
+            assert jen_update_root._confirm_running_version("9.9.9", attempts=5, delay=3) == "9.9.9"
+        assert slp.call_count == 2
+
+    def test_confirm_running_version_fails_instead_of_trusting_disk(self, jen_update_root):
+        with (
+            patch.object(jen_update_root, "_running_version", return_value=None),
+            patch.object(jen_update_root, "_installed_version", return_value="9.9.9"),
+            patch("time.sleep"),
+        ):
+            with pytest.raises(RuntimeError, match="only\\s+proves the files were copied"):
+                jen_update_root._confirm_running_version("9.9.9", attempts=3, delay=0)
+
+    def test_confirm_running_version_mismatch_fails_immediately(self, jen_update_root):
+        with patch.object(jen_update_root, "_running_version", return_value="1.0.0"), patch("time.sleep") as slp:
+            with pytest.raises(RuntimeError, match="mismatch"):
+                jen_update_root._confirm_running_version("9.9.9")
+        slp.assert_not_called()
 
 
 class TestInstallSelfUpdateFiles:

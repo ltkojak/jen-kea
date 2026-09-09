@@ -240,6 +240,32 @@ def _ssl_cert_paths() -> tuple[str, str]:
     return cert, extensions.SSL_KEY
 
 
+def _cert_pair_loadable(certfile: str, keyfile: str) -> bool:
+    """
+    v5.9.1 — can this cert/key pair actually be loaded as a TLS server
+    chain? gunicorn would find out the hard way: a mismatched key or a
+    truncated PEM makes it exit at startup, systemd's Restart=always spins,
+    and the console is gone until someone SSHes in. Checked here first so
+    a bad pair means "HTTP-only with a CRITICAL in the journal", not an
+    outage. Pure — unit-tested with a generated pair in tests/test_ssl_material.py.
+    """
+    import ssl
+
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile, keyfile)
+        return True
+    except Exception as e:  # ssl.SSLError, OSError, ValueError
+        logger.critical(
+            "SSL certificate/key (%s + %s) cannot be loaded: %s — starting HTTP-ONLY so the "
+            "console stays reachable. Replace the certificate under Settings → Access & Security → SSL Certificate.",
+            certfile,
+            keyfile,
+            e,
+        )
+        return False
+
+
 def _gunicorn_importable() -> bool:
     try:
         import gunicorn  # noqa: F401
@@ -261,6 +287,12 @@ def main():
     https_port = extensions.HTTPS_PORT
     threads = extensions.WORKER_THREADS
     use_ssl = ssl_configured()
+    if use_ssl and not _cert_pair_loadable(*_ssl_cert_paths()):
+        # Tell the app (inherited by gunicorn via exec/Popen) so the HTTPS
+        # redirect, the Secure cookie flag and the settings badges all agree
+        # that we're serving plain HTTP — see jen.config.ssl_configured().
+        os.environ["JEN_SSL_DISABLED"] = "1"
+        use_ssl = False
 
     if not _gunicorn_importable():
         logger.critical(

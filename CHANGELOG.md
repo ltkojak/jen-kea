@@ -2,6 +2,64 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.9.1] - 2026-09-09
+
+Follow-ups from the 5.9.0 review, plus the capitalisation nit.
+
+### A bad certificate upload can no longer take Jen down
+
+The certificate upload checked its inputs textually — "contains `BEGIN
+CERTIFICATE`", "contains `PRIVATE KEY`" — and then overwrote the live
+files and restarted. A perfectly valid certificate paired with the wrong
+private key passed, gunicorn refused the pair at startup, and systemd's
+`Restart=always` spun the console into an outage until someone SSHed in.
+
+- **Upload validates first.** The pair (and the CA bundle, if given) is
+  loaded with the same `ssl` API gunicorn uses, on temp files, before
+  anything under `/etc/jen/ssl` changes. A mismatched key or a truncated
+  PEM is refused with the reason and "Nothing was changed." Writes are
+  atomic (`os.replace`) and the previous cert/key are kept beside the new
+  ones as `.prev`.
+- **Startup never crash-loops on a bad pair.** `run.py` loads the on-disk
+  pair before launching HTTPS; if it can't, it logs CRITICAL, comes up
+  **HTTP-only** so the console stays reachable to fix it, and sets
+  `JEN_SSL_DISABLED=1` so the HTTPS redirect, the Secure cookie flag and
+  the settings badges all agree that plain HTTP is what's being served.
+
+### HTTP → HTTPS redirect
+
+- **Query strings are preserved.** The redirect used `request.path`, so
+  `/settings/databases?tab=backups` over HTTP landed on
+  `/settings/databases` — noticeable now that Settings tabs are `?tab=`.
+- **The Host header is validated** before it becomes a `Location`: a plain
+  hostname, IPv4 or bracketed IPv6 (port stripped), anything else gets a
+  400. Applies to both the in-app redirect and the standalone HTTP
+  listener (`jen/httpredirect.py`). Low risk in practice — a browser sends
+  the URL's own host — but there was no reason to build a redirect from
+  an unchecked header.
+
+### Updater
+
+- **The running-process version is authoritative.** After the restart the
+  updater must read the installed version back from `/api/v1/health`
+  (retried a few times while the app warms up). The on-disk `JEN_VERSION`
+  is no longer accepted as "confirmed running" — it only proves the copy
+  succeeded, which is not the question.
+- **Pruning keeps what recovery might need.** Stale `.rollback-*`
+  snapshots are still pruned, but the newest always survives, and a
+  snapshot the CRITICAL path marks with `.keep` is never auto-pruned —
+  clicking Update again after a failed rollback must not delete the one
+  intact copy of the previous release.
+
+### Also
+
+- ShellCheck runs in CI (`-S error` to start) on `install.sh`,
+  `uninstall.sh` and `scripts/release_check.sh`.
+- Sub-tab and jump-list labels are Title Case ("Updates & System",
+  "Plugin Manager", "Audit Log", "Alert Log", "Ports & Threads", …).
+- README still pointed IPv6 at "Settings → Infrastructure"; it's Settings
+  → Kea.
+
 ## [5.9.0] - 2026-09-09
 
 Settings, reorganised. Plus three small hardenings of the in-app
