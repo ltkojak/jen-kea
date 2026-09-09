@@ -66,14 +66,32 @@ import sys
 # missing venv (not built yet) or a broken one (an OS python bump stranded
 # it — `sudo ./install.sh --repair` rebuilds) simply falls through to the
 # current interpreter. Set JEN_NO_VENV_REEXEC=1 to opt out.
-_VENV_PYTHON = "/opt/jen/venv/bin/python"
-if (
-    os.environ.get("JEN_NO_VENV_REEXEC") != "1"
-    and os.path.exists(_VENV_PYTHON)
-    and os.path.realpath(sys.executable) != os.path.realpath(_VENV_PYTHON)
-):
+#
+# "Are we already the venv interpreter?" is `sys.prefix == the venv dir`,
+# NOT a realpath comparison of the executables: a POSIX venv's bin/python
+# is a symlink chain back to the base interpreter, so both realpath to
+# /usr/bin/pythonX.Y and the guard would wrongly conclude "already in the
+# venv" and never re-exec (v5.8.0 shipped with exactly that bug).
+_VENV_DIR = "/opt/jen/venv"
+
+
+def _venv_reexec_target(venv_dir=_VENV_DIR):
+    """The venv interpreter this process should re-exec into, or None to
+    stay put — opted out, no venv present, or we're already running it."""
+    if os.environ.get("JEN_NO_VENV_REEXEC") == "1":
+        return None
+    venv_python = os.path.join(venv_dir, "bin", "python")
+    if not os.path.exists(venv_python):
+        return None
+    if os.path.abspath(sys.prefix) == os.path.abspath(venv_dir):
+        return None
+    return venv_python
+
+
+_reexec_target = _venv_reexec_target()
+if _reexec_target:
     try:
-        os.execv(_VENV_PYTHON, [_VENV_PYTHON, os.path.abspath(__file__), *sys.argv[1:]])
+        os.execv(_reexec_target, [_reexec_target, os.path.abspath(__file__), *sys.argv[1:]])
     except OSError:
         # Broken venv (dangling interpreter symlink, etc.) — continue on
         # whatever interpreter we're already running under.

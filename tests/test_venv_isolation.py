@@ -8,8 +8,14 @@ maintains the venv; jen.service deliberately stays on system python3 so
 the unit never changes and a pre-venv install can't be stranded.
 """
 
+import os
 import pathlib
 import re
+import subprocess
+import sys
+import venv
+
+import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 RUN_PY = (REPO / "run.py").read_text(encoding="utf-8")
@@ -18,26 +24,65 @@ SERVICE = (REPO / "jen.service").read_text(encoding="utf-8")
 
 
 class TestRunPyReExec:
-    def test_reexec_block_present_and_guarded(self):
-        assert '_VENV_PYTHON = "/opt/jen/venv/bin/python"' in RUN_PY
-        # must not loop: skip the exec when we're already that interpreter
-        assert "os.path.realpath(sys.executable) != os.path.realpath(_VENV_PYTHON)" in RUN_PY
-        # opt-out hatch
-        assert 'os.environ.get("JEN_NO_VENV_REEXEC") != "1"' in RUN_PY
-        # a broken venv must not be fatal
-        assert "except OSError:" in RUN_PY
+    def test_guard_uses_sys_prefix_not_realpath(self):
+        # v5.8.0 shipped with a realpath(executable) comparison, which is
+        # always equal on POSIX (venv bin/python symlink-chains to the base
+        # interpreter) → re-exec never fired. sys.prefix is the right check.
+        assert "os.path.abspath(sys.prefix) == os.path.abspath(venv_dir)" in RUN_PY
+        assert "os.path.realpath" not in RUN_PY, "the realpath comparison was the bug"
+        assert 'os.environ.get("JEN_NO_VENV_REEXEC") == "1"' in RUN_PY
+        assert "except OSError:" in RUN_PY  # broken venv must not be fatal
 
     def test_reexec_runs_before_any_jen_import(self):
-        reexec_at = RUN_PY.index("_VENV_PYTHON =")
-        first_jen_import = RUN_PY.index("from jen import JEN_VERSION")
-        assert reexec_at < first_jen_import, "venv re-exec must precede the first dependency import"
+        assert RUN_PY.index("_venv_reexec_target") < RUN_PY.index("from jen import JEN_VERSION")
 
     def test_run_py_imports_cleanly_here(self):
-        # No /opt/jen/venv on the test box → the guard is a no-op and the
-        # module imports normally (also exercised by test_run_launcher).
         import run
 
         assert hasattr(run, "gunicorn_argv")
+
+    def test_target_is_none_when_no_venv(self, tmp_path):
+        import run
+
+        assert run._venv_reexec_target(str(tmp_path / "nope")) is None
+
+    # run.py's re-exec is bare-metal-Linux-only by design (it hardcodes the
+    # POSIX bin/python layout; Docker and dev never reach it). The
+    # behavioural tests below build a real venv and only run on POSIX.
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
+    def test_target_is_none_when_opted_out(self, tmp_path, monkeypatch):
+        import run
+
+        v = tmp_path / "venv"
+        venv.create(v, with_pip=False)
+        monkeypatch.setenv("JEN_NO_VENV_REEXEC", "1")
+        assert run._venv_reexec_target(str(v)) is None
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
+    def test_target_is_the_venv_python_when_running_outside_it(self, tmp_path):
+        """The v5.8.0 bug: this returned None because realpath of the
+        venv's bin/python equals realpath of the base interpreter. It must
+        return the venv python whenever we're not already running it."""
+        import run
+
+        v = tmp_path / "venv"
+        venv.create(v, with_pip=False, symlinks=True)
+        out = run._venv_reexec_target(str(v))
+        assert out == str(v / "bin" / "python")
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
+    def test_end_to_end_reexec_actually_switches_interpreter(self, tmp_path):
+        """Build a real venv, point a stub run.py guard at it, run it with
+        the base interpreter, and prove the process re-execs."""
+        v = tmp_path / "venv"
+        venv.create(v, with_pip=False, symlinks=True)
+        vpy = str(v / "bin" / "python")
+        stub = tmp_path / "stub.py"
+        guard = RUN_PY[RUN_PY.index("import os") : RUN_PY.index("import logging")]
+        guard = guard.replace('_VENV_DIR = "/opt/jen/venv"', f"_VENV_DIR = {str(v)!r}")
+        stub.write_text(guard + "\nimport sys; print(sys.executable)\n", encoding="utf-8")
+        r = subprocess.run([sys.executable, str(stub)], capture_output=True, text=True, check=True)
+        assert r.stdout.strip() == vpy, f"expected re-exec into {vpy}, ran as {r.stdout.strip()}"
 
 
 class TestInstallShVenv:
