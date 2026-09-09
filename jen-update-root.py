@@ -50,8 +50,29 @@ itself" trap this redesign exists to close for the application. See
 install_self_update_files() below for the fix and the safety reasoning
 for replacing this script's own installed copy while it's the one
 currently running.
+
+v5.5.0 — the flow started running pip, non-fatally, because run.py went
+from werkzeug to gunicorn and a file-only update would land run.py
+expecting a package that wasn't there.
+
+v5.8.0 — the flow is now transactional and venv-based:
+  1. download + checksum-verify, extract to a staging dir
+  2. ensure /opt/jen/venv exists (create it if this install predates it)
+  3. pip install the *staged* requirements.txt into the venv — a failure
+     here aborts before any file in /opt/jen is touched
+  4. compile + import the staged jen/ package under the updated venv —
+     a failure aborts, still nothing changed
+  5. snapshot the replace-wholesale parts of the install, then swap the
+     files in and restart
+  6. health-check (unit active + HTTP answers); on failure, restore the
+     snapshot and restart back to the previous version
+The shared venv means a rollback keeps the (forward-compatible,
+floor-pinned) newer deps — a true atomic switch waits for the versioned
+release directories tracked for a future major (see docs/ARCHITECTURE.md
+§6).
 """
 
+import configparser
 import hashlib
 import json
 import os
@@ -60,14 +81,25 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 GITHUB_REPO = "ltkojak/jen-kea"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_ASSET_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
 INSTALL_DIR = "/opt/jen"
+VENV_DIR = "/opt/jen/venv"
+SYSTEM_PYTHON = "/usr/bin/python3"
 SELF_INSTALL_PATH = "/usr/local/sbin/jen-update-root.py"
 UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
+CONFIG_FILE = "/etc/jen/jen.config"
+
+# The parts of /opt/jen that install_extracted_files() replaces wholesale
+# (rmtree + recopy) rather than merging — so a failed update has to be
+# able to put exactly these back. static/ is an additive copy (never
+# rmtree'd) and holds user icon uploads, so it's deliberately not here.
+_ROLLBACK_ITEMS = ("jen", "run.py", "templates", "requirements.txt", "CHANGELOG.md")
 
 
 def log(msg):
@@ -142,10 +174,9 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
     if os.path.isfile(changelog_src):
         shutil.copy2(changelog_src, os.path.join(install_dir, "CHANGELOG.md"))
 
-    # requirements.txt (v5.4.1) — keep the pinned dependency list current
-    # beside the installed app. Note this flow still does NOT run pip; a
-    # release that adds or bumps a dependency floor needs a
-    # `sudo ./install.sh --upgrade`, not just the in-app update button.
+    # requirements.txt — keep the pinned dependency list current beside
+    # the installed app. main() has already pip-installed it into the
+    # venv (from the staged copy) before reaching this point.
     requirements_src = os.path.join(extracted, "requirements.txt")
     if os.path.isfile(requirements_src):
         shutil.copy2(requirements_src, os.path.join(install_dir, "requirements.txt"))
@@ -278,41 +309,161 @@ def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, up
         log(f"Updated {update_service_path} and reloaded systemd.")
 
 
-def install_python_dependencies(install_dir=INSTALL_DIR):
-    """
-    v5.5.0 — the self-update flow now runs pip.
+def _python_works(python_bin):
+    """True if `python_bin` exists and can execute a trivial program —
+    catches a venv whose interpreter symlink is dangling after an OS
+    python upgrade."""
+    try:
+        return subprocess.run([python_bin, "-c", ""], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
-    Before this, a release that added or raised a runtime dependency
-    floor only reached an install via `sudo ./install.sh --upgrade`;
-    the in-app update button copied files but never touched packages.
-    v5.5.0 made that a hard problem — run.py now expects gunicorn — so
-    the updater installs `-r <install_dir>/requirements.txt` (copied in
-    by install_extracted_files, one step earlier).
 
-    Deliberately non-fatal: a pip failure is logged, and the update
-    proceeds to the restart. run.py's werkzeug fallback keeps the
-    console reachable if a needed package genuinely didn't land, and
-    the operator can then fix it with a normal `install.sh --upgrade`.
+def ensure_venv(venv_dir=VENV_DIR):
     """
-    req = os.path.join(install_dir, "requirements.txt")
-    if not os.path.isfile(req):
-        log(f"WARNING: {req} not found — skipping dependency install.")
-        return
-    log("Installing Python dependencies (pip install -r requirements.txt)…")
-    base = ["/usr/bin/python3", "-m", "pip", "install", "--upgrade", "-r", req]
-    # --break-system-packages exists only on pip >= 23 (Ubuntu 24.04+);
-    # try with it, fall back to plain for older pip, same as install.sh.
-    result = subprocess.run(base + ["--break-system-packages"], capture_output=True, text=True)
-    if result.returncode != 0:
-        result = subprocess.run(base, capture_output=True, text=True)
-    if result.returncode == 0:
-        log("Dependencies up to date.")
+    v5.8.0 — Jen runs its dependencies out of /opt/jen/venv. Return the
+    path to that venv's python, creating the venv first if this is an
+    install that predates it (or repairing one an OS python bump left
+    broken). Returns None if a venv genuinely can't be built, so the
+    caller can fall back to the system interpreter + --break-system-packages
+    exactly as pre-5.8.0 updates did.
+    """
+    venv_py = os.path.join(venv_dir, "bin", "python")
+    if _python_works(venv_py):
+        return venv_py
+    log("No usable venv at /opt/jen/venv — creating it.")
+    try:
+        if os.path.exists(venv_dir):
+            shutil.rmtree(venv_dir)
+        subprocess.run([SYSTEM_PYTHON, "-m", "venv", venv_dir], check=True, capture_output=True, text=True)
+        if _python_works(venv_py):
+            subprocess.run([venv_py, "-m", "pip", "install", "-q", "--upgrade", "pip"], capture_output=True)
+            return venv_py
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"WARNING: could not create /opt/jen/venv ({e}) — falling back to system python.")
+    return None
+
+
+def install_python_dependencies(requirements_path, python_bin):
+    """
+    Install the release's pinned dependencies with `python_bin -m pip`.
+    Returns True on success (or when there's nothing to do); False on a
+    pip failure.
+
+    v5.8.0 — a failure here ABORTS the update. It runs against the
+    *staged* requirements.txt before any file in /opt/jen is touched, so
+    a release that genuinely needs a new library (or a transient PyPI
+    problem) leaves the running install exactly as it was, rather than
+    the pre-5.8.0 behaviour of logging a warning and restarting into a
+    half-updated app.
+    """
+    if not os.path.isfile(requirements_path):
+        log(f"WARNING: {requirements_path} not found — skipping dependency install.")
+        return True
+    log(f"Installing Python dependencies with {python_bin} …")
+    cmd = [python_bin, "-m", "pip", "install", "--upgrade", "-r", requirements_path]
+    if os.path.realpath(python_bin) == os.path.realpath(SYSTEM_PYTHON):
+        # No venv — system pip needs the PEP 668 override (pip >= 23).
+        result = subprocess.run(cmd + ["--break-system-packages"], capture_output=True, text=True)
+        if result.returncode != 0:
+            result = subprocess.run(cmd, capture_output=True, text=True)  # older pip
     else:
-        log(
-            "WARNING: pip install failed — the app will start on whatever is "
-            "already present (run.py falls back to werkzeug if gunicorn is "
-            f"missing). Fix with `sudo ./install.sh --upgrade`. pip said:\n{result.stderr.strip()}"
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        log("Dependencies installed.")
+        return True
+    log(f"ERROR: pip install failed — aborting update, /opt/jen untouched:\n{result.stderr.strip()}")
+    return False
+
+
+def validate_staged_release(staged_root, python_bin):
+    """
+    Confirm the extracted release is loadable with the (now updated)
+    dependencies before it replaces the running install: every module in
+    the staged jen/ package compiles, and the app factory + migration
+    registry import cleanly. Returns True if the staged code is sound.
+    """
+    staged_pkg = os.path.join(staged_root, "jen")
+    compiled = subprocess.run([python_bin, "-m", "compileall", "-q", staged_pkg], capture_output=True, text=True)
+    if compiled.returncode != 0:
+        log(f"ERROR: staged jen/ failed to compile — aborting:\n{compiled.stdout}\n{compiled.stderr}")
+        return False
+    check = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "import jen; from jen import create_app; from jen.models import migrations"
+    )
+    imported = subprocess.run([python_bin, "-c", check, staged_root], capture_output=True, text=True)
+    if imported.returncode != 0:
+        log(f"ERROR: staged code did not import cleanly — aborting:\n{imported.stderr.strip()}")
+        return False
+    log("Staged release validated (compiles + imports).")
+    return True
+
+
+def snapshot_install(snapshot_dir, install_dir=INSTALL_DIR):
+    """Copy the replace-wholesale parts of the current install aside so a
+    failed update can restore them."""
+    os.makedirs(snapshot_dir, exist_ok=True)
+    for item in _ROLLBACK_ITEMS:
+        src = os.path.join(install_dir, item)
+        if not os.path.exists(src):
+            continue
+        dst = os.path.join(snapshot_dir, item)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+
+
+def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR):
+    """Put a snapshot_install() snapshot back, then restart jen."""
+    for item in os.listdir(snapshot_dir):
+        src = os.path.join(snapshot_dir, item)
+        dst = os.path.join(install_dir, item)
+        if os.path.isdir(src):
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    subprocess.run(
+        ["/bin/chown", "-R", "www-data:www-data", *[os.path.join(install_dir, i) for i in _ROLLBACK_ITEMS]],
+        check=False,
+    )
+    subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
+
+
+def _http_port():
+    try:
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(CONFIG_FILE)
+        return cfg.getint("server", "http_port", fallback=5050)
+    except Exception:
+        return 5050
+
+
+def service_healthy(timeout=45):
+    """
+    After the restart, wait up to `timeout`s for jen to be back: the unit
+    active AND the HTTP port answering with anything below 500 (a 200, or
+    a 301/302 to login when SSL is on — both mean the app is serving).
+    """
+    port = _http_port()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(3)
+        if subprocess.run(["/usr/bin/systemctl", "is-active", "--quiet", "jen"]).returncode != 0:
+            continue
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as resp:
+                if resp.status < 500:
+                    return True
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                return True
+        except (urllib.error.URLError, OSError):
+            pass
+    return False
 
 
 def verify_release_checksum(tarball_name, actual_hash, checksum_text):
@@ -424,15 +575,47 @@ def main():
             log("ERROR: update package format invalid — expected jen/ directory in tarball.")
             return 1
 
+        # ── Transactional install (v5.8.0) ──────────────────────────────
+        # Everything up to install_extracted_files() is against staging
+        # and the venv only; /opt/jen's own files are not touched until
+        # the release has been proven to install its deps and import.
+        python_bin = ensure_venv() or SYSTEM_PYTHON
+
+        if not install_python_dependencies(os.path.join(extracted, "requirements.txt"), python_bin):
+            return 1
+        if os.path.realpath(python_bin) != os.path.realpath(SYSTEM_PYTHON):
+            subprocess.run(["/bin/chown", "-R", "www-data:www-data", VENV_DIR], check=False)
+
+        if not validate_staged_release(extracted, python_bin):
+            return 1
+
+        snapshot_dir = os.path.join(INSTALL_DIR, f".rollback-{int(time.time())}")
+        log(f"Snapshotting current install → {snapshot_dir}")
+        snapshot_install(snapshot_dir)
+
         log("Installing files…")
         install_extracted_files(extracted, INSTALL_DIR)
         install_self_update_files(extracted)
-        install_python_dependencies(INSTALL_DIR)
 
         log(f"Update to v{version} installed. Restarting jen…")
         subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
-        log("Done.")
-        return 0
+
+        if service_healthy():
+            log("jen is back up and serving.")
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
+            log("Done.")
+            return 0
+
+        log("ERROR: jen did not come back healthy after the update — rolling back.")
+        restore_snapshot(snapshot_dir)
+        if service_healthy():
+            log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
+        else:
+            log(
+                "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
+                f"{snapshot_dir}; check `journalctl -u jen`."
+            )
+        return 1
 
     finally:
         try:

@@ -265,36 +265,175 @@ class TestInstallExtractedFiles:
 
 
 class TestInstallPythonDependencies:
-    """v5.5.0 — the self-update flow now runs pip, because run.py went
-    from werkzeug to gunicorn and a file-only update would land run.py
-    expecting a package that isn't installed."""
+    """v5.8.0 — the flow pip-installs the *staged* requirements.txt into
+    the venv, and a failure ABORTS the update (returns False) rather than
+    the pre-5.8.0 log-a-warning-and-restart behaviour."""
 
-    def test_runs_pip_install_against_installed_requirements(self, jen_update_root, tmp_path):
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-        (install_dir / "requirements.txt").write_text("gunicorn>=23.0.0\n")
+    def test_runs_pip_install_against_the_given_requirements(self, jen_update_root, tmp_path):
+        req = tmp_path / "requirements.txt"
+        req.write_text("gunicorn>=26.0.0\n")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
-            jen_update_root.install_python_dependencies(str(install_dir))
+            ok = jen_update_root.install_python_dependencies(str(req), "/opt/jen/venv/bin/python")
+        assert ok is True
         joined = " ".join(str(c) for c in mock_run.call_args_list)
         assert "pip" in joined and "install" in joined
-        assert str(install_dir / "requirements.txt") in joined
+        assert str(req) in joined
 
-    def test_missing_requirements_file_is_a_no_op(self, jen_update_root, tmp_path):
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
+    def test_venv_python_does_not_get_break_system_packages(self, jen_update_root, tmp_path):
+        req = tmp_path / "requirements.txt"
+        req.write_text("flask>=3.1\n")
         with patch("subprocess.run") as mock_run:
-            jen_update_root.install_python_dependencies(str(install_dir))
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            jen_update_root.install_python_dependencies(str(req), "/opt/jen/venv/bin/python")
+        joined = " ".join(str(c) for c in mock_run.call_args_list)
+        assert "--break-system-packages" not in joined
+
+    def test_system_python_gets_break_system_packages(self, jen_update_root, tmp_path):
+        req = tmp_path / "requirements.txt"
+        req.write_text("flask>=3.1\n")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            jen_update_root.install_python_dependencies(str(req), jen_update_root.SYSTEM_PYTHON)
+        joined = " ".join(str(c) for c in mock_run.call_args_list)
+        assert "--break-system-packages" in joined
+
+    def test_missing_requirements_file_is_a_no_op_success(self, jen_update_root, tmp_path):
+        with patch("subprocess.run") as mock_run:
+            ok = jen_update_root.install_python_dependencies(str(tmp_path / "nope.txt"), "/x/python")
+        mock_run.assert_not_called()
+        assert ok is True
+
+    def test_pip_failure_returns_false_and_does_not_raise(self, jen_update_root, tmp_path):
+        req = tmp_path / "requirements.txt"
+        req.write_text("gunicorn>=26.0.0\n")
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr="boom", stdout="")
+            ok = jen_update_root.install_python_dependencies(str(req), "/opt/jen/venv/bin/python")
+        assert ok is False
+
+
+class TestEnsureVenv:
+    def test_returns_existing_working_venv_without_recreating(self, jen_update_root, tmp_path):
+        venv = tmp_path / "venv"
+        (venv / "bin").mkdir(parents=True)
+        (venv / "bin" / "python").write_text("")
+        with patch.object(jen_update_root, "_python_works", return_value=True), patch("subprocess.run") as mock_run:
+            out = jen_update_root.ensure_venv(str(venv))
+        assert out == str(venv / "bin" / "python")
         mock_run.assert_not_called()
 
-    def test_pip_failure_is_non_fatal(self, jen_update_root, tmp_path):
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
-        (install_dir / "requirements.txt").write_text("gunicorn>=23.0.0\n")
+    def test_creates_venv_when_missing(self, jen_update_root, tmp_path):
+        venv = tmp_path / "venv"
+        works = iter([False, True])  # missing first, then works after `venv` runs
+        with (
+            patch.object(jen_update_root, "_python_works", side_effect=lambda _p: next(works)),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            out = jen_update_root.ensure_venv(str(venv))
+        assert out == str(venv / "bin" / "python")
+        assert any("venv" in " ".join(map(str, c.args[0])) for c in mock_run.call_args_list)
+
+    def test_returns_none_when_venv_cannot_be_built(self, jen_update_root, tmp_path):
+        with (
+            patch.object(jen_update_root, "_python_works", return_value=False),
+            patch("subprocess.run", side_effect=OSError("no venv module")),
+        ):
+            assert jen_update_root.ensure_venv(str(tmp_path / "venv")) is None
+
+
+class TestValidateStagedRelease:
+    def _staged(self, tmp_path):
+        root = tmp_path / "staged"
+        (root / "jen").mkdir(parents=True)
+        (root / "jen" / "__init__.py").write_text('JEN_VERSION = "9.9.9"\n')
+        return root
+
+    def test_true_when_compile_and_import_both_succeed(self, jen_update_root, tmp_path):
+        root = self._staged(tmp_path)
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stderr="boom")
-            # must not raise
-            jen_update_root.install_python_dependencies(str(install_dir))
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            assert jen_update_root.validate_staged_release(str(root), "/x/python") is True
+
+    def test_false_when_compile_fails(self, jen_update_root, tmp_path):
+        root = self._staged(tmp_path)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="SyntaxError", stderr="")
+            assert jen_update_root.validate_staged_release(str(root), "/x/python") is False
+
+    def test_false_when_import_fails(self, jen_update_root, tmp_path):
+        root = self._staged(tmp_path)
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                MagicMock(returncode=0, stdout="", stderr=""),  # compileall ok
+                MagicMock(returncode=1, stdout="", stderr="ModuleNotFoundError: newdep"),  # import fails
+            ]
+            assert jen_update_root.validate_staged_release(str(root), "/x/python") is False
+
+
+class TestSnapshotRollback:
+    def test_snapshot_then_restore_round_trips_replaced_items(self, jen_update_root, tmp_path):
+        install = tmp_path / "opt-jen"
+        (install / "jen").mkdir(parents=True)
+        (install / "jen" / "app.py").write_text("v1\n")
+        (install / "run.py").write_text("run-v1\n")
+        (install / "static").mkdir()
+        (install / "static" / "user-icon.svg").write_text("user data\n")
+
+        snap = tmp_path / "snap"
+        jen_update_root.snapshot_install(str(snap), install_dir=str(install))
+
+        # simulate a bad update overwriting the tree
+        (install / "jen" / "app.py").write_text("v2-broken\n")
+        (install / "run.py").write_text("run-v2-broken\n")
+
+        with patch("subprocess.run"):
+            jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
+
+        assert (install / "jen" / "app.py").read_text() == "v1\n"
+        assert (install / "run.py").read_text() == "run-v1\n"
+        # static/ is left alone by both snapshot and restore
+        assert (install / "static" / "user-icon.svg").read_text() == "user data\n"
+
+    def test_restore_restarts_jen(self, jen_update_root, tmp_path):
+        install = tmp_path / "opt-jen"
+        (install / "jen").mkdir(parents=True)
+        (install / "jen" / "x.py").write_text("1\n")
+        snap = tmp_path / "snap"
+        jen_update_root.snapshot_install(str(snap), install_dir=str(install))
+        with patch("subprocess.run") as mock_run:
+            jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
+        calls = [" ".join(map(str, c.args[0])) for c in mock_run.call_args_list]
+        assert any("systemctl restart jen" in c for c in calls)
+
+
+class TestServiceHealthy:
+    def test_true_when_active_and_http_ok(self, jen_update_root):
+        with (
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("urllib.request.urlopen") as mock_open,
+            patch("time.sleep"),
+        ):
+            mock_open.return_value.__enter__.return_value = MagicMock(status=200)
+            assert jen_update_root.service_healthy(timeout=1) is True
+
+    def test_false_when_unit_never_active(self, jen_update_root):
+        with (
+            patch("subprocess.run", return_value=MagicMock(returncode=1)),
+            patch("time.sleep"),
+        ):
+            assert jen_update_root.service_healthy(timeout=0.01) is False
+
+    def test_redirect_counts_as_healthy(self, jen_update_root):
+        import urllib.error
+
+        with (
+            patch("subprocess.run", return_value=MagicMock(returncode=0)),
+            patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", 302, "Found", {}, None)),
+            patch("time.sleep"),
+        ):
+            assert jen_update_root.service_healthy(timeout=1) is True
 
 
 class TestInstallSelfUpdateFiles:
