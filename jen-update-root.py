@@ -75,6 +75,15 @@ v5.8.1 — step 7 now also catches an exception *during* the file swap
 the external unit/sudoers/updater files so a bad jen.service can't
 survive a rollback.
 
+v5.8.2 — from a real stuck box. Step 2 now demands a venv with a working
+pip (a half-built venv from a failed `python3 -m venv` used to be handed
+straight to pip), apt-installs python3-venv and retries if the OS package
+is missing, and logs the actual pip output on every failed attempt. Step
+6 also byte-compiles the *installed* tree and confirms the running
+process reports the new version via /api/v1/health — either failing
+rolls back. The post-restart health-check window is 90s (was 45),
+overridable with `[server] update_health_timeout`.
+
 The shared venv still means a rollback keeps the (forward-compatible,
 floor-pinned) newer deps — a true atomic switch waits for the versioned
 release directories tracked for a future major (see docs/ARCHITECTURE.md
@@ -331,38 +340,68 @@ def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, up
         log(f"Updated {update_service_path} and reloaded systemd.")
 
 
-def _python_works(python_bin):
-    """True if `python_bin` exists and can execute a trivial program —
-    catches a venv whose interpreter symlink is dangling after an OS
-    python upgrade."""
+def _venv_usable(python_bin):
+    """True if `python_bin` exists, runs, AND has a working pip. A venv
+    left half-built by a failed `python3 -m venv` (interpreter present,
+    ensurepip never ran) passes a bare `-c ''` but has no pip — v5.8.1
+    handed exactly that back and then failed with 'No module named pip'."""
     try:
-        return subprocess.run([python_bin, "-c", ""], capture_output=True, timeout=15).returncode == 0
+        if subprocess.run([python_bin, "-c", ""], capture_output=True, timeout=15).returncode != 0:
+            return False
+        return subprocess.run([python_bin, "-m", "pip", "--version"], capture_output=True, timeout=15).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 
 
+def _try_build_venv(venv_dir):
+    """`python3 -m venv <dir>` + bootstrap pip. Returns True if the result
+    is usable. Wipes any half-built leftover first."""
+    venv_py = os.path.join(venv_dir, "bin", "python")
+    if os.path.exists(venv_dir):
+        shutil.rmtree(venv_dir, ignore_errors=True)
+    r = subprocess.run([SYSTEM_PYTHON, "-m", "venv", venv_dir], capture_output=True, text=True)
+    if r.returncode != 0:
+        log(f"  `python3 -m venv` failed: {(r.stderr or r.stdout).strip()}")
+        return False
+    subprocess.run([venv_py, "-m", "ensurepip", "--upgrade"], capture_output=True)
+    subprocess.run([venv_py, "-m", "pip", "install", "-q", "--upgrade", "pip"], capture_output=True)
+    return _venv_usable(venv_py)
+
+
 def ensure_venv(venv_dir=VENV_DIR):
     """
-    v5.8.0 — Jen runs its dependencies out of /opt/jen/venv. Return the
-    path to that venv's python, creating the venv first if this is an
-    install that predates it (or repairing one an OS python bump left
-    broken). Returns None if a venv genuinely can't be built, so the
-    caller can fall back to the system interpreter + --break-system-packages
-    exactly as pre-5.8.0 updates did.
+    Return the path to /opt/jen/venv's python, building the venv if it's
+    absent or broken. This script runs as root, so if `python3 -m venv`
+    fails for want of the `python3-venv` package we apt-install it and
+    retry. Returns None only if a venv genuinely can't be produced, so
+    the caller can fall back to the system interpreter.
     """
     venv_py = os.path.join(venv_dir, "bin", "python")
-    if _python_works(venv_py):
+    if _venv_usable(venv_py):
         return venv_py
-    log("No usable venv at /opt/jen/venv — creating it.")
-    try:
-        if os.path.exists(venv_dir):
-            shutil.rmtree(venv_dir)
-        subprocess.run([SYSTEM_PYTHON, "-m", "venv", venv_dir], check=True, capture_output=True, text=True)
-        if _python_works(venv_py):
-            subprocess.run([venv_py, "-m", "pip", "install", "-q", "--upgrade", "pip"], capture_output=True)
-            return venv_py
-    except (OSError, subprocess.SubprocessError) as e:
-        log(f"WARNING: could not create /opt/jen/venv ({e}) — falling back to system python.")
+
+    log("No usable venv at /opt/jen/venv — building one.")
+    if _try_build_venv(venv_dir):
+        return venv_py
+
+    # Most common cause on Debian/Ubuntu: python3-venv isn't installed
+    # (an install that has only ever used the in-app update button).
+    log("Installing python3-venv / python3-full and retrying…")
+    apt = subprocess.run(
+        ["/usr/bin/apt-get", "install", "-y", "-qq", "python3-venv", "python3-full"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+    )
+    if apt.returncode != 0:
+        log(f"  apt-get failed: {(apt.stderr or apt.stdout).strip()}")
+    elif _try_build_venv(venv_dir):
+        return venv_py
+
+    log(
+        "WARNING: could not build /opt/jen/venv. Falling back to system python for "
+        "this update; run `sudo ./install.sh` on the host to finish the venv migration."
+    )
     return None
 
 
@@ -387,17 +426,25 @@ def install_python_dependencies(requirements_path, python_bin):
     # ensure_venv() returns the literal venv path or None → SYSTEM_PYTHON;
     # a plain string compare is right here (NOT realpath — a venv's
     # bin/python realpaths to the system interpreter, see run.py's guard).
+    attempts = []
     if python_bin == SYSTEM_PYTHON:
         # No venv — system pip needs the PEP 668 override (pip >= 23).
-        result = subprocess.run(cmd + ["--break-system-packages"], capture_output=True, text=True)
-        if result.returncode != 0:
-            result = subprocess.run(cmd, capture_output=True, text=True)  # older pip
+        r1 = subprocess.run(cmd + ["--break-system-packages"], capture_output=True, text=True)
+        attempts.append(("--break-system-packages", r1))
+        result = r1
+        if r1.returncode != 0:
+            r2 = subprocess.run(cmd, capture_output=True, text=True)  # older pip
+            attempts.append(("plain", r2))
+            result = r2
     else:
         result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
         log("Dependencies installed.")
         return True
-    log(f"ERROR: pip install failed — aborting update, /opt/jen untouched:\n{result.stderr.strip()}")
+    log("ERROR: pip install failed — aborting update, /opt/jen untouched.")
+    for label, r in attempts or [("", result)]:
+        tail = (r.stderr or r.stdout or "").strip()
+        log(f"  [{label or 'pip'}]: {tail}" if tail else f"  [{label or 'pip'}]: (no output, exit {r.returncode})")
     return False
 
 
@@ -484,22 +531,58 @@ def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR):
     subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
 
 
-def _http_port():
+def _server_cfg(key, fallback):
     try:
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read(CONFIG_FILE)
-        return cfg.getint("server", "http_port", fallback=5050)
+        return cfg.getint("server", key, fallback=fallback)
     except Exception:
-        return 5050
+        return fallback
 
 
-def service_healthy(timeout=45):
+def _installed_version():
+    """JEN_VERSION out of the on-disk /opt/jen/jen/__init__.py."""
+    try:
+        with open(os.path.join(INSTALL_DIR, "jen", "__init__.py")) as f:
+            for line in f:
+                if line.startswith("JEN_VERSION"):
+                    return line.split("=", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return "?"
+
+
+def _running_version():
+    """
+    Version reported by the *running* process, via the public
+    /api/v1/health endpoint. This is the real proof the restart picked up
+    the new code — the on-disk string is near-tautological right after we
+    wrote it. Returns None when the endpoint can't be read as JSON (e.g.
+    SSL is on and the HTTP port only serves a redirect); the caller then
+    falls back to the on-disk string.
+    """
+    port = _server_cfg("http_port", 5050)
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/health", timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+        if isinstance(payload, dict):
+            return payload.get("jen_version") or None
+        return None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def service_healthy(timeout=None):
     """
     After the restart, wait up to `timeout`s for jen to be back: the unit
     active AND the HTTP port answering with anything below 500 (a 200, or
     a 301/302 to login when SSL is on — both mean the app is serving).
+    Default is 90s (a slow homelab box + migrations + background-worker
+    init + gunicorn spawn), override with `[server] update_health_timeout`.
     """
-    port = _http_port()
+    if timeout is None:
+        timeout = _server_cfg("update_health_timeout", 90)
+    port = _server_cfg("http_port", 5050)
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
@@ -653,18 +736,41 @@ def main():
         log(f"Snapshotting current install → {snapshot_dir}")
         snapshot_install(snapshot_dir)
 
-        # From here on ANY failure — an exception during the file swap, or
-        # a service that doesn't come back healthy — restores the snapshot
-        # and restarts the previous version. (v5.8.0 only rolled back on
-        # the health check; a raise mid-swap left /opt/jen half-updated.)
+        # From here on ANY failure — an exception during the file swap, a
+        # staged tree that won't byte-compile, a service that doesn't come
+        # back healthy, or a running process that reports the wrong version
+        # — restores the snapshot and restarts the previous version. (v5.8.0
+        # only rolled back on the health check; a raise mid-swap left
+        # /opt/jen half-updated.)
         try:
             log("Installing files…")
             install_extracted_files(extracted, INSTALL_DIR)
             install_self_update_files(extracted)
+            # Byte-compile the freshly-installed tree with the SAME interpreter
+            # that will run it, so the first request after restart isn't paying
+            # compile cost (and a syntax error surfaces here, pre-restart, where
+            # the rollback path still applies).
+            compiled = subprocess.run(
+                [python_bin, "-m", "compileall", "-q", os.path.join(INSTALL_DIR, "jen")],
+                capture_output=True,
+                text=True,
+            )
+            if compiled.returncode != 0:
+                raise RuntimeError(
+                    f"byte-compiling the installed tree failed: {(compiled.stderr or compiled.stdout).strip()}"
+                )
             log(f"Update to v{version} installed. Restarting jen…")
             subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
             if not service_healthy():
                 raise RuntimeError("jen did not come back healthy after the update")
+            running = _running_version()
+            source = "running process"
+            if running is None:
+                running, source = _installed_version(), "on-disk"
+            if running == version:
+                log(f"Confirmed: jen is running v{running} ({source}).")
+            else:
+                raise RuntimeError(f"post-restart version mismatch — expected v{version}, {source} reports v{running}")
         except Exception as e:
             log(f"ERROR: {e} — rolling back.")
             restore_snapshot(snapshot_dir)

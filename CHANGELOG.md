@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.8.2] - 2026-09-09
+
+In-app updater hardening, from a real deployment failure. A long-running
+box that had only ever upgraded via the in-app button (never a
+post-5.7 `sudo ./install.sh`) never had `python3-venv` installed. Every
+in-app update since the PEP-668 world hit `externally-managed-environment`
+and quietly carried on against stale system packages; the 5.8.0→5.8.1
+attempt then tried to build `/opt/jen/venv`, got a half-built venv with
+no `pip` (interpreter present, `ensurepip` never ran), and — because the
+old check only asked "does this Python run?" — handed that back to `pip`
+and failed with `No module named pip`. The transaction correctly aborted
+with `/opt/jen` untouched, but the box was stuck: it could not update
+itself out of the problem.
+
+### The updater now builds its own venv
+
+- `ensure_venv()` checks for a venv with a **working `pip`**, not just a
+  runnable interpreter. A half-built venv is wiped and rebuilt.
+- If `python3 -m venv` fails for want of the OS package, the updater
+  (already running as root) `apt-get install`s `python3-venv` /
+  `python3-full` and retries once, then falls back to the system
+  interpreter with a loud warning only if that also fails.
+- A failed `pip install` now logs the actual `pip` output for **every**
+  attempt it made, instead of a bare "pip install failed".
+
+### Post-restart verification
+
+- The health-check timeout after the restart went from 45s to 90s (a
+  slow homelab box doing migrations + background-worker init + gunicorn
+  spawn was racing it), and is now overridable with
+  `[server] update_health_timeout` in `jen.config`.
+- After the restart the updater byte-compiles the freshly-installed
+  `/opt/jen/jen` with the venv interpreter and confirms the **running**
+  process reports the expected version (via `/api/v1/health`), rolling
+  back if either fails — both inside the existing rollback transaction.
+  The journal now says "Confirmed: jen is running v5.8.2" or rolls back
+  with the mismatch.
+
+**If your box is stuck reporting an old version after an in-app update:**
+`sudo ./install.sh --upgrade` from the 5.8.2 tarball rebuilds the venv
+and gets you current; in-app updates work from there.
+
 ## [5.8.1] - 2026-09-09
 
 Fixes for two regressions in 5.8.0 plus the deployment-transaction gaps

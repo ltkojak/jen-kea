@@ -466,15 +466,24 @@ A writable venv would be a persistence foothold for a compromised
 then restart — which silently shipped a half-updated app if a release
 genuinely needed a new library. It's now
 verify → stage → `pip` into the venv → compile+import the staged
-package → snapshot → switch → restart → health-check. **Any failure from
-the switch onward** — an exception mid-copy, or a service that doesn't
-come back healthy (unit active + HTTP answering) — **restores the
+package → snapshot → switch → restart → health-check → version-confirm.
+**Any failure from the switch onward** — an exception mid-copy, a service
+that doesn't come back healthy (unit active + HTTP answering), a failed
+byte-compile of the installed tree, or a running process that doesn't
+report the expected version via `/api/v1/health` — **restores the
 snapshot and restarts the previous version**. The snapshot covers the
 replace-wholesale parts of `/opt/jen` *and* the files an update replaces
 outside it (`jen.service`, `/etc/sudoers.d/jen`, the updater itself,
 `jen-update.service`), so a bad unit file can't survive the rollback.
 Deps and code are both proven against each other before a single file in
 `/opt/jen` is touched.
+
+v5.8.2 hardened the venv build: `ensure_venv()` requires a venv with a
+*working `pip`* (a half-built venv from a failed `python3 -m venv` is
+wiped and rebuilt), and — running as root already — `apt-get install`s
+`python3-venv` and retries once before falling back to the system
+interpreter. The post-restart health-check timeout is 90s (was 45),
+overridable via `[server] update_health_timeout`.
 
 **Still weaker than ideal, tracked for a future major:** the venv is
 shared, so a rollback keeps the newer dependencies (fine because they're

@@ -313,32 +313,67 @@ class TestInstallPythonDependencies:
         assert ok is False
 
 
+class TestVenvUsable:
+    def test_needs_a_working_pip_not_just_a_runnable_python(self, jen_update_root):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            rc = 0 if argv[1:] == ["-c", ""] else 1  # python runs, pip --version fails
+            return MagicMock(returncode=rc)
+
+        with patch("subprocess.run", side_effect=fake_run):
+            assert jen_update_root._venv_usable("/x/venv/bin/python") is False
+        assert any("pip" in a for a in calls[-1])
+
+
 class TestEnsureVenv:
-    def test_returns_existing_working_venv_without_recreating(self, jen_update_root, tmp_path):
+    def test_returns_existing_usable_venv_without_rebuilding(self, jen_update_root, tmp_path):
         venv = tmp_path / "venv"
         (venv / "bin").mkdir(parents=True)
         (venv / "bin" / "python").write_text("")
-        with patch.object(jen_update_root, "_python_works", return_value=True), patch("subprocess.run") as mock_run:
-            out = jen_update_root.ensure_venv(str(venv))
-        assert out == str(venv / "bin" / "python")
-        mock_run.assert_not_called()
-
-    def test_creates_venv_when_missing(self, jen_update_root, tmp_path):
-        venv = tmp_path / "venv"
-        works = iter([False, True])  # missing first, then works after `venv` runs
         with (
-            patch.object(jen_update_root, "_python_works", side_effect=lambda _p: next(works)),
-            patch("subprocess.run") as mock_run,
+            patch.object(jen_update_root, "_venv_usable", return_value=True),
+            patch.object(jen_update_root, "_try_build_venv") as build,
         ):
-            mock_run.return_value = MagicMock(returncode=0)
             out = jen_update_root.ensure_venv(str(venv))
         assert out == str(venv / "bin" / "python")
-        assert any("venv" in " ".join(map(str, c.args[0])) for c in mock_run.call_args_list)
+        build.assert_not_called()
 
-    def test_returns_none_when_venv_cannot_be_built(self, jen_update_root, tmp_path):
+    def test_builds_the_venv_when_missing(self, jen_update_root, tmp_path):
+        venv = tmp_path / "venv"
         with (
-            patch.object(jen_update_root, "_python_works", return_value=False),
-            patch("subprocess.run", side_effect=OSError("no venv module")),
+            patch.object(jen_update_root, "_venv_usable", return_value=False),
+            patch.object(jen_update_root, "_try_build_venv", return_value=True) as build,
+        ):
+            out = jen_update_root.ensure_venv(str(venv))
+        assert out == str(venv / "bin" / "python")
+        build.assert_called_once()
+
+    def test_apt_installs_python3_venv_and_retries_then_succeeds(self, jen_update_root, tmp_path):
+        venv = tmp_path / "venv"
+        build_results = iter([False, True])  # first build fails, retry after apt succeeds
+        apt_calls = []
+
+        def fake_run(argv, **kw):
+            if "apt-get" in argv[0]:
+                apt_calls.append(argv)
+            return MagicMock(returncode=0)
+
+        with (
+            patch.object(jen_update_root, "_venv_usable", return_value=False),
+            patch.object(jen_update_root, "_try_build_venv", side_effect=lambda _d: next(build_results)),
+            patch("subprocess.run", side_effect=fake_run),
+        ):
+            out = jen_update_root.ensure_venv(str(venv))
+        assert out == str(venv / "bin" / "python")
+        assert apt_calls and "python3-venv" in apt_calls[0]
+
+    def test_returns_none_when_even_apt_and_retry_fail(self, jen_update_root, tmp_path):
+        with (
+            patch.object(jen_update_root, "_venv_usable", return_value=False),
+            patch.object(jen_update_root, "_try_build_venv", return_value=False),
+            patch("subprocess.run", return_value=MagicMock(returncode=1, stderr="nope", stdout="")),
         ):
             assert jen_update_root.ensure_venv(str(tmp_path / "venv")) is None
 
@@ -482,6 +517,57 @@ class TestServiceHealthy:
             patch("time.sleep"),
         ):
             assert jen_update_root.service_healthy(timeout=1) is True
+
+    def test_default_timeout_is_read_from_jen_config(self, jen_update_root, tmp_path, monkeypatch):
+        cfg = tmp_path / "jen.config"
+        cfg.write_text("[server]\nupdate_health_timeout = 7\n")
+        monkeypatch.setattr(jen_update_root, "CONFIG_FILE", str(cfg))
+        assert jen_update_root._server_cfg("update_health_timeout", 90) == 7
+
+    def test_default_timeout_falls_back_to_90_when_unset(self, jen_update_root, tmp_path, monkeypatch):
+        cfg = tmp_path / "jen.config"
+        cfg.write_text("[server]\nhttp_port = 5050\n")
+        monkeypatch.setattr(jen_update_root, "CONFIG_FILE", str(cfg))
+        assert jen_update_root._server_cfg("update_health_timeout", 90) == 90
+
+
+class TestRunningVersion:
+    """v5.8.2 — the post-restart check queries the running process, not
+    just the string we just wrote to disk (bigben's failure looked fine
+    on disk but the process never picked it up)."""
+
+    def test_parses_jen_version_from_the_health_endpoint(self, jen_update_root):
+        body = b'{"jen_version": "5.8.2", "kea_up": true}'
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value = MagicMock(read=lambda: body)
+            assert jen_update_root._running_version() == "5.8.2"
+
+    def test_returns_none_when_endpoint_is_unreachable(self, jen_update_root):
+        import urllib.error
+
+        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("down")):
+            assert jen_update_root._running_version() is None
+
+    def test_returns_none_on_non_json_body(self, jen_update_root):
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value = MagicMock(read=lambda: b"<html>redirect</html>")
+            assert jen_update_root._running_version() is None
+
+
+class TestMainPostRestartChecks:
+    """v5.8.2 — main() byte-compiles the installed tree with the venv
+    interpreter and confirms the running version before declaring success,
+    both inside the rollback try/except."""
+
+    def test_swap_region_compiles_installed_tree_and_confirms_version(self, jen_update_root):
+        import inspect
+
+        src = inspect.getsource(jen_update_root.main)
+        region = src[src.index("snapshot_install(snapshot_dir)") : src.rindex("return 0")]
+        assert 'compileall", "-q", os.path.join(INSTALL_DIR, "jen")' in region
+        assert "_running_version()" in region
+        assert region.index("compileall") < region.index("except Exception")
+        assert region.index("_running_version()") < region.index("except Exception")
 
 
 class TestInstallSelfUpdateFiles:
