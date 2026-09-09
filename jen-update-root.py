@@ -388,11 +388,16 @@ def validate_staged_release(staged_root, python_bin):
     if compiled.returncode != 0:
         log(f"ERROR: staged jen/ failed to compile — aborting:\n{compiled.stdout}\n{compiled.stderr}")
         return False
-    check = (
-        "import sys; sys.path.insert(0, sys.argv[1]); "
-        "import jen; from jen import create_app; from jen.models import migrations"
+    # Import the staged tree by putting it on PYTHONPATH (not by reading
+    # anything from this script's own argv — see the "no caller input"
+    # property tested in tests/test_jen_update_root.py).
+    env = {**os.environ, "PYTHONPATH": staged_root}
+    imported = subprocess.run(
+        [python_bin, "-c", "import jen; from jen import create_app; from jen.models import migrations"],
+        capture_output=True,
+        text=True,
+        env=env,
     )
-    imported = subprocess.run([python_bin, "-c", check, staged_root], capture_output=True, text=True)
     if imported.returncode != 0:
         log(f"ERROR: staged code did not import cleanly — aborting:\n{imported.stderr.strip()}")
         return False
@@ -610,6 +615,7 @@ def main():
         restore_snapshot(snapshot_dir)
         if service_healthy():
             log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
         else:
             log(
                 "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
