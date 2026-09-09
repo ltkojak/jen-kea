@@ -99,7 +99,7 @@ class TestOldUrlsRedirect:
         "old,new",
         [
             ("/settings/infrastructure", "/settings/kea"),
-            ("/settings/icons", "/settings/appearance"),
+            ("/settings/icons", "/settings/appearance#app-icons"),
             ("/database", "/settings/databases"),
             ("/database?tab=backups", "/settings/databases?tab=backups"),
             ("/database/migrate", "/settings/databases/migrate"),
