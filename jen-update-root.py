@@ -62,11 +62,20 @@ v5.8.0 — the flow is now transactional and venv-based:
      here aborts before any file in /opt/jen is touched
   4. compile + import the staged jen/ package under the updated venv —
      a failure aborts, still nothing changed
-  5. snapshot the replace-wholesale parts of the install, then swap the
-     files in and restart
-  6. health-check (unit active + HTTP answers); on failure, restore the
-     snapshot and restart back to the previous version
-The shared venv means a rollback keeps the (forward-compatible,
+  5. snapshot everything a rollback needs — the replace-wholesale parts
+     of /opt/jen AND the out-of-tree files an update can replace
+     (jen.service, /etc/sudoers.d/jen, this script, jen-update.service)
+  6. swap the files in, restart, health-check (unit active + HTTP answers)
+  7. on ANY failure from step 6 — an exception during the swap, or an
+     unhealthy service — restore the whole snapshot (daemon-reload
+     included) and restart the previous version
+
+v5.8.1 — step 7 now also catches an exception *during* the file swap
+(5.8.0 only rolled back on the health check), and the snapshot covers
+the external unit/sudoers/updater files so a bad jen.service can't
+survive a rollback.
+
+The shared venv still means a rollback keeps the (forward-compatible,
 floor-pinned) newer deps — a true atomic switch waits for the versioned
 release directories tracked for a future major (see docs/ARCHITECTURE.md
 §6).
@@ -98,8 +107,20 @@ CONFIG_FILE = "/etc/jen/jen.config"
 # The parts of /opt/jen that install_extracted_files() replaces wholesale
 # (rmtree + recopy) rather than merging — so a failed update has to be
 # able to put exactly these back. static/ is an additive copy (never
-# rmtree'd) and holds user icon uploads, so it's deliberately not here.
+# rmtree'd) and holds user icon uploads, so it's deliberately not here:
+# a rolled-back app just leaves the new static files sitting unused.
 _ROLLBACK_ITEMS = ("jen", "run.py", "templates", "requirements.txt", "CHANGELOG.md")
+
+# Files an update also replaces that live OUTSIDE /opt/jen. A bad
+# jen.service / sudoers / updater would make the app fail AND make a
+# jen-only rollback useless (the bad unit is still installed), so these
+# get snapshotted too. {live path: name under snapshot_dir/_ext/}
+_EXTERNAL_ITEMS = {
+    "/etc/systemd/system/jen.service": "jen.service",
+    "/etc/sudoers.d/jen": "sudoers-jen",
+    SELF_INSTALL_PATH: "jen-update-root.py",
+    UPDATE_SERVICE_PATH: "jen-update.service",
+}
 
 
 def log(msg):
@@ -149,12 +170,13 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
     extraction at all — matching this project's general preference for
     small, directly-testable functions over one large script body.
 
-    Mirrors the exact same file scope and safety behaviors as the
-    previous self_update() Flask route's copy_cmds list: jen/ package,
-    run.py, CHANGELOG.md, templates/, static/ (additive, preserving an
-    existing favicon.ico rather than overwriting it — see v5.1.8),
-    jen.service, and jen-sudoers (validated with visudo -c before
-    installing, never installed if validation fails).
+    Scope: jen/ package, run.py, CHANGELOG.md, requirements.txt,
+    templates/, static/ (additive, preserving an existing favicon.ico —
+    see v5.1.8), jen.service (+ `systemctl daemon-reload`), and
+    jen-sudoers (validated with `visudo -c` first, never installed on a
+    validation failure). main() has already pip-installed requirements
+    into the venv and snapshotted everything a rollback needs before
+    calling this.
     """
     # Core application package
     jen_src = os.path.join(extracted, "jen")
@@ -362,7 +384,10 @@ def install_python_dependencies(requirements_path, python_bin):
         return True
     log(f"Installing Python dependencies with {python_bin} …")
     cmd = [python_bin, "-m", "pip", "install", "--upgrade", "-r", requirements_path]
-    if os.path.realpath(python_bin) == os.path.realpath(SYSTEM_PYTHON):
+    # ensure_venv() returns the literal venv path or None → SYSTEM_PYTHON;
+    # a plain string compare is right here (NOT realpath — a venv's
+    # bin/python realpaths to the system interpreter, see run.py's guard).
+    if python_bin == SYSTEM_PYTHON:
         # No venv — system pip needs the PEP 668 override (pip >= 23).
         result = subprocess.run(cmd + ["--break-system-packages"], capture_output=True, text=True)
         if result.returncode != 0:
@@ -405,32 +430,53 @@ def validate_staged_release(staged_root, python_bin):
     return True
 
 
+def _copy_any(src, dst):
+    """Replace dst (file or dir) with a copy of src."""
+    if os.path.isdir(src):
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        elif os.path.exists(dst):
+            os.unlink(dst)
+        shutil.copytree(src, dst)
+    else:
+        if os.path.isdir(dst):
+            shutil.rmtree(dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+
 def snapshot_install(snapshot_dir, install_dir=INSTALL_DIR):
-    """Copy the replace-wholesale parts of the current install aside so a
-    failed update can restore them."""
-    os.makedirs(snapshot_dir, exist_ok=True)
+    """Copy aside everything a failed update would need to put back — the
+    replace-wholesale parts of /opt/jen, plus the unit/sudoers/updater
+    files that live outside it."""
+    ext_dir = os.path.join(snapshot_dir, "_ext")
+    os.makedirs(ext_dir, exist_ok=True)
     for item in _ROLLBACK_ITEMS:
         src = os.path.join(install_dir, item)
-        if not os.path.exists(src):
-            continue
-        dst = os.path.join(snapshot_dir, item)
-        if os.path.isdir(src):
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy2(src, dst)
+        if os.path.exists(src):
+            _copy_any(src, os.path.join(snapshot_dir, item))
+    for live_path, name in _EXTERNAL_ITEMS.items():
+        if os.path.exists(live_path):
+            shutil.copy2(live_path, os.path.join(ext_dir, name))
 
 
 def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR):
-    """Put a snapshot_install() snapshot back, then restart jen."""
-    for item in os.listdir(snapshot_dir):
+    """Put a snapshot_install() snapshot back — /opt/jen tree, then the
+    external files, then daemon-reload + chown + restart jen."""
+    for item in _ROLLBACK_ITEMS:
         src = os.path.join(snapshot_dir, item)
-        dst = os.path.join(install_dir, item)
-        if os.path.isdir(src):
-            if os.path.isdir(dst):
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy2(src, dst)
+        if os.path.exists(src):
+            _copy_any(src, os.path.join(install_dir, item))
+    ext_dir = os.path.join(snapshot_dir, "_ext")
+    reload_needed = False
+    for live_path, name in _EXTERNAL_ITEMS.items():
+        saved = os.path.join(ext_dir, name)
+        if os.path.isfile(saved):
+            shutil.copy2(saved, live_path)
+            if live_path.endswith(".service"):
+                reload_needed = True
+    if reload_needed:
+        subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)
     subprocess.run(
         ["/bin/chown", "-R", "www-data:www-data", *[os.path.join(install_dir, i) for i in _ROLLBACK_ITEMS]],
         check=False,
@@ -590,7 +636,7 @@ def main():
             return 1
         # The venv stays root:root (this script runs as root; www-data only
         # reads/executes it — a writable venv is a persistence foothold).
-        if os.path.realpath(python_bin) != os.path.realpath(SYSTEM_PYTHON):
+        if python_bin != SYSTEM_PYTHON:
             subprocess.run(["/bin/chown", "-R", "root:root", VENV_DIR], check=False)
             subprocess.run([python_bin, "-m", "compileall", "-q", os.path.join(VENV_DIR, "lib")], capture_output=True)
 
@@ -601,30 +647,35 @@ def main():
         log(f"Snapshotting current install → {snapshot_dir}")
         snapshot_install(snapshot_dir)
 
-        log("Installing files…")
-        install_extracted_files(extracted, INSTALL_DIR)
-        install_self_update_files(extracted)
+        # From here on ANY failure — an exception during the file swap, or
+        # a service that doesn't come back healthy — restores the snapshot
+        # and restarts the previous version. (v5.8.0 only rolled back on
+        # the health check; a raise mid-swap left /opt/jen half-updated.)
+        try:
+            log("Installing files…")
+            install_extracted_files(extracted, INSTALL_DIR)
+            install_self_update_files(extracted)
+            log(f"Update to v{version} installed. Restarting jen…")
+            subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
+            if not service_healthy():
+                raise RuntimeError("jen did not come back healthy after the update")
+        except Exception as e:
+            log(f"ERROR: {e} — rolling back.")
+            restore_snapshot(snapshot_dir)
+            if service_healthy():
+                log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
+                shutil.rmtree(snapshot_dir, ignore_errors=True)
+            else:
+                log(
+                    "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
+                    f"{snapshot_dir}; check `journalctl -u jen`."
+                )
+            return 1
 
-        log(f"Update to v{version} installed. Restarting jen…")
-        subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
-
-        if service_healthy():
-            log("jen is back up and serving.")
-            shutil.rmtree(snapshot_dir, ignore_errors=True)
-            log("Done.")
-            return 0
-
-        log("ERROR: jen did not come back healthy after the update — rolling back.")
-        restore_snapshot(snapshot_dir)
-        if service_healthy():
-            log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
-            shutil.rmtree(snapshot_dir, ignore_errors=True)
-        else:
-            log(
-                "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
-                f"{snapshot_dir}; check `journalctl -u jen`."
-            )
-        return 1
+        log("jen is back up and serving.")
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
+        log("Done.")
+        return 0
 
     finally:
         try:

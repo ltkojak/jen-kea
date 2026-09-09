@@ -466,10 +466,14 @@ A writable venv would be a persistence foothold for a compromised
 then restart — which silently shipped a half-updated app if a release
 genuinely needed a new library. It's now
 verify → stage → `pip` into the venv → compile+import the staged
-package → snapshot → switch → restart → health-check, and it **restores
-the snapshot and restarts the previous version** if the post-update
-service doesn't come back healthy (unit active + HTTP answering). Deps
-and code are both proven against each other before a single file in
+package → snapshot → switch → restart → health-check. **Any failure from
+the switch onward** — an exception mid-copy, or a service that doesn't
+come back healthy (unit active + HTTP answering) — **restores the
+snapshot and restarts the previous version**. The snapshot covers the
+replace-wholesale parts of `/opt/jen` *and* the files an update replaces
+outside it (`jen.service`, `/etc/sudoers.d/jen`, the updater itself,
+`jen-update.service`), so a bad unit file can't survive the rollback.
+Deps and code are both proven against each other before a single file in
 `/opt/jen` is touched.
 
 **Still weaker than ideal, tracked for a future major:** the venv is

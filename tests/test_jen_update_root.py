@@ -416,6 +416,45 @@ class TestSnapshotRollback:
         calls = [" ".join(map(str, c.args[0])) for c in mock_run.call_args_list]
         assert any("systemctl restart jen" in c for c in calls)
 
+    def test_snapshot_and_restore_cover_the_external_unit_files(self, jen_update_root, tmp_path):
+        install = tmp_path / "opt-jen"
+        (install / "jen").mkdir(parents=True)
+        (install / "jen" / "x.py").write_text("1\n")
+        unit = tmp_path / "jen.service"
+        unit.write_text("[Service]\nExecStart=good\n")
+        sudoers = tmp_path / "sudoers-jen"
+        sudoers.write_text("www-data ALL=(root) NOPASSWD: /usr/bin/systemctl restart jen\n")
+        snap = tmp_path / "snap"
+        with patch.dict(
+            jen_update_root._EXTERNAL_ITEMS,
+            {str(unit): "jen.service", str(sudoers): "sudoers-jen"},
+            clear=True,
+        ):
+            jen_update_root.snapshot_install(str(snap), install_dir=str(install))
+            # a bad update wrecks the unit
+            unit.write_text("[Service]\nExecStart=BROKEN\n")
+            sudoers.write_text("garbage\n")
+            with patch("subprocess.run") as mock_run:
+                jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
+        assert unit.read_text() == "[Service]\nExecStart=good\n"
+        assert "restart jen" in sudoers.read_text()
+        calls = [" ".join(map(str, c.args[0])) for c in mock_run.call_args_list]
+        assert any("daemon-reload" in c for c in calls), "a restored .service needs daemon-reload"
+
+    def test_main_rolls_back_on_an_exception_during_the_swap(self, jen_update_root):
+        """v5.8.1 — the file swap + restart must be inside a try/except
+        that restores the snapshot, not just a post-restart health check."""
+        import inspect
+
+        src = inspect.getsource(jen_update_root.main)
+        # the region from the snapshot to the success return
+        region = src[src.index("snapshot_install(snapshot_dir)") : src.rindex("return 0")]
+        assert "try:" in region
+        assert "except Exception" in region
+        assert "restore_snapshot(snapshot_dir)" in region
+        # install_extracted_files must be INSIDE that try (before the except)
+        assert region.index("install_extracted_files(extracted") < region.index("except Exception")
+
 
 class TestServiceHealthy:
     def test_true_when_active_and_http_ok(self, jen_update_root):
