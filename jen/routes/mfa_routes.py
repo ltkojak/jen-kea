@@ -61,6 +61,27 @@ def _complete_pending_login(user):
     __user.audit("LOGIN", "auth", f"User {user.username} logged in (after MFA enrollment)")
 
 
+def _remaining_mfa_factor_count(user_id, excluding_method_id):
+    """Enabled TOTP methods + passkeys the user would still have if the
+    given TOTP method were removed. Fails OPEN (returns 1) on a DB error
+    — a hiccup must never be what blocks a removal."""
+    from jen.models.db import jen_db
+
+    try:
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS c FROM mfa_methods WHERE user_id=%s AND enabled=1 AND id <> %s",
+                    (user_id, excluding_method_id or 0),
+                )
+                totp = cur.fetchone()["c"]
+                cur.execute("SELECT COUNT(*) AS c FROM webauthn_credentials WHERE user_id=%s", (user_id,))
+                passkeys = cur.fetchone()["c"]
+        return totp + passkeys
+    except Exception:
+        return 1
+
+
 def _JEN_VERSION():
     from jen import JEN_VERSION
 
@@ -283,6 +304,12 @@ def mfa_enroll():
             return redirect(url_for("mfa_routes.mfa_enroll"))
         if action in ("remove", "remove_totp"):
             method_id = request.form.get("method_id") or request.form.get("mfa_id")
+            # Don't let the last factor go while MFA is mandatory for this
+            # user: it would lock the policy out on the next login, and it
+            # hands a stolen session an easy way to switch MFA off entirely.
+            if __mfa.user_needs_mfa(enrolling) and _remaining_mfa_factor_count(uid, method_id) == 0:
+                flash("MFA is required for your account — add another authenticator before removing this one.", "error")
+                return redirect(url_for("mfa_routes.mfa_enroll"))
             try:
                 with __db.jen_db() as db:
                     with db.cursor() as cur:

@@ -11,10 +11,11 @@ single-use, and atomicity.
 
 import concurrent.futures
 
+import pyotp
 import pytest
 
 from jen.models.db import jen_db
-from jen.services import mfa
+from jen.services import crypto, mfa
 
 USER_ID = 1
 
@@ -62,3 +63,59 @@ class TestSingleUse:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
             results = list(ex.map(lambda _: mfa.verify_backup_code(USER_ID, code), range(8)))
         assert results.count(True) == 1, results
+
+
+class TestBackupCodeLoginFlow:
+    """The end-to-end path the review asked for: enrolled user with a
+    lost authenticator signs in with a backup code, which is then spent."""
+
+    PW = "bkpflow123"
+
+    @pytest.fixture
+    def enrolled_user(self, app):
+        from jen.models.user import hash_password
+
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE username='_bkp_flow'")
+                cur.execute(
+                    "INSERT INTO users (username, password, role, must_change_password) VALUES (%s, %s, 'viewer', 0)",
+                    ("_bkp_flow", hash_password(self.PW)),
+                )
+                cur.execute("SELECT id FROM users WHERE username='_bkp_flow'")
+                uid = cur.fetchone()["id"]
+                cur.execute(
+                    "INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled) VALUES (%s,'totp',%s,'x',1)",
+                    (uid, crypto.encrypt_secret(pyotp.random_base32())),
+                )
+            db.commit()
+        codes = mfa.generate_backup_codes(uid)
+        yield uid, codes
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (uid,))
+                cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (uid,))
+                cur.execute("DELETE FROM users WHERE username='_bkp_flow'")
+            db.commit()
+
+    def test_login_with_backup_code_authenticates_and_consumes_it(self, client, enrolled_user):
+        uid, codes = enrolled_user
+        r = client.post("/login", data={"username": "_bkp_flow", "password": self.PW}, follow_redirects=False)
+        assert "/mfa/verify" in r.headers["Location"]
+        with client.session_transaction() as sess:
+            assert "_user_id" not in sess  # not authenticated yet
+
+        r = client.post("/mfa/verify", data={"code": codes[0]}, follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert "/mfa/verify" not in r.headers["Location"]
+        with client.session_transaction() as sess:
+            assert "_user_id" in sess
+            assert "mfa_pending_user_id" not in sess
+
+        # that code is now spent; a second login can't reuse it
+        client.get("/logout")
+        client.post("/login", data={"username": "_bkp_flow", "password": self.PW})
+        r = client.post("/mfa/verify", data={"code": codes[0]}, follow_redirects=True)
+        assert b"invalid" in r.data.lower() or b"incorrect" in r.data.lower()
+        with client.session_transaction() as sess:
+            assert "_user_id" not in sess

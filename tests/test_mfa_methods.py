@@ -68,3 +68,71 @@ class TestMultiMethodTotp:
         assert mfa.verify_totp(1, "000000") is False
         state = _last_used()
         assert state["_probe_iPhone"] is None and state["_probe_Keeper"] is None
+
+
+def _probe_ids():
+    with jen_db() as db:
+        with db.cursor() as cur:
+            cur.execute("SELECT id, name FROM mfa_methods WHERE name LIKE '\\_probe\\_%' ORDER BY name")
+            return {r["name"]: r["id"] for r in cur.fetchall()}
+
+
+def _probe_count():
+    with jen_db() as db:
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM mfa_methods WHERE name LIKE '\\_probe\\_%'")
+            return cur.fetchone()["c"]
+
+
+class TestLastFactorProtection:
+    """v5.8.0 — a required-MFA user must not be able to remove their only
+    authenticator (would lock the policy out on next login / let a stolen
+    session switch MFA off)."""
+
+    def _set_mode(self, mode):
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
+
+        set_global_setting("mfa_mode", mode)
+        _invalidate_settings_cache()
+
+    def test_cannot_remove_only_factor_when_required(self, logged_in_client, two_totp_methods):
+        self._set_mode("required_all")
+        try:
+            ids = _probe_ids()
+            # drop one so exactly one _probe_ method is left
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM mfa_methods WHERE id=%s", (ids["_probe_Keeper"],))
+                db.commit()
+            r = logged_in_client.post(
+                "/mfa/enroll",
+                data={"action": "remove", "method_id": ids["_probe_iPhone"]},
+                follow_redirects=True,
+            )
+            assert r.status_code == 200
+            assert _probe_count() == 1, "the last required factor was removed"
+        finally:
+            self._set_mode("off")
+
+    def test_can_remove_one_of_two_when_required(self, logged_in_client, two_totp_methods):
+        self._set_mode("required_all")
+        try:
+            ids = _probe_ids()
+            logged_in_client.post(
+                "/mfa/enroll", data={"action": "remove", "method_id": ids["_probe_iPhone"]}, follow_redirects=True
+            )
+            assert _probe_count() == 1
+        finally:
+            self._set_mode("off")
+
+    def test_can_remove_last_factor_when_mfa_not_required(self, logged_in_client, two_totp_methods):
+        self._set_mode("off")
+        ids = _probe_ids()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM mfa_methods WHERE id=%s", (ids["_probe_Keeper"],))
+            db.commit()
+        logged_in_client.post(
+            "/mfa/enroll", data={"action": "remove", "method_id": ids["_probe_iPhone"]}, follow_redirects=True
+        )
+        assert _probe_count() == 0

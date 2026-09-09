@@ -87,6 +87,11 @@ paths:
   generated value through an escaping helper, so a password containing
   `$`, `` ` ``, `#`, spaces or quotes is no longer mangled by Docker
   Compose's interpolation.
+- **You can no longer remove your last authenticator** while MFA is
+  mandatory for your account — that would lock the policy out on the
+  next login, and gives a stolen session no route to disabling MFA.
+  Add a second one first. (A superadmin MFA-reset for a locked-out user
+  is a separate, deliberate path and is unaffected.)
 
 ## [5.7.0] - 2026-09-08
 
