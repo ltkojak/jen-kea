@@ -99,35 +99,48 @@ All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root
 | Key | Description | Example |
 |---|---|---|
 | `connection_mode` | `ca` (default) or `direct` — see "Direct control sockets" below | `ca` |
-| `api_url` | In `ca` mode: the Control Agent URL. In `direct` mode: kea-dhcp4's own HTTP control socket. | `http://YOUR-KEA-SERVER:8000` |
+| `api_url` | In `ca` mode: the Control Agent URL. In `direct` mode: kea-dhcp4's own HTTP/HTTPS control socket — **must include an explicit port** (a daemon socket is never on 80/443). | `https://10.10.10.20:8004` |
 | `api_user` | API authentication username | `kea-api` |
 | `api_pass` | API authentication password | `your-password` |
 | `api_ca` | Optional. Path on the Jen host to a CA bundle — pins TLS verification for an `https://` `api_url`. | `/etc/jen/ssl/kea-ca.pem` |
 | `api_tls_verify` | Optional, default `true`. Set `false` to skip TLS verification for an `https://` `api_url` (only sensible with a self-signed cert and no `api_ca`). | `true` |
+| `api_client_cert` | Optional. Client-certificate PEM on the Jen host. Kea's per-daemon `https` socket defaults `cert-required` to `true` (mutual TLS), so without this an `https://` endpoint refuses the handshake. Set with `api_client_key` (both or neither). | `/etc/jen/ssl/jen-kea-client.pem` |
+| `api_client_key` | Optional. The private key for `api_client_cert`. Must be readable by `www-data` (`root:www-data` `640` under `/etc/jen/ssl/`). | `/etc/jen/ssl/jen-kea-client.key` |
 
-`connection_mode`, `api_ca`, and `api_tls_verify` are all optional and
-backward-compatible — an existing `jen.config` with none of them behaves
-exactly as it did before v5.10.0.
+All of these are optional and backward-compatible — an existing
+`jen.config` with none of them behaves exactly as it did before v5.10.0.
 
 ### Direct control sockets (Kea 2.7.2+ / required for 3.2+)
 
 ISC **deprecated the Control Agent (`kea-ctrl-agent`) in Kea 3.0** and
 **removed it entirely in Kea 3.2**. Since Kea 2.7.2 each daemon
-(`kea-dhcp4`, `kea-dhcp6`, `kea-dhcp-ddns`) exposes its own HTTP command
-API through a `control-sockets` list. Set `connection_mode = direct` and
-point `api_url` at the kea-dhcp4 socket.
+(`kea-dhcp4`, `kea-dhcp6`, `kea-dhcp-ddns`) exposes its own HTTP/HTTPS
+command API through a `control-sockets` list. Set `connection_mode =
+direct` and point `api_url` at each daemon's socket — dhcp4 under `[kea]`,
+dhcp6 under `[kea6]` (there is **no** fallback from v6 to the v4 URL in
+direct mode; a kea-dhcp4 daemon cannot answer DHCPv6 commands). ISC's
+example uses port **8004** for dhcp4; Jen's docs use **8006** for dhcp6.
 
-Add an `http` entry to `control-sockets` in `kea-dhcp4.conf` — **keep the
-existing `unix` entry alongside it** (`kea-shell` and some hooks still
-use it):
+Always **keep the existing `unix` entry** in `control-sockets` alongside
+the new one (`kea-shell` and some hooks use it), and **firewall the
+HTTP(S) port to the Jen host** regardless of which option below you pick.
+
+#### Recommended — HTTPS on a management address, mutual TLS
+
+Bind the control API to a management IP (not `0.0.0.0`), use HTTPS, and
+require a client certificate. In `kea-dhcp4.conf`:
 
 ```json
 "control-sockets": [
   { "socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket" },
   {
-    "socket-type": "http",
-    "socket-address": "0.0.0.0",
+    "socket-type": "https",
+    "socket-address": "10.10.10.20",
     "socket-port": 8004,
+    "trust-anchor": "/etc/kea/tls/ca.crt",
+    "cert-file": "/etc/kea/tls/server.crt",
+    "key-file": "/etc/kea/tls/server.key",
+    "cert-required": true,
     "authentication": {
       "type": "basic",
       "realm": "kea",
@@ -137,35 +150,91 @@ use it):
 ]
 ```
 
-Then in `jen.config`:
+Jen side:
 
 ```ini
 [kea]
 connection_mode = direct
-api_url  = http://YOUR-KEA-SERVER:8004
+api_url  = https://10.10.10.20:8004
 api_user = kea-api
 api_pass = your-password
+api_ca          = /etc/jen/ssl/kea-ca.pem
+api_client_cert = /etc/jen/ssl/jen-kea-client.pem
+api_client_key  = /etc/jen/ssl/jen-kea-client.key
 ```
 
-Notes:
+#### Without a client certificate
 
-- ISC's own example uses port **8004** for `kea-dhcp4`. Jen's docs use
-  **8006** for `kea-dhcp6` by convention — set it under `[kea6] api_url`
-  (there is no fallback to the v4 URL in direct mode; a kea-dhcp4 daemon
-  cannot answer DHCPv6 commands).
-- Basic auth is the only authentication type Kea's HTTP sockets support.
-  For TLS, add `trust-anchor` / `cert-file` / `key-file` to the `http`
-  entry and use an `https://` `api_url` with `api_ca`.
+If you can't deploy a client cert to the Jen host, set `"cert-required":
+false` on the Kea socket — otherwise Kea demands a client certificate
+Jen can't present and the TLS handshake fails. Jen side: `api_ca` only
+(no `api_client_cert` / `api_client_key`). The connection is still
+encrypted and still firewalled to the Jen host; it just isn't mutual.
+
+#### Plain HTTP
+
+> ⚠️ Basic-auth credentials are sent **in the clear** over an `http`
+> socket (ISC's own guidance). Bind to a management IP, **never
+> `0.0.0.0`**, and firewall the port to the Jen host.
+
+```json
+"control-sockets": [
+  { "socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl-socket" },
+  {
+    "socket-type": "http",
+    "socket-address": "10.10.10.20",
+    "socket-port": 8004,
+    "authentication": {
+      "type": "basic", "realm": "kea",
+      "clients": [ { "user": "kea-api", "password": "your-password" } ]
+    }
+  }
+]
+```
+
+#### Making the certificates
+
+A minimal private CA — one CA, a server cert per Kea host (SAN = the
+management IP), one client cert for Jen:
+
+```bash
+# CA
+openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 -nodes \
+  -keyout ca.key -out ca.crt -subj "/CN=jen-kea-ca"
+
+# Kea server cert (repeat per host; set the SAN to that host's mgmt IP)
+openssl req -newkey rsa:4096 -nodes -keyout server.key -out server.csr \
+  -subj "/CN=kea01" -addext "subjectAltName=IP:10.10.10.20"
+openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -sha256 -days 825 -out server.crt -copy_extensions copy
+
+# Jen client cert
+openssl req -newkey rsa:4096 -nodes -keyout jen-kea-client.key \
+  -out jen.csr -subj "/CN=jen"
+openssl x509 -req -in jen.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -sha256 -days 825 -out jen-kea-client.pem
+```
+
+On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
+`/etc/kea/tls/` (`root:_kea` `640`). On the **Jen host**: `ca.crt` (as
+`api_ca`), `jen-kea-client.pem`, `jen-kea-client.key` in `/etc/jen/ssl/`
+(`root:www-data` `640`).
+
+#### Notes
+
 - **Never point `api_url` at an HA peer port.** In Kea 3.2 the HA hook's
   `restrict-commands` defaults to `true`, so the HA listener only accepts
   HA commands — Jen must talk to each daemon's *own* control socket.
 - The **Probe** button on Settings → Kea reports the running Kea version
-  and whether `ca` or `direct` answered, with a recommendation.
+  and whether `ca` or `direct` answered, with a recommendation. Paste a
+  specific URL into the box next to it to test a candidate direct socket.
 - For a **brand-new** Kea with no config yet, "Author a starting
   kea-dhcpX.conf" (Settings → Kea, superadmin) writes the `control-sockets`
-  list above for you when `connection_mode = direct` — port and basic-auth
-  credentials come from `[kea]` / `[kea6] api_url` / `api_user` / `api_pass`,
-  so set those first.
+  list for you when `connection_mode = direct`: it respects the endpoint
+  scheme (http vs https), asks for the TLS paths and a bind address, sets
+  `cert-required` from whether Jen has a client certificate, and generates
+  per server from each server's own API settings. Every direct-mode API
+  URL must include an explicit port.
 
 ### [kea_db] section
 
@@ -584,7 +653,19 @@ api_pass = your-kea-api-password
 ssh_host = YOUR-STANDBY-SERVER
 ssh_user = your-ssh-user
 kea_conf = /etc/kea/kea-dhcp4.conf
+# Optional per-server DHCPv6 endpoint for direct mode — only needed when
+# this server's kea-dhcp6 has its own socket. api6_user / api6_pass fall
+# back to api_user / api_pass (v5.10.2):
+# api6_url  = http://YOUR-STANDBY-SERVER:8006
+# api6_user = kea-api
+# api6_pass = your-kea-api-password
 ```
+
+The **Additional Servers** editor manages `name`, `role`, `api_url`,
+`api_user`, `api_pass`, `api6_url`, `api6_user`, `api6_pass`, `ssh_host`,
+`ssh_user`, and `kea_conf`. Any other key you've hand-added to a
+`[kea_server_N]` section (for example `ssh_key`) is preserved when you
+save from the UI (v5.10.2).
 
 ### How Active Node Routing Works
 

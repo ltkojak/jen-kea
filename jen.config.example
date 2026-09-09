@@ -107,6 +107,11 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # ssh_host = YOUR-STANDBY-SERVER
 # ssh_user = your-ssh-user
 # kea_conf = /etc/kea/kea-dhcp4.conf
+# Optional per-server DHCPv6 endpoint (direct mode) — api6_user/api6_pass
+# fall back to api_user/api_pass:
+# api6_url  = http://YOUR-STANDBY-SERVER:8006
+# api6_user = kea-api
+# api6_pass = your-kea-api-password
 
 [subnets]
 # Format: subnet_id = Friendly Name, CIDR

@@ -2,6 +2,95 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.10.2] - 2026-09-09
+
+The Kea 3 direct-control-socket work from 5.10.0/5.10.1 got the transport
+right; this release finishes the edges around it — TLS, config lifecycle,
+and authoring defaults — from an external review. All of it is optional
+and backward-compatible; a `ca`-mode install is unaffected.
+
+### HTTPS direct sockets actually work
+
+5.10.1's "Author a starting config" always emitted an `http` control
+socket, even when Jen's own `api_url` was `https://` — so Jen dialled
+HTTPS and Kea listened plain HTTP, and they couldn't talk. And Kea's
+per-daemon `https` socket defaults `cert-required` to **true** (mutual
+TLS), which the admin-guide's HTTPS instructions didn't account for.
+
+- New `[kea] api_client_cert` / `api_client_key` — a client-certificate
+  PEM and key on the Jen host, passed to every Kea request. Set both or
+  neither; Jen checks each file exists on save. Kea can now demand a
+  client cert (its default) and Jen can satisfy it.
+- The authoring wizard is scheme-aware: an `https://` endpoint produces a
+  `socket-type: https` entry with `trust-anchor` / `cert-file` /
+  `key-file`, and `cert-required` is set to `true` only when Jen actually
+  has a client certificate configured — never authored as `true` into a
+  file Jen then can't connect to.
+- The admin-guide's "Direct control sockets" section is rewritten
+  secure-first: HTTPS-with-mTLS on a management address is the headline
+  example, with a `cert-required: false` variant and a plain-HTTP warning
+  box, plus a minimal private-CA `openssl` recipe.
+
+### The authored socket is the endpoint Jen will dial
+
+The generated config is now built **per target server**, from each
+server's own `api_url` and credentials via the same endpoint resolution
+the live transport uses — not once from the primary's globals. An
+HA standby with its own port/credentials gets a config Jen can reach.
+
+- Direct-mode API URLs must include an explicit port (`http://kea:8004`,
+  not `http://kea`). A daemon control socket is never on 80/443, and a
+  portless URL had Jen dial `:80` while authoring emitted `:8000`. The
+  Kea page warns about any portless URL after a mode switch.
+- The stale dhcp4 fallback port (`8000`, the old Control Agent port) is
+  gone — there's no fallback; a missing port is an error.
+
+### No more 0.0.0.0 by default
+
+5.10.1 hard-coded the authored control socket to bind `0.0.0.0` (every
+interface) with no way to choose — a "secure enough on a trusted LAN"
+default, not a secure one. The authoring form now offers a **bind
+address** picker over the Kea host's detected management IPs, preselecting
+the one Jen connects to; `0.0.0.0` is present but flagged "not
+recommended" and never the default. A plain-`http` endpoint shows a
+"credentials in the clear" warning.
+
+### Config that stays configured
+
+- **Clearing a `[kea6]` override now works.** Blanking a Kea6 API/DB text
+  field removes the key so Jen genuinely inherits the v4 value — before
+  this a blank field wrote nothing and a stale `…:8006` override could
+  survive a `direct → ca` switch and get a CA-shaped payload aimed at the
+  v6 daemon's port. Passwords are kept unless you tick a new "Inherit"
+  box.
+- **Additional Servers no longer drops `api6_url`.** The editor rebuilt
+  each `[kea_server_N]` from a fixed field list, so a per-server v6
+  endpoint (or a hand-added `ssh_key`) vanished on any unrelated save.
+  The form now carries `api6_url` / `api6_user` / `api6_pass`, and keys
+  it doesn't manage are preserved.
+- Per-server `api6_user` / `api6_pass` now make the full trip from config
+  through to the transport.
+
+### Preview no longer shows passwords
+
+The "Preview & Validate" step returned the whole generated config as
+JSON, lease-database and control-socket passwords included, into the
+browser DOM. Passwords are now redacted (`********`) in that payload; the
+real values still reach the remote `kea-dhcpX -t` check.
+
+### Probe a specific URL
+
+The Probe button on Settings → Kea takes an optional URL — it probes just
+that endpoint (direct-style, no port-8004 guessing) and, when it answers,
+recommends setting it as the API URL. The scheme is never downgraded.
+
+### Not in this release
+
+Per-server or `[kea6]`-specific client certificates (one global
+`[kea]` pair for now); replacing the remote `sudo python3` config-push
+path with a fixed-function helper (a larger change, tracked separately);
+plugin-registry checksums.
+
 ## [5.10.1] - 2026-09-09
 
 Completes the Kea 3 work from 5.10.0: **"Author a starting config" now

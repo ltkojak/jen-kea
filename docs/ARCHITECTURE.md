@@ -31,11 +31,18 @@ The command HTTP API is reached one of two ways, chosen by
 - **`ca`** (default) — one `kea-ctrl-agent` endpoint routes commands to
   each daemon by a `"service"` field. Every release before v5.10.0 did
   only this.
-- **`direct`** — Jen talks to each daemon's own `http` control socket.
-  ISC deprecated the Control Agent in Kea 3.0 and **removed it in 3.2**,
-  so `direct` is the only option on current Kea. `kea-dhcp4` and
-  `kea-dhcp6` each get their own URL (`[kea] api_url` / `[kea6] api_url`),
-  and the `"service"` field is omitted.
+- **`direct`** — Jen talks to each daemon's own `http`/`https` control
+  socket. ISC deprecated the Control Agent in Kea 3.0 and **removed it in
+  3.2**, so `direct` is the only option on current Kea. `kea-dhcp4` and
+  `kea-dhcp6` each get their own URL (`[kea] api_url` / `[kea6] api_url`,
+  explicit port required), and the `"service"` field is omitted. For an
+  `https://` socket Jen can present a client certificate (`[kea]
+  api_client_cert` / `api_client_key`) — Kea's per-daemon TLS socket
+  defaults `cert-required` to true, so mutual TLS is the norm. The client
+  key sits under `/etc/jen/ssl` readable by `www-data`; a compromise of
+  the Jen process exposes it exactly the way it already exposes the Kea
+  SSH key — one more reason for the planned Kea-host helper (§3.3), not a
+  new class of exposure.
 
 Deliberately **not** an agent-based architecture. There's no separate
 process running on each Kea server the way Stork's `stork-agent` works —
