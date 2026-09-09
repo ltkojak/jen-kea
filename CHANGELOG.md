@@ -58,6 +58,14 @@ directories in a future major (see `docs/ARCHITECTURE.md` §6).
 A round of fixes from an external review of 5.7.0, in the auth/recovery
 paths:
 
+- **Mandatory-MFA enrollment could be bypassed.** When MFA was required
+  but a user hadn't set it up, login called `login_user()` *before*
+  redirecting to the enrollment page and nothing kept that
+  fully-authenticated session off the rest of the app. Login now holds
+  the user in a pre-authenticated *pending* state — password verified,
+  but not a Flask-Login session — reachable only by `/mfa/enroll`; the
+  session is promoted to a real login only once a factor is enrolled and
+  verified. `tests/test_mfa_enrollment_gate.py` is the integration guard.
 - **Backup codes never worked.** They were generated and hashed as
   `XXXXXXXX-XXXXXXXX` but the challenge path stripped the dash before
   re-hashing, so no entered code could ever match. Entered codes are now

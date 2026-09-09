@@ -147,29 +147,28 @@ def login():
                 mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin")
             )
             if mfa_enrolled or needs_mfa:
+                _next = request.args.get("next", "")
+                if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
+                    _next = ""
                 if mfa_enrolled and not __mfa.is_trusted_device(row["id"], request):
                     session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
-                    _next = request.args.get("next", "")
-                    if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
-                        _next = ""
+                    session.pop("mfa_pending_enroll", None)
                     session["mfa_next"] = _next or url_for("dashboard.dashboard")
                     return redirect(url_for("mfa_routes.mfa_verify"))
                 elif needs_mfa and not mfa_enrolled:
+                    # Password is verified, but MFA is mandatory and the
+                    # user hasn't set it up. Hold them in a pending state —
+                    # NOT a Flask-Login session — so nothing else in the app
+                    # is reachable until they enroll and verify a factor.
+                    # (Pre-5.8.0 this called login_user() here, leaving a
+                    # fully-authenticated session one redirect away from the
+                    # enrollment page.)
                     session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
-                    login_user(user)
-                    session["last_active"] = datetime.now(timezone.utc).isoformat()
-                    session["_user_cache"] = {
-                        "id": user.id,
-                        "username": user.username,
-                        "role": user.role,
-                        "session_timeout": user.session_timeout,
-                        "subnet_access": row.get("subnet_access"),
-                        "token_version": row.get("token_version", 0),
-                        "must_change_password": bool(row.get("must_change_password")),
-                    }
-                    flash("MFA is required for your account. Please enroll now.", "warning")
+                    session["mfa_pending_enroll"] = True
+                    session["mfa_next"] = _next or url_for("dashboard.dashboard")
+                    flash("MFA is required for your account — set up an authenticator to finish signing in.", "warning")
                     return redirect(url_for("mfa_routes.mfa_enroll"))
 
             login_user(user)

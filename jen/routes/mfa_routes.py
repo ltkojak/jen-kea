@@ -40,6 +40,27 @@ def _load_user(user_id):
     return None
 
 
+def _pending_enroll_user():
+    """The user in the middle of forced MFA enrollment: password verified
+    at login, `mfa_pending_enroll` flagged in the session, but NOT a
+    Flask-Login session yet (see jen/routes/auth.py). Returns a User or
+    None. Only /mfa/enroll and /mfa/verify honour this state — every
+    @login_required route still turns them away until enrollment finishes."""
+    if not session.get("mfa_pending_enroll"):
+        return None
+    uid = session.get("mfa_pending_user_id")
+    return _load_user(uid) if uid else None
+
+
+def _complete_pending_login(user):
+    """Turn a finished forced-enrollment into a real session."""
+    login_user(user)
+    session["last_active"] = datetime.now(timezone.utc).isoformat()
+    for key in ("mfa_pending_user_id", "mfa_pending_username", "mfa_pending_enroll"):
+        session.pop(key, None)
+    __user.audit("LOGIN", "auth", f"User {user.username} logged in (after MFA enrollment)")
+
+
 def _JEN_VERSION():
     from jen import JEN_VERSION
 
@@ -62,6 +83,9 @@ def mfa_verify():
         if current_user.is_authenticated:
             return redirect(url_for("dashboard.dashboard"))
         return redirect(url_for("auth.login"))
+    if session.get("mfa_pending_enroll"):
+        # This user has no factor yet — there's nothing to verify.
+        return redirect(url_for("mfa_routes.mfa_enroll"))
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
         flash(f"Too many failed codes. Try again in {remaining} minute(s).", "error")
@@ -196,13 +220,21 @@ def mfa_verify():
 
 
 @bp.route("/mfa/enroll", methods=["GET", "POST"])
-@login_required
 def mfa_enroll():
     import base64
     import io as _io
 
     import pyotp
     import qrcode
+
+    # Either a logged-in user managing their MFA, or a user held in the
+    # forced-enrollment pending state (password verified, not yet a
+    # session). No third door: anyone else goes back to login.
+    is_forced = not current_user.is_authenticated
+    enrolling = _pending_enroll_user() if is_forced else current_user
+    if enrolling is None:
+        return redirect(url_for("auth.login"))
+    uid, uname = enrolling.id, enrolling.username
 
     if request.method == "POST":
         action = request.form.get("action")
@@ -228,39 +260,48 @@ def mfa_enroll():
                         cur.execute(
                             """INSERT INTO mfa_methods (user_id, method_type, secret, name, enabled)
                                        VALUES (%s, 'totp', %s, %s, 1)""",
-                            (current_user.id, stored_secret, device_name),
+                            (uid, stored_secret, device_name),
                         )
                     db.commit()
                     # Generate backup codes
-                    codes = __mfa.generate_backup_codes(current_user.id)
-                __user.audit("MFA_ENROLL", "auth", f"{current_user.username} device={device_name}")
+                    codes = __mfa.generate_backup_codes(uid)
+                __user.audit("MFA_ENROLL", "auth", f"{uname} device={device_name}")
+                if is_forced:
+                    # First factor is now in place — promote the pending
+                    # state to a real session before showing recovery codes.
+                    _complete_pending_login(enrolling)
                 flash("Authenticator enrolled successfully!", "success")
                 return render_template("mfa_backup_codes.html", codes=codes)
             except Exception as e:
-                logger.error(f"MFA enrollment error for {current_user.username}: {e}")
+                logger.error(f"MFA enrollment error for {uname}: {e}")
                 flash("Enrollment error. Check server logs for details.", "error")
                 return redirect(url_for("mfa_routes.mfa_enroll"))
-        elif action in ("remove", "remove_totp"):
+        # Everything past here manages an existing setup — only for a
+        # user who is already fully authenticated.
+        if is_forced:
+            flash("Finish setting up your authenticator first.", "error")
+            return redirect(url_for("mfa_routes.mfa_enroll"))
+        if action in ("remove", "remove_totp"):
             method_id = request.form.get("method_id") or request.form.get("mfa_id")
             try:
                 with __db.jen_db() as db:
                     with db.cursor() as cur:
-                        cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (method_id, current_user.id))
+                        cur.execute("DELETE FROM mfa_methods WHERE id=%s AND user_id=%s", (method_id, uid))
                     db.commit()
-                __user.audit("MFA_REMOVE", "auth", f"{current_user.username} method_id={method_id}")
+                __user.audit("MFA_REMOVE", "auth", f"{uname} method_id={method_id}")
                 flash("Authenticator removed.", "success")
             except Exception as e:
-                logger.error(f"MFA removal error for {current_user.username}: {e}")
+                logger.error(f"MFA removal error for {uname}: {e}")
                 flash("Error removing authenticator. Check server logs for details.", "error")
             return redirect(url_for("mfa_routes.mfa_enroll"))
         elif action == "new_backup_codes":
-            codes = __mfa.generate_backup_codes(current_user.id)
-            __user.audit("MFA_NEW_BACKUP", "auth", current_user.username)
+            codes = __mfa.generate_backup_codes(uid)
+            __user.audit("MFA_NEW_BACKUP", "auth", uname)
             return render_template("mfa_backup_codes.html", codes=codes)
     # GET - show enrollment page
     secret = pyotp.random_base32()
     totp = pyotp.TOTP(secret)
-    uri = totp.provisioning_uri(name=current_user.username, issuer_name="Jen DHCP")
+    uri = totp.provisioning_uri(name=uname, issuer_name="Jen DHCP")
     qr = qrcode.make(uri)
     buf = _io.BytesIO()
     qr.save(buf, format="PNG")
@@ -270,12 +311,10 @@ def mfa_enroll():
             with db.cursor() as cur:
                 cur.execute(
                     "SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
-                    (current_user.id,),
+                    (uid,),
                 )
                 methods = cur.fetchall()
-                cur.execute(
-                    "SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,)
-                )
+                cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (uid,))
                 backup_count = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"mfa_enroll fetch error: {e}")
