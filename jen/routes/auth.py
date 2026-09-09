@@ -53,39 +53,7 @@ def login():
                     )
                     row = cur.fetchone()
 
-                    # Rate limit settings (single query)
-                    cur.execute(
-                        "SELECT setting_key, setting_value FROM settings "
-                        "WHERE setting_key IN ('rl_max_attempts','rl_lockout_minutes','rl_mode','mfa_mode')"
-                    )
-                    settings = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
-
-                    rl_mode = settings.get("rl_mode", "both")
-                    max_att = int(settings.get("rl_max_attempts", "10"))
-                    lockout_min = int(settings.get("rl_lockout_minutes", "15"))
-
-                    locked = False
-                    remaining = 0
-                    if rl_mode != "off" and max_att > 0:
-                        window = f"DATE_SUB(NOW(), INTERVAL {lockout_min if lockout_min > 0 else 1440} MINUTE)"
-                        count = 0
-                        if rl_mode in ("ip", "both"):
-                            cur.execute(
-                                f"SELECT COUNT(*) as cnt FROM login_attempts "
-                                f"WHERE ip_address=%s AND attempted_at >= {window}",
-                                (ip,),
-                            )
-                            count = max(count, cur.fetchone()["cnt"])
-                        if rl_mode in ("username", "both"):
-                            cur.execute(
-                                f"SELECT COUNT(*) as cnt FROM login_attempts "
-                                f"WHERE username=%s AND attempted_at >= {window}",
-                                (username,),
-                            )
-                            count = max(count, cur.fetchone()["cnt"])
-                        if count >= max_att:
-                            locked = True
-                            remaining = lockout_min if lockout_min > 0 else 999
+                    mfa_mode = __user.get_global_setting("mfa_mode", "off")
 
                     mfa_enrolled = False
                     if row:
@@ -100,6 +68,13 @@ def login():
             logger.error(f"Login DB error: {e}")
             flash("Database error. Please try again.", "error")
             return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
+
+        # v5.8.4 — one implementation of the lockout rule. This route used
+        # to carry its own inline copy of jen.services.auth.is_locked_out()
+        # that reported the *whole* window as "minutes remaining" rather
+        # than the time left from the oldest attempt (the same bug 5.8.0
+        # fixed on the MFA side), leaving the shared function dead code.
+        locked, remaining = __auth.is_locked_out(ip, username)
 
         if locked:
             if remaining >= 999:
@@ -142,7 +117,6 @@ def login():
             )
 
             # MFA check
-            mfa_mode = settings.get("mfa_mode", "off")
             needs_mfa = mfa_mode == "required_all" or (
                 mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin")
             )

@@ -130,6 +130,28 @@ class TestRestartRouteBehavior:
             assert "StrictHostKeyChecking=accept-new" in call_args
             assert "StrictHostKeyChecking=no" not in call_args
 
+    def test_restart_tries_both_kea_unit_names(self, logged_in_client, monkeypatch):
+        """v5.8.4 — this route only ever tried `isc-kea-dhcp4-server`, so
+        the button silently failed on hosts running ISC's own packages
+        (unit `kea-dhcp4-server`). subnets.py and kea6.py already tried
+        both; this pins the same convention here."""
+        from unittest.mock import MagicMock, patch
+
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "primary", "ssh_host": "10.0.0.2", "ssh_user": "jen", "api_url": "", "role": "primary"}],
+        )
+        fake = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        with patch("jen.routes.servers.subprocess.run", return_value=fake) as mock_run:
+            logged_in_client.post("/servers/restart/1", follow_redirects=True)
+        remote = mock_run.call_args.args[0][-1]
+        assert "systemctl restart kea-dhcp4-server" in remote
+        assert "systemctl restart isc-kea-dhcp4-server" in remote
+        assert "||" in remote
+
     def test_failed_restart_shows_stderr(self, logged_in_client, monkeypatch):
         from jen import extensions
 

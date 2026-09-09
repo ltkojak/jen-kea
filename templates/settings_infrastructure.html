@@ -175,15 +175,41 @@ function startUpdate(evt) {
     title.textContent = targetVersion ? ('Updating to v' + targetVersion + '…') : 'Updating Jen…';
     msg.textContent = 'Restarting Jen…';
 
+    var runningVersion = {{ jen_version|tojson }};
     var attempts = 0;
     var poll = setInterval(function() {
         attempts++;
-        fetch('/settings/infrastructure/check-update', { cache: 'no-store' })
+        // v5.8.4 — ask systemd how jen-update.service is doing before
+        // asking Jen what version it is. A crash *before* the restart
+        // (a snapshot failure, a pip failure) used to sit here for 50s and
+        // then be reported as "Jen restarted but still reports vX", which
+        // was simply untrue. attempts > 1 so a stale "failed" from an
+        // earlier run isn't read before this run has actually started.
+        fetch('/settings/infrastructure/update-status', { cache: 'no-store' })
+            .then(function(r) { return r.ok ? r.json() : {}; })
+            .catch(function() { return {}; })
+            .then(function(s) {
+                if (s && s.failed && attempts > 1) {
+                    clearInterval(poll);
+                    title.textContent = 'Update failed';
+                    msg.textContent = 'The update service exited with an error' +
+                        (s.exit_status ? ' (exit ' + s.exit_status + ')' : '') +
+                        '. Jen is still on v' + runningVersion +
+                        '. On the server: sudo journalctl -u jen-update.service -n 100';
+                    return null;
+                }
+                if (s && (s.active_state === 'activating' || s.active_state === 'active')) {
+                    msg.textContent = 'Installing update (' + (s.sub_state || 'running') + ')…';
+                }
+                return fetch('/settings/infrastructure/check-update', { cache: 'no-store' });
+            })
             .then(function(r) {
+                if (r === null) return null;
                 if (!r.ok) throw new Error('not ready');
                 return r.json();
             })
             .then(function(d) {
+                if (d === null) return;
                 // If we know the specific target version (the normal
                 // case — see startUpdate() above), wait for Jen to
                 // report exactly that version. If we don't (e.g.
@@ -197,12 +223,14 @@ function startUpdate(evt) {
                     clearInterval(poll);
                     msg.textContent = 'Update complete — reloading…';
                     setTimeout(function() { window.location.reload(); }, 800);
-                } else if (attempts > 25) {
-                    // Jen is up but still reports the old version after ~50s —
-                    // something is wrong (restart may not have taken effect)
+                } else if (attempts > 45) {
+                    // Jen is up but still reports the old version after ~90s
+                    // (the updater's own health window is 90s too) and
+                    // systemd hasn't reported a failure — still running, or
+                    // stuck. Say what we know, not what we guess.
                     clearInterval(poll);
-                    title.textContent = 'Update may not have completed';
-                    msg.textContent = 'Jen restarted but still reports v' + d.current + '. Check manually or view logs.';
+                    title.textContent = 'Update still not confirmed';
+                    msg.textContent = 'Jen still reports v' + d.current + '. The update service may still be running, or it rolled back. On the server: sudo journalctl -u jen-update.service -n 100';
                 }
             })
             .catch(function() {

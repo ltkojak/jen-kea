@@ -26,6 +26,7 @@ Settings -> Infrastructure toggle.
 """
 
 import logging
+import shlex
 
 from jen import extensions
 from jen.services.kea import kea_command
@@ -119,7 +120,7 @@ def _config_exists(ssh, kea6_conf: str) -> bool:
     """Confirm kea-dhcp6.conf actually exists on the remote server before
     attempting to enable — Jen never authors a v6 config from nothing on
     first enable (see plan doc); if it's missing, report that plainly."""
-    _, stdout, _ = ssh.exec_command(f"test -f {kea6_conf} && echo yes || echo no")
+    _, stdout, _ = ssh.exec_command(f"test -f {shlex.quote(kea6_conf)} && echo yes || echo no")
     return stdout.read().decode().strip() == "yes"
 
 

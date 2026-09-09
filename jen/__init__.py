@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.8.3"
+JEN_VERSION = "5.8.4"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -356,7 +356,14 @@ def create_app() -> Flask:
             return
         if request.path.startswith("/static/"):
             return
-        if csrf_svc.is_api_key_request():
+        # v5.8.4 — the Bearer exemption is scoped to the API routes that
+        # actually use Bearer auth. Before, ANY route skipped CSRF the
+        # moment a request carried an Authorization: Bearer header — even
+        # a bogus one — while the session cookie still authenticated it.
+        # Not exploitable cross-site (a custom header forces a CORS
+        # preflight Jen never answers), but the invariant was "a header
+        # disables CSRF", which is the wrong shape to keep around.
+        if request.path.startswith("/api/v1/") and csrf_svc.is_api_key_request():
             return
         token = csrf_svc.get_submitted_token()
         if not csrf_svc.validate_csrf_token(app, token):

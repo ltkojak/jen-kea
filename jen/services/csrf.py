@@ -20,6 +20,11 @@ A forged request (whether an auto-submitting <form> or cross-origin JS
 without CORS permission) cannot attach a custom Authorization header, so
 the attack this module defends against does not apply to API-key auth.
 Jen sets no permissive CORS headers, so that guarantee holds.
+
+v5.8.4 — that exemption is applied only under `/api/v1/` (see
+`_csrf_protect` in jen/__init__.py). Everywhere else a Bearer header is
+ignored and the token is required as usual — session-authenticated UI
+routes never get a header-shaped bypass.
 """
 
 import secrets

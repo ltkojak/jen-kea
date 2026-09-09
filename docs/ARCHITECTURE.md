@@ -76,25 +76,41 @@ decisions, not accidental regressions.
 
 ### 3.1 The self-update sudoers grant
 
-`jen-sudoers` grants `www-data` (the user Jen runs as) passwordless
-`sudo` execution of `/bin/bash /tmp/jen_update_install.sh` — a fixed,
-predictable path. The sudoers rule only checks the *path*, not the file's
-*content*.
+`jen-sudoers` grants `www-data` (the user Jen runs as) exactly two
+passwordless commands, matched by `sudo` byte-for-byte:
 
-**Why this is safe as designed:** the self-update flow that writes that
-file first downloads a release tarball, verifies its checksum against
-the pinned `ltkojak/jen-kea` GitHub repo via the GitHub API, and only
-then writes and `chmod`s the installer script. The trust boundary is the
-pinned repo + checksum verification, not the sudoers rule itself.
+```
+/usr/bin/systemctl restart jen
+/usr/bin/systemctl start --no-block jen-update.service
+```
 
-**What this means for any future change:** if Jen ever grows *any* other
-way for `www-data` to write attacker-influenced content to exactly that
-path (a file-upload bug, a path-traversal bug reachable from an HTTP
-request), that becomes an instant root exploit, because the sudoers rule
-has no way to tell the difference between "content the self-update flow
-verified" and "content something else wrote." Any code review touching
-file-write paths should ask: could this ever write to
-`/tmp/jen_update_install.sh`?
+Neither takes any input from Jen. `jen-update.service` is a root
+`oneshot` that runs `/usr/local/sbin/jen-update-root.py` — owned
+`root:root`, mode `0700`, **outside** every directory `www-data` can
+write — which re-derives "the current latest release" from the pinned
+`ltkojak/jen-kea` GitHub repo on its own, verifies the tarball's SHA-256
+against the published `SHA256SUMS`, and only then installs (see §6 for
+the staged/rollback flow).
+
+**Why this is the boundary:** even a fully-compromised `www-data` can
+only trigger "install whatever GitHub currently publishes as latest". It
+cannot pass a version, a URL, or file content into the privileged step,
+because nothing it controls reaches that script as input.
+
+**History — why it looks this way (v5.2.6):** the previous design had
+`www-data` write `/tmp/jen_update_install.sh` and `sudo` it. Since
+`/tmp` is world-writable and `www-data` was the exact account allowed to
+write that exact path, any code execution as `www-data` was root — the
+sudoers rule couldn't tell "content the update flow verified" from
+"content something else wrote". Moving the whole pipeline into a
+root-owned script that takes no caller input closed that.
+
+**What this means for any future change:** rule 8 in `CLAUDE.md` — a
+changed `sudo` command string is a changed sudoers line in the same
+commit, and this section is updated with it. Never add a parameter to
+either command. `jen-update-root.py` must never read `sys.argv` or any
+file `www-data` can write (`tests/test_jen_update_root.py` pins the
+first; the second is a review checklist item).
 
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
@@ -146,6 +162,21 @@ would be. If Kea's config file format or CLI flags change in a future
 version, Jen's script-generation logic needs to be updated to match —
 there's no API contract protecting against that the way there would be
 with native hook-based integration.
+
+**The privilege implication (stated plainly, v5.8.4):** the generated
+script is run as `… | sudo python3` on the Kea host. The documented
+Kea-side sudoers line therefore grants Jen's SSH user
+`NOPASSWD: /usr/bin/python3` — which is **root**, full stop. Every
+other entry on that line (`systemctl restart …`, `tail`, `apt-get`) is
+cosmetic next to it. In threat-model terms: **a compromised Jen process
+(`www-data` on the Jen host) is root on every Kea server Jen manages.**
+The Jen side of the same problem was fixed in v5.2.6 (§3.1, §6); the
+Kea side has not been yet. The planned fix is the same shape — a small,
+root-owned, fixed-path helper on each Kea host with a strict operation
+allowlist and a one-line sudoers grant, with this `sudo python3` path
+kept as a banner-warned fallback (a 5.x change; removing the fallback
+would be the MAJOR trigger). Until then, `CLAUDE.md` rule 9: any new
+remote `sudo` command is a documented change to that line.
 
 ### 3.4 API key scope
 
@@ -477,6 +508,14 @@ update replaces outside it (`jen.service`, `/etc/sudoers.d/jen`, the
 updater itself, `jen-update.service`), so a bad unit file can't survive
 the rollback. Deps and code are both proven against each other before a
 single file in `/opt/jen` is touched.
+
+Two small deliberate choices worth stating: `/api/v1/health` is
+**unauthenticated** (it returns Jen's version, whether Kea is up, Kea's
+version string and the subnet count — no leases, MACs or hostnames) and
+the updater's post-restart version confirmation depends on it; and the
+snapshot copies symlinks *as* symlinks (`copytree(symlinks=True)`) —
+v5.8.4, after a stray dangling `templates/templates` link from an old
+install made every snapshot raise before the swap.
 
 v5.8.2 hardened the venv build: `ensure_venv()` requires a venv with a
 *working `pip`* (a half-built venv from a failed `python3 -m venv` is

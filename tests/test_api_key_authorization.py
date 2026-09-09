@@ -318,6 +318,103 @@ class TestLimitParameterFloor:
         assert r.status_code == 200, f"expected a clamped, successful response, got {r.status_code}: {r.data}"
 
 
+class TestApiKeySubnetScope:
+    """v5.8.4 — docs/ARCHITECTURE.md §3.4 says a subnet-scoped key gets
+    the same subnet restriction as the human UI on every /api/v1 route.
+    Nothing tested that until now: only key *ownership* and the limit
+    clamp were covered. These seed one row per subnet in each table and
+    assert a key scoped to subnet 1 never sees subnet 2's row — list
+    routes and by-MAC routes alike (the latter must 404, not 403, so the
+    key can't probe whether a MAC exists outside its scope)."""
+
+    def _scoped_key(self, db, admin_id, subnet_ids):
+        import hashlib
+        import secrets
+
+        raw_key = "jen_" + secrets.token_hex(20)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access, active) "
+                "VALUES (%s, %s, %s, %s, %s, 1)",
+                (
+                    f"scope-key-{raw_key[-6:]}",
+                    hashlib.sha256(raw_key.encode()).hexdigest(),
+                    raw_key[:8],
+                    admin_id,
+                    json.dumps(subnet_ids),
+                ),
+            )
+        db.commit()
+        return {"Authorization": f"Bearer {raw_key}"}
+
+    def _seed(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4")
+            cur.execute("DELETE FROM hosts")
+            cur.execute("DELETE FROM devices")
+            for sid, ip, mac in ((1, "10.10.1.50", "aa1111111101"), (2, "10.10.2.50", "aa2222222202")):
+                cur.execute(
+                    "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) "
+                    "VALUES (INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), %s, 0, %s)",
+                    (ip, mac, sid, f"scope-lease-{sid}"),
+                )
+                cur.execute(
+                    "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                    "VALUES (UNHEX(%s), 0, %s, INET_ATON(%s), %s)",
+                    (mac, sid, ip.replace(".50", ".60"), f"scope-res-{sid}"),
+                )
+                mac_colon = ":".join(mac[i : i + 2] for i in range(0, 12, 2))
+                cur.execute(
+                    "INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, first_seen, last_seen) "
+                    "VALUES (%s, %s, %s, %s, NOW(), NOW())",
+                    (mac_colon, ip, f"scope-dev-{sid}", sid),
+                )
+        db.commit()
+
+    def test_list_routes_only_return_in_scope_subnet(self, client, db, mock_kea):
+        admin_id = _insert_admin_user(db, "scope_admin_1")
+        db.commit()
+        self._seed(db)
+        headers = self._scoped_key(db, admin_id, [1])
+
+        leases = client.get("/api/v1/leases", headers=headers).get_json()["leases"]
+        assert {lease["subnet_id"] for lease in leases} == {1}
+
+        res = client.get("/api/v1/reservations", headers=headers).get_json()["reservations"]
+        assert {r["subnet_id"] for r in res} == {1}
+
+        devs = client.get("/api/v1/devices", headers=headers).get_json()["devices"]
+        assert [d["last_hostname"] for d in devs] == ["scope-dev-1"]
+
+    def test_explicit_out_of_scope_subnet_filter_is_still_clamped(self, client, db, mock_kea):
+        """?subnet=2 on a key scoped to [1] must not widen the scope."""
+        admin_id = _insert_admin_user(db, "scope_admin_2")
+        db.commit()
+        self._seed(db)
+        headers = self._scoped_key(db, admin_id, [1])
+        leases = client.get("/api/v1/leases?subnet=2", headers=headers).get_json()["leases"]
+        assert leases == []
+
+    def test_by_mac_routes_404_outside_scope(self, client, db, mock_kea):
+        admin_id = _insert_admin_user(db, "scope_admin_3")
+        db.commit()
+        self._seed(db)
+        headers = self._scoped_key(db, admin_id, [1])
+        assert client.get("/api/v1/leases/aa:22:22:22:22:02", headers=headers).status_code == 404
+        assert client.get("/api/v1/devices/aa:22:22:22:22:02", headers=headers).status_code == 404
+        # …and the in-scope twin works, so the 404 above is scope, not data.
+        assert client.get("/api/v1/leases/aa:11:11:11:11:01", headers=headers).status_code == 200
+        assert client.get("/api/v1/devices/aa:11:11:11:11:01", headers=headers).status_code == 200
+
+    def test_unrestricted_key_sees_both(self, client, db, mock_kea):
+        admin_id = _insert_admin_user(db, "scope_admin_4")
+        db.commit()
+        self._seed(db)
+        headers = self._scoped_key(db, admin_id, [1, 2])
+        leases = client.get("/api/v1/leases", headers=headers).get_json()["leases"]
+        assert {lease["subnet_id"] for lease in leases} == {1, 2}
+
+
 class TestLastUsedThrottling:
     def test_last_used_not_updated_within_five_minutes_of_previous_update(self, db):
         """Direct DB-level test of the throttling SQL itself — avoids

@@ -18,6 +18,39 @@ from jen.services.access import admin_required as _admin_required
 
 logger = logging.getLogger(__name__)
 
+# v5.8.4 — uploaded SVGs are served same-origin from /static/, and the CSP
+# allows 'unsafe-inline'. Navigated to directly, an SVG's <script> (or an
+# onload= handler, a javascript: href, a <foreignObject> wrapping HTML)
+# runs in Jen's origin — stored XSS by an admin against a superadmin.
+# Reject, don't sanitize: a stripped SVG that still "works" invites
+# creative bypasses; a refused one gets fixed by the uploader.
+_SVG_FORBIDDEN = re.compile(
+    r"<\s*script\b"  # inline script
+    r"|\bon[a-z]+\s*="  # onload=, onclick=, onerror=, …
+    r"|javascript\s*:"  # javascript: URLs
+    r"|<\s*foreignObject\b"  # arbitrary HTML inside the SVG
+    r"|<\s*(?:iframe|embed|object)\b"
+    r"|<\s*(?:set|animate)\b"  # SMIL can rewrite attributes into handlers
+    r"|<!ENTITY"  # XML entities — no reason in an icon
+    r"|(?:xlink:)?href\s*=\s*[\"']?\s*(?:https?:|//|data:)",  # external / data loads
+    re.IGNORECASE,
+)
+
+
+def svg_upload_rejection(data: bytes) -> str | None:
+    """Return None if the SVG is acceptable, else a short reason. Pure —
+    tested directly in tests/test_svg_upload.py."""
+    try:
+        text = data.decode("utf-8", "replace")
+    except Exception:
+        return "not valid text"
+    if "<svg" not in text.lower():
+        return "does not contain an <svg> element"
+    m = _SVG_FORBIDDEN.search(text)
+    if m:
+        return f"contains active content ({m.group(0).strip()[:30]!r})"
+    return None
+
 
 @bp.route("/settings/upload-favicon", methods=["POST"])
 @login_required
@@ -89,9 +122,15 @@ def upload_custom_icon():
     if size > 100 * 1024:
         flash("SVG file must be under 100KB.", "error")
         return redirect(url_for("settings.settings_icons"))
+    data = svg_file.read()
+    reason = svg_upload_rejection(data)
+    if reason:
+        flash(f"SVG rejected — {reason}. Icons must be plain vector graphics with no scripts or handlers.", "error")
+        return redirect(url_for("settings.settings_icons"))
     os.makedirs(extensions.ICONS_CUSTOM_DIR, exist_ok=True)
     dest = f"{extensions.ICONS_CUSTOM_DIR}/{icon_name}.svg"
-    svg_file.save(dest)
+    with open(dest, "wb") as f:
+        f.write(data)
     # Update MANUFACTURER_ICON_MAP if name matches a known manufacturer
     __user.audit("UPLOAD_ICON", "settings", f"Custom icon '{icon_name}.svg' uploaded by {current_user.username}")
     flash(f"Icon '{icon_name}.svg' uploaded. It will be used for any manufacturer mapped to '{icon_name}'.", "success")
@@ -137,6 +176,12 @@ def upload_nav_logo():
     if size > 200 * 1024:
         flash("Logo file must be under 200KB.", "error")
         return redirect(url_for("settings.settings_system"))
+    if ext == "svg":
+        reason = svg_upload_rejection(logo_file.read())
+        logo_file.seek(0)
+        if reason:
+            flash(f"SVG rejected — {reason}. Use a plain vector logo, or a PNG/JPG/WebP.", "error")
+            return redirect(url_for("settings.settings_system"))
     # Remove any existing logo files
     for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
         old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"

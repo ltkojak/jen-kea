@@ -58,6 +58,7 @@ EXPECTED_ENDPOINTS = {
     "settings.remove_nav_logo",
     "settings.save_nav_color",
     "settings.check_update",
+    "settings.update_status",
     "settings.self_update",
 }
 

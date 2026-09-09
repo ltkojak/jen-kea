@@ -192,20 +192,32 @@ class TestCsrfMiddlewareIntegration:
         r = logged_in_csrf_client.get("/subnets")
         assert r.status_code == 200
 
-    def test_bearer_auth_request_exempt_from_csrf(self, logged_in_csrf_client):
-        """A request carrying an Authorization: Bearer header must skip the
-        CSRF check entirely, even with zero csrf_token — on ANY route, not
-        just the /api/v1/* ones, since the middleware checks globally. Uses
-        a real POST route (api key creation) with no csrf_token field at
-        all; success (302 redirect) proves CSRF was skipped, not just that
-        the route happened to tolerate a missing token."""
+    def test_bearer_header_does_not_bypass_csrf_on_ui_routes(self, logged_in_csrf_client):
+        """v5.8.4 — this used to assert the opposite: that a Bearer header
+        skipped CSRF on ANY route. A session-authenticated UI POST carrying
+        a (bogus) Bearer header and no csrf_token must now be rejected
+        like any token-less POST; the exemption lives under /api/v1/ only."""
         r = logged_in_csrf_client.post(
             "/settings/api-keys/create",
             data={"name": "test-exempt-key"},
             headers={"Authorization": "Bearer not-a-real-key"},
         )
-        assert r.status_code == 302
-        assert b"session security token" not in r.data
+        assert r.status_code == 403
+        assert b"session security token" in r.data
+
+    def test_bearer_exemption_is_scoped_to_api_v1_paths(self, app):
+        """The middleware's exemption condition is path-scoped — checked at
+        the request-context level so it doesn't depend on any /api/v1 POST
+        route existing (they're all GET today, so CSRF never fires there
+        anyway; this pins the *rule*, not a route)."""
+        with app.test_request_context("/api/v1/leases", headers={"Authorization": "Bearer x"}):
+            from flask import request
+
+            assert request.path.startswith("/api/v1/") and csrf_svc.is_api_key_request()
+        with app.test_request_context("/settings/api-keys/create", headers={"Authorization": "Bearer x"}):
+            from flask import request
+
+            assert not request.path.startswith("/api/v1/")
 
     def test_existing_suite_unaffected_by_default(self, logged_in_client):
         """Sanity check: with the default (CSRF-disabled-for-tests) client

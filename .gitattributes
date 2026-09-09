@@ -1,0 +1,6 @@
+# v5.8.4 — keep the retired pre-2.6.0 monolith out of the release tarball.
+# It's kept in the repo for reference only (see its header and ruff.toml's
+# exclude); nothing imports or runs it, and it was shipping in every
+# jen-vX.Y.Z.tar.gz built by `git archive` in release.yml.
+legacy/ export-ignore
+.gitattributes export-ignore

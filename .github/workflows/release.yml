@@ -48,8 +48,11 @@ jobs:
       - name: Build tarball
         run: |
           mkdir -p dist
-          # Package the repo contents as jen/ directory
-          git archive --format=tar.gz --prefix=jen/ HEAD \
+          # Package the repo contents as jen/ directory — from the TAG, not
+          # HEAD: identical on a tag push, but a workflow_dispatch with a
+          # tag input used to archive the default branch and label it with
+          # that tag (v5.8.4). legacy/ is export-ignored via .gitattributes.
+          git archive --format=tar.gz --prefix=jen/ "${{ steps.version.outputs.tag }}" \
             -o dist/jen-v${{ steps.version.outputs.version }}.tar.gz
           echo "Tarball built: $(ls -lh dist/)"
 

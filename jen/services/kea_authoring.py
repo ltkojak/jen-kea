@@ -38,6 +38,7 @@ Deliberately excluded from generation, always:
 import json
 import logging
 import os
+import shlex
 
 from jen import extensions
 
@@ -86,7 +87,9 @@ def read_remote_json(ssh, path: str):
     exactly the case this whole module exists to help with), not an
     error condition."""
     try:
-        _, stdout, _ = ssh.exec_command(f"cat {path} 2>/dev/null")
+        # path is validated on save (valid_remote_path) — quoted here too,
+        # defense-in-depth, since it's interpolated into a remote shell.
+        _, stdout, _ = ssh.exec_command(f"cat {shlex.quote(path)} 2>/dev/null")
         raw = stdout.read().decode()
         if not raw.strip():
             return None

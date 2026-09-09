@@ -137,7 +137,15 @@ def restart_kea_server(server_id):
         result = subprocess.run(
             ["ssh"]
             + __auth.ssh_cli_opts()
-            + [f"{server['ssh_user']}@{server['ssh_host']}", "sudo systemctl restart isc-kea-dhcp4-server"],
+            + [
+                f"{server['ssh_user']}@{server['ssh_host']}",
+                # v5.8.4 — both unit names, same as subnets.py / kea6.py:
+                # ISC's own packages install `kea-dhcp4-server`, older
+                # Debian/Ubuntu packages `isc-kea-dhcp4-server`. This
+                # route only ever tried the second, so the Servers-page
+                # restart button silently failed on ISC-package hosts.
+                "sudo systemctl restart kea-dhcp4-server 2>/dev/null || sudo systemctl restart isc-kea-dhcp4-server",
+            ],
             capture_output=True,
             timeout=15,
         )

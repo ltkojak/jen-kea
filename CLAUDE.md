@@ -61,6 +61,46 @@ and as a gate on every tagged release (`release.yml`).
   `mock_kea` fixture to stub the Kea API.
 - A new schema change is a **new numbered migration**, never an edit to an existing one
   — then add a test in `tests/test_migrations.py`.
+- **Probe, redirect and TLS behaviour is tested against real local servers**, not a
+  mocked `urlopen`. v5.8.3's SSL health-check bug shipped behind a test that mocked
+  `urlopen` *raising* `HTTPError(302)` — a real redirect is followed, never raised. Stand
+  up `http.server` / `jen.httpredirect.make_server` / an `ssl`-wrapped server on an
+  ephemeral port (see `tests/test_jen_update_root.py::TestServiceHealthy`).
+
+### Local verification (Windows dev box)
+
+The full suite cannot run here: `tests/conftest.py` has a session-scoped **autouse** DB
+fixture, so every test errors without a reachable MariaDB. What works locally:
+
+- `py_compile` / `ruff check` / `ruff format --check` / `bash -n install.sh`.
+- A standalone harness that `importlib`-loads `jen-update-root.py` (pure stdlib) and
+  exercises the function under test against real temp dirs, real venvs, real local
+  servers — this is how the updater work has been verified before each push.
+- Tests that need no DB can be listed and reasoned about, but still won't *run* here:
+  test_dependency_consistency, test_docker_config, test_small_hardening_fixes,
+  test_htmx_vendoring, test_pwa_manifest, test_device_identity, test_sudoers_command_matching,
+  test_jen_update_root, test_changelog. CI is the arbiter; expect one push per round.
+
+Gotchas learned the hard way:
+
+- **MariaDB puts an implicit `CHECK (json_valid(col))` on every `JSON` column.** A
+  non-JSON string (e.g. an encrypted `v1:` blob) fails INSERT with error 4025 and will
+  never show up locally. Store it as a JSON string literal: `json.dumps(token)`. MySQL 8
+  additionally forbids a literal `DEFAULT` on TEXT/BLOB/JSON columns (error 1101) — use
+  `VARCHAR(n)` for defaulted short strings.
+- **bandit's exit code is meaningless on Windows** — it reports `jen/routes\settings.py`
+  (backslash), which never matches the forward-slash baseline, so everything shows as
+  new. Baseline matching is by (test_id, filename, text, severity, confidence), not line
+  number.
+- When adding a test class to an existing file, put it **after** the class it follows —
+  dropping it mid-class silently reparents every method below it.
+- After a broad `ruff format` pass, re-check every source-scanning test: line-shape
+  regexes (e.g. `set_cookie\("jen_trusted"`) break silently when the formatter
+  re-wraps a call.
+- A venv's `bin/python` on Linux **realpaths to the system interpreter**. "Am I in this
+  venv?" is `sys.prefix == venv_dir`, never a `realpath` comparison.
+- Rule 7 in practice: the word "other" in new page prose has broken absence-assertion
+  tests. Grep `tests/` for `not in` assertions on the page you're touching.
 
 ## Architecture
 
@@ -120,6 +160,22 @@ Access via context managers in `jen/models/db.py`: `jen_db()`, `kea_db()`, `kea6
 Each yields a pooled connection and auto commit/rollback/return. `kea6_db()` reuses the
 `kea_db` pool when v6 targets the same database (the common case).
 
+### Kea hosts (SSH)
+
+Config pushes, restarts, log reads and the IPv6 toggle reach each Kea server over SSH
+(`jen/routes/subnets.py`, `jen/services/kea6.py`, `jen/services/kea_authoring.py`,
+`jen/routes/ddns.py`, `jen/routes/servers.py`). Conventions that have bitten before:
+
+- Kea's systemd unit is `kea-dhcpX-server` on ISC packages and `isc-kea-dhcpX-server` on
+  older Debian/Ubuntu packages — **always try both**
+  (`systemctl … kea-dhcp4-server 2>/dev/null || systemctl … isc-kea-dhcp4-server`).
+- Anything interpolated into a remote command string is validated on save
+  (`valid_remote_path()`, `valid_ssh_target()`, `valid_unix_username()` in
+  `jen/services/auth.py`) **and** `shlex.quote`d at the call site. Local `subprocess`
+  calls are always list-args.
+- Every new remote `sudo` command is a documented sudoers change on the Kea side — rule 9
+  below.
+
 ### Access control
 
 Three tiers: `superadmin` > `admin` > `viewer`. Decorators live in
@@ -161,6 +217,12 @@ inline `<script>`, `style=`, and `onclick=` throughout, so the CSP deliberately 
 `'unsafe-inline'` for script/style while still blocking external origins. Partial
 templates are `_`-prefixed and returned for HTMX swaps.
 
+- A value placed in a **JS context** — inside a `<script>` block or an `on*=` attribute —
+  goes through `|tojson`, never bare `{{ }}`. HTML autoescaping is not JS escaping.
+- Uploaded SVGs (custom icons, nav logo) are served same-origin from `/static/`, so an
+  SVG containing `<script>`/`on*=`/`javascript:` is executable content under this CSP.
+  Reject on upload; never sanitize-and-hope.
+
 ## Deployment paths and versioning
 
 - `/opt/jen/` — application code (override with `JEN_ROOT`). Reinstalled from the release
@@ -192,6 +254,13 @@ templates are `_`-prefixed and returned for HTMX swaps.
   required config-file change, a migration that can't run automatically, dropped
   OS/Kea/Python support, a removed feature or API endpoint, or a changed default an
   operator would notice.
+
+MAJOR is reserved for changes that require the **operator** to do something. An on-disk
+layout change under `/opt/jen` (versioned release dirs, user content moving to
+`/var/lib/jen`, a root-owned app tree) that `install.sh` and the in-app updater migrate
+automatically is MINOR. Removing a fallback that an operator may still depend on (e.g.
+the legacy `sudo python3` config-push path once a Kea-host helper exists) is what would
+actually be MAJOR — so keep fallbacks, banner them, and don't remove them in 5.x.
 
 Process:
 
@@ -228,4 +297,11 @@ Process:
 8. **Any change to a command invoked via `sudo` requires updating the sudoers file in the
    same change** to match it exactly — `sudo` matches command strings literally, word for
    word, not by meaning. (See `jen-sudoers`, `jen-update-root.py`, and
-   `tests/test_sudoers_command_matching.py`.)
+   `tests/test_sudoers_command_matching.py`.) `docs/ARCHITECTURE.md` §3.1 describes that
+   grant — update it in the same change too; it has gone stale before.
+9. **The same rule applies on the Kea hosts.** Any new `sudo …` Jen runs over SSH on a
+   Kea server must be added to the documented Kea-side sudoers line in
+   `docs/admin-guide.md` and `docs/troubleshooting.md` in the same change (and to the
+   helper's op allowlist once `jen-kea-helper` exists). Today that line grants
+   `/usr/bin/python3`, i.e. root — see `docs/ARCHITECTURE.md` §3.3. Don't widen it
+   casually, and don't add a new remote command without stating it.

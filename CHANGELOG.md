@@ -2,6 +2,106 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.8.4] - 2026-09-09
+
+Correctness, docs and small security fixes from a full code review of
+5.8.3, plus the reason in-app updates were still failing on a
+long-lived box.
+
+### In-app update died at the snapshot step
+
+The 5.8.2/5.8.3 updater snapshots `/opt/jen` before swapping files.
+`shutil.copytree` followed symlinks by default, and one old install had
+a stray dangling `/opt/jen/templates/templates -> (gone)` left behind
+by some ancient upgrade — so every update raised ENOENT at the snapshot
+and exited with a traceback. Because that happens before the swap,
+nothing was damaged; the box just stayed on its old version, and the
+update overlay reported "Jen restarted but still reports vX", which was
+untrue (Jen never restarted).
+
+- The snapshot (and the rollback restore) now copy symlinks *as*
+  symlinks and never follow them. A snapshot failure aborts with a
+  plain "could not snapshot — aborting, /opt/jen untouched" line.
+- The updater exits early with "Already running vX — nothing to do"
+  when GitHub's latest is what's already installed, instead of
+  re-downloading and reinstalling it.
+- New admin-only `/settings/infrastructure/update-status` (a read-only
+  `systemctl show jen-update.service` — no `sudo`, so no sudoers
+  change). The overlay polls it and now says **"Update failed (exit N)
+  … `journalctl -u jen-update.service`"** when the unit failed, and
+  only falls back to "still not confirmed" after 90 s.
+
+### Security
+
+- **Uploaded SVGs are refused if they carry active content.** Custom
+  brand icons and an SVG nav logo are served same-origin from
+  `/static/` under a CSP that allows inline script, so an SVG with
+  `<script>`, an `on*=` handler, a `javascript:` link, a
+  `<foreignObject>`, SMIL `<set>`/`<animate>`, an XML entity or an
+  external/data `href` was stored XSS by an admin against a superadmin.
+  Rejected on upload with a reason; never sanitized.
+- **The CSRF exemption for `Authorization: Bearer` requests is now
+  scoped to `/api/v1/`.** Before, *any* route skipped the CSRF check
+  the moment a request carried a Bearer header — even a bogus one —
+  while the session cookie still authenticated it. Not exploitable
+  cross-site (a custom header forces a CORS preflight Jen never
+  answers), but "a header disables CSRF" was the wrong invariant to
+  keep. UI routes now require the token regardless of headers.
+- `shlex.quote` on the two remaining remote paths interpolated into
+  SSH commands (`kea_authoring.read_remote_json`,
+  `kea6._config_exists`). Both were already validated on save; this is
+  defense-in-depth.
+
+### Bugs
+
+- **Servers page → Restart** only tried the `isc-kea-dhcp4-server`
+  unit. Every other restart in Jen tries `kea-dhcp4-server` first (ISC's
+  own packages) and falls back — this one now does too, so the button
+  works on ISC-package hosts.
+- `login()` carried its own inline copy of the rate-limit check that
+  reported the *whole* lockout window as "minutes remaining" rather
+  than the time left from the oldest attempt — the same bug 5.8.0 fixed
+  on the MFA side — and left `jen.services.auth.is_locked_out()` dead.
+  Login now calls the one shared implementation.
+- `release.yml` archived `HEAD` rather than the tag: identical on a
+  tag push, wrong for a `workflow_dispatch` with a tag input.
+- `legacy/jen.py` (the retired pre-2.6.0 monolith, 6,300 lines) is
+  export-ignored and no longer ships in the release tarball.
+- `scheduler.py` used `datetime.utcnow()` (deprecated in 3.12).
+
+### Docs — the threat model catches up
+
+- `ARCHITECTURE.md` §3.1 still described the pre-5.2.6
+  `/tmp/jen_update_install.sh` grant. Rewritten for what `jen-sudoers`
+  actually contains and why.
+- `ARCHITECTURE.md` §3.3 now states the privilege implication of the
+  SSH config push plainly: the Kea-side sudoers line grants
+  `/usr/bin/python3`, which is root; a compromised Jen process is root
+  on every managed Kea host. A fixed-path helper is the planned fix.
+- The Kea-host sudoers instructions in the Admin Guide and
+  Troubleshooting were incomplete and out of date (`kea-dhcp4`, `cp`,
+  `tee` are no longer run directly; only one unit name; no
+  `kea-dhcp6-server`, `tail`, `apt-get`). Replaced with one complete,
+  honest block, validated with `visudo -c`.
+- `CLAUDE.md`: versioning clarified (layout changes migrated by the
+  installer/updater are MINOR), rule 9 (Kea-side sudo changes are
+  documented sudoers changes), Kea-host conventions, `|tojson` and SVG
+  rules, and the local-verification gotchas moved in from private
+  notes.
+- The Admin Guide and Installation guide still told people to
+  `tar xzf jen-v5.3.3.tar.gz` and `jen-v3.8.0.tar.gz`. Both now use a
+  `jen-vX.Y.Z.tar.gz` placeholder, and `scripts/release_check.sh` scans
+  every guide for stale numeric references (and no longer needs
+  `grep -P`).
+
+### Tests
+
+Subnet-scoped API keys are now tested against every `/api/v1` list and
+by-MAC route (nothing covered §3.4's scope claim before); Servers-page
+restart pins both unit names; the updater has a real dangling-symlink
+snapshot test; the update-status route and the SVG checker have their
+own suites.
+
 ## [5.8.3] - 2026-09-09
 
 Fixes a bug in 5.8.2's own new post-restart checks, plus two smaller

@@ -23,7 +23,7 @@ Before starting Jen for the first time, work through this checklist:
 
 **Run the installer:**
 ```bash
-tar xzf jen-v5.3.3.tar.gz
+tar xzf jen-vX.Y.Z.tar.gz   # substitute the release you downloaded
 cd jen
 sudo ./install.sh
 ```
@@ -350,10 +350,31 @@ chmod 600 ~/.ssh/authorized_keys
 
 ### Add Sudoers Entry on Kea Server
 
+Jen applies subnet changes by piping a generated Python script over SSH
+into `sudo python3` on the Kea host, restarts Kea's units, reads the DDNS
+log, and can install the Kea packages for you. Be clear-eyed about what
+that grant is: **`NOPASSWD: /usr/bin/python3` is root.** The rest of the
+line only documents what Jen actually runs; it doesn't narrow anything
+while `python3` is on it. (A restricted fixed-path helper is planned —
+see `docs/ARCHITECTURE.md` §3.3.)
+
 ```bash
-echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3, /usr/bin/tail" | sudo tee /etc/sudoers.d/jen-kea
+sudo tee /etc/sudoers.d/jen-kea >/dev/null <<'EOF'
+# Jen (DHCP console) — SSH user "youruser". python3 = root; see docs/ARCHITECTURE.md §3.3
+youruser ALL=(root) NOPASSWD: /usr/bin/python3
+youruser ALL=(root) NOPASSWD: /usr/bin/systemctl restart kea-dhcp4-server, /usr/bin/systemctl restart isc-kea-dhcp4-server
+youruser ALL=(root) NOPASSWD: /usr/bin/systemctl * kea-dhcp6-server, /usr/bin/systemctl * isc-kea-dhcp6-server
+youruser ALL=(root) NOPASSWD: /usr/bin/tail -200 /var/log/kea/*
+youruser ALL=(root) NOPASSWD: SETENV: /usr/bin/apt-get update -qq, /usr/bin/apt-get install -y kea-dhcp4-server, /usr/bin/apt-get install -y kea-dhcp6-server
+EOF
 sudo chmod 440 /etc/sudoers.d/jen-kea
+sudo visudo -c -f /etc/sudoers.d/jen-kea
 ```
+
+Adjust the `tail` path if your DDNS log lives elsewhere (Jen only ever
+runs `sudo tail -200 <configured log path>`). `SETENV` on the `apt-get`
+line is needed because Jen runs it as
+`sudo DEBIAN_FRONTEND=noninteractive apt-get install …`.
 
 ---
 

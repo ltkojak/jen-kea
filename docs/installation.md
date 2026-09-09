@@ -59,7 +59,7 @@ FLUSH PRIVILEGES;
 ### Method 1 — Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v3.8.0.tar.gz
+tar xzf jen-vX.Y.Z.tar.gz   # substitute the release you downloaded
 cd jen
 sudo ./install.sh
 ```

@@ -180,15 +180,18 @@ The SSH user needs sudo access to write the config file. On your Kea server:
 sudo cat /etc/sudoers.d/jen-kea
 ```
 
-Should contain:
-```
-youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3
-```
+It must grant `/usr/bin/python3` (Jen pipes its config-edit script into
+`sudo python3` — that grant is root; `docs/ARCHITECTURE.md` §3.3 says so
+plainly), both Kea unit names for restarts, the DDNS log for `tail`, and
+`apt-get` (with `SETENV`) if you use the in-app Kea package installer.
+The complete, current line set is in the **Admin Guide → Add Sudoers
+Entry on Kea Server**; copy it from there rather than from an older
+one-liner (pre-5.8.4 docs listed `kea-dhcp4`, `cp` and `tee`, which Jen
+no longer runs directly, and only one of the two unit names).
 
-If missing:
+Validate after editing:
 ```bash
-echo "youruser ALL=(ALL) NOPASSWD: /usr/sbin/kea-dhcp4, /usr/bin/systemctl restart isc-kea-dhcp4-server, /bin/cp, /usr/bin/tee, /usr/bin/python3, /usr/bin/tail" | sudo tee /etc/sudoers.d/jen-kea
-sudo chmod 440 /etc/sudoers.d/jen-kea
+sudo visudo -c -f /etc/sudoers.d/jen-kea
 ```
 
 ### SSH key permission denied

@@ -6,7 +6,7 @@ Started by the app factory after DB init.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _run_backup_job(app):
             sched = get_schedule()
             if not sched or not sched.get("enabled"):
                 return
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)  # utcnow() is deprecated in 3.12
             hour = int(sched.get("hour", 2))
             freq = sched.get("frequency", "daily")
             if now.hour != hour:

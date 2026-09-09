@@ -507,13 +507,20 @@ def validate_staged_release(staged_root, python_bin):
 
 
 def _copy_any(src, dst):
-    """Replace dst (file or dir) with a copy of src."""
+    """Replace dst (file or dir) with a copy of src.
+
+    symlinks=True: copy a symlink AS a symlink, never follow it. A
+    snapshot must reproduce the tree as it is, and following links is
+    how v5.8.2/5.8.3 died on a real box — a stray dangling
+    `/opt/jen/templates/templates -> (gone)` left behind by some ancient
+    install made copytree raise ENOENT at the snapshot step, before the
+    swap, on every single update attempt."""
     if os.path.isdir(src):
         if os.path.isdir(dst):
             shutil.rmtree(dst)
-        elif os.path.exists(dst):
+        elif os.path.exists(dst) or os.path.islink(dst):
             os.unlink(dst)
-        shutil.copytree(src, dst)
+        shutil.copytree(src, dst, symlinks=True)
     else:
         if os.path.isdir(dst):
             shutil.rmtree(dst)
@@ -694,6 +701,15 @@ def main():
         log("ERROR: could not determine latest version from GitHub API response.")
         return 1
 
+    # The UI only offers the update button when GitHub is ahead, but this
+    # unit re-derives "latest" on its own — a race, or a second click,
+    # would otherwise re-download and re-install the version already on
+    # disk (and restart jen for nothing).
+    installed = _installed_version()
+    if installed == version:
+        log(f"Already running v{version} — nothing to do.")
+        return 0
+
     assets = data.get("assets", [])
     asset_url = ""
     for asset in assets:
@@ -800,7 +816,15 @@ def main():
 
         snapshot_dir = os.path.join(INSTALL_DIR, f".rollback-{int(time.time())}")
         log(f"Snapshotting current install → {snapshot_dir}")
-        snapshot_install(snapshot_dir)
+        try:
+            snapshot_install(snapshot_dir)
+        except (OSError, shutil.Error) as e:
+            # Nothing has been touched yet, so there's nothing to roll
+            # back — but say so plainly instead of a bare traceback, and
+            # point at the entry that broke the copy.
+            log(f"ERROR: could not snapshot the current install — aborting, /opt/jen untouched: {e}")
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
+            return 1
 
         # From here on ANY failure — an exception during the file swap, a
         # staged tree that won't byte-compile, a service that doesn't come

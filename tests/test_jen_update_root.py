@@ -518,6 +518,45 @@ class TestSnapshotRollback:
         # install_extracted_files must be INSIDE that try (before the except)
         assert region.index("install_extracted_files(extracted") < region.index("except Exception")
 
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks needs a privilege on Windows")
+    def test_snapshot_copies_a_dangling_symlink_instead_of_dying(self, jen_update_root, tmp_path):
+        """v5.8.4 — bigben had a stray `/opt/jen/templates/templates -> (gone)`
+        from some ancient install. copytree(symlinks=False) followed it,
+        raised ENOENT, and every in-app update died at the snapshot step —
+        before the swap, so the box just stayed on the old version."""
+        install = tmp_path / "opt-jen"
+        (install / "templates").mkdir(parents=True)
+        (install / "templates" / "index.html").write_text("ok\n")
+        os.symlink(str(tmp_path / "does-not-exist"), str(install / "templates" / "templates"))
+
+        snap = tmp_path / "snap"
+        jen_update_root.snapshot_install(str(snap), install_dir=str(install))
+
+        assert (snap / "templates" / "index.html").read_text() == "ok\n"
+        assert os.path.islink(snap / "templates" / "templates")  # copied as a link, not followed
+
+    def test_main_aborts_cleanly_when_the_snapshot_itself_fails(self, jen_update_root):
+        """A snapshot failure happens before anything is touched, so it must
+        log + return 1, not traceback — and must NOT use `except Exception`
+        (the rollback-region test above slices on that string)."""
+        import inspect
+
+        src = inspect.getsource(jen_update_root.main)
+        i = src.index("snapshot_install(snapshot_dir)")
+        after = src[i : i + 600]
+        assert "except (OSError, shutil.Error)" in after
+        assert "/opt/jen untouched" in after
+        assert "return 1" in after
+
+    def test_main_exits_zero_without_downloading_when_already_current(self, jen_update_root):
+        with (
+            patch.object(jen_update_root, "fetch_json", return_value={"tag_name": "v9.9.9", "assets": []}),
+            patch.object(jen_update_root, "_installed_version", return_value="9.9.9"),
+            patch.object(jen_update_root, "fetch_bytes_with_sha256") as download,
+        ):
+            assert jen_update_root.main() == 0
+        download.assert_not_called()
+
 
 def _self_signed_cert(tmp_path, cn="jen.example.com"):
     """A throwaway cert whose CN is deliberately NOT 127.0.0.1 — the whole

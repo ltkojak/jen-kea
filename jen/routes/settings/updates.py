@@ -78,6 +78,65 @@ def check_update():
         return jsonify({"status": "error", "message": "Could not check for updates. Check server logs for details."})
 
 
+def _parse_systemctl_show(text: str) -> dict:
+    """`systemctl show -p A -p B` prints `Key=Value` lines. Pure — tested
+    directly."""
+    props = {}
+    for line in text.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            props[k.strip()] = v.strip()
+    return props
+
+
+@bp.route("/settings/infrastructure/update-status")
+@login_required
+@_admin_required
+def update_status():
+    """
+    v5.8.4 — what the update overlay polls next to check-update. The
+    overlay used to conclude "Jen restarted but still reports vX" after
+    ~50s, which was wrong whenever the updater had *crashed before the
+    restart* (bigben, 5.8.2→5.8.3: a snapshot failure). `systemctl show`
+    on a system unit is a read-only property query that needs no sudo —
+    so no sudoers change (rule 8) — and tells the page whether the unit
+    is still running, finished, or failed, and with what exit status.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "/usr/bin/systemctl",
+                "show",
+                "jen-update.service",
+                "-p",
+                "ActiveState",
+                "-p",
+                "SubState",
+                "-p",
+                "Result",
+                "-p",
+                "ExecMainStatus",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        props = _parse_systemctl_show(result.stdout)
+    except Exception as e:
+        logger.error(f"update-status: could not query jen-update.service: {e}")
+        props = {}
+    active = props.get("ActiveState", "unknown")
+    return jsonify(
+        {
+            "active_state": active,
+            "sub_state": props.get("SubState", ""),
+            "result": props.get("Result", ""),
+            "exit_status": props.get("ExecMainStatus", ""),
+            "failed": active == "failed",
+        }
+    )
+
+
 @bp.route("/settings/infrastructure/self-update", methods=["POST"])
 @login_required
 @_superadmin_required
