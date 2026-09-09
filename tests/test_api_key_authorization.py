@@ -386,14 +386,21 @@ class TestApiKeySubnetScope:
         devs = client.get("/api/v1/devices", headers=headers).get_json()["devices"]
         assert [d["last_hostname"] for d in devs] == ["scope-dev-1"]
 
-    def test_explicit_out_of_scope_subnet_filter_is_still_clamped(self, client, db, mock_kea):
-        """?subnet=2 on a key scoped to [1] must not widen the scope."""
+    def test_explicit_out_of_scope_subnet_filter_is_still_clamped(self, client, db, mock_kea, monkeypatch):
+        """?subnet=2 on a key scoped to [1] must not widen the scope. Subnet
+        2 has to exist in SUBNET_MAP for the filter to resolve at all — an
+        unknown ?subnet= is ignored (the scope clamp still holds either
+        way, which is what the second assertion pins)."""
+        from jen import extensions
+
+        monkeypatch.setitem(extensions.SUBNET_MAP, 2, {"name": "Second Net", "cidr": "10.10.2.0/24"})
         admin_id = _insert_admin_user(db, "scope_admin_2")
         db.commit()
         self._seed(db)
         headers = self._scoped_key(db, admin_id, [1])
-        leases = client.get("/api/v1/leases?subnet=2", headers=headers).get_json()["leases"]
-        assert leases == []
+        assert client.get("/api/v1/leases?subnet=2", headers=headers).get_json()["leases"] == []
+        unknown = client.get("/api/v1/leases?subnet=999", headers=headers).get_json()["leases"]
+        assert {lease["subnet_id"] for lease in unknown} <= {1}
 
     def test_by_mac_routes_404_outside_scope(self, client, db, mock_kea):
         admin_id = _insert_admin_user(db, "scope_admin_3")

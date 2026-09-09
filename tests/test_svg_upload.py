@@ -61,14 +61,22 @@ class TestCustomIconUploadRoute:
             follow_redirects=True,
         )
 
+    def _custom_dir(self, tmp_path, monkeypatch):
+        # The redirect target (/settings/icons) listdir()s this, so it has
+        # to exist even when the upload is refused before creating it.
+        d = tmp_path / "custom"
+        d.mkdir()
+        monkeypatch.setattr(extensions, "ICONS_CUSTOM_DIR", str(d))
+        return d
+
     def test_clean_icon_is_saved(self, logged_in_client, tmp_path, monkeypatch):
-        monkeypatch.setattr(extensions, "ICONS_CUSTOM_DIR", str(tmp_path / "custom"))
+        d = self._custom_dir(tmp_path, monkeypatch)
         r = self._post(logged_in_client, "cleanbrand", CLEAN)
         assert r.status_code == 200
-        assert (tmp_path / "custom" / "cleanbrand.svg").read_bytes() == CLEAN
+        assert (d / "cleanbrand.svg").read_bytes() == CLEAN
 
     def test_scripted_icon_is_refused_and_not_written(self, logged_in_client, tmp_path, monkeypatch):
-        monkeypatch.setattr(extensions, "ICONS_CUSTOM_DIR", str(tmp_path / "custom"))
+        self._custom_dir(tmp_path, monkeypatch)
         r = self._post(logged_in_client, "evilbrand", b"<svg><script>alert(1)</script></svg>")
         assert r.status_code == 200
         assert b"SVG rejected" in r.data
