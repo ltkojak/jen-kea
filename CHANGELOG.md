@@ -58,6 +58,13 @@ directories in a future major (see `docs/ARCHITECTURE.md` §6).
 A round of fixes from an external review of 5.7.0, in the auth/recovery
 paths:
 
+- **Backup codes never worked.** They were generated and hashed as
+  `XXXXXXXX-XXXXXXXX` but the challenge path stripped the dash before
+  re-hashing, so no entered code could ever match. Entered codes are now
+  canonicalised back to the stored format — with or without the dash,
+  any case, stray spaces — so already-issued codes work. Redemption is a
+  single atomic `UPDATE … WHERE … used=0` that must change exactly one
+  row, so two requests can't both spend one code.
 - **Password rehash-on-login race** (introduced in 5.7.0 with the scrypt
   move): the background thread did an unconditional
   `UPDATE users SET password`, which could clobber a password changed in

@@ -69,9 +69,9 @@ def mfa_verify():
         return render_template("mfa_challenge.html", username=pending_username, has_totp=has_totp)
     if request.method == "POST":
         code = request.form.get("code", "").strip().replace(" ", "")
-        # Try backup code first (8 hex chars without dash, or with dash stripped)
-        clean_code = code.replace("-", "").upper()
-        if __mfa.verify_backup_code(pending_id, clean_code):
+        # Try a backup code first — verify_backup_code() canonicalises it
+        # (with/without dash, any case) to the stored XXXXXXXX-XXXXXXXX form.
+        if len(code) >= 16 and __mfa.verify_backup_code(pending_id, code):
             user = _load_user(pending_id)
             if user:
                 __auth.clear_mfa_attempts(pending_id)

@@ -7,6 +7,7 @@ backup codes, trusted devices.
 
 import hashlib
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -61,6 +62,18 @@ def user_has_mfa(user_id):
         return False
 
 
+def _canonical_backup_code(code):
+    """Normalise a submitted backup code to the exact stored form
+    (`XXXXXXXX-XXXXXXXX`, uppercase). Accepts it with or without the
+    dash, with stray spaces, any case. Returns None if it isn't 16 hex
+    digits — the previous verify path stripped the dash before hashing,
+    so no entered code could ever match the stored hash."""
+    hexonly = re.sub(r"[^0-9a-fA-F]", "", code or "").upper()
+    if len(hexonly) != 16:
+        return None
+    return f"{hexonly[:8]}-{hexonly[8:]}"
+
+
 def generate_backup_codes(user_id):
     """Generate 8 single-use backup codes."""
     codes = [secrets.token_hex(4).upper() + "-" + secrets.token_hex(4).upper() for _ in range(8)]
@@ -80,19 +93,22 @@ def generate_backup_codes(user_id):
 
 
 def verify_backup_code(user_id, code):
-    code_hash = hashlib.sha256(code.strip().upper().encode()).hexdigest()
+    """Consume one unused backup code. Redemption is a single atomic
+    UPDATE (WHERE used=0) that succeeds only if it changed exactly one
+    row — so two requests racing the same code can't both win."""
+    canon = _canonical_backup_code(code)
+    if canon is None:
+        return False
+    code_hash = hashlib.sha256(canon.encode()).hexdigest()
     try:
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM mfa_backup_codes WHERE user_id=%s AND code_hash=%s AND used=0", (user_id, code_hash)
+                affected = cur.execute(
+                    "UPDATE mfa_backup_codes SET used=1, used_at=NOW() WHERE user_id=%s AND code_hash=%s AND used=0",
+                    (user_id, code_hash),
                 )
-                row = cur.fetchone()
-                if row:
-                    cur.execute("UPDATE mfa_backup_codes SET used=1, used_at=NOW() WHERE id=%s", (row["id"],))
-                    db.commit()
-                    return True
-        return False
+            db.commit()
+        return affected == 1
     except Exception:
         return False
 
