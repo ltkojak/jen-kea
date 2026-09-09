@@ -58,6 +58,11 @@ Fill in:
 - **`JEN_INITIAL_ADMIN_PASSWORD`** — the first-login `admin` password
   (leave blank for legacy `admin`/`admin` + forced change)
 
+> If a password or token contains `$`, `` ` ``, `#`, spaces or quotes,
+> **single-quote the value** — `JEN_DB_PASS='p$ss w0rd'` — so Docker
+> Compose doesn't try to interpolate it. The guided installer does this
+> for you.
+
 ```bash
 docker compose up -d
 ```

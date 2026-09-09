@@ -53,6 +53,26 @@ forward-compatible) dependencies rather than doing a true point-in-time
 revert — a genuinely atomic switch waits for versioned release
 directories in a future major (see `docs/ARCHITECTURE.md` §6).
 
+### Security & reliability — authentication
+
+A round of fixes from an external review of 5.7.0, in the auth/recovery
+paths:
+
+- **Password rehash-on-login race** (introduced in 5.7.0 with the scrypt
+  move): the background thread did an unconditional
+  `UPDATE users SET password`, which could clobber a password changed in
+  the meantime. It's now synchronous and conditional on the hash that
+  was just verified still being the stored one.
+- **MFA lockout "time remaining"** could display ~900 minutes just after
+  lockout (it divided elapsed time by 60 inside the subtraction). Fixed.
+- **Failed-attempt recording** for both password and MFA moved from a
+  detached thread to synchronous, so a burst of parallel requests can't
+  each pass its rate-limit check before the earlier failures land.
+- **Docker `.env` values are now quoted.** `install.sh` writes every
+  generated value through an escaping helper, so a password containing
+  `$`, `` ` ``, `#`, spaces or quotes is no longer mangled by Docker
+  Compose's interpolation.
+
 ## [5.7.0] - 2026-09-08
 
 ### Alert-channel tokens encrypted at rest

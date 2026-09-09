@@ -84,7 +84,62 @@ class TestInstallerWritesEnvNotJenConfig:
 
     def test_installer_passes_admin_password_through_env_var(self):
         sh = (REPO / "install.sh").read_text(encoding="utf-8")
-        assert "JEN_INITIAL_ADMIN_PASSWORD=${ADMIN_PASS}" in sh
+        assert re.search(r"JEN_INITIAL_ADMIN_PASSWORD=\$\(env_value ", sh)
+
+
+class TestEnvValueEscaping:
+    """v5.8.0 — Docker Compose interpolates unquoted .env values, so a
+    password with $, ${..}, a backtick etc. gets mangled or emptied.
+    install.sh's env_value() must quote every generated value."""
+
+    _SH = (REPO / "install.sh").read_text(encoding="utf-8")
+
+    def test_every_credential_line_in_the_env_heredoc_is_escaped(self):
+        heredoc = self._SH[self._SH.index('cat > "./.env"') : self._SH.index("\nENVEOF")]
+        sensitive = [
+            "JEN_KEA_API_PASS",
+            "JEN_KEA_DB_PASS",
+            "JEN_DB_PASS",
+            "JEN_DDNS_TOKEN",
+            "JEN_INITIAL_ADMIN_PASSWORD",
+            "MYSQL_ROOT_PASSWORD",
+            "JEN_MYSQL_PASSWORD",
+        ]
+        for key in sensitive:
+            assert re.search(rf"^{key}=\$\(env_value ", heredoc, re.M), f"{key} not run through env_value()"
+
+    def test_env_value_helper_quotes_nasty_inputs(self, tmp_path):
+        import shutil
+        import subprocess
+
+        if not shutil.which("bash"):
+            import pytest
+
+            pytest.skip("bash not available")
+        fn = re.search(r"^env_value\(\) \{.*?^\}", self._SH, re.S | re.M).group(0)
+        # Feed test values through a file (one per line) rather than argv —
+        # argv round-tripping through subprocess is not reliable on Windows.
+        cases = {
+            "plainhex": "'plainhex'",
+            "a b": "'a b'",
+            "p$ss": "'p$ss'",  # single-quoted -> $ can't interpolate
+            "p${braces}x": "'p${braces}x'",
+            "h#h": "'h#h'",
+            'd"q': "'d\"q'",
+            "b\\s": "'b\\s'",
+            "it's": '"it\'s"',  # has ' -> double-quote branch
+        }
+        values = tmp_path / "values"
+        values.write_text("\n".join(cases) + "\n", encoding="utf-8", newline="\n")
+        runner = tmp_path / "run.sh"
+        runner.write_text(
+            fn + '\nwhile IFS= read -r v; do env_value "$v"; printf "\\n"; done\n', encoding="utf-8", newline="\n"
+        )
+        out = subprocess.run(
+            ["bash", str(runner)], stdin=values.open(), capture_output=True, text=True, check=True
+        ).stdout.splitlines()
+        got = dict(zip(cases, out, strict=True))
+        assert got == cases, f"got {got}"
 
 
 class TestDocsDoNotTellDockerUsersToEditJenConfig:
