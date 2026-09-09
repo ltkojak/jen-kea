@@ -640,6 +640,12 @@ class TestAuthorKeaConfigPreviewRoute:
         return f
 
     def _direct_setup(self, monkeypatch, servers, connect_map=None):
+        # derive_kea_servers() always populates api_user/api_pass on every
+        # server dict (from [kea] / [kea_server_N]); mirror that here so
+        # _endpoint_for() resolves credentials the way it does in production.
+        for s in servers:
+            s.setdefault("api_user", "kea-api")
+            s.setdefault("api_pass", "s3cret")
         monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
         monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
@@ -653,10 +659,7 @@ class TestAuthorKeaConfigPreviewRoute:
         monkeypatch.setattr(kea6_module, "_connect_ssh", _connect)
 
     def test_direct_preview_http_socket_from_this_servers_url(self, logged_in_client, monkeypatch):
-        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
-        monkeypatch.setattr(extensions, "KEA_API_USER", "kea-api")
-        monkeypatch.setattr(extensions, "KEA_API_PASS", "s3cret")
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004"}
         self._direct_setup(monkeypatch, [srv])
         data = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
@@ -766,10 +769,7 @@ class TestAuthorKeaConfigPreviewRoute:
         assert https["cert-file"] == "/etc/kea/tls/s.crt"
 
     def test_direct_preview_never_leaks_a_password_to_the_browser(self, logged_in_client, monkeypatch):
-        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004"}
-        monkeypatch.setattr(extensions, "KEA_API_URL", "http://1.2.3.4:8004")
-        monkeypatch.setattr(extensions, "KEA_API_USER", "kea-api")
-        monkeypatch.setattr(extensions, "KEA_API_PASS", "s3cretsock")
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004", "api_pass": "s3cretsock"}
         monkeypatch.setattr(extensions, "KEA_DB_PASS", "s3cretdb")
         fake = FakeSSHClient([("preview-ok", "")])
         self._direct_setup(monkeypatch, [srv], {"s1": fake})
