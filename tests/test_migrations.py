@@ -52,6 +52,23 @@ class TestAppliedState:
             assert recorded[version] == description
 
 
+class TestDashboardWidgetsPortability:
+    """v5.8.0 / migration 19 — dashboard_prefs.widgets must be VARCHAR,
+    not TEXT: MySQL 8 rejects a literal DEFAULT on a TEXT column (the CI
+    MySQL leg caught the baseline failing to build)."""
+
+    def test_widgets_column_is_varchar_with_a_default(self):
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SHOW COLUMNS FROM dashboard_prefs LIKE 'widgets'")
+                col = cur.fetchone()
+        assert "varchar" in col["Type"].lower(), col["Type"]
+        assert col["Default"] and "subnet_stats" in col["Default"]
+
+    def test_migration_19_recorded(self):
+        assert 19 in applied_versions()
+
+
 class TestAdminRoleRegression:
     """
     Prior to v4.2.0, init_jen_db promoted every 'admin' user to superadmin

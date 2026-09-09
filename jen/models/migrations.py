@@ -153,9 +153,12 @@ _BASELINE_TABLES = [
         params TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""",
+    # dashboard_prefs.widgets is VARCHAR, not TEXT, on purpose: MySQL 8
+    # forbids a literal DEFAULT on a TEXT/BLOB/JSON column (MariaDB allows
+    # it). The value is a short JSON array of widget ids. See migration 19.
     """CREATE TABLE IF NOT EXISTS dashboard_prefs (
         user_id INT PRIMARY KEY,
-        widgets TEXT NOT NULL DEFAULT '["subnet_stats","recent_leases"]',
+        widgets VARCHAR(512) NOT NULL DEFAULT '["subnet_stats","recent_leases"]',
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )""",
     """CREATE TABLE IF NOT EXISTS webauthn_credentials (
@@ -682,6 +685,27 @@ def _m018_encrypt_alert_channel_config(db):
             logger.warning("Migration 18: encrypted %d alert channel config blob(s) at rest", len(rows))
 
 
+def _m019_dashboard_widgets_varchar(db):
+    """
+    v5.8.0 — `dashboard_prefs.widgets` was `TEXT NOT NULL DEFAULT '[…]'`.
+    MariaDB allows a literal default on a TEXT column; MySQL 8 rejects it
+    (error 1101), so the baseline schema wouldn't even build on MySQL —
+    which the CI MySQL leg caught, and which contradicts the documented
+    "MySQL or MariaDB" support. The value is a short JSON array of widget
+    ids, so VARCHAR(512) holds it with room to spare and takes the
+    default on both engines.
+
+    Idempotent: skipped when the column is already VARCHAR.
+    """
+    with db.cursor() as cur:
+        if "varchar" not in _column_type(cur, "dashboard_prefs", "widgets"):
+            cur.execute(
+                "ALTER TABLE dashboard_prefs MODIFY widgets "
+                'VARCHAR(512) NOT NULL DEFAULT \'["subnet_stats","recent_leases"]\''
+            )
+            logger.info("Migration 19: dashboard_prefs.widgets TEXT → VARCHAR(512)")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -707,6 +731,11 @@ MIGRATIONS = [
     ),
     (17, "Encrypt existing plaintext mfa_methods.secret values at rest (v5.4.0)", _m017_encrypt_mfa_secrets),
     (18, "Encrypt existing plaintext alert_channels.config blobs at rest (v5.7.0)", _m018_encrypt_alert_channel_config),
+    (
+        19,
+        "dashboard_prefs.widgets TEXT → VARCHAR(512) for MySQL 8 portability (v5.8.0)",
+        _m019_dashboard_widgets_varchar,
+    ),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

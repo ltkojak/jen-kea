@@ -93,6 +93,16 @@ paths:
   Add a second one first. (A superadmin MFA-reset for a locked-out user
   is a separate, deliberate path and is unaffected.)
 
+### Portability
+
+- **CI now runs the full suite against MySQL 8** as well as MariaDB —
+  the README has always claimed both, only MariaDB was tested. It
+  immediately caught one: `dashboard_prefs.widgets` was
+  `TEXT NOT NULL DEFAULT '…'`, which MySQL 8 rejects (a literal default
+  on a `TEXT` column; MariaDB allows it). The baseline schema wouldn't
+  build on MySQL at all. It's now `VARCHAR(512)`; migration 19 converts
+  existing installs.
+
 ### Documentation
 
 - `docs/manual-install.md` — the full bare-metal install by hand (every
