@@ -89,6 +89,15 @@ class AppConfig:
         extensions.KEA_API_USER = cfg.get("kea", "api_user")
         extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
 
+        # v5.10.0 — Control-Agent-less mode. Default 'ca' = every prior
+        # release's behaviour, unchanged; an unrecognised value is treated
+        # as 'ca' rather than raising (a typo mustn't break a working
+        # install). See jen/services/kea.py::_endpoint_for().
+        _mode = cfg.get("kea", "connection_mode", fallback="ca").strip().lower()
+        extensions.KEA_CONNECTION_MODE = _mode if _mode in ("ca", "direct") else "ca"
+        extensions.KEA_API_CA = cfg.get("kea", "api_ca", fallback="").strip()
+        extensions.KEA_API_TLS_VERIFY = cfg.getboolean("kea", "api_tls_verify", fallback=True)
+
         extensions.KEA_DB_HOST = cfg.get("kea_db", "host")
         extensions.KEA_DB_USER = cfg.get("kea_db", "user")
         extensions.KEA_DB_PASS = cfg.get("kea_db", "password")
@@ -122,7 +131,13 @@ class AppConfig:
         # see the v5.0 plan doc). Reading these costs a v4-only install
         # nothing; they're simply never consulted unless ipv6_enabled (a
         # settings-table flag, not a config value) is true.
-        extensions.KEA6_API_URL = cfg.get("kea6", "api_url", fallback=extensions.KEA_API_URL)
+        # v5.10.0 — in ca mode [kea6] api_url falls back to the v4 CA URL
+        # (one Control Agent proxies both families — the common case). In
+        # direct mode there is NO fallback: kea-dhcp4 cannot answer dhcp6
+        # commands, so an unset [kea6] api_url means v6 API calls return an
+        # error dict rather than being misrouted to the v4 daemon.
+        _kea6_url_fallback = extensions.KEA_API_URL if extensions.KEA_CONNECTION_MODE == "ca" else ""
+        extensions.KEA6_API_URL = cfg.get("kea6", "api_url", fallback=_kea6_url_fallback)
         extensions.KEA6_API_USER = cfg.get("kea6", "api_user", fallback=extensions.KEA_API_USER)
         extensions.KEA6_API_PASS = cfg.get("kea6", "api_pass", fallback=extensions.KEA_API_PASS)
 
@@ -228,6 +243,11 @@ class AppConfig:
                 "id": 1,
                 "name": cfg.get("kea", "name", fallback="Kea Server 1"),
                 "api_url": cfg.get("kea", "api_url"),
+                # v5.10.0 — the kea-dhcp6 control-socket URL for `direct`
+                # mode. Blank on the primary means "use [kea6] api_url"
+                # (jen/services/kea.py::_endpoint_for); v6 API is
+                # primary-only, so extra servers rarely set this.
+                "api6_url": cfg.get("kea6", "api_url", fallback=""),
                 "api_user": primary_user,
                 "api_pass": primary_pass,
                 "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
@@ -245,6 +265,7 @@ class AppConfig:
                     "id": n,
                     "name": cfg.get(sec, "name", fallback=f"Kea Server {n}"),
                     "api_url": cfg.get(sec, "api_url", fallback=""),
+                    "api6_url": cfg.get(sec, "api6_url", fallback=""),
                     "api_user": cfg.get(sec, "api_user", fallback=primary_user),
                     "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
                     "ssh_host": cfg.get(sec, "ssh_host", fallback=""),

@@ -1,7 +1,22 @@
 """
 jen/services/kea.py
 ───────────────────
-All communication with the Kea Control Agent REST API.
+The Kea command transport (v5.10.0).
+
+Two connection modes, picked by [kea] connection_mode:
+
+  ca (default)  — one HTTP endpoint (a kea-ctrl-agent) routes every
+                  command to kea-dhcp4 / kea-dhcp6 by the JSON "service"
+                  field. Byte-identical to every release before 5.10.0.
+  direct        — talk to each daemon's own HTTP control socket. ISC
+                  deprecated the Control Agent in Kea 3.0 and REMOVED it
+                  in 3.2, so a 3.2+ install has nothing to run in ca mode.
+                  dhcp4 commands go to KEA_API_URL, dhcp6 commands to
+                  KEA6_API_URL (no fallback — a v4 daemon can't answer v6),
+                  and the "service" field is omitted (3.2 rejects a wrong
+                  one; omitting is the portable choice — the daemon still
+                  wraps its reply in a one-element list for compatibility,
+                  so the response handling below is unchanged).
 """
 
 import logging
@@ -14,25 +29,68 @@ from jen import extensions
 logger = logging.getLogger(__name__)
 
 
+def _tls_verify():
+    """The `verify` kwarg for the requests call — only relevant when the
+    endpoint URL is https://. A [kea] api_ca path pins verification to that
+    CA bundle; otherwise the [kea] api_tls_verify boolean (default True,
+    identical to requests' own default)."""
+    return extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY
+
+
+def _endpoint_for(server: dict, service: str):
+    """
+    Resolve (url, user, pwd) for one command — or return an error dict
+    when a dhcp6 command has nowhere to go in direct mode.
+
+    dhcp4 (and anything that isn't "dhcp6") behaves exactly as it has
+    since v4.0.0: the given server dict, or the [kea] globals when server
+    is None. Only dhcp6 routing is mode-aware.
+    """
+    direct = extensions.KEA_CONNECTION_MODE == "direct"
+
+    if service == "dhcp6":
+        if server is None:
+            url = extensions.KEA6_API_URL
+            user = extensions.KEA6_API_USER
+            pwd = extensions.KEA6_API_PASS
+        else:
+            v4_url_fallback = "" if direct else server.get("api_url", "")
+            url = server.get("api6_url") or extensions.KEA6_API_URL or v4_url_fallback
+            user = server.get("api6_user") or extensions.KEA6_API_USER or server.get("api_user", "")
+            pwd = server.get("api6_pass") or extensions.KEA6_API_PASS or server.get("api_pass", "")
+        if direct and not url:
+            return {
+                "result": 1,
+                "text": (
+                    "IPv6 direct mode needs a kea-dhcp6 control-socket URL — "
+                    "set [kea6] api_url (Settings → Kea → Kea6 Control Socket)."
+                ),
+            }
+        return url, user, pwd
+
+    if server is None:
+        return extensions.KEA_API_URL, extensions.KEA_API_USER, extensions.KEA_API_PASS
+    return server.get("api_url", ""), server.get("api_user", ""), server.get("api_pass", "")
+
+
 def kea_command(command: str, service: str = "dhcp4", arguments: dict = None, server: dict = None) -> dict:
     """
-    Send a command to a specific Kea server (or server 1 if None).
+    Send a command to a specific Kea server (or the primary if None).
     Always returns a dict — never raises.
     """
-    if server is None:
-        url = extensions.KEA_API_URL
-        user = extensions.KEA_API_USER
-        pwd = extensions.KEA_API_PASS
-    else:
-        url = server["api_url"]
-        user = server["api_user"]
-        pwd = server["api_pass"]
+    endpoint = _endpoint_for(server, service)
+    if isinstance(endpoint, dict):  # e.g. direct mode with no [kea6] api_url
+        return endpoint
+    url, user, pwd = endpoint
 
-    payload = {"command": command, "service": [service]}
+    if extensions.KEA_CONNECTION_MODE == "direct":
+        payload = {"command": command}
+    else:
+        payload = {"command": command, "service": [service]}
     if arguments:
         payload["arguments"] = arguments
     try:
-        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10)
+        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10, verify=_tls_verify())
         resp.raise_for_status()
         data = resp.json()
         return data[0] if isinstance(data, list) else data

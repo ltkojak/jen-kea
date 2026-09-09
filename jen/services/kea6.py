@@ -6,17 +6,14 @@ kea_command()/kea_is_up()/get_active_kea_server(), NOT a parallel module.
 
 Why thin wrappers and not a duplicate module
 ─────────────────────────────────────────────
-kea_command() already sends {"command": ..., "service": [service]} with
-service defaulting to "dhcp4" — Kea's Control Agent is commonly configured
-to proxy to both kea-dhcp4 and kea-dhcp6 through the same HTTP endpoint
-(confirmed against theelders' real kea-ctrl-agent.conf during Phase 0: one
-CA, one `control-sockets` block, entries keyed per service). So the v6 API
-layer only needs to pass service="dhcp6" through to the same functions,
-using the v6-specific connection info from jen.extensions when configured,
-and falling back to the v4 connection info otherwise (jen/config.py's
-AppConfig.apply() already does that fallback at load time — KEA6_API_URL
-etc. are simply equal to KEA_API_URL etc. when [kea6] is absent from
-jen.config).
+kea_command() is the single transport (v5.10.0). It routes by `service`
+and connection mode:
+  - ca mode: one endpoint proxies both families — v6 only needs to pass
+    service="dhcp6"; KEA6_API_URL falls back to KEA_API_URL at load time.
+  - direct mode: v6 commands go to the kea-dhcp6 control socket
+    (KEA6_API_URL / a per-server api6_url) with no v4 fallback.
+So this module just passes service="dhcp6" and the server through —
+jen/services/kea.py::_endpoint_for() does all the endpoint selection.
 
 Everything in this module is inert on a v4-only install: is_ipv6_enabled()
 is the gate every other function here should be called behind, and it
@@ -58,30 +55,14 @@ def is_ipv6_enabled() -> bool:
         return False
 
 
-def _v6_server(server: dict = None) -> dict:
-    """
-    Build the server dict kea_command() expects, using v6 connection info
-    with a fallback to the given v4 server's own values — covers the
-    same-CA-multi-service common case (extensions.KEA6_API_URL already
-    equals KEA_API_URL when [kea6] is absent) as well as an explicit
-    per-server v6 override, should that ever be needed.
-    """
-    if server is None:
-        return {
-            "api_url": extensions.KEA6_API_URL,
-            "api_user": extensions.KEA6_API_USER,
-            "api_pass": extensions.KEA6_API_PASS,
-        }
-    return {
-        "api_url": server.get("api6_url") or extensions.KEA6_API_URL or server["api_url"],
-        "api_user": server.get("api6_user") or extensions.KEA6_API_USER or server["api_user"],
-        "api_pass": server.get("api6_pass") or extensions.KEA6_API_PASS or server["api_pass"],
-    }
-
-
 def kea6_command(command: str, arguments: dict = None, server: dict = None) -> dict:
-    """Send a command to kea-dhcp6 via the same Control Agent plumbing v4 uses."""
-    return kea_command(command, service="dhcp6", arguments=arguments, server=_v6_server(server))
+    """
+    Send a command to kea-dhcp6. Routing (which URL, whether the "service"
+    field is sent) is entirely jen/services/kea.py's job now — this is
+    just kea_command() with service pinned to "dhcp6". In direct mode with
+    no [kea6] api_url configured, kea_command() returns an error dict.
+    """
+    return kea_command(command, service="dhcp6", arguments=arguments, server=server)
 
 
 def kea6_is_up(server: dict = None) -> bool:

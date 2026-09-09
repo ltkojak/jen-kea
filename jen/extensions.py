@@ -46,6 +46,22 @@ KEA_API_URL: str = ""
 KEA_API_USER: str = ""
 KEA_API_PASS: str = ""
 
+# v5.10.0 — Kea removed the Control Agent (deprecated in 3.0, gone in 3.2).
+# connection_mode = "ca" | "direct":
+#   ca     — one endpoint (KEA_API_URL) is a kea-ctrl-agent that routes
+#            commands to kea-dhcp4/kea-dhcp6 by the JSON "service" field.
+#            The default, and byte-identical to every release before 5.10.0.
+#   direct — talk straight to each daemon's own HTTP control socket. dhcp4
+#            commands go to KEA_API_URL (the kea-dhcp4 socket), dhcp6
+#            commands to KEA6_API_URL (the kea-dhcp6 socket) with NO
+#            fallback, and the "service" field is omitted from the payload.
+# KEA_API_CA / KEA_API_TLS_VERIFY only matter for an https:// socket URL:
+# a CA-bundle path pins verification to that CA, else the boolean toggle
+# (default True — the same as requests' own default).
+KEA_CONNECTION_MODE: str = "ca"
+KEA_API_CA: str = ""
+KEA_API_TLS_VERIFY: bool = True
+
 KEA_DB_HOST: str = ""
 KEA_DB_USER: str = ""
 KEA_DB_PASS: str = ""

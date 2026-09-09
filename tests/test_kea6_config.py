@@ -94,6 +94,9 @@ class TestKea6ConfigFallback:
             "KEA_API_URL",
             "KEA_API_USER",
             "KEA_API_PASS",
+            "KEA_CONNECTION_MODE",
+            "KEA_API_CA",
+            "KEA_API_TLS_VERIFY",
             "KEA_DB_HOST",
             "KEA_DB_USER",
             "KEA_DB_PASS",
@@ -115,10 +118,10 @@ class TestKea6ConfigFallback:
         for k, v in snapshot.items():
             setattr(extensions, k, v)
 
-    def _base_cfg(self, extra: str = "") -> configparser.ConfigParser:
+    def _base_cfg(self, extra: str = "", kea_extra: str = "") -> configparser.ConfigParser:
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read_string(
-            "[kea]\napi_url=http://kea4:8000\napi_user=u4\napi_pass=p4\n"
+            "[kea]\napi_url=http://kea4:8000\napi_user=u4\napi_pass=p4\n" + kea_extra + "\n"
             "[kea_db]\nhost=db4\nuser=u4\npassword=p4\n"
             "[jen_db]\nhost=jendb\nuser=j\npassword=p\n" + extra
         )
@@ -146,6 +149,33 @@ class TestKea6ConfigFallback:
         cfg = self._base_cfg("[subnets6]\n5 = V6LAN, 2001:db8:5::/64\n")
         app_config.apply(cfg)
         assert extensions.SUBNET6_MAP == {5: {"name": "V6LAN", "cidr": "2001:db8:5::/64", "paired_subnet4_id": None}}
+
+    def test_connection_mode_defaults_to_ca(self):
+        AppConfig().apply(self._base_cfg())
+        assert extensions.KEA_CONNECTION_MODE == "ca"
+        assert extensions.KEA_API_CA == ""
+        assert extensions.KEA_API_TLS_VERIFY is True
+
+    def test_unrecognised_connection_mode_is_treated_as_ca(self):
+        AppConfig().apply(self._base_cfg(kea_extra="connection_mode = wat"))
+        assert extensions.KEA_CONNECTION_MODE == "ca"
+
+    def test_direct_mode_kea6_url_has_no_v4_fallback(self):
+        AppConfig().apply(self._base_cfg(kea_extra="connection_mode = direct"))
+        assert extensions.KEA_CONNECTION_MODE == "direct"
+        # ca mode would set this to http://kea4:8000; direct mode must not.
+        assert extensions.KEA6_API_URL == ""
+
+    def test_direct_mode_kea6_url_still_takes_an_explicit_value(self):
+        AppConfig().apply(self._base_cfg("[kea6]\napi_url = http://kea6:8006\n", kea_extra="connection_mode = direct"))
+        assert extensions.KEA6_API_URL == "http://kea6:8006"
+        # user/pass still fall back to [kea] in either mode
+        assert extensions.KEA6_API_USER == "u4"
+
+    def test_api_ca_and_tls_verify_are_parsed(self):
+        AppConfig().apply(self._base_cfg(kea_extra="api_ca = /etc/jen/ssl/kea-ca.pem\napi_tls_verify = false"))
+        assert extensions.KEA_API_CA == "/etc/jen/ssl/kea-ca.pem"
+        assert extensions.KEA_API_TLS_VERIFY is False
 
 
 class TestIsIpv6Enabled:
@@ -202,15 +232,22 @@ class TestKea6Command:
         assert captured["service"] == "dhcp6"
         assert captured["command"] == "lease6-get-all"
 
-    def test_v6_server_falls_back_to_v4_server_fields(self, monkeypatch):
+    def test_passes_server_straight_through_no_prewrapping(self, monkeypatch):
+        """v5.10.0 — kea6_command no longer resolves the endpoint itself
+        (was _v6_server); it hands `server` verbatim to kea_command so
+        jen/services/kea.py::_endpoint_for does the mode-aware routing."""
         from jen.services import kea6 as kea6_module
 
-        monkeypatch.setattr(extensions, "KEA6_API_URL", "")
-        monkeypatch.setattr(extensions, "KEA6_API_USER", "")
-        monkeypatch.setattr(extensions, "KEA6_API_PASS", "")
-        v4_server = {"api_url": "http://v4:8000", "api_user": "u", "api_pass": "p"}
-        result = kea6_module._v6_server(v4_server)
-        assert result == {"api_url": "http://v4:8000", "api_user": "u", "api_pass": "p"}
+        captured = {}
+
+        def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
+            captured["server"] = server
+            return {"result": 0}
+
+        monkeypatch.setattr(kea6_module, "kea_command", fake_kea_command)
+        srv = {"api_url": "http://v4:8000", "api_user": "u", "api_pass": "p"}
+        kea6_module.kea6_command("config-get", server=srv)
+        assert captured["server"] is srv  # not a rebuilt dict
 
     def test_kea6_is_up_reflects_result_zero(self, monkeypatch):
         from jen.services import kea6 as kea6_module

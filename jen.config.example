@@ -5,10 +5,25 @@
 # This file is gitignored — never commit jen.config with real credentials.
 
 [kea]
-# Kea Control Agent REST API
+# How Jen reaches Kea's command API. Default 'ca' — unchanged from every
+# release before 5.10.0 — and 'direct'.
+#   ca     : api_url is a kea-ctrl-agent that routes commands to
+#            kea-dhcp4 / kea-dhcp6 by the "service" field.
+#   direct : api_url is kea-dhcp4's OWN http control socket. Use this on
+#            Kea 3.2+, which removed the Control Agent (it was deprecated
+#            in 3.0). Set [kea6] api_url to kea-dhcp6's socket if you run
+#            IPv6. Add an http entry to control-sockets in each daemon's
+#            config (see docs/admin-guide.md "Kea → Direct control sockets").
+# connection_mode = ca
 api_url  = http://YOUR-KEA-SERVER:8000
 api_user = kea-api
 api_pass = your-kea-api-password
+# Optional, only for an https:// api_url (a TLS control socket):
+#   api_ca         — path on the Jen host to the CA bundle that signed the
+#                    Kea socket's cert. Pins verification to that CA.
+#   api_tls_verify — set false to skip verification entirely (default true).
+# api_ca = /etc/jen/ssl/kea-ca.pem
+# api_tls_verify = true
 # Friendly name shown in the UI and alerts
 name     = Kea Server 1
 # Role: primary or standby
@@ -97,14 +112,19 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # commented out and nothing changes — no new required config, no new
 # required services.
 #
-# Both [kea6] and [kea6_db] are entirely optional: any value left unset
-# falls back to its [kea]/[kea_db] counterpart, since the common Kea setup
-# is one Control Agent proxying to both kea-dhcp4 and kea-dhcp6, and one
-# shared MySQL database. Only uncomment values here if your kea-dhcp6
-# deployment genuinely uses a separate CA/port or a separate database.
+# Both [kea6] and [kea6_db] are entirely optional.
+#   ca mode     — api_url falls back to [kea] api_url (one Control Agent
+#                 proxies both families — the common case). Only set it if
+#                 kea-dhcp6 uses a separate CA/port.
+#   direct mode — api_url is kea-dhcp6's OWN http control socket and there
+#                 is NO fallback (a v4 daemon can't answer v6 commands).
+#                 REQUIRED here if you run IPv6 in direct mode. ISC's
+#                 example uses port 8004 for dhcp4; use 8006 for dhcp6.
+# api_user / api_pass still fall back to [kea] in both modes.
+# [kea6_db] always falls back to [kea_db].
 
 # [kea6]
-# api_url  = http://YOUR-KEA-SERVER:8000
+# api_url  = http://YOUR-KEA-SERVER:8006
 # api_user = kea-api
 # api_pass = your-kea-api-password
 

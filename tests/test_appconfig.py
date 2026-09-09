@@ -105,3 +105,40 @@ class TestAppConfig:
         extensions.CONFIG_FILE = str(bad)
         with pytest.raises(ValueError):
             app_config.load()
+
+
+class TestKea3ConnectionMode:
+    """v5.10.0 — [kea] connection_mode + api_ca / api_tls_verify, and
+    the api6_url the server dicts carry for direct mode. connection_mode
+    is optional: absent → 'ca' → every prior release's behaviour."""
+
+    def test_defaults_when_key_absent(self, isolated_config):
+        assert extensions.KEA_CONNECTION_MODE == "ca"
+        assert extensions.KEA_API_CA == ""
+        assert extensions.KEA_API_TLS_VERIFY is True
+        assert extensions.KEA_SERVERS[0]["api6_url"] == ""
+
+    def test_direct_mode_and_tls_options_round_trip(self, isolated_config):
+        app_config.write_values(
+            [
+                ("kea", "connection_mode", "direct"),
+                ("kea", "api_ca", "/etc/jen/ssl/kea-ca.pem"),
+                ("kea", "api_tls_verify", "false"),
+            ]
+        )
+        assert extensions.KEA_CONNECTION_MODE == "direct"
+        assert extensions.KEA_API_CA == "/etc/jen/ssl/kea-ca.pem"
+        assert extensions.KEA_API_TLS_VERIFY is False
+
+    def test_derive_kea_servers_carries_api6_url_from_kea6_section(self, isolated_config):
+        app_config.mutate(lambda p: (p.add_section("kea6"), p.set("kea6", "api_url", "http://kea6:8006")))
+        assert extensions.KEA_SERVERS[0]["api6_url"] == "http://kea6:8006"
+
+    def test_extra_server_api6_url_is_its_own_key(self, isolated_config):
+        def add(p):
+            p.add_section("kea_server_2")
+            p.set("kea_server_2", "api_url", "http://s2:8000")
+            p.set("kea_server_2", "api6_url", "http://s2:8006")
+
+        app_config.mutate(add)
+        assert extensions.KEA_SERVERS[1]["api6_url"] == "http://s2:8006"
