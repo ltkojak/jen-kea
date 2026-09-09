@@ -95,24 +95,10 @@ docker compose -f docker-compose.mysql.yml up -d
 
 ### Method 4 — Manual bare metal
 
-```bash
-sudo apt install -y python3-pip mariadb-client-core openssh-client
-sudo pip3 install flask flask-login pymysql requests --break-system-packages
-
-tar xzf jen-v3.8.0.tar.gz
-cd jen
-sudo mkdir -p /opt/jen /opt/jen/static /etc/jen /etc/jen/ssl /etc/jen/ssh
-sudo cp jen.py /opt/jen/jen.py
-sudo cp -r templates /opt/jen/templates
-sudo cp jen.service /etc/systemd/system/jen.service
-sudo cp jen-sudoers /etc/sudoers.d/jen
-sudo chmod 440 /etc/sudoers.d/jen
-sudo cp jen.config.example /etc/jen/jen.config
-sudo nano /etc/jen/jen.config
-sudo chown -R www-data:www-data /opt/jen /etc/jen
-sudo systemctl daemon-reload
-sudo systemctl enable --now jen
-```
+For a distro `install.sh` doesn't recognise, an air-gapped host, or
+config management — the full step-by-step (packages, the `/opt/jen/venv`,
+every path and owner, service + sudoers + updater) is in
+[`manual-install.md`](manual-install.md).
 
 ---
 

@@ -93,6 +93,14 @@ paths:
   Add a second one first. (A superadmin MFA-reset for a locked-out user
   is a separate, deliberate path and is unaffected.)
 
+### Documentation
+
+- `docs/manual-install.md` — the full bare-metal install by hand (every
+  path, owner, and the venv), for a distro `install.sh` doesn't know or
+  a config-managed host. The stale "Method 4" stub in the install guide
+  (still referencing the pre-2.6.0 `jen.py` monolith) now points at it.
+- `tests/README.md` rewritten to actually map the suite.
+
 ## [5.7.0] - 2026-09-08
 
 ### Alert-channel tokens encrypted at rest
