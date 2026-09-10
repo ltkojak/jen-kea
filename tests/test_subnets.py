@@ -651,7 +651,18 @@ class TestEditFormBaseSha:
         monkeypatch.setattr(
             extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
         )
-        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
+        monkeypatch.setattr(
+            "jen.routes.subnets._get_subnet_kea_data",
+            lambda sid: {
+                "pools": [],
+                "pool_str": "",
+                "valid_lifetime": "",
+                "renew_timer": "",
+                "rebind_timer": "",
+                "routers": "",
+                "dns_servers": "",
+            },
+        )
         fake = FakeHelper()
         fake.configs[(1, "dhcp4")] = {"Dhcp4": {"subnet4": subnet4 if subnet4 is not None else [{"id": 1}]}}
         fake.shas[(1, "dhcp4")] = sha
