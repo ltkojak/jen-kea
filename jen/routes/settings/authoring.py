@@ -162,31 +162,16 @@ def author_kea_config(service):
     default_socket = ca_socket or f"/run/kea/kea{'4' if service == 'dhcp4' else '6'}-ctrl-socket"
     direct_mode = extensions.KEA_CONNECTION_MODE == "direct"
 
-    # v5.10.2 — what Jen will actually dial for this server, so the form
-    # knows the scheme (whether to ask for TLS paths) and can preselect a
-    # bind address matching the endpoint host.
-    endpoint_scheme = "http"
-    endpoint_host = ""
-    if direct_mode:
-        from jen.services.kea import _endpoint_for
-
-        _ep = _endpoint_for(target_server, service)
-        if not isinstance(_ep, dict):
-            _url = _ep[0] or ""
-            _p = urlparse(_url)
-            endpoint_scheme = _p.scheme or "http"
-            endpoint_host = _p.hostname or ""
-
-    bind_options = list(detected_addresses)
-    bind_preselect = ""
-    if direct_mode:
-        _is_ip = _looks_like_ip(endpoint_host)
-        if _is_ip:
-            bind_preselect = endpoint_host
-            if endpoint_host not in bind_options:
-                bind_options = [endpoint_host, *bind_options]
-        elif bind_options:
-            bind_preselect = bind_options[0]
+    # v5.10.3 — every ssh-configured server gets its own bind picker. An
+    # HA pair has two management IPs; 5.10.2 detected one address on the
+    # first server and wrote it into every server's socket.
+    bind_candidates = _author_bind_candidates(service, target_server, detected_addresses) if direct_mode else []
+    target_candidate = next((c for c in bind_candidates if c["id"] == target_server.get("id")), None)
+    # The scheme drives whether the form asks for TLS paths; "" means the
+    # target server's endpoint couldn't be resolved at all (bug 8).
+    endpoint_scheme = target_candidate["endpoint_scheme"] if target_candidate else ""
+    endpoint_error = target_candidate["endpoint_error"] if target_candidate else ""
+    any_http = direct_mode and [c["name"] for c in bind_candidates if c["endpoint_scheme"] == "http"]
 
     cert_required = bool(extensions.KEA_API_CLIENT_CERT and extensions.KEA_API_CLIENT_KEY)
     subnet_lines = _subnets_to_lines(existing_subnets, service)
@@ -200,15 +185,78 @@ def author_kea_config(service):
         default_socket=default_socket,
         direct_mode=direct_mode,
         endpoint_scheme=endpoint_scheme,
-        endpoint_host=endpoint_host,
-        endpoint_host_is_ip=_looks_like_ip(endpoint_host),
-        bind_options=bind_options,
-        bind_preselect=bind_preselect,
+        endpoint_error=endpoint_error,
+        any_http=any_http,
+        bind_candidates=bind_candidates,
         cert_required=cert_required,
         subnet_lines=subnet_lines,
         has_existing_subnets=bool(existing_subnets),
         default_db=default_db,
     )
+
+
+def _author_bind_candidates(service: str, target_server: dict = None, target_addresses=None):
+    """
+    v5.10.3 — one bind-address picker per ssh-configured server, direct
+    mode only. Each entry: {id, name, endpoint_scheme, endpoint_host,
+    endpoint_error, options, preselect}.
+
+    A server's options are ITS OWN detected global addresses plus the host
+    Jen dials for it (when that's an IP literal), and the preselect is
+    that endpoint host — never 0.0.0.0, never another server's address.
+    One best-effort SSH session per server; a connection failure just
+    leaves that server with whatever the endpoint tells us. `target_server`
+    / `target_addresses` let the caller pass in what _author_kea_detect()
+    already fetched so the same host isn't dialled twice.
+    """
+    from jen.services.kea import _endpoint_for
+
+    target_id = (target_server or {}).get("id")
+    out = []
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        entry = {
+            "id": server.get("id"),
+            "name": server.get("name") or server.get("ssh_host") or "server",
+            "endpoint_scheme": "",
+            "endpoint_host": "",
+            "endpoint_error": "",
+            "options": [],
+            "preselect": "",
+        }
+        ep = _endpoint_for(server, service)
+        if isinstance(ep, dict):  # direct + dhcp6 with no v6 URL for this server
+            entry["endpoint_error"] = ep["text"]
+            out.append(entry)
+            continue
+        p = urlparse(ep[0] or "")
+        entry["endpoint_scheme"] = p.scheme or "http"
+        entry["endpoint_host"] = p.hostname or ""
+
+        if server.get("id") == target_id and target_addresses is not None:
+            detected = list(target_addresses)
+        else:
+            detected = []
+            try:
+                ssh = __kea6._connect_ssh(server)
+                try:
+                    detected = __authoring.autodetect_addresses(ssh)
+                finally:
+                    ssh.close()
+            except Exception as e:  # noqa: BLE001 — a picker with fewer options, not a page failure
+                logger.warning(f"_author_bind_candidates({entry['name']}): {e}")
+
+        options = list(detected)
+        if _looks_like_ip(entry["endpoint_host"]):
+            if entry["endpoint_host"] not in options:
+                options.insert(0, entry["endpoint_host"])
+            entry["preselect"] = entry["endpoint_host"]
+        elif options:
+            entry["preselect"] = options[0]
+        entry["options"] = options
+        out.append(entry)
+    return out
 
 
 def _direct_control_socket(service: str, server: dict, form_tls: dict):
@@ -269,12 +317,23 @@ def _author_kea_common(service, form):
         return None, None, "Database host, username, and name are required."
 
     direct = extensions.KEA_CONNECTION_MODE == "direct"
-    bind_address = ""
+    bind_addresses = {}
     tls = None
     if direct:
-        bind_address = form.get("bind_address_custom", "").strip() or form.get("bind_address", "").strip()
-        if not _looks_like_ip(bind_address):
-            return None, None, "Bind address must be an IP address, not a hostname (Kea binds it)."
+        # v5.10.3 — one bind address PER SERVER. An HA pair has two
+        # management IPs; a single shared value meant kea02 was told to
+        # bind kea01's address.
+        for srv in extensions.KEA_SERVERS:
+            if not srv.get("ssh_host"):
+                continue
+            sid = srv.get("id")
+            raw = form.get(f"bind_address_custom_{sid}", "").strip() or form.get(f"bind_address_{sid}", "").strip()
+            if not raw:
+                continue  # no picker rendered (unresolvable endpoint) — a per-server error later
+            if not _looks_like_ip(raw):
+                name = srv.get("name") or srv.get("ssh_host")
+                return None, None, f"Bind address for {name} must be an IP address, not a hostname (Kea binds it)."
+            bind_addresses[sid] = raw
 
         # TLS paths are required only if a target endpoint is https.
         from jen.services.kea import _endpoint_for
@@ -318,7 +377,7 @@ def _author_kea_common(service, form):
     common = {
         "interfaces": interfaces,
         "control_socket_path": control_socket_path,
-        "bind_address": bind_address,
+        "bind_addresses": bind_addresses,
         "tls": tls,
         "lease_db": {
             "host": db_host,
@@ -343,7 +402,11 @@ def _author_kea_config_for(service, server, common, subnets):
     sock, err = _direct_control_socket(service, server, common["tls"])
     if err:
         return None, [], None, err
-    sock["address"] = common["bind_address"]
+    bind = common["bind_addresses"].get(server.get("id"))
+    if not bind:
+        name = server.get("name") or server.get("ssh_host") or "server"
+        return None, [], None, f"{name}: no bind address chosen for the control API."
+    sock["address"] = bind
     config = __authoring.build_new_kea_config(
         service, common["interfaces"], common["lease_db"], common["control_socket_path"], subnets, api_socket=sock
     )
@@ -354,7 +417,6 @@ def _author_kea_config_for(service, server, common, subnets):
         tls_paths = [(t["cert_file"], "file"), (t["key_file"], "file"), (t["trust_anchor"], "dir")]
 
     warning = None
-    bind = common["bind_address"]
     if bind == "0.0.0.0":  # nosec B104 — comparing an operator-chosen value to warn; not a bind Jen performs
         warning = f"{server.get('name', 'server')}: the control API will bind every interface (0.0.0.0)."
     elif _looks_like_ip(sock["endpoint_host"]) and bind != sock["endpoint_host"]:
@@ -406,6 +468,9 @@ def author_kea_config_preview(service):
         try:
             out, err, _ = _run_author_script(server, service, config, tls_paths, dry_run=True, allow_overwrite=False)
             row = {"name": name, "config": __authoring.redact_secrets(config)}
+            bind = common["bind_addresses"].get(server.get("id"))
+            if bind:
+                row["bind_address"] = bind
             if warning:
                 row["warning"] = warning
             if out == "preview-ok":

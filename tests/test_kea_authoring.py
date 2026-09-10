@@ -578,10 +578,55 @@ class TestAuthorKeaConfigRoute:
         resp = logged_in_client.get("/settings/infrastructure/author-kea/dhcp4")
         assert resp.status_code == 200
         body = resp.data
-        assert b'name="bind_address"' in body
+        assert b'name="bind_address_1"' in body  # v5.10.3 — per server
         assert b'<option value="10.0.0.5" selected>' in body
         assert b'value="172.16.0.9"' in body
         assert b"Credentials are transmitted without encryption" in body  # http warning
+
+    def test_direct_mode_two_servers_each_get_their_own_picker(self, logged_in_client, monkeypatch):
+        """v5.10.3 — 5.10.2 detected one address on the FIRST ssh server and
+        offered it for every server; an HA pair has two management IPs."""
+        s1 = {"id": 1, "name": "kea01", "ssh_host": "10.10.10.20", "api_url": "http://10.10.10.20:8004"}
+        s2 = {"id": 2, "name": "kea02", "ssh_host": "10.10.10.21", "api_url": "http://10.10.10.21:8004"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [s1, s2])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        import jen.services.kea6 as kea6_module
+
+        fakes = {
+            # target server: sibling, interfaces, ca-socket, addresses
+            "10.10.10.20": FakeSSHClient(
+                [("", ""), ("", ""), ("", ""), ("2: eth0    inet 10.10.10.20/24 scope global eth0\n", "")]
+            ),
+            # other servers: addresses only
+            "10.10.10.21": FakeSSHClient([("2: eth0    inet 10.10.10.21/24 scope global eth0\n", "")]),
+        }
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fakes[s["ssh_host"]])
+        body = logged_in_client.get("/settings/infrastructure/author-kea/dhcp4").data
+        assert b'name="bind_address_1"' in body and b'name="bind_address_2"' in body
+        assert b'<option value="10.10.10.20" selected>' in body
+        assert b'<option value="10.10.10.21" selected>' in body
+        # neither picker defaults to all-interfaces, and the old "one at a
+        # time" workaround text is gone
+        assert b'<option value="0.0.0.0" selected>' not in body
+        assert b"one at a time" not in body
+
+    def test_direct_dhcp6_without_a_v6_url_says_so_up_front(self, logged_in_client, monkeypatch):
+        """v5.10.3 (bug 8) — the GET page used to fall back to scheme
+        'http' with an empty host and only the POST explained the real
+        problem."""
+        server = {"id": 1, "name": "s1", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "KEA6_API_URL", "")
+        import jen.services.kea6 as kea6_module
+
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("", ""), ("", ""), ("", "")]))
+        body = logged_in_client.get("/settings/infrastructure/author-kea/dhcp6").data
+        assert b"no kea-dhcp6 control-socket URL is configured" in body
+        assert b"disabled" in body  # Preview button
+        assert b"Credentials are transmitted without encryption" not in body
 
 
 class TestAuthorKeaConfigPreviewRoute:
@@ -634,18 +679,21 @@ class TestAuthorKeaConfigPreviewRoute:
             "db_user": "u",
             "db_name": "kea",
             "subnets": "1 = LAN, 192.168.1.0/24",
-            "bind_address": "10.0.0.5",
+            # v5.10.3 — the bind address is per server (id 1 by default here).
+            "bind_address_1": "10.0.0.5",
         }
         f.update(over)
         return f
 
     def _direct_setup(self, monkeypatch, servers, connect_map=None):
-        # derive_kea_servers() always populates api_user/api_pass on every
-        # server dict (from [kea] / [kea_server_N]); mirror that here so
-        # _endpoint_for() resolves credentials the way it does in production.
+        # derive_kea_servers() always populates api_user/api_pass and the
+        # api6_* keys on every server dict; mirror that here so
+        # _endpoint_for() resolves the way it does in production.
         for s in servers:
             s.setdefault("api_user", "kea-api")
             s.setdefault("api_pass", "s3cret")
+            for k in ("api6_url", "api6_user", "api6_pass"):
+                s.setdefault(k, "")
         monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
         monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "192.168.1.0/24"}})
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
@@ -687,7 +735,8 @@ class TestAuthorKeaConfigPreviewRoute:
         monkeypatch.setattr(extensions, "KEA_API_PASS", "p1")
         self._direct_setup(monkeypatch, [primary, standby])
         data = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_2="10.0.0.6"),
         ).get_json()
         by_name = {r["name"]: r for r in data["servers"]}
         p_http = next(s for s in by_name["p1"]["config"]["Dhcp4"]["control-sockets"] if s["socket-type"] == "http")
@@ -704,7 +753,8 @@ class TestAuthorKeaConfigPreviewRoute:
         monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
         self._direct_setup(monkeypatch, [good, bad])
         data = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_2="10.0.0.6"),
         ).get_json()
         by_name = {r["name"]: r for r in data["servers"]}
         assert by_name["good"]["ok"] is True
@@ -720,7 +770,7 @@ class TestAuthorKeaConfigPreviewRoute:
         self._direct_setup(monkeypatch, [srv])
         r = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp4/preview",
-            data=self._direct_form(bind_address="kea.example.com"),
+            data=self._direct_form(bind_address_1="kea.example.com"),
         )
         assert r.status_code == 400
         assert "IP address" in r.get_json()["error"]
@@ -733,7 +783,7 @@ class TestAuthorKeaConfigPreviewRoute:
         self._direct_setup(monkeypatch, [srv])
         data = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp4/preview",
-            data=self._direct_form(bind_address="0.0.0.0"),
+            data=self._direct_form(bind_address_1="0.0.0.0"),
         ).get_json()
         assert data["servers"][0]["ok"] is True
         assert data["all_passed"] is True
@@ -783,6 +833,154 @@ class TestAuthorKeaConfigPreviewRoute:
         b64 = fake.calls[0].split("echo ")[1].split(" |")[0]
         script = base64.b64decode(b64).decode()
         assert "s3cretsock" in script and "s3cretdb" in script
+
+    # ── v5.10.3: the bind address is per server ────────────────────────────
+    def _pair_of_servers(self, monkeypatch):
+        s1 = {"id": 1, "name": "kea01", "ssh_host": "10.10.10.20", "api_url": "http://10.10.10.20:8004"}
+        s2 = {"id": 2, "name": "kea02", "ssh_host": "10.10.10.21", "api_url": "http://10.10.10.21:8004"}
+        self._direct_setup(monkeypatch, [s1, s2])
+        return s1, s2
+
+    def test_each_server_binds_its_own_address(self, logged_in_client, monkeypatch):
+        """5.10.2 wrote one bind address into every server's socket — kea02
+        was told to bind kea01's management IP."""
+        self._pair_of_servers(monkeypatch)
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_1="10.10.10.20", bind_address_2="10.10.10.21"),
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        for name, want in (("kea01", "10.10.10.20"), ("kea02", "10.10.10.21")):
+            sock = next(s for s in by_name[name]["config"]["Dhcp4"]["control-sockets"] if s["socket-type"] == "http")
+            assert sock["socket-address"] == want
+            assert by_name[name]["bind_address"] == want
+            assert "warning" not in by_name[name]
+        assert data["all_passed"] is True
+
+    def test_binding_another_servers_address_warns_but_still_passes(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_1="10.10.10.20", bind_address_2="10.10.10.20"),
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        assert "warning" not in by_name["kea01"]
+        assert "10.10.10.21" in by_name["kea02"]["warning"]  # Jen connects there
+        assert data["all_passed"] is True  # a warning, not a block
+
+    def test_a_server_with_no_bind_address_fails_only_itself(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_1="10.10.10.20"),  # nothing for server 2
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        assert by_name["kea01"]["ok"] is True
+        assert by_name["kea02"]["ok"] is False
+        assert "no bind address" in by_name["kea02"]["message"]
+        assert data["all_passed"] is False
+
+    def test_a_hostname_bind_address_names_the_server(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        r = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_1="kea01.example", bind_address_2="10.10.10.21"),
+        )
+        assert r.status_code == 400
+        assert "kea01" in r.get_json()["error"]
+
+    def test_the_custom_field_overrides_the_select(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(
+                bind_address_1="10.10.10.20",
+                bind_address_2="10.10.10.21",
+                bind_address_custom_2="192.168.50.9",
+            ),
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        assert by_name["kea02"]["bind_address"] == "192.168.50.9"
+
+
+class TestAuthorBindCandidates:
+    """v5.10.3 — one picker per ssh server, each from its OWN detected
+    addresses and its OWN endpoint. FakeSSHClient returns ("", "") past the
+    end of its reply list, so these assert the option VALUES; a
+    short-changed fake would otherwise pass vacuously."""
+
+    def _setup(self, monkeypatch, servers, connect):
+        for s in servers:
+            s.setdefault("api_user", "u")
+            s.setdefault("api_pass", "p")
+            for k in ("api6_url", "api6_user", "api6_pass"):
+                s.setdefault(k, "")
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        import jen.services.kea6 as kea6_module
+
+        monkeypatch.setattr(kea6_module, "_connect_ssh", connect)
+
+    def test_each_server_offers_its_own_addresses(self, logged_in_client, monkeypatch):
+        from jen.routes.settings.authoring import _author_bind_candidates
+
+        s1 = {"id": 1, "name": "kea01", "ssh_host": "10.10.10.20", "api_url": "http://10.10.10.20:8004"}
+        s2 = {"id": 2, "name": "kea02", "ssh_host": "10.10.10.21", "api_url": "http://10.10.10.21:8004"}
+        fakes = {
+            "10.10.10.20": FakeSSHClient([("2: eth0    inet 10.10.10.20/24 scope global eth0\n", "")]),
+            "10.10.10.21": FakeSSHClient(
+                [
+                    (
+                        "2: eth0    inet 10.10.10.21/24 scope global eth0\n3: eth1    inet 172.16.0.9/24 scope global eth1\n",
+                        "",
+                    )
+                ]
+            ),
+        }
+        self._setup(monkeypatch, [s1, s2], lambda s: fakes[s["ssh_host"]])
+        by_id = {c["id"]: c for c in _author_bind_candidates("dhcp4")}
+        assert by_id[1]["options"] == ["10.10.10.20"]
+        assert by_id[1]["preselect"] == "10.10.10.20"
+        assert by_id[2]["options"] == ["10.10.10.21", "172.16.0.9"]
+        assert by_id[2]["preselect"] == "10.10.10.21"
+
+    def test_target_addresses_are_reused_without_a_second_ssh(self, logged_in_client, monkeypatch):
+        from jen.routes.settings.authoring import _author_bind_candidates
+
+        s1 = {"id": 1, "name": "kea01", "ssh_host": "10.10.10.20", "api_url": "http://10.10.10.20:8004"}
+        connects = []
+
+        def _connect(s):
+            connects.append(s["ssh_host"])
+            return FakeSSHClient([("", "")])
+
+        self._setup(monkeypatch, [s1], _connect)
+        by_id = {c["id"]: c for c in _author_bind_candidates("dhcp4", s1, ["10.10.10.20", "172.16.0.9"])}
+        assert connects == []  # the caller already fetched these
+        assert by_id[1]["options"] == ["10.10.10.20", "172.16.0.9"]
+
+    def test_a_connection_failure_still_offers_the_endpoint_ip(self, logged_in_client, monkeypatch):
+        from jen.routes.settings.authoring import _author_bind_candidates
+
+        s1 = {"id": 1, "name": "kea01", "ssh_host": "10.10.10.20", "api_url": "http://10.10.10.20:8004"}
+
+        def _boom(s):
+            raise TimeoutError("no route to host")
+
+        self._setup(monkeypatch, [s1], _boom)
+        c = _author_bind_candidates("dhcp4")[0]
+        assert c["options"] == ["10.10.10.20"]
+        assert c["preselect"] == "10.10.10.20"
+
+    def test_an_unresolvable_endpoint_reports_the_error_and_no_options(self, logged_in_client, monkeypatch):
+        from jen.routes.settings.authoring import _author_bind_candidates
+
+        s1 = {"id": 1, "name": "kea01", "ssh_host": "10.10.10.20", "api_url": "http://10.10.10.20:8004"}
+        self._setup(monkeypatch, [s1], lambda s: FakeSSHClient([("", "")]))
+        monkeypatch.setattr(extensions, "KEA6_API_URL", "")
+        c = _author_bind_candidates("dhcp6")[0]  # direct + dhcp6, no v6 URL
+        assert "kea-dhcp6 control-socket" in c["endpoint_error"]
+        assert c["options"] == [] and c["preselect"] == ""
 
 
 class TestDetectInstalledKeaServices:

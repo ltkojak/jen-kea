@@ -9,14 +9,21 @@
 <div class="alert alert-warning">⚠️ This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
 
 {% if direct_mode %}
-<div class="alert alert-info">🔌 Jen is in <strong>direct</strong> connection mode, so the generated config gets a
-<code>{{ endpoint_scheme }}</code> control socket alongside the unix socket — the exact endpoint Jen will
-dial for {{ target_server.name or target_server.ssh_host }} ({{ endpoint_host or 'its API URL' }}), with the
-bind address you choose below. <code>cert-required</code> will be
+{% if endpoint_error %}
+<div class="alert alert-danger">🛑 Direct mode: no kea-dhcp6 control-socket URL is configured for
+<strong>{{ target_server.name or target_server.ssh_host }}</strong> — set <code>[kea6] api_url</code>
+(Settings → Kea → IPv6) or this server's IPv6 API URL (Servers &amp; HA) first. Authoring will refuse.
+<br><span class="form-hint">{{ endpoint_error }}</span></div>
+{% else %}
+<div class="alert alert-info">🔌 Jen is in <strong>direct</strong> connection mode, so each generated config gets a
+control socket alongside the unix socket — the exact endpoint Jen will dial for that server, with the
+bind address you choose for it below. <code>cert-required</code> will be
 {% if cert_required %}<strong>true</strong> — Jen presents its client certificate (Settings → Kea){% else %}<strong>false</strong> — no client certificate is configured in Settings → Kea, so Kea will accept any client that has the password{% endif %}.
-Each server is authored from its <em>own</em> API settings; if your servers need different bind addresses, author them one at a time.</div>
-{% if endpoint_scheme == 'http' %}
-<div class="alert alert-warning">⚠️ The endpoint is plain <code>http</code>. <strong>Credentials are transmitted without encryption.</strong> Restrict this port to the Jen host or use HTTPS.</div>
+Each server is authored from its <em>own</em> API settings and binds its <em>own</em> address.</div>
+{% endif %}
+{% if any_http %}
+<div class="alert alert-warning">⚠️ The endpoint is plain <code>http</code> for: {{ any_http|join(', ') }}.
+<strong>Credentials are transmitted without encryption.</strong> Restrict this port to the Jen host or use HTTPS.</div>
 {% endif %}
 {% endif %}
 
@@ -43,23 +50,28 @@ Each server is authored from its <em>own</em> API settings; if your servers need
         <div class="form-group">
             <label>{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
             <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" style="font-family:monospace;">
-            <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the {{ endpoint_scheme }} socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
+            <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the control socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
         </div>
         {% if direct_mode %}
-        <div class="form-group">
-            <label>Control API bind address</label>
-            <select name="bind_address" id="f-bind">
-                {% for a in bind_options %}<option value="{{ a }}" {% if a == bind_preselect %}selected{% endif %}>{{ a }}{% if a == endpoint_host %} — Jen connects here{% endif %}</option>{% endfor %}
-                <option value="0.0.0.0" {% if not bind_options and not bind_preselect %}selected{% endif %}>0.0.0.0 — all interfaces (not recommended)</option>
+        {% for c in bind_candidates %}
+        <div class="form-group" data-server-id="{{ c.id }}">
+            <label>Control API bind address — {{ c.name }}</label>
+            {% if c.endpoint_error %}
+            <div class="alert alert-warning" style="margin:6px 0;">{{ c.endpoint_error }}</div>
+            {% else %}
+            <select name="bind_address_{{ c.id }}" class="f-bind">
+                {% for a in c.options %}<option value="{{ a }}" {% if a == c.preselect %}selected{% endif %}>{{ a }}{% if a == c.endpoint_host %} — Jen connects here{% endif %}</option>{% endfor %}
+                <option value="0.0.0.0" {% if not c.preselect %}selected{% endif %}>0.0.0.0 — all interfaces (not recommended)</option>
             </select>
-            <input type="text" name="bind_address_custom" id="f-bind-custom" placeholder="or type an address" style="font-family:monospace;margin-top:6px;">
-            <div class="form-hint" id="f-bind-hint">
-                {% if endpoint_host and not endpoint_host_is_ip %}Jen connects to <code>{{ endpoint_host }}</code>, which is a hostname — pick or type the IP the daemon should bind.
-                {% elif not bind_options %}No global addresses were detected on this host — type the management IP the daemon should bind.
+            <input type="text" name="bind_address_custom_{{ c.id }}" placeholder="or type an address" style="font-family:monospace;margin-top:6px;">
+            <div class="form-hint f-bind-hint">
+                Jen dials <code>{{ c.endpoint_scheme }}://{{ c.endpoint_host or '(its API URL)' }}</code>.
+                {% if c.endpoint_host and not c.options %}That's a hostname and no global addresses were detected — type the IP this daemon should bind.
                 {% else %}The IP Kea's control API should listen on. Prefer a management address firewalled to the Jen host.{% endif %}
-                Same for every server in one submission; author them one at a time if they differ.
             </div>
+            {% endif %}
         </div>
+        {% endfor %}
         {% if endpoint_scheme == 'https' %}
         <div class="form-row">
             <div class="form-group">
@@ -110,7 +122,7 @@ Each server is authored from its <em>own</em> API settings; if your servers need
         </label>
 
         <div style="display:flex;gap:8px;">
-            <button type="button" class="btn btn-danger" onclick="showPreview()">🔍 Preview &amp; Validate</button>
+            <button type="button" class="btn btn-danger" id="preview-btn" onclick="showPreview()" {% if endpoint_error %}disabled{% endif %}>🔍 Preview &amp; Validate</button>
             <a href="/settings/kea" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -161,6 +173,9 @@ async function showPreview() {
             var icon = s.ok ? '✅' : '❌';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
             var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
+            if (s.bind_address) {
+                line += '<div style="color:var(--text-muted);margin-left:20px;font-size:11px;">binds ' + escapeHtml(s.bind_address) + '</div>';
+            }
             if (s.warning) {
                 line += '<div style="color:var(--warning);margin-left:20px;">⚠️ ' + escapeHtml(s.warning) + '</div>';
             }
@@ -215,19 +230,21 @@ async function installBinary(btn, binary) {
     }
 }
 (function () {
-    var sel = document.getElementById('f-bind');
-    var hint = document.getElementById('f-bind-hint');
-    if (!sel || !hint) return;
-    sel.addEventListener('change', function () {
-        var old = document.getElementById('f-bind-warn');
-        if (old) old.remove();
-        if (sel.value === '0.0.0.0') {
-            var w = document.createElement('div');
-            w.id = 'f-bind-warn';
-            w.style.cssText = 'color:var(--danger);font-size:12px;margin-top:4px;';
-            w.textContent = 'Binds the control API on every interface. Only do this on an isolated management network.';
-            hint.parentNode.insertBefore(w, hint.nextSibling);
-        }
+    // One picker per server (v5.10.3) — warn on each independently.
+    document.querySelectorAll('select[name^="bind_address_"]').forEach(function (sel) {
+        var group = sel.closest('.form-group');
+        if (!group) return;
+        sel.addEventListener('change', function () {
+            var old = group.querySelector('.f-bind-warn');
+            if (old) old.remove();
+            if (sel.value === '0.0.0.0') {
+                var w = document.createElement('div');
+                w.className = 'f-bind-warn';
+                w.style.cssText = 'color:var(--danger);font-size:12px;margin-top:4px;';
+                w.textContent = 'Binds the control API on every interface. Only do this on an isolated management network.';
+                group.appendChild(w);
+            }
+        });
     });
 })();
 
