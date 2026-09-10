@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.10.4] - 2026-09-10
+
+A patch for four small things, two of which have been quietly broken
+since 5.9.0.
+
+### The in-app updater refreshes the page again
+
+Trigger an update from Settings and Jen tells you "this page will
+refresh automatically once Jen is back." It hasn't, since 5.9.0 — and
+not because of the virtualenv work, which is where the finger has been
+pointed. The 5.9.0 Settings reorganisation moved the update overlay and
+its restart-poller onto the System page, but the update trigger kept
+redirecting to the Kea page, which has neither. So the update ran to
+completion and the browser just sat there until you reloaded by hand.
+The trigger now sends you to the page that actually carries the
+overlay. The overlay's own "give up and tell the operator" timers were
+also too short — 60 and 90 seconds against a server-side health window
+that alone is 90 seconds — and now allow three minutes.
+
+### A fresh install could not save its own settings
+
+`install.sh` wrote `/etc/jen/jen.config` owned by `root`, in a step
+that runs *after* the one that hands the application tree to the
+service user. On a fresh 5.9.0–5.10.3 install that left the file
+root-owned, and the running service — which rewrites it on every
+Settings save — got permission denied every time, until the next
+`sudo ./install.sh --upgrade` happened to fix the ownership as a side
+effect. The installer now assigns it to the service user, and Jen
+writes the file atomically (to a sibling temp file, then an atomic
+rename), which only needs write access to the directory. **An
+already-affected box heals itself on the first successful Settings save
+after upgrading to 5.10.4** — no manual `chown` needed. The atomic
+write also means an interrupted save can no longer truncate the config
+to nothing.
+
+### /about and the API docs stop showing deployment detail to viewers
+
+The About page listed the HTTP and HTTPS ports, the on-disk config and
+application paths, and the Kea SSH host to every signed-in user; the
+API documentation page pre-filled its examples from a list of every
+active API key's name and prefix, even though the key-management page
+itself is admin-only. Both are now limited to admins and superadmins.
+(The About page also now actually fills in the port and SSH-host rows,
+which it never did — admins were looking at blank cells.)
+
+### The login-attempt table is pruned hourly, not per attempt
+
+Every failed login ran a "delete rows older than 24 hours" sweep of
+the rate-limit table. The row insert that the lockout logic depends on
+is still synchronous; the cleanup now runs at most once an hour.
+
 ## [5.10.3] - 2026-09-09
 
 5.10.2 made single-server direct mode correct. This makes the

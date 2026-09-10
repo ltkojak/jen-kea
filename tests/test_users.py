@@ -178,15 +178,15 @@ class TestUserManagement:
 class TestAboutPageDeploymentDetailIsAdminOnly:
     """v5.10.4 — /about listed the HTTP/HTTPS ports, the on-disk config
     and app paths, and the Kea SSH host to any logged-in user. Those
-    rows are admin-only now; the row labels must not leak to a viewer
-    (an absence assertion, so keep 'Kea SSH Host' off any viewer-visible
-    prose on that page)."""
+    rows are admin-only now. The markers below target the table-cell
+    markup (`>Label</td>`), not bare prose, so a changelog entry that
+    mentions "the Kea SSH host" doesn't trip the absence check."""
 
     def test_admin_sees_the_deployment_rows(self, logged_in_client):
         r = logged_in_client.get("/about")
         assert r.status_code == 200
-        assert b"Kea SSH Host" in r.data
-        assert b"App Directory" in r.data
+        assert b">Kea SSH Host</td>" in r.data
+        assert b">App Directory</td>" in r.data
 
     def test_viewer_does_not_see_the_deployment_rows(self, client, db):
         from tests.conftest import restricted_client
@@ -194,7 +194,8 @@ class TestAboutPageDeploymentDetailIsAdminOnly:
         c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
         r = c.get("/about")
         assert r.status_code == 200
-        assert b"Kea SSH Host" not in r.data
-        assert b"App Directory" not in r.data
+        assert b">Kea SSH Host</td>" not in r.data
+        assert b">App Directory</td>" not in r.data
+        assert b">Config File</td>" not in r.data
         # the page itself still renders for a viewer
         assert b"About Jen" in r.data
