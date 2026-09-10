@@ -9,15 +9,19 @@
 sudo journalctl -u jen -n 50 --no-pager
 ```
 
-### SyntaxError in jen.py
+### SyntaxError on start
 
-The application file is corrupted or incompatible with your Python version.
+The application tree is corrupted or incompatible with your Python
+version. As of v5.14.0 the live code is under
+`/opt/jen/current/app/` (a symlink to `releases/<X.Y.Z>/app/`); older
+installs have it flat at `/opt/jen/`.
 
 ```bash
-python3 -c "import ast; ast.parse(open('/opt/jen/jen.py').read()); print('OK')"
+sudo /opt/jen/current/venv/bin/python -m compileall -q /opt/jen/current/app/jen
 ```
 
-Fix: re-run the installer to reinstall the application files.
+Fix: `sudo ./install.sh --repair` from the tarball rebuilds the current
+release's `app/` and `venv/` and re-activates it.
 
 ### Config file not found
 
@@ -60,9 +64,13 @@ sudo systemctl restart jen
 PermissionError: [Errno 13] Permission denied: '/etc/jen/jen.config'
 ```
 
-Fix:
+Fix — the application tree is root-owned on purpose (read-only to the
+service account); only `/etc/jen` and `/var/lib/jen` are the service
+user's:
 ```bash
-sudo chown -R www-data:www-data /opt/jen /etc/jen
+sudo chown -R root:root /opt/jen && sudo chmod -R a+rX /opt/jen
+sudo chown -R www-data:www-data /etc/jen /var/lib/jen
+sudo chown "$(id -u www-data):www-data" /etc/jen/jen.config
 sudo systemctl restart jen
 ```
 
@@ -367,6 +375,36 @@ sudo cp /etc/kea/kea-dhcp4.conf.bak /etc/kea/kea-dhcp4.conf
 sudo systemctl restart isc-kea-dhcp4-server
 sudo systemctl status isc-kea-dhcp4-server
 ```
+
+---
+
+## Upgrades and the versioned layout (v5.14.0+)
+
+Jen installs each release into `/opt/jen/releases/<X.Y.Z>/` and points
+`/opt/jen/current` at the live one. `sudo journalctl -u jen-update.service`
+has the in-app updater's output.
+
+**An in-app update to 5.14.0 rolled back.** Expected — the updater on a
+5.13.x box is the flat one and can't create the versioned layout. Take
+5.14.0 with `sudo ./install.sh` once; every in-app update after that
+works.
+
+**Roll back to the previous release:**
+```bash
+ls /opt/jen/releases
+sudo ln -sfn releases/<X.Y.Z> /opt/jen/current
+sudo systemctl restart jen
+```
+
+**`jen.service` fails with "No such file or directory" on the
+interpreter.** `/opt/jen/current` is missing or dangling. Point it at a
+real release (command above), or `sudo ./install.sh --repair` from the
+tarball.
+
+**Disk filling with old releases.** The updater keeps `current` + the
+newest other + anything marked `.keep`; it prunes the rest on its next
+run. Delete extras by hand with `sudo rm -rf /opt/jen/releases/<X.Y.Z>`
+(never the one `current` points at).
 
 ---
 

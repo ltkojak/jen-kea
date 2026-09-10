@@ -2,6 +2,54 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.14.0] - 2026-09-10
+
+Versioned release directories and an atomic upgrade. **The first upgrade
+to 5.14.0 must be run with `sudo ./install.sh`** — see "Upgrading" below.
+
+### Why
+
+Through 5.13.x an upgrade overwrote `/opt/jen` in place: a copy of the
+new files on top of the old, a shared virtualenv that `pip` mutated
+before anything was proven, and a rollback that copied a snapshot back.
+If a release needed a new library the rollback couldn't truly undo it,
+and a failure mid-copy left the tree half-updated.
+
+### What changed
+
+- **Each release is its own directory.** `/opt/jen/releases/<X.Y.Z>/`
+  holds `app/` (the full tree) and `venv/` (a virtualenv built for that
+  release's `requirements.txt`). `/opt/jen/current` is a relative symlink
+  to the live one.
+- **The install is atomic.** Both the installer and the in-app updater
+  build the entire release under a staging directory — extract, build the
+  venv, `pip`, byte-compile, import-check — and then do one
+  `os.rename()` into place plus one `os.replace()` of the `current`
+  symlink. Nothing the running install depends on is touched until that
+  flip.
+- **The rollback is a true point-in-time revert.** A failed upgrade flips
+  `current` back to the previous release directory, which was never
+  touched — its code *and* its exact dependencies. The previous release
+  stays on disk as a hand-rollback target:
+  `sudo ln -sfn releases/<old> /opt/jen/current && sudo systemctl restart jen`.
+- **`jen.service`** now runs `/opt/jen/current/venv/bin/python
+  /opt/jen/current/app/run.py`. `run.py` keeps a re-exec shim as a safety
+  net for Docker and still-flat boxes.
+- **The flat `/opt/jen/{jen,run.py,templates,static,plugins,venv}` is
+  removed** once the versioned layout is live. Docker stays flat (the
+  container is the isolation).
+- The old `.staging-*` and `.rollback-*` directories, `.failed` releases,
+  and all but the newest spare release are pruned automatically.
+
+### Upgrading
+
+The updater already on a 5.13.x box is the flat one. It will install the
+5.14.0 files — the new `jen.service` included — but there is no `current`
+symlink yet, so the new unit can't start: the box **fails the health
+check and cleanly rolls back to 5.13.0**. Run `sudo ./install.sh` once
+(it builds the versioned layout, activates it, and removes the flat
+leftovers). Every in-app update from 5.14.0 onward is the atomic path.
+
 ## [5.13.0] - 2026-09-10
 
 User content moves out of the application tree, and `/opt/jen` becomes

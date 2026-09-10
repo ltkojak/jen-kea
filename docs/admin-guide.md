@@ -564,9 +564,21 @@ cd jen
 sudo ./install.sh
 ```
 
-Select **Keep existing config** when prompted. The installer backs up the current application, installs the new files, restarts the service, and rolls back automatically if the service fails to start.
+Select **Keep existing config** when prompted. The installer builds the new release under `/opt/jen/releases/<X.Y.Z>/`, points `/opt/jen/current` at it with one atomic symlink flip, restarts the service, and flips back to the previous release if it fails to start.
 
-Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`, v5.13.0), are never modified during an upgrade. The application tree in `/opt/jen` is replaced wholesale and is root-owned and read-only to the service account. The first upgrade to 5.13.0 moves existing custom icons, favicon, nav logo, backups and registry plugins out of `/opt/jen` into `/var/lib/jen` automatically; nothing to do by hand.
+Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`), are never modified during an upgrade. Each release's application tree and its own virtualenv are root-owned and read-only to the service account.
+
+**v5.14.0 introduces the versioned layout.** The first upgrade to 5.14.0 must be run with `sudo ./install.sh` — the in-app update button cannot make the jump (the box has no `current` symlink yet, so the new unit can't start, and the in-app attempt rolls back cleanly to your current version). Every in-app update from 5.14.0 onward is the atomic-symlink path. The 5.14.0 install also removes the now-unused flat `/opt/jen/{jen,run.py,templates,static,plugins,venv}` once the versioned layout is live.
+
+### Rolling back by hand
+
+The previous release directory is left on disk. To go back to it:
+
+```bash
+ls /opt/jen/releases
+sudo ln -sfn releases/<X.Y.Z> /opt/jen/current
+sudo systemctl restart jen
+```
 
 ---
 
@@ -680,10 +692,9 @@ resets when you install a renewed one.
 
 | Path | Purpose |
 |---|---|
-| `/opt/jen/jen/` | Application code (root-owned, read-only to the service account) |
-| `/opt/jen/templates/` | HTML templates |
-| `/opt/jen/static/icons/brands/` | Bundled brand SVG icons (release-owned) |
-| `/opt/jen/plugins/` | Bundled plugins: `ipam`, `network-discovery` (release-owned) |
+| `/opt/jen/releases/<X.Y.Z>/app/` | One release's application tree (root-owned, read-only to the service account) — v5.14.0 |
+| `/opt/jen/releases/<X.Y.Z>/venv/` | That release's virtualenv |
+| `/opt/jen/current` | Symlink to the live release; a rollback flips it |
 | `/var/lib/jen/icons/` | User-uploaded custom brand icons (v5.13.0) |
 | `/var/lib/jen/branding/` | Uploaded favicon and nav logo (v5.13.0) |
 | `/var/lib/jen/backups/` | Database backups (v5.13.0) |

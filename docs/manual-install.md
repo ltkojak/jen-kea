@@ -18,12 +18,13 @@ sudo apt install -y python3 python3-venv python3-pip \
 `python3-venv` is required — Jen runs from its own virtualenv, not
 system site-packages.
 
-## 2. Layout
+## 2. Layout (v5.14.0 — versioned release directories)
 
 | Path | Owner | Purpose |
 |---|---|---|
-| `/opt/jen/` | `root:root`, `a+rX` | application code (`jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `requirements.txt`, `CHANGELOG.md`) — read-only to the service account (v5.13.0) |
-| `/opt/jen/venv/` | `root:root` | Python dependencies (service reads/executes, never writes) |
+| `/opt/jen/releases/<X.Y.Z>/app/` | `root:root`, `a+rX` | one release's full tree (`jen/`, `run.py`, `templates/`, `static/`, `plugins/`, the shipped external files, `docs/`) — read-only to the service account |
+| `/opt/jen/releases/<X.Y.Z>/venv/` | `root:root` | that release's virtualenv, built for its own `requirements.txt` |
+| `/opt/jen/current` | symlink | relative symlink → `releases/<live>`; the unit runs `current/venv/bin/python current/app/run.py` |
 | `/var/lib/jen/` | `www-data:www-data`, `0750` | user content: `icons/`, `branding/`, `backups/`, `plugins/`, `plugins-enabled/`, `keys/` — **never touched by upgrades** (v5.13.0) |
 | `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/`, `backups/` — **never touched by upgrades** |
 | `/etc/jen/jen.config` | `root:www-data`, `0640` | config + secrets |
@@ -34,27 +35,30 @@ system site-packages.
 
 ```bash
 tar xzf jen-vX.Y.Z.tar.gz && cd jen
+VER=$(grep -oP 'JEN_VERSION\s*=\s*"\K[0-9.]+' jen/__init__.py)
+REL="/opt/jen/releases/$VER"
 
-sudo mkdir -p /opt/jen /etc/jen/ssl /etc/jen/ssh /etc/jen/backups \
+sudo mkdir -p "$REL/app" /etc/jen/ssl /etc/jen/ssh /etc/jen/backups \
     /var/lib/jen/{icons,branding,backups,plugins,plugins-enabled,keys}
-sudo cp -r run.py jen templates static plugins requirements.txt CHANGELOG.md /opt/jen/
+sudo cp -r . "$REL/app/"
+sudo rm -rf "$REL/app/.git" "$REL/app/tests"
 ```
 
-## 3. Virtualenv
+## 3. Virtualenv (per release)
 
 ```bash
-sudo python3 -m venv /opt/jen/venv
-sudo /opt/jen/venv/bin/pip install --upgrade pip
-sudo /opt/jen/venv/bin/pip install -r /opt/jen/requirements.txt
-sudo /opt/jen/venv/bin/python -m compileall -q /opt/jen/venv/lib /opt/jen/jen /opt/jen/plugins
-# leave it root-owned
+sudo python3 -m venv "$REL/venv"
+sudo "$REL/venv/bin/pip" install --upgrade pip
+sudo "$REL/venv/bin/pip" install -r "$REL/app/requirements.txt"
+sudo "$REL/venv/bin/python" -m compileall -q "$REL/venv/lib" "$REL/app/jen" "$REL/app/plugins"
+# leave the whole release dir root-owned
+sudo chown -R root:root "$REL" && sudo chmod -R a+rX "$REL"
 ```
 
-`run.py` re-execs into `/opt/jen/venv/bin/python` on start, so
-`jen.service` calls the system `python3` and the venv is picked up
-automatically. If the venv is ever broken (an OS Python upgrade), the
-service falls back to the system interpreter — rebuild with the three
-commands above.
+`jen.service` runs the release's venv interpreter directly. `run.py`
+still carries a re-exec shim as a safety net (it prefers
+`current/venv`, then the flat `/opt/jen/venv`), so a Docker image or a
+still-flat box also works.
 
 ## 4. Config
 
@@ -79,17 +83,21 @@ the main install guide.
 ## 5. Service, sudoers, updater
 
 ```bash
-sudo cp jen.service                 /etc/systemd/system/jen.service
-sudo cp jen-sudoers                 /etc/sudoers.d/jen
-sudo chmod 440                      /etc/sudoers.d/jen
-sudo visudo -cf /etc/sudoers.d/jen  # sanity-check before it takes effect
-sudo cp jen-update-root.py          /usr/local/sbin/jen-update-root.py
-sudo chown root:root                /usr/local/sbin/jen-update-root.py
-sudo chmod 700                      /usr/local/sbin/jen-update-root.py
-sudo cp jen-update.service          /etc/systemd/system/jen-update.service
-sudo cp jen-kea-helper              /opt/jen/jen-kea-helper   # data on the Jen host; Jen pushes it to Kea hosts
+# The shipped external files live inside the release now.
+sudo cp "$REL/app/jen.service"        /etc/systemd/system/jen.service
+sudo cp "$REL/app/jen-sudoers"        /etc/sudoers.d/jen
+sudo chmod 440                        /etc/sudoers.d/jen
+sudo visudo -cf /etc/sudoers.d/jen    # sanity-check before it takes effect
+sudo cp "$REL/app/jen-update-root.py" /usr/local/sbin/jen-update-root.py
+sudo chown root:root                  /usr/local/sbin/jen-update-root.py
+sudo chmod 700                        /usr/local/sbin/jen-update-root.py
+sudo cp "$REL/app/jen-update.service" /etc/systemd/system/jen-update.service
 
-sudo chown -R root:root /opt/jen && sudo chmod -R a+rX /opt/jen   # app tree read-only to www-data (v5.13.0)
+# Activate this release (relative symlink, replaced atomically).
+sudo ln -sfn "releases/$VER" /opt/jen/current.tmp
+sudo mv -T /opt/jen/current.tmp /opt/jen/current
+
+sudo chown -R root:root /opt/jen && sudo chmod -R a+rX /opt/jen
 sudo chown -R www-data:www-data /etc/jen /var/lib/jen
 sudo chmod 750 /var/lib/jen
 ```
@@ -97,7 +105,7 @@ sudo chmod 750 /var/lib/jen
 ### On each Kea host (v5.11.0+)
 
 ```bash
-# copy /opt/jen/jen-kea-helper from the Jen host first, then:
+# copy /opt/jen/current/app/jen-kea-helper from the Jen host first, then:
 sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-helper
 echo 'youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper' | sudo tee /etc/sudoers.d/jen-kea-helper
 sudo chmod 440 /etc/sudoers.d/jen-kea-helper
@@ -125,10 +133,27 @@ seed), it's `admin` / `admin` and Jen forces a change on first login.
 
 ## Upgrading manually
 
-Repeat steps 2, 3, and 5 with the new tarball (config in `/etc/jen` is
-untouched), then `sudo systemctl restart jen`. Or use the in-app update
-button, which runs the staged, rollback-capable updater at
-`/usr/local/sbin/jen-update-root.py` (it stages and validates the new
-release before touching `/opt/jen` and restores a snapshot on any
-failure — with the one caveat that the venv is shared, so a rollback
-keeps the newer dependencies; see `docs/ARCHITECTURE.md` §6).
+Repeat steps 2, 3, and 5 with the new tarball — a **new**
+`releases/<X.Y.Z>/` directory — then activate it with the `ln -sfn` /
+`mv -T` pair from step 5 and `sudo systemctl daemon-reload && sudo
+systemctl restart jen`. The old release directory stays on disk as a
+hand-rollback target (`sudo ln -sfn releases/<old> /opt/jen/current &&
+sudo systemctl restart jen`). Or use the in-app update button, which
+runs the staged, rollback-capable updater at
+`/usr/local/sbin/jen-update-root.py`: it builds the whole release under
+a staging directory (its own venv included) and the install is one
+atomic symlink flip, so a rollback is a true point-in-time revert. See
+`docs/ARCHITECTURE.md` §6.
+
+The **first** upgrade to 5.14.0 has to be done with `sudo ./install.sh`
+(or the manual steps above), not the in-app button — the box has no
+`current` symlink yet, so the new unit can't start and the in-app
+attempt rolls back cleanly to the previous version.
+
+## Rolling back by hand
+
+```bash
+ls /opt/jen/releases                 # what's on disk
+sudo ln -sfn releases/<X.Y.Z> /opt/jen/current
+sudo systemctl restart jen
+```

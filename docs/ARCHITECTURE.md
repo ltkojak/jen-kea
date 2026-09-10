@@ -519,42 +519,48 @@ production, and it says so, loudly, in the log on every start.
 **venv + transactional self-update (v5.8.0).** Two paired changes to how
 Jen's code and dependencies land on bare metal.
 
-*The venv.* Jen's Python dependencies live in `/opt/jen/venv`, not system
-site-packages — no more `pip --break-system-packages`. `install.sh`
-builds it (`setup_venv()`, `python3 -m venv --upgrade` on re-runs so an
-OS Python bump doesn't strand it) and installs `-r requirements.txt`
-into it. `jen.service` **still calls `/usr/bin/python3 /opt/jen/run.py`**
-on purpose: `run.py` re-execs into `/opt/jen/venv/bin/python` at the top
-of the file, before its first dependency import. Doing it as a re-exec
-rather than a unit change means the unit file never has to move, an
-in-app update from a pre-venv install can't leave systemd pointing at a
-venv that isn't there yet, and a missing or broken venv falls through to
-the system interpreter (with the werkzeug fallback still behind that).
-Docker doesn't use any of this — the container is the isolation.
+*The venv.* Jen's Python dependencies live in a virtualenv, not system
+site-packages — no more `pip --break-system-packages`. As of **v5.14.0**
+each release gets its **own** venv at `releases/<X.Y.Z>/venv`, built for
+exactly that release's `requirements.txt`; `jen.service` runs
+`/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py`. `run.py`
+still carries a re-exec shim (it prefers `<run.py dir>/../venv`, then the
+flat `/opt/jen/venv`) as a safety net for a still-flat box and for
+Docker, but on a versioned box the unit already names the right
+interpreter. Pre-5.14 the venv was the single flat `/opt/jen/venv` and
+the unit ran `/usr/bin/python3 /opt/jen/run.py`.
 
 The venv is **`root:root`** — the `www-data` service account reads and
 executes the interpreter and site-packages but never writes them (it's
 byte-compiled as root at install time so there's no lazy `.pyc` write).
 A writable venv would be a persistence foothold for a compromised
 `www-data`: swap a package's code and Jen runs it on every restart. Only
-`install.sh` and the root self-updater modify it.
+`install.sh` and the root self-updater modify it. Docker doesn't use a
+venv at all — the container is the isolation — and reaches the app
+through the same `JEN_ROOT` fallback.
 
 *The transactional updater.* `jen-update-root.py` was
 *replace-then-try-deps*: overwrite `/opt/jen`, then `pip` non-fatally,
 then restart — which silently shipped a half-updated app if a release
-genuinely needed a new library. It's now
-verify → stage → `pip` into the venv → compile+import the staged
-package → snapshot → switch → restart → health-check → version-confirm.
-**Any failure from the switch onward** — an exception mid-copy, a service
-that doesn't come back healthy (unit active + the app answering on its
-real port), a failed byte-compile of the installed tree, or a running
-process that doesn't report the expected version via `/api/v1/health` —
-**restores the snapshot and restarts the previous version**. The snapshot
-covers the replace-wholesale parts of `/opt/jen` *and* the files an
-update replaces outside it (`jen.service`, `/etc/sudoers.d/jen`, the
-updater itself, `jen-update.service`), so a bad unit file can't survive
-the rollback. Deps and code are both proven against each other before a
-single file in `/opt/jen` is touched.
+genuinely needed a new library. As of **v5.14.0** it builds the whole
+release under `releases/<X.Y.Z>.staging-<ts>/` (extract the tarball into
+`app/`, build `venv/`, `pip`, compile, import-check) and the install is
+`os.rename()` of the staging dir into place plus an `os.replace()` of the
+`/opt/jen/current` relative symlink — atomic on POSIX. **Any failure**
+flips the symlink back to the previous release (its directory was never
+touched, so it is its own rollback — no snapshot/restore of the app tree
+at all) and restarts. The out-of-tree files an update replaces
+(`jen.service`, `/etc/sudoers.d/jen`, the updater itself,
+`jen-update.service`) are still snapshotted and restored, so a bad unit
+file can't survive the rollback. The per-release venv finally makes the
+rollback a **true point-in-time revert** — the old release's venv is
+exactly the dependencies it shipped with.
+
+The first run on a still-flat box ("migration run" — no `current` symlink
+yet) keeps `snapshot_install()` / `restore_snapshot()` for exactly that
+one case: it snapshots the flat tree, builds the versioned layout, and on
+success removes the flat `jen/ run.py templates/ static/ plugins/ venv/`.
+`sudo ./install.sh` does the same migration immediately.
 
 Two small deliberate choices worth stating: `/api/v1/health` is
 **unauthenticated** (it returns Jen's version, whether Kea is up, Kea's
@@ -564,33 +570,34 @@ snapshot copies symlinks *as* symlinks (`copytree(symlinks=True)`) —
 v5.8.4, after a stray dangling `templates/templates` link from an old
 install made every snapshot raise before the swap.
 
-v5.8.2 hardened the venv build: `ensure_venv()` requires a venv with a
-*working `pip`* (a half-built venv from a failed `python3 -m venv` is
-wiped and rebuilt), and — running as root already — `apt-get install`s
-`python3-venv` (v5.8.3: `apt-get update` + one more retry on a box with
-stale indices) and falls back to the system interpreter only if that
-also fails. The post-restart health-check timeout is 90s (was 45),
-overridable via `[server] update_health_timeout`. The health and
-version probes talk to the app's real port — HTTPS directly when certs
-are present — and neither follows redirects nor verifies TLS on the
-loopback call, so an SSL install with a hostname cert isn't mistaken for
-a dead one (v5.8.2 chased `jen/httpredirect.py`'s 301 into a failing TLS
+The venv build (`_build_release_venv()`, pre-5.14 `ensure_venv()`)
+requires a venv with a *working `pip`* (a half-built venv from a failed
+`python3 -m venv` is wiped and rebuilt), and — running as root already —
+`apt-get install`s `python3-venv` (v5.8.3: `apt-get update` + one more
+retry on a box with stale indices). Because the venv build now happens
+against a brand-new staging path, a failure there aborts the update with
+nothing touched. The post-restart health-check timeout is 90s (was 45),
+overridable via `[server] update_health_timeout`. The health and version
+probes talk to the app's real port — HTTPS directly when certs are
+present — and neither follows redirects nor verifies TLS on the loopback
+call, so an SSL install with a hostname cert isn't mistaken for a dead
+one (v5.8.2 chased `jen/httpredirect.py`'s 301 into a failing TLS
 handshake and rolled back healthy HTTPS upgrades).
 
-**Still weaker than ideal, tracked for a future major:** the venv is
-shared, so a rollback keeps the newer dependencies (fine because they're
-floor-pinned and forward-compatible, but not a true point-in-time
-revert); and the "switch" is still an in-place file copy, not an atomic
-pointer flip. Versioned release directories (`/opt/jen/releases/X.Y.Z` +
-an atomic `current` symlink), which also close the "tarball deploy can't
-delete files" gap in §7, are the next step.
+**The 5.13.0 → 5.14.0 transition.** The updater already deployed on a
+5.13.x box is the flat one; it installs the 5.14.0 tarball — the new
+`jen.service` included — but has no `current` symlink, so the new unit
+can't start. That box fails the health check and **cleanly rolls back to
+5.13.0**. Operators take 5.14.0 with `sudo ./install.sh` once (it builds
+the versioned layout and removes the flat leftovers); every in-app update
+from 5.14.0 onward is the atomic-symlink path.
 
 **Still not offered:** a reverse proxy is not required and not
 configured by the installer. Terminating TLS in nginx/caddy and running
 gunicorn HTTP-only behind it is a valid deployment, just not the
 default — the default keeps the "one `install.sh` and done" story.
 
-### 6.1 On-disk layout (v5.13.0)
+### 6.1 On-disk layout (v5.13.0, extended in v5.14.0)
 
 Through v5.12.x the application tree under `/opt/jen` held user-writable
 content — custom icons, the uploaded favicon and nav logo, database
@@ -598,16 +605,27 @@ backups, registry-installed plugins, the secret-key/MFA-key fallbacks —
 so `www-data` needed write access to parts of the tree it also executes.
 That is a persistence foothold: anything that can write a `.py` file Jen
 imports, and later run it as `www-data` on the next restart, has a way to
-stay resident across an update. v5.13.0 splits the two apart.
+stay resident across an update. v5.13.0 split the two apart; v5.14.0
+added the versioned release directories.
 
 | Path | Holds | Owner / mode | What an upgrade does |
 |------|-------|--------------|----------------------|
-| `/opt/jen/` | Application code: `jen/`, `templates/`, `static/`, `plugins/` (bundled `ipam` + `network-discovery`), `run.py`, `venv/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Replaced from the release tarball. `jen/`, `templates/`, `static/`, `plugins/` are removed and re-copied wholesale (clean rollback items); nothing else is deleted. Byte-compiled as root at install time. |
+| `/opt/jen/releases/<X.Y.Z>/app/` | One release's full tree: `jen/`, `templates/`, `static/`, `plugins/` (bundled `ipam` + `network-discovery`), `run.py`, the shipped external files, `docs/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Built whole under a `.staging-<ts>` sibling, then `os.rename()`d into place. Byte-compiled as root. The previous release's directory is left untouched. |
+| `/opt/jen/releases/<X.Y.Z>/venv/` | That release's virtualenv, built for its own `requirements.txt` | `root:root` | Built fresh per release — the rollback is a true point-in-time revert of dependencies too. |
+| `/opt/jen/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |
+| `/opt/jen/` (flat, pre-5.14) | `jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `venv/` | `root:root`, `a+rX` | Removed by the migration run / `install.sh` once the versioned layout is live. Docker stays flat. |
 | `/etc/jen/` | `jen.config`, its backups, TLS certs (`ssl/`), SSH keys (`ssh/`) | `www-data` | Never touched. |
-| `/var/lib/jen/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (registry-installed), `plugins-enabled/` (enable markers), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `/opt/jen` (installer and in-app updater both do this before the file swap, so a rollback restores the pre-move state). |
+| `/var/lib/jen/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (registry-installed), `plugins-enabled/` (enable markers), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `/opt/jen`. |
 | `/tmp` | Scratch only (`PrivateTmp=yes`) | per-service namespace | n/a |
 
-`extensions.CONTENT_DIR` is the single read surface for that last row:
+`extensions.JEN_ROOT` reads `/opt/jen/current/app` when it exists, else
+the flat `/opt/jen` (the `JEN_ROOT` env var overrides both, for dev and
+CI). Because `current` is a symlink flipped atomically, a running worker
+that opened a file under it keeps reading the old release until it
+restarts — which the updater does anyway.
+
+`extensions.CONTENT_DIR` is the single read surface for the `/var/lib/jen`
+row:
 `/var/lib/jen` in production, `$JEN_ROOT/var` in a source checkout,
 overridable with `JEN_CONTENT_DIR`. The app factory best-effort *copies*
 any content still in an old `/opt/jen` location into `CONTENT_DIR` on
@@ -637,19 +655,14 @@ Documenting these here rather than letting them go unstated:
 - **No professional external security audit.** See `SECURITY.md` for
   the honest framing of what level of scrutiny this project has
   actually had.
-- **The tarball-based deploy model can't delete files.** Every release
-  is deployed via `tar xzf ~/jen-vX.Y.Z.tar.gz --strip-components=1 -C .`
-  extracted on top of an existing checkout — which can only add or
-  overwrite files, never remove one that's no longer in the current
-  tarball but still sitting in the working tree from an earlier release.
-  Discovered concretely in the v4.4.14 cleanup: the top-level `jen.py`
-  monolith (retired at v2.6.0, moved to `legacy/jen.py`) and four
-  `docs/github-release-*.x.md` files (properly relocated to
-  `docs/release-history/` at some point since) had been quietly
-  persisting in the real repository for releases, invisible to every
-  tarball built from a clean working tree that never had them in the
-  first place. There's no automatic detection for this — the practical
-  mitigation is periodically pulling the actual published GitHub
-  archive (`github.com/<repo>/archive/refs/tags/vX.Y.Z.tar.gz`) and
-  diffing it against the working tree that built it, which is how this
-  specific instance was found.
+- **The deployed application tree can no longer accrete stale files
+  (v5.14.0).** Each release is a fresh directory built from that
+  tarball's contents and switched in with one symlink flip, so a file
+  dropped from a later release is simply absent from that release's
+  `app/`. The *source repository* can still quietly carry a file that no
+  clean-checkout tarball ever had (discovered in the v4.4.14 cleanup:
+  the retired `jen.py` monolith and some relocated `docs/` files had
+  persisted in the real repo for releases). The mitigation for that is
+  still to periodically diff the published GitHub archive
+  (`github.com/<repo>/archive/refs/tags/vX.Y.Z.tar.gz`) against the
+  working tree that built it.
