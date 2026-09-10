@@ -521,6 +521,14 @@
         <code>sudo ./install.sh --repair</code> on the host to finish it.
     </div>
     {% endif %}
+    {% if content_dir_incomplete and current_user.is_authenticated and current_user.role in ('superadmin','admin') %}
+    <div style="background:#2a1f00;border:1px solid var(--warning);border-radius:var(--radius);
+                padding:10px 16px;margin-bottom:12px;font-size:13px;">
+        ⚠️ <strong>Content directory not set up</strong> — Jen can't write to
+        <code>/var/lib/jen</code>, so database backups, custom icons and favicon uploads
+        will fail. Run <code>sudo ./install.sh</code> on the host to create it.
+    </div>
+    {% endif %}
     {% if kea_legacy_hosts %}
     <div style="background:#2a1f00;border:1px solid var(--warning);border-radius:var(--radius);
                 padding:10px 16px;margin-bottom:12px;font-size:13px;">

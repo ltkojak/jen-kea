@@ -36,17 +36,47 @@ _CONTENT_SUBDIRS = (
 )
 
 
+# Set by ensure_content_dirs(): True once CONTENT_DIR exists and Jen can
+# write into it. base.html shows an admin banner when this is False (the
+# box went 5.12→5.13 in-app so the root migration never ran, or perms are
+# wrong — `sudo ./install.sh` fixes it). v5.15.0.
+_CONTENT_DIR_WRITABLE = True
+
+
 def ensure_content_dirs() -> None:
     """Create CONTENT_DIR and its subtree. `send_from_directory` needs the
     directory to exist even when empty. Logs and moves on if it can't —
     never crashes the factory (a broken deployment shows 404s, not a
-    dead app)."""
+    dead app), but records the failure so an admin gets a banner."""
+    global _CONTENT_DIR_WRITABLE
+    ok = True
     for attr in _CONTENT_SUBDIRS:
         path = getattr(extensions, attr)
         try:
             os.makedirs(path, exist_ok=True)
         except OSError as e:
             logger.warning(f"content: could not create {path}: {e}")
+            ok = False
+    if ok:
+        # makedirs on an existing dir doesn't prove writability — probe it.
+        probe = os.path.join(extensions.CONTENT_DIR, ".jen-write-test")
+        try:
+            with open(probe, "w") as f:
+                f.write("")
+            os.remove(probe)
+        except OSError as e:
+            logger.warning(f"content: {extensions.CONTENT_DIR} is not writable: {e}")
+            ok = False
+    _CONTENT_DIR_WRITABLE = ok
+
+
+def content_dir_incomplete() -> bool:
+    """True when CONTENT_DIR is missing or unwritable — an admin needs to
+    run `sudo ./install.sh`. Never flagged for a dev checkout / Docker
+    (those set JEN_CONTENT_DIR or a writable $JEN_ROOT/var)."""
+    if os.environ.get("JEN_ROOT") or os.environ.get("JEN_CONTENT_DIR") or os.path.exists("/.dockerenv"):
+        return False
+    return not _CONTENT_DIR_WRITABLE
 
 
 def _sha256(path: str) -> str:

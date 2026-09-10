@@ -224,3 +224,43 @@ class TestDiscoverPluginsMerge:
         assert plugins_svc._is_enabled("ipam")
         ok, msg = plugins_svc.uninstall_plugin("ipam")
         assert ok and "built-in" in msg and not plugins_svc._is_enabled("ipam")
+
+
+class TestContentDirIncompleteBanner:
+    """v5.15.0 — a box that went 5.12→5.13 in-app never ran the root
+    content migration, so /var/lib/jen doesn't exist and www-data can't
+    create it. Surface a banner instead of degrading silently."""
+
+    def test_writable_content_dir_is_not_flagged(self, tmp_path, monkeypatch):
+        from jen.services import content
+
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(tmp_path))
+        for attr in content._CONTENT_SUBDIRS:
+            monkeypatch.setattr(extensions, attr, str(tmp_path / attr))
+        monkeypatch.delenv("JEN_ROOT", raising=False)
+        monkeypatch.delenv("JEN_CONTENT_DIR", raising=False)
+        content.ensure_content_dirs()
+        assert content._CONTENT_DIR_WRITABLE is True
+
+    def test_unwritable_content_dir_sets_the_flag(self, tmp_path, monkeypatch):
+        from jen.services import content
+
+        missing = tmp_path / "nope" / "jen"  # parent doesn't exist and can't be made under a file
+        (tmp_path / "nope").write_text("i am a file, not a dir")
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(missing))
+        for attr in content._CONTENT_SUBDIRS:
+            monkeypatch.setattr(extensions, attr, str(missing / attr))
+        content.ensure_content_dirs()
+        assert content._CONTENT_DIR_WRITABLE is False
+
+    def test_dev_checkout_is_never_flagged(self, monkeypatch):
+        from jen.services import content
+
+        monkeypatch.setattr(content, "_CONTENT_DIR_WRITABLE", False)
+        monkeypatch.setenv("JEN_ROOT", "/x")
+        assert content.content_dir_incomplete() is False
+
+    def test_base_html_has_the_banner(self):
+        base = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(encoding="utf-8")
+        assert "content_dir_incomplete" in base
+        assert "sudo ./install.sh" in base

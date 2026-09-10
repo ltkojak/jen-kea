@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.14.1"
+JEN_VERSION = "5.15.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -58,6 +58,9 @@ def _venv_migration_incomplete() -> bool:
 # restarts the service.
 _VENV_MIGRATION_INCOMPLETE = _venv_migration_incomplete()
 
+# Set by create_app() after ensure_content_dirs() probes CONTENT_DIR (v5.15.0).
+_CONTENT_DIR_INCOMPLETE = False
+
 
 # ── Login manager (module-level so decorators can reference it) ───────────────
 login_manager = LoginManager()
@@ -73,13 +76,16 @@ def create_app() -> Flask:
 
     # ── User content (v5.13.0) — create the /var/lib/jen subtree, then a
     # best-effort copy of anything a pre-5.13 box still has under /opt/jen.
-    from jen.services.content import ensure_content_dirs, migrate_legacy_content
+    from jen.services.content import content_dir_incomplete, ensure_content_dirs, migrate_legacy_content
 
     ensure_content_dirs()
     try:
         migrate_legacy_content()
     except Exception as e:
         logger.warning(f"content migration skipped: {e}")
+    # Static for the process lifetime — `sudo ./install.sh` restarts jen.
+    global _CONTENT_DIR_INCOMPLETE
+    _CONTENT_DIR_INCOMPLETE = content_dir_incomplete()
 
     # ── Flask app ─────────────────────────────────────────────────────────────
     app = Flask(__name__, static_folder=extensions.STATIC_DIR, template_folder=extensions.TEMPLATE_DIR)
@@ -466,6 +472,7 @@ def create_app() -> Flask:
             "jen_version": JEN_VERSION,
             "restart_pending": restart_pending,
             "venv_migration_incomplete": _VENV_MIGRATION_INCOMPLETE,
+            "content_dir_incomplete": _CONTENT_DIR_INCOMPLETE,
             "ipv6_enabled": ipv6_enabled,
             "kea_legacy_hosts": kea_legacy_hosts,
             "csrf_token": lambda: csrf_svc.generate_csrf_token(app),

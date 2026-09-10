@@ -2,6 +2,46 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.15.0] - 2026-09-11
+
+Shared networks. `sudo ./install.sh` or the in-app update — nothing to do
+by hand.
+
+### Subnets inside a shared network were invisible
+
+If any of your subnets lived inside a Kea `shared-networks` block, Jen
+never showed it. It was absent from the Subnets page and the dashboard,
+its pool wasn't counted anywhere, editing it silently did nothing, and
+**config-drift reported it as missing from Kea** — a standing false
+alarm. Every config-get consumer now iterates shared networks too
+(`jen/services/kea_config_view.py`); a config with no shared networks
+behaves exactly as before.
+
+### Managing shared networks
+
+On the Subnets page (admin, SSH configured):
+
+- Cards are grouped under a **Shared network: `<name>` · `<interface>`**
+  heading, with a **shared** chip on nested cards.
+- A per-card dropdown **moves** a subnet between the top level and any
+  shared network.
+- **New shared network** creates an empty one; the Add Subnet form has a
+  shared-network picker; **Delete network** removes an empty one.
+- Creating or deleting a network needs access to all subnets; moving a
+  subnet needs access to that subnet.
+
+Kea semantics: subnets in one shared network share the whole pool space,
+and client classification is per network. Renaming isn't supported (Kea
+has no rename) — delete the empty network and recreate it.
+
+### Also
+
+- New admin banner when `/var/lib/jen` is missing or unwritable ("content
+  directory not set up — run `sudo ./install.sh`"), the same way the
+  incomplete-venv banner works. A box that upgraded 5.12 → 5.13 with the
+  in-app button never ran the root-side content migration, so backups and
+  uploads were failing with no visible cause.
+
 ## [5.14.1] - 2026-09-10
 
 Housekeeping. A `sudo ./install.sh` upgrade (or, from 5.14.0, the in-app

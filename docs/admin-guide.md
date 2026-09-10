@@ -471,6 +471,34 @@ Configure in **Settings → Alerts & Integrations**.
 
 ---
 
+## Shared networks (v5.15.0)
+
+Kea lets several subnets share one **shared network** — they share the
+whole address-pool space (a client can get an address from any member
+subnet) and client classification applies per network. Jen sees, groups
+and edits subnets that live inside `Dhcp4.shared-networks` the same way
+as top-level ones.
+
+Before 5.15.0 a nested subnet was invisible: it didn't appear on the
+Subnets page, its pool wasn't counted, editing it silently did nothing,
+and config-drift reported it as *missing from Kea*.
+
+On the **Subnets** page (admin, SSH configured):
+
+- Cards are grouped under a **Shared network: `<name>` · `<interface>`**
+  heading; nested cards carry a small **shared** chip.
+- The dropdown on each card **moves** the subnet between the top level and
+  any shared network — one Kea push and restart.
+- **New shared network** (bottom of the page) creates an empty one; add
+  subnets to it from the Add Subnet form, or move existing ones in.
+- **Delete network** removes an *empty* shared network (move its subnets
+  out first). Creating and deleting a network needs access to all subnets.
+
+Renaming a network isn't supported (Kea has none either) — delete the
+empty network and create it under the new name.
+
+---
+
 ## SSH Setup for Subnet Editing
 
 ### Generate the Key
