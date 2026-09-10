@@ -42,9 +42,13 @@ def helper():
     return _load()
 
 
-def _run(helper, op, payload, path_env=None):
+def _run(helper, op, payload, path_env=None, keep_version=False):
     """Invoke main() with a captured stdin/stdout/stderr. Returns
-    (exit_code, parsed_stdout_json, stderr_text)."""
+    (exit_code, parsed_stdout_json, stderr_text). v2 stamps
+    `helper_version` on every response; it's popped from the parsed dict
+    unless keep_version=True so the many `out == {...}` assertions below
+    don't all have to spell it out. TestHelperVersionEnvelope checks it's
+    always present."""
     stdin = io.StringIO(json.dumps(payload))
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -60,6 +64,8 @@ def _run(helper, op, payload, path_env=None):
             os.environ["PATH"] = old_path or ""
     out = stdout.getvalue().strip()
     parsed = json.loads(out) if out else None
+    if isinstance(parsed, dict) and not keep_version:
+        parsed.pop("helper_version", None)
     return code, parsed, stderr.getvalue()
 
 
@@ -120,12 +126,30 @@ class TestProtocolMisuse:
 
 class TestVersion:
     def test_version(self, helper):
-        code, out, err = _run(helper, "version", {})
+        code, out, err = _run(helper, "version", {}, keep_version=True)
         assert code == 0
         assert out["ok"] is True
-        assert out["helper_version"] == helper.HELPER_VERSION == 1
+        assert out["helper_version"] == helper.HELPER_VERSION == 2
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
+
+
+class TestHelperVersionEnvelope:
+    """v2 (v5.16.0) — every response, including protocol-error responses,
+    carries helper_version so Jen learns the real number from any op."""
+
+    @pytest.mark.parametrize(
+        "op,payload",
+        [
+            ("version", {}),
+            ("read-config", {"service": "dhcp4", "path": "/tmp/evil.conf"}),
+            ("nonsense-op", {}),
+            ("tail-log", {"path": "/etc/passwd"}),
+        ],
+    )
+    def test_every_response_carries_helper_version(self, helper, op, payload):
+        _code, out, _err = _run(helper, op, payload, keep_version=True)
+        assert out["helper_version"] == 2
 
 
 class TestPathWalls:
@@ -182,22 +206,43 @@ class TestReadConfig:
         assert out["ok"] is False and out["error"] == "invalid-json"
 
     def test_ok(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
         monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
         p = tmp_path / "kea-dhcp4.conf"
-        p.write_text(json.dumps({"Dhcp4": {"subnet4": [{"id": 1}]}}))
+        raw = json.dumps({"Dhcp4": {"subnet4": [{"id": 1}]}})
+        p.write_bytes(raw.encode())
         code, out, _ = _run(helper, "read-config", {"service": "dhcp4", "path": str(p)})
-        assert out == {"ok": True, "config": {"Dhcp4": {"subnet4": [{"id": 1}]}}}
+        assert out == {
+            "ok": True,
+            "config": {"Dhcp4": {"subnet4": [{"id": 1}]}},
+            "sha256": hashlib.sha256(raw.encode()).hexdigest(),
+        }
+
+    def test_sha256_is_of_the_raw_bytes_whitespace_included(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = tmp_path / "kea-dhcp4.conf"
+        pretty = '{\n    "Dhcp4": {}\n}\n'  # a hand-formatted file
+        p.write_bytes(pretty.encode())
+        _code, out, _ = _run(helper, "read-config", {"service": "dhcp4", "path": str(p)})
+        assert out["sha256"] == hashlib.sha256(pretty.encode()).hexdigest()
 
 
-def _fake_kea_bin(tmp_path, name, exit_code=0, stdout="", stderr=""):
+def _fake_kea_bin(tmp_path, name, exit_code=0, stdout="", stderr="", marker=None):
     """Write a /bin/sh stub that mimics `kea-dhcpX -t` and return its
-    directory (to prepend to PATH)."""
+    directory (to prepend to PATH). If `marker` is a path, the stub
+    `touch`es it on every call — a test can assert `-t` did or didn't
+    run."""
     import shlex
 
     d = tmp_path / "bin"
     d.mkdir(exist_ok=True)
     script = d / name
     lines = ["#!/bin/sh"]
+    if marker:
+        lines.append(f"echo x >> {shlex.quote(str(marker))}")
     if stdout:
         lines.append(f"printf %s {shlex.quote(stdout)}")
     if stderr:
@@ -308,6 +353,85 @@ class TestApplyConfig:
         monkeypatch.setattr(os, "chown", spy)
         _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {}}, path_env=bindir)
         assert (p + ".jen_apply_tmp", 0, 0) in chowns
+
+    # ── v2: optimistic concurrency ─────────────────────────────────────────
+
+    def test_apply_returns_the_sha_of_the_bytes_written(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        p, bindir = self._setup(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(
+            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}}, path_env=bindir
+        )
+        assert out["ok"] is True
+        assert out["sha256"] == hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+
+    def test_matching_expect_sha256_applies(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {"a": 1}})
+        cur = hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
+        _code, out, _ = _run(
+            helper,
+            "apply-config",
+            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"a": 2}}, "expect_sha256": cur},
+            path_env=bindir,
+        )
+        assert out["ok"] is True
+        assert json.loads(pathlib.Path(p).read_text()) == {"Dhcp4": {"a": 2}}
+        assert out["sha256"] != cur
+
+    def test_stale_expect_sha256_is_a_conflict_and_nothing_is_touched(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        marker = tmp_path / "kea_ran"
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = tmp_path / "kea-dhcp4.conf"
+        p.write_text(json.dumps({"Dhcp4": {"a": 1}}))
+        original = p.read_bytes()
+        bindir = _fake_kea_bin(tmp_path, "kea-dhcp4", exit_code=0, marker=marker)
+        _code, out, _ = _run(
+            helper,
+            "apply-config",
+            {"service": "dhcp4", "path": str(p), "config": {"Dhcp4": {"a": 9}}, "expect_sha256": "deadbeef" * 8},
+            path_env=bindir,
+        )
+        assert out["ok"] is False and out["error"] == "conflict"
+        assert out["sha256"] == hashlib.sha256(original).hexdigest()
+        assert p.read_bytes() == original  # file untouched
+        assert not (pathlib.Path(str(p) + ".jen_apply_tmp")).exists()
+        assert not marker.exists()  # kea-dhcpX -t was never invoked
+
+    def test_expect_empty_string_on_missing_file_applies(self, helper, tmp_path, monkeypatch):
+        p, bindir = self._setup(helper, tmp_path, monkeypatch)  # file does not exist
+        _code, out, _ = _run(
+            helper,
+            "apply-config",
+            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}, "expect_sha256": ""},
+            path_env=bindir,
+        )
+        assert out["ok"] is True
+
+    def test_expect_empty_string_but_file_exists_is_conflict(self, helper, tmp_path, monkeypatch):
+        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
+        _code, out, _ = _run(
+            helper,
+            "apply-config",
+            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"new": 1}}, "expect_sha256": ""},
+            path_env=bindir,
+        )
+        assert out["ok"] is False and out["error"] == "conflict"
+
+    def test_a_lock_file_is_created_when_expect_is_given(self, helper, tmp_path, monkeypatch):
+        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
+        _run(
+            helper,
+            "apply-config",
+            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"x": 1}}, "expect_sha256": ""},
+            path_env=bindir,
+        )
+        # expect "" conflicts (file exists), but the lock is taken first
+        assert pathlib.Path(p + ".jen_lock").exists()
 
 
 class TestService:
