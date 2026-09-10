@@ -31,12 +31,15 @@ import os
 # one constant instead of hardcoding "/opt/jen" repeatedly — a third-party
 # review correctly pointed out that a hardcoded absolute path here makes a
 # local clone-and-run hostile (nothing under /opt/jen exists outside a real
-# install) and forces CI to work around it with a symlink. Defaults to
-# /opt/jen, so every existing production install's behavior is completely
-# unchanged; set JEN_ROOT to override for local development or a
-# CI checkout that isn't (and shouldn't need to be) installed to
-# /opt/jen at all.
-JEN_ROOT = os.environ.get("JEN_ROOT", "/opt/jen")
+# install) and forces CI to work around it with a symlink. `JEN_ROOT`
+# env override wins (local development, CI). Otherwise: the versioned
+# layout's `/opt/jen/current/app` (v5.14.0) if it exists, else the flat
+# `/opt/jen` (pre-5.14, Docker, and the one transitional boot). The
+# `current` symlink is flipped atomically by the updater / install.sh,
+# so this is a stable path to read at startup.
+JEN_ROOT = os.environ.get("JEN_ROOT") or (
+    "/opt/jen/current/app" if os.path.isdir("/opt/jen/current/app") else "/opt/jen"
+)
 
 # ── Config ──────────────────────────────────────────────────────────────────
 cfg: configparser.ConfigParser = None  # loaded by app factory

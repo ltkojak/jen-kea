@@ -5,21 +5,27 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=/opt/jen
-# v5.8.0 — Jen's Python deps live in /opt/jen/venv, but this stays on the
-# system python3 on purpose: run.py re-execs into the venv interpreter
-# itself (see its header), so the unit never has to change and an in-app
-# update from a pre-venv install can't strand systemd on a missing venv.
-ExecStart=/usr/bin/python3 /opt/jen/run.py
+# v5.14.0 — the versioned layout. `/opt/jen/current` is a symlink to the
+# live release directory (`releases/<X.Y.Z>/`), flipped atomically by
+# install.sh and the root self-updater. The unit points at that stable
+# path; a rollback is one symlink flip + `systemctl restart jen`.
+WorkingDirectory=/opt/jen/current/app
+# The per-release venv interpreter runs run.py directly — run.py's own
+# re-exec shim then sees it is already the venv python and stays put. On
+# a still-flat box (the transition install of 5.14.0, or Docker) this
+# path won't exist yet; the shim falls back to /opt/jen/venv or the
+# system interpreter, and the migration run / `install.sh --upgrade`
+# creates `current`.
+ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
 
-# v5.5.0 — run.py now launches gunicorn (directly via exec when there's
-# no SSL, or as a child alongside the HTTP->HTTPS redirect when there
-# is). Give gunicorn's graceful shutdown (--graceful-timeout 30) room
-# to finish before systemd escalates to SIGKILL, and send the stop
-# signal to the whole process group so the redirect child goes too.
+# v5.5.0 — run.py launches gunicorn (directly via exec when there's no
+# SSL, or as a child alongside the HTTP->HTTPS redirect when there is).
+# Give gunicorn's graceful shutdown (--graceful-timeout 30) room to
+# finish before systemd escalates to SIGKILL, and send the stop signal
+# to the whole process group so the redirect child goes too.
 KillMode=mixed
 TimeoutStopSec=40
 

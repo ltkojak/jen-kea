@@ -36,6 +36,14 @@ class TestRunPyReExec:
     def test_reexec_runs_before_any_jen_import(self):
         assert RUN_PY.index("_venv_reexec_target") < RUN_PY.index("from jen import JEN_VERSION")
 
+    def test_candidate_order_is_sibling_then_flat(self):
+        """v5.14.0 — the versioned layout puts the venv at
+        `<run.py dir>/../venv` (= /opt/jen/current/venv); the flat
+        /opt/jen/venv is the fallback."""
+        src = RUN_PY[RUN_PY.index("def _venv_reexec_target") : RUN_PY.index("_reexec_target = _venv_reexec_target")]
+        assert 'os.path.join(here, os.pardir, "venv")' in src
+        assert src.index("sibling_venv") < src.index("fallback_venv")
+
     def test_run_py_imports_cleanly_here(self):
         import run
 
@@ -44,11 +52,9 @@ class TestRunPyReExec:
     def test_target_is_none_when_no_venv(self, tmp_path):
         import run
 
-        assert run._venv_reexec_target(str(tmp_path / "nope")) is None
+        # script_path points somewhere with no ../venv and no /opt/jen/venv
+        assert run._venv_reexec_target(str(tmp_path / "app" / "run.py"), fallback_venv=str(tmp_path / "nope")) is None
 
-    # run.py's re-exec is bare-metal-Linux-only by design (it hardcodes the
-    # POSIX bin/python layout; Docker and dev never reach it). The
-    # behavioural tests below build a real venv and only run on POSIX.
     @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
     def test_target_is_none_when_opted_out(self, tmp_path, monkeypatch):
         import run
@@ -56,24 +62,32 @@ class TestRunPyReExec:
         v = tmp_path / "venv"
         venv.create(v, with_pip=False)
         monkeypatch.setenv("JEN_NO_VENV_REEXEC", "1")
-        assert run._venv_reexec_target(str(v)) is None
+        assert run._venv_reexec_target(str(tmp_path / "run.py"), fallback_venv=str(v)) is None
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
-    def test_target_is_the_venv_python_when_running_outside_it(self, tmp_path):
-        """The v5.8.0 bug: this returned None because realpath of the
-        venv's bin/python equals realpath of the base interpreter. It must
-        return the venv python whenever we're not already running it."""
+    def test_prefers_the_sibling_release_venv(self, tmp_path):
+        """current/app/run.py → current/venv/bin/python."""
         import run
 
-        v = tmp_path / "venv"
+        (tmp_path / "current" / "app").mkdir(parents=True)
+        v = tmp_path / "current" / "venv"
         venv.create(v, with_pip=False, symlinks=True)
-        out = run._venv_reexec_target(str(v))
+        out = run._venv_reexec_target(str(tmp_path / "current" / "app" / "run.py"))
+        assert out == str(v / "bin" / "python")
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
+    def test_falls_back_to_the_flat_venv(self, tmp_path):
+        import run
+
+        v = tmp_path / "flatvenv"
+        venv.create(v, with_pip=False, symlinks=True)
+        out = run._venv_reexec_target(str(tmp_path / "opt-jen" / "run.py"), fallback_venv=str(v))
         assert out == str(v / "bin" / "python")
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX bin/python venv layout")
     def test_end_to_end_reexec_actually_switches_interpreter(self, tmp_path):
-        """Build a real venv, point a stub run.py guard at it, run it with
-        the base interpreter, and prove the process re-execs."""
+        """Build a real venv, point a stub run.py guard's fallback at it,
+        run it with the base interpreter, and prove the process re-execs."""
         v = tmp_path / "venv"
         venv.create(v, with_pip=False, symlinks=True)
         vpy = str(v / "bin" / "python")
@@ -114,12 +128,19 @@ class TestInstallShVenv:
         assert len(calls) >= 2, f"expected setup_venv called in ≥2 flows, found {len(calls)}"
 
 
-class TestServiceFileUnchanged:
-    def test_execstart_still_system_python(self):
-        assert "ExecStart=/usr/bin/python3 /opt/jen/run.py" in SERVICE
+class TestServiceFile:
+    """v5.14.0 — the unit points at the versioned layout's stable
+    `/opt/jen/current` symlink."""
 
-    def test_comment_explains_the_venv_reexec_choice(self):
-        assert "re-execs into the venv" in SERVICE
+    def test_execstart_is_the_release_venv_and_app(self):
+        assert "ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py" in SERVICE
+
+    def test_workingdirectory_is_current_app(self):
+        assert "WorkingDirectory=/opt/jen/current/app" in SERVICE
+
+    def test_comment_explains_the_transition_fallback(self):
+        assert "re-exec shim" in SERVICE
+        assert "won't exist yet" in SERVICE  # the still-flat / Docker case
 
 
 class TestVenvMigrationBanner:
@@ -165,7 +186,13 @@ class TestJenConfigOwnership:
 
 
 class TestKeaHelperPackaged:
-    """v5.11.0 — jen-kea-helper ships beside the app on the Jen host."""
+    """v5.11.0 — jen-kea-helper ships beside the app on the Jen host.
+    v5.14.0 — it now travels inside the whole-tree copy into
+    releases/<ver>/app/, then the release directory is what Jen reads."""
 
-    def test_install_sh_copies_the_helper(self):
-        assert 'cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"' in INSTALL_SH
+    def test_install_sh_installs_the_release_tree_wholesale(self):
+        assert 'cp -r "$SCRIPT_DIR/." "$APP_DIR/"' in INSTALL_SH
+
+    def test_updater_lists_the_helper_as_a_rollback_item(self):
+        u = (REPO / "jen-update-root.py").read_text(encoding="utf-8")
+        assert '"jen-kea-helper"' in u

@@ -29,14 +29,34 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLLBACK_JEN=""
 ROLLBACK_PKG=""
 
+# v5.14.0 — versioned release directories. Each release is built whole
+# under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
+# the live one, flipped atomically (ln -s + mv -T). A rollback is one
+# flip back — the previous release dir is never touched.
+RELEASES_DIR="$INSTALL_DIR/releases"
+CURRENT_LINK="$INSTALL_DIR/current"
+RELEASE_DIR="$RELEASES_DIR/$JEN_VERSION"   # the release THIS run installs
+APP_DIR="$RELEASE_DIR/app"
+
 # v5.8.0 — bare-metal Jen runs from its own venv, not system site-packages
-# (no more --break-system-packages). VENV_PY is the interpreter jen.service
-# ends up using (via bin/jen-run); PYBIN is whatever's usable right now for
-# the installer's own inline python helpers (venv if built, else system).
-VENV_DIR="$INSTALL_DIR/venv"
+# (no more --break-system-packages). VENV_PY is this release's interpreter;
+# PYBIN is whatever's usable right now for the installer's own inline
+# python helpers — the currently-live release's venv (pre-upgrade DB
+# backup needs pymysql), else a flat pre-5.14 venv, else system python.
+VENV_DIR="$RELEASE_DIR/venv"
 VENV_PY="$VENV_DIR/bin/python"
 PYBIN="python3"
-[[ -x "$VENV_PY" ]] && PYBIN="$VENV_PY"
+[[ -x "$INSTALL_DIR/venv/bin/python" ]] && PYBIN="$INSTALL_DIR/venv/bin/python"
+[[ -x "$CURRENT_LINK/venv/bin/python" ]] && PYBIN="$CURRENT_LINK/venv/bin/python"
+
+# The app tree the installer's inline python helpers should import from:
+# this run's release once install_files has populated it, else the live
+# release, else a flat pre-5.14 tree.
+app_pyroot() {
+    if   [[ -d "$APP_DIR/jen" ]]; then echo "$APP_DIR"
+    elif [[ -d "$CURRENT_LINK/app/jen" ]]; then echo "$CURRENT_LINK/app"
+    else echo "$INSTALL_DIR"; fi
+}
 
 # ── Mode flags ────────────────────────────────────────────────────────────────
 MODE_UPGRADE=false
@@ -240,13 +260,15 @@ require_root() {
 
 # ── Detect existing install ───────────────────────────────────────────────────
 detect_existing() {
-    if [[ -f "$INSTALL_DIR/run.py" ]] || [[ -f "$INSTALL_DIR/jen.py" ]] || [[ -d "$INSTALL_DIR/jen" ]]; then
+    if [[ -f "$CURRENT_LINK/app/run.py" ]] || [[ -f "$INSTALL_DIR/run.py" ]] || [[ -f "$INSTALL_DIR/jen.py" ]] || [[ -d "$INSTALL_DIR/jen" ]]; then
         IS_UPGRADE=true
-        # Version is defined in jen/__init__.py (2.6.x+), jen.py (pre-2.6), or legacy/jen.py
+        # Version: the versioned layout's current/app first (v5.14.0), then
+        # the flat jen/__init__.py (2.6.x+), jen.py (pre-2.6), legacy/jen.py.
         local ver_file=""
-        if   [[ -f "$INSTALL_DIR/jen/__init__.py" ]]; then ver_file="$INSTALL_DIR/jen/__init__.py"
-        elif [[ -f "$INSTALL_DIR/jen.py"          ]]; then ver_file="$INSTALL_DIR/jen.py"
-        elif [[ -f "$INSTALL_DIR/legacy/jen.py"   ]]; then ver_file="$INSTALL_DIR/legacy/jen.py"
+        if   [[ -f "$CURRENT_LINK/app/jen/__init__.py" ]]; then ver_file="$CURRENT_LINK/app/jen/__init__.py"
+        elif [[ -f "$INSTALL_DIR/jen/__init__.py"      ]]; then ver_file="$INSTALL_DIR/jen/__init__.py"
+        elif [[ -f "$INSTALL_DIR/jen.py"               ]]; then ver_file="$INSTALL_DIR/jen.py"
+        elif [[ -f "$INSTALL_DIR/legacy/jen.py"        ]]; then ver_file="$INSTALL_DIR/legacy/jen.py"
         fi
         if [[ -n "$ver_file" ]]; then
             EXISTING_VERSION=$(grep -m1 'JEN_VERSION' "$ver_file" 2>/dev/null                 | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' || echo "unknown")
@@ -384,19 +406,19 @@ setup_venv() {
     divider
     blank
 
-    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$RELEASE_DIR"
     local req_file="$SCRIPT_DIR/requirements.txt"
     [[ -f "$req_file" ]] || fatal "requirements.txt not found beside install.sh"
 
     if [[ -x "$VENV_PY" ]] && "$VENV_PY" -c '' 2>/dev/null; then
-        spinner_start "Refreshing virtualenv (/opt/jen/venv)..."
+        spinner_start "Refreshing virtualenv ($VENV_DIR)..."
         python3 -m venv --upgrade "$VENV_DIR" 2>/dev/null || true
     else
         [[ -e "$VENV_DIR" ]] && rm -rf "$VENV_DIR"
-        spinner_start "Creating virtualenv (/opt/jen/venv)..."
+        spinner_start "Creating virtualenv ($VENV_DIR)..."
         if ! python3 -m venv "$VENV_DIR"; then
             spinner_stop
-            fatal "Could not create /opt/jen/venv — is python3-venv installed?"
+            fatal "Could not create $VENV_DIR — is python3-venv installed?"
         fi
     fi
     "$VENV_PY" -m pip install -q --upgrade pip >/dev/null 2>&1 || true
@@ -734,7 +756,7 @@ _set_admin_password() {
     JEN_INSTALL_ADMIN_PASS="$pass" "$PYBIN" << PYEOF 2>/dev/null || true
 import os
 import sys
-sys.path.insert(0, '$INSTALL_DIR')
+sys.path.insert(0, '$(app_pyroot)')
 try:
     # Use Jen's own hasher (scrypt as of v5.8.0) so the installer and the
     # app never disagree on the password-hash format.
@@ -774,13 +796,20 @@ backup_existing() {
     mkdir -p "$BACKUP_DIR"
     local ts; ts=$(date +%Y%m%d_%H%M%S)
 
-    if [[ -f "$INSTALL_DIR/run.py" ]]; then
-        cp "$INSTALL_DIR/run.py" "${BACKUP_DIR}/run.py.${ts}.bak"
+    # v5.14.0 — the real rollback is the previous release dir + a symlink
+    # flip (rollback(), below). This copy to /etc/jen/backups is kept one
+    # more release as cheap belt-and-braces. Read from current/app if the
+    # box is already on the versioned layout, else the flat tree.
+    local src="$INSTALL_DIR"
+    [[ -d "$CURRENT_LINK/app" ]] && src="$CURRENT_LINK/app"
+
+    if [[ -f "$src/run.py" ]]; then
+        cp "$src/run.py" "${BACKUP_DIR}/run.py.${ts}.bak"
         ok "Backed up run.py"
     fi
 
-    if [[ -d "$INSTALL_DIR/jen" ]]; then
-        cp -r "$INSTALL_DIR/jen" "${BACKUP_DIR}/jen.${ts}.bak"
+    if [[ -d "$src/jen" ]]; then
+        cp -r "$src/jen" "${BACKUP_DIR}/jen.${ts}.bak"
         ok "Backed up jen/ package"
     fi
 
@@ -792,9 +821,27 @@ backup_existing() {
 
 # ── Rollback ──────────────────────────────────────────────────────────────────
 rollback() {
+    # v5.14.0 — prefer flipping `current` back to the newest OTHER release
+    # directory (it was never touched by this run).
+    if [[ -d "$RELEASES_DIR" ]]; then
+        local prev
+        prev=$(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d \
+                 ! -name '*.staging-*' ! -name "$JEN_VERSION" -printf '%T@ %f\n' 2>/dev/null \
+               | sort -rn | head -1 | cut -d' ' -f2-)
+        if [[ -n "$prev" && -d "$RELEASES_DIR/$prev/app" ]]; then
+            warn "Rolling back to release $prev..."
+            ln -sfn "releases/$prev" "$CURRENT_LINK.tmp" && mv -T "$CURRENT_LINK.tmp" "$CURRENT_LINK"
+            systemctl daemon-reload
+            systemctl restart jen 2>/dev/null || true
+            warn "Rollback complete — release $prev restored"
+            return
+        fi
+    fi
+    # Legacy flat copy-back (a still-flat box whose versioned migration failed).
     [[ -z "${ROLLBACK_JEN:-}" ]] && return
     [[ -f "$ROLLBACK_JEN" ]] || return
     warn "Rolling back to previous installation..."
+    rm -f "$CURRENT_LINK"
     cp "$ROLLBACK_JEN" "$INSTALL_DIR/run.py"
     if [[ -n "${ROLLBACK_PKG:-}" && -d "$ROLLBACK_PKG" ]]; then
         rm -rf "$INSTALL_DIR/jen"
@@ -864,111 +911,53 @@ migrate_content() {
 }
 
 # ── Install files ─────────────────────────────────────────────────────────────
+# v5.14.0 — the whole tarball goes into releases/$JEN_VERSION/app; the
+# shipped OUT-OF-TREE files (jen.service, jen-sudoers, jen-update-root.py,
+# jen-update.service) are installed from that copy. `current` is NOT
+# flipped here — setup_venv() has to build releases/$JEN_VERSION/venv
+# first, then activate_release() does the atomic flip.
 install_files() {
     blank
     echo -e "  ${B}${C}INSTALLING FILES${NC}"
     divider
     blank
 
-    mkdir -p "$INSTALL_DIR/templates" \
-             "$CONFIG_DIR/ssl" "$CONFIG_DIR/ssh"
+    mkdir -p "$APP_DIR" "$CONFIG_DIR/ssl" "$CONFIG_DIR/ssh"
 
-    spinner_start "Installing application files..."
-    cp "$SCRIPT_DIR/run.py"  "$INSTALL_DIR/run.py"
-    # v5.2.5 — CHANGELOG.md was never copied here (or in self_update()'s
-    # equivalent list in jen/routes/settings.py) at all, on any release
-    # before this one. This is the third time this exact category of bug
-    # has hit this project: run.py itself was missing from self-update's
-    # copy list until v4.4.16, vendored static assets (chart.umd.min.js,
-    # htmx.min.js) were missing until v5.1.6/v5.1.8, and now CHANGELOG.md
-    # for the same reason — a file the running app actually reads at
-    # runtime, but which lives outside the jen/, templates/, static/
-    # scope both this script and self_update() treat as "the app," so it
-    # silently never gets refreshed on update. The v5.2.1 in-app "What's
-    # New" changelog viewer reads this exact file, so every existing
-    # install has been showing whatever CHANGELOG.md happened to be
-    # present at initial install time, indefinitely, no matter how many
-    # releases ship after it.
-    if [[ -f "$SCRIPT_DIR/CHANGELOG.md" ]]; then
-        cp "$SCRIPT_DIR/CHANGELOG.md" "$INSTALL_DIR/CHANGELOG.md"
-    fi
-    # v5.4.1 — keep the pinned dependency list beside the installed app
-    # for the record and for a future updater that reinstalls deps (the
-    # in-app self-update flow does not run pip today — see PENDING /
-    # jen-update-root.py).
-    if [[ -f "$SCRIPT_DIR/requirements.txt" ]]; then
-        cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/requirements.txt"
-    fi
-    # v5.11.0 — jen-kea-helper is the fixed-function root helper Jen
-    # installs onto each Kea host (Settings → Kea → SSH, or by hand). It
-    # lives here as plain data — Jen reads it to push it over SSH; it is
-    # NOT executed on the Jen host.
-    if [[ -f "$SCRIPT_DIR/jen-kea-helper" ]]; then
-        cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"
-    fi
-    # Copy legacy monolith for reference (not executed)
-    if [[ -f "$SCRIPT_DIR/legacy/jen.py" ]]; then
-        mkdir -p "$INSTALL_DIR/legacy"
-        cp "$SCRIPT_DIR/legacy/jen.py" "$INSTALL_DIR/legacy/jen.py"
-    fi
+    spinner_start "Installing release $JEN_VERSION..."
+    rm -rf "$APP_DIR"
+    mkdir -p "$APP_DIR"
+    # cp -r "$SCRIPT_DIR/." copies contents including dotfiles; then prune
+    # the things a release directory has no use for.
+    cp -r "$SCRIPT_DIR/." "$APP_DIR/"
+    rm -rf "$APP_DIR/.git" "$APP_DIR/.github" "$APP_DIR/tests" "$APP_DIR/.venv" "$APP_DIR/venv"
+    find "$APP_DIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+    find "$APP_DIR" -name '*.pyc' -delete 2>/dev/null || true
     spinner_stop
-    ok "Installed run.py"
+    ok "Installed release tree  ${DIM}($(find "$APP_DIR/jen" -name '*.py' 2>/dev/null | wc -l) modules)${NC}"
 
-    if [[ -d "$SCRIPT_DIR/jen" ]]; then
-        spinner_start "Installing jen/ package..."
-        rm -rf "$INSTALL_DIR/jen"
-        cp -r "$SCRIPT_DIR/jen" "$INSTALL_DIR/jen"
-        spinner_stop
-        ok "Installed jen/ package  ${DIM}($(find "$INSTALL_DIR/jen" -name '*.py' | wc -l) modules)${NC}"
-    fi
-
-    spinner_start "Installing templates..."
-    rm -rf "$INSTALL_DIR/templates"
-    cp -r "$SCRIPT_DIR/templates" "$INSTALL_DIR/templates"
-    spinner_stop
-    ok "Installed templates  ${DIM}($(ls "$SCRIPT_DIR/templates/" | wc -l) files)${NC}"
-
-    # v5.13.0 — static/ and plugins/ are fully release-owned now (custom
-    # icons/logos/favicon and registry-installed plugins moved to
-    # $CONTENT_DIR by migrate_content). rm -rf + recopy, same as jen/.
-    spinner_start "Installing static assets..."
-    rm -rf "$INSTALL_DIR/static"
-    cp -r "$SCRIPT_DIR/static" "$INSTALL_DIR/static"
-    spinner_stop
-    ok "Installed static assets  ${DIM}($(find "$SCRIPT_DIR/static" -type f | wc -l) files)${NC}"
-
-    if [[ -d "$SCRIPT_DIR/plugins" ]]; then
-        spinner_start "Installing bundled plugins..."
-        rm -rf "$INSTALL_DIR/plugins"
-        cp -r "$SCRIPT_DIR/plugins" "$INSTALL_DIR/plugins"
-        spinner_stop
-        ok "Installed bundled plugins"
-    fi
-
-    cp "$SCRIPT_DIR/jen.service" "$SERVICE_FILE"
+    # ── Out-of-tree files, from the just-installed release copy ──────────
+    cp "$APP_DIR/jen.service" "$SERVICE_FILE"
     ok "Installed systemd service"
 
-    cp "$SCRIPT_DIR/jen-sudoers" "$SUDOERS_FILE"
-    chmod 440 "$SUDOERS_FILE"
-    ok "Installed sudoers entry"
+    if [[ -f "$APP_DIR/jen-sudoers" ]]; then
+        cp "$APP_DIR/jen-sudoers" "$SUDOERS_FILE"
+        chmod 440 "$SUDOERS_FILE"
+        ok "Installed sudoers entry"
+    fi
 
-    # v5.2.6 security fix — the self-update helper script must live
-    # OUTSIDE $INSTALL_DIR entirely. This script's own final action
-    # below does `chown -R www-data:www-data "$INSTALL_DIR"`, which
-    # would otherwise silently re-expose a root-owned helper placed
-    # anywhere under /opt/jen to the exact account the whole point of
-    # this fix is to keep it away from. See
-    # /usr/local/sbin/jen-update-root.py's own docstring for the full
-    # security rationale.
-    if [[ -f "$SCRIPT_DIR/jen-update-root.py" ]]; then
-        cp "$SCRIPT_DIR/jen-update-root.py" /usr/local/sbin/jen-update-root.py
+    # v5.2.6 security fix — the self-update helper script lives OUTSIDE
+    # $INSTALL_DIR entirely (this script chowns the whole tree root:root,
+    # which is fine, but the helper also has to be reachable by the
+    # jen-update.service unit). See its own docstring for the rationale.
+    if [[ -f "$APP_DIR/jen-update-root.py" ]]; then
+        cp "$APP_DIR/jen-update-root.py" /usr/local/sbin/jen-update-root.py
         chown root:root /usr/local/sbin/jen-update-root.py
         chmod 700 /usr/local/sbin/jen-update-root.py
         ok "Installed root-privileged update script"
     fi
-    if [[ -f "$SCRIPT_DIR/jen-update.service" ]]; then
-        cp "$SCRIPT_DIR/jen-update.service" /etc/systemd/system/jen-update.service
-        systemctl daemon-reload
+    if [[ -f "$APP_DIR/jen-update.service" ]]; then
+        cp "$APP_DIR/jen-update.service" /etc/systemd/system/jen-update.service
         ok "Installed jen-update.service"
     fi
 
@@ -986,13 +975,42 @@ install_files() {
 }
 
 # ── Byte-compile the app as root ─────────────────────────────────────────────
-# v5.13.0 — /opt/jen is root-owned now, so $JEN_USER can't write __pycache__.
-# Compile with the venv interpreter (built by setup_venv) so the .pyc match
-# what actually runs.
+# v5.13.0 — the app tree is root-owned, so $JEN_USER can't write __pycache__.
+# Compile with the release's own venv interpreter so the .pyc match what runs.
 compile_app() {
     local py="$VENV_PY"
     [[ -x "$py" ]] || py="python3"
-    "$py" -m compileall -q "$INSTALL_DIR/jen" "$INSTALL_DIR/plugins" >/dev/null 2>&1 || true
+    "$py" -m compileall -q "$APP_DIR/jen" "$APP_DIR/plugins" >/dev/null 2>&1 || true
+}
+
+# ── Activate the release (atomic symlink flip) ───────────────────────────────
+# v5.14.0 — point `current` at releases/$JEN_VERSION. The symlink target is
+# RELATIVE so /opt/jen can be bind-mounted; `ln -s` into a .tmp name then
+# `mv -T` (rename(2), atomic) so `current` is never briefly absent.
+activate_release() {
+    chown -R root:root "$RELEASE_DIR"
+    ln -sfn "releases/$JEN_VERSION" "$CURRENT_LINK.tmp"
+    mv -T "$CURRENT_LINK.tmp" "$CURRENT_LINK"
+    systemctl daemon-reload
+    ok "Release $JEN_VERSION is current  ${DIM}($CURRENT_LINK -> releases/$JEN_VERSION)${NC}"
+}
+
+# ── Remove the flat leftovers after a successful versioned install ───────────
+# v5.14.0 — everything lives under releases/<ver>/ now and is reached
+# through `current`; the flat copies shadow nothing (JEN_ROOT resolves to
+# current/app) but they waste disk and confuse. Only runs once `current`
+# resolves to a real release.
+remove_flat_leftovers() {
+    [[ -L "$CURRENT_LINK" && -d "$CURRENT_LINK/app/jen" ]] || return 0
+    local it removed=0
+    for it in jen run.py templates static plugins venv CHANGELOG.md requirements.txt jen-kea-helper legacy; do
+        if [[ -e "$INSTALL_DIR/$it" && ! -L "$INSTALL_DIR/$it" ]]; then
+            rm -rf "${INSTALL_DIR:?}/$it"
+            removed=$((removed + 1))
+        fi
+    done
+    [[ "$removed" -gt 0 ]] && ok "Removed $removed flat leftover(s) from $INSTALL_DIR"
+    return 0
 }
 
 # ── Start service ─────────────────────────────────────────────────────────────
@@ -1052,12 +1070,12 @@ verify_install() {
     tpl_result=$("$PYBIN" -c "
 from jinja2 import Environment, FileSystemLoader
 import os, sys
-env = Environment(loader=FileSystemLoader('$INSTALL_DIR/templates'))
+env = Environment(loader=FileSystemLoader('$(app_pyroot)/templates'))
 # Register custom filters used by Jen so validation doesn't false-fail
 for f in ['utcfmt','utcdate','utctime']:
     env.filters[f] = lambda v, fmt=None: v
 errors = []
-for t in os.listdir('$INSTALL_DIR/templates'):
+for t in os.listdir('$(app_pyroot)/templates'):
     if t.endswith('.html'):
         try: env.get_template(t)
         except Exception as e: errors.append(f'{t}: {e}')
@@ -1065,7 +1083,7 @@ if errors:
     for e in errors: print(e)
     sys.exit(1)
 else:
-    print(len([f for f in os.listdir('$INSTALL_DIR/templates') if f.endswith('.html')]))
+    print(len([f for f in os.listdir('$(app_pyroot)/templates') if f.endswith('.html')]))
 " 2>&1)
     if [[ $? -eq 0 ]]; then
         ok "Templates validated  ${DIM}(${tpl_result} files)${NC}"
@@ -1074,10 +1092,10 @@ else:
     fi
 
     # Modules
-    if [[ -d "$INSTALL_DIR/jen" ]]; then
+    if [[ -d "$(app_pyroot)/jen" ]]; then
         local mod_result
         mod_result=$("$PYBIN" -c "
-import sys; sys.path.insert(0, '$INSTALL_DIR')
+import sys; sys.path.insert(0, '$(app_pyroot)')
 errors = []
 for m in ['jen.extensions','jen.config','jen.models.db','jen.models.user',
           'jen.services.kea','jen.services.alerts','jen.services.fingerprint',
@@ -1369,7 +1387,8 @@ main() {
         exit 0
     fi
 
-    # Handle --repair mode
+    # Handle --repair mode — rebuild this release's app/ and venv/ from the
+    # tarball and re-activate it. Keeps user content and config untouched.
     if [[ "$MODE_REPAIR" == "true" ]]; then
         detect_existing
         show_mode_banner
@@ -1379,8 +1398,11 @@ main() {
         backup_existing
         install_files
         setup_venv
+        compile_app
+        activate_release
         start_service
         verify_install
+        remove_flat_leftovers
         print_summary
         exit 0
     fi
@@ -1474,8 +1496,10 @@ for which in ['jen','kea']:
     setup_venv
     compile_app
     write_config
+    activate_release
     start_service
     verify_install
+    remove_flat_leftovers
     print_summary
 }
 

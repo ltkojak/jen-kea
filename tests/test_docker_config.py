@@ -185,8 +185,10 @@ class TestKeaHelperShipsInTheImage:
     def test_dockerfile_copies_the_helper(self):
         assert re.search(r"^COPY jen-kea-helper /opt/jen/jen-kea-helper\s*$", _text("Dockerfile"), re.M)
 
-    def test_install_sh_copies_the_helper(self):
-        assert 'cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"' in _text("install.sh")
+    def test_install_sh_ships_the_helper_in_the_release_tree(self):
+        # v5.14.0 — the whole tarball (jen-kea-helper included) is copied
+        # into releases/<ver>/app wholesale.
+        assert 'cp -r "$SCRIPT_DIR/." "$APP_DIR/"' in _text("install.sh")
 
 
 class TestContentDirLayout:
@@ -228,3 +230,41 @@ class TestContentDirLayout:
         u = _text("jen-update-root.py")
         assert '"static"' in u and '"plugins"' in u  # _ROLLBACK_ITEMS
         assert "def migrate_user_content" in u
+
+
+class TestVersionedReleaseLayout:
+    """v5.14.0 — releases/<X.Y.Z>/{app,venv} + an atomic `current` symlink."""
+
+    def test_installer_builds_a_release_dir_and_flips_current(self):
+        sh = _text("install.sh")
+        assert 'RELEASES_DIR="$INSTALL_DIR/releases"' in sh
+        assert 'APP_DIR="$RELEASE_DIR/app"' in sh
+        assert 'ln -sfn "releases/$JEN_VERSION" "$CURRENT_LINK.tmp"' in sh
+        assert 'mv -T "$CURRENT_LINK.tmp" "$CURRENT_LINK"' in sh
+        assert "activate_release" in sh
+        assert "remove_flat_leftovers" in sh
+
+    def test_installer_activate_runs_after_setup_venv(self):
+        sh = _text("install.sh")
+        main_fn = sh[sh.rindex("\nmain() {") :]
+        assert main_fn.index("setup_venv") < main_fn.index("activate_release")
+        assert main_fn.index("activate_release") < main_fn.index("start_service")
+        assert main_fn.index("verify_install") < main_fn.index("remove_flat_leftovers")
+
+    def test_service_unit_points_at_current(self):
+        s = _text("jen.service")
+        assert "ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py" in s
+        assert "WorkingDirectory=/opt/jen/current/app" in s
+
+    def test_updater_has_the_versioned_layout_primitives(self):
+        u = _text("jen-update-root.py")
+        assert 'RELEASES_DIR = "/opt/jen/releases"' in u
+        assert 'CURRENT_LINK = "/opt/jen/current"' in u
+        assert "def _switch_current(" in u
+        assert "def _extract_release(" in u
+        assert "def _prune_old_releases(" in u
+        assert "def _remove_flat_leftovers(" in u
+
+    def test_extensions_jen_root_prefers_current_app(self):
+        ext = _text("jen/extensions.py")
+        assert '"/opt/jen/current/app" if os.path.isdir("/opt/jen/current/app") else "/opt/jen"' in ext

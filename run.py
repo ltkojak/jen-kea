@@ -60,12 +60,16 @@ import sys
 # file must be importable there — and we re-exec into the venv interpreter
 # here, before `from jen import …` below pulls in a single dependency.
 #
-# Deliberately a re-exec and not a jen.service ExecStart change: the unit
-# file then never has to change, and an in-app update from a pre-5.8.0
-# install can't leave systemd pointing at a venv that isn't there yet. A
-# missing venv (not built yet) or a broken one (an OS python bump stranded
-# it — `sudo ./install.sh --repair` rebuilds) simply falls through to the
-# current interpreter. Set JEN_NO_VENV_REEXEC=1 to opt out.
+# A missing venv (not built yet) or a broken one (an OS python bump
+# stranded it — `sudo ./install.sh --repair` rebuilds) simply falls
+# through to the current interpreter. Set JEN_NO_VENV_REEXEC=1 to opt out.
+#
+# v5.14.0 — the versioned layout puts the venv beside run.py at
+# `<run.py dir>/../venv` (i.e. /opt/jen/current/venv when jen.service runs
+# /opt/jen/current/app/run.py). That is tried first, then the flat
+# /opt/jen/venv (Docker, and any pre-5.14 box the migration hasn't
+# reached). Running from current/venv makes `sys.prefix` match the first
+# candidate, so no re-exec happens.
 #
 # "Are we already the venv interpreter?" is `sys.prefix == the venv dir`,
 # NOT a realpath comparison of the executables: a POSIX venv's bin/python
@@ -75,17 +79,23 @@ import sys
 _VENV_DIR = "/opt/jen/venv"
 
 
-def _venv_reexec_target(venv_dir=_VENV_DIR):
+def _venv_reexec_target(script_path=None, fallback_venv=_VENV_DIR):
     """The venv interpreter this process should re-exec into, or None to
-    stay put — opted out, no venv present, or we're already running it."""
+    stay put — opted out, no venv present, or we're already running it.
+    Candidates, in order: the venv beside the running run.py
+    (`<dir>/../venv`), then `fallback_venv` (the flat /opt/jen/venv)."""
     if os.environ.get("JEN_NO_VENV_REEXEC") == "1":
         return None
-    venv_python = os.path.join(venv_dir, "bin", "python")
-    if not os.path.exists(venv_python):
-        return None
-    if os.path.abspath(sys.prefix) == os.path.abspath(venv_dir):
-        return None
-    return venv_python
+    here = os.path.dirname(os.path.abspath(script_path or __file__))
+    sibling_venv = os.path.normpath(os.path.join(here, os.pardir, "venv"))
+    for venv_dir in (sibling_venv, fallback_venv):
+        venv_python = os.path.join(venv_dir, "bin", "python")
+        if not os.path.exists(venv_python):
+            continue
+        if os.path.abspath(sys.prefix) == os.path.abspath(venv_dir):
+            return None
+        return venv_python
+    return None
 
 
 _reexec_target = _venv_reexec_target()

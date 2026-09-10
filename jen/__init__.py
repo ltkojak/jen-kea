@@ -49,6 +49,8 @@ def _venv_migration_incomplete() -> bool:
         return False  # already running inside a venv
     if os.path.exists("/.dockerenv") or os.environ.get("JEN_ROOT"):
         return False  # container / dev checkout
+    if os.path.exists("/opt/jen/current/venv/bin/python"):
+        return False  # v5.14.0 versioned layout — the per-release venv is there
     return os.path.isfile("/opt/jen/run.py") and not os.path.exists("/opt/jen/venv/bin/python")
 
 
