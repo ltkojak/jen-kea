@@ -114,6 +114,45 @@ class TestSelfUpdateRouteIsNowJustATrigger:
         mock_run.assert_not_called()
 
 
+class TestSelfUpdateRedirectsToTheOverlayPage:
+    """v5.10.4 — the update overlay and its ?updating=1 restart-poller
+    have lived on /settings/system since the 5.9.0 Settings IA rework,
+    but self_update() still redirected to /settings/kea, so after
+    triggering an update the browser landed on a page with no overlay
+    and nothing polling — the page never refreshed when the update
+    finished. All four redirect paths now go to /settings/system."""
+
+    def test_success_redirects_to_system_page_with_updating_flag(self, logged_in_client):
+        with patch("jen.routes.settings.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=False
+            )
+        assert r.status_code in (301, 302)
+        assert r.headers["Location"].endswith("/settings/system?updating=1"), r.headers["Location"]
+
+    def test_trigger_failure_redirects_to_system_page(self, logged_in_client):
+        with patch("jen.routes.settings.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr="systemd said no")
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=False
+            )
+        assert r.status_code in (301, 302)
+        assert r.headers["Location"].endswith("/settings/system"), r.headers["Location"]
+
+    def test_backup_failure_redirects_to_system_page(self, logged_in_client):
+        with (
+            patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")),
+            patch("jen.routes.settings.subprocess.run") as mock_run,
+        ):
+            r = logged_in_client.post(
+                "/settings/infrastructure/self-update", data={"db_backup": "1"}, follow_redirects=False
+            )
+        assert r.status_code in (301, 302)
+        assert r.headers["Location"].endswith("/settings/system"), r.headers["Location"]
+        mock_run.assert_not_called()
+
+
 class TestSelfUpdateOptionalDbBackup:
     """DB backup behavior is unchanged from before this fix — this is
     Jen backing up its own database with credentials it already

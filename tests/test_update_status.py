@@ -11,9 +11,14 @@ entry (CLAUDE.md rule 8 doesn't apply). subprocess.run is mocked here;
 the parser is tested directly.
 """
 
+import pathlib
+import re
 from unittest.mock import MagicMock, patch
 
 from jen.routes.settings.updates import _parse_systemctl_show
+
+_REPO = pathlib.Path(__file__).resolve().parent.parent
+_SETTINGS_SYSTEM_HTML = (_REPO / "templates" / "settings_system.html").read_text(encoding="utf-8")
 
 
 class TestParseSystemctlShow:
@@ -69,3 +74,25 @@ class TestUpdateStatusRoute:
     def test_requires_login(self, client):
         resp = client.get("/settings/infrastructure/update-status")
         assert resp.status_code in (302, 401)
+
+
+class TestUpdateOverlayLivesWithThePoller:
+    """v5.10.4 — self_update() redirects to settings.settings_system
+    with ?updating=1; the overlay markup and the restart-poller that
+    reads that flag must both be on exactly that page, or an update
+    completes without the browser ever noticing."""
+
+    def test_overlay_and_poll_live_on_the_page_the_route_redirects_to(self, logged_in_client):
+        resp = logged_in_client.get("/settings/system?updating=1")
+        assert resp.status_code == 200
+        assert b'id="update-overlay"' in resp.data
+        assert b"params.get('updating')" in resp.data
+
+    def test_poll_budget_is_at_least_three_minutes(self):
+        """The poller ticks every 2s. The server-side health window is
+        90s ([server] update_health_timeout) plus restart + byte-compile
+        time, so every `attempts > N` give-up point must allow at least
+        ~3 minutes (N >= 90)."""
+        budgets = [int(n) for n in re.findall(r"attempts\s*>\s*(\d+)", _SETTINGS_SYSTEM_HTML)]
+        assert len(budgets) == 2, f"expected exactly two poll-budget checks, found {budgets}"
+        assert all(n >= 90 for n in budgets), budgets

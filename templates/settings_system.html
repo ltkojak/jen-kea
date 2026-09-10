@@ -303,14 +303,19 @@ function startUpdate(evt) {
                     clearInterval(poll);
                     msg.textContent = 'Update complete — reloading…';
                     setTimeout(function() { window.location.reload(); }, 800);
-                } else if (attempts > 45) {
+                } else if (attempts > 90) {
+                    // v5.10.4 — 3 min at 2s. The server-side health window
+                    // is 90s ([server] update_health_timeout) plus restart
+                    // and byte-compile time, so the old 45/30 give-up
+                    // points fired while a legitimate update was still in
+                    // flight.
                     clearInterval(poll);
                     title.textContent = 'Update still not confirmed';
                     msg.textContent = 'Jen still reports v' + d.current + '. The update service may still be running, or it rolled back. On the server: sudo journalctl -u jen-update.service -n 100';
                 }
             })
             .catch(function() {
-                if (attempts > 30) {
+                if (attempts > 90) {
                     clearInterval(poll);
                     msg.textContent = 'Taking longer than expected — refresh manually if needed.';
                 }
