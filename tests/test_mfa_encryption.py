@@ -68,8 +68,10 @@ class TestCryptoPrimitives:
     def test_key_unavailable_raises(self, monkeypatch):
         from jen import extensions
 
+        # both key candidates (the configured path and the CONTENT_DIR
+        # fallback) must be unwritable for this to raise
         monkeypatch.setattr(extensions, "MFA_KEY_PATH", "/proc/nonexistent/mfa_key")
-        monkeypatch.setattr(extensions, "JEN_ROOT", "/proc/nonexistent")
+        monkeypatch.setattr(extensions, "CONTENT_KEYS_DIR", "/proc/nonexistent")
         crypto.reset_key_cache()
         with pytest.raises(crypto.MfaKeyUnavailable):
             crypto.encrypt_secret("x")
