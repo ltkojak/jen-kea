@@ -94,10 +94,24 @@ proof-of-life), and don't verify TLS on the loopback call. Also:
 `apt-get update` + one more retry if the python3-venv install fails on a
 box with stale indices.
 
-The shared venv still means a rollback keeps the (forward-compatible,
-floor-pinned) newer deps — a true atomic switch waits for the versioned
-release directories tracked for a future major (see docs/ARCHITECTURE.md
-§6).
+v5.14.0 — versioned release directories + an atomic symlink switch.
+Each release is built whole under `/opt/jen/releases/<X.Y.Z>/`:
+`app/` is the extracted tarball, `venv/` is a virtualenv built for
+exactly that `app/requirements.txt`. `/opt/jen/current` is a relative
+symlink to the live release; the update is `os.replace()` of that link,
+which is atomic, and the rollback is flipping it back — the previous
+release directory is never touched, so it is its own rollback. The
+per-release venv finally closes the "a rollback keeps the newer deps"
+gap: the old release's venv is exactly the deps it shipped with.
+
+The updater that installs 5.14.0 is the OLD (flat) one, so 5.14.0 lands
+flat and boots through the `JEN_ROOT` fallback + run.py's shim. The
+first run of THIS updater on such a box has no `current` symlink yet
+("migration run"): it builds `releases/<ver>/`, snapshots the flat tree
+for rollback, creates `current`, and on success removes the flat
+leftovers. `sudo ./install.sh --upgrade` does the same immediately.
+Docker stays flat (no venv, the container is the isolation) and reaches
+the app through the same `JEN_ROOT` fallback.
 """
 
 import configparser
@@ -119,7 +133,9 @@ GITHUB_REPO = "ltkojak/jen-kea"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_ASSET_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
 INSTALL_DIR = "/opt/jen"
-VENV_DIR = "/opt/jen/venv"
+VENV_DIR = "/opt/jen/venv"  # legacy flat venv path (pre-5.14 / Docker); removed by the migration run
+RELEASES_DIR = "/opt/jen/releases"  # v5.14.0 — releases/<X.Y.Z>/{app,venv}
+CURRENT_LINK = "/opt/jen/current"  # v5.14.0 — relative symlink → releases/<live>
 SYSTEM_PYTHON = "/usr/bin/python3"
 SELF_INSTALL_PATH = "/usr/local/sbin/jen-update-root.py"
 UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
@@ -135,11 +151,12 @@ SSL_KEY = "/etc/jen/ssl/private.key"
 # migrates pre-5.13 content into it and chowns it to www-data.
 CONTENT_DIR = "/var/lib/jen"
 
-# The parts of /opt/jen that install_extracted_files() replaces wholesale
-# (rmtree + recopy) — so a failed update has to be able to put exactly
-# these back. As of v5.13.0 `static/` and `plugins/` are fully
-# release-owned (user uploads and registry-installed plugins moved to
-# CONTENT_DIR), so they rmtree cleanly and belong here.
+# v5.14.0 — the flat parts of /opt/jen. In the versioned layout the
+# previous release directory IS the rollback (it's never touched), so
+# these matter for exactly ONE case: the migration run on a still-flat
+# box, where snapshot_install()/restore_snapshot() copy them aside and
+# put them back if the switch to the versioned layout fails. On success
+# the migration run deletes them (they'd shadow nothing but confuse).
 _ROLLBACK_ITEMS = (
     "jen",
     "run.py",
@@ -150,6 +167,7 @@ _ROLLBACK_ITEMS = (
     "CHANGELOG.md",
     "jen-kea-helper",
 )
+_FLAT_LEFTOVERS = (*_ROLLBACK_ITEMS, "venv")
 
 # Files an update also replaces that live OUTSIDE /opt/jen. A bad
 # jen.service / sudoers / updater would make the app fail AND make a
@@ -200,92 +218,28 @@ def fetch_bytes_with_sha256(url, timeout=120):
     return b"".join(chunks), sha256.hexdigest()
 
 
-def install_extracted_files(extracted, install_dir=INSTALL_DIR):
+def install_external_files(app_dir):
     """
-    Perform the actual file installation from an already-extracted,
-    already-verified release directory into install_dir. Pulled out as
-    its own function (rather than left inline in main()) specifically
-    so it's independently testable against a hand-built fake extracted
-    directory, without needing to mock network calls or tarfile
-    extraction at all — matching this project's general preference for
-    small, directly-testable functions over one large script body.
+    v5.14.0 — install the files a release ships that live OUTSIDE the
+    release directory: the systemd unit (`jen.service`, + `daemon-reload`)
+    and the sudoers grant (`jen-sudoers`, validated with `visudo -c`
+    first, never installed on a failure). The application tree itself is
+    no longer copied anywhere — it IS `app_dir` (`releases/<ver>/app/`),
+    reached through the `current` symlink. `jen-update-root.py` and
+    `jen-update.service` are handled by install_self_update_files() with
+    its atomic replace-while-running dance. `app_dir` is
+    `releases/<ver>/app` and is already `root:root` (chowned on the
+    staging dir before the rename).
 
-    Scope: jen/ package, run.py, CHANGELOG.md, requirements.txt,
-    templates/, static/ (additive, preserving an existing favicon.ico —
-    see v5.1.8), jen.service (+ `systemctl daemon-reload`), and
-    jen-sudoers (validated with `visudo -c` first, never installed on a
-    validation failure). main() has already pip-installed requirements
-    into the venv and snapshotted everything a rollback needs before
-    calling this.
+    Kept as its own function so it's testable against a hand-built
+    directory without mocking the network or tar extraction.
     """
-    # Core application package
-    jen_src = os.path.join(extracted, "jen")
-    if os.path.isdir(jen_src):
-        target = os.path.join(install_dir, "jen")
-        if os.path.isdir(target):
-            shutil.rmtree(target)
-        shutil.copytree(jen_src, target)
-
-    # Entry point
-    run_py_src = os.path.join(extracted, "run.py")
-    if os.path.isfile(run_py_src):
-        shutil.copy2(run_py_src, os.path.join(install_dir, "run.py"))
-
-    # CHANGELOG.md (v5.2.5 fix, carried forward here)
-    changelog_src = os.path.join(extracted, "CHANGELOG.md")
-    if os.path.isfile(changelog_src):
-        shutil.copy2(changelog_src, os.path.join(install_dir, "CHANGELOG.md"))
-
-    # requirements.txt — keep the pinned dependency list current beside
-    # the installed app. main() has already pip-installed it into the
-    # venv (from the staged copy) before reaching this point.
-    requirements_src = os.path.join(extracted, "requirements.txt")
-    if os.path.isfile(requirements_src):
-        shutil.copy2(requirements_src, os.path.join(install_dir, "requirements.txt"))
-
-    # jen-kea-helper (v5.11.0) — plain data on the Jen host; Jen pushes it
-    # to each Kea host over SSH. In _ROLLBACK_ITEMS so a failed update
-    # restores the previous copy.
-    helper_src = os.path.join(extracted, "jen-kea-helper")
-    if os.path.isfile(helper_src):
-        shutil.copy2(helper_src, os.path.join(install_dir, "jen-kea-helper"))
-
-    # Templates
-    templates_src = os.path.join(extracted, "templates")
-    if os.path.isdir(templates_src):
-        target = os.path.join(install_dir, "templates")
-        if os.path.isdir(target):
-            shutil.rmtree(target)
-        shutil.copytree(templates_src, target)
-
-    # static/ — release-owned as of v5.13.0 (a custom favicon and uploaded
-    # icons/logos moved to CONTENT_DIR). rmtree + recopy, same as jen/.
-    static_src = os.path.join(extracted, "static")
-    if os.path.isdir(static_src):
-        target = os.path.join(install_dir, "static")
-        if os.path.isdir(target):
-            shutil.rmtree(target)
-        shutil.copytree(static_src, target)
-
-    # plugins/ — the SHIPPED plugin tree (ipam, network-discovery).
-    # Registry-installed plugins live under CONTENT_DIR now, so this is
-    # also release-owned: rmtree + recopy.
-    plugins_src = os.path.join(extracted, "plugins")
-    if os.path.isdir(plugins_src):
-        target = os.path.join(install_dir, "plugins")
-        if os.path.isdir(target):
-            shutil.rmtree(target)
-        shutil.copytree(plugins_src, target)
-
-    # systemd service file
-    service_src = os.path.join(extracted, "jen.service")
+    service_src = os.path.join(app_dir, "jen.service")
     if os.path.isfile(service_src):
         shutil.copy2(service_src, "/etc/systemd/system/jen.service")
         subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
 
-    # sudoers entry — validate before installing to avoid locking out
-    # all sudo access with a malformed file.
-    sudoers_src = os.path.join(extracted, "jen-sudoers")
+    sudoers_src = os.path.join(app_dir, "jen-sudoers")
     if os.path.isfile(sudoers_src):
         check = subprocess.run(["/usr/sbin/visudo", "-c", "-f", sudoers_src], capture_output=True, text=True)
         if check.returncode != 0:
@@ -293,15 +247,6 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
         else:
             shutil.copy2(sudoers_src, "/etc/sudoers.d/jen")
             os.chmod("/etc/sudoers.d/jen", 0o440)
-
-    # Ownership — v5.13.0 makes the whole application tree root-owned and
-    # read-only to the service user (user-writable content is under
-    # CONTENT_DIR, chowned separately in main()). This script and its own
-    # directory are never touched — they're not under install_dir at all.
-    # main() byte-compiles jen/ + plugins/ with the venv interpreter right
-    # after this (www-data can no longer write __pycache__).
-    subprocess.run(["/bin/chown", "-R", "root:root", install_dir], check=False)
-    subprocess.run(["/bin/chmod", "-R", "a+rX", install_dir], check=False)
 
 
 _SHIPPED_PLUGIN_IDS = ("ipam", "network-discovery")
@@ -380,10 +325,10 @@ def _file_sha256(path):
 def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, update_service_path=UPDATE_SERVICE_PATH):
     """
     v5.3.3 fix — a real gap found by a third-party review of the v5.2.6
-    redesign: install_extracted_files() above installs the application
-    (jen/, run.py, templates/, static/, jen.service, jen-sudoers), but
-    never installed a new copy of THIS script or of jen-update.service
-    itself. A fix shipped inside jen-update-root.py would never reach
+    redesign: the file install (the release directory, plus
+    install_external_files() for jen.service / jen-sudoers) never
+    installed a new copy of THIS script or of jen-update.service itself.
+    A fix shipped inside jen-update-root.py would never reach
     an already-running instance via the in-app update button — only a
     manual `sudo ./install.sh --upgrade` would pick it up, silently
     reintroducing the exact "self-update can't fix itself" maintenance
@@ -469,21 +414,13 @@ def _try_build_venv(venv_dir):
     return _venv_usable(venv_py)
 
 
-def ensure_venv(venv_dir=VENV_DIR):
-    """
-    Return the path to /opt/jen/venv's python, building the venv if it's
-    absent or broken. This script runs as root, so if `python3 -m venv`
-    fails for want of the `python3-venv` package we apt-install it and
-    retry. Returns None only if a venv genuinely can't be produced, so
-    the caller can fall back to the system interpreter.
-    """
-    venv_py = os.path.join(venv_dir, "bin", "python")
-    if _venv_usable(venv_py):
-        return venv_py
-
-    log("No usable venv at /opt/jen/venv — building one.")
+def _build_venv_with_apt_recovery(venv_dir):
+    """`python3 -m venv <dir>`, apt-installing `python3-venv` / `python3-full`
+    and retrying (once more after `apt-get update`) if the OS package is
+    missing. This script runs as root, so it can. Returns True if the
+    result is a usable venv."""
     if _try_build_venv(venv_dir):
-        return venv_py
+        return True
 
     # Most common cause on Debian/Ubuntu: python3-venv isn't installed
     # (an install that has only ever used the in-app update button).
@@ -506,13 +443,22 @@ def ensure_venv(venv_dir=VENV_DIR):
         apt = _apt_install()
         if apt.returncode != 0:
             log(f"  apt-get install still failed: {(apt.stderr or apt.stdout).strip()}")
-    if apt.returncode == 0 and _try_build_venv(venv_dir):
-        return venv_py
+    return apt.returncode == 0 and _try_build_venv(venv_dir)
 
-    log(
-        "WARNING: could not build /opt/jen/venv. Falling back to system python for "
-        "this update; run `sudo ./install.sh` on the host to finish the venv migration."
-    )
+
+def _build_release_venv(venv_dir):
+    """
+    Build the per-release virtualenv at `venv_dir` (a brand-new path
+    under a staging directory — no "is the existing one usable" shortcut,
+    it can't exist yet). This is what makes the update transactional: the
+    live release's venv is never touched, so a pip failure here or a
+    rollback later leaves the running install's dependencies exactly as
+    they were. Returns the venv's python, or None if a venv genuinely
+    can't be produced (which aborts the update).
+    """
+    if _build_venv_with_apt_recovery(venv_dir):
+        return os.path.join(venv_dir, "bin", "python")
+    log(f"ERROR: could not build a virtualenv at {venv_dir}.")
     return None
 
 
@@ -534,8 +480,9 @@ def install_python_dependencies(requirements_path, python_bin):
         return True
     log(f"Installing Python dependencies with {python_bin} …")
     cmd = [python_bin, "-m", "pip", "install", "--upgrade", "-r", requirements_path]
-    # ensure_venv() returns the literal venv path or None → SYSTEM_PYTHON;
-    # a plain string compare is right here (NOT realpath — a venv's
+    # v5.14.0 the caller always passes a per-release venv python, so the
+    # SYSTEM_PYTHON branch below is a belt-and-braces fallback only. A
+    # plain string compare is right here (NOT realpath — a venv's
     # bin/python realpaths to the system interpreter, see run.py's guard).
     attempts = []
     if python_bin == SYSTEM_PYTHON:
@@ -625,9 +572,17 @@ def snapshot_install(snapshot_dir, install_dir=INSTALL_DIR):
             shutil.copy2(live_path, os.path.join(ext_dir, name))
 
 
-def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR):
-    """Put a snapshot_install() snapshot back — /opt/jen tree, then the
-    external files, then daemon-reload + chown + restart jen."""
+def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR, current_link=CURRENT_LINK):
+    """Put a snapshot_install() snapshot back — the flat /opt/jen tree,
+    then the external files, then daemon-reload + chown + restart jen.
+    v5.14.0 — this is the MIGRATION-run rollback: a half-created `current`
+    symlink is removed so the box stays on the flat layout it started
+    from. (The steady-state versioned rollback is just an os.replace() of
+    the `current` link back to the previous release — main() does that
+    inline; the previous release dir was never touched.)"""
+    if os.path.islink(current_link) or os.path.lexists(current_link):
+        with contextlib.suppress(OSError):
+            os.unlink(current_link)
     for item in _ROLLBACK_ITEMS:
         src = os.path.join(snapshot_dir, item)
         if os.path.exists(src):
@@ -651,6 +606,24 @@ def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR):
     subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
 
 
+def _remove_flat_leftovers(install_dir=INSTALL_DIR):
+    """v5.14.0 — after a successful migration run, delete the flat
+    application tree from /opt/jen. Everything now lives under
+    releases/<ver>/ and is reached through `current`; the flat copies
+    would shadow nothing (JEN_ROOT resolves to current/app) but they are
+    confusing and waste disk. /opt/jen itself, /opt/jen/releases,
+    /opt/jen/current and any .rollback-* snapshot are left alone."""
+    for item in _FLAT_LEFTOVERS:
+        path = os.path.join(install_dir, item)
+        if os.path.islink(path) or os.path.isfile(path):
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+                log(f"Removed flat leftover {path}")
+        elif os.path.isdir(path):
+            shutil.rmtree(path, ignore_errors=True)
+            log(f"Removed flat leftover {path}/")
+
+
 def _server_cfg(key, fallback):
     try:
         cfg = configparser.ConfigParser(interpolation=None)
@@ -661,14 +634,18 @@ def _server_cfg(key, fallback):
 
 
 def _installed_version():
-    """JEN_VERSION out of the on-disk /opt/jen/jen/__init__.py."""
-    try:
-        with open(os.path.join(INSTALL_DIR, "jen", "__init__.py")) as f:
-            for line in f:
-                if line.startswith("JEN_VERSION"):
-                    return line.split("=", 1)[1].strip().strip("\"'")
-    except OSError:
-        pass
+    """JEN_VERSION out of the on-disk jen/__init__.py — the versioned
+    layout's `current/app/jen/__init__.py` first (v5.14.0), the flat
+    `/opt/jen/jen/__init__.py` second (pre-5.14, Docker, and the one
+    transitional boot)."""
+    for base in (os.path.join(CURRENT_LINK, "app"), INSTALL_DIR):
+        try:
+            with open(os.path.join(base, "jen", "__init__.py")) as f:
+                for line in f:
+                    if line.startswith("JEN_VERSION"):
+                        return line.split("=", 1)[1].strip().strip("\"'")
+        except OSError:
+            continue
     return "?"
 
 
@@ -787,28 +764,79 @@ def verify_release_checksum(tarball_name, actual_hash, checksum_text):
 KEEP_MARKER = ".keep"  # written into a snapshot the CRITICAL path wants preserved
 
 
-def _prune_stale_snapshots(install_dir=INSTALL_DIR):
-    """v5.9.0 — older updaters left a `.rollback-<ts>` directory behind on
-    every failed attempt. v5.9.1 — prune everything EXCEPT (a) the newest
-    snapshot and (b) any snapshot carrying a `.keep` marker: the CRITICAL
-    path ("rollback restart also unhealthy") marks its snapshot because it
-    may be the only intact copy of the previous release if
-    restore_snapshot() itself died halfway. "Click Update again" must never
-    delete the one thing that can recover the box."""
+def _prune_old_releases(releases_dir=RELEASES_DIR, current_link=CURRENT_LINK, install_dir=INSTALL_DIR):
+    """
+    v5.14.0 — keep the disk from filling with old release dirs. Keeps:
+      - the release `current` points at,
+      - the single newest OTHER release directory (a hand-rollback
+        target, and the CRITICAL path's fallback),
+      - any release dir carrying a `.keep` marker.
+    Removes the rest, plus:
+      - `*.staging-*` dirs older than a day (a crashed earlier attempt),
+      - any `.failed`-marked release dir,
+      - legacy `.rollback-<ts>` snapshot dirs left under /opt/jen by the
+        pre-5.14 updater (except a `.keep`-marked one — that may be the
+        only intact copy of a previous release if a rollback died
+        halfway, and "click Update again" must never delete it).
+    """
+    removed = 0
+    now = time.time()
+
+    def _mtime(p):
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return 0.0
+
+    current_target = None
+    if os.path.islink(current_link):
+        current_target = os.path.basename(os.readlink(current_link).rstrip("/"))
+
+    try:
+        names = os.listdir(releases_dir)
+    except OSError:
+        names = []
+    release_dirs = []
+    for name in names:
+        path = os.path.join(releases_dir, name)
+        if ".staging-" in name:
+            if now - _mtime(path) > 86400:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+            continue
+        if os.path.isdir(path) and not os.path.islink(path):
+            release_dirs.append(name)
+
+    release_dirs.sort(key=lambda n: _mtime(os.path.join(releases_dir, n)), reverse=True)
+    kept_one_other = False
+    for name in release_dirs:
+        path = os.path.join(releases_dir, name)
+        if name == current_target:
+            continue
+        if os.path.exists(os.path.join(path, KEEP_MARKER)):
+            log(f"Keeping release {name} — marked for recovery.")
+            continue
+        if not os.path.exists(os.path.join(path, ".failed")) and not kept_one_other:
+            kept_one_other = True
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        removed += 1
+
+    # Legacy .rollback-<ts> snapshots from the pre-5.14 updater.
     try:
         snaps = sorted(n for n in os.listdir(install_dir) if n.startswith(".rollback-"))
     except OSError:
-        return 0
-    removed = 0
-    for name in snaps[:-1]:  # newest stays
+        snaps = []
+    for name in snaps[:-1]:  # newest stays (mirrors the pre-5.14 behaviour)
         path = os.path.join(install_dir, name)
         if os.path.exists(os.path.join(path, KEEP_MARKER)):
             log(f"Keeping {name} — marked for recovery by an earlier failed rollback.")
             continue
         shutil.rmtree(path, ignore_errors=True)
         removed += 1
+
     if removed:
-        log(f"Pruned {removed} stale rollback snapshot(s) from earlier runs.")
+        log(f"Pruned {removed} old release / staging / snapshot dir(s).")
     return removed
 
 
@@ -839,8 +867,91 @@ def _confirm_running_version(version, attempts=5, delay=3):
     )
 
 
+def _switch_current(target_release, current_link=CURRENT_LINK):
+    """Atomically point `current` at `releases/<target_release>`. The
+    symlink target is RELATIVE so /opt/jen can be bind-mounted; the swap
+    is os.replace() of the link itself (atomic on POSIX), never
+    os.remove()+os.symlink() which has a window where `current` is gone."""
+    tmp_link = current_link + ".tmp"
+    if os.path.lexists(tmp_link):
+        os.unlink(tmp_link)
+    os.symlink(os.path.join("releases", target_release), tmp_link)
+    os.replace(tmp_link, current_link)
+
+
+def _extract_release(tarball_path, dest_app):
+    """Extract the WHOLE tarball into `dest_app`, stripping the leading
+    `jen/` path component. Same tar-slip protection as before: filter by
+    TYPE (files/dirs only — a member named safely under `jen/` can still
+    be a sym/hardlink pointing outside) and reject `..` / absolute names.
+    Extraction IS the install now — there is no second copy step."""
+    os.makedirs(dest_app, exist_ok=True)
+    with tarfile.open(tarball_path, "r:gz") as tf:
+        members = []
+        for m in tf.getmembers():
+            if not m.name.startswith("jen/") or ".." in m.name or os.path.isabs(m.name):
+                continue
+            if not (m.isfile() or m.isdir()):
+                continue
+            m.name = m.name[len("jen/") :]
+            if not m.name:
+                continue
+            members.append(m)
+        tf.extractall(dest_app, members=members)
+
+
+def _rollback_release(snapshot_dir, prev, migration_run, version, release_dir):
+    """Undo a failed switch. Migration run → restore the flat tree and
+    drop the half-made `current`. Steady state → flip `current` back to
+    the previous release (its dir was never touched) and restore the
+    external unit/sudoers/updater files from the snapshot. Then restart
+    and health-check; an unhealthy result is the CRITICAL path."""
+    if os.path.isdir(release_dir):
+        with contextlib.suppress(OSError):
+            open(os.path.join(release_dir, ".failed"), "w").close()
+
+    if migration_run:
+        restore_snapshot(snapshot_dir)
+    else:
+        try:
+            _switch_current(prev)
+        except OSError as e:
+            log(f"  WARNING: could not flip `current` back to {prev}: {e}")
+        ext_dir = os.path.join(snapshot_dir, "_ext")
+        reload_needed = False
+        for live_path, name in _EXTERNAL_ITEMS.items():
+            saved = os.path.join(ext_dir, name)
+            if os.path.isfile(saved):
+                shutil.copy2(saved, live_path)
+                if live_path.endswith(".service"):
+                    reload_needed = True
+        if reload_needed:
+            subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)
+        subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
+
+    if service_healthy():
+        log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
+        shutil.rmtree(snapshot_dir, ignore_errors=True)
+        return
+
+    # Rollback restart itself unhealthy — keep every recovery artefact.
+    with contextlib.suppress(OSError), open(os.path.join(snapshot_dir, KEEP_MARKER), "w") as f:
+        f.write(f"rollback restart unhealthy after v{version} attempt; probe {_local_base_url()}/\n")
+    if not migration_run and prev:
+        prev_dir = os.path.join(RELEASES_DIR, prev)
+        if os.path.isdir(prev_dir):
+            with contextlib.suppress(OSError):
+                open(os.path.join(prev_dir, KEEP_MARKER), "w").close()
+    log(
+        "CRITICAL: rollback restart also unhealthy. Recovery snapshot kept at "
+        f"{snapshot_dir}; check `journalctl -u jen`. If `systemctl is-active jen` says active, "
+        f"the PROBE is what's failing (it used {_local_base_url()}/), not the app — the previous "
+        "version is restored and running; fix the probe's view of the ports/SSL and retry."
+    )
+
+
 def main():
-    _prune_stale_snapshots()
+    _prune_old_releases()
     log("Checking GitHub for the latest release…")
     data = fetch_json(GITHUB_RELEASES_API)
     version = data.get("tag_name", "").lstrip("v")
@@ -911,111 +1022,102 @@ def main():
 
     log("Checksum verified.")
 
-    # ── Extract to a temp dir. Same tar-slip protection as the
-    # previous implementation: filter by TYPE, not just name — a
-    # member named safely under "jen/" can still be a symlink/hardlink
-    # whose target points outside tmp_dir. Only allow plain files and
-    # directories.
-    tmp_dir = tempfile.mkdtemp(prefix="jen_update_extract_")
-    # kept past the block on purpose — written and closed here, unlinked in `finally`
+    log("Checking the on-disk layout…")
+    prev = None
+    if os.path.islink(CURRENT_LINK):
+        prev = os.path.basename(os.readlink(CURRENT_LINK).rstrip("/"))
+    migration_run = prev is None
+    if migration_run:
+        log("No `current` symlink — this is the migration run from the flat layout.")
+
+    staging = os.path.join(RELEASES_DIR, f"{version}.staging-{int(time.time())}")
+    staging_app = os.path.join(staging, "app")
+    staging_venv = os.path.join(staging, "venv")
+    release_dir = os.path.join(RELEASES_DIR, version)
+
     tmp_tarball = tempfile.NamedTemporaryFile(suffix=".tar.gz", prefix="jen_update_", delete=False)  # noqa: SIM115
     try:
         tmp_tarball.write(tarball_bytes)
         tmp_tarball.close()
 
-        with tarfile.open(tmp_tarball.name, "r:gz") as tf:
-            members = [
-                m
-                for m in tf.getmembers()
-                if m.name.startswith("jen/")
-                and ".." not in m.name
-                and not os.path.isabs(m.name)
-                and (m.isfile() or m.isdir())
-            ]
-            tf.extractall(tmp_dir, members=members)
-
-        extracted = os.path.join(tmp_dir, "jen")
-        if not os.path.isdir(extracted):
-            log("ERROR: update package format invalid — expected jen/ directory in tarball.")
+        # ── Build the new release entirely under a staging dir. Nothing
+        # the running install depends on — not its files, not its venv —
+        # is touched until the switch. That is what makes this atomic.
+        _extract_release(tmp_tarball.name, staging_app)
+        if not os.path.isdir(os.path.join(staging_app, "jen")):
+            log("ERROR: update package format invalid — expected a jen/ package inside the tarball.")
             return 1
 
-        # ── Transactional install (v5.8.0) ──────────────────────────────
-        # Everything up to install_extracted_files() is against staging
-        # and the venv only; /opt/jen's own files are not touched until
-        # the release has been proven to install its deps and import.
-        python_bin = ensure_venv() or SYSTEM_PYTHON
-        if python_bin == SYSTEM_PYTHON and not os.path.exists("/.dockerenv"):
-            log(
-                "WARNING: running WITHOUT /opt/jen/venv — installing to system python. "
-                "Jen is not isolated. Run `sudo ./install.sh --repair` after this update "
-                "to finish the venv migration (the app shows a banner about this too)."
-            )
-
-        if not install_python_dependencies(os.path.join(extracted, "requirements.txt"), python_bin):
-            return 1
-        # The venv stays root:root (this script runs as root; www-data only
-        # reads/executes it — a writable venv is a persistence foothold).
-        if python_bin != SYSTEM_PYTHON:
-            subprocess.run(["/bin/chown", "-R", "root:root", VENV_DIR], check=False)
-            subprocess.run([python_bin, "-m", "compileall", "-q", os.path.join(VENV_DIR, "lib")], capture_output=True)
-
-        if not validate_staged_release(extracted, python_bin):
+        python_bin = _build_release_venv(staging_venv)
+        if not python_bin:
+            log("ERROR: could not build the release's virtualenv — aborting, /opt/jen untouched.")
             return 1
 
-        # v5.9.0 — baseline the health probe against the app that's
-        # running NOW, before anything is touched. If the probe can't see
-        # a known-good Jen, it can't be trusted to judge the new one
-        # either: the 5.8.2 updater on an SSL box installed a healthy
-        # 5.8.4 and then rolled it back on exactly that false negative.
+        if not install_python_dependencies(os.path.join(staging_app, "requirements.txt"), python_bin):
+            return 1
+
+        # The whole staging tree is root-owned (www-data reads/executes,
+        # never writes — a writable app tree or venv is a persistence
+        # foothold), then byte-compiled with the interpreter that will run
+        # it so the first post-restart request isn't paying compile cost
+        # and a syntax error surfaces here, before the switch.
+        subprocess.run(["/bin/chown", "-R", "root:root", staging], check=False)
+        _compile_targets = [staging_venv]
+        _compile_targets += [
+            os.path.join(staging_app, d) for d in ("jen", "plugins") if os.path.isdir(os.path.join(staging_app, d))
+        ]
+        subprocess.run([python_bin, "-m", "compileall", "-q", *_compile_targets], capture_output=True)
+
+        if not validate_staged_release(staging_app, python_bin):
+            return 1
+
+        # v5.9.0 — baseline the health probe against the app running NOW.
+        # If the probe can't see a known-good Jen it can't be trusted to
+        # judge the new one either (the 5.8.2 updater on an SSL box
+        # installed a healthy 5.8.4 and rolled it back on that false
+        # negative).
         probe_url = f"{_local_base_url()}/"
         if not _probe_once(_local_opener(), probe_url):
             log(
                 f"ERROR: the health probe cannot reach the currently-running Jen at {probe_url} "
-                "— it would wrongly roll back a good update. Aborting before the swap; /opt/jen untouched. "
+                "— it would wrongly roll back a good update. Aborting before the switch. "
                 "Check `systemctl status jen`, the [server] ports in /etc/jen/jen.config, and whether "
                 "/etc/jen/ssl/certificate.crt + private.key match how Jen is actually serving."
             )
             return 1
 
+        # Snapshot the out-of-tree files an update replaces (jen.service,
+        # sudoers, this script, jen-update.service). On the migration run
+        # also snapshot the flat /opt/jen tree — that run's rollback is
+        # "put the flat layout back", the previous release dir doesn't
+        # exist yet. In steady state the _ROLLBACK_ITEMS paths don't exist
+        # under /opt/jen at all, so only _ext/ gets populated.
         snapshot_dir = os.path.join(INSTALL_DIR, f".rollback-{int(time.time())}")
         log(f"Snapshotting current install → {snapshot_dir}")
         try:
             snapshot_install(snapshot_dir)
         except (OSError, shutil.Error) as e:
-            # Nothing has been touched yet, so there's nothing to roll
-            # back — but say so plainly instead of a bare traceback, and
-            # point at the entry that broke the copy.
             log(f"ERROR: could not snapshot the current install — aborting, /opt/jen untouched: {e}")
             shutil.rmtree(snapshot_dir, ignore_errors=True)
             return 1
 
-        # From here on ANY failure — an exception during the file swap, a
-        # staged tree that won't byte-compile, a service that doesn't come
-        # back healthy, or a running process that reports the wrong version
-        # — restores the snapshot and restarts the previous version. (v5.8.0
-        # only rolled back on the health check; a raise mid-swap left
-        # /opt/jen half-updated.)
+        # ── From here, ANY failure flips back and restarts the previous
+        # version.
         try:
             log("Installing files…")
-            migrate_user_content(INSTALL_DIR, CONTENT_DIR, extracted)
-            install_extracted_files(extracted, INSTALL_DIR)
-            install_self_update_files(extracted)
-            # Byte-compile the freshly-installed tree with the SAME interpreter
-            # that will run it, so the first request after restart isn't paying
-            # compile cost (and a syntax error surfaces here, pre-restart, where
-            # the rollback path still applies).
-            _compile_targets = [
-                os.path.join(INSTALL_DIR, d) for d in ("jen", "plugins") if os.path.isdir(os.path.join(INSTALL_DIR, d))
-            ]
-            compiled = subprocess.run(
-                [python_bin, "-m", "compileall", "-q", *_compile_targets],
-                capture_output=True,
-                text=True,
-            )
-            if compiled.returncode != 0:
-                raise RuntimeError(
-                    f"byte-compiling the installed tree failed: {(compiled.stderr or compiled.stdout).strip()}"
-                )
+            if migration_run:
+                migrate_user_content(INSTALL_DIR, CONTENT_DIR, staging_app)
+
+            if os.path.isdir(release_dir):
+                shutil.rmtree(release_dir)  # a prior failed attempt at this exact version
+            os.rename(staging, release_dir)
+            staging = None  # renamed — the finally block must not delete it
+
+            install_external_files(os.path.join(release_dir, "app"))
+            install_self_update_files(os.path.join(release_dir, "app"))
+
+            _switch_current(version)
+            subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)
             log(f"Update to v{version} installed. Restarting jen…")
             subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
             if not service_healthy():
@@ -1024,33 +1126,22 @@ def main():
             log(f"Confirmed: the running process reports v{running}.")
         except Exception as e:
             log(f"ERROR: {e} — rolling back.")
-            restore_snapshot(snapshot_dir)
-            if service_healthy():
-                log(f"Rolled back to the previous install. The v{version} update was NOT applied.")
-                shutil.rmtree(snapshot_dir, ignore_errors=True)
-            else:
-                try:  # never auto-pruned by a later run — see _prune_stale_snapshots
-                    with open(os.path.join(snapshot_dir, KEEP_MARKER), "w") as f:
-                        f.write(f"rollback restart unhealthy after v{version} attempt; probe {_local_base_url()}/\n")
-                except OSError:
-                    pass
-                log(
-                    "CRITICAL: rollback restart also unhealthy. Snapshot kept at "
-                    f"{snapshot_dir}; check `journalctl -u jen`. If `systemctl is-active jen` says active, "
-                    f"the PROBE is what's failing (it used {_local_base_url()}/), not the app — the previous "
-                    "version is restored and running; fix the probe's view of the ports/SSL and retry."
-                )
+            _rollback_release(snapshot_dir, prev, migration_run, version, release_dir)
             return 1
 
+        if migration_run:
+            _remove_flat_leftovers()
         log("jen is back up and serving.")
         shutil.rmtree(snapshot_dir, ignore_errors=True)
+        _prune_old_releases()
         log("Done.")
         return 0
 
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp_tarball.name)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if staging and os.path.isdir(staging):
+            shutil.rmtree(staging, ignore_errors=True)
 
 
 if __name__ == "__main__":
