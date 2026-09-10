@@ -650,13 +650,18 @@ def api_keys_delete(key_id):
 @login_required
 def api_docs():
     keys = []
-    try:
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, name, key_prefix FROM api_keys WHERE active=1 ORDER BY created_at DESC LIMIT 10"
-                )
-                keys = cur.fetchall()
-    except Exception:
-        pass
+    # v5.10.4 — the "pre-fill from your keys" list showed every active
+    # key's name and prefix to any logged-in user, including viewers, even
+    # though /settings/api-keys itself is admin-only. Viewers get the
+    # empty-state ("create one") the template already renders.
+    if current_user.is_admin_or_above:
+        try:
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, name, key_prefix FROM api_keys WHERE active=1 ORDER BY created_at DESC LIMIT 10"
+                    )
+                    keys = cur.fetchall()
+        except Exception:
+            pass
     return render_template("api_docs.html", keys=keys, base_url=request.host_url.rstrip("/"))

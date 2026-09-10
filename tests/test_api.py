@@ -147,3 +147,36 @@ class TestDashboardStatsApi:
         with app.test_client() as fresh_client:
             r = fresh_client.get("/api/stats", follow_redirects=False)
             assert r.status_code in (301, 302, 308)
+
+
+class TestApiDocsKeyListIsAdminOnly:
+    """v5.10.4 — /settings/api-docs pre-filled its examples from a list
+    of every active key's name and prefix, shown to any logged-in user
+    even though /settings/api-keys itself is admin-only."""
+
+    @staticmethod
+    def _seed_key(db, prefix):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys")
+            cur.execute(
+                "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active) VALUES (%s, %s, %s, 1, 1)",
+                (f"key-{prefix}", f"hash-{prefix}", prefix),
+            )
+        db.commit()
+
+    def test_admin_with_a_key_sees_the_prefill_buttons(self, logged_in_client, db):
+        self._seed_key(db, "abc12345")
+        r = logged_in_client.get("/settings/api-docs")
+        assert r.status_code == 200
+        assert b"keybtn-" in r.data
+        assert b"abc12345" in r.data
+
+    def test_viewer_never_sees_key_names_or_prefixes(self, client, db):
+        from tests.conftest import restricted_client
+
+        self._seed_key(db, "xyz98765")
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
+        r = c.get("/settings/api-docs")
+        assert r.status_code == 200
+        assert b"keybtn-" not in r.data
+        assert b"xyz98765" not in r.data

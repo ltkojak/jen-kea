@@ -199,6 +199,51 @@ class TestRateLimiting:
             src = inspect.getsource(fn)
             assert "threading" not in src and "Thread(" not in src, f"{fn.__name__} still defers its write"
 
+    def test_prune_helper_runs_at_most_once_an_hour(self, monkeypatch):
+        """v5.10.4 — the 24h login_attempts cleanup DELETE no longer
+        rides along on every failed login; _maybe_prune_login_attempts
+        gates it to once per process-hour."""
+        from jen.services import auth
+
+        monkeypatch.setattr(auth, "_last_prune", 0.0)
+
+        class FakeCur:
+            def __init__(self):
+                self.deletes = 0
+
+            def execute(self, sql, *args):
+                if sql.strip().upper().startswith("DELETE"):
+                    self.deletes += 1
+
+        cur = FakeCur()
+        # _last_prune is 0.0; first call is >1h past that, so it prunes.
+        assert auth._maybe_prune_login_attempts(cur, now=10_000.0) is True
+        assert auth._maybe_prune_login_attempts(cur, now=10_000.0 + 3599) is False
+        assert auth._maybe_prune_login_attempts(cur, now=10_000.0 + 3601) is True
+        assert cur.deletes == 2
+
+    def test_record_login_attempt_does_not_prune_on_every_call(self, db, monkeypatch):
+        from jen.services import auth
+
+        monkeypatch.setattr(auth, "_last_prune", 0.0)
+
+        # First call is allowed to prune. Seed a stale row AFTER it, then
+        # a second call within the hour must leave that row alone.
+        auth.record_login_attempt("1.2.3.4", "u1")
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO login_attempts (ip_address, username, attempted_at) "
+                "VALUES ('9.9.9.9', 'stale', DATE_SUB(NOW(), INTERVAL 48 HOUR))"
+            )
+        db.commit()
+        auth.record_login_attempt("1.2.3.4", "u2")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM login_attempts WHERE username='stale'")
+            assert cur.fetchone()["c"] == 1, "second call within the hour pruned anyway"
+            cur.execute("SELECT COUNT(*) AS c FROM login_attempts WHERE username IN ('u1', 'u2')")
+            assert cur.fetchone()["c"] == 2, "both failed-login INSERTs must be recorded"
+
     def test_rate_limit_lockout(self, client, db):
         """Exceed max attempts triggers lockout message."""
         # Set tight rate limit

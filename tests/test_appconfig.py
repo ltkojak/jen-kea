@@ -9,6 +9,7 @@ must be structurally impossible.
 """
 
 import configparser
+import os
 
 import pytest
 
@@ -148,3 +149,41 @@ class TestKea3ConnectionMode:
 
         app_config.mutate(add)
         assert extensions.KEA_SERVERS[1]["api6_url"] == "http://s2:8006"
+
+
+class TestAtomicWrite:
+    """v5.10.4 — _write_parser() writes a sibling .tmp file and
+    os.replace()s it into place: an interrupted write can't truncate
+    jen.config, and a save only needs write access to /etc/jen (not the
+    file), so a box whose jen.config was left root-owned by an older
+    installer self-heals on its first Settings save."""
+
+    def test_write_goes_through_a_tmp_file_and_os_replace(self, isolated_config, monkeypatch):
+        calls = []
+        real_replace = os.replace
+
+        def spy_replace(src, dst):
+            calls.append((str(src), str(dst)))
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", spy_replace)
+        app_config.write_value("kea", "api_url", "http://tmp.test:8000")
+
+        assert calls, "write_value() did not go through os.replace()"
+        src, dst = calls[-1]
+        assert src == f"{dst}.tmp"
+        assert dst == str(isolated_config)
+        assert not os.path.exists(src), "the .tmp file was left behind"
+        assert extensions.KEA_API_URL == "http://tmp.test:8000"
+
+    @pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX file-permission semantics only")
+    def test_write_survives_a_read_only_config_file_in_a_writable_dir(self, isolated_config):
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses the file mode bits this test relies on")
+
+        os.chmod(str(isolated_config), 0o444)
+        app_config.write_value("kea", "api_pass", "rotated-secret")
+
+        assert extensions.KEA_API_PASS == "rotated-secret"
+        mode = os.stat(str(isolated_config)).st_mode & 0o777
+        assert mode == 0o640, oct(mode)

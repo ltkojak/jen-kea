@@ -123,6 +123,7 @@ def about():
                     lease_counts[sid] = cur.fetchone()["cnt"]
     except Exception:
         pass
+    from jen.config import ssl_configured
     from jen.services.changelog import parse_changelog
 
     changelog_entries = parse_changelog(limit=5)
@@ -131,7 +132,12 @@ def about():
         jen_version=_JEN_VERSION(),
         kea_version=kea_version,
         kea_up=kea_up,
+        # v5.10.4 — the template's deployment-detail rows (now admin-only)
+        # need these; they were never passed, so admins saw blank cells.
+        http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
+        ssl_on=ssl_configured(),
+        kea_ssh_host=extensions.KEA_SSH_HOST,
         subnet_map=extensions.SUBNET_MAP,
         lease_counts=lease_counts,
         changelog_entries=changelog_entries,

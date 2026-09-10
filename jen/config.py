@@ -170,8 +170,25 @@ class AppConfig:
         return parser
 
     def _write_parser(self, parser: configparser.ConfigParser) -> None:
-        with open(self.path, "w") as f:
+        # v5.10.4 — write a sibling temp file and os.replace() it into
+        # place, for two reasons:
+        #   * an interrupted write can no longer truncate jen.config to
+        #     nothing (the reader sees either the old file or the new one,
+        #     never a half-written one);
+        #   * os.replace() only needs write access to the *directory*
+        #     (/etc/jen, owned by the service user), so a box whose
+        #     jen.config was left root-owned by an older installer
+        #     (5.9.0–5.10.3 fresh installs — see write_config in
+        #     install.sh) self-heals on its first Settings save instead of
+        #     failing every save with EACCES.
+        tmp = f"{self.path}.tmp"
+        with open(tmp, "w") as f:
             parser.write(f)
+        try:
+            os.chmod(tmp, 0o640)
+        except OSError:
+            pass
+        os.replace(tmp, self.path)
 
     def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:
         """Update a single value on disk, then reload."""

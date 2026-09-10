@@ -700,7 +700,14 @@ api_token   = ${DDNS_TOKEN}
 forward_zone = ${DDNS_ZONE}
 CONFEOF
 
-    chown root:www-data "$CONFIG_FILE"
+    # v5.10.4 — jen.config is the app's file: the running service rewrites
+    # it on every Settings save. It must be owned by the service user, not
+    # root. (Fresh installs 5.9.0–5.10.3 left it root:www-data 0640 here,
+    # AFTER install_files' `chown -R www-data`, so every Settings save
+    # failed with EACCES until the next `install.sh --upgrade`. AppConfig
+    # now also writes atomically via os.replace so an affected box
+    # self-heals on its first save — see jen/config.py::_write_parser.)
+    chown "$JEN_USER:$JEN_USER" "$CONFIG_FILE"
     chmod 640 "$CONFIG_FILE"
     ok "Config written → ${DIM}${CONFIG_FILE}${NC}"
 

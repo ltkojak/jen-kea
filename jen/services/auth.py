@@ -7,10 +7,16 @@ Input validation helpers and login rate-limiting functions.
 import ipaddress
 import logging
 import re
+import time
 
 from jen import extensions
 
 logger = logging.getLogger(__name__)
+
+# v5.10.4 — the 24h login_attempts cleanup used to run on every failed
+# login. It's now rate-limited to once per process-hour via
+# _maybe_prune_login_attempts(); this is the last time it ran.
+_last_prune = 0.0
 
 # ── Compiled validation patterns ──────────────────────────────────────────────
 MAC_RE = re.compile(r"^([0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}$")
@@ -167,19 +173,36 @@ def get_rate_limit_settings():
     }
 
 
+def _maybe_prune_login_attempts(cur, now=None):
+    """Run the 24h login_attempts cleanup DELETE at most once per
+    process-hour, using the open cursor `cur`. Returns True if it ran the
+    DELETE. Pure enough to unit-test with a fake cursor and an injected
+    `now` — the only side effect besides the DELETE is updating the
+    module-level `_last_prune` stamp."""
+    global _last_prune
+    now = time.time() if now is None else now
+    if now - _last_prune < 3600:
+        return False
+    cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+    _last_prune = now
+    return True
+
+
 def record_login_attempt(ip, username):
-    """Record a failed login attempt. Synchronous (v5.8.0): the previous
-    fire-and-forget thread meant a burst of parallel requests could each
-    run its `is_locked_out()` check before any of their failures had
-    actually reached the DB, so the lockout never engaged. The write is
-    one INSERT + a bounded cleanup DELETE — a few ms against a DB round
-    trip we're already making, and trivial next to the password hash that
-    just ran."""
+    """Record a failed login attempt. The INSERT is synchronous (v5.8.0):
+    the previous fire-and-forget thread meant a burst of parallel requests
+    could each run its `is_locked_out()` check before any of their
+    failures had actually reached the DB, so the lockout never engaged.
+
+    v5.10.4 — the 24h cleanup DELETE that used to ride along on every
+    single call is now rate-limited to once per process-hour
+    (_maybe_prune_login_attempts). The INSERT — the part the lockout
+    correctness depends on — stays synchronous."""
     try:
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
                 cur.execute("INSERT INTO login_attempts (ip_address, username) VALUES (%s, %s)", (ip, username))
-                cur.execute("DELETE FROM login_attempts WHERE attempted_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)")
+                _maybe_prune_login_attempts(cur)
             db.commit()
     except Exception as e:
         logger.error(f"Rate limit record error: {e}")

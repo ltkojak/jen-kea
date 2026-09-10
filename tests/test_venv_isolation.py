@@ -150,3 +150,15 @@ class TestVenvMigrationBanner:
         base = (REPO / "templates" / "base.html").read_text(encoding="utf-8")
         assert "venv_migration_incomplete" in base
         assert "install.sh --repair" in base
+
+
+class TestJenConfigOwnership:
+    """v5.10.4 — jen.config is rewritten by the running service on every
+    Settings save, so it must be owned by the service user. Fresh
+    installs 5.9.0–5.10.3 chowned it root:www-data in write_config, which
+    runs AFTER install_files' `chown -R www-data`, so every save failed
+    with EACCES until the next `install.sh --upgrade`."""
+
+    def test_config_file_is_chowned_to_the_service_user_not_root(self):
+        assert 'chown "$JEN_USER:$JEN_USER" "$CONFIG_FILE"' in INSTALL_SH
+        assert 'chown root:www-data "$CONFIG_FILE"' not in INSTALL_SH

@@ -24,6 +24,12 @@
                 <span style="color:var(--danger);">● Unreachable</span>
                 {% endif %}
             </td></tr>
+        {# v5.10.4 — ports, on-disk paths and the Kea SSH host are
+           deployment detail an admin needs and a viewer has no reason to
+           see. Gate the rows; the labels themselves must not appear in
+           any viewer-visible prose on this page (an absence assertion
+           guards it). #}
+        {% if current_user.is_admin_or_above %}
         <tr><td class="stat-label" style="padding:8px 0;">HTTP Port</td>
             <td>{{ http_port }} <span style="color:var(--text-muted);font-size:11px;">(redirects to HTTPS)</span></td></tr>
         <tr><td class="stat-label" style="padding:8px 0;">HTTPS Port</td>
@@ -36,6 +42,7 @@
             <td class="mono" style="font-size:12px;">/opt/jen</td></tr>
         <tr><td class="stat-label" style="padding:8px 0;">Kea SSH Host</td>
             <td class="mono" style="font-size:12px;">{{ kea_ssh_host or '—' }}</td></tr>
+        {% endif %}
     </table>
 </div>
 
