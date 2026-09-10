@@ -50,7 +50,9 @@ def _run(helper, op, payload, path_env=None):
     stderr = io.StringIO()
     old_path = os.environ.get("PATH")
     if path_env is not None:
-        os.environ["PATH"] = path_env
+        # prepend, don't replace — the fake kea-dhcpX stub still needs
+        # /bin/sh resolvable via a normal PATH
+        os.environ["PATH"] = path_env + os.pathsep + (old_path or "")
     try:
         code = helper.main(argv=["jen-kea-helper", op], stdin=stdin, stdout=stdout, stderr=stderr)
     finally:
@@ -188,14 +190,21 @@ class TestReadConfig:
 
 
 def _fake_kea_bin(tmp_path, name, exit_code=0, stdout="", stderr=""):
-    """Write an executable stub that mimics `kea-dhcpX -t`."""
+    """Write a /bin/sh stub that mimics `kea-dhcpX -t` and return its
+    directory (to prepend to PATH)."""
+    import shlex
+
     d = tmp_path / "bin"
     d.mkdir(exist_ok=True)
     script = d / name
-    body = "#!/usr/bin/env python3\nimport sys\n"
-    body += f"sys.stdout.write({stdout!r})\nsys.stderr.write({stderr!r})\nsys.exit({exit_code})\n"
-    script.write_text(body)
-    script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+    lines = ["#!/bin/sh"]
+    if stdout:
+        lines.append(f"printf %s {shlex.quote(stdout)}")
+    if stderr:
+        lines.append(f"printf %s {shlex.quote(stderr)} >&2")
+    lines.append(f"exit {exit_code}")
+    script.write_text("\n".join(lines) + "\n")
+    script.chmod(0o755)
     return str(d)
 
 
