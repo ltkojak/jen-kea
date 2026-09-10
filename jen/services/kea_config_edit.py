@@ -21,19 +21,26 @@ The behavior is a verbatim port of what the old remote scripts did —
 same option-data upsert (routers code 3, domain-name-servers code 6,
 v6 dns-servers code 23, all `csv-format: true`), same "no change" and
 "id exists" / "not found" outcomes.
+
+v5.15.0 — the subnet iteration now goes through
+jen/services/kea_config_view.py, so patch / delete / add reach subnets
+nested inside `Dhcp4.shared-networks` too (before, a nested subnet was a
+silent no-op on edit). Adds create/delete shared network and move-subnet.
 """
 
 from __future__ import annotations
 
 import copy
 
+from jen.services import kea_config_view as _view
+
 
 def _iter_subnets(cfg, dhcp_key, subnet_key):
+    """Every subnet in `cfg[dhcp_key]` — top-level AND nested in
+    shared-networks — as bare dicts (the caller mutates them in place)."""
     section = cfg.get(dhcp_key)
-    if not isinstance(section, dict):
-        return []
-    subnets = section.get(subnet_key)
-    return subnets if isinstance(subnets, list) else []
+    iter_fn = _view.iter_subnet4 if subnet_key == "subnet4" else _view.iter_subnet6
+    return [s for s, _sn in iter_fn(section)]
 
 
 def _upsert_option(opts, name, code, space, data):
@@ -112,22 +119,122 @@ def patch_subnet6(cfg, subnet_id, new_pool, extra_pools, new_preferred, new_vali
     return cfg, changed
 
 
-def add_subnet4(cfg, block):
-    """Append a new subnet4 block. Returns (new_cfg, "ok"|"idexists")."""
+def add_subnet4(cfg, block, shared_network=None):
+    """Append a new subnet4 block. Into the named shared network when
+    `shared_network` is given (must already exist). Returns
+    (new_cfg, "ok"|"idexists"|"nonetwork"). The new id must be unique
+    across every subnet, top-level or nested."""
     cfg = copy.deepcopy(cfg)
     new_id = block.get("id")
+    d4 = cfg.setdefault("Dhcp4", {})
     if any(s.get("id") == new_id for s in _iter_subnets(cfg, "Dhcp4", "subnet4")):
         return cfg, "idexists"
-    cfg.setdefault("Dhcp4", {}).setdefault("subnet4", []).append(block)
+    if shared_network:
+        for sn in d4.get("shared-networks") or []:
+            if isinstance(sn, dict) and sn.get("name") == shared_network:
+                sn.setdefault("subnet4", []).append(block)
+                return cfg, "ok"
+        return cfg, "nonetwork"
+    d4.setdefault("subnet4", []).append(block)
     return cfg, "ok"
 
 
 def delete_subnet4(cfg, subnet_id):
-    """Remove a subnet4 block by id. Returns (new_cfg, "ok"|"notfound")."""
+    """Remove a subnet4 block by id, wherever it lives (top-level or
+    inside a shared network). Returns (new_cfg, "ok"|"notfound")."""
     cfg = copy.deepcopy(cfg)
-    subnets = _iter_subnets(cfg, "Dhcp4", "subnet4")
-    kept = [s for s in subnets if s.get("id") != subnet_id]
-    if len(kept) == len(subnets):
+    d4 = cfg.get("Dhcp4")
+    if not isinstance(d4, dict):
         return cfg, "notfound"
-    cfg["Dhcp4"]["subnet4"] = kept
+    for container in (d4, *(sn for sn in (d4.get("shared-networks") or []) if isinstance(sn, dict))):
+        subs = container.get("subnet4")
+        if not isinstance(subs, list):
+            continue
+        kept = [s for s in subs if s.get("id") != subnet_id]
+        if len(kept) != len(subs):
+            container["subnet4"] = kept
+            return cfg, "ok"
+    return cfg, "notfound"
+
+
+def _shared_networks4(cfg):
+    d4 = cfg.get("Dhcp4")
+    return d4.get("shared-networks") if isinstance(d4, dict) and isinstance(d4.get("shared-networks"), list) else None
+
+
+def create_shared_network4(cfg, name, interface=None):
+    """Add an empty shared network. Returns (new_cfg, "ok"|"exists")."""
+    cfg = copy.deepcopy(cfg)
+    nets = cfg.setdefault("Dhcp4", {}).setdefault("shared-networks", [])
+    if any(isinstance(n, dict) and n.get("name") == name for n in nets):
+        return cfg, "exists"
+    block = {"name": name, "subnet4": []}
+    if interface:
+        block["interface"] = interface
+    nets.append(block)
+    return cfg, "ok"
+
+
+def delete_shared_network4(cfg, name):
+    """Remove a shared network. Refuses when it still has subnets (moving
+    them out is a separate step). Returns
+    (new_cfg, "ok"|"notfound"|"notempty")."""
+    cfg = copy.deepcopy(cfg)
+    nets = _shared_networks4(cfg)
+    if nets is None:
+        return cfg, "notfound"
+    for i, n in enumerate(nets):
+        if isinstance(n, dict) and n.get("name") == name:
+            if n.get("subnet4"):
+                return cfg, "notempty"
+            nets.pop(i)
+            return cfg, "ok"
+    return cfg, "notfound"
+
+
+def move_subnet4(cfg, subnet_id, to_network):
+    """Move a subnet between containers. `to_network` is a shared network
+    name, or "" / None for top-level. The subnet dict is carried across
+    byte-identical. Returns
+    (new_cfg, "ok"|"notfound"|"nonetwork"|"nochange")."""
+    cfg = copy.deepcopy(cfg)
+    d4 = cfg.get("Dhcp4")
+    if not isinstance(d4, dict):
+        return cfg, "notfound"
+    target = to_network or None
+
+    src = None  # (container_dict, index, current_network_name)
+    for container, cur_name in (
+        (d4, None),
+        *((sn, sn.get("name")) for sn in (d4.get("shared-networks") or []) if isinstance(sn, dict)),
+    ):
+        subs = container.get("subnet4")
+        if not isinstance(subs, list):
+            continue
+        for idx, s in enumerate(subs):
+            if s.get("id") == subnet_id:
+                src = (container, idx, cur_name)
+                break
+        if src:
+            break
+    if src is None:
+        return cfg, "notfound"
+    container, idx, cur_name = src
+    if target == cur_name:
+        return cfg, "nochange"
+
+    dest = None
+    if target is not None:
+        dest = next(
+            (sn for sn in (d4.get("shared-networks") or []) if isinstance(sn, dict) and sn.get("name") == target),
+            None,
+        )
+        if dest is None:
+            return cfg, "nonetwork"
+
+    subnet = container["subnet4"].pop(idx)
+    if target is None:
+        d4.setdefault("subnet4", []).append(subnet)
+    else:
+        dest.setdefault("subnet4", []).append(subnet)
     return cfg, "ok"

@@ -240,6 +240,21 @@ class TestRemoteCommandValidators:
         assert valid_remote_path("/tmp/x`whoami`") is False
         assert valid_remote_path("relative/path") is False
 
+    def test_valid_shared_network_name(self):
+        from jen.services.auth import valid_shared_network_name
+
+        assert valid_shared_network_name("guest-wifi") is True
+        assert valid_shared_network_name("iot_2.0") is True
+        assert valid_shared_network_name("A") is True
+        assert valid_shared_network_name("x" * 64) is True
+        assert valid_shared_network_name("x" * 65) is False
+        assert valid_shared_network_name("") is False
+        assert valid_shared_network_name(".hidden") is False
+        assert valid_shared_network_name("-flag") is False
+        assert valid_shared_network_name("../etc") is False
+        assert valid_shared_network_name("has space") is False
+        assert valid_shared_network_name("semi;colon") is False
+
 
 class TestValidApiUrl:
     """v5.10.2 — the Kea command-API URL check. In direct mode a daemon

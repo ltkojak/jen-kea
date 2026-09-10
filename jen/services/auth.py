@@ -110,6 +110,7 @@ def sanitize_search(search):
 # being read as an ssh flag rather than a target).
 UNIX_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 SAFE_REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
+SHARED_NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 def valid_ssh_target(value):
@@ -129,6 +130,13 @@ def valid_remote_path(value):
     """Absolute path, no shell metacharacters, whitespace, or quotes."""
     value = (value or "").strip()
     return bool(SAFE_REMOTE_PATH_RE.match(value))
+
+
+def valid_shared_network_name(value):
+    """A Kea shared-network name (v5.15.0). Travels only in POST form
+    fields, never a URL segment — letters/digits/`_.-`, 1-64 chars,
+    can't start with `.` or `-`."""
+    return bool(SHARED_NETWORK_NAME_RE.match((value or "").strip()))
 
 
 def valid_dns_lookup_host(value):
