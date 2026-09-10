@@ -174,27 +174,27 @@ def devices():
         if os.path.exists(extensions.ICONS_CUSTOM_DIR)
         else []
     )
-    template_vars = dict(
-        devices=devices_list,
-        page=page,
-        pages=pages,
-        total=total,
-        search=search,
-        show_stale=show_stale,
-        stale_days=stale_days,
-        subnet_map=accessible_subnet_map,
-        sort=sort,
-        direction=direction,
-        per_page=per_page_param,
-        type_filter=type_filter,
-        subnet_filter=subnet_filter,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        bundled_icons=bundled_icons,
-        custom_icons=custom_icons,
-        view_mode="v4",
-        subnet6_map=extensions.SUBNET6_MAP,
-    )
+    template_vars = {
+        "devices": devices_list,
+        "page": page,
+        "pages": pages,
+        "total": total,
+        "search": search,
+        "show_stale": show_stale,
+        "stale_days": stale_days,
+        "subnet_map": accessible_subnet_map,
+        "sort": sort,
+        "direction": direction,
+        "per_page": per_page_param,
+        "type_filter": type_filter,
+        "subnet_filter": subnet_filter,
+        "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
+        "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
+        "bundled_icons": bundled_icons,
+        "custom_icons": custom_icons,
+        "view_mode": "v4",
+        "subnet6_map": extensions.SUBNET6_MAP,
+    }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: same class of bug fixed in leases.py/reservations.py
         # — headers and pagination live outside the old #devices-table-body
@@ -254,14 +254,14 @@ def _devices_v6():
         logger.error(f"Could not load IPv6 devices: {e}")
         flash("Could not load IPv6 devices. Check server logs for details.", "error")
 
-    template_vars = dict(
-        devices6=devices_list,
-        total=len(devices_list),
-        subnet_filter=subnet_filter,
-        search=search,
-        subnet6_map=extensions.SUBNET6_MAP,
-        view_mode="v6",
-    )
+    template_vars = {
+        "devices6": devices_list,
+        "total": len(devices_list),
+        "subnet_filter": subnet_filter,
+        "search": search,
+        "subnet6_map": extensions.SUBNET6_MAP,
+        "view_mode": "v6",
+    }
     if request.headers.get("HX-Request") == "true":
         return render_template("_devices6_results.html", **template_vars), 200
     return render_template("devices.html", **template_vars)

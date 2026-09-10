@@ -202,25 +202,25 @@ def reservations():
     stale_days = int(__user.get_global_setting("stale_device_days", "30"))
     mac_list = [h["mac"] for h in hosts if h.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
-    template_vars = dict(
-        hosts=hosts,
-        subnet_filter=subnet_filter,
-        search=search,
-        subnet_map=accessible_subnet_map,
-        page=page,
-        pages=pages,
-        total=total,
-        stale_days=stale_days,
-        sort=sort,
-        direction=direction,
-        device_info=device_info,
-        per_page=per_page_param,
-        status_filter=status_filter,
-        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-        view_mode="v4",
-        subnet6_map=extensions.SUBNET6_MAP,
-    )
+    template_vars = {
+        "hosts": hosts,
+        "subnet_filter": subnet_filter,
+        "search": search,
+        "subnet_map": accessible_subnet_map,
+        "page": page,
+        "pages": pages,
+        "total": total,
+        "stale_days": stale_days,
+        "sort": sort,
+        "direction": direction,
+        "device_info": device_info,
+        "per_page": per_page_param,
+        "status_filter": status_filter,
+        "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
+        "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
+        "view_mode": "v4",
+        "subnet6_map": extensions.SUBNET6_MAP,
+    }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
         # leaving the sort-link headers and pagination (rendered outside
@@ -285,14 +285,14 @@ def _reservations_v6():
         logger.error(f"Could not load IPv6 reservations: {e}")
         flash("Could not load IPv6 reservations. Check server logs for details.", "error")
 
-    template_vars = dict(
-        hosts6=hosts6,
-        total=len(hosts6),
-        subnet_filter=subnet_filter,
-        search=search,
-        subnet6_map=extensions.SUBNET6_MAP,
-        view_mode="v6",
-    )
+    template_vars = {
+        "hosts6": hosts6,
+        "total": len(hosts6),
+        "subnet_filter": subnet_filter,
+        "search": search,
+        "subnet6_map": extensions.SUBNET6_MAP,
+        "view_mode": "v6",
+    }
     if request.headers.get("HX-Request") == "true":
         return render_template("_reservations6_results.html", **template_vars), 200
     return render_template("reservations.html", **template_vars)

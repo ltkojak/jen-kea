@@ -87,7 +87,7 @@ def _rows(*rows):
         "extra_ssh_user[]",
         "extra_kea_conf[]",
     ]
-    defaults = {k: "" for k in keys}
+    defaults = dict.fromkeys(keys, "")
     defaults["extra_role[]"] = "standby"
     defaults["extra_kea_conf[]"] = "/etc/kea/kea-dhcp4.conf"
     return {k: [{**defaults, **r}[k] for r in rows] for k in keys}

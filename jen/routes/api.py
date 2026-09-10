@@ -75,7 +75,7 @@ def _api_key_subnet_ids(key_row):
         import json as _json
 
         ids = _json.loads(raw) if isinstance(raw, str) else raw
-        return set(int(i) for i in ids)
+        return {int(i) for i in ids}
     except Exception:
         return set()
 

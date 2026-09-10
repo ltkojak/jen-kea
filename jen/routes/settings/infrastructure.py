@@ -429,7 +429,8 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4"):
         if d.get("result") != 0:
             return "", d.get("text", "Kea returned an error")
         return (d.get("arguments", {}).get("extended", "") or d.get("text", "")).strip(), ""
-    except Exception as e:  # noqa: BLE001 — any transport failure is just "this endpoint didn't answer"
+    except Exception as e:
+        # any transport failure is just "this endpoint didn't answer"
         return "", str(e)
 
 

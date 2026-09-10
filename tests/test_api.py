@@ -134,7 +134,7 @@ class TestDashboardStatsApi:
 
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
         monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "error"})
-        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
+        monkeypatch.setattr(kea_svc, "get_all_server_status", list)
 
         r = logged_in_client.get("/api/stats")
         data = json.loads(r.data)

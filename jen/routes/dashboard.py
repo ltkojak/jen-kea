@@ -166,19 +166,19 @@ def dashboard():
     except Exception as e:
         logger.error(f"Dashboard recent leases error: {e}")
 
-    template_vars = dict(
-        stats=stats,
-        recent=recent,
-        kea_up=None,
-        subnet_map=accessible_subnet_map,
-        pool_sizes={},
-        hours=hours_str,
-        server_statuses=server_statuses,
-        device_info=device_info,
-        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-        ipv6_summary=_get_ipv6_dashboard_summary(),
-    )
+    template_vars = {
+        "stats": stats,
+        "recent": recent,
+        "kea_up": None,
+        "subnet_map": accessible_subnet_map,
+        "pool_sizes": {},
+        "hours": hours_str,
+        "server_statuses": server_statuses,
+        "device_info": device_info,
+        "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
+        "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
+        "ipv6_summary": _get_ipv6_dashboard_summary(),
+    }
     # HTMX time window change — return just the recent leases rows
     if request.headers.get("HX-Request") == "true":
         return render_template("_recent_leases_rows.html", **template_vars), 200

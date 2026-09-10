@@ -161,25 +161,25 @@ def leases():
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     mac_list = [row["mac"] for row in leases_list if row.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
-    template_vars = dict(
-        leases=leases_list,
-        page=page,
-        pages=pages,
-        total=total,
-        subnet_filter=subnet_filter,
-        minutes=minutes,
-        search=search,
-        show_expired=show_expired,
-        subnet_map=accessible_subnet_map,
-        sort=sort,
-        direction=direction,
-        device_info=device_info,
-        per_page=per_page_param,
-        get_manufacturer_icon_url=__fp.get_manufacturer_icon_url,
-        device_type_display=__fp.DEVICE_TYPE_DISPLAY,
-        view_mode="v4",
-        subnet6_map=extensions.SUBNET6_MAP,
-    )
+    template_vars = {
+        "leases": leases_list,
+        "page": page,
+        "pages": pages,
+        "total": total,
+        "subnet_filter": subnet_filter,
+        "minutes": minutes,
+        "search": search,
+        "show_expired": show_expired,
+        "subnet_map": accessible_subnet_map,
+        "sort": sort,
+        "direction": direction,
+        "device_info": device_info,
+        "per_page": per_page_param,
+        "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
+        "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
+        "view_mode": "v4",
+        "subnet6_map": extensions.SUBNET6_MAP,
+    }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
         # <tbody> contents), leaving the sort-link headers and pagination
@@ -253,15 +253,15 @@ def _leases_v6():
         logger.error(f"Could not load IPv6 leases: {e}")
         flash("Could not load IPv6 leases. Check server logs for details.", "error")
 
-    template_vars = dict(
-        leases6=leases_list,
-        total=len(leases_list),
-        subnet_filter=subnet_filter,
-        search=search,
-        show_expired=show_expired,
-        subnet6_map=extensions.SUBNET6_MAP,
-        view_mode="v6",
-    )
+    template_vars = {
+        "leases6": leases_list,
+        "total": len(leases_list),
+        "subnet_filter": subnet_filter,
+        "search": search,
+        "show_expired": show_expired,
+        "subnet6_map": extensions.SUBNET6_MAP,
+        "view_mode": "v6",
+    }
     if request.headers.get("HX-Request") == "true":
         return render_template("_leases6_results.html", **template_vars), 200
     return render_template("leases.html", **template_vars)

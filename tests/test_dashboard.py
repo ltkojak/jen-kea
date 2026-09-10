@@ -90,7 +90,7 @@ class TestApiStats:
 
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
         monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "error"})
-        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
+        monkeypatch.setattr(kea_svc, "get_all_server_status", list)
         r = logged_in_client.get("/api/stats")
         assert r.status_code == 200
         data = json.loads(r.data)
@@ -193,7 +193,7 @@ class TestPrometheusMetrics:
 
         monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: False)
         monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "error"})
-        monkeypatch.setattr(kea_svc, "get_all_server_status", lambda: [])
+        monkeypatch.setattr(kea_svc, "get_all_server_status", list)
         r = client.get("/metrics")
         assert r.status_code == 200
         assert "jen_kea_up 0" in r.data.decode()

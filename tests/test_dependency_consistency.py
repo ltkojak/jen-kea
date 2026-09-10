@@ -32,7 +32,7 @@ def _runtime_package_names():
     names = []
     for line in REQUIREMENTS.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if not line or line.startswith("#") or line.startswith("-"):
+        if not line or line.startswith(("#", "-")):
             continue
         # "qrcode[pil]>=8.2" -> "qrcode"; "flask-login>=0.6.3" -> "flask-login"
         name = re.split(r"[<>=!\[ ]", line, maxsplit=1)[0].strip().lower()

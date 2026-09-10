@@ -27,7 +27,7 @@ _REAL_RECORD = kea_host.record_helper_status
 def quiet_status(monkeypatch):
     """No settings-table writes for the transport tests."""
     monkeypatch.setattr(kea_host, "record_helper_status", lambda *a, **k: None)
-    monkeypatch.setattr(kea_host, "helper_status", lambda: {})
+    monkeypatch.setattr(kea_host, "helper_status", dict)
 
 
 def _connect_seq(monkeypatch, *queues):
@@ -171,7 +171,7 @@ class TestNoDirectRootPathsOutsideKeaHost:
     render_install_helper_script (which deploys the helper once)."""
 
     def _py_files(self):
-        return [p for p in _JEN.rglob("*.py")]
+        return list(_JEN.rglob("*.py"))
 
     def test_sudo_python3_pipe_only_in_kea_host_and_installer(self):
         offenders = []

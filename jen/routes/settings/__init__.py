@@ -325,11 +325,11 @@ def save_mfa_mode():
 
 # ── Register the split-out route modules (imported for their @bp.route side
 # effects; module-name form so nothing shadows a local) ──────────────────────
-import jen.routes.settings.alerts  # noqa: E402, F401
-import jen.routes.settings.authoring  # noqa: E402, F401
-import jen.routes.settings.branding  # noqa: E402, F401
-import jen.routes.settings.infrastructure  # noqa: E402, F401
-import jen.routes.settings.security  # noqa: E402, F401
+import jen.routes.settings.alerts  # noqa: E402
+import jen.routes.settings.authoring  # noqa: E402
+import jen.routes.settings.branding  # noqa: E402
+import jen.routes.settings.infrastructure  # noqa: E402
+import jen.routes.settings.security  # noqa: E402
 import jen.routes.settings.updates  # noqa: E402, F401
 
 # Re-exported for tests that import these helpers by their old path.

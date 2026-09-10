@@ -246,7 +246,8 @@ def _author_bind_candidates(service: str, target_server: dict = None, target_add
                     detected = __authoring.autodetect_addresses(ssh)
                 finally:
                     ssh.close()
-            except Exception as e:  # noqa: BLE001 — a picker with fewer options, not a page failure
+            except Exception as e:
+                # a picker with fewer options, not a page failure
                 logger.warning(f"_author_bind_candidates({entry['name']}): {e}")
 
         options = list(detected)

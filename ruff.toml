@@ -38,8 +38,13 @@ exclude = ["legacy"]
 #         except, etc.) that aren't already covered by pyflakes
 #   SIM — flake8-simplify: nested `with`, needless bool returns,
 #         `contextlib.suppress` over try/except/pass (v5.11.1)
+#   C4  — flake8-comprehensions: unnecessary dict()/list()/set()/
+#         generator calls a literal or comprehension does better (v5.11.1)
+#   PIE — flake8-pie: `lambda: []`-style reimplemented builtins,
+#         repeated `.startswith`/`.endswith` (v5.11.1)
+#   RUF100 — unused `# noqa` directives, stale after this rule move (v5.11.1)
 [lint]
-select = ["F", "E", "W", "I", "UP", "B", "SIM"]
+select = ["F", "E", "W", "I", "UP", "B", "SIM", "C4", "PIE", "RUF100"]
 ignore = [
     "E501",   # line-too-long — line-length above is a soft target for
               # new/reformatted code, not a hard gate on 10k+ existing

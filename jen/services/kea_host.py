@@ -118,7 +118,7 @@ def record_helper_status(server_id, version) -> None:
     data[str(server_id)] = {"version": version, "checked": datetime.now(timezone.utc).isoformat()}
     try:
         _user().set_global_setting(_HELPER_STATUS_KEY, json.dumps(data))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning(f"could not persist kea_helper_status: {e}")
 
 
