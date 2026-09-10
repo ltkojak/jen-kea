@@ -193,15 +193,37 @@ host:
   sudo's argument matching.
 - There is **no `self-update` op**. "Jen writes a file the Kea host then
   runs as root" is exactly the capability being removed; letting the
-  helper update itself would put it straight back. Updating the helper
-  (only when its integer `HELPER_VERSION` changes — rare) is a manual
-  copy by an administrator.
+  helper update itself would put it straight back. Upgrading the helper
+  (only when its integer `HELPER_VERSION` changes — rare, called out in
+  the release notes) is pressing **Install helper** in Settings → Kea →
+  SSH again — it re-copies the current file — or a manual
+  `install -m 0755` by an administrator.
+
+**Helper protocol v2 (v5.16.0 — optimistic concurrency).** `read-config`
+now also returns `"sha256"`, the hex SHA-256 of the raw config-file
+bytes (whitespace and key order included — the point is to detect a hand
+edit). `apply-config` accepts an optional `"expect_sha256"`: when
+present, the helper takes an exclusive `flock` on a sidecar
+`<path>.jen_lock` (never on the config itself — `os.replace` swaps the
+inode), re-hashes the live file, and refuses with
+`{"ok": false, "error": "conflict", "sha256": <current>}` **before**
+running `kea-dhcpX -t` if it doesn't match (`""` means "must not
+exist"). Success also returns the SHA of the bytes just written. Every
+v2 response — protocol errors included — carries `"helper_version"`, so
+Jen learns the real number from any op, not just `version`.
+`JEN_HELPER_MIN_VERSION` stays 1: a v1 host keeps working, and
+`JEN_HELPER_WANT_VERSION = 2` only drives an "upgrade available" hint.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
-  pure functions) rather than inside a generated script. A consequence:
-  read → mutate → apply is no longer a single atomic step on the Kea
-  host, so two administrators editing the same subnet at the same
-  moment can lose one edit. Acceptable for a homelab-scale tool; noted
-  here so it isn't a surprise.
+  pure functions) rather than inside a generated script. Read → mutate →
+  apply is not a single atomic step on the Kea host, but since v5.16.0
+  the write is guarded: the v2 helper enforces `expect_sha256` under the
+  lock above, and a v1 / legacy host gets a best-effort compare in Jen
+  (re-read, canonical-JSON diff against the last recorded revision,
+  refuse on mismatch) with a one-per-request "no atomic guard" warning.
+  Every config Jen writes — and every out-of-band change it notices on
+  the next read — is also recorded in `kea_config_revisions` (jen_db,
+  migration 20) as a diffable, restorable revision; see the admin guide.
 
 **The legacy fallback.** A host that does not have the helper yet falls
 back to the pre-5.11.0 path: Jen generates a Python script, base64s it,

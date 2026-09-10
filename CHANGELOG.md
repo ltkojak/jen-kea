@@ -2,6 +2,83 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.16.0] - 2026-09-11
+
+Kea config history, and an optimistic-concurrency guard on every config
+write. `sudo ./install.sh` or the in-app update; then, once per Kea host,
+press **Settings → Kea → SSH → Install helper** to move it to helper v2
+(a v1 host keeps working with a weaker guard — see below).
+
+### Every config Jen writes is now saved, diffable, and restorable
+
+Before this, a subnet edit that broke something left you with a
+`.bak` file on the Kea host and `journalctl`. Now every config Jen
+applies to a host is recorded in Jen's database — who, when, why, and the
+full config — under **Servers → Config history** on each server card. A
+revision page shows a unified diff against the previous one (every line
+HTML-escaped — the config never renders as markup), a **Download JSON**
+link, and, for superadmins, **Restore this revision**: it re-validates
+the old config with `kea-dhcpX -t`, re-applies it, and restarts Kea.
+
+Jen also notices changes made *outside* Jen. If someone hand-edits
+`kea-dhcp4.conf` on the host, the next time Jen reads it the difference
+is captured as an **external** revision, so the history stays complete.
+
+How many revisions are kept per server and service is **Settings →
+System → Kea Config History** (default 50). The history pages show a
+server's whole config, so — like other cross-subnet views — they require
+access to all subnets, not just admin.
+
+### A write is refused if the file changed under you
+
+Open the Edit Subnet form, go make a coffee, come back and save — and in
+the meantime another admin changed the same file. Previously one of the
+two edits was silently lost. Now the form carries the config's checksum
+as it was when you opened it; if the file on the host moved on, the write
+is refused before anything is touched:
+
+> The Kea config on kea-01 changed since you opened this form — your
+> edit was NOT applied. Reload and try again.
+
+The add-subnet, delete-subnet and shared-network routes carry the same
+guard using the checksum read at the top of the request.
+
+### Helper protocol v2
+
+This needs a new capability on the Kea host, so `jen-kea-helper` goes to
+`HELPER_VERSION = 2`:
+
+- `read-config` returns the SHA-256 of the raw config-file bytes
+  (whitespace included — the point is to catch hand edits).
+- `apply-config` takes an optional `expect_sha256` and, when given,
+  holds an exclusive `flock` on a sidecar lock file while it re-checks
+  the hash and does the atomic replace — so the guard above is enforced
+  on the host, not just in Jen.
+- Every response now carries `helper_version`, so Jen learns a host's
+  real helper version from any operation.
+
+`JEN_HELPER_MIN_VERSION` stays 1. A host still on **helper v1 or the
+legacy `python3` path keeps working** — Jen falls back to a best-effort
+"re-read and compare" guard and flashes *"No atomic guard on <host>"*
+once per request, and it does **not** capture out-of-band changes on
+those hosts (there's no checksum to compare). **Settings → Kea → SSH**
+shows an "upgrade available" hint for a v1 host; **Install helper**
+re-copies the current file.
+
+### Under the hood
+
+- New table `kea_config_revisions` (migration 20). `MEDIUMTEXT`, not
+  `JSON` — the body is stored as `json.dumps(cfg, indent=2,
+  sort_keys=True)` so diffs are stable and it sidesteps the MariaDB
+  `json_valid` CHECK.
+- `jen/services/config_revisions.py` — record / list / diff / prune /
+  restore-support, all best-effort: a failed history write never fails
+  the config apply that triggered it.
+- `kea_host.read_config_versioned()` returns `(config, sha)`;
+  `read_config()` is now a thin wrapper, so existing callers are
+  unchanged. `apply_config()` gained `expect_sha256`, `summary` and
+  `source` keyword arguments.
+
 ## [5.15.0] - 2026-09-11
 
 Shared networks. `sudo ./install.sh` or the in-app update — nothing to do

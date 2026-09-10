@@ -181,7 +181,9 @@ Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` co
 
 Every Kea-side action Jen performs goes through `jen-kea-helper` at
 `/usr/local/sbin/jen-kea-helper`, behind one sudoers line. **Settings →
-Kea → SSH** shows `v1` for each host that has it.
+Kea → SSH** shows `v1` or `v2` for each host that has it (v5.16.0 ships
+`v2`; a `v1` host works but shows an "upgrade available" hint — press
+**Install helper** to update it).
 
 Two failure signatures, both meaning "Jen fell back to the legacy root
 `python3` path for that host":
@@ -376,6 +378,26 @@ sudo cp /etc/kea/kea-dhcp4.conf.bak /etc/kea/kea-dhcp4.conf
 sudo systemctl restart isc-kea-dhcp4-server
 sudo systemctl status isc-kea-dhcp4-server
 ```
+
+Or, from Jen (v5.16.0+): **Servers → Config history → <a good revision> →
+Restore this revision** (superadmin) — it re-validates with
+`kea-dhcpX -t` and restarts Kea for you.
+
+### "The Kea config on <host> changed since you opened this form" (v5.16.0+)
+
+The edit was **not** applied — this is the optimistic-concurrency guard,
+not a bug. The config file on the host is different from what it was
+when you opened the form: another admin saved a change, or someone
+edited `kea-dhcp4.conf` directly. Reload the page (Jen re-reads the
+current config) and redo your edit. **Servers → Config history** shows
+what changed and who did it; an entry marked **external** is a hand edit
+Jen noticed rather than made.
+
+If instead you see *"No atomic guard on <host>: helper v1 / legacy"*,
+the write went through on a best-effort check because that host is still
+on helper v1 or the legacy `python3` path — upgrade it (**Settings →
+Kea → SSH → Install helper**) to get the atomic guard and out-of-band
+change tracking.
 
 ---
 

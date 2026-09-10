@@ -550,9 +550,41 @@ sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-he
 then add the sudoers line above. **Settings → Kea → SSH** shows
 `helper v1` for each host once it is reachable.
 
-Updating the helper is rare — only when its `HELPER_VERSION` changes,
-which the release notes will call out. It is always a manual copy (the
-helper has no self-update op, on purpose).
+**Upgrading the helper.** Rare — only when the release notes call out a
+new `HELPER_VERSION`. Press **Install helper** in Settings → Kea → SSH
+again: it re-copies the current file over the old one. (By hand, repeat
+the `install -m 0755` above.) There is no self-update op, on purpose.
+v5.16.0 ships **helper v2** (optimistic concurrency — see below); until
+a host is upgraded it shows `helper v1` with an "upgrade available"
+hint and keeps working with the best-effort guard.
+
+### Kea config history (v5.16.0+)
+
+Every Kea config Jen writes to a host is saved in Jen's database as a
+revision — who, when, why, and the full config — and so is any change
+Jen notices was made **outside** Jen on the next read (a hand edit to
+`kea-dhcp4.conf`, say). Open it from **Servers → Config history** on
+each server card. A revision page shows a unified diff against the one
+before it, a **Download JSON** link, and — for superadmins — a
+**Restore this revision** button that re-validates the old config with
+`kea-dhcpX -t`, re-applies it, and restarts Kea.
+
+How many revisions are kept per server and service is **Settings →
+System → Kea Config History** (default 50; older ones are pruned).
+Because the page shows the whole config for a server — including subnets
+a subnet-restricted admin can't otherwise see — the history pages need
+access to **all** subnets, not just admin.
+
+**Optimistic concurrency.** With helper v2, the edit-subnet / add /
+delete / shared-network forms send the config's SHA as it was when the
+form was opened; if the file on the host changed underneath (another
+admin, a hand edit), the write is refused atomically and you get *"The
+Kea config on <host> changed since you opened this form — your edit was
+NOT applied. Reload and try again."* On a host still running **helper
+v1 or the legacy path** there is no atomic guard: Jen does a best-effort
+re-read-and-compare instead, warns *"No atomic guard on <host>"* once
+per request, and does **not** capture out-of-band changes as revisions
+(no SHA to compare). Upgrade the helper to close that gap.
 
 ### Legacy grant (pre-5.11.0 — `python3` is root)
 
