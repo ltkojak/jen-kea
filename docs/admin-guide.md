@@ -486,19 +486,61 @@ echo "ssh-rsa AAAA... jen@your-jen-server" >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ```
 
-### Add Sudoers Entry on Kea Server
+### Kea host helper (v5.11.0+)
 
-Jen applies subnet changes by piping a generated Python script over SSH
-into `sudo python3` on the Kea host, restarts Kea's units, reads the DDNS
-log, and can install the Kea packages for you. Be clear-eyed about what
-that grant is: **`NOPASSWD: /usr/bin/python3` is root.** The rest of the
-line only documents what Jen actually runs; it doesn't narrow anything
-while `python3` is on it. (A restricted fixed-path helper is planned —
-see `docs/ARCHITECTURE.md` §3.3.)
+Every Kea-side action Jen performs — reading a config, testing a
+candidate with `kea-dhcpX -t`, replacing the live file, restarting a
+daemon, reading a log, installing a Kea package — goes through
+`jen-kea-helper`, a small root-owned script at
+`/usr/local/sbin/jen-kea-helper`. Jen calls it over SSH as
+`sudo -n /usr/local/sbin/jen-kea-helper <op>` with a JSON request on
+stdin; it never runs anything it is handed.
+
+That means **one** sudoers line, and it is not root-equivalent the way
+the old one was — the helper's own op allowlist and path walls are the
+control:
+
+```bash
+sudo tee /etc/sudoers.d/jen-kea-helper >/dev/null <<'EOF'
+# Jen (DHCP console) — SSH user "youruser". The helper's op allowlist is the control; see docs/ARCHITECTURE.md §3.3
+youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper
+EOF
+sudo chmod 440 /etc/sudoers.d/jen-kea-helper
+sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
+```
+
+**Installing the helper.** From Jen: **Settings → Kea → SSH**, then
+**Install helper** next to the server (this uses the legacy path once —
+see below — so the old grant must still be present for the button to
+work). By hand, copy `jen-kea-helper` from your Jen host to the Kea
+host and:
+
+```bash
+sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-helper
+```
+
+then add the sudoers line above. **Settings → Kea → SSH** shows
+`helper v1` for each host once it is reachable.
+
+Updating the helper is rare — only when its `HELPER_VERSION` changes,
+which the release notes will call out. It is always a manual copy (the
+helper has no self-update op, on purpose).
+
+### Legacy grant (pre-5.11.0 — `python3` is root)
+
+A Kea host that does not have the helper yet falls back to the old path:
+Jen pipes a generated Python script over SSH into `sudo python3`. That
+needs the grant below — and **`NOPASSWD: /usr/bin/python3` is root**,
+full stop; the other lines only document what Jen runs, they don't
+narrow anything. Jen shows an admin banner for every host still on this
+path.
+
+Keep this **only until every Kea host shows `helper v1`** in Settings →
+Kea → SSH, then remove `/etc/sudoers.d/jen-kea`.
 
 ```bash
 sudo tee /etc/sudoers.d/jen-kea >/dev/null <<'EOF'
-# Jen (DHCP console) — SSH user "youruser". python3 = root; see docs/ARCHITECTURE.md §3.3
+# Jen (DHCP console) — LEGACY fallback. SSH user "youruser". python3 = root; see docs/ARCHITECTURE.md §3.3
 youruser ALL=(root) NOPASSWD: /usr/bin/python3
 youruser ALL=(root) NOPASSWD: /usr/bin/systemctl restart kea-dhcp4-server, /usr/bin/systemctl restart isc-kea-dhcp4-server
 youruser ALL=(root) NOPASSWD: /usr/bin/systemctl * kea-dhcp6-server, /usr/bin/systemctl * isc-kea-dhcp6-server
@@ -509,9 +551,7 @@ sudo chmod 440 /etc/sudoers.d/jen-kea
 sudo visudo -c -f /etc/sudoers.d/jen-kea
 ```
 
-Adjust the `tail` path if your DDNS log lives elsewhere (Jen only ever
-runs `sudo tail -200 <configured log path>`). `SETENV` on the `apt-get`
-line is needed because Jen runs it as
+`SETENV` on the `apt-get` line is needed because Jen runs it as
 `sudo DEBIAN_FRONTEND=noninteractive apt-get install …`.
 
 ---

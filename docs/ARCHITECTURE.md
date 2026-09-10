@@ -161,42 +161,65 @@ trusted, that assumption should be revisited.
 
 ### 3.3 SSH-based config push instead of native Kea config management
 
-Jen changes subnet/pool configuration by generating a Python script
-(with all values safely embedded via `repr()`/`json.dumps()`, not
-string-interpolated), base64-encoding it, piping it over SSH, and having
-it write the new Kea config, test it with `kea-dhcp4 -t`, and only
-replace the live config (after taking a backup) if the test passes.
+Jen changes Kea configuration over SSH — it edits the on-disk config
+file, tests it with `kea-dhcp4 -t`, and only replaces the live file
+(after a backup) if the test passes. It does **not** use Kea's Control
+Agent API for config changes: a live-only API change is lost on Kea's
+next restart unless something also rewrites the file, so editing the
+file directly and testing before committing is more robust for Jen's
+use case (persistent, restart-safe config). The tradeoff is that this
+is more fragile to Kea version changes than native hook-based
+integration would be — if Kea's config format or CLI flags change,
+Jen's logic has to be updated to match.
 
-**Why not Kea's native API-based config management:** Kea's Control
-Agent API for live config changes doesn't persist to the on-disk config
-file the way editing the file directly does — a live-only API change
-would be lost on Kea's next restart unless something also updates the
-file. Editing the file directly and testing before committing is more
-robust for Jen's actual use case (persistent, restart-safe config), at
-the cost of being a workaround rather than integration with an API
-designed for this.
+**How the push happens (v5.11.0 — `jen-kea-helper`).** Every Kea-side
+operation Jen performs — read a config, `kea-dhcpX -t` a candidate,
+replace the live file, restart/enable/disable a daemon, tail a log,
+install a Kea package — goes through a fixed-function helper on the Kea
+host:
 
-**What this means:** this is inherently more fragile to Kea version
-changes than a tool built on Kea's own config-management primitives
-would be. If Kea's config file format or CLI flags change in a future
-version, Jen's script-generation logic needs to be updated to match —
-there's no API contract protecting against that the way there would be
-with native hook-based integration.
+- `jen-kea-helper` is a small pure-stdlib script installed at
+  `/usr/local/sbin/jen-kea-helper`, owned `root:root` mode `0755`.
+  `www-data` cannot read or modify it.
+- Jen invokes it as `sudo -n /usr/local/sbin/jen-kea-helper <op>` with
+  one JSON object on stdin; it replies with one JSON object on stdout.
+  It **never executes anything it is handed** — stdin is data only.
+- The **one** Kea-side sudoers line is
+  `youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper`. The
+  bare command (no argument list) is deliberate: the control is the
+  helper's own op allowlist and path walls (config files must sit
+  directly in `/etc/kea` or `/usr/local/etc/kea` and match
+  `*.conf`; logs must resolve under `/var/log` and end `.log`), not
+  sudo's argument matching.
+- There is **no `self-update` op**. "Jen writes a file the Kea host then
+  runs as root" is exactly the capability being removed; letting the
+  helper update itself would put it straight back. Updating the helper
+  (only when its integer `HELPER_VERSION` changes — rare) is a manual
+  copy by an administrator.
+- `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
+  pure functions) rather than inside a generated script. A consequence:
+  read → mutate → apply is no longer a single atomic step on the Kea
+  host, so two administrators editing the same subnet at the same
+  moment can lose one edit. Acceptable for a homelab-scale tool; noted
+  here so it isn't a surprise.
 
-**The privilege implication (stated plainly, v5.8.4):** the generated
-script is run as `… | sudo python3` on the Kea host. The documented
-Kea-side sudoers line therefore grants Jen's SSH user
-`NOPASSWD: /usr/bin/python3` — which is **root**, full stop. Every
-other entry on that line (`systemctl restart …`, `tail`, `apt-get`) is
-cosmetic next to it. In threat-model terms: **a compromised Jen process
-(`www-data` on the Jen host) is root on every Kea server Jen manages.**
-The Jen side of the same problem was fixed in v5.2.6 (§3.1, §6); the
-Kea side has not been yet. The planned fix is the same shape — a small,
-root-owned, fixed-path helper on each Kea host with a strict operation
-allowlist and a one-line sudoers grant, with this `sudo python3` path
-kept as a banner-warned fallback (a 5.x change; removing the fallback
-would be the MAJOR trigger). Until then, `CLAUDE.md` rule 9: any new
-remote `sudo` command is a documented change to that line.
+**The legacy fallback.** A host that does not have the helper yet falls
+back to the pre-5.11.0 path: Jen generates a Python script, base64s it,
+pipes it over SSH into `sudo python3`, and runs it as root. That
+requires the old `NOPASSWD: /usr/bin/python3` grant — which **is root,
+full stop**: a compromised `www-data` on the Jen host is root on every
+such Kea box. Jen shows an admin banner naming every server still on
+this path, and flashes a warning on each use. The fallback is kept for
+compatibility and **is not removed anywhere in the 5.x line** —
+removing it would break a clean upgrade for anyone still relying on it,
+which is the MAJOR trigger. `CLAUDE.md` rule 9 still applies: any new
+Kea-side capability is a new helper op **and** a documented change to
+both sudoers subsections in `docs/admin-guide.md` and
+`docs/troubleshooting.md`.
+
+The Jen side of this same "www-data writes a root-run file" problem was
+fixed in v5.2.6 (§3.1, §6); v5.11.0 closes the Kea side for hosts that
+have adopted the helper.
 
 ### 3.4 API key scope
 

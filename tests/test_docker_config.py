@@ -176,3 +176,14 @@ class TestSeedHonoursInitialAdminPassword:
         src = (REPO / "jen" / "models" / "db.py").read_text(encoding="utf-8")
         assert "JEN_INITIAL_ADMIN_PASSWORD" in src
         assert src.count("must_change_password") >= 3  # both seed branches still set it
+
+
+class TestKeaHelperShipsInTheImage:
+    """v5.11.0 — jen-kea-helper is data on the Jen host; Jen pushes it to
+    Kea hosts. It has to be in the image / the install tree."""
+
+    def test_dockerfile_copies_the_helper(self):
+        assert re.search(r"^COPY jen-kea-helper /opt/jen/jen-kea-helper\s*$", _text("Dockerfile"), re.M)
+
+    def test_install_sh_copies_the_helper(self):
+        assert 'cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"' in _text("install.sh")

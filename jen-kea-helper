@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""
+jen-kea-helper — the fixed-function privilege boundary on a Kea host
+───────────────────────────────────────────────────────────────────
+v5.11.0. Installed at /usr/local/sbin/jen-kea-helper, owned root:root
+mode 0755. Jen (running as www-data on a *different* host) invokes it
+over SSH as:
+
+    sudo -n /usr/local/sbin/jen-kea-helper <op>
+
+with ONE JSON object on stdin and gets ONE JSON object back on stdout.
+Nothing else is ever written to stdout; a single diagnostic line goes
+to stderr per call.
+
+Why this exists
+───────────────
+Before 5.11.0 every Kea-side operation Jen performs — editing a subnet,
+authoring a config, restarting a daemon, reading a log, installing a
+package — was done by generating a Python script on the Jen host,
+base64-ing it, piping it over SSH into `sudo python3`, and running it
+as root. The documented Kea-side sudoers grant was therefore
+`NOPASSWD: /usr/bin/python3`, i.e. **root**. A compromised www-data on
+the Jen host was root on every Kea host it manages.
+
+This helper replaces that with a closed set of operations behind ONE
+sudoers line:
+
+    youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper
+
+The bare command (no argument list) means "any arguments allowed" —
+that is deliberate: the control is *this file's* op allowlist and path
+walls, not sudo's argument matching. www-data cannot read or modify
+this file, and the helper never executes anything it is handed: stdin
+is data only. In particular there is **no `self-update` op** — "Jen
+writes a root-executed file on the Kea host" is exactly the capability
+being removed. Updating the helper (rare — only when the protocol
+version below changes) is a manual copy by an administrator; see
+docs/admin-guide.md "Kea host helper".
+
+The legacy `sudo python3` path stays in Jen as a banner-warned fallback
+for hosts that don't have the helper yet, and is never removed in the
+5.x line (removing it would break a clean upgrade → a MAJOR change).
+
+Protocol
+────────
+- stdin: one JSON object (an empty object is allowed). > 4 MiB → refused.
+- stdout: exactly one JSON object, always with an `"ok"` boolean.
+- exit 0 when the protocol worked (even if `"ok": false`, e.g. a config
+  that failed `kea-dhcp4 -t`); exit 2 for protocol misuse (unknown op,
+  unreadable JSON, oversize stdin) — still printing a JSON object.
+- `HELPER_VERSION` is the protocol version. Bump it only when an op's
+  request/response contract changes; Jen refuses a helper older than
+  its `JEN_HELPER_MIN_VERSION`.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import posixpath
+import re
+import shutil
+import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
+import sys
+
+HELPER_VERSION = 1
+
+MAX_STDIN = 4 * 1024 * 1024  # 4 MiB
+
+# Directories a Kea config file may live in. Anything else is refused,
+# independent of whatever path Jen sent — Jen validates its own copy,
+# but this helper does not trust that.
+_ALLOWED_CONF_DIRS = ("/etc/kea", "/usr/local/etc/kea")
+_CONF_BASENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.conf$")
+
+_ALLOWED_SERVICES = ("dhcp4", "dhcp6")
+
+
+# ── Path walls ──────────────────────────────────────────────────────────────
+
+
+def _allowed_conf_path(p):
+    """True iff `p` is an absolute, already-normalised path to a
+    `*.conf` file directly inside one of the allowed Kea config dirs.
+    posixpath, not os.path — these are always remote Linux paths."""
+    if not isinstance(p, str) or not p:
+        return False
+    if not p.startswith("/") or posixpath.normpath(p) != p:
+        return False
+    if ".." in p.split("/"):
+        return False
+    if posixpath.dirname(p) not in _ALLOWED_CONF_DIRS:
+        return False
+    return bool(_CONF_BASENAME_RE.match(posixpath.basename(p)))
+
+
+def _allowed_log_path(p):
+    """True iff `p` is an absolute, already-normalised `*.log` path under
+    /var/log (with symlinks in the existing prefix resolved)."""
+    if not isinstance(p, str) or not p:
+        return False
+    if not p.startswith("/") or posixpath.normpath(p) != p:
+        return False
+    if not p.endswith(".log"):
+        return False
+    real = os.path.realpath(p)
+    return real == "/var/log" or real.startswith("/var/log/")
+
+
+def _valid_service(service):
+    return service in _ALLOWED_SERVICES
+
+
+def _kea_binary(service):
+    """Absolute path to the kea-dhcp4/6 binary, or None if not found.
+    Checks $PATH plus the two standard system locations (the .deb
+    packages install to /usr/sbin; a build-from-source often lands in
+    /usr/local/sbin), mirroring detect_installed_kea_services() on the
+    Jen side."""
+    name = "kea-dhcp4" if service == "dhcp4" else "kea-dhcp6"
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in ("/usr/sbin", "/usr/local/sbin"):
+        cand = os.path.join(d, name)
+        if os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+# ── Kea config test (shared by test-config and apply-config) ─────────────────
+
+
+def _run_kea_test(service, path, config, tls_paths):
+    """Write `config` to `<path>.jen_tmp`, verify any TLS material
+    exists, run `kea-dhcpX -t` against the temp file, and ALWAYS remove
+    the temp file. Returns (ok: bool, result: dict). On ok, result is
+    {"tmp": <path to the still-removed temp>} is NOT returned — apply
+    re-writes its own. This only validates."""
+    binary = _kea_binary(service)
+    if binary is None:
+        return False, {
+            "ok": False,
+            "error": "missingbinary",
+            "binary": "kea-dhcp4" if service == "dhcp4" else "kea-dhcp6",
+        }
+
+    tmp = path + ".jen_tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(config, f, indent=2)
+
+        for entry in tls_paths or []:
+            tp, kind = entry[0], (entry[1] if len(entry) > 1 else "file")
+            present = os.path.isdir(tp) if kind == "dir" else os.path.isfile(tp)
+            if not present:
+                return False, {"ok": False, "error": "tlsmissing", "path": tp}
+
+        proc = subprocess.run([binary, "-t", tmp], capture_output=True, text=True)  # nosec B603
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode != 0 or "ERROR" in combined:
+            lines = [ln for ln in combined.splitlines() if "ERROR" in ln or "Error" in ln]
+            return False, {"ok": False, "error": "testerror", "detail": " | ".join(lines[:3])}
+        return True, {"ok": True}
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+# ── Ops ─────────────────────────────────────────────────────────────────────
+
+
+def op_version(_payload):
+    v = sys.version_info
+    return {
+        "ok": True,
+        "helper_version": HELPER_VERSION,
+        "python": f"{v.major}.{v.minor}.{v.micro}",
+    }, None
+
+
+def op_read_config(payload):
+    service = payload.get("service")
+    path = payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    if not os.path.isfile(path):
+        return {"ok": False, "error": "missing"}, path
+    try:
+        with open(path) as f:
+            return {"ok": True, "config": json.load(f)}, path
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
+
+
+def op_test_config(payload):
+    service = payload.get("service")
+    path = payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        return {"ok": False, "error": "not-allowed"}, path
+    _ok, result = _run_kea_test(service, path, config, payload.get("tls_paths") or [])
+    return result, path
+
+
+def op_apply_config(payload):
+    service = payload.get("service")
+    path = payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        return {"ok": False, "error": "not-allowed"}, path
+    allow_overwrite = bool(payload.get("allow_overwrite", True))
+
+    ok, result = _run_kea_test(service, path, config, payload.get("tls_paths") or [])
+    if not ok:
+        return result, path
+
+    exists = os.path.exists(path)
+    if exists and not allow_overwrite:
+        return {"ok": False, "error": "exists"}, path
+
+    tmp = path + ".jen_apply_tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(config, f, indent=2)
+
+        backup = None
+        if exists:
+            backup = path + ".jen_backup"
+            shutil.copy2(path, backup)
+            st = os.stat(path)
+            try:
+                os.chown(tmp, st.st_uid, st.st_gid)
+            except (OSError, AttributeError):
+                pass
+            os.chmod(tmp, st.st_mode & 0o777)
+        else:
+            # A brand-new config: match what `json.dump` under the old
+            # sudo-python3 path produced. Ubuntu's kea runs as `_kea` and
+            # must be able to read it.
+            os.chmod(tmp, 0o644)
+            try:
+                os.chown(tmp, 0, 0)
+            except (OSError, AttributeError):
+                pass
+
+        os.replace(tmp, path)
+        return {"ok": True, "backup": backup}, path
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def _resolve_unit(service, action):
+    """The installed unit name for `service` — `kea-dhcpX-server` on ISC
+    packages, `isc-kea-dhcpX-server` on older Debian/Ubuntu ones. Tries
+    each with `systemctl show -p LoadState`; returns the first that is
+    `loaded`, else None."""
+    fam = "dhcp4" if service == "dhcp4" else "dhcp6"
+    for unit in (f"kea-{fam}-server", f"isc-kea-{fam}-server"):
+        try:
+            proc = subprocess.run(  # nosec B603 B607
+                ["systemctl", "show", "-p", "LoadState", "--value", unit],
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None
+        if proc.stdout.strip() == "loaded":
+            return unit
+    return None
+
+
+def _unit_state(unit):
+    try:
+        proc = subprocess.run(  # nosec B603 B607
+            ["systemctl", "is-active", unit], capture_output=True, text=True
+        )
+    except OSError:
+        return "unknown"
+    return proc.stdout.strip() or "unknown"
+
+
+def op_service(payload):
+    service = payload.get("service")
+    action = payload.get("action")
+    if not _valid_service(service) or action not in ("restart", "enable", "disable", "status"):
+        return {"ok": False, "error": "not-allowed"}, None
+
+    unit = _resolve_unit(service, action)
+    if unit is None:
+        return {"ok": False, "error": "no-unit"}, None
+
+    if action == "status":
+        return {"ok": True, "unit": unit, "state": _unit_state(unit)}, unit
+
+    argv = ["systemctl", action]
+    if action in ("enable", "disable"):
+        argv.append("--now")
+    argv.append(unit)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True)  # nosec B603 B607
+    except OSError as e:
+        return {"ok": False, "error": "systemctl", "detail": str(e)}, unit
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stderr or proc.stdout or "").splitlines()[-5:])
+        return {"ok": False, "error": "systemctl", "detail": tail}, unit
+    return {"ok": True, "unit": unit, "state": _unit_state(unit)}, unit
+
+
+def op_tail_log(payload):
+    path = payload.get("path")
+    if not _allowed_log_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    try:
+        lines = int(payload.get("lines", 200))
+    except (TypeError, ValueError):
+        lines = 200
+    lines = max(1, min(lines, 1000))
+    if not os.path.isfile(path):
+        return {"ok": False, "error": "missing"}, path
+    try:
+        with open(path, errors="replace") as f:
+            content = f.read().splitlines()
+    except OSError as e:
+        return {"ok": False, "error": "unreadable", "detail": str(e)}, path
+    return {"ok": True, "lines": content[-lines:]}, path
+
+
+def op_install_package(payload):
+    service = payload.get("service")
+    if not _valid_service(service):
+        return {"ok": False, "error": "not-allowed"}, None
+    package = "kea-dhcp4-server" if service == "dhcp4" else "kea-dhcp6-server"
+    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    out = []
+    ok = True
+    for argv in (["apt-get", "update", "-qq"], ["apt-get", "install", "-y", package]):
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, env=env)  # nosec B603 B607
+        except OSError as e:
+            return {"ok": False, "output": str(e)}, package
+        out.append((proc.stdout or "") + (proc.stderr or ""))
+        if proc.returncode != 0:
+            ok = False
+            break
+    tail = "\n".join("".join(out).strip().splitlines()[-15:])
+    return {"ok": ok, "output": tail}, package
+
+
+_OPS = {
+    "version": op_version,
+    "read-config": op_read_config,
+    "test-config": op_test_config,
+    "apply-config": op_apply_config,
+    "service": op_service,
+    "tail-log": op_tail_log,
+    "install-package": op_install_package,
+}
+
+
+# ── Entry point ─────────────────────────────────────────────────────────────
+
+
+def _emit(stdout, stderr, op, result, exit_code, path=None):
+    stdout.write(json.dumps(result))
+    stdout.write("\n")
+    stdout.flush()
+    status = "ok" if result.get("ok") else "fail"
+    line = f"jen-kea-helper: {op or '(no op)'} {status}"
+    if path:
+        line += f" {path}"
+    stderr.write(line + "\n")
+    stderr.flush()
+    return exit_code
+
+
+def main(argv=None, stdin=None, stdout=None, stderr=None):
+    argv = sys.argv if argv is None else argv
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
+
+    op = argv[1] if len(argv) > 1 else ""
+
+    raw = stdin.read(MAX_STDIN + 1)
+    if len(raw) > MAX_STDIN:
+        return _emit(stdout, stderr, op, {"ok": False, "error": "stdin-too-large"}, 2)
+
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+    except ValueError as e:
+        return _emit(stdout, stderr, op, {"ok": False, "error": "bad-json", "detail": str(e)}, 2)
+    if not isinstance(payload, dict):
+        return _emit(stdout, stderr, op, {"ok": False, "error": "bad-json", "detail": "stdin is not a JSON object"}, 2)
+
+    handler = _OPS.get(op)
+    if handler is None:
+        return _emit(stdout, stderr, op, {"ok": False, "error": "unknown-op"}, 2)
+
+    try:
+        result, path = handler(payload)
+    except Exception as e:  # noqa: BLE001 — never let a bug become a stray traceback on stdout
+        result, path = {"ok": False, "error": "helper-exception", "detail": str(e)}, None
+
+    return _emit(stdout, stderr, op, result, 0, path)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

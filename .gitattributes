@@ -4,3 +4,10 @@
 # jen-vX.Y.Z.tar.gz built by `git archive` in release.yml.
 legacy/ export-ignore
 .gitattributes export-ignore
+
+# v5.11.0 — jen-kea-helper is a shebang script run as root on Kea hosts.
+# A CRLF from a misconfigured Windows checkout would break its `#!` line
+# (`env: 'python3\r'`). Pin LF regardless of core.autocrlf.
+jen-kea-helper text eol=lf
+jen-update-root.py text eol=lf
+run.py text eol=lf

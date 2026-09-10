@@ -137,7 +137,7 @@ SSL_KEY = "/etc/jen/ssl/private.key"
 # old templates. Real fix is separating release-owned static from
 # user-uploaded content — tracked against the 6.0.0 versioned-release-dir
 # work (see PENDING / docs/ARCHITECTURE.md §6).
-_ROLLBACK_ITEMS = ("jen", "run.py", "templates", "requirements.txt", "CHANGELOG.md")
+_ROLLBACK_ITEMS = ("jen", "run.py", "templates", "requirements.txt", "CHANGELOG.md", "jen-kea-helper")
 
 # Files an update also replaces that live OUTSIDE /opt/jen. A bad
 # jen.service / sudoers / updater would make the app fail AND make a
@@ -231,6 +231,13 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
     if os.path.isfile(requirements_src):
         shutil.copy2(requirements_src, os.path.join(install_dir, "requirements.txt"))
 
+    # jen-kea-helper (v5.11.0) — plain data on the Jen host; Jen pushes it
+    # to each Kea host over SSH. In _ROLLBACK_ITEMS so a failed update
+    # restores the previous copy.
+    helper_src = os.path.join(extracted, "jen-kea-helper")
+    if os.path.isfile(helper_src):
+        shutil.copy2(helper_src, os.path.join(install_dir, "jen-kea-helper"))
+
     # Templates
     templates_src = os.path.join(extracted, "templates")
     if os.path.isdir(templates_src):
@@ -290,6 +297,7 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
             os.path.join(install_dir, "run.py"),
             os.path.join(install_dir, "templates"),
             os.path.join(install_dir, "static"),
+            os.path.join(install_dir, "jen-kea-helper"),
         ],
         check=False,
     )

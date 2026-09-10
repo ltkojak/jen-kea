@@ -842,6 +842,13 @@ install_files() {
     if [[ -f "$SCRIPT_DIR/requirements.txt" ]]; then
         cp "$SCRIPT_DIR/requirements.txt" "$INSTALL_DIR/requirements.txt"
     fi
+    # v5.11.0 — jen-kea-helper is the fixed-function root helper Jen
+    # installs onto each Kea host (Settings → Kea → SSH, or by hand). It
+    # lives here as plain data — Jen reads it to push it over SSH; it is
+    # NOT executed on the Jen host.
+    if [[ -f "$SCRIPT_DIR/jen-kea-helper" ]]; then
+        cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"
+    fi
     # Copy legacy monolith for reference (not executed)
     if [[ -f "$SCRIPT_DIR/legacy/jen.py" ]]; then
         mkdir -p "$INSTALL_DIR/legacy"

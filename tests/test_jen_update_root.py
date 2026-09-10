@@ -264,6 +264,39 @@ class TestInstallExtractedFiles:
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
         assert (install_dir / "run.py").exists()
 
+    def test_jen_kea_helper_installed_when_present(self, jen_update_root, tmp_path):
+        """v5.11.0 — jen-kea-helper travels with the release so the
+        installed copy Jen pushes to Kea hosts stays current."""
+        extracted = self._make_extracted_dir(tmp_path, with_static=False, with_service=False, with_sudoers=False)
+        (extracted / "jen-kea-helper").write_text("#!/usr/bin/env python3\nHELPER_VERSION = 1\n")
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            jen_update_root.install_extracted_files(str(extracted), str(install_dir))
+        assert "HELPER_VERSION = 1" in (install_dir / "jen-kea-helper").read_text()
+
+
+class TestKeaHelperRollback:
+    """v5.11.0 — jen-kea-helper is in _ROLLBACK_ITEMS so a failed update
+    restores the previous copy (a helper version drift between Jen and
+    the box's installed helper would otherwise be silent)."""
+
+    def test_helper_is_a_rollback_item(self, jen_update_root):
+        assert "jen-kea-helper" in jen_update_root._ROLLBACK_ITEMS
+
+    def test_snapshot_then_restore_round_trips_the_helper(self, jen_update_root, tmp_path):
+        install = tmp_path / "opt-jen"
+        (install / "jen").mkdir(parents=True)
+        (install / "jen" / "x.py").write_text("1\n")
+        (install / "jen-kea-helper").write_text("HELPER_VERSION = 1\n")
+        snap = tmp_path / "snap"
+        jen_update_root.snapshot_install(str(snap), install_dir=str(install))
+        (install / "jen-kea-helper").write_text("HELPER_VERSION = 2  # bad update\n")
+        with patch("subprocess.run"):
+            jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
+        assert (install / "jen-kea-helper").read_text() == "HELPER_VERSION = 1\n"
+
 
 class TestInstallPythonDependencies:
     """v5.8.0 — the flow pip-installs the *staged* requirements.txt into

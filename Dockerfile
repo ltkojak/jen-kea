@@ -43,6 +43,7 @@ COPY run.py        /opt/jen/run.py
 COPY jen/          /opt/jen/jen/
 COPY templates/    /opt/jen/templates/
 COPY static/       /opt/jen/static/
+COPY jen-kea-helper /opt/jen/jen-kea-helper
 
 # Set permissions
 RUN chown -R www-data:www-data /opt/jen /etc/jen

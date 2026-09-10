@@ -162,3 +162,10 @@ class TestJenConfigOwnership:
     def test_config_file_is_chowned_to_the_service_user_not_root(self):
         assert 'chown "$JEN_USER:$JEN_USER" "$CONFIG_FILE"' in INSTALL_SH
         assert 'chown root:www-data "$CONFIG_FILE"' not in INSTALL_SH
+
+
+class TestKeaHelperPackaged:
+    """v5.11.0 — jen-kea-helper ships beside the app on the Jen host."""
+
+    def test_install_sh_copies_the_helper(self):
+        assert 'cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"' in INSTALL_SH
