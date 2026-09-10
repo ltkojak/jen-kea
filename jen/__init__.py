@@ -69,6 +69,16 @@ def create_app() -> Flask:
     # ── Config & globals ──────────────────────────────────────────────────────
     app_config.reload()
 
+    # ── User content (v5.13.0) — create the /var/lib/jen subtree, then a
+    # best-effort copy of anything a pre-5.13 box still has under /opt/jen.
+    from jen.services.content import ensure_content_dirs, migrate_legacy_content
+
+    ensure_content_dirs()
+    try:
+        migrate_legacy_content()
+    except Exception as e:
+        logger.warning(f"content migration skipped: {e}")
+
     # ── Flask app ─────────────────────────────────────────────────────────────
     app = Flask(__name__, static_folder=extensions.STATIC_DIR, template_folder=extensions.TEMPLATE_DIR)
     app.secret_key = _load_secret_key()
@@ -411,7 +421,7 @@ def create_app() -> Flask:
         for ext in ("png", "svg", "jpg", "jpeg", "webp"):
             path = f"{nav_logo_path}.{ext}"
             if os.path.exists(path):
-                nav_logo_url = f"/static/nav_logo.{ext}?v={int(os.path.getmtime(path))}"
+                nav_logo_url = f"/content/branding/nav_logo.{ext}?v={int(os.path.getmtime(path))}"
                 break
         if current_user and current_user.is_authenticated:
             try:
@@ -499,7 +509,10 @@ def create_app() -> Flask:
     def favicon():
         from flask import send_from_directory
 
+        # An uploaded override in CONTENT_DIR wins; else the shipped default.
         if os.path.exists(extensions.FAVICON_PATH):
+            return send_from_directory(extensions.CONTENT_BRANDING_DIR, "favicon.ico")
+        if os.path.exists(extensions.FAVICON_DEFAULT_PATH):
             return send_from_directory(extensions.STATIC_DIR, "favicon.ico")
         return "", 204
 
@@ -563,6 +576,7 @@ def _register_blueprints(app: Flask) -> None:
     """Import and register all route blueprints."""
     from jen.routes.api import bp as api_bp
     from jen.routes.auth import bp as auth_bp
+    from jen.routes.content import bp as content_bp
     from jen.routes.dashboard import bp as dashboard_bp
     from jen.routes.database import bp as database_bp
     from jen.routes.ddns import bp as ddns_bp
@@ -582,6 +596,7 @@ def _register_blueprints(app: Flask) -> None:
     for blueprint in [
         api_bp,
         auth_bp,
+        content_bp,
         dashboard_bp,
         database_bp,
         ddns_bp,
@@ -611,7 +626,7 @@ def _load_secret_key() -> str:
     session on every single restart, which is a confusing "why do I keep
     getting logged out" bug for the person running this (v4.4.2).
     """
-    candidates = ["/etc/jen/secret_key", os.path.join(extensions.JEN_ROOT, ".secret_key")]
+    candidates = ["/etc/jen/secret_key", os.path.join(extensions.CONTENT_KEYS_DIR, ".secret_key")]
     for key_file in candidates:
         try:
             if os.path.exists(key_file):

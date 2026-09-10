@@ -19,7 +19,7 @@ from jen import extensions
 
 logger = logging.getLogger(__name__)
 
-BACKUP_DIR = os.path.join(extensions.JEN_ROOT, "backups")
+BACKUP_DIR = extensions.CONTENT_BACKUP_DIR
 SCHEMA_VERSION = 1  # bump when export format changes
 
 # ── Jen tables available for export ──────────────────────────────────────────

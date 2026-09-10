@@ -69,6 +69,11 @@ logger = logging.getLogger(__name__)
 # In-memory registry of loaded plugin metadata
 _loaded_plugins: dict[str, dict] = {}
 
+# The plugin ids Jen ships in its own tree (extensions.PLUGIN_DIR_BUNDLED).
+# Registry-installed plugins go to extensions.PLUGIN_DIR (CONTENT_DIR); a
+# same-id copy there wins. Uninstalling a shipped plugin only disables it.
+SHIPPED_PLUGIN_IDS = frozenset({"ipam", "network-discovery"})
+
 # Every function below that turns a plugin_id into a filesystem path must
 # validate it against this first — a plugin_id is attacker-influenced input
 # (it arrives as a URL path segment) and several of these functions end in
@@ -105,27 +110,34 @@ def jen_version_meets(required: str) -> bool:
 
 def discover_plugins() -> list[dict]:
     """
-    Scan PLUGIN_DIR for installed plugins.
-    Returns list of manifest dicts with added 'path' and 'enabled' keys.
+    Scan the shipped plugin tree (extensions.PLUGIN_DIR_BUNDLED) then the
+    writable one (extensions.PLUGIN_DIR, under CONTENT_DIR) for installed
+    plugins. A plugin present in both — an updated copy of a shipped one —
+    is taken from the writable tree.
+
+    Returns manifest dicts with added 'path' / 'enabled' / 'version_ok' /
+    'bundled' keys.
     """
-    plugins = []
-    if not os.path.isdir(extensions.PLUGIN_DIR):
-        return plugins
-    for name in sorted(os.listdir(extensions.PLUGIN_DIR)):
-        path = os.path.join(extensions.PLUGIN_DIR, name)
-        manifest_path = os.path.join(path, "manifest.json")
-        if not os.path.isdir(path) or not os.path.isfile(manifest_path):
+    by_id: dict[str, dict] = {}
+    for base, bundled in ((extensions.PLUGIN_DIR_BUNDLED, True), (extensions.PLUGIN_DIR, False)):
+        if not os.path.isdir(base):
             continue
-        try:
-            with open(manifest_path) as f:
-                manifest = json.load(f)
-            manifest["path"] = path
-            manifest["enabled"] = _is_enabled(manifest["id"])
-            manifest["version_ok"] = jen_version_meets(manifest.get("requires_jen", "0.0.0"))
-            plugins.append(manifest)
-        except Exception as e:
-            logger.warning(f"Could not load plugin manifest from {path}: {e}")
-    return plugins
+        for name in sorted(os.listdir(base)):
+            path = os.path.join(base, name)
+            manifest_path = os.path.join(path, "manifest.json")
+            if not os.path.isdir(path) or not os.path.isfile(manifest_path):
+                continue
+            try:
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+                manifest["path"] = path
+                manifest["bundled"] = bundled
+                manifest["enabled"] = _is_enabled(manifest["id"])
+                manifest["version_ok"] = jen_version_meets(manifest.get("requires_jen", "0.0.0"))
+                by_id[manifest["id"]] = manifest  # writable tree comes second → wins
+            except Exception as e:
+                logger.warning(f"Could not load plugin manifest from {path}: {e}")
+    return [by_id[k] for k in sorted(by_id)]
 
 
 def load_plugins(app) -> None:
@@ -206,7 +218,19 @@ def _load_plugin(app, manifest: dict) -> bool:
 
 
 def _enabled_file(plugin_id: str) -> str:
-    return os.path.join(extensions.PLUGIN_DIR, plugin_id, ".enabled")
+    # v5.13.0 — the marker lives in CONTENT_DIR/plugins-enabled/<id>, not
+    # inside the plugin dir (which for a shipped plugin is read-only).
+    return os.path.join(extensions.CONTENT_PLUGINS_ENABLED_DIR, plugin_id)
+
+
+def _plugin_dir(plugin_id: str) -> str | None:
+    """The on-disk directory for a plugin — the writable copy if there is
+    one, else the shipped copy, else None."""
+    for base in (extensions.PLUGIN_DIR, extensions.PLUGIN_DIR_BUNDLED):
+        path = os.path.join(base, plugin_id)
+        if os.path.isdir(path):
+            return path
+    return None
 
 
 def _is_enabled(plugin_id: str) -> bool:
@@ -217,9 +241,10 @@ def enable_plugin(plugin_id: str) -> None:
     if not valid_plugin_id(plugin_id):
         logger.warning(f"enable_plugin: rejected invalid plugin_id {plugin_id!r}")
         return
-    path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
-    if os.path.isdir(path):
-        open(_enabled_file(plugin_id), "w").close()
+    if _plugin_dir(plugin_id):
+        os.makedirs(extensions.CONTENT_PLUGINS_ENABLED_DIR, exist_ok=True)
+        with open(_enabled_file(plugin_id), "w"):
+            pass
 
 
 def disable_plugin(plugin_id: str) -> None:
@@ -372,17 +397,24 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 
 
 def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
-    """Remove plugin directory. Does not remove DB tables (data preservation)."""
+    """Remove a registry-installed plugin's directory (under CONTENT_DIR).
+    A shipped plugin (ipam / network-discovery) can't be removed — the tree
+    is read-only — so uninstalling one just disables it. DB tables are left
+    alone either way (data preservation)."""
     import shutil
 
     if not valid_plugin_id(plugin_id):
         return False, "Invalid plugin ID."
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
     if not os.path.isdir(path):
+        bundled = os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)
+        if os.path.isdir(bundled):
+            disable_plugin(plugin_id)
+            _loaded_plugins.pop(plugin_id, None)
+            return True, f"'{plugin_id}' is a built-in plugin and can't be removed — it has been disabled instead."
         return False, "Plugin not found."
     try:
         shutil.rmtree(path)
-        # Remove from loaded cache
         _loaded_plugins.pop(plugin_id, None)
         logger.info(f"Plugin '{plugin_id}' uninstalled")
         return True, f"Plugin '{plugin_id}' uninstalled. Restart Jen to fully remove."

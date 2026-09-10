@@ -228,7 +228,9 @@ def settings_appearance():
     nav_logo_url = None
     for ext in ("png", "svg", "jpg", "jpeg", "webp"):
         if os.path.exists(f"{extensions.NAV_LOGO_PATH}.{ext}"):
-            nav_logo_url = f"/static/nav_logo.{ext}?v={int(os.path.getmtime(f'{extensions.NAV_LOGO_PATH}.{ext}'))}"
+            nav_logo_url = (
+                f"/content/branding/nav_logo.{ext}?v={int(os.path.getmtime(f'{extensions.NAV_LOGO_PATH}.{ext}'))}"
+            )
             break
     bundled, custom = icon_lists()
     return render_template(

@@ -122,7 +122,7 @@ def get_manufacturer_icon_url(manufacturer: str) -> str:
     # Check custom first
     custom_path = f"{extensions.ICONS_CUSTOM_DIR}/{icon_name}.svg"
     if os.path.exists(custom_path):
-        return f"/static/icons/custom/{icon_name}.svg"
+        return f"/content/icons/{icon_name}.svg"
     # Check bundled
     bundled_path = f"{extensions.ICONS_BUNDLED_DIR}/{icon_name}.svg"
     if os.path.exists(bundled_path):
@@ -222,7 +222,7 @@ def get_device_info_map(mac_list: list) -> dict:
                     test_custom = f"{extensions.ICONS_CUSTOM_DIR}/{dicon}.svg"
                     test_bundled = f"{extensions.ICONS_BUNDLED_DIR}/{dicon}.svg"
                     if os.path.exists(test_custom):
-                        icon_url = f"/static/icons/custom/{dicon}.svg"
+                        icon_url = f"/content/icons/{dicon}.svg"
                     elif os.path.exists(test_bundled):
                         icon_url = f"/static/icons/brands/{dicon}.svg"
                     else:

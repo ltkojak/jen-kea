@@ -76,7 +76,7 @@ def _key_candidates() -> list[str]:
     """Read `extensions.MFA_KEY_PATH` dynamically (never cached) so the
     test suite can repoint it, exactly like `AppConfig` reads
     `extensions.CONFIG_FILE`."""
-    return [extensions.MFA_KEY_PATH, os.path.join(extensions.JEN_ROOT, ".mfa_key")]
+    return [extensions.MFA_KEY_PATH, os.path.join(extensions.CONTENT_KEYS_DIR, ".mfa_key")]
 
 
 def _looks_like_fernet_key(value: str) -> bool:

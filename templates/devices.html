@@ -201,7 +201,7 @@ function setTypeFilter(typeKey) {
                                 padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
                                 border:1px solid var(--primary)44;"
                          onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--primary)44'">
-                        <img src="/static/icons/custom/{{ icon }}.svg" alt="{{ icon }}"
+                        <img src="/content/icons/{{ icon }}.svg" alt="{{ icon }}"
                              style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">
                         <span style="font-size:9px;color:var(--primary);">{{ icon }}</span>
                     </div>
@@ -236,7 +236,7 @@ function selectIcon(value, label) {
     const preview = document.getElementById('iconPickerPreview');
     if (value) {
         // Check custom first, then bundled
-        const customUrl = `/static/icons/custom/${value}.svg`;
+        const customUrl = `/content/icons/${value}.svg`;
         const brandUrl = `/static/icons/brands/${value}.svg`;
         preview.innerHTML = `<img src="${brandUrl}" onerror="this.src='${customUrl}'" alt="${value}"
             style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">`;

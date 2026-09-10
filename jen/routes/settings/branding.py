@@ -63,7 +63,7 @@ def upload_favicon():
     if not favicon_file.filename.lower().endswith((".ico", ".png")):
         flash("Favicon must be a .ico or .png file.", "error")
         return redirect(url_for("settings.settings_appearance"))
-    os.makedirs(extensions.STATIC_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(extensions.FAVICON_PATH), exist_ok=True)
     try:
         favicon_file.save(extensions.FAVICON_PATH)
         flash("Favicon updated.", "success")
@@ -79,7 +79,7 @@ def upload_favicon():
 def remove_favicon():
     if os.path.exists(extensions.FAVICON_PATH):
         os.remove(extensions.FAVICON_PATH)
-    flash("Favicon removed.", "success")
+    flash("Custom favicon removed — the default is back.", "success")
     return redirect(url_for("settings.settings_appearance"))
 
 
@@ -195,7 +195,7 @@ def upload_nav_logo():
         old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"
         if os.path.exists(old):
             os.remove(old)
-    os.makedirs(extensions.STATIC_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(extensions.NAV_LOGO_PATH), exist_ok=True)
     try:
         logo_file.save(f"{extensions.NAV_LOGO_PATH}.{ext}")
         __user.audit("BRANDING", "settings", f"Nav logo uploaded by {current_user.username}")

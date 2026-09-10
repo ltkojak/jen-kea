@@ -138,15 +138,48 @@ SSL_CERT = "/etc/jen/ssl/certificate.crt"
 SSL_KEY = "/etc/jen/ssl/private.key"
 SSL_CA = "/etc/jen/ssl/ca_bundle.crt"
 SSL_COMBINED = "/etc/jen/ssl/combined.crt"
-FAVICON_PATH = os.path.join(JEN_ROOT, "static", "favicon.ico")
 STATIC_DIR = os.path.join(JEN_ROOT, "static")
 TEMPLATE_DIR = os.path.join(JEN_ROOT, "templates")
 ICONS_BUNDLED_DIR = os.path.join(JEN_ROOT, "static", "icons", "brands")
-ICONS_CUSTOM_DIR = os.path.join(JEN_ROOT, "static", "icons", "custom")
-NAV_LOGO_PATH = os.path.join(JEN_ROOT, "static", "nav_logo")
 
-# Plugin system
-PLUGIN_DIR = os.path.join(JEN_ROOT, "plugins")  # installed plugin directories
+# ── User-writable content (v5.13.0) ─────────────────────────────────────────
+# Everything a running Jen writes — uploaded brand icons, the nav logo, a
+# custom favicon, DB backups, registry-installed plugins, plugin enable
+# markers, and the secret-key / MFA-key fallbacks — lives HERE, outside the
+# application tree. /opt/jen is reinstalled from the release tarball on every
+# upgrade and (as of 5.13.0) is root-owned and read-only to the service
+# user; CONTENT_DIR is service-user-owned and never touched by an upgrade.
+#   JEN_CONTENT_DIR env override → that
+#   else JEN_ROOT set (a dev / CI checkout) → $JEN_ROOT/var
+#   else → /var/lib/jen
+CONTENT_DIR = os.environ.get("JEN_CONTENT_DIR") or (
+    os.path.join(JEN_ROOT, "var") if "JEN_ROOT" in os.environ else "/var/lib/jen"
+)
+CONTENT_ICONS_DIR = os.path.join(CONTENT_DIR, "icons")
+CONTENT_BRANDING_DIR = os.path.join(CONTENT_DIR, "branding")
+CONTENT_BACKUP_DIR = os.path.join(CONTENT_DIR, "backups")
+CONTENT_PLUGIN_DIR = os.path.join(CONTENT_DIR, "plugins")
+CONTENT_PLUGINS_ENABLED_DIR = os.path.join(CONTENT_DIR, "plugins-enabled")
+CONTENT_KEYS_DIR = os.path.join(CONTENT_DIR, "keys")
+
+# The shipped default favicon (release-owned, always present); an uploaded
+# override lands at FAVICON_PATH under CONTENT_DIR. The /favicon.ico route
+# prefers the override, then the default.
+FAVICON_DEFAULT_PATH = os.path.join(JEN_ROOT, "static", "favicon.ico")
+FAVICON_PATH = os.path.join(CONTENT_BRANDING_DIR, "favicon.ico")
+# sha256 of the shipped static/favicon.ico — the app-side legacy migration
+# uses it to tell "operator customised the favicon" from "still the default".
+# Regenerate when static/favicon.ico changes (test_content_layout guards it).
+SHIPPED_FAVICON_SHA256 = "48dd30fb607fe4e17f3c32662f2221d3d0eda1639bd09bc1d5c78524aebadb30"
+
+# Names kept so tests that monkeypatch them by name keep working; the values
+# now point into CONTENT_DIR.
+ICONS_CUSTOM_DIR = CONTENT_ICONS_DIR
+NAV_LOGO_PATH = os.path.join(CONTENT_BRANDING_DIR, "nav_logo")
+
+# ── Plugin system ───────────────────────────────────────────────────────────
+PLUGIN_DIR = CONTENT_PLUGIN_DIR  # registry-installed plugins (writable)
+PLUGIN_DIR_BUNDLED = os.path.join(JEN_ROOT, "plugins")  # shipped, read-only
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 SSH_KEY_PATH = "/etc/jen/ssh/jen_rsa"
 SSH_KNOWN_HOSTS = "/etc/jen/ssh/known_hosts"

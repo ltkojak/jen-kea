@@ -211,11 +211,30 @@ def _patch_extensions():
     extensions.HTTPS_PORT = 8499
     extensions.WORKER_THREADS = 8
     extensions.CONFIG_FILE = "/tmp/jen_test.config"
-    # Keep load_plugins() a no-op inside the app fixture — tests must not
-    # pull the real shipped plugins (ipam has a .enabled marker) into the
-    # test app. CI used to get this for free by not symlinking plugins/
-    # into /opt/jen; now that JEN_ROOT points at the checkout, pin it.
-    extensions.PLUGIN_DIR = "/tmp/jen_test_plugins_absent"
+
+    # v5.13.0 — user-writable content is under CONTENT_DIR now. Repoint the
+    # whole subtree at a throwaway tmp dir and BOTH plugin trees at absent
+    # paths so the app fixture never pulls the real shipped plugins in and
+    # never writes into the checkout.
+    _content = "/tmp/jen_test_content"
+    extensions.CONTENT_DIR = _content
+    extensions.CONTENT_ICONS_DIR = os.path.join(_content, "icons")
+    extensions.CONTENT_BRANDING_DIR = os.path.join(_content, "branding")
+    extensions.CONTENT_BACKUP_DIR = os.path.join(_content, "backups")
+    extensions.CONTENT_PLUGIN_DIR = os.path.join(_content, "plugins")
+    extensions.CONTENT_PLUGINS_ENABLED_DIR = os.path.join(_content, "plugins-enabled")
+    extensions.CONTENT_KEYS_DIR = os.path.join(_content, "keys")
+    extensions.ICONS_CUSTOM_DIR = extensions.CONTENT_ICONS_DIR
+    extensions.NAV_LOGO_PATH = os.path.join(extensions.CONTENT_BRANDING_DIR, "nav_logo")
+    extensions.FAVICON_PATH = os.path.join(extensions.CONTENT_BRANDING_DIR, "favicon.ico")
+    extensions.PLUGIN_DIR = extensions.CONTENT_PLUGIN_DIR
+    extensions.PLUGIN_DIR_BUNDLED = "/tmp/jen_test_plugins_bundled_absent"
+    try:
+        import jen.services.dbexport as _dbe
+
+        _dbe.BACKUP_DIR = extensions.CONTENT_BACKUP_DIR
+    except Exception:
+        pass
     # v5.4.0 — repoint the MFA-secret encryption key off /etc/jen so the
     # suite works on a dev box where /etc/jen isn't writable (CI creates
     # it, a laptop running pytest may not). Same direct-assignment pattern
