@@ -612,7 +612,10 @@ class TestMigrateUserContent:
 
     def test_main_calls_migrate_before_install(self):
         src = _SCRIPT_PATH.read_text()
-        assert src.index("migrate_user_content(INSTALL_DIR") < src.index("install_extracted_files(extracted")
+        # the CALL sites (upper-case args), not the `def` line
+        assert src.index("migrate_user_content(INSTALL_DIR, CONTENT_DIR, extracted)") < src.index(
+            "install_extracted_files(extracted, INSTALL_DIR)"
+        )
 
     def test_snapshot_and_restore_cover_the_external_unit_files(self, jen_update_root, tmp_path):
         install = tmp_path / "opt-jen"
@@ -969,7 +972,10 @@ class TestMainPostRestartChecks:
 
         src = inspect.getsource(jen_update_root.main)
         region = src[src.index("snapshot_install(snapshot_dir)") : src.rindex("return 0")]
-        assert 'compileall", "-q", os.path.join(INSTALL_DIR, "jen")' in region
+        # v5.13.0 — the installed tree is jen/ + plugins/ (both now
+        # release-owned); compileall runs over whichever exist.
+        assert 'os.path.join(INSTALL_DIR, d) for d in ("jen", "plugins")' in region
+        assert 'compileall", "-q", *_compile_targets' in region
         assert "_confirm_running_version(version)" in region
         assert region.index("compileall") < region.index("except Exception")
         assert region.index("_confirm_running_version(version)") < region.index("except Exception")
