@@ -111,7 +111,7 @@ class TestAppConfig:
 class TestKea3ConnectionMode:
     """v5.10.0 — [kea] connection_mode + api_ca / api_tls_verify, and
     the api6_url the server dicts carry for direct mode. connection_mode
-    is optional: absent → 'ca' → every prior release's behaviour."""
+    is optional: absent → 'ca' → every prior release's behavior."""
 
     def test_defaults_when_key_absent(self, isolated_config):
         assert extensions.KEA_CONNECTION_MODE == "ca"

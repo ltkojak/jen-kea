@@ -4,7 +4,7 @@
 {% from '_icons.html' import icon_trash %}
 <div class="page-header">
     <h1>🎨 Appearance</h1>
-    <p>Logo, nav colour, favicon, and the brand icons shown in the device inventory.</p>
+    <p>Logo, nav color, favicon, and the brand icons shown in the device inventory.</p>
 </div>
 
 {% set toc = [('app-branding', 'Branding'), ('app-favicon', 'Favicon'), ('app-icons', 'Brand Icons')] %}
@@ -16,7 +16,7 @@
         <span class="card-title">🎨 Branding</span>
     </div>
     <p style="color:var(--text-muted);font-size:12px;margin-bottom:20px;">
-        Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar colour to distinguish environments.
+        Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar color to distinguish environments.
     </p>
     <div class="form-row">
         <div class="form-group">
@@ -38,7 +38,7 @@
             </form>
         </div>
         <div class="form-group">
-            <label>Nav Bar Colour</label>
+            <label>Nav Bar Color</label>
             <form method="POST" action="/settings/save-nav-color"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                     <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">

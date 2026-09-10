@@ -328,10 +328,10 @@ Jen supports TOTP-based MFA (Google Authenticator, Authy, 1Password, etc.).
 
 Go to **Settings → Access & Security → MFA policy** to set the policy:
 
-| Policy | Behaviour |
+| Policy | Behavior |
 |---|---|
 | Off | MFA disabled for all users |
-| Optional | Users can enrol but are not required to |
+| Optional | Users can enroll but are not required to |
 | Required for Admins | Admin accounts must use MFA |
 | Required for All | All accounts must use MFA |
 
@@ -671,7 +671,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **Kea clock in sync** | the `Date` header Kea returns vs Jen's clock — warns > 30 s, fails > 5 min (HA and lease timers assume synced clocks) | NTP on the Kea host and the Jen host |
 | **Subnet map matches Kea** | `check_config_drift()` — Jen's `[subnets]` list vs Kea's live config | Settings → Kea → `[subnets]` |
 | **Every Kea subnet is named** | every subnet id in Kea's config has a name in Jen's `[subnets]`, and vice-versa | Settings → Kea → `[subnets]` |
-| **Pool utilisation** | the latest lease snapshot per subnet — warns at the alert threshold, fails at 95 % | Subnets page; widen the pool |
+| **Pool utilization** | the latest lease snapshot per subnet — warns at the alert threshold, fails at 95 % | Subnets page; widen the pool |
 | **Lease snapshots current** | the newest snapshot is no older than 2× the snapshot interval | Settings → System; check the background worker is running |
 | **kea-dhcp-ddns reachable** | when dhcp4 `dhcp-ddns.enable-updates` is on: `version-get` on the `d2` service (`ca` mode only) | DDNS page; the D2 service |
 | **kea-dhcp-ddns error counters** | D2's `ncr-error` + `update-error` statistics | DDNS page; the DNS server / TSIG keys |

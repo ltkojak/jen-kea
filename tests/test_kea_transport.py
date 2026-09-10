@@ -230,7 +230,7 @@ class TestPerServerV6Precedence:
         assert fake_http.calls[0]["url"] == "http://kea6-primary:8006"
 
 
-class TestResponseNormalisation:
+class TestResponseNormalization:
     def test_list_wrapped_response_is_unwrapped(self, fake_http):
         fake_http.reply = [{"result": 0, "text": "ok"}]
         assert kea_svc.kea_command("version-get") == {"result": 0, "text": "ok"}

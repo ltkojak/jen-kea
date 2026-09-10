@@ -1,13 +1,13 @@
 """
 jen/models/db.py
 ────────────────
-Database connection helpers and schema initialisation.
+Database connection helpers and schema initialization.
 
 Connection pooling via dbutils.pooled_db.PooledDB keeps a small number of
 TCP connections open permanently so requests reuse existing connections
 instead of paying the ~1s TCP + MySQL handshake cost on every request.
 
-Pool is initialised lazily on first use so startup doesn't block if the
+Pool is initialized lazily on first use so startup doesn't block if the
 DB is temporarily unavailable.
 """
 
@@ -24,7 +24,7 @@ from jen import extensions
 logger = logging.getLogger(__name__)
 
 # ── Connection pools ──────────────────────────────────────────────────────────
-# Initialised once on first use. Thread-safe — PooledDB handles locking.
+# Initialized once on first use. Thread-safe — PooledDB handles locking.
 
 _jen_pool = None
 _kea_pool = None
@@ -105,7 +105,7 @@ def get_jen_db() -> pymysql.connections.Connection:
             if _jen_pool is None:  # double-checked locking
                 try:
                     _jen_pool = _make_jen_pool()
-                    logger.info("Jen DB connection pool initialised (dbutils)")
+                    logger.info("Jen DB connection pool initialized (dbutils)")
                 except Exception as e:
                     logger.warning(f"Jen DB pool failed, using direct connections: {e}")
                     return pymysql.connect(
@@ -131,7 +131,7 @@ def get_kea_db() -> pymysql.connections.Connection:
             if _kea_pool is None:
                 try:
                     _kea_pool = _make_kea_pool()
-                    logger.info("Kea DB connection pool initialised (dbutils)")
+                    logger.info("Kea DB connection pool initialized (dbutils)")
                 except Exception as e:
                     logger.warning(f"Kea DB pool failed, using direct connections: {e}")
                     return pymysql.connect(
@@ -209,7 +209,7 @@ def get_kea6_db() -> pymysql.connections.Connection:
             if _kea6_pool is None:
                 try:
                     _kea6_pool = _make_kea6_pool()
-                    logger.info("Kea6 DB connection pool initialised (dbutils)")
+                    logger.info("Kea6 DB connection pool initialized (dbutils)")
                 except Exception as e:
                     logger.warning(f"Kea6 DB pool failed, using direct connections: {e}")
                     return pymysql.connect(
@@ -234,7 +234,7 @@ def get_kea6_db() -> pymysql.connections.Connection:
 #         with db.cursor() as cur:
 #             cur.execute(...)
 #
-# Explicit db.commit() calls inside the block remain valid and are honoured
+# Explicit db.commit() calls inside the block remain valid and are honored
 # immediately; the final commit on clean exit is then a harmless no-op.
 
 
@@ -313,7 +313,7 @@ def reset_pools() -> None:
 
 def init_jen_db() -> None:
     """
-    Initialise the Jen database: run all pending schema migrations,
+    Initialize the Jen database: run all pending schema migrations,
     then seed the default admin account if no users exist.
     Called once at startup by the app factory.
 

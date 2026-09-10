@@ -4,7 +4,7 @@
 
 ### First full release
 
-- **Overview page** — all accessible subnets shown as cards with stacked utilisation bars (dynamic/reserved/static/available) and percentage used
+- **Overview page** — all accessible subnets shown as cards with stacked utilization bars (dynamic/reserved/static/available) and percentage used
 - **Subnet detail page** — full address space table showing every IP in the pool with its current status
 - **Status types:** Available (no lease/reservation/note), Dynamic (active DHCP lease), Reserved (Kea reservation), Static (manually noted)
 - **Notes/annotations** — click "＋ Note" on any IP to add a label (e.g. "NAS"), owner (e.g. "Matthew"), and free-text notes. Edit or remove at any time.

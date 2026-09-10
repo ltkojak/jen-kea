@@ -13,7 +13,7 @@ CONTENT_DIR="/var/lib/jen"          # v5.13.0 — uploads, DB backups, plugins
 SERVICE_FILE="/etc/systemd/system/jen.service"
 SUDOERS_FILE="/etc/sudoers.d/jen"
 
-# ── ANSI colours ──────────────────────────────────────────────────────────────
+# ── ANSI colors ──────────────────────────────────────────────────────────────
 R='\033[0;31m'
 G='\033[0;32m'
 Y='\033[1;33m'
@@ -105,7 +105,7 @@ blank
 printf "  ${Y}  ▸${NC} Uninstall Jen v${INSTALLED_VER}? [y/N]: "
 read -r CONFIRM
 if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
-    info "Uninstall cancelled."
+    info "Uninstall canceled."
     exit 0
 fi
 
@@ -129,7 +129,7 @@ if [[ "$REMOVAL_LEVEL" == "3" ]]; then
     printf "  ${Y}  ▸${NC} Type ${B}DELETE${NC} to confirm full removal: "
     read -r DELETE_CONFIRM
     if [[ "$DELETE_CONFIRM" != "DELETE" ]]; then
-        warn "Full removal cancelled — downgrading to app-only removal."
+        warn "Full removal canceled — downgrading to app-only removal."
         REMOVAL_LEVEL="1"
     fi
 fi

@@ -17,7 +17,7 @@ inside a string, untestable except by asserting on the generated text.
     jen/services/kea_host.py, which prefers the fixed-function
     `jen-kea-helper` and falls back to the legacy `sudo python3` path.
 
-The behaviour is a verbatim port of what the old remote scripts did —
+The behavior is a verbatim port of what the old remote scripts did —
 same option-data upsert (routers code 3, domain-name-servers code 6,
 v6 dns-servers code 23, all `csv-format: true`), same "no change" and
 "id exists" / "not found" outcomes.

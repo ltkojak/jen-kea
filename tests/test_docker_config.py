@@ -123,7 +123,7 @@ class TestEnvValueEscaping:
         assert "JEN_DATABASE_MODE" in fn
         assert "JEN_MYSQL_PASSWORD=.." not in fn  # the buggy grep is gone
 
-    def test_env_value_helper_behaviour(self, tmp_path):
+    def test_env_value_helper_behavior(self, tmp_path):
         import shutil
         import subprocess
 
@@ -171,7 +171,7 @@ class TestDocsDoNotTellDockerUsersToEditJenConfig:
         assert ".env" in md
 
 
-class TestSeedHonoursInitialAdminPassword:
+class TestSeedHonorsInitialAdminPassword:
     def test_init_jen_db_reads_the_env_var(self):
         src = (REPO / "jen" / "models" / "db.py").read_text(encoding="utf-8")
         assert "JEN_INITIAL_ADMIN_PASSWORD" in src

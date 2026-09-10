@@ -60,7 +60,7 @@ def user_has_mfa(user_id):
 
 
 def _canonical_backup_code(code):
-    """Normalise a submitted backup code to the exact stored form
+    """Normalize a submitted backup code to the exact stored form
     (`XXXXXXXX-XXXXXXXX`, uppercase). Accepts it with or without the
     dash, with stray spaces, any case. Returns None if it isn't 16 hex
     digits — the previous verify path stripped the dash before hashing,

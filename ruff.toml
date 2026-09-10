@@ -24,7 +24,7 @@ line-length = 120
 exclude = ["legacy"]
 
 # v5.6.0 — the whole codebase was run through `ruff format` +
-# `ruff check --fix` (one mechanical, zero-behaviour-change pass), and
+# `ruff check --fix` (one mechanical, zero-behavior-change pass), and
 # CI now gates on `ruff check .` and `ruff format --check .` (see
 # .github/workflows/tests.yml). New lint/format regressions fail the
 # build. Rule selection stays deliberately conservative — the goal is

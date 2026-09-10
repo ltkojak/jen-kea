@@ -28,7 +28,7 @@
     </div>
 
     {% if s.total %}
-    <!-- Stacked utilisation bar -->
+    <!-- Stacked utilization bar -->
     <div style="height:8px;border-radius:4px;background:var(--surface2);display:flex;overflow:hidden;margin-bottom:10px;">
         {% if s.dynamic %}
         <div style="width:{{ (s.dynamic / s.total * 100)|round }}%;background:var(--primary);"></div>

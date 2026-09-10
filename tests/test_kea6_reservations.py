@@ -1,7 +1,7 @@
 """
 tests/test_kea6_reservations.py
 ───────────────────────────────
-DHCPv6 host reservations: get_ipv6_reservations(), DUID normalisation, the add/delete service functions and their routes, and the v6 Reservations view.
+DHCPv6 host reservations: get_ipv6_reservations(), DUID normalization, the add/delete service functions and their routes, and the v6 Reservations view.
 
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """

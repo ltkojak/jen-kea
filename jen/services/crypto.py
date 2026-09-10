@@ -37,7 +37,7 @@ Storage format
 ──────────────
 `encrypt_secret()` returns `"v1:" + <fernet token>`. The `v1:` prefix
 is a version tag so a future key rotation or algorithm change is a
-recognisable, migratable format rather than an ambiguous blob.
+recognizable, migratable format rather than an ambiguous blob.
 `decrypt_secret()` accepts three inputs:
   1. `"v1:…"`            → Fernet-decrypt.
   2. a bare legacy value → returned unchanged (pre-v5.4.0 plaintext
@@ -110,7 +110,7 @@ def _load_or_create_key() -> bytes:
                 with open(key_file) as f:
                     existing = f.read().strip()
                 if _looks_like_fernet_key(existing):
-                    Fernet(existing.encode())  # validate it initialises
+                    Fernet(existing.encode())  # validate it initializes
                     return existing.encode()
             except Exception as e:
                 raise MfaKeyUnavailable(

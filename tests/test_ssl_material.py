@@ -144,7 +144,7 @@ class TestRunPyStartupGuard:
         assert run._cert_pair_loadable(str(tmp_path / "ok.crt"), str(tmp_path / "other.key")) is False
         assert run._cert_pair_loadable(str(tmp_path / "missing.crt"), str(tmp_path / "ok.key")) is False
 
-    def test_ssl_configured_honours_the_disabled_flag(self):
+    def test_ssl_configured_honors_the_disabled_flag(self):
         """conftest stubs jen.config.ssl_configured for the whole session
         (tests run over plain HTTP), so the real function is exercised
         from its source: the env guard must sit before the file checks."""

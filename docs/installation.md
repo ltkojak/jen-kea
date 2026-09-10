@@ -95,7 +95,7 @@ docker compose -f docker-compose.mysql.yml up -d
 
 ### Method 4 — Manual bare metal
 
-For a distro `install.sh` doesn't recognise, an air-gapped host, or
+For a distro `install.sh` doesn't recognize, an air-gapped host, or
 config management — the full step-by-step (packages, the `/opt/jen/venv`,
 every path and owner, service + sudoers + updater) is in
 [`manual-install.md`](manual-install.md).

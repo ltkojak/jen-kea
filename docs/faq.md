@@ -228,7 +228,7 @@ Use one of your backup codes. Each code works once. After using one, generate a 
 
 ### Can MFA be required for all users?
 
-Yes. Go to **Settings → System → MFA Policy** and set it to "Required for All". Users without MFA enrolled will be forced to enrol on their next login.
+Yes. Go to **Settings → System → MFA Policy** and set it to "Required for All". Users without MFA enrolled will be forced to enroll on their next login.
 
 ---
 

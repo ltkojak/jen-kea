@@ -91,7 +91,7 @@ class AppConfig:
         extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
 
         # v5.10.0 — Control-Agent-less mode. Default 'ca' = every prior
-        # release's behaviour, unchanged; an unrecognised value is treated
+        # release's behavior, unchanged; an unrecognized value is treated
         # as 'ca' rather than raising (a typo mustn't break a working
         # install). See jen/services/kea.py::_endpoint_for().
         _mode = cfg.get("kea", "connection_mode", fallback="ca").strip().lower()
@@ -418,7 +418,7 @@ def ssl_configured() -> bool:
     cannot be loaded (a mismatched key, a truncated PEM) and it has fallen
     back to HTTP-only rather than crash-looping. Everything that keys on
     "is SSL on" — the HTTPS redirect, the Secure cookie flag, the settings
-    badges — must agree with what's actually being served, so honour it
+    badges — must agree with what's actually being served, so honor it
     here, at the one choke point.
     """
     if os.environ.get("JEN_SSL_DISABLED") == "1":

@@ -5,7 +5,7 @@ v5.4.0 — TOTP shared secrets (`mfa_methods.secret`) are encrypted at
 rest with a Fernet key kept outside the database
 (jen/services/crypto.py). These tests cover the crypto primitives,
 migration 17 (which wraps pre-existing plaintext rows), the encrypt-on-
-enrol / decrypt-on-verify wiring, and the fail-closed behaviour when a
+enroll / decrypt-on-verify wiring, and the fail-closed behavior when a
 secret can't be decrypted (e.g. a DB restored without its /etc/jen key).
 
 conftest repoints extensions.MFA_KEY_PATH at /tmp for the whole suite.
@@ -212,7 +212,7 @@ class TestVerifyTotp:
             self._cleanup("_v_bad2", "_v_good2")
 
 
-# ── Enrolment route stores ciphertext, not the submitted base32 ─────────────
+# ── Enrollment route stores ciphertext, not the submitted base32 ─────────────
 class TestEnrollRoute:
     def test_enroll_stores_encrypted_secret(self, logged_in_client):
         raw = pyotp.random_base32()
@@ -231,7 +231,7 @@ class TestEnrollRoute:
             with jen_db() as db, db.cursor() as cur:
                 cur.execute("SELECT secret FROM mfa_methods WHERE user_id=1 AND name='_enroll_probe'")
                 row = cur.fetchone()
-            assert row is not None, "enrolment did not persist a method"
+            assert row is not None, "enrollment did not persist a method"
             assert row["secret"].startswith("v1:")
             assert row["secret"] != raw
             assert crypto.decrypt_secret(row["secret"]) == raw

@@ -8,7 +8,7 @@ discarded (Python's logging module falls back to `logging.lastResort`,
 a bare StreamHandler(stderr) that only handles WARNING and above, when
 no handler is configured anywhere in the logger hierarchy). The
 workaround visible in jen/models/db.py before this fix — logging
-routine "connection pool initialised" events at WARNING instead of
+routine "connection pool initialized" events at WARNING instead of
 INFO — existed specifically so those messages would actually appear.
 That's no longer necessary once logging is properly configured; see
 the corresponding fix in db.py.

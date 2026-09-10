@@ -99,7 +99,7 @@ SETTINGS_GROUPS = [
         "label": "Appearance",
         "icon": "🎨",
         "url": "/settings/appearance",
-        "blurb": "Logo, nav colour, favicon, brand icons",
+        "blurb": "Logo, nav color, favicon, brand icons",
         "match": ("settings.settings_appearance", "settings.settings_icons"),
     },
     {

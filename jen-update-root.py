@@ -472,7 +472,7 @@ def install_python_dependencies(requirements_path, python_bin):
     *staged* requirements.txt before any file in /opt/jen is touched, so
     a release that genuinely needs a new library (or a transient PyPI
     problem) leaves the running install exactly as it was, rather than
-    the pre-5.8.0 behaviour of logging a warning and restarting into a
+    the pre-5.8.0 behavior of logging a warning and restarting into a
     half-updated app.
     """
     if not os.path.isfile(requirements_path):
@@ -829,7 +829,7 @@ def _prune_old_releases(releases_dir=RELEASES_DIR, current_link=CURRENT_LINK, in
         snaps = sorted(n for n in os.listdir(install_dir) if n.startswith(".rollback-"))
     except OSError:
         snaps = []
-    for name in snaps[:-1]:  # newest stays (mirrors the pre-5.14 behaviour)
+    for name in snaps[:-1]:  # newest stays (mirrors the pre-5.14 behavior)
         path = os.path.join(install_dir, name)
         if os.path.exists(os.path.join(path, KEEP_MARKER)):
             log(f"Keeping {name} — marked for recovery by an earlier failed rollback.")

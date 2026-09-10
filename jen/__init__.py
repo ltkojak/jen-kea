@@ -1,7 +1,7 @@
 """
 jen/__init__.py
 ───────────────
-Application factory. Creates the Flask app, initialises all
+Application factory. Creates the Flask app, initializes all
 extensions, registers blueprints, and wires up global middleware.
 
 Usage:
@@ -23,7 +23,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.14.0"
+JEN_VERSION = "5.14.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -66,7 +66,7 @@ login_manager = LoginManager()
 def create_app() -> Flask:
     """
     Create and configure the Flask application.
-    Loads config, initialises all globals, registers every blueprint.
+    Loads config, initializes all globals, registers every blueprint.
     """
     # ── Config & globals ──────────────────────────────────────────────────────
     app_config.reload()

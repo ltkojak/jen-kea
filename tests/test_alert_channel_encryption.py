@@ -6,7 +6,7 @@ Pushover keys, ntfy tokens, Slack/Discord/webhook URLs) is encrypted at
 rest with the same Fernet key as the TOTP secrets (jen/services/crypto.py).
 
 Covers the encode/decode helpers, migration 18 (wraps pre-existing
-plaintext blobs), the save-route wiring, and the fail-soft behaviour when
+plaintext blobs), the save-route wiring, and the fail-soft behavior when
 a blob can't be decrypted (a DB restored without its /etc/jen key — a
 channel goes quiet rather than crashing alert dispatch).
 

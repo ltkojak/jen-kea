@@ -352,7 +352,7 @@ def get_channel_config(channel):
 
 
 def encode_channel_config(config):
-    """Serialise a channel config dict for storage, encrypted at rest.
+    """Serialize a channel config dict for storage, encrypted at rest.
 
     Returns a JSON string *literal* — `json.dumps("v1:…")` — so the value
     still satisfies the `config` column's JSON validity (MariaDB enforces

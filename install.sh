@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.14.0"
+JEN_VERSION="5.14.1"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -78,7 +78,7 @@ for arg in "$@"; do
     esac
 done
 
-# ── ANSI colours ──────────────────────────────────────────────────────────────
+# ── ANSI colors ──────────────────────────────────────────────────────────────
 R='\033[0;31m'    # red
 G='\033[0;32m'    # green
 Y='\033[1;33m'    # yellow
@@ -214,7 +214,7 @@ _vlen() {
 # Usage: _box_line "  ${B}Some text${NC}" ["$C"|"$R"]
 _box_line() {
     local content="$1"
-    local bc="${2:-$C}"   # border colour
+    local bc="${2:-$C}"   # border color
     local vis pad
     vis=$(_vlen "$content")
     pad=$(printf '%*s' $((54 - vis)) '')
@@ -1439,7 +1439,7 @@ main() {
         echo -e "  ${B}Existing installation detected:${NC} v${EXISTING_VERSION/unknown/—}"
         blank
         [[ "$(prompt_yn "Upgrade to Jen v${JEN_VERSION}?" "y")" == "n" ]] && \
-            { info "Upgrade cancelled."; exit 0; }
+            { info "Upgrade canceled."; exit 0; }
         blank
         if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
             spinner_start "Backing up Jen and Kea databases..."

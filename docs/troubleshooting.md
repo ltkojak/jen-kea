@@ -194,7 +194,8 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
   the **helper isn't installed**. Use **Install helper** in Settings →
   Kea → SSH (needs the legacy `/etc/sudoers.d/jen` grant present once),
   or copy it by hand:
-  `sudo install -o root -g root -m 0755 /opt/jen/jen-kea-helper /usr/local/sbin/jen-kea-helper`.
+  `sudo install -o root -g root -m 0755 /opt/jen/current/app/jen-kea-helper /usr/local/sbin/jen-kea-helper`
+  (`/opt/jen/jen-kea-helper` on a pre-5.14 flat install).
 
 Once every host shows `v1` you can delete `/etc/sudoers.d/jen` (the old
 `python3` = root grant). Full details: **Admin Guide → Kea host helper**.
@@ -319,7 +320,7 @@ rejected.
 This fails safe, not open — affected users are not bypassed. Recovery:
 
 - **The user still has backup codes** — log in with one of those, then
-  re-enrol the authenticator (Settings → Security), which writes a
+  re-enroll the authenticator (Settings → Security), which writes a
   fresh secret under the new key.
 - **An admin resets the user's MFA** — Users → edit user → reset MFA,
   then the user re-enrols.

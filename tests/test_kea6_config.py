@@ -1,7 +1,7 @@
 """
 tests/test_kea6_config.py
 ─────────────────────────
-Kea6 config plumbing: SUBNET6_MAP derivation, [kea6] section fallback to v4, is_ipv6_enabled(), the kea6 command choke point, the shared kea_db pool, and the zero-behaviour-change guarantee for v4-only installs.
+Kea6 config plumbing: SUBNET6_MAP derivation, [kea6] section fallback to v4, is_ipv6_enabled(), the kea6 command choke point, the shared kea_db pool, and the zero-behavior-change guarantee for v4-only installs.
 
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
@@ -159,7 +159,7 @@ class TestKea6ConfigFallback:
         assert extensions.KEA_API_CA == ""
         assert extensions.KEA_API_TLS_VERIFY is True
 
-    def test_unrecognised_connection_mode_is_treated_as_ca(self):
+    def test_unrecognized_connection_mode_is_treated_as_ca(self):
         AppConfig().apply(self._base_cfg(kea_extra="connection_mode = wat"))
         assert extensions.KEA_CONNECTION_MODE == "ca"
 

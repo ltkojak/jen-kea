@@ -171,7 +171,7 @@ CONTENT_KEYS_DIR = os.path.join(CONTENT_DIR, "keys")
 FAVICON_DEFAULT_PATH = os.path.join(JEN_ROOT, "static", "favicon.ico")
 FAVICON_PATH = os.path.join(CONTENT_BRANDING_DIR, "favicon.ico")
 # sha256 of the shipped static/favicon.ico — the app-side legacy migration
-# uses it to tell "operator customised the favicon" from "still the default".
+# uses it to tell "operator customized the favicon" from "still the default".
 # Regenerate when static/favicon.ico changes (test_content_layout guards it).
 SHIPPED_FAVICON_SHA256 = "48dd30fb607fe4e17f3c32662f2221d3d0eda1639bd09bc1d5c78524aebadb30"
 

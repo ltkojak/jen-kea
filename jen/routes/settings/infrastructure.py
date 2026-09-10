@@ -219,7 +219,7 @@ def save_infra_kea():
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
     # v5.10.0 — Kea 3 control plane. connection_mode defaults to 'ca'
-    # (every prior release's behaviour); api_ca / api_tls_verify only
+    # (every prior release's behavior); api_ca / api_tls_verify only
     # matter for an https:// socket URL.
     connection_mode = request.form.get("connection_mode", "ca").strip().lower()
     api_ca = request.form.get("api_ca", "").strip()

@@ -1,7 +1,7 @@
 """
 jen/routes/settings/branding.py
 ─────────────────────────────
-Custom icons, favicon, nav logo, nav colour.
+Custom icons, favicon, nav logo, nav color.
 """
 
 import logging

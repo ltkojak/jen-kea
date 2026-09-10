@@ -152,7 +152,7 @@ The DDNS Status page shows activity from the Technitium DNS update script that r
 
 ### Log Activity
 
-The log panel shows the most recent 200 lines from the DDNS log file, newest first. Lines are colour-coded:
+The log panel shows the most recent 200 lines from the DDNS log file, newest first. Lines are color-coded:
 
 - **Green** — successful DNS updates (new leases added)
 - **Yellow** — deletions (leases expired or released)

@@ -219,7 +219,7 @@ class TestKeaSubnetsDeclared:
 # ── capacity ───────────────────────────────────────────────────────────────
 
 
-class TestPoolUtilisation:
+class TestPoolUtilization:
     def _seed(self, db, rows):
         with db.cursor() as cur:
             cur.execute("DELETE FROM lease_history")
@@ -235,27 +235,27 @@ class TestPoolUtilisation:
         with db.cursor() as cur:
             cur.execute("DELETE FROM lease_history")
         db.commit()
-        c = health._pool_utilisation(_ctx())
+        c = health._pool_utilization(_ctx())
         assert c.status == "skip"
 
     def test_below_threshold_ok(self, db):
         self._seed(db, [(1, 10, 100, 5)])
-        c = health._pool_utilisation(_ctx())
+        c = health._pool_utilization(_ctx())
         assert c.status == "ok"
 
     def test_over_threshold_warns(self, db):
         self._seed(db, [(1, 85, 100, 5)])
-        c = health._pool_utilisation(_ctx())
+        c = health._pool_utilization(_ctx())
         assert c.status == "warn"
 
     def test_near_exhaustion_fails(self, db):
         self._seed(db, [(1, 98, 100, 5)])
-        c = health._pool_utilisation(_ctx())
+        c = health._pool_utilization(_ctx())
         assert c.status == "fail"
 
     def test_restricted_viewer_only_sees_own(self, db):
         self._seed(db, [(1, 98, 100, 5), (2, 10, 100, 5)])
-        c = health._pool_utilisation(_ctx(subnet_filter=lambda sid: sid == 2))
+        c = health._pool_utilization(_ctx(subnet_filter=lambda sid: sid == 2))
         assert c.status == "ok"  # subnet 1 (the hot one) filtered out
 
 
@@ -426,9 +426,9 @@ class TestRunChecks:
         assert [c.id for c in checks] == health.CHECK_IDS
         assert all(c.group in health.GROUP_ORDER for c in checks)
 
-    def test_summarise(self):
+    def test_summarize(self):
         checks = [health.Check("a", "A", "jen", "ok"), health.Check("b", "B", "jen", "warn")]
-        assert health.summarise(checks) == {"ok": 1, "warn": 1, "fail": 0, "skip": 0}
+        assert health.summarize(checks) == {"ok": 1, "warn": 1, "fail": 0, "skip": 0}
 
 
 # ── kea.server_clock_offset against a real local server ─────────────────────
@@ -617,10 +617,10 @@ class TestHealthCenterPage:
         db.commit()
 
         full, _u1 = restricted_client(client, db, allowed_subnets=None, role="admin", username="hc_full")
-        assert _check_status(full.get("/health-center/data").get_json(), "pool_utilisation") == "fail"
+        assert _check_status(full.get("/health-center/data").get_json(), "pool_utilization") == "fail"
 
         scoped, _u2 = restricted_client(client, db, allowed_subnets=[2], role="viewer", username="hc_scoped")
-        assert _check_status(scoped.get("/health-center/data").get_json(), "pool_utilisation") == "ok"
+        assert _check_status(scoped.get("/health-center/data").get_json(), "pool_utilization") == "ok"
 
 
 class TestHealthNav:

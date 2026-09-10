@@ -61,7 +61,7 @@ and as a gate on every tagged release (`release.yml`).
   `mock_kea` fixture to stub the Kea API.
 - A new schema change is a **new numbered migration**, never an edit to an existing one
   — then add a test in `tests/test_migrations.py`.
-- **Probe, redirect and TLS behaviour is tested against real local servers**, not a
+- **Probe, redirect and TLS behavior is tested against real local servers**, not a
   mocked `urlopen`. v5.8.3's SSL health-check bug shipped behind a test that mocked
   `urlopen` *raising* `HTTPError(302)` — a real redirect is followed, never raised. Stand
   up `http.server` / `jen.httpredirect.make_server` / an `ssl`-wrapped server on an

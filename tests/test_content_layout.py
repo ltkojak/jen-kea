@@ -144,7 +144,7 @@ class TestMigrateLegacyContent:
         content_svc.migrate_legacy_content()
         assert (content / "icons" / "acme.svg").read_text() == "NEW"
 
-    def test_favicon_only_when_customised(self, legacy):
+    def test_favicon_only_when_customized(self, legacy):
         root, content = legacy
         # identical to the shipped default → not migrated
         default = pathlib.Path("static/favicon.ico").read_bytes()

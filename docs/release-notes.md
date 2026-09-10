@@ -62,7 +62,7 @@ With this release, the `jen/` package is complete. `jen.py` is retained for refe
 
 ### Code Modularization — Phase 1
 
-This release introduces the `jen/` Python package alongside the existing `jen.py` monolith. All behaviour is identical — this is a structural refactor that sets up the foundation for route blueprint migration in 2.7.x and the full 3.0 rewrite.
+This release introduces the `jen/` Python package alongside the existing `jen.py` monolith. All behavior is identical — this is a structural refactor that sets up the foundation for route blueprint migration in 2.7.x and the full 3.0 rewrite.
 
 **No changes to any feature, UI, API, or configuration.**
 

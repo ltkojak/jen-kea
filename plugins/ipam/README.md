@@ -10,7 +10,7 @@ Full IP address space management for Jen. See every IP in each subnet at a glanc
 
 ## Features
 
-- **Overview page** — all subnets as cards with stacked utilisation bars (dynamic / reserved / static / available)
+- **Overview page** — all subnets as cards with stacked utilization bars (dynamic / reserved / static / available)
 - **Subnet detail** — every IP in the pool with its current status and any annotations
 - **Edit modal** — context-aware per IP status:
   - Dynamic / Reserved: notes only (Kea controls identity)

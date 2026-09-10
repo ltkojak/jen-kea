@@ -43,7 +43,7 @@ def _pending_enroll_user():
     """The user in the middle of forced MFA enrollment: password verified
     at login, `mfa_pending_enroll` flagged in the session, but NOT a
     Flask-Login session yet (see jen/routes/auth.py). Returns a User or
-    None. Only /mfa/enroll and /mfa/verify honour this state — every
+    None. Only /mfa/enroll and /mfa/verify honor this state — every
     @login_required route still turns them away until enrollment finishes."""
     if not session.get("mfa_pending_enroll"):
         return None

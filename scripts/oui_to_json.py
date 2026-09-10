@@ -11,7 +11,7 @@ file the module loads once at import. This script is how that file gets
 loaded from the JSON — and dumps it back out sorted, one OUI per line,
 UTF-8 (emoji stay literal). Running it with no source change is a
 no-op reformat; to add or correct a vendor, edit the JSON and run this
-to normalise it.
+to normalize it.
 """
 
 import json

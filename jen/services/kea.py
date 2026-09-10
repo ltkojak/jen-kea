@@ -71,7 +71,7 @@ def _tls_client_cert():
     [kea] api_client_cert AND api_client_key are both set, else None
     (requests' own default). Kea's per-daemon https control socket
     defaults cert-required=true, so an https:// endpoint needs this;
-    None keeps ca-mode / http:// behaviour byte-identical (v5.10.2)."""
+    None keeps ca-mode / http:// behavior byte-identical (v5.10.2)."""
     if extensions.KEA_API_CLIENT_CERT and extensions.KEA_API_CLIENT_KEY:
         return (extensions.KEA_API_CLIENT_CERT, extensions.KEA_API_CLIENT_KEY)
     return None

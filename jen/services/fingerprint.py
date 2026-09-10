@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # OUI -> (manufacturer, device_type, icon). ~1,350 entries; moved out of
 # this module into a JSON data file in v5.11.1 (the dict dominated the
-# file). Regenerate/normalise with scripts/oui_to_json.py.
+# file). Regenerate/normalize with scripts/oui_to_json.py.
 # device_type values: apple, android, windows, linux, amazon, iot, tv,
 #                     printer, nas, network, voip, gaming, raspberry_pi, unknown
 _OUI_DB_PATH = os.path.join(os.path.dirname(__file__), "oui_db.json")
@@ -251,7 +251,7 @@ def friendly_user_agent(ua: str) -> str:
     """
     Parse a raw User-Agent string into a short human-readable description
     like "iPhone (iOS 18.7) · Safari" or "Windows · Chrome 147".
-    Returns "Unknown device" if the string is empty or unrecognisable.
+    Returns "Unknown device" if the string is empty or unrecognizable.
     """
     import re
 

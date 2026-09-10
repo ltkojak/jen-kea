@@ -2,7 +2,7 @@
 jen/services/dbexport.py
 ────────────────────────
 Database export, import, backup scheduling, and migration logic.
-All operations clearly labelled by which database they touch (Jen or Kea).
+All operations clearly labeled by which database they touch (Jen or Kea).
 """
 
 import contextlib
@@ -130,7 +130,7 @@ def _direct_conn(host, port, user, password, database):
 
 
 def _dump_table(conn, table):
-    """Return all rows from table as a list of dicts, with datetime serialised."""
+    """Return all rows from table as a list of dicts, with datetime serialized."""
     with conn.cursor() as cur:
         cur.execute(f"SELECT * FROM `{table}`")
         rows = cur.fetchall()

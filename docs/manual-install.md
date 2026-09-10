@@ -2,7 +2,7 @@
 
 `sudo ./install.sh` is the supported path and does everything below
 interactively. This page is for the cases it doesn't cover — a distro
-it doesn't recognise, an air-gapped or config-managed host, or just
+it doesn't recognize, an air-gapped or config-managed host, or just
 wanting to know exactly what lands where.
 
 Targets Ubuntu 22.04 / 24.04 + Python 3.10+ + Kea 3.0+ with a

@@ -102,12 +102,14 @@ fail on you:
 - **Don't bump the version.** `JEN_VERSION` and the other version strings
   move together at release time, not per-PR. Leave them alone; the
   maintainer bumps them with the `CHANGELOG.md` entry.
+- **American spelling** in code, comments, log lines, UI text and docs
+  (`color`, `behavior`, `initialize`, `utilization`).
 
 ## Commit and PR style
 
 - Focused commits with a clear message explaining *why*, not just what.
 - One logical change per PR where practical.
-- Add or update tests for behaviour changes.
+- Add or update tests for behavior changes.
 - If your change is user-visible, note it in the PR description so it can
   go in the changelog — `CHANGELOG.md` entries are narrative prose, not
   terse bullets.

@@ -10,12 +10,12 @@ and every existing `url_for("settings.…")` keeps resolving:
                     and the save handlers for Kea, DB, SSH, DDNS, HA,
                     ports, metrics
   authoring       — "generate a Kea config over SSH" flow + binary checks
-  branding        — icons, favicon, nav logo, nav colour (Appearance page)
+  branding        — icons, favicon, nav logo, nav color (Appearance page)
   security        — session timeout, rate limiting, SSL certs
   updates         — check-for-update, update-status, self-update trigger
   nav             — the navigation model base.html renders (v5.9.0)
 
-v5.9.0 — Settings was reorganised into seven task-shaped groups (see
+v5.9.0 — Settings was reorganized into seven task-shaped groups (see
 nav.py and CHANGELOG). This module keeps the landing page, the System
 page (updates hub, ports, restart, retention), and the Access & Security
 and Appearance pages. Every POST endpoint URL is unchanged; only GET

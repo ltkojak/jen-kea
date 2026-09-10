@@ -2,7 +2,25 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.14.0] - 2026-09-10
+## [5.14.1] - 2026-09-10
+
+Housekeeping. A `sudo ./install.sh` upgrade (or, from 5.14.0, the in-app
+button) is all that's needed.
+
+### Changed
+
+- **Spelling is now American throughout** — comments, docstrings, log
+  lines, UI labels and docs. ~130 words: `colour` → `color`,
+  `behaviour` → `behavior`, `utilisation` → `utilization`,
+  `initialise` → `initialize`, and so on. No configuration keys, form
+  fields, route names or database values were British to begin with, so
+  nothing an operator has stored changes.
+- One Health Center check id changed with it: the JSON at
+  `/health-center/data` now reports `pool_utilization` (was
+  `pool_utilisation`). If you script against that endpoint, update the
+  key name.
+- The README shows real screenshots (dashboard, leases, subnets,
+  settings) instead of the mock SVG preview.
 
 Versioned release directories and an atomic upgrade. **The first upgrade
 to 5.14.0 must be run with `sudo ./install.sh`** — see "Upgrading" below.
@@ -133,7 +151,7 @@ one-line detail and a link straight to the page that fixes it: Kea
 reachability and version, HA state, whether the `host_cmds` / `lease_cmds`
 / `ha` hooks are loaded, clock skew between Kea and Jen (read off the
 HTTP `Date` header — Kea has no clock command), config drift, pool
-utilisation and snapshot freshness, kea-dhcp-ddns reachability and its
+utilization and snapshot freshness, kea-dhcp-ddns reachability and its
 error counters, TLS certificate expiry, both database round trips, the
 schema version, whether the `jen-kea-helper` is installed on each SSH
 host, and whether the background workers are running.
@@ -154,12 +172,12 @@ scripting.
   other alert type.
 - The `openssl x509` certificate-reading logic moved from the settings
   route into `jen/services/certs.py` so the check and the alert share it;
-  no behaviour change to the Settings → Access & Security page.
+  no behavior change to the Settings → Access & Security page.
 
 ## [5.11.1] - 2026-09-10
 
 Housekeeping — a wider lint net and the OUI table out of the code. No
-behaviour change; a `sudo ./install.sh` upgrade is all that's needed.
+behavior change; a `sudo ./install.sh` upgrade is all that's needed.
 
 ### Changed
 
@@ -251,7 +269,7 @@ since 5.9.0.
 Trigger an update from Settings and Jen tells you "this page will
 refresh automatically once Jen is back." It hasn't, since 5.9.0 — and
 not because of the virtualenv work, which is where the finger has been
-pointed. The 5.9.0 Settings reorganisation moved the update overlay and
+pointed. The 5.9.0 Settings reorganization moved the update overlay and
 its restart-poller onto the System page, but the update trigger kept
 redirecting to the Kea page, which has neither. So the update ran to
 completion and the browser just sat there until you reloaded by hand.
@@ -635,7 +653,7 @@ private key passed, gunicorn refused the pair at startup, and systemd's
 
 ## [5.9.0] - 2026-09-09
 
-Settings, reorganised. Plus three small hardenings of the in-app
+Settings, reorganized. Plus three small hardenings of the in-app
 updater from watching a real box go through the 5.8.4 update.
 
 ### Settings is seven groups, not nine tabs and a junk drawer
@@ -648,7 +666,7 @@ different. Users, the audit log, API keys and API docs lived under
 Settings because there was nowhere else. On a phone the nine-tab strip
 overflowed and a fourteen-card page was a long blind scroll.
 
-It's now organised by what you're trying to do:
+It's now organized by what you're trying to do:
 
 | Group | What's there |
 |---|---|
@@ -656,7 +674,7 @@ It's now organised by what you're trying to do:
 | **Databases** | Jen / Kea connection settings, plus the export, import, backups, schedule and migrate tools as tabs (superadmin) |
 | **Access & Security** | MFA policy, session timeout, rate limiting, SSL certificate; Users, API Keys and API Docs as sub-tabs |
 | **Alerts & Integrations** | Thresholds, channels, templates, DDNS/DNS provider, Prometheus |
-| **Appearance** | Logo, nav colour, favicon, brand icons |
+| **Appearance** | Logo, nav color, favicon, brand icons |
 | **System** | Jen updates and the plugin summary in one place, ports & threads (one card), restart, audit retention |
 | **Logs** | Audit log and the alert delivery log |
 
@@ -1103,7 +1121,7 @@ interactive login (~50–100 ms).
 
 ### Split the two monolith files (`settings.py`, `test_kea6.py`)
 
-Pure refactor — no behaviour change, no route or endpoint renamed.
+Pure refactor — no behavior change, no route or endpoint renamed.
 Both reviews flagged these as the maintainability frontier, and the
 next feature (Kea CA-less support) adds routes and fields to Settings,
 which is much nicer on a split module than a 2,060-line one.
@@ -1200,7 +1218,7 @@ redundant change of a password the operator had just chosen).
 ### Ruff is now a CI gate
 
 The whole codebase was run through `ruff format` + `ruff check --fix` —
-one mechanical, zero-behaviour-change pass (verified: bandit shows no
+one mechanical, zero-behavior-change pass (verified: bandit shows no
 new findings, the full suite is green). The ~71 backlog findings
 (compound one-liners, unsorted imports, one unused var, thirteen
 ambiguous `l` names) are gone.
@@ -1317,7 +1335,7 @@ database, not a hash.
 **How it works.** A new `jen/services/crypto.py` wraps each secret with
 Fernet (AES-128-CBC + HMAC, from the `cryptography` library — already a
 transitive dependency via paramiko, now pinned explicitly). Stored
-values gain a `v1:` prefix so a future key rotation is a recognisable,
+values gain a `v1:` prefix so a future key rotation is a recognizable,
 migratable format rather than an ambiguous blob. The key lives at
 `/etc/jen/mfa_key` (0600), with the same two-candidate load-or-create
 logic and `$JEN_ROOT` fallback that `_load_secret_key()` already uses
@@ -1347,7 +1365,7 @@ description and `docs/troubleshooting.md`.
 
 16 tests added (`tests/test_mfa_encryption.py`): crypto round-trips and
 failure modes, migration 17 (encrypt + idempotent re-run), the
-enrol/verify wiring, legacy-plaintext compatibility, and the
+enroll/verify wiring, legacy-plaintext compatibility, and the
 fail-closed paths.
 
 ## [5.3.3] - 2026-09-08
@@ -3183,7 +3201,7 @@ actions applied to a given row.
   depending on state — a device that already has a reservation, a
   lease already tied to a reservation, an API key that's already
   revoked — now show an explicit, always-present entry for that state
-  (e.g. "Reservation exists", greyed out) instead of silently omitting
+  (e.g. "Reservation exists", grayed out) instead of silently omitting
   the icon. A handful of other pages (Infrastructure's extra-server
   rows, the nav logo remover, plugin uninstall, saved-search delete,
   custom icon delete) keep a single button rather than a dropdown,

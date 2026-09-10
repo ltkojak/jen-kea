@@ -14,7 +14,7 @@ Groups and check ids are stable (tests and the JSON twin key off them):
   kea       kea_reachable · kea_version_supported · kea_ha_state ·
             kea_hooks · kea_time_sync · kea_config_drift ·
             kea_subnets_declared
-  capacity  pool_utilisation · lease_snapshot_fresh
+  capacity  pool_utilization · lease_snapshot_fresh
   ddns      d2_reachable · d2_errors
   jen       cert_expiry · db_jen · db_kea · schema_current ·
             helper_installed · background_workers · update_available
@@ -305,8 +305,8 @@ def _latest_lease_history() -> list[dict]:
         return list(cur.fetchall())
 
 
-def _pool_utilisation(ctx) -> Check:
-    c = Check("pool_utilisation", "Pool utilisation", "capacity", fix_url="/subnets")
+def _pool_utilization(ctx) -> Check:
+    c = Check("pool_utilization", "Pool utilization", "capacity", fix_url="/subnets")
     try:
         threshold = int(__get_setting("alert_threshold_pct", "80"))
     except (TypeError, ValueError):
@@ -314,7 +314,7 @@ def _pool_utilisation(ctx) -> Check:
     try:
         rows = _latest_lease_history()
     except Exception as e:
-        _log_err("pool_utilisation", e)
+        _log_err("pool_utilization", e)
         c.status, c.detail = "fail", "could not read lease history — see server logs"
         return c
     rows = [r for r in rows if ctx["subnet_filter"](r["subnet_id"])]
@@ -590,7 +590,7 @@ _CHECKS = [
     _kea_time_sync,
     _kea_config_drift,
     _kea_subnets_declared,
-    _pool_utilisation,
+    _pool_utilization,
     _lease_snapshot_fresh,
     _d2_reachable,
     _d2_errors,
@@ -612,7 +612,7 @@ _CHECK_META = {
     "kea_time_sync": ("Kea clock in sync", "kea"),
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
-    "pool_utilisation": ("Pool utilisation", "capacity"),
+    "pool_utilization": ("Pool utilization", "capacity"),
     "lease_snapshot_fresh": ("Lease snapshots current", "capacity"),
     "d2_reachable": ("kea-dhcp-ddns reachable", "ddns"),
     "d2_errors": ("kea-dhcp-ddns error counters", "ddns"),
@@ -651,7 +651,7 @@ def run_checks(ctx: dict | None = None) -> list[Check]:
     return out
 
 
-def summarise(checks: list[Check]) -> dict:
+def summarize(checks: list[Check]) -> dict:
     out = {"ok": 0, "warn": 0, "fail": 0, "skip": 0}
     for c in checks:
         out[c.status] = out.get(c.status, 0) + 1
