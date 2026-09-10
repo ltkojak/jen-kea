@@ -84,6 +84,17 @@
         </div>
         <button type="submit" class="btn btn-primary">Save Kea API</button>
         <button type="button" class="btn btn-secondary" id="probe-kea-btn" onclick="probeKea()">🔍 Probe</button>
+        {% if kea_servers|length > 1 %}
+        <select id="probe-server" style="display:inline-block;width:auto;margin-left:8px;font-size:12px;">
+            {% for s in kea_servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+        </select>
+        {% endif %}
+        {% if ipv6_enabled %}
+        <select id="probe-service" style="display:inline-block;width:auto;margin-left:8px;font-size:12px;">
+            <option value="dhcp4">dhcp4</option>
+            <option value="dhcp6">dhcp6</option>
+        </select>
+        {% endif %}
         <input type="text" id="probe-candidate-url" placeholder="optional — probe a specific direct socket URL, e.g. https://kea:8004"
                onkeydown="if(event.key==='Enter'){event.preventDefault();probeKea();}"
                style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
@@ -442,6 +453,8 @@ async function probeKea() {
     var btn = document.getElementById('probe-kea-btn');
     var out = document.getElementById('probe-kea-results');
     var candidate = (document.getElementById('probe-candidate-url') || {}).value || '';
+    var serverSel = document.getElementById('probe-server');
+    var serviceSel = document.getElementById('probe-service');
     btn.disabled = true;
     out.innerHTML = '<span style="color:var(--text-muted);">Probing…</span>';
     try {
@@ -451,7 +464,11 @@ async function probeKea() {
                 'X-CSRFToken': {{ csrf_token()|tojson }},
                 'Content-Type': 'application/x-www-form-urlencoded',
             },
-            body: new URLSearchParams({candidate_url: candidate.trim()}),
+            body: new URLSearchParams({
+                candidate_url: candidate.trim(),
+                server_id: serverSel ? serverSel.value : '',
+                service: serviceSel ? serviceSel.value : 'dhcp4',
+            }),
         });
         var data = await resp.json();
         var colors = {ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)'};
@@ -462,9 +479,10 @@ async function probeKea() {
             return;
         }
         var prefix = data.candidate ? 'Candidate: ' : '';
+        var where = data.server ? ' on <strong>' + escapeHtml(data.server) + '</strong> (' + escapeHtml(data.service || 'dhcp4') + ')' : '';
         if (data.ok) {
-            html += '<div>✅ ' + prefix + 'Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong> via <strong>' +
-                escapeHtml(data.answered_mode) + '</strong> mode';
+            html += '<div>✅ ' + prefix + 'Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong>' +
+                where + ' via <strong>' + escapeHtml(data.answered_mode) + '</strong> mode';
             if (!data.candidate && data.answered_mode !== data.configured_mode) {
                 html += ' <span style="color:var(--warning);">(you have <code>' + escapeHtml(data.configured_mode) +
                     '</code> configured)</span>';

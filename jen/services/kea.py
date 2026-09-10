@@ -25,10 +25,16 @@ import re
 import time
 
 import requests as http
+import urllib3
 
 from jen import extensions
 
 logger = logging.getLogger(__name__)
+
+# v5.10.3 — with [kea] api_tls_verify = false, urllib3 emits an
+# InsecureRequestWarning on EVERY request; the dashboard polls, so that
+# fills the journal. Say it once per process instead.
+_insecure_warned = False
 
 
 def parse_kea_version(text: str):
@@ -45,8 +51,17 @@ def _tls_verify():
     """The `verify` kwarg for the requests call — only relevant when the
     endpoint URL is https://. A [kea] api_ca path pins verification to that
     CA bundle; otherwise the [kea] api_tls_verify boolean (default True,
-    identical to requests' own default)."""
-    return extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY
+    identical to requests' own default).
+
+    v5.10.3 — when verification is deliberately off, suppress urllib3's
+    per-request InsecureRequestWarning and log the reason once instead."""
+    global _insecure_warned
+    verify = extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY
+    if verify is False and not _insecure_warned:
+        _insecure_warned = True
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        logger.warning("Kea TLS verification is disabled ([kea] api_tls_verify = false)")
+    return verify
 
 
 def _tls_client_cert():
@@ -57,6 +72,49 @@ def _tls_client_cert():
     None keeps ca-mode / http:// behaviour byte-identical (v5.10.2)."""
     if extensions.KEA_API_CLIENT_CERT and extensions.KEA_API_CLIENT_KEY:
         return (extensions.KEA_API_CLIENT_CERT, extensions.KEA_API_CLIENT_KEY)
+    return None
+
+
+def validate_client_tls_material(cert_path: str, key_path: str, ca_path: str) -> str | None:
+    """
+    v5.10.3 — None if the [kea] mTLS material is usable, else a short
+    reason. Loads it with the same API requests/urllib3 will use, AS THIS
+    PROCESS (www-data), so a mismatched pair, a non-PEM file, or a key the
+    service user can't read is caught at save time instead of turning
+    every Kea call into an opaque SSLError. os.path.isfile() — the only
+    check before this — is a stat(), which succeeds without read
+    permission.
+
+    Pure; tested in tests/test_kea_tls_material.py. Deliberately separate
+    from security.py::validate_cert_material, which validates Jen's own
+    SERVER certificate with PROTOCOL_TLS_SERVER and takes PEM text; this
+    one takes paths (the files already live on the Jen host).
+    """
+    import ssl
+
+    if not cert_path and not key_path and not ca_path:
+        return None
+    if bool(cert_path) != bool(key_path):
+        return "set both the client certificate and key, or neither"
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if cert_path:
+        try:
+            ctx.load_cert_chain(cert_path, key_path)
+        except ssl.SSLError as e:
+            if "mismatch" in (e.strerror or str(e)).lower():
+                return "the client key does not match the client certificate"
+            return f"the client certificate/key could not be loaded ({e.strerror or e})"
+        except PermissionError:
+            return "the client certificate or key is not readable by the Jen service user — chown root:www-data and chmod 640 it"
+        except (OSError, ValueError) as e:
+            return f"the client certificate/key could not be loaded ({e})"
+    if ca_path:
+        try:
+            ctx.load_verify_locations(cafile=ca_path)
+        except PermissionError:
+            return "the CA bundle is not readable by the Jen service user"
+        except (ssl.SSLError, OSError, ValueError) as e:
+            return f"the CA bundle could not be loaded ({getattr(e, 'strerror', None) or e})"
     return None
 
 

@@ -232,6 +232,38 @@ class TestResponseNormalisation:
         assert kea_svc.kea_command("version-get") == {"result": 0, "text": "ok"}
 
 
+class TestInsecureWarningIsSaidOnce:
+    """v5.10.3 — with api_tls_verify = false urllib3 warns on EVERY
+    request; the dashboard polls, so that fills the journal. Suppress the
+    per-request warning and log the reason once per process instead."""
+
+    def test_disabled_once_and_logged_once(self, fake_http, monkeypatch, caplog):
+        import urllib3
+
+        monkeypatch.setattr(extensions, "KEA_API_TLS_VERIFY", False)
+        monkeypatch.setattr(kea_svc, "_insecure_warned", False)
+        calls = []
+        monkeypatch.setattr(urllib3, "disable_warnings", lambda *a, **kw: calls.append(a))
+
+        with caplog.at_level("WARNING", logger="jen.services.kea"):
+            kea_svc.kea_command("version-get")
+            kea_svc.kea_command("version-get")
+
+        assert len(calls) == 1
+        assert calls[0][0] is urllib3.exceptions.InsecureRequestWarning
+        assert sum("verification is disabled" in r.message for r in caplog.records) == 1
+        assert [c["verify"] for c in fake_http.calls] == [False, False]
+
+    def test_not_touched_when_verification_is_on(self, fake_http, monkeypatch):
+        import urllib3
+
+        monkeypatch.setattr(kea_svc, "_insecure_warned", False)
+        calls = []
+        monkeypatch.setattr(urllib3, "disable_warnings", lambda *a, **kw: calls.append(a))
+        kea_svc.kea_command("version-get")
+        assert calls == []
+
+
 class TestClientCert:
     """v5.10.2 — [kea] api_client_cert / api_client_key become requests'
     `cert=(cert, key)` pair (Kea's https socket defaults cert-required)."""

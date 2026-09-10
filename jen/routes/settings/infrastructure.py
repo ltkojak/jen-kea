@@ -176,6 +176,10 @@ def settings_kea():
         ca_deprecation_warning=ca_deprecation_warning,
         ca_removed=ca_removed,
         direct_port_warnings=direct_port_warnings,
+        # v5.10.3 — id + name only; the real server dicts carry passwords.
+        kea_servers=[
+            {"id": s.get("id"), "name": s.get("name", f"Kea Server {s.get('id')}")} for s in extensions.KEA_SERVERS
+        ],
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,
@@ -229,6 +233,14 @@ def save_infra_kea():
         if path and not os.path.isfile(path):
             flash(f"Client {label} not found on the Jen host: {path}", "error")
             return redirect(url_for("settings.settings_kea"))
+    # v5.10.3 — isfile() is a stat(); it says nothing about whether the pair
+    # actually loads, matches, or is readable by www-data. Check for real
+    # before writing, so a bad pair can't turn every Kea call into an
+    # opaque SSLError.
+    tls_err = __kea.validate_client_tls_material(api_client_cert, api_client_key, api_ca)
+    if tls_err:
+        flash(f"TLS settings not saved: {tls_err}.", "error")
+        return redirect(url_for("settings.settings_kea"))
 
     items = [
         ("kea", "api_url", api_url),
@@ -373,13 +385,13 @@ def save_infra_kea6():
     return redirect(url_for("settings.settings_kea"))
 
 
-def _probe_once(url, user, pwd, omit_service):
+def _probe_once(url, user, pwd, omit_service, service="dhcp4"):
     """One version-get against a candidate endpoint, independent of the
     globally-configured connection mode. Returns (version_text, error):
     exactly one is non-empty."""
     payload = {"command": "version-get"}
     if not omit_service:
-        payload["service"] = ["dhcp4"]
+        payload["service"] = [service]
     try:
         resp = __kea.http.post(
             url,
@@ -416,13 +428,31 @@ def probe_kea():
     (direct-style, no service field, no :8004 auto-fallback) so an admin
     whose direct socket doesn't share the CA's scheme/host can test it
     before committing. The scheme is never downgraded.
+
+    v5.10.3 — `server_id` and `service` pick WHICH endpoint to probe. The
+    URL and credentials come from _endpoint_for(server, service), i.e.
+    exactly what Jen will dial for that daemon on that server; before
+    this, probing was always the primary's URL with the primary's
+    credentials, so a standby could not be tested at all.
     """
     from urllib.parse import urlparse
 
-    configured_url = extensions.KEA_API_URL
     configured_mode = extensions.KEA_CONNECTION_MODE
-    user, pwd = extensions.KEA_API_USER, extensions.KEA_API_PASS
     attempts = []
+
+    service = "dhcp6" if request.form.get("service", "").strip() == "dhcp6" else "dhcp4"
+    raw_id = request.form.get("server_id", "").strip()
+    server = None
+    if raw_id.isdigit():
+        server = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == raw_id), None)
+    if server is None:
+        server = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
+    server_name = (server or {}).get("name", "Kea Server 1")
+
+    endpoint = __kea._endpoint_for(server, service)
+    if isinstance(endpoint, dict):  # direct + dhcp6 with no v6 URL for this server
+        return jsonify({"ok": False, "error": endpoint["text"], "server": server_name, "service": service}), 400
+    configured_url, user, pwd = endpoint
 
     candidate = request.form.get("candidate_url", "").strip()
     if candidate:
@@ -434,12 +464,14 @@ def probe_kea():
                     "(e.g. https://kea:8004).",
                 }
             ), 400
-        version_text, err = _probe_once(candidate, user, pwd, omit_service=True)
+        version_text, err = _probe_once(candidate, user, pwd, omit_service=True, service=service)
         attempts.append({"url": candidate, "mode": "direct", "error": err or ""})
         answered_mode = "direct" if version_text else None
         answered_url = candidate if version_text else None
     else:
-        version_text, err = _probe_once(configured_url, user, pwd, omit_service=(configured_mode == "direct"))
+        version_text, err = _probe_once(
+            configured_url, user, pwd, omit_service=(configured_mode == "direct"), service=service
+        )
         answered_mode = configured_mode if version_text else None
         answered_url = configured_url if version_text else None
         if not version_text:
@@ -447,8 +479,8 @@ def probe_kea():
             host = urlparse(configured_url).hostname
             scheme = urlparse(configured_url).scheme or "http"
             if host and configured_mode != "direct":
-                alt = f"{scheme}://{host}:8004"
-                version_text, err2 = _probe_once(alt, user, pwd, omit_service=True)
+                alt = f"{scheme}://{host}:{8006 if service == 'dhcp6' else 8004}"
+                version_text, err2 = _probe_once(alt, user, pwd, omit_service=True, service=service)
                 if version_text:
                     answered_mode, answered_url = "direct", alt
                 else:
@@ -460,6 +492,8 @@ def probe_kea():
                 "ok": False,
                 "candidate": bool(candidate),
                 "configured_mode": configured_mode,
+                "server": server_name,
+                "service": service,
                 "attempts": attempts,
                 "recommendation": {
                     "text": "Nothing answered a version-get. Check the URL, credentials, and that a Kea "
@@ -503,12 +537,17 @@ def probe_kea():
         )
 
     __user.audit(
-        "PROBE_KEA", "kea_api", f"version={version or '?'} answered={answered_mode} candidate={bool(candidate)}"
+        "PROBE_KEA",
+        "kea_api",
+        f"server={server_name} service={service} version={version or '?'} "
+        f"answered={answered_mode} candidate={bool(candidate)}",
     )
     return jsonify(
         {
             "ok": True,
             "candidate": bool(candidate),
+            "server": server_name,
+            "service": service,
             "version": version,
             "version_raw": version_text.splitlines()[0] if version_text else "",
             "configured_mode": configured_mode,

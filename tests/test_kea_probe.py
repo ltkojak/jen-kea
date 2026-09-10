@@ -59,7 +59,7 @@ class _FakeHTTP:
         self.calls = []
 
     def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
-        self.calls.append({"url": url, "json": json, "cert": cert})
+        self.calls.append({"url": url, "json": json, "cert": cert, "auth": auth})
         for frag, body in self.replies.items():
             if frag in url:
                 if isinstance(body, Exception):
@@ -157,6 +157,14 @@ class TestProbeRoute:
         never downgrades to http (would leak credentials)."""
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
         monkeypatch.setattr(extensions, "KEA_API_URL", "https://localhost:18000")
+        # v5.10.3 — the probe resolves its endpoint through _endpoint_for(),
+        # which reads the SERVER dict; keep it in sync the way
+        # derive_kea_servers() would.
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [dict(extensions.KEA_SERVERS[0], api_url="https://localhost:18000")],
+        )
         fake = probe_http({})  # nothing answers
         logged_in_client.post("/settings/infrastructure/probe-kea")
         assert any(c["url"] == "https://localhost:8004" for c in fake.calls)
@@ -199,3 +207,78 @@ class TestProbeCandidateUrl:
         probe_http({})
         r = logged_in_client.post("/settings/infrastructure/probe-kea", data={"candidate_url": "ftp://kea:8004"})
         assert r.status_code == 400
+
+
+class TestProbeServerAndService:
+    """v5.10.3 — Probe used the primary's URL and credentials whatever you
+    asked it about, so a standby could not be tested at all. server_id and
+    service now pick the endpoint via kea._endpoint_for(), i.e. exactly
+    what Jen will dial for that daemon on that server."""
+
+    PRIMARY = {
+        "id": 1,
+        "name": "Test Kea",
+        "api_url": "http://localhost:18000",
+        "api_user": "u1",
+        "api_pass": "p1",
+        "api6_url": "",
+        "api6_user": "",
+        "api6_pass": "",
+    }
+    STANDBY = {
+        "id": 2,
+        "name": "s2",
+        "api_url": "http://kea02:9000",
+        "api_user": "u2",
+        "api_pass": "p2",
+        "api6_url": "",
+        "api6_user": "",
+        "api6_pass": "",
+    }
+
+    @pytest.fixture(autouse=True)
+    def _two_servers(self, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(self.PRIMARY), dict(self.STANDBY)])
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+
+    def test_server_id_picks_that_servers_url_and_credentials(self, logged_in_client, db, probe_http):
+        fake = probe_http({"kea02:9000": _ok("3.2.0")})
+        data = logged_in_client.post("/settings/infrastructure/probe-kea", data={"server_id": "2"}).get_json()
+        assert data["ok"] is True
+        assert data["server"] == "s2"
+        assert fake.calls[0]["url"] == "http://kea02:9000"
+        assert fake.calls[0]["auth"] == ("u2", "p2")
+
+    def test_dhcp6_sends_the_dhcp6_service_and_falls_back_to_8006(self, logged_in_client, db, probe_http):
+        fake = probe_http({})  # nothing answers, so both attempts are recorded
+        data = logged_in_client.post(
+            "/settings/infrastructure/probe-kea", data={"server_id": "2", "service": "dhcp6"}
+        ).get_json()
+        assert data["service"] == "dhcp6"
+        assert fake.calls[0]["json"]["service"] == ["dhcp6"]
+        assert any(c["url"] == "http://kea02:8006" for c in fake.calls)
+        assert not any(c["url"].endswith(":8004") for c in fake.calls)
+
+    def test_direct_dhcp6_without_a_v6_url_is_400(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        probe_http({})
+        r = logged_in_client.post("/settings/infrastructure/probe-kea", data={"server_id": "2", "service": "dhcp6"})
+        assert r.status_code == 400
+        assert "kea-dhcp6 control-socket" in r.get_json()["error"]
+        assert r.get_json()["server"] == "s2"
+
+    def test_candidate_url_uses_the_selected_servers_credentials(self, logged_in_client, db, probe_http):
+        fake = probe_http({"kea02:8004": _ok("3.2.0")})
+        data = logged_in_client.post(
+            "/settings/infrastructure/probe-kea",
+            data={"server_id": "2", "candidate_url": "http://kea02:8004"},
+        ).get_json()
+        assert data["ok"] is True
+        assert fake.calls[0]["auth"] == ("u2", "p2")
+
+    @pytest.mark.parametrize("bogus", ["9", "x", ""])
+    def test_an_unknown_server_id_falls_back_to_the_primary(self, logged_in_client, db, probe_http, bogus):
+        fake = probe_http({"localhost:18000": _ok("3.2.0")})
+        data = logged_in_client.post("/settings/infrastructure/probe-kea", data={"server_id": bogus}).get_json()
+        assert data["server"] == "Test Kea"
+        assert fake.calls[0]["auth"] == ("u1", "p1")

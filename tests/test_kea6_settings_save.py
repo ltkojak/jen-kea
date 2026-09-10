@@ -158,11 +158,13 @@ class TestSaveKeaClientCert:
         )
         assert b"not found on the Jen host" in r.data
 
-    def test_existing_pair_is_saved(self, logged_in_client, db, mock_kea, isolated_config, tmp_path):
-        cert = tmp_path / "c.pem"
-        key = tmp_path / "c.key"
-        cert.write_text("x")
-        key.write_text("y")
+    def test_a_real_matching_pair_is_saved(self, logged_in_client, db, mock_kea, isolated_config, tmp_path):
+        """v5.10.3 — a real pair now, not two text files: the route
+        validates the material before writing it."""
+        from tests.test_ssl_material import _pair
+
+        _pair(tmp_path, name="c")
+        cert, key = tmp_path / "c.crt", tmp_path / "c.key"
         logged_in_client.post(
             "/settings/infrastructure/save-kea",
             data={
@@ -178,6 +180,28 @@ class TestSaveKeaClientCert:
         disk = _on_disk(isolated_config)
         assert disk.get("kea", "api_client_cert") == str(cert)
         assert disk.get("kea", "api_client_key") == str(key)
+
+    def test_a_mismatched_pair_is_refused(self, logged_in_client, db, mock_kea, isolated_config, tmp_path):
+        """The 5.10.2 gap: both paths existed, so isfile() passed and every
+        later Kea request died with an opaque SSLError instead."""
+        from tests.test_ssl_material import _pair
+
+        _pair(tmp_path, name="a")
+        _pair(tmp_path, cn="other", name="b")
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-kea",
+            data={
+                "api_url": "https://kea:8004",
+                "api_user": "u",
+                "connection_mode": "direct",
+                "api_tls_verify": "1",
+                "api_client_cert": str(tmp_path / "a.crt"),
+                "api_client_key": str(tmp_path / "b.key"),
+            },
+            follow_redirects=True,
+        )
+        assert b"does not match" in r.data
+        assert not _on_disk(isolated_config).has_option("kea", "api_client_cert")
 
 
 class TestDirectPortWarnings:
