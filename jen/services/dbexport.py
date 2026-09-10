@@ -5,6 +5,7 @@ Database export, import, backup scheduling, and migration logic.
 All operations clearly labelled by which database they touch (Jen or Kea).
 """
 
+import contextlib
 import gzip
 import json
 import logging
@@ -324,7 +325,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
                     cur.execute(f"DELETE FROM `{tbl}`")
                 if rows:
                     real_cols = _get_table_columns(conn, tbl)
-                    cols = [c for c in rows[0].keys() if c in real_cols]
+                    cols = [c for c in rows[0] if c in real_cols]
                     if not cols:
                         results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
                         continue
@@ -374,7 +375,7 @@ def import_kea(file_bytes, duplicate_mode="skip"):
                 continue
             inserted = skipped = 0
             real_cols = _get_table_columns(conn, tbl)
-            cols = [c for c in rows[0].keys() if c in real_cols]
+            cols = [c for c in rows[0] if c in real_cols]
             if not cols:
                 results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
                 continue
@@ -463,7 +464,7 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
             with src.cursor() as cur:
                 cur.execute(f"SHOW CREATE TABLE `{tbl}`")
                 row = cur.fetchone()
-                ddl_key = [k for k in row.keys() if "Create" in k][0]
+                ddl_key = [k for k in row if "Create" in k][0]
                 ddl = row[ddl_key]
                 # Ensure IF NOT EXISTS and strip AUTO_INCREMENT value
                 ddl = ddl.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")
@@ -570,7 +571,7 @@ def migrate_kea(
             with src.cursor() as cur:
                 cur.execute(f"SHOW CREATE TABLE `{tbl}`")
                 row = cur.fetchone()
-                ddl_key = [k for k in row.keys() if "Create" in k][0]
+                ddl_key = [k for k in row if "Create" in k][0]
                 ddl = row[ddl_key].replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")
                 ddl = re.sub(r" AUTO_INCREMENT=\d+", "", ddl)
             with dst.cursor() as cur:
@@ -637,10 +638,9 @@ def get_schedule():
     from jen.models.db import jen_db
 
     try:
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT * FROM backup_schedule WHERE id=1")
-                row = cur.fetchone()
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT * FROM backup_schedule WHERE id=1")
+            row = cur.fetchone()
         return row or {}
     except Exception:
         return {}
@@ -724,10 +724,8 @@ def _prune_backups(keep_count):
         [os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".json.gz")], key=os.path.getmtime
     )
     for old in files[:-keep_count] if len(files) > keep_count else []:
-        try:
+        with contextlib.suppress(Exception):
             os.remove(old)
-        except Exception:
-            pass
 
 
 def list_backups():

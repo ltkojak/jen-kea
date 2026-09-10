@@ -72,9 +72,9 @@ def leases():
         page = 1  # no pagination = always page 1
     if subnet_filter != "all":
         try:
-            if int(subnet_filter) not in extensions.SUBNET_MAP:
-                subnet_filter = "all"
-            elif not current_user.can_access_subnet(int(subnet_filter)):
+            if int(subnet_filter) not in extensions.SUBNET_MAP or not current_user.can_access_subnet(
+                int(subnet_filter)
+            ):
                 subnet_filter = "all"
         except ValueError:
             subnet_filter = "all"
@@ -485,22 +485,21 @@ def ipmap():
     reservations_by_ip = {}
     cidr = extensions.SUBNET_MAP.get(subnet_filter, {}).get("cidr", "")
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s",
-                    (subnet_filter,),
-                )
-                for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                    leases_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "dynamic"}
-                cur.execute(
-                    "SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s",
-                    (subnet_filter,),
-                )
-                for row in cur.fetchall():
-                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                    reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
+        with __db.kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s",
+                (subnet_filter,),
+            )
+            for row in cur.fetchall():
+                mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                leases_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "dynamic"}
+            cur.execute(
+                "SELECT inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex FROM hosts WHERE dhcp4_subnet_id=%s",
+                (subnet_filter,),
+            )
+            for row in cur.fetchall():
+                mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                reservations_by_ip[row["ip"]] = {"hostname": row["hostname"] or "", "mac": mac, "type": "reserved"}
     except Exception as e:
         logger.error(f"Could not load IP map: {e}")
         flash("Could not load IP map. Check server logs for details.", "error")

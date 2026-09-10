@@ -147,7 +147,8 @@ class TestImportConfirmTmpPathValidation:
         monkeypatch.setattr(
             dbexport, "parse_import_file", lambda file_bytes: ({"database": "unknown-for-test"}, {}, None)
         )
-        real_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")
+        # kept past the block on purpose — the route reads it back by path
+        real_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")  # noqa: SIM115
         real_tmp.write(b"placeholder")
         real_tmp.close()
         encoded = base64.b64encode(real_tmp.name.encode()).decode()

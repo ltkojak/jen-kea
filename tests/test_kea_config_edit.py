@@ -41,7 +41,7 @@ class TestPatchSubnet4:
         original = copy.deepcopy(_V4)
         cfg, changed = edit.patch_subnet4(_V4, 10, "", [], "", "", "", "", "")
         assert changed is False
-        assert _V4 == original
+        assert original == _V4
 
     def test_pool_and_extra_pools_replace_the_list(self):
         cfg, changed = edit.patch_subnet4(
@@ -92,7 +92,7 @@ class TestPatchSubnet6:
     def test_input_not_mutated(self):
         original = copy.deepcopy(_V6)
         edit.patch_subnet6(_V6, 100, "2001:db8:a::5-2001:db8:a::9", [], "", "", "", "", "")
-        assert _V6 == original
+        assert original == _V6
 
     def test_no_fields_is_no_change(self):
         _cfg, changed = edit.patch_subnet6(_V6, 100, "", [], "", "", "", "", "")
@@ -124,7 +124,7 @@ class TestAddDeleteSubnet4:
         original = copy.deepcopy(_V4)
         cfg, code = edit.delete_subnet4(_V4, 777)
         assert code == "notfound"
-        assert _V4 == original
+        assert original == _V4
 
     def test_add_into_empty_config(self):
         cfg, code = edit.add_subnet4({}, {"id": 1, "subnet": "192.168.0.0/24"})

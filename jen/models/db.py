@@ -14,7 +14,7 @@ DB is temporarily unavailable.
 import logging
 import os
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 
 import pymysql
 import pymysql.cursors
@@ -246,10 +246,8 @@ def jen_db():
         yield db
         db.commit()
     except Exception:
-        try:
+        with suppress(Exception):
             db.rollback()
-        except Exception:
-            pass
         raise
     finally:
         db.close()
@@ -263,10 +261,8 @@ def kea_db():
         yield db
         db.commit()
     except Exception:
-        try:
+        with suppress(Exception):
             db.rollback()
-        except Exception:
-            pass
         raise
     finally:
         db.close()
@@ -286,10 +282,8 @@ def kea6_db():
         yield db
         db.commit()
     except Exception:
-        try:
+        with suppress(Exception):
             db.rollback()
-        except Exception:
-            pass
         raise
     finally:
         db.close()
@@ -303,22 +297,16 @@ def reset_pools() -> None:
     global _jen_pool, _kea_pool, _kea6_pool
     with _pool_lock:
         if _jen_pool is not None:
-            try:
+            with suppress(Exception):
                 _jen_pool._idle_cache.clear()
-            except Exception:
-                pass
             _jen_pool = None
         if _kea_pool is not None:
-            try:
+            with suppress(Exception):
                 _kea_pool._idle_cache.clear()
-            except Exception:
-                pass
             _kea_pool = None
         if _kea6_pool is not None:
-            try:
+            with suppress(Exception):
                 _kea6_pool._idle_cache.clear()
-            except Exception:
-                pass
             _kea6_pool = None
     logger.info("DB connection pools reset")
 

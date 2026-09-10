@@ -53,13 +53,12 @@ def audit_log():
     if tab == "alerts":
         recent_alerts = []
         try:
-            with __db.jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT alert_type, channel_type, status, error, sent_at FROM alert_log "
-                        "ORDER BY sent_at DESC LIMIT 100"
-                    )
-                    recent_alerts = cur.fetchall()
+            with __db.jen_db() as db, db.cursor() as cur:
+                cur.execute(
+                    "SELECT alert_type, channel_type, status, error, sent_at FROM alert_log "
+                    "ORDER BY sent_at DESC LIMIT 100"
+                )
+                recent_alerts = cur.fetchall()
         except Exception as e:
             logger.error(f"Could not load alert log: {e}")
             flash("Could not load the alert log. Check server logs for details.", "error")
@@ -74,23 +73,22 @@ def audit_log():
     logs = []
     total = 0
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                where = []
-                params = []
-                if search:
-                    where.append("(username LIKE %s OR action LIKE %s OR entity LIKE %s OR details LIKE %s)")
-                    s = f"%{search}%"
-                    params += [s, s, s, s]
-                where_str = " WHERE " + " AND ".join(where) if where else ""
-                cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
-                total = cur.fetchone()["cnt"]
-                offset = (page - 1) * per_page
-                cur.execute(
-                    f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}",
-                    params,
-                )
-                logs = cur.fetchall()
+        with __db.jen_db() as db, db.cursor() as cur:
+            where = []
+            params = []
+            if search:
+                where.append("(username LIKE %s OR action LIKE %s OR entity LIKE %s OR details LIKE %s)")
+                s = f"%{search}%"
+                params += [s, s, s, s]
+            where_str = " WHERE " + " AND ".join(where) if where else ""
+            cur.execute(f"SELECT COUNT(*) as cnt FROM audit_log{where_str}", params)
+            total = cur.fetchone()["cnt"]
+            offset = (page - 1) * per_page
+            cur.execute(
+                f"SELECT * FROM audit_log{where_str} ORDER BY created_at DESC LIMIT {per_page} OFFSET {offset}",
+                params,
+            )
+            logs = cur.fetchall()
     except Exception as e:
         logger.error(f"Could not load audit log: {e}")
         flash("Could not load audit log. Check server logs for details.", "error")
@@ -116,11 +114,10 @@ def about():
     except Exception:
         pass
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                for sid in extensions.SUBNET_MAP:
-                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
-                    lease_counts[sid] = cur.fetchone()["cnt"]
+        with __db.kea_db() as db, db.cursor() as cur:
+            for sid in extensions.SUBNET_MAP:
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                lease_counts[sid] = cur.fetchone()["cnt"]
     except Exception:
         pass
     from jen.config import ssl_configured
@@ -151,30 +148,25 @@ def about():
 @login_required
 def user_profile():
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s", (current_user.id,)
-                )
-                user_data = cur.fetchone()
-                cur.execute(
-                    "SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (current_user.id,)
-                )
-                totp_count = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (current_user.id,))
-                passkey_count = cur.fetchone()["cnt"]
-                cur.execute(
-                    "SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,)
-                )
-                backup_count = cur.fetchone()["cnt"]
-                cur.execute(
-                    """
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT id, username, role, session_timeout, created_at FROM users WHERE id=%s", (current_user.id,)
+            )
+            user_data = cur.fetchone()
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (current_user.id,))
+            totp_count = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (current_user.id,))
+            passkey_count = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (current_user.id,))
+            backup_count = cur.fetchone()["cnt"]
+            cur.execute(
+                """
                     SELECT COUNT(*) as cnt FROM mfa_trusted_devices
                     WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())
                 """,
-                    (current_user.id,),
-                )
-                trusted_count = cur.fetchone()["cnt"]
+                (current_user.id,),
+            )
+            trusted_count = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"Error loading profile for {current_user.username}: {e}")
         flash("Error loading profile. Check server logs for details.", "error")
@@ -206,29 +198,28 @@ def users_legacy():
 @_superadmin_required
 def users():
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username"
+            )
+            all_users = cur.fetchall()
+            for u in all_users:
                 cur.execute(
-                    "SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username"
-                )
-                all_users = cur.fetchall()
-                for u in all_users:
-                    cur.execute(
-                        """
+                    """
                         SELECT
                             (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) +
                             (SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as mfa_count
                     """,
-                        (u["id"], u["id"]),
-                    )
-                    u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
-                    # Parse subnet_access for display
-                    try:
-                        import json as _json
+                    (u["id"], u["id"]),
+                )
+                u["mfa_enrolled"] = cur.fetchone()["mfa_count"] > 0
+                # Parse subnet_access for display
+                try:
+                    import json as _json
 
-                        u["subnet_ids"] = _json.loads(u["subnet_access"]) if u["subnet_access"] else None
-                    except Exception:
-                        u["subnet_ids"] = None
+                    u["subnet_ids"] = _json.loads(u["subnet_access"]) if u["subnet_access"] else None
+                except Exception:
+                    u["subnet_ids"] = None
     except Exception as e:
         logger.error(f"Could not load users: {e}")
         flash("Could not load users. Check server logs for details.", "error")

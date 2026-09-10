@@ -5,6 +5,7 @@ APScheduler wrapper for scheduled backups.
 Started by the app factory after DB init.
 """
 
+import contextlib
 import logging
 from datetime import datetime, timezone
 
@@ -71,10 +72,8 @@ def _run_backup_job(app):
 
 def stop_scheduler():
     if _scheduler and _scheduler.running:
-        try:
+        with contextlib.suppress(Exception):
             _scheduler.shutdown(wait=False)
-        except Exception:
-            pass
 
 
 def _run_audit_cleanup(app):

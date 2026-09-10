@@ -22,6 +22,7 @@ never set true except through the (not yet built, Phase 1 checklist item)
 Settings -> Infrastructure toggle.
 """
 
+import contextlib
 import logging
 import shlex
 
@@ -107,10 +108,8 @@ def _connect_ssh(server: dict):
         key_filename=extensions.SSH_KEY_PATH,
         timeout=10,
     )
-    try:
+    with contextlib.suppress(Exception):
         ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
-    except Exception:
-        pass
     return ssh
 
 
@@ -300,10 +299,9 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
     where_str = " AND ".join(where) if where else "1=1"
 
     results = []
-    with kea6_db() as db:
-        with db.cursor() as cur:
-            cur.execute(
-                f"""
+    with kea6_db() as db, db.cursor() as cur:
+        cur.execute(
+            f"""
                 SELECT address, HEX(duid) AS duid_hex, HEX(hwaddr) AS hwaddr_hex,
                        valid_lifetime, expire,
                        (expire - INTERVAL valid_lifetime SECOND) AS obtained,
@@ -312,28 +310,28 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
                 FROM lease6 WHERE {where_str}
                 ORDER BY address
             """,
-                params,
+            params,
+        )
+        for row in cur.fetchall():
+            results.append(
+                {
+                    "address": row["address"],
+                    "duid_hex": row["duid_hex"] or "",
+                    "mac": get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or "",
+                    "valid_lifetime": row["valid_lifetime"],
+                    "expire": row["expire"],
+                    "obtained": row["obtained"],
+                    "subnet_id": row["subnet_id"],
+                    "pref_lifetime": row["pref_lifetime"],
+                    "lease_type": row["lease_type"],
+                    "lease_type_name": LEASE6_TYPE_NAMES.get(row["lease_type"], "?"),
+                    "iaid": row["iaid"],
+                    "prefix_len": row["prefix_len"],
+                    "hostname": row["hostname"] or "",
+                    "state": row["state"],
+                    "expired": (row["state"] or 0) != 0,
+                }
             )
-            for row in cur.fetchall():
-                results.append(
-                    {
-                        "address": row["address"],
-                        "duid_hex": row["duid_hex"] or "",
-                        "mac": get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or "",
-                        "valid_lifetime": row["valid_lifetime"],
-                        "expire": row["expire"],
-                        "obtained": row["obtained"],
-                        "subnet_id": row["subnet_id"],
-                        "pref_lifetime": row["pref_lifetime"],
-                        "lease_type": row["lease_type"],
-                        "lease_type_name": LEASE6_TYPE_NAMES.get(row["lease_type"], "?"),
-                        "iaid": row["iaid"],
-                        "prefix_len": row["prefix_len"],
-                        "hostname": row["hostname"] or "",
-                        "state": row["state"],
-                        "expired": (row["state"] or 0) != 0,
-                    }
-                )
     return results
 
 
@@ -361,54 +359,53 @@ def get_ipv6_reservations(subnet_id: int = None) -> list:
 
     hosts_by_id = {}
     order = []
-    with kea6_db() as db:
-        with db.cursor() as cur:
-            cur.execute(
-                f"""
+    with kea6_db() as db, db.cursor() as cur:
+        cur.execute(
+            f"""
                 SELECT host_id, HEX(dhcp_identifier) AS duid_hex,
                        dhcp_identifier_type, dhcp6_subnet_id, hostname,
                        dhcp6_client_classes
                 FROM hosts WHERE {where_str}
                 ORDER BY host_id
             """,
-                params,
-            )
-            for row in cur.fetchall():
-                hosts_by_id[row["host_id"]] = {
-                    "host_id": row["host_id"],
-                    "duid_hex": row["duid_hex"] or "",
-                    "dhcp_identifier_type": row["dhcp_identifier_type"],
-                    "subnet_id": row["dhcp6_subnet_id"],
-                    "hostname": row["hostname"] or "",
-                    "client_classes": row["dhcp6_client_classes"] or "",
-                    "reservations": [],
-                }
-                order.append(row["host_id"])
+            params,
+        )
+        for row in cur.fetchall():
+            hosts_by_id[row["host_id"]] = {
+                "host_id": row["host_id"],
+                "duid_hex": row["duid_hex"] or "",
+                "dhcp_identifier_type": row["dhcp_identifier_type"],
+                "subnet_id": row["dhcp6_subnet_id"],
+                "hostname": row["hostname"] or "",
+                "client_classes": row["dhcp6_client_classes"] or "",
+                "reservations": [],
+            }
+            order.append(row["host_id"])
 
-            if hosts_by_id:
-                placeholders = ",".join(["%s"] * len(hosts_by_id))
-                cur.execute(
-                    f"""
+        if hosts_by_id:
+            placeholders = ",".join(["%s"] * len(hosts_by_id))
+            cur.execute(
+                f"""
                     SELECT reservation_id, address, prefix_len, type,
                            dhcp6_iaid, host_id
                     FROM ipv6_reservations WHERE host_id IN ({placeholders})
                 """,
-                    list(hosts_by_id.keys()),
+                list(hosts_by_id.keys()),
+            )
+            for row in cur.fetchall():
+                host = hosts_by_id.get(row["host_id"])
+                if host is None:
+                    continue
+                host["reservations"].append(
+                    {
+                        "reservation_id": row["reservation_id"],
+                        "address": row["address"],
+                        "prefix_len": row["prefix_len"],
+                        "type": row["type"],
+                        "type_name": IPV6_RESERVATION_TYPE_NAMES.get(row["type"], "?"),
+                        "iaid": row["dhcp6_iaid"],
+                    }
                 )
-                for row in cur.fetchall():
-                    host = hosts_by_id.get(row["host_id"])
-                    if host is None:
-                        continue
-                    host["reservations"].append(
-                        {
-                            "reservation_id": row["reservation_id"],
-                            "address": row["address"],
-                            "prefix_len": row["prefix_len"],
-                            "type": row["type"],
-                            "type_name": IPV6_RESERVATION_TYPE_NAMES.get(row["type"], "?"),
-                            "iaid": row["dhcp6_iaid"],
-                        }
-                    )
 
     return [hosts_by_id[hid] for hid in order]
 

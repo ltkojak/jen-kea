@@ -36,28 +36,27 @@ def global_search():
     results = {"leases": [], "reservations": [], "devices": [], "leases6": [], "reservations6": []}
     if len(q) >= 2:
         try:
-            with __db.kea_db() as kdb:
-                with __db.jen_db() as jdb:
-                    s = f"%{q}%"
-                    s_mac = s.replace(":", "")
+            with __db.kea_db() as kdb, __db.jen_db() as jdb:
+                s = f"%{q}%"
+                s_mac = s.replace(":", "")
 
-                    # Subnet-restricted users only ever see results from
-                    # subnets they're assigned — same rule list/detail views
-                    # already enforce. Applied identically to all three
-                    # result sets below (v4.4.4 — this route previously
-                    # leaked leases/reservations/devices across subnets to
-                    # restricted admins/viewers).
-                    from jen.services.access import add_subnet_restriction
+                # Subnet-restricted users only ever see results from
+                # subnets they're assigned — same rule list/detail views
+                # already enforce. Applied identically to all three
+                # result sets below (v4.4.4 — this route previously
+                # leaked leases/reservations/devices across subnets to
+                # restricted admins/viewers).
+                from jen.services.access import add_subnet_restriction
 
-                    # Search leases
-                    where, params = (
-                        ["(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)"],
-                        [s, s, s_mac],
-                    )
-                    where, params = add_subnet_restriction(where, params, "l", "subnet_id")
-                    with kdb.cursor() as cur:
-                        cur.execute(
-                            f"""
+                # Search leases
+                where, params = (
+                    ["(inet_ntoa(l.address) LIKE %s OR l.hostname LIKE %s OR HEX(l.hwaddr) LIKE %s)"],
+                    [s, s, s_mac],
+                )
+                where, params = add_subnet_restriction(where, params, "l", "subnet_id")
+                with kdb.cursor() as cur:
+                    cur.execute(
+                        f"""
                             SELECT inet_ntoa(l.address) AS ip,
                                    l.hostname,
                                    HEX(l.hwaddr) AS mac_hex,
@@ -67,31 +66,31 @@ def global_search():
                             WHERE {" AND ".join(where)}
                             LIMIT 20
                         """,
-                            params,
-                        )
-                        for row in cur.fetchall():
-                            mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                            results["leases"].append(
-                                {
-                                    "ip": row["ip"],
-                                    "hostname": row["hostname"] or "",
-                                    "mac": mac,
-                                    "subnet_id": row["subnet_id"],
-                                }
-                            )
-
-                    # Search reservations
-                    where, params = (
-                        [
-                            "h.dhcp4_subnet_id > 0",
-                            "(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)",
-                        ],
-                        [s, s, s_mac],
+                        params,
                     )
-                    where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
-                    with kdb.cursor() as cur:
-                        cur.execute(
-                            f"""
+                    for row in cur.fetchall():
+                        mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                        results["leases"].append(
+                            {
+                                "ip": row["ip"],
+                                "hostname": row["hostname"] or "",
+                                "mac": mac,
+                                "subnet_id": row["subnet_id"],
+                            }
+                        )
+
+                # Search reservations
+                where, params = (
+                    [
+                        "h.dhcp4_subnet_id > 0",
+                        "(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)",
+                    ],
+                    [s, s, s_mac],
+                )
+                where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
+                with kdb.cursor() as cur:
+                    cur.execute(
+                        f"""
                             SELECT inet_ntoa(h.ipv4_address) AS ip,
                                    h.hostname,
                                    HEX(h.dhcp_identifier) AS mac_hex,
@@ -100,100 +99,100 @@ def global_search():
                             WHERE {" AND ".join(where)}
                             LIMIT 20
                         """,
-                            params,
-                        )
-                        for row in cur.fetchall():
-                            mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                            results["reservations"].append(
-                                {
-                                    "ip": row["ip"],
-                                    "hostname": row["hostname"] or "",
-                                    "mac": mac,
-                                    "subnet_id": row["subnet_id"],
-                                }
-                            )
-
-                    # Search devices — devices.last_subnet_id is nullable
-                    # (a device we've never seen a lease/subnet for yet), so
-                    # a restricted user can still find those since they
-                    # can't be attributed to any subnet they lack access to.
-                    where, params = (
-                        ["(mac LIKE %s OR last_ip LIKE %s OR device_name LIKE %s OR owner LIKE %s)"],
-                        [s, s, s, s],
+                        params,
                     )
-                    if not current_user.all_subnets:
-                        ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
-                        if ids:
-                            placeholders = ",".join(["%s"] * len(ids))
-                            where.append(f"(last_subnet_id IS NULL OR last_subnet_id IN ({placeholders}))")
-                            params.extend(ids)
-                        else:
-                            where.append("last_subnet_id IS NULL")
-                    with jdb.cursor() as cur:
-                        cur.execute(
-                            f"""
+                    for row in cur.fetchall():
+                        mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                        results["reservations"].append(
+                            {
+                                "ip": row["ip"],
+                                "hostname": row["hostname"] or "",
+                                "mac": mac,
+                                "subnet_id": row["subnet_id"],
+                            }
+                        )
+
+                # Search devices — devices.last_subnet_id is nullable
+                # (a device we've never seen a lease/subnet for yet), so
+                # a restricted user can still find those since they
+                # can't be attributed to any subnet they lack access to.
+                where, params = (
+                    ["(mac LIKE %s OR last_ip LIKE %s OR device_name LIKE %s OR owner LIKE %s)"],
+                    [s, s, s, s],
+                )
+                if not current_user.all_subnets:
+                    ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
+                    if ids:
+                        placeholders = ",".join(["%s"] * len(ids))
+                        where.append(f"(last_subnet_id IS NULL OR last_subnet_id IN ({placeholders}))")
+                        params.extend(ids)
+                    else:
+                        where.append("last_subnet_id IS NULL")
+                with jdb.cursor() as cur:
+                    cur.execute(
+                        f"""
                             SELECT mac, last_ip, device_name AS name, owner, notes, last_subnet_id
                             FROM devices
                             WHERE {" AND ".join(where)}
                             LIMIT 20
                         """,
-                            params,
-                        )
-                        results["devices"] = cur.fetchall()
+                        params,
+                    )
+                    results["devices"] = cur.fetchall()
 
-                    # v5.0 Phase 4 — IPv6 leases/reservations. Only searched
-                    # when v6 is genuinely on (display gate, same as every
-                    # other v6 code path) and there's something configured
-                    # to search. Subnet restriction here follows the v6
-                    # subnet's paired_subnet4_id where one exists (a paired
-                    # v6 subnet IS the same network as its v4 counterpart,
-                    # so a user with access to that v4 subnet should see
-                    # its v6 side too); an UNPAIRED v6 subnet has no v4
-                    # subnet to inherit access from, so it's restricted to
-                    # all_subnets users only rather than guessing.
-                    if __kea6.is_ipv6_enabled() and extensions.SUBNET6_MAP:
-                        if current_user.all_subnets:
-                            searchable_v6_ids = list(extensions.SUBNET6_MAP.keys())
-                        else:
-                            accessible_v4_ids = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-                            searchable_v6_ids = [
-                                sid
-                                for sid, info in extensions.SUBNET6_MAP.items()
-                                if info.get("paired_subnet4_id") in accessible_v4_ids
-                            ]
-                        for sid in searchable_v6_ids:
-                            try:
-                                for lease in __kea6.list_lease6(subnet_id=sid, search=q)[:20]:
-                                    results["leases6"].append(
+                # v5.0 Phase 4 — IPv6 leases/reservations. Only searched
+                # when v6 is genuinely on (display gate, same as every
+                # other v6 code path) and there's something configured
+                # to search. Subnet restriction here follows the v6
+                # subnet's paired_subnet4_id where one exists (a paired
+                # v6 subnet IS the same network as its v4 counterpart,
+                # so a user with access to that v4 subnet should see
+                # its v6 side too); an UNPAIRED v6 subnet has no v4
+                # subnet to inherit access from, so it's restricted to
+                # all_subnets users only rather than guessing.
+                if __kea6.is_ipv6_enabled() and extensions.SUBNET6_MAP:
+                    if current_user.all_subnets:
+                        searchable_v6_ids = list(extensions.SUBNET6_MAP.keys())
+                    else:
+                        accessible_v4_ids = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+                        searchable_v6_ids = [
+                            sid
+                            for sid, info in extensions.SUBNET6_MAP.items()
+                            if info.get("paired_subnet4_id") in accessible_v4_ids
+                        ]
+                    for sid in searchable_v6_ids:
+                        try:
+                            for lease in __kea6.list_lease6(subnet_id=sid, search=q)[:20]:
+                                results["leases6"].append(
+                                    {
+                                        "address": lease["address"],
+                                        "hostname": lease["hostname"],
+                                        "duid_hex": lease["duid_hex"],
+                                        "subnet_id": lease["subnet_id"],
+                                        "lease_type_name": lease["lease_type_name"],
+                                    }
+                                )
+                        except Exception:
+                            pass
+                    for sid in searchable_v6_ids:
+                        try:
+                            for h in __kea6.get_ipv6_reservations(subnet_id=sid)[:20]:
+                                ql = q.lower()
+                                if (
+                                    ql in (h["hostname"] or "").lower()
+                                    or ql in (h["duid_hex"] or "").lower()
+                                    or any(ql in (r["address"] or "").lower() for r in h["reservations"])
+                                ):
+                                    results["reservations6"].append(
                                         {
-                                            "address": lease["address"],
-                                            "hostname": lease["hostname"],
-                                            "duid_hex": lease["duid_hex"],
-                                            "subnet_id": lease["subnet_id"],
-                                            "lease_type_name": lease["lease_type_name"],
+                                            "hostname": h["hostname"],
+                                            "duid_hex": h["duid_hex"],
+                                            "subnet_id": h["subnet_id"],
+                                            "addresses": [r["address"] for r in h["reservations"]],
                                         }
                                     )
-                            except Exception:
-                                pass
-                        for sid in searchable_v6_ids:
-                            try:
-                                for h in __kea6.get_ipv6_reservations(subnet_id=sid)[:20]:
-                                    ql = q.lower()
-                                    if (
-                                        ql in (h["hostname"] or "").lower()
-                                        or ql in (h["duid_hex"] or "").lower()
-                                        or any(ql in (r["address"] or "").lower() for r in h["reservations"])
-                                    ):
-                                        results["reservations6"].append(
-                                            {
-                                                "hostname": h["hostname"],
-                                                "duid_hex": h["duid_hex"],
-                                                "subnet_id": h["subnet_id"],
-                                                "addresses": [r["address"] for r in h["reservations"]],
-                                            }
-                                        )
-                            except Exception:
-                                pass
+                        except Exception:
+                            pass
 
         except Exception as e:
             logger.error(f"Search error: {e}")
@@ -222,12 +221,9 @@ def global_search():
 @login_required
 def saved_searches():
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT * FROM saved_searches WHERE user_id=%s ORDER BY created_at DESC", (current_user.id,)
-                )
-                searches = cur.fetchall()
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY created_at DESC", (current_user.id,))
+            searches = cur.fetchall()
     except Exception:
         searches = []
     return render_template("saved_searches.html", searches=searches)
@@ -281,16 +277,15 @@ def delete_saved_search(search_id):
 def api_saved_searches():
     page = request.args.get("page", "")
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                if page:
-                    cur.execute(
-                        "SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name",
-                        (current_user.id, page),
-                    )
-                else:
-                    cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
-                searches = cur.fetchall()
+        with __db.jen_db() as db, db.cursor() as cur:
+            if page:
+                cur.execute(
+                    "SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name",
+                    (current_user.id, page),
+                )
+            else:
+                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
+            searches = cur.fetchall()
         return jsonify([dict(s) for s in searches])
     except Exception:
         return jsonify([])

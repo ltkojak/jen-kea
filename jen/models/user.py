@@ -175,10 +175,9 @@ def get_global_setting(key: str, default=None):
         from jen.models.db import jen_db
 
         try:
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT setting_key, setting_value FROM settings")
-                    _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT setting_key, setting_value FROM settings")
+                _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
             _settings_cache_ts = now
         except Exception as e:
             logger.error(f"get_global_setting cache reload: {e}")

@@ -1539,11 +1539,10 @@ def get_device_info_map(mac_list: list) -> dict:
     try:
         from jen.models.db import jen_db
 
-        with jen_db() as db:
-            with db.cursor() as cur:
-                placeholders = ",".join(["%s"] * len(normalized))
-                cur.execute(
-                    f"""
+        with jen_db() as db, db.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(normalized))
+            cur.execute(
+                f"""
                     SELECT LOWER(mac) AS mac,
                            COALESCE(manufacturer_override, manufacturer) AS manufacturer,
                            COALESCE(device_type_override, device_type) AS device_type,
@@ -1551,33 +1550,33 @@ def get_device_info_map(mac_list: list) -> dict:
                            manufacturer_override IS NOT NULL AS is_manual
                     FROM devices WHERE LOWER(mac) IN ({placeholders})
                 """,
-                    normalized,
-                )
-                for row in cur.fetchall():
-                    mfr = row["manufacturer"] or ""
-                    dtype = row["device_type"] or "unknown"
-                    dicon = row["device_icon"] or "❓"
-                    # If there's an icon override that's a valid icon name, use it directly
-                    icon_url = None
-                    if row["is_manual"] and dicon and len(dicon) > 2:
-                        # dicon might be an icon name (e.g. "appletv") not an emoji
-                        test_custom = f"{extensions.ICONS_CUSTOM_DIR}/{dicon}.svg"
-                        test_bundled = f"{extensions.ICONS_BUNDLED_DIR}/{dicon}.svg"
-                        if os.path.exists(test_custom):
-                            icon_url = f"/static/icons/custom/{dicon}.svg"
-                        elif os.path.exists(test_bundled):
-                            icon_url = f"/static/icons/brands/{dicon}.svg"
-                        else:
-                            icon_url = get_manufacturer_icon_url(mfr)
+                normalized,
+            )
+            for row in cur.fetchall():
+                mfr = row["manufacturer"] or ""
+                dtype = row["device_type"] or "unknown"
+                dicon = row["device_icon"] or "❓"
+                # If there's an icon override that's a valid icon name, use it directly
+                icon_url = None
+                if row["is_manual"] and dicon and len(dicon) > 2:
+                    # dicon might be an icon name (e.g. "appletv") not an emoji
+                    test_custom = f"{extensions.ICONS_CUSTOM_DIR}/{dicon}.svg"
+                    test_bundled = f"{extensions.ICONS_BUNDLED_DIR}/{dicon}.svg"
+                    if os.path.exists(test_custom):
+                        icon_url = f"/static/icons/custom/{dicon}.svg"
+                    elif os.path.exists(test_bundled):
+                        icon_url = f"/static/icons/brands/{dicon}.svg"
                     else:
                         icon_url = get_manufacturer_icon_url(mfr)
-                    result[row["mac"]] = {
-                        "manufacturer": mfr,
-                        "device_type": dtype,
-                        "device_icon": dicon,
-                        "icon_url": icon_url,
-                        "is_manual": bool(row["is_manual"]),
-                    }
+                else:
+                    icon_url = get_manufacturer_icon_url(mfr)
+                result[row["mac"]] = {
+                    "manufacturer": mfr,
+                    "device_type": dtype,
+                    "device_icon": dicon,
+                    "icon_url": icon_url,
+                    "is_manual": bool(row["is_manual"]),
+                }
     except Exception as e:
         logger.error(f"get_device_info_map error: {e}")
     return result
@@ -1613,9 +1612,7 @@ def friendly_user_agent(ua: str) -> str:
     elif "Android" in ua:
         m = re.search(r"Android (\d+)", ua)
         platform = f"Android {m.group(1)}" if m else "Android"
-    elif "Windows NT 10.0" in ua:
-        platform = "Windows"
-    elif "Windows" in ua:
+    elif "Windows NT 10.0" in ua or "Windows" in ua:
         platform = "Windows"
     elif "Mac OS X" in ua:
         platform = "Mac"
@@ -1660,13 +1657,12 @@ def client_hostname(ip: str) -> str:
     try:
         from jen.models.db import kea_db
 
-        with kea_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT hostname FROM lease4 WHERE inet_ntoa(address)=%s AND state=0 ORDER BY expire DESC LIMIT 1",
-                    (ip,),
-                )
-                row = cur.fetchone()
+        with kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT hostname FROM lease4 WHERE inet_ntoa(address)=%s AND state=0 ORDER BY expire DESC LIMIT 1",
+                (ip,),
+            )
+            row = cur.fetchone()
         if row and row.get("hostname"):
             return str(row["hostname"]).rstrip(".").strip()
     except Exception:
@@ -1674,15 +1670,14 @@ def client_hostname(ip: str) -> str:
     try:
         from jen.models.db import jen_db
 
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT COALESCE(NULLIF(device_name,''), NULLIF(last_hostname,'')) AS name "
-                    "FROM devices WHERE last_ip=%s "
-                    "ORDER BY last_seen DESC LIMIT 1",
-                    (ip,),
-                )
-                row = cur.fetchone()
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(NULLIF(device_name,''), NULLIF(last_hostname,'')) AS name "
+                "FROM devices WHERE last_ip=%s "
+                "ORDER BY last_seen DESC LIMIT 1",
+                (ip,),
+            )
+            row = cur.fetchone()
         if row and row.get("name"):
             return str(row["name"]).rstrip(".").strip()
     except Exception:

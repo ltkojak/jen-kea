@@ -46,9 +46,8 @@ class TestContextManagers:
         assert fake_conn.closed == 1
 
     def test_rollback_and_close_on_exception(self, fake_conn):
-        with pytest.raises(RuntimeError):
-            with db_module.jen_db():
-                raise RuntimeError("boom")
+        with pytest.raises(RuntimeError), db_module.jen_db():
+            raise RuntimeError("boom")
         assert fake_conn.committed == 0
         assert fake_conn.rolled_back == 1
         assert fake_conn.closed == 1
@@ -69,9 +68,8 @@ class TestContextManagers:
         assert fake_conn.closed == 1
 
     def test_kea_db_same_guarantees(self, fake_conn):
-        with pytest.raises(ValueError):
-            with db_module.kea_db():
-                raise ValueError("boom")
+        with pytest.raises(ValueError), db_module.kea_db():
+            raise ValueError("boom")
         assert fake_conn.rolled_back == 1
         assert fake_conn.closed == 1
 
@@ -79,6 +77,5 @@ class TestContextManagers:
         class Custom(Exception):
             pass
 
-        with pytest.raises(Custom):
-            with db_module.jen_db():
-                raise Custom()
+        with pytest.raises(Custom), db_module.jen_db():
+            raise Custom()

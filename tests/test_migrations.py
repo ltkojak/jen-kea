@@ -31,10 +31,9 @@ class TestRegistry:
 
 class TestAppliedState:
     def test_schema_migrations_table_exists(self):
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SHOW TABLES LIKE 'schema_migrations'")
-                assert cur.fetchone() is not None
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW TABLES LIKE 'schema_migrations'")
+            assert cur.fetchone() is not None
 
     def test_all_versions_recorded(self):
         assert applied_versions() == {v for v, _, _ in MIGRATIONS}
@@ -44,10 +43,9 @@ class TestAppliedState:
         assert applied_versions() == {v for v, _, _ in MIGRATIONS}
 
     def test_recorded_descriptions_match_registry(self):
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT version, description FROM schema_migrations")
-                recorded = {r["version"]: r["description"] for r in cur.fetchall()}
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT version, description FROM schema_migrations")
+            recorded = {r["version"]: r["description"] for r in cur.fetchall()}
         for version, description, _ in MIGRATIONS:
             assert recorded[version] == description
 
@@ -58,10 +56,9 @@ class TestDashboardWidgetsPortability:
     MySQL leg caught the baseline failing to build)."""
 
     def test_widgets_column_is_varchar_with_a_default(self):
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SHOW COLUMNS FROM dashboard_prefs LIKE 'widgets'")
-                col = cur.fetchone()
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM dashboard_prefs LIKE 'widgets'")
+            col = cur.fetchone()
         assert "varchar" in col["Type"].lower(), col["Type"]
         assert col["Default"] and "subnet_stats" in col["Default"]
 
@@ -85,10 +82,9 @@ class TestAdminRoleRegression:
             db.commit()
         try:
             run_migrations()  # simulates a restart
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT role FROM users WHERE username='_mig_admin_probe'")
-                    assert cur.fetchone()["role"] == "admin"
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT role FROM users WHERE username='_mig_admin_probe'")
+                assert cur.fetchone()["role"] == "admin"
         finally:
             with jen_db() as db:
                 with db.cursor() as cur:
@@ -190,13 +186,12 @@ class TestBackfillMustChangePasswordMigration:
                 _m016_backfill_must_change_password_for_existing_admin_admin(db)
                 db.commit()
 
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT username, must_change_password FROM users "
-                        "WHERE username IN ('_mig16_stale_default', '_mig16_real_pw')"
-                    )
-                    results = {r["username"]: r["must_change_password"] for r in cur.fetchall()}
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute(
+                    "SELECT username, must_change_password FROM users "
+                    "WHERE username IN ('_mig16_stale_default', '_mig16_real_pw')"
+                )
+                results = {r["username"]: r["must_change_password"] for r in cur.fetchall()}
             assert results["_mig16_stale_default"] == 1, "user still on literal 'admin' must be flagged"
             assert results["_mig16_real_pw"] == 0, "user with a real, changed password must not be flagged"
         finally:

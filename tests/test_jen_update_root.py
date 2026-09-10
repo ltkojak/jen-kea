@@ -887,14 +887,17 @@ class TestMainPostRestartChecks:
             patch.object(jen_update_root, "_running_version", return_value=None),
             patch.object(jen_update_root, "_installed_version", return_value="9.9.9"),
             patch("time.sleep"),
+            pytest.raises(RuntimeError, match="only\\s+proves the files were copied"),
         ):
-            with pytest.raises(RuntimeError, match="only\\s+proves the files were copied"):
-                jen_update_root._confirm_running_version("9.9.9", attempts=3, delay=0)
+            jen_update_root._confirm_running_version("9.9.9", attempts=3, delay=0)
 
     def test_confirm_running_version_mismatch_fails_immediately(self, jen_update_root):
-        with patch.object(jen_update_root, "_running_version", return_value="1.0.0"), patch("time.sleep") as slp:
-            with pytest.raises(RuntimeError, match="mismatch"):
-                jen_update_root._confirm_running_version("9.9.9")
+        with (
+            patch.object(jen_update_root, "_running_version", return_value="1.0.0"),
+            patch("time.sleep") as slp,
+            pytest.raises(RuntimeError, match="mismatch"),
+        ):
+            jen_update_root._confirm_running_version("9.9.9")
         slp.assert_not_called()
 
 

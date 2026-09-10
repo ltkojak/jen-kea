@@ -44,19 +44,16 @@ def user_needs_mfa(user):
         return False  # user chooses to enroll
     if mode == "required_admins":
         return user.role in ("superadmin", "admin")
-    if mode == "required_all":
-        return True
-    return False
+    return mode == "required_all"
 
 
 def user_has_mfa(user_id):
     try:
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (user_id,))
-                totp = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (user_id,))
-                passkeys = cur.fetchone()["cnt"]
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (user_id,))
+            totp = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (user_id,))
+            passkeys = cur.fetchone()["cnt"]
         return (totp + passkeys) > 0
     except Exception:
         return False
@@ -125,13 +122,12 @@ def verify_totp(user_id, code):
 
         from jen.services import crypto as _crypto
 
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, secret FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
-                    (user_id,),
-                )
-                rows = cur.fetchall()
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT id, secret FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
+                (user_id,),
+            )
+            rows = cur.fetchall()
         if not rows:
             return False
         code = code.strip()
@@ -170,17 +166,16 @@ def is_trusted_device(user_id, request):
         return False
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     try:
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    """
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            cur.execute(
+                """
                     SELECT id, device_name, user_agent FROM mfa_trusted_devices
                     WHERE user_id=%s AND token_hash=%s
                     AND (expires_at IS NULL OR expires_at > NOW())
                 """,
-                    (user_id, token_hash),
-                )
-                row = cur.fetchone()
+                (user_id, token_hash),
+            )
+            row = cur.fetchone()
         if row:
             # Capture request data NOW — the thread must not touch `request`.
             # werkzeug 2.1+ UserAgent is always falsy (no built-in parsing) — read header directly (v4.3.3)

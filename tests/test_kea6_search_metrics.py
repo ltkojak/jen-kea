@@ -7,6 +7,7 @@ Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
 import configparser
+from pathlib import Path
 
 import pytest
 
@@ -290,19 +291,19 @@ class TestPrometheusMetricsV6:
 
 class TestPluginIpv6Notes:
     def test_ipam_template_has_gated_note(self):
-        content = open("plugins/ipam/templates/ipam/index.html").read()
+        content = Path("plugins/ipam/templates/ipam/index.html").read_text(encoding="utf-8")
         assert "{% if ipv6_enabled %}" in content
         assert "IPv4 addresses only" in content
 
     def test_network_discovery_template_has_gated_note(self):
-        content = open("plugins/network-discovery/templates/network_discovery/index.html").read()
+        content = Path("plugins/network-discovery/templates/network_discovery/index.html").read_text(encoding="utf-8")
         assert "{% if ipv6_enabled %}" in content
         assert "IPv4 subnets only" in content
 
     def test_ipam_readme_documents_v4_only_scope(self):
-        content = open("plugins/ipam/README.md").read()
+        content = Path("plugins/ipam/README.md").read_text(encoding="utf-8")
         assert "IPv4 only" in content
 
     def test_network_discovery_readme_documents_v4_only_scope(self):
-        content = open("plugins/network-discovery/README.md").read()
+        content = Path("plugins/network-discovery/README.md").read_text(encoding="utf-8")
         assert "IPv4 only" in content

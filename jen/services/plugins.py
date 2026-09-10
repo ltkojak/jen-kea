@@ -397,13 +397,12 @@ def _plugin_applied_versions(plugin_id: str) -> set:
     plugin loading is ever reachable before that)."""
     from jen.models.db import jen_db
 
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("SHOW TABLES LIKE 'plugin_schema_migrations'")
-            if not cur.fetchone():
-                return set()
-            cur.execute("SELECT version FROM plugin_schema_migrations WHERE plugin_id=%s", (plugin_id,))
-            return {r["version"] for r in cur.fetchall()}
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SHOW TABLES LIKE 'plugin_schema_migrations'")
+        if not cur.fetchone():
+            return set()
+        cur.execute("SELECT version FROM plugin_schema_migrations WHERE plugin_id=%s", (plugin_id,))
+        return {r["version"] for r in cur.fetchall()}
 
 
 def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
@@ -478,9 +477,8 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
 
     from jen.models.db import jen_db
 
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("""
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("""
                 CREATE TABLE IF NOT EXISTS plugin_schema_migrations (
                     plugin_id VARCHAR(100) NOT NULL,
                     version INT NOT NULL,
@@ -498,13 +496,12 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
             continue
         description = m.get("description", "")
         try:
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute(m["sql"])
-                    cur.execute(
-                        "INSERT INTO plugin_schema_migrations (plugin_id, version, description) VALUES (%s, %s, %s)",
-                        (plugin_id, version, description),
-                    )
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute(m["sql"])
+                cur.execute(
+                    "INSERT INTO plugin_schema_migrations (plugin_id, version, description) VALUES (%s, %s, %s)",
+                    (plugin_id, version, description),
+                )
             count += 1
             logger.info(f"Plugin '{plugin_id}' migration {version} applied: {description}")
         except Exception as e:

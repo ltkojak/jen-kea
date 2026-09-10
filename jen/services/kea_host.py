@@ -20,6 +20,7 @@ Every high-level call returns a `HostResult` dict:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -72,10 +73,8 @@ def helper_call(server: dict, op: str, payload: dict | None = None, timeout: int
         out = stdout.read().decode("utf-8", "replace").strip()
         err = stderr.read().decode("utf-8", "replace").strip()
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ssh.close()
-        except Exception:
-            pass
 
     if out:
         try:
@@ -168,10 +167,8 @@ def _legacy_python3(server: dict, script: str, timeout: int = 30) -> tuple[str, 
         _stdin, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3", timeout=timeout)
         return stdout.read().decode("utf-8", "replace").strip(), stderr.read().decode("utf-8", "replace").strip()
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ssh.close()
-        except Exception:
-            pass
 
 
 def _legacy_ssh(server: dict, command: str, timeout: int = 30) -> tuple[str, str]:
@@ -180,10 +177,8 @@ def _legacy_ssh(server: dict, command: str, timeout: int = 30) -> tuple[str, str
         _stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
         return stdout.read().decode("utf-8", "replace").strip(), stderr.read().decode("utf-8", "replace").strip()
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ssh.close()
-        except Exception:
-            pass
 
 
 def _parse_legacy_script_out(out: str, err: str, via: str) -> dict:
@@ -249,10 +244,8 @@ def read_config(server: dict, service: str) -> dict | None:
         try:
             return __authoring.read_remote_json(ssh, path)
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 ssh.close()
-            except Exception:
-                pass
     except HelperError as e:
         logger.warning(f"read-config helper error on {server.get('name')}: {e}")
         return None

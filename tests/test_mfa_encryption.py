@@ -124,10 +124,9 @@ class TestMigration17:
             with jen_db() as db:
                 _m017_encrypt_mfa_secrets(db)
                 db.commit()
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT secret FROM mfa_methods WHERE name='_enc_probe'")
-                    after_first = cur.fetchone()["secret"]
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT secret FROM mfa_methods WHERE name='_enc_probe'")
+                after_first = cur.fetchone()["secret"]
             assert after_first.startswith("v1:")
             assert crypto.decrypt_secret(after_first) == raw
 
@@ -135,10 +134,9 @@ class TestMigration17:
             with jen_db() as db:
                 _m017_encrypt_mfa_secrets(db)
                 db.commit()
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT secret FROM mfa_methods WHERE name='_enc_probe'")
-                    after_second = cur.fetchone()["secret"]
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT secret FROM mfa_methods WHERE name='_enc_probe'")
+                after_second = cur.fetchone()["secret"]
             assert after_second == after_first
         finally:
             with jen_db() as db:
@@ -228,10 +226,9 @@ class TestEnrollRoute:
         )
         assert resp.status_code == 200
         try:
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT secret FROM mfa_methods WHERE user_id=1 AND name='_enroll_probe'")
-                    row = cur.fetchone()
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT secret FROM mfa_methods WHERE user_id=1 AND name='_enroll_probe'")
+                row = cur.fetchone()
             assert row is not None, "enrolment did not persist a method"
             assert row["secret"].startswith("v1:")
             assert row["secret"] != raw

@@ -26,6 +26,7 @@ compatibility with existing callers and plugins.
 """
 
 import configparser
+import contextlib
 import ipaddress
 import logging
 import os
@@ -184,10 +185,8 @@ class AppConfig:
         tmp = f"{self.path}.tmp"
         with open(tmp, "w") as f:
             parser.write(f)
-        try:
+        with contextlib.suppress(OSError):
             os.chmod(tmp, 0o640)
-        except OSError:
-            pass
         os.replace(tmp, self.path)
 
     def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:

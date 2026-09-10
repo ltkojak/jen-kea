@@ -30,29 +30,28 @@ def settings_alerts():
     channels = []
     templates = {}
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT * FROM alert_channels ORDER BY channel_type, channel_name")
-                channels = cur.fetchall()
-                # Parse JSON fields
-                for ch in channels:
-                    # config is encrypted at rest (v5.7.0) — decode via the
-                    # service helper, which also handles legacy plaintext rows
-                    ch["config"] = __alerts.get_channel_config(ch)
-                    if isinstance(ch.get("alert_types"), str):
-                        try:
-                            ch["alert_types"] = json.loads(ch["alert_types"])
-                        except (json.JSONDecodeError, ValueError):
-                            ch["alert_types"] = []
-                    # v5.1.16 — per-channel subnet scope for notifications
-                    if isinstance(ch.get("subnet_scope"), str):
-                        try:
-                            ch["subnet_scope"] = json.loads(ch["subnet_scope"])
-                        except (json.JSONDecodeError, ValueError):
-                            ch["subnet_scope"] = None
-                cur.execute("SELECT alert_type, template_text FROM alert_templates")
-                for row in cur.fetchall():
-                    templates[row["alert_type"]] = row["template_text"]
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT * FROM alert_channels ORDER BY channel_type, channel_name")
+            channels = cur.fetchall()
+            # Parse JSON fields
+            for ch in channels:
+                # config is encrypted at rest (v5.7.0) — decode via the
+                # service helper, which also handles legacy plaintext rows
+                ch["config"] = __alerts.get_channel_config(ch)
+                if isinstance(ch.get("alert_types"), str):
+                    try:
+                        ch["alert_types"] = json.loads(ch["alert_types"])
+                    except (json.JSONDecodeError, ValueError):
+                        ch["alert_types"] = []
+                # v5.1.16 — per-channel subnet scope for notifications
+                if isinstance(ch.get("subnet_scope"), str):
+                    try:
+                        ch["subnet_scope"] = json.loads(ch["subnet_scope"])
+                    except (json.JSONDecodeError, ValueError):
+                        ch["subnet_scope"] = None
+            cur.execute("SELECT alert_type, template_text FROM alert_templates")
+            for row in cur.fetchall():
+                templates[row["alert_type"]] = row["template_text"]
     except Exception as e:
         logger.error(f"Error loading alert settings: {e}")
         flash("Error loading alert settings. Check server logs for details.", "error")
@@ -169,12 +168,11 @@ def save_alert_channel():
         # Don't overwrite api_token if blank (treat like smtp_pass)
         if channel_id and not config["api_token"]:
             try:
-                with __db.jen_db() as db:
-                    with db.cursor() as cur:
-                        cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
-                        row = cur.fetchone()
-                        if row:
-                            config["api_token"] = __alerts.get_channel_config(row).get("api_token", "")
+                with __db.jen_db() as db, db.cursor() as cur:
+                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
+                    row = cur.fetchone()
+                    if row:
+                        config["api_token"] = __alerts.get_channel_config(row).get("api_token", "")
             except Exception:
                 pass
     elif channel_type == "discord":
@@ -185,12 +183,11 @@ def save_alert_channel():
     # Don't overwrite password if blank
     if channel_id and channel_type == "email" and not config["smtp_pass"]:
         try:
-            with __db.jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
-                    row = cur.fetchone()
-                    if row:
-                        config["smtp_pass"] = __alerts.get_channel_config(row).get("smtp_pass", "")
+            with __db.jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM alert_channels WHERE id=%s", (channel_id,))
+                row = cur.fetchone()
+                if row:
+                    config["smtp_pass"] = __alerts.get_channel_config(row).get("smtp_pass", "")
         except Exception:
             pass
 
@@ -257,10 +254,9 @@ def delete_alert_channel(channel_id):
 def test_alert_channel(channel_id):
 
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
-                channel = cur.fetchone()
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
+            channel = cur.fetchone()
         if not channel:
             flash("Channel not found.", "error")
             return redirect(url_for("settings.settings_alerts"))

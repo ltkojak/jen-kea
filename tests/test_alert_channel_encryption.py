@@ -94,10 +94,9 @@ class TestMigration18:
             with jen_db() as db:
                 _m018_encrypt_alert_channel_config(db)
                 db.commit()
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE channel_name='_enc_probe'")
-                    after_first = cur.fetchone()["config"]
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM alert_channels WHERE channel_name='_enc_probe'")
+                after_first = cur.fetchone()["config"]
             assert after_first.startswith('"v1:')
             assert "PlainBotToken" not in after_first
             assert alerts.get_channel_config({"config": after_first}) == cfg
@@ -106,10 +105,9 @@ class TestMigration18:
             with jen_db() as db:
                 _m018_encrypt_alert_channel_config(db)
                 db.commit()
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE channel_name='_enc_probe'")
-                    assert cur.fetchone()["config"] == after_first
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM alert_channels WHERE channel_name='_enc_probe'")
+                assert cur.fetchone()["config"] == after_first
         finally:
             with jen_db() as db:
                 with db.cursor() as cur:
@@ -157,10 +155,9 @@ class TestSaveChannelRoute:
         )
         assert resp.status_code == 200
         try:
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE channel_name='_save_probe'")
-                    row = cur.fetchone()
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM alert_channels WHERE channel_name='_save_probe'")
+                row = cur.fetchone()
             assert row is not None, "channel did not persist"
             assert row["config"].startswith('"v1:')
             assert "SubmittedBotToken" not in row["config"]
@@ -210,10 +207,9 @@ class TestSaveChannelRoute:
                 follow_redirects=True,
             )
             assert resp.status_code == 200
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT config FROM alert_channels WHERE id=%s", (cid,))
-                    cfg = alerts.get_channel_config({"config": cur.fetchone()["config"]})
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM alert_channels WHERE id=%s", (cid,))
+                cfg = alerts.get_channel_config({"config": cur.fetchone()["config"]})
             assert cfg["smtp_pass"] == "keepme"
         finally:
             with jen_db() as db:

@@ -198,10 +198,9 @@ ALERT_TYPE_LABELS = {
 
 def get_alert_template(alert_type):
     try:
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT template_text FROM alert_templates WHERE alert_type=%s", (alert_type,))
-                row = cur.fetchone()
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            cur.execute("SELECT template_text FROM alert_templates WHERE alert_type=%s", (alert_type,))
+            row = cur.fetchone()
         if row and row["template_text"]:
             return row["template_text"]
     except Exception:
@@ -262,10 +261,9 @@ def safe_text(value):
 def get_active_channels():
     """Get all enabled alert channels."""
     try:
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
-                channels = cur.fetchall()
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
+            channels = cur.fetchall()
         return channels
     except Exception as e:
         logger.error(f"get_active_channels error: {e}")
@@ -615,52 +613,48 @@ def take_lease_snapshot():
     """Record current lease counts for all subnets."""
     try:
         retention_days = int(__get_global_setting("history_retention_days", "90"))
-        with __kea_db_ctx() as kdb:
-            with __jen_db_ctx() as jdb:
-                # Get pool sizes from Kea config
-                pool_sizes = {}
-                result = __kea_command("config-get", server=__get_active_kea_server())
-                if result.get("result") == 0:
-                    for s in result["arguments"]["Dhcp4"].get("subnet4", []):
-                        for pool in s.get("pools", []):
-                            p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                            if "-" in p:
-                                start, end = [x.strip() for x in p.split("-")]
-                                pool_sizes[s["id"]] = ip_to_int(end) - ip_to_int(start) + 1
+        with __kea_db_ctx() as kdb, __jen_db_ctx() as jdb:
+            # Get pool sizes from Kea config
+            pool_sizes = {}
+            result = __kea_command("config-get", server=__get_active_kea_server())
+            if result.get("result") == 0:
+                for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+                    for pool in s.get("pools", []):
+                        p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                        if "-" in p:
+                            start, end = [x.strip() for x in p.split("-")]
+                            pool_sizes[s["id"]] = ip_to_int(end) - ip_to_int(start) + 1
 
-                with kdb.cursor() as kcur:
-                    with jdb.cursor() as jcur:
-                        for subnet_id, _info in extensions.SUBNET_MAP.items():
-                            kcur.execute(
-                                "SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,)
-                            )
-                            active = kcur.fetchone()["cnt"]
-                            kcur.execute(
-                                """
-                                SELECT COUNT(*) as cnt FROM lease4 l
-                                LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
-                                    AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                                WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
-                            """,
-                                (subnet_id,),
-                            )
-                            dynamic = kcur.fetchone()["cnt"]
-                            kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                            reserved = kcur.fetchone()["cnt"]
-                            pool_size = pool_sizes.get(subnet_id, 0)
-                            jcur.execute(
-                                """
-                                INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
-                                VALUES (%s, %s, %s, %s, %s)
-                            """,
-                                (subnet_id, active, dynamic, reserved, pool_size),
-                            )
+            with kdb.cursor() as kcur, jdb.cursor() as jcur:
+                for subnet_id, _info in extensions.SUBNET_MAP.items():
+                    kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    active = kcur.fetchone()["cnt"]
+                    kcur.execute(
+                        """
+                        SELECT COUNT(*) as cnt FROM lease4 l
+                        LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
+                            AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
+                        WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
+                    """,
+                        (subnet_id,),
+                    )
+                    dynamic = kcur.fetchone()["cnt"]
+                    kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                    reserved = kcur.fetchone()["cnt"]
+                    pool_size = pool_sizes.get(subnet_id, 0)
+                    jcur.execute(
+                        """
+                        INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """,
+                        (subnet_id, active, dynamic, reserved, pool_size),
+                    )
 
-                        # Purge old history
-                        jcur.execute(
-                            f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
-                        )
-                jdb.commit()
+                # Purge old history
+                jcur.execute(
+                    f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
+                )
+            jdb.commit()
     except Exception as e:
         logger.error(f"Snapshot error: {e}")
 
@@ -669,25 +663,24 @@ def send_daily_summary():
     """Build and send daily summary."""
     try:
         lines = ["<b>Daily Network Summary</b>"]
-        with __kea_db_ctx() as db:
-            with __jen_db_ctx() as jdb:
-                with db.cursor() as cur:
-                    for subnet_id, info in extensions.SUBNET_MAP.items():
-                        cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                        active = cur.fetchone()["cnt"]
-                        cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                        reserved = cur.fetchone()["cnt"]
-                        lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
-                    # New devices in last 24h
-                    with jdb.cursor() as jcur:
-                        jcur.execute(
-                            "SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)"
-                        )
-                        new_devices = jcur.fetchone()["cnt"]
-                        jcur.execute("SELECT COUNT(*) as cnt FROM devices")
-                        total_devices = jcur.fetchone()["cnt"]
-                lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
-                lines.append(f"Total known devices: <b>{total_devices}</b>")
+        with __kea_db_ctx() as db, __jen_db_ctx() as jdb:
+            with db.cursor() as cur:
+                for subnet_id, info in extensions.SUBNET_MAP.items():
+                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    active = cur.fetchone()["cnt"]
+                    cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                    reserved = cur.fetchone()["cnt"]
+                    lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
+                # New devices in last 24h
+                with jdb.cursor() as jcur:
+                    jcur.execute(
+                        "SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)"
+                    )
+                    new_devices = jcur.fetchone()["cnt"]
+                    jcur.execute("SELECT COUNT(*) as cnt FROM devices")
+                    total_devices = jcur.fetchone()["cnt"]
+            lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
+            lines.append(f"Total known devices: <b>{total_devices}</b>")
         summary = "\n".join(lines)
         send_alert("daily_summary", summary=summary)
     except Exception as e:
@@ -716,11 +709,10 @@ def check_alerts():
     # Seed known_macs from devices table so restarts don't
     # flood with "new device" alerts for every known device
     try:
-        with __jen_db_ctx() as jdb:
-            with jdb.cursor() as jcur:
-                jcur.execute("SELECT mac FROM devices")
-                for row in jcur.fetchall():
-                    known_macs.add(row["mac"].lower())
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT mac FROM devices")
+            for row in jcur.fetchall():
+                known_macs.add(row["mac"].lower())
         logger.info(f"Seeded {len(known_macs)} known MACs from devices table")
     except Exception as e:
         logger.warning(f"Could not seed known_macs from devices: {e}")
@@ -769,31 +761,30 @@ def check_alerts():
             kea_up = any(last_kea_status.values()) if last_kea_status else True
 
             if kea_up:
-                with __kea_db_ctx() as db:
-                    with db.cursor() as cur:
-                        reserved_lease_mode = __get_global_setting("reserved_lease_mode", "always")
-                        # ── Lease tracking ──
-                        # v5.1.13 — this used to anti-join out any lease
-                        # matching a reservation (WHERE h.host_id IS NULL),
-                        # to avoid re-firing "new lease" on every renewal of
-                        # every statically-reserved device. But that meant
-                        # a reserved device's IP going active — moving
-                        # subnets, coming back online after being off — was
-                        # invisible forever, not just on its very first
-                        # appearance. The fix isn't a separate one-time
-                        # "ever seen" check (that would still miss a
-                        # reserved device that comes back after being
-                        # offline, e.g. moved between subnets) — it's to
-                        # keep reservation status as a tag on the SAME
-                        # freshness check dynamic leases already use.
-                        # last_seen_leases already correctly distinguishes
-                        # "this IP is a genuinely new binding" from "this
-                        # is just a renewal of an IP already active last
-                        # cycle" for the dynamic pool; there's no reason
-                        # reserved leases need different freshness logic,
-                        # only a different alert type once something IS
-                        # fresh.
-                        cur.execute("""
+                with __kea_db_ctx() as db, db.cursor() as cur:
+                    reserved_lease_mode = __get_global_setting("reserved_lease_mode", "always")
+                    # ── Lease tracking ──
+                    # v5.1.13 — this used to anti-join out any lease
+                    # matching a reservation (WHERE h.host_id IS NULL),
+                    # to avoid re-firing "new lease" on every renewal of
+                    # every statically-reserved device. But that meant
+                    # a reserved device's IP going active — moving
+                    # subnets, coming back online after being off — was
+                    # invisible forever, not just on its very first
+                    # appearance. The fix isn't a separate one-time
+                    # "ever seen" check (that would still miss a
+                    # reserved device that comes back after being
+                    # offline, e.g. moved between subnets) — it's to
+                    # keep reservation status as a tag on the SAME
+                    # freshness check dynamic leases already use.
+                    # last_seen_leases already correctly distinguishes
+                    # "this IP is a genuinely new binding" from "this
+                    # is just a renewal of an IP already active last
+                    # cycle" for the dynamic pool; there's no reason
+                    # reserved leases need different freshness logic,
+                    # only a different alert type once something IS
+                    # fresh.
+                    cur.execute("""
                             SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
                                    IFNULL(l.hostname,'') AS hostname, l.subnet_id,
                                    (h.host_id IS NOT NULL) AS is_reserved
@@ -802,30 +793,30 @@ def check_alerts():
                                 AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
                             WHERE l.state=0
                         """)
-                        current_leases = set()
-                        new_lease_rows = []
-                        for row in cur.fetchall():
-                            current_leases.add(row["ip"])
-                            if not first_run and row["ip"] not in last_seen_leases:
-                                new_lease_rows.append(row)
+                    current_leases = set()
+                    new_lease_rows = []
+                    for row in cur.fetchall():
+                        current_leases.add(row["ip"])
+                        if not first_run and row["ip"] not in last_seen_leases:
+                            new_lease_rows.append(row)
 
-                        # ── Device inventory update ──
-                        cur.execute("""
+                    # ── Device inventory update ──
+                    cur.execute("""
                             SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
                                    IFNULL(l.hostname,'') AS hostname, l.subnet_id
                             FROM lease4 l WHERE l.state=0
                         """)
-                        all_leases = cur.fetchall()
-                        try:
-                            with __jen_db_ctx() as jdb:
-                                with jdb.cursor() as jcur:
-                                    for row in all_leases:
-                                        mac = __format_mac(row["hwaddr"])
-                                        manufacturer, device_type, device_icon = __classify_device(
-                                            mac, row["hostname"] or ""
-                                        )
-                                        jcur.execute(
-                                            """
+                    all_leases = cur.fetchall()
+                    try:
+                        with __jen_db_ctx() as jdb:
+                            with jdb.cursor() as jcur:
+                                for row in all_leases:
+                                    mac = __format_mac(row["hwaddr"])
+                                    manufacturer, device_type, device_icon = __classify_device(
+                                        mac, row["hostname"] or ""
+                                    )
+                                    jcur.execute(
+                                        """
                                             INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen,
                                                                  manufacturer, device_type, device_icon)
                                             VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s)
@@ -836,209 +827,208 @@ def check_alerts():
                                                 device_type=IF(manufacturer_override IS NULL, %s, device_type),
                                                 device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
                                         """,
-                                            (
-                                                mac,
-                                                row["ip"],
-                                                row["hostname"],
-                                                row["subnet_id"],
-                                                manufacturer,
-                                                device_type,
-                                                device_icon,
-                                                row["ip"],
-                                                row["hostname"],
-                                                row["subnet_id"],
-                                                manufacturer,
-                                                device_type,
-                                                device_icon,
-                                            ),
-                                        )
-                                jdb.commit()
-                        except Exception as e:
-                            logger.error(f"Device tracking error: {e}")
+                                        (
+                                            mac,
+                                            row["ip"],
+                                            row["hostname"],
+                                            row["subnet_id"],
+                                            manufacturer,
+                                            device_type,
+                                            device_icon,
+                                            row["ip"],
+                                            row["hostname"],
+                                            row["subnet_id"],
+                                            manufacturer,
+                                            device_type,
+                                            device_icon,
+                                        ),
+                                    )
+                            jdb.commit()
+                    except Exception as e:
+                        logger.error(f"Device tracking error: {e}")
 
-                        # ── New lease alerts ──
-                        # A row only reaches here once per genuinely new
-                        # binding (last_seen_leases already filtered out
-                        # renewals) — is_reserved just picks which alert
-                        # type describes it. A reserved device gets
-                        # new_reserved_lease every time its lease goes
-                        # active again, not just once ever; new_device
-                        # remains the "genuinely never seen this MAC
-                        # before" signal for the dynamic-pool case, since a
-                        # reserved MAC is by definition already known.
-                        for row in new_lease_rows:
-                            mac = __format_mac(row["hwaddr"])
-                            subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get(
-                                "name", f"Subnet {row['subnet_id']}"
-                            )
-                            hostname = safe_text(row["hostname"]) if row["hostname"] else "(none)"
-                            if row["is_reserved"]:
-                                # v5.1.16 — recurrence is now an admin
-                                # choice, not something hardcoded either
-                                # way. "always" (default, matches the
-                                # v5.1.13 fix): fires every time a
-                                # reserved lease goes newly active.
-                                # "once": fires only the first time a
-                                # given reserved MAC is ever seen —
-                                # offered as an explicit, documented
-                                # option for anyone who actually wants
-                                # the old quieter behavior, rather than
-                                # that being an accidental bug.
-                                if reserved_lease_mode == "once" and mac in known_macs:
-                                    continue
-                                send_alert(
-                                    "new_reserved_lease",
-                                    ip=row["ip"],
-                                    mac=mac,
-                                    hostname=hostname,
-                                    subnet=subnet_name,
-                                    subnet_id=row["subnet_id"],
-                                )
-                                known_macs.add(mac)
+                    # ── New lease alerts ──
+                    # A row only reaches here once per genuinely new
+                    # binding (last_seen_leases already filtered out
+                    # renewals) — is_reserved just picks which alert
+                    # type describes it. A reserved device gets
+                    # new_reserved_lease every time its lease goes
+                    # active again, not just once ever; new_device
+                    # remains the "genuinely never seen this MAC
+                    # before" signal for the dynamic-pool case, since a
+                    # reserved MAC is by definition already known.
+                    for row in new_lease_rows:
+                        mac = __format_mac(row["hwaddr"])
+                        subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get(
+                            "name", f"Subnet {row['subnet_id']}"
+                        )
+                        hostname = safe_text(row["hostname"]) if row["hostname"] else "(none)"
+                        if row["is_reserved"]:
+                            # v5.1.16 — recurrence is now an admin
+                            # choice, not something hardcoded either
+                            # way. "always" (default, matches the
+                            # v5.1.13 fix): fires every time a
+                            # reserved lease goes newly active.
+                            # "once": fires only the first time a
+                            # given reserved MAC is ever seen —
+                            # offered as an explicit, documented
+                            # option for anyone who actually wants
+                            # the old quieter behavior, rather than
+                            # that being an accidental bug.
+                            if reserved_lease_mode == "once" and mac in known_macs:
                                 continue
                             send_alert(
-                                "new_lease",
+                                "new_reserved_lease",
                                 ip=row["ip"],
                                 mac=mac,
                                 hostname=hostname,
                                 subnet=subnet_name,
                                 subnet_id=row["subnet_id"],
                             )
-                            # New device alert — only fire for MACs truly never
-                            # seen before (not in devices table, not just unknown
-                            # since last restart)
-                            if mac not in known_macs:
-                                send_alert(
-                                    "new_device",
-                                    ip=row["ip"],
-                                    mac=mac,
-                                    hostname=hostname,
-                                    subnet=subnet_name,
-                                    subnet_id=row["subnet_id"],
-                                )
-                                known_macs.add(mac)  # prevent repeat alerts this session
+                            known_macs.add(mac)
+                            continue
+                        send_alert(
+                            "new_lease",
+                            ip=row["ip"],
+                            mac=mac,
+                            hostname=hostname,
+                            subnet=subnet_name,
+                            subnet_id=row["subnet_id"],
+                        )
+                        # New device alert — only fire for MACs truly never
+                        # seen before (not in devices table, not just unknown
+                        # since last restart)
+                        if mac not in known_macs:
+                            send_alert(
+                                "new_device",
+                                ip=row["ip"],
+                                mac=mac,
+                                hostname=hostname,
+                                subnet=subnet_name,
+                                subnet_id=row["subnet_id"],
+                            )
+                            known_macs.add(mac)  # prevent repeat alerts this session
 
-                        # Update known MACs from all current leases
-                        for row in all_leases:
-                            known_macs.add(__format_mac(row["hwaddr"]))
+                    # Update known MACs from all current leases
+                    for row in all_leases:
+                        known_macs.add(__format_mac(row["hwaddr"]))
 
-                        last_seen_leases = current_leases
-                        first_run = False
+                    last_seen_leases = current_leases
+                    first_run = False
 
-                        # ── Utilization alerts ──
-                        kea_cfg = __kea_command("config-get", server=__get_active_kea_server())
-                        if kea_cfg.get("result") == 0:
-                            threshold = int(__get_global_setting("alert_threshold_pct", "80"))
-                            exhaustion_threshold = int(__get_global_setting("pool_exhaustion_free", "5"))
-                            for s in kea_cfg["arguments"]["Dhcp4"].get("subnet4", []):
-                                sid = s["id"]
-                                if sid not in extensions.SUBNET_MAP:
-                                    continue
-                                info = extensions.SUBNET_MAP[sid]
-                                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
-                                active = cur.fetchone()["cnt"]
-                                for pool in s.get("pools", []):
-                                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                                    if "-" in p:
-                                        start, end = [x.strip() for x in p.split("-")]
-                                        pool_size = ip_to_int(end) - ip_to_int(start) + 1
-                                        pct = round(active / pool_size * 100) if pool_size > 0 else 0
-                                        free = pool_size - active
-                                        subnet_key = f"{sid}"
-                                        if pct >= threshold and subnet_key not in alerted_high_subnets:
-                                            send_alert(
-                                                "utilization_high",
-                                                subnet=info["name"],
-                                                cidr=info["cidr"],
-                                                pct=pct,
-                                                used=active,
-                                                total=pool_size,
-                                                subnet_id=sid,
-                                            )
-                                            alerted_high_subnets.add(subnet_key)
-                                        elif pct < threshold and subnet_key in alerted_high_subnets:
-                                            send_alert(
-                                                "utilization_ok",
-                                                subnet=info["name"],
-                                                cidr=info["cidr"],
-                                                pct=pct,
-                                                used=active,
-                                                total=pool_size,
-                                                subnet_id=sid,
-                                            )
-                                            alerted_high_subnets.discard(subnet_key)
-                                        if free <= exhaustion_threshold:
-                                            send_alert(
-                                                "pool_exhaustion",
-                                                subnet=info["name"],
-                                                cidr=info["cidr"],
-                                                free=free,
-                                                subnet_id=sid,
-                                            )
+                    # ── Utilization alerts ──
+                    kea_cfg = __kea_command("config-get", server=__get_active_kea_server())
+                    if kea_cfg.get("result") == 0:
+                        threshold = int(__get_global_setting("alert_threshold_pct", "80"))
+                        exhaustion_threshold = int(__get_global_setting("pool_exhaustion_free", "5"))
+                        for s in kea_cfg["arguments"]["Dhcp4"].get("subnet4", []):
+                            sid = s["id"]
+                            if sid not in extensions.SUBNET_MAP:
+                                continue
+                            info = extensions.SUBNET_MAP[sid]
+                            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                            active = cur.fetchone()["cnt"]
+                            for pool in s.get("pools", []):
+                                p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
+                                if "-" in p:
+                                    start, end = [x.strip() for x in p.split("-")]
+                                    pool_size = ip_to_int(end) - ip_to_int(start) + 1
+                                    pct = round(active / pool_size * 100) if pool_size > 0 else 0
+                                    free = pool_size - active
+                                    subnet_key = f"{sid}"
+                                    if pct >= threshold and subnet_key not in alerted_high_subnets:
+                                        send_alert(
+                                            "utilization_high",
+                                            subnet=info["name"],
+                                            cidr=info["cidr"],
+                                            pct=pct,
+                                            used=active,
+                                            total=pool_size,
+                                            subnet_id=sid,
+                                        )
+                                        alerted_high_subnets.add(subnet_key)
+                                    elif pct < threshold and subnet_key in alerted_high_subnets:
+                                        send_alert(
+                                            "utilization_ok",
+                                            subnet=info["name"],
+                                            cidr=info["cidr"],
+                                            pct=pct,
+                                            used=active,
+                                            total=pool_size,
+                                            subnet_id=sid,
+                                        )
+                                        alerted_high_subnets.discard(subnet_key)
+                                    if free <= exhaustion_threshold:
+                                        send_alert(
+                                            "pool_exhaustion",
+                                            subnet=info["name"],
+                                            cidr=info["cidr"],
+                                            free=free,
+                                            subnet_id=sid,
+                                        )
 
-                        # ── Stale reservation alerts ──
-                        try:
-                            stale_days = int(__get_global_setting("stale_device_days", "30"))
-                            with __jen_db_ctx() as jdb:
-                                with jdb.cursor() as jcur:
-                                    jcur.execute(f"""
+                    # ── Stale reservation alerts ──
+                    try:
+                        stale_days = int(__get_global_setting("stale_device_days", "30"))
+                        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+                            jcur.execute(f"""
                                         SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days
                                         FROM devices
                                         WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)
                                     """)
-                                    stale_rows = jcur.fetchall()
-                            for row in stale_rows:
-                                if row["mac"] not in alerted_stale_macs:
-                                    # Check if has reservation
-                                    mac_hex = row["mac"].replace(":", "")
-                                    cur.execute(
-                                        "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id "
-                                        "FROM hosts WHERE HEX(dhcp_identifier)=%s",
-                                        (mac_hex,),
+                            stale_rows = jcur.fetchall()
+                        for row in stale_rows:
+                            if row["mac"] not in alerted_stale_macs:
+                                # Check if has reservation
+                                mac_hex = row["mac"].replace(":", "")
+                                cur.execute(
+                                    "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id "
+                                    "FROM hosts WHERE HEX(dhcp_identifier)=%s",
+                                    (mac_hex,),
+                                )
+                                res = cur.fetchone()
+                                if res:
+                                    send_alert(
+                                        "stale_reservation",
+                                        ip=res["ip"] or "",
+                                        mac=row["mac"],
+                                        hostname=safe_text(res["hostname"]) if res["hostname"] else "",
+                                        days=row["days"],
+                                        subnet_id=res["dhcp4_subnet_id"],
                                     )
-                                    res = cur.fetchone()
-                                    if res:
-                                        send_alert(
-                                            "stale_reservation",
-                                            ip=res["ip"] or "",
-                                            mac=row["mac"],
-                                            hostname=safe_text(res["hostname"]) if res["hostname"] else "",
-                                            days=row["days"],
-                                            subnet_id=res["dhcp4_subnet_id"],
-                                        )
-                                        alerted_stale_macs.add(row["mac"])
-                        except Exception as e:
-                            logger.error(f"Stale reservation check error: {e}")
+                                    alerted_stale_macs.add(row["mac"])
+                    except Exception as e:
+                        logger.error(f"Stale reservation check error: {e}")
 
-                        # ── Config drift check (v5.2.0) ──
-                        # Jen's own subnet map is a manually-maintained
-                        # config file, not derived from Kea's live
-                        # config at all — it can silently drift out of
-                        # sync (this is exactly what caused a real bug:
-                        # selecting a subnet by name returned a
-                        # different subnet's data, because Jen's stored
-                        # id for that name no longer matched what Kea's
-                        # live config actually assigned it to). Alerts
-                        # once when an issue first appears and once when
-                        # it resolves — not every 30-second cycle it
-                        # persists — using the same detected/resolved
-                        # pairing pattern as kea_down/kea_up and
-                        # utilization_high/utilization_ok.
-                        try:
-                            current_issues = {__drift_issue_key(i): i for i in __check_config_drift()}
-                            for key, issue in current_issues.items():
-                                if key not in last_drift_issues:
-                                    send_alert(
-                                        "config_drift_detected", message=issue["message"], subnet_id=issue["subnet_id"]
-                                    )
-                            for key, issue in last_drift_issues.items():
-                                if key not in current_issues:
-                                    send_alert(
-                                        "config_drift_resolved", message=issue["message"], subnet_id=issue["subnet_id"]
-                                    )
-                            last_drift_issues = current_issues
-                        except Exception as e:
-                            logger.error(f"Config drift check error: {e}")
+                    # ── Config drift check (v5.2.0) ──
+                    # Jen's own subnet map is a manually-maintained
+                    # config file, not derived from Kea's live
+                    # config at all — it can silently drift out of
+                    # sync (this is exactly what caused a real bug:
+                    # selecting a subnet by name returned a
+                    # different subnet's data, because Jen's stored
+                    # id for that name no longer matched what Kea's
+                    # live config actually assigned it to). Alerts
+                    # once when an issue first appears and once when
+                    # it resolves — not every 30-second cycle it
+                    # persists — using the same detected/resolved
+                    # pairing pattern as kea_down/kea_up and
+                    # utilization_high/utilization_ok.
+                    try:
+                        current_issues = {__drift_issue_key(i): i for i in __check_config_drift()}
+                        for key, issue in current_issues.items():
+                            if key not in last_drift_issues:
+                                send_alert(
+                                    "config_drift_detected", message=issue["message"], subnet_id=issue["subnet_id"]
+                                )
+                        for key, issue in last_drift_issues.items():
+                            if key not in current_issues:
+                                send_alert(
+                                    "config_drift_resolved", message=issue["message"], subnet_id=issue["subnet_id"]
+                                )
+                        last_drift_issues = current_issues
+                    except Exception as e:
+                        logger.error(f"Config drift check error: {e}")
 
             # ── Lease history snapshot ──
             snapshot_interval = int(__get_global_setting("snapshot_interval_minutes", "30")) * 60

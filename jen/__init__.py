@@ -152,10 +152,9 @@ def create_app() -> Flask:
             have_current = False
             tv_row = None
             try:
-                with jen_db() as db:
-                    with db.cursor() as cur:
-                        cur.execute("SELECT token_version FROM users WHERE id=%s", (user_id,))
-                        tv_row = cur.fetchone()
+                with jen_db() as db, db.cursor() as cur:
+                    cur.execute("SELECT token_version FROM users WHERE id=%s", (user_id,))
+                    tv_row = cur.fetchone()
                 have_current = True
             except Exception as e:
                 logger.error(f"load_user token_version check error: {e}")
@@ -186,14 +185,13 @@ def create_app() -> Flask:
         # Slow path: full DB lookup — first login, cache missing, or cache
         # found to be stale/unverifiable above.
         try:
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT id, username, role, session_timeout, subnet_access, "
-                        "token_version, must_change_password FROM users WHERE id=%s",
-                        (user_id,),
-                    )
-                    row = cur.fetchone()
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute(
+                    "SELECT id, username, role, session_timeout, subnet_access, "
+                    "token_version, must_change_password FROM users WHERE id=%s",
+                    (user_id,),
+                )
+                row = cur.fetchone()
             if row:
                 user = User(
                     row["id"],
@@ -402,11 +400,10 @@ def create_app() -> Flask:
                 try:
                     from jen.models.db import jen_db
 
-                    with jen_db() as db:
-                        with db.cursor() as cur:
-                            cur.execute("SELECT avatar_url FROM users WHERE id=%s", (current_user.id,))
-                            row = cur.fetchone()
-                            avatar_url = row.get("avatar_url") if row else None
+                    with jen_db() as db, db.cursor() as cur:
+                        cur.execute("SELECT avatar_url FROM users WHERE id=%s", (current_user.id,))
+                        row = cur.fetchone()
+                        avatar_url = row.get("avatar_url") if row else None
                 except Exception:
                     avatar_url = None
                 session["_avatar_url"] = avatar_url

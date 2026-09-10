@@ -101,6 +101,7 @@ release directories tracked for a future major (see docs/ARCHITECTURE.md
 """
 
 import configparser
+import contextlib
 import hashlib
 import json
 import os
@@ -255,7 +256,8 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
         existing_favicon = os.path.join(static_dest, "favicon.ico")
         preserved_favicon = None
         if os.path.isfile(existing_favicon):
-            preserved_favicon = tempfile.NamedTemporaryFile(delete=False)
+            # kept past the block on purpose — closed here, unlinked much later
+            preserved_favicon = tempfile.NamedTemporaryFile(delete=False)  # noqa: SIM115
             preserved_favicon.close()
             shutil.copy2(existing_favicon, preserved_favicon.name)
         for root, _dirs, files in os.walk(static_src):
@@ -841,7 +843,8 @@ def main():
     # whose target points outside tmp_dir. Only allow plain files and
     # directories.
     tmp_dir = tempfile.mkdtemp(prefix="jen_update_extract_")
-    tmp_tarball = tempfile.NamedTemporaryFile(suffix=".tar.gz", prefix="jen_update_", delete=False)
+    # kept past the block on purpose — written and closed here, unlinked in `finally`
+    tmp_tarball = tempfile.NamedTemporaryFile(suffix=".tar.gz", prefix="jen_update_", delete=False)  # noqa: SIM115
     try:
         tmp_tarball.write(tarball_bytes)
         tmp_tarball.close()
@@ -967,10 +970,8 @@ def main():
         return 0
 
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_tarball.name)
-        except OSError:
-            pass
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 

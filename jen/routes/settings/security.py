@@ -4,6 +4,7 @@ jen/routes/settings/security.py
 Session timeout, login rate limiting, SSL certificate upload.
 """
 
+import contextlib
 import logging
 import os
 import subprocess
@@ -138,10 +139,8 @@ def _write_atomically(path: str, data: str, mode: int) -> None:
     restart) never sees a half-written PEM. The previous file, if any, is
     kept beside it as `<name>.prev` for a manual recovery."""
     if os.path.exists(path):
-        try:
+        with contextlib.suppress(OSError):
             os.replace(path, path + ".prev")
-        except OSError:
-            pass
     tmp = path + ".new"
     with open(tmp, "w") as f:
         f.write(data)

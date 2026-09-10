@@ -103,11 +103,10 @@ def subnets():
     ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
     subnet_notes = {}
     try:
-        with __db.jen_db() as jdb:
-            with jdb.cursor() as jcur:
-                jcur.execute("SELECT subnet_id, notes FROM subnet_notes")
-                for row in jcur.fetchall():
-                    subnet_notes[row["subnet_id"]] = row["notes"]
+        with __db.jen_db() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT subnet_id, notes FROM subnet_notes")
+            for row in jcur.fetchall():
+                subnet_notes[row["subnet_id"]] = row["notes"]
     except Exception:
         pass
     return render_template(
@@ -404,12 +403,11 @@ def delete_subnet(subnet_id):
     # Block deletion if the subnet still has active leases or reservations —
     # deleting Kea config out from under live leases would orphan them.
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                active_leases = cur.fetchone()["cnt"]
-                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                reservations = cur.fetchone()["cnt"]
+        with __db.kea_db() as db, db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+            active_leases = cur.fetchone()["cnt"]
+            cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+            reservations = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"Could not verify subnet {subnet_id} is safe to delete: {e}")
         flash("Could not verify subnet is safe to delete. Check server logs for details.", "error")

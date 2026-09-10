@@ -177,19 +177,22 @@ class TestNoDirectRootPathsOutsideKeaHost:
         offenders = []
         for p in self._py_files():
             text = p.read_text(encoding="utf-8")
-            if "base64 -d | sudo python3" in text or "| sudo python3" in text:
-                if p.name not in ("kea_host.py", "kea_authoring.py"):
-                    offenders.append(str(p.relative_to(_JEN.parent)))
+            if ("base64 -d | sudo python3" in text or "| sudo python3" in text) and p.name not in (
+                "kea_host.py",
+                "kea_authoring.py",
+            ):
+                offenders.append(str(p.relative_to(_JEN.parent)))
         assert not offenders, offenders
 
     def test_no_subprocess_ssh_in_routes(self):
         offenders = []
         for p in (_JEN / "routes").rglob("*.py"):
             text = p.read_text(encoding="utf-8")
-            if 'subprocess.run(["ssh"' in text or "subprocess.run(['ssh'" in text or '["ssh"]\n' in text:
-                # ddns.py keeps a plain-SSH `dig`/`host` lookup (no sudo)
-                if p.name != "ddns.py":
-                    offenders.append(str(p.relative_to(_JEN.parent)))
+            # ddns.py keeps a plain-SSH `dig`/`host` lookup (no sudo)
+            if (
+                'subprocess.run(["ssh"' in text or "subprocess.run(['ssh'" in text or '["ssh"]\n' in text
+            ) and p.name != "ddns.py":
+                offenders.append(str(p.relative_to(_JEN.parent)))
         assert not offenders, offenders
 
 

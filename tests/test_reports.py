@@ -20,7 +20,7 @@ import pathlib
 
 class TestReportsChartJsVendoring:
     def test_no_external_cdn_reference_anywhere_in_template(self):
-        content = open("templates/reports.html").read()
+        content = pathlib.Path("templates/reports.html").read_text(encoding="utf-8")
         assert "cdnjs.cloudflare.com" not in content
         assert "cdn.jsdelivr.net" not in content
         assert "unpkg.com" not in content
@@ -31,7 +31,7 @@ class TestReportsChartJsVendoring:
         assert path.stat().st_size > 50_000  # a real bundle, not a stub
 
     def test_vendored_chart_js_exposes_global_chart_constructor(self):
-        content = open("static/js/chart.umd.min.js").read()
+        content = pathlib.Path("static/js/chart.umd.min.js").read_text(encoding="utf-8")
         assert "Chart.js" in content[:200]  # header comment survives minification
         assert "window.Chart" in content  # UMD global export path present
 

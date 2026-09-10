@@ -88,10 +88,9 @@ class TestPendingEnrollmentIsNotAuthenticated:
         r = client.post("/mfa/enroll", data={"action": "new_backup_codes"}, follow_redirects=False)
         assert r.status_code in (301, 302)
         assert "/mfa/enroll" in r.headers["Location"]
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT COUNT(*) c FROM mfa_backup_codes WHERE user_id=%s", (required_all_unenrolled,))
-                assert cur.fetchone()["c"] == 0
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) c FROM mfa_backup_codes WHERE user_id=%s", (required_all_unenrolled,))
+            assert cur.fetchone()["c"] == 0
 
 
 class TestCompletingEnrollmentAuthenticates:
@@ -111,12 +110,9 @@ class TestCompletingEnrollmentAuthenticates:
             assert "mfa_pending_enroll" not in sess
         # and now the app is actually reachable
         assert client.get("/", follow_redirects=False).status_code == 200
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) c FROM mfa_methods WHERE user_id=%s AND enabled=1", (required_all_unenrolled,)
-                )
-                assert cur.fetchone()["c"] == 1
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) c FROM mfa_methods WHERE user_id=%s AND enabled=1", (required_all_unenrolled,))
+            assert cur.fetchone()["c"] == 1
 
     def test_bad_code_does_not_authenticate(self, client, required_all_unenrolled):
         _login(client)

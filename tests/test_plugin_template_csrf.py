@@ -26,6 +26,7 @@ happened to get reported.
 
 import glob
 import re
+from pathlib import Path
 
 import pytest
 
@@ -52,7 +53,7 @@ class TestPluginFormsHaveCsrfToken:
 
     @pytest.mark.parametrize("template_path", _all_plugin_template_files())
     def test_every_post_form_includes_csrf_token(self, template_path):
-        content = open(template_path).read()
+        content = Path(template_path).read_text(encoding="utf-8")
         post_forms = _POST_FORM_RE.findall(content)
         for i, form_html in enumerate(post_forms):
             assert "csrf_token" in form_html, (

@@ -78,89 +78,87 @@ def devices():
     total = 0
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     try:
-        with __db.jen_db() as db:
-            with __db.kea_db() as kdb:
-                with db.cursor() as cur:
-                    where = []
-                    params = []
-                    if search:
-                        where.append(
-                            "(d.mac LIKE %s OR d.device_name LIKE %s OR d.owner LIKE %s OR d.last_ip LIKE %s OR d.last_hostname LIKE %s)"
-                        )
-                        s = f"%{search}%"
-                        params += [s, s, s, s, s]
-                    if show_stale:
-                        where.append(f"d.last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)")
-                    if type_filter:
-                        where.append("d.device_type=%s")
-                        params.append(type_filter)
-                    if subnet_filter != "all":
-                        try:
-                            sid = int(subnet_filter)
-                            # v5.1.12 — same fix as reservations.py: verify
-                            # the id actually exists in SUBNET_MAP before
-                            # trusting it, matching leases.py's existing
-                            # guard, rather than filtering directly on a
-                            # possibly stale/nonexistent id.
-                            if sid not in extensions.SUBNET_MAP:
-                                subnet_filter = "all"
-                            elif current_user.can_access_subnet(sid):
-                                where.append("d.last_subnet_id=%s")
-                                params.append(sid)
-                            else:
-                                subnet_filter = "all"
-                        except ValueError:
-                            subnet_filter = "all"
-                    if subnet_filter == "all" and not current_user.all_subnets:
-                        from jen.services.access import add_subnet_restriction
-
-                        where, params = add_subnet_restriction(where, params, "d", "last_subnet_id")
-                    where_str = " AND ".join(where) if where else "1=1"
-
-                    cur.execute(f"SELECT COUNT(*) as cnt FROM devices d WHERE {where_str}", params)
-                    total = cur.fetchone()["cnt"]
-                    if per_page:
-                        offset = (page - 1) * per_page
-                        limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+        with __db.jen_db() as db, __db.kea_db() as kdb, db.cursor() as cur:
+            where = []
+            params = []
+            if search:
+                where.append(
+                    "(d.mac LIKE %s OR d.device_name LIKE %s OR d.owner LIKE %s OR d.last_ip LIKE %s OR d.last_hostname LIKE %s)"
+                )
+                s = f"%{search}%"
+                params += [s, s, s, s, s]
+            if show_stale:
+                where.append(f"d.last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)")
+            if type_filter:
+                where.append("d.device_type=%s")
+                params.append(type_filter)
+            if subnet_filter != "all":
+                try:
+                    sid = int(subnet_filter)
+                    # v5.1.12 — same fix as reservations.py: verify
+                    # the id actually exists in SUBNET_MAP before
+                    # trusting it, matching leases.py's existing
+                    # guard, rather than filtering directly on a
+                    # possibly stale/nonexistent id.
+                    if sid not in extensions.SUBNET_MAP:
+                        subnet_filter = "all"
+                    elif current_user.can_access_subnet(sid):
+                        where.append("d.last_subnet_id=%s")
+                        params.append(sid)
                     else:
-                        limit_clause = ""
-                    cur.execute(
-                        f"""
-                        SELECT d.id, d.mac, d.device_name, d.owner, d.notes,
-                               d.first_seen, d.last_seen, d.last_ip, d.last_hostname, d.last_subnet_id,
-                               COALESCE(d.manufacturer_override, d.manufacturer) AS manufacturer,
-                               COALESCE(d.device_type_override, d.device_type) AS device_type,
-                               COALESCE(d.device_icon_override, d.device_icon) AS device_icon,
-                               d.manufacturer_override IS NOT NULL AS is_manual,
-                               d.device_type_override AS type_override_key,
-                               d.device_icon_override AS icon_override_key,
-                               DATEDIFF(NOW(), d.last_seen) as days_since_seen
-                        FROM devices d
-                        WHERE {where_str}
-                        ORDER BY {sort_col} {direction}
-                        {limit_clause}
-                    """,
-                        params,
-                    )
-                    rows = cur.fetchall()
+                        subnet_filter = "all"
+                except ValueError:
+                    subnet_filter = "all"
+            if subnet_filter == "all" and not current_user.all_subnets:
+                from jen.services.access import add_subnet_restriction
 
-                    with kdb.cursor() as kcur:
-                        for row in rows:
-                            mac_hex = row["mac"].replace(":", "")
-                            kcur.execute(
-                                "SELECT host_id, inet_ntoa(ipv4_address) AS ip FROM hosts WHERE HEX(dhcp_identifier)=%s",
-                                (mac_hex,),
-                            )
-                            res = kcur.fetchone()
-                            row["has_reservation"] = bool(res)
-                            row["reservation_ip"] = res["ip"] if res else None
-                            row["subnet_name"] = (
-                                extensions.SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "")
-                                if row["last_subnet_id"]
-                                else ""
-                            )
-                            row["is_stale"] = row["days_since_seen"] >= stale_days
-                            devices_list.append(row)
+                where, params = add_subnet_restriction(where, params, "d", "last_subnet_id")
+            where_str = " AND ".join(where) if where else "1=1"
+
+            cur.execute(f"SELECT COUNT(*) as cnt FROM devices d WHERE {where_str}", params)
+            total = cur.fetchone()["cnt"]
+            if per_page:
+                offset = (page - 1) * per_page
+                limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+            else:
+                limit_clause = ""
+            cur.execute(
+                f"""
+                SELECT d.id, d.mac, d.device_name, d.owner, d.notes,
+                       d.first_seen, d.last_seen, d.last_ip, d.last_hostname, d.last_subnet_id,
+                       COALESCE(d.manufacturer_override, d.manufacturer) AS manufacturer,
+                       COALESCE(d.device_type_override, d.device_type) AS device_type,
+                       COALESCE(d.device_icon_override, d.device_icon) AS device_icon,
+                       d.manufacturer_override IS NOT NULL AS is_manual,
+                       d.device_type_override AS type_override_key,
+                       d.device_icon_override AS icon_override_key,
+                       DATEDIFF(NOW(), d.last_seen) as days_since_seen
+                FROM devices d
+                WHERE {where_str}
+                ORDER BY {sort_col} {direction}
+                {limit_clause}
+            """,
+                params,
+            )
+            rows = cur.fetchall()
+
+            with kdb.cursor() as kcur:
+                for row in rows:
+                    mac_hex = row["mac"].replace(":", "")
+                    kcur.execute(
+                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip FROM hosts WHERE HEX(dhcp_identifier)=%s",
+                        (mac_hex,),
+                    )
+                    res = kcur.fetchone()
+                    row["has_reservation"] = bool(res)
+                    row["reservation_ip"] = res["ip"] if res else None
+                    row["subnet_name"] = (
+                        extensions.SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "")
+                        if row["last_subnet_id"]
+                        else ""
+                    )
+                    row["is_stale"] = row["days_since_seen"] >= stale_days
+                    devices_list.append(row)
     except Exception as e:
         logger.error(f"Devices error: {e}")
         flash("Could not load device inventory. Check server logs for details.", "error")

@@ -214,7 +214,8 @@ def import_inspect():
     import base64
     import tempfile
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")
+    # kept past the block on purpose — the path is handed to the confirm step
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")  # noqa: SIM115
     tmp.write(file_bytes)
     tmp.close()
     return render_template(

@@ -157,9 +157,7 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
         return False
     if p.scheme not in ("http", "https") or not p.hostname:
         return False
-    if require_port and port is None:
-        return False
-    return True
+    return not (require_port and port is None)
 
 
 # ─────────────────────────────────────────
@@ -235,40 +233,39 @@ def is_locked_out(ip, username):
         return False, 0
 
     try:
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
-                # Rolling window: only count attempts within the lockout period.
-                # This ensures old attempts don't contribute to new lockouts.
-                # If lockout_minutes=0 (permanent lockout), use a 24h detection
-                # window to find the triggering burst, then lock permanently.
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            # Rolling window: only count attempts within the lockout period.
+            # This ensures old attempts don't contribute to new lockouts.
+            # If lockout_minutes=0 (permanent lockout), use a 24h detection
+            # window to find the triggering burst, then lock permanently.
+            if lockout_minutes > 0:
+                window = f"DATE_SUB(NOW(), INTERVAL {lockout_minutes} MINUTE)"
+            else:
+                window = "DATE_SUB(NOW(), INTERVAL 1440 MINUTE)"  # 24h rolling window
+
+            count = 0
+            if mode in ("ip", "both"):
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address=%s AND attempted_at >= {window}",
+                    (ip,),
+                )
+                count = max(count, cur.fetchone()["cnt"])
+            if mode in ("username", "both"):
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM login_attempts WHERE username=%s AND attempted_at >= {window}",
+                    (username,),
+                )
+                count = max(count, cur.fetchone()["cnt"])
+
+            if count >= max_attempts:
                 if lockout_minutes > 0:
-                    window = f"DATE_SUB(NOW(), INTERVAL {lockout_minutes} MINUTE)"
-                else:
-                    window = "DATE_SUB(NOW(), INTERVAL 1440 MINUTE)"  # 24h rolling window
-
-                count = 0
-                if mode in ("ip", "both"):
+                    # Calculate time remaining in the lockout window from
+                    # the FIRST attempt in the current window, not the last.
+                    # Lock expires when the oldest attempt in the window ages out.
+                    field = "ip_address" if mode in ("ip", "both") else "username"
+                    val = ip if mode in ("ip", "both") else username
                     cur.execute(
-                        f"SELECT COUNT(*) as cnt FROM login_attempts WHERE ip_address=%s AND attempted_at >= {window}",
-                        (ip,),
-                    )
-                    count = max(count, cur.fetchone()["cnt"])
-                if mode in ("username", "both"):
-                    cur.execute(
-                        f"SELECT COUNT(*) as cnt FROM login_attempts WHERE username=%s AND attempted_at >= {window}",
-                        (username,),
-                    )
-                    count = max(count, cur.fetchone()["cnt"])
-
-                if count >= max_attempts:
-                    if lockout_minutes > 0:
-                        # Calculate time remaining in the lockout window from
-                        # the FIRST attempt in the current window, not the last.
-                        # Lock expires when the oldest attempt in the window ages out.
-                        field = "ip_address" if mode in ("ip", "both") else "username"
-                        val = ip if mode in ("ip", "both") else username
-                        cur.execute(
-                            f"""
+                        f"""
                             SELECT CEIL(
                                 ({lockout_minutes} * 60) -
                                 TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW())
@@ -276,14 +273,14 @@ def is_locked_out(ip, username):
                             FROM login_attempts
                             WHERE {field}=%s AND attempted_at >= {window}
                         """,
-                            (val,),
-                        )
-                        row = cur.fetchone()
-                        remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
-                        remaining_mins = max(1, (remaining_secs + 59) // 60)
-                    else:
-                        remaining_mins = 999  # permanent until admin clears
-                    return True, remaining_mins
+                        (val,),
+                    )
+                    row = cur.fetchone()
+                    remaining_secs = max(0, int(row["remaining"] or 0)) if row else 0
+                    remaining_mins = max(1, (remaining_secs + 59) // 60)
+                else:
+                    remaining_mins = 999  # permanent until admin clears
+                return True, remaining_mins
         return False, 0
     except Exception as e:
         logger.error(f"Rate limit check error: {e}")
@@ -337,28 +334,27 @@ def is_mfa_locked_out(user_id):
     """Returns (locked: bool, remaining_minutes: int). Always a timed
     lockout — never permanent (see MFA_LOCKOUT_MINUTES note above)."""
     try:
-        with __jen_db_ctx() as db:
-            with db.cursor() as cur:
+        with __jen_db_ctx() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) as cnt FROM mfa_attempts "
+                "WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
+                (user_id, MFA_LOCKOUT_MINUTES),
+            )
+            count = cur.fetchone()["cnt"]
+            if count >= MFA_MAX_ATTEMPTS:
+                # Seconds until the OLDEST attempt in the window ages out,
+                # converted to minutes in Python — same shape as the
+                # password-side calc above. The old query divided elapsed
+                # time by 60 *inside* the subtraction (900 - mins), so it
+                # reported ~900 "minutes remaining" right after lockout.
                 cur.execute(
-                    "SELECT COUNT(*) as cnt FROM mfa_attempts "
-                    "WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
-                    (user_id, MFA_LOCKOUT_MINUTES),
+                    "SELECT (%s * 60) - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) as remaining_secs "
+                    "FROM mfa_attempts WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
+                    (MFA_LOCKOUT_MINUTES, user_id, MFA_LOCKOUT_MINUTES),
                 )
-                count = cur.fetchone()["cnt"]
-                if count >= MFA_MAX_ATTEMPTS:
-                    # Seconds until the OLDEST attempt in the window ages out,
-                    # converted to minutes in Python — same shape as the
-                    # password-side calc above. The old query divided elapsed
-                    # time by 60 *inside* the subtraction (900 - mins), so it
-                    # reported ~900 "minutes remaining" right after lockout.
-                    cur.execute(
-                        "SELECT (%s * 60) - TIMESTAMPDIFF(SECOND, MIN(attempted_at), NOW()) as remaining_secs "
-                        "FROM mfa_attempts WHERE user_id=%s AND attempted_at >= DATE_SUB(NOW(), INTERVAL %s MINUTE)",
-                        (MFA_LOCKOUT_MINUTES, user_id, MFA_LOCKOUT_MINUTES),
-                    )
-                    row = cur.fetchone()
-                    remaining_secs = max(0, int(row["remaining_secs"] or 0)) if row else 0
-                    return True, max(1, (remaining_secs + 59) // 60)
+                row = cur.fetchone()
+                remaining_secs = max(0, int(row["remaining_secs"] or 0)) if row else 0
+                return True, max(1, (remaining_secs + 59) // 60)
         return False, 0
     except Exception as e:
         logger.error(f"MFA rate limit check error: {e}")

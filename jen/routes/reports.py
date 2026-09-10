@@ -40,11 +40,10 @@ def reports():
 
     history = {}
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
-                    cur.execute(
-                        """
+        with __db.jen_db() as db, db.cursor() as cur:
+            for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
+                cur.execute(
+                    """
                         SELECT
                             DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:%%i') as ts,
                             active_leases, dynamic_leases, reserved_leases, pool_size
@@ -53,10 +52,10 @@ def reports():
                         AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                         ORDER BY snapshot_time ASC
                     """,
-                        (subnet_id, days),
-                    )
-                    rows = cur.fetchall()
-                    history[subnet_id] = {"name": info["name"], "cidr": info["cidr"], "data": rows}
+                    (subnet_id, days),
+                )
+                rows = cur.fetchall()
+                history[subnet_id] = {"name": info["name"], "cidr": info["cidr"], "data": rows}
     except Exception as e:
         logger.error(f"Reports error: {e}")
         flash("Could not load history data. Check server logs for details.", "error")
@@ -64,39 +63,34 @@ def reports():
     # Summary stats
     summary = {}
     try:
-        with __db.kea_db() as db:
-            with __db.jen_db() as jdb:
-                with db.cursor() as cur:
-                    with jdb.cursor() as jcur:
-                        for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
-                            cur.execute(
-                                "SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,)
-                            )
-                            active = cur.fetchone()["cnt"]
-                            jcur.execute(
-                                """
+        with __db.kea_db() as db, __db.jen_db() as jdb, db.cursor() as cur, jdb.cursor() as jcur:
+            for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                active = cur.fetchone()["cnt"]
+                jcur.execute(
+                    """
                                 SELECT active_leases, pool_size, snapshot_time
                                 FROM lease_history WHERE subnet_id=%s
                                 ORDER BY snapshot_time DESC LIMIT 1
                             """,
-                                (subnet_id,),
-                            )
-                            last = jcur.fetchone()
-                            jcur.execute(
-                                """
+                    (subnet_id,),
+                )
+                last = jcur.fetchone()
+                jcur.execute(
+                    """
                                 SELECT MAX(active_leases) as peak FROM lease_history
                                 WHERE subnet_id=%s AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                             """,
-                                (subnet_id, days),
-                            )
-                            peak = jcur.fetchone()
-                            summary[subnet_id] = {
-                                "name": info["name"],
-                                "cidr": info["cidr"],
-                                "current": active,
-                                "pool_size": last["pool_size"] if last else 0,
-                                "peak": peak["peak"] if peak and peak["peak"] else active,
-                            }
+                    (subnet_id, days),
+                )
+                peak = jcur.fetchone()
+                summary[subnet_id] = {
+                    "name": info["name"],
+                    "cidr": info["cidr"],
+                    "current": active,
+                    "pool_size": last["pool_size"] if last else 0,
+                    "peak": peak["peak"] if peak and peak["peak"] else active,
+                }
     except Exception as e:
         logger.error(f"Reports summary error: {e}")
 

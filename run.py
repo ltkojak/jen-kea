@@ -50,6 +50,7 @@ Docker / .env auto-config
     JEN_SUBNETS            (format: "1=Production,10.10.10.0/24;30=IoT,10.10.30.0/24")
 """
 
+import contextlib
 import os
 import sys
 
@@ -90,12 +91,10 @@ def _venv_reexec_target(venv_dir=_VENV_DIR):
 
 _reexec_target = _venv_reexec_target()
 if _reexec_target:
-    try:
+    # On a broken venv (dangling interpreter symlink, etc.) fall through and
+    # continue on whatever interpreter we're already running under.
+    with contextlib.suppress(OSError):
         os.execv(_reexec_target, [_reexec_target, os.path.abspath(__file__), *sys.argv[1:]])
-    except OSError:
-        # Broken venv (dangling interpreter symlink, etc.) — continue on
-        # whatever interpreter we're already running under.
-        pass
 
 import logging  # noqa: E402
 import signal  # noqa: E402
@@ -192,10 +191,8 @@ forward_zone = {os.environ.get("JEN_DDNS_ZONE", "")}
         f.write(config_content)
 
     # Set permissions if possible (may not be root in Docker)
-    try:
+    with contextlib.suppress(Exception):
         os.chmod(config_path, 0o640)
-    except Exception:
-        pass
 
     print(f"Jen: config generated from environment variables → {config_path}")
 
@@ -314,10 +311,8 @@ def main():
             return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
 
         def _forward(_signum, _frame):
-            try:
+            with contextlib.suppress(Exception):
                 proc.send_signal(signal.SIGTERM)
-            except Exception:
-                pass
 
         signal.signal(signal.SIGTERM, _forward)
         signal.signal(signal.SIGINT, _forward)

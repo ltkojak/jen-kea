@@ -44,25 +44,24 @@ def login():
 
         # Single DB connection for the entire login flow
         try:
-            with __db.jen_db() as db:
-                with db.cursor() as cur:
-                    # User lookup
+            with __db.jen_db() as db, db.cursor() as cur:
+                # User lookup
+                cur.execute(
+                    "SELECT id, username, role, session_timeout, password, subnet_access, token_version, must_change_password FROM users WHERE username=%s",
+                    (username,),
+                )
+                row = cur.fetchone()
+
+                mfa_mode = __user.get_global_setting("mfa_mode", "off")
+
+                mfa_enrolled = False
+                if row:
                     cur.execute(
-                        "SELECT id, username, role, session_timeout, password, subnet_access, token_version, must_change_password FROM users WHERE username=%s",
-                        (username,),
+                        "SELECT (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) + "
+                        "(SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as cnt",
+                        (row["id"], row["id"]),
                     )
-                    row = cur.fetchone()
-
-                    mfa_mode = __user.get_global_setting("mfa_mode", "off")
-
-                    mfa_enrolled = False
-                    if row:
-                        cur.execute(
-                            "SELECT (SELECT COUNT(*) FROM mfa_methods WHERE user_id=%s AND enabled=1) + "
-                            "(SELECT COUNT(*) FROM webauthn_credentials WHERE user_id=%s) as cnt",
-                            (row["id"], row["id"]),
-                        )
-                        mfa_enrolled = cur.fetchone()["cnt"] > 0
+                    mfa_enrolled = cur.fetchone()["cnt"] > 0
 
         except Exception as e:
             logger.error(f"Login DB error: {e}")

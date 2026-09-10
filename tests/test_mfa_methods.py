@@ -39,10 +39,9 @@ def two_totp_methods():
 
 
 def _last_used():
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("SELECT name, last_used FROM mfa_methods WHERE name LIKE '\\_probe\\_%' ORDER BY name")
-            return {r["name"]: r["last_used"] for r in cur.fetchall()}
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT name, last_used FROM mfa_methods WHERE name LIKE '\\_probe\\_%' ORDER BY name")
+        return {r["name"]: r["last_used"] for r in cur.fetchall()}
 
 
 class TestMultiMethodTotp:
@@ -71,17 +70,15 @@ class TestMultiMethodTotp:
 
 
 def _probe_ids():
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("SELECT id, name FROM mfa_methods WHERE name LIKE '\\_probe\\_%' ORDER BY name")
-            return {r["name"]: r["id"] for r in cur.fetchall()}
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT id, name FROM mfa_methods WHERE name LIKE '\\_probe\\_%' ORDER BY name")
+        return {r["name"]: r["id"] for r in cur.fetchall()}
 
 
 def _probe_count():
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS c FROM mfa_methods WHERE name LIKE '\\_probe\\_%'")
-            return cur.fetchone()["c"]
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS c FROM mfa_methods WHERE name LIKE '\\_probe\\_%'")
+        return cur.fetchone()["c"]
 
 
 class TestLastFactorProtection:

@@ -759,13 +759,12 @@ def applied_versions() -> set:
     """Return the set of applied migration versions (empty if table absent)."""
     from jen.models.db import jen_db
 
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("SHOW TABLES LIKE 'schema_migrations'")
-            if not cur.fetchone():
-                return set()
-            cur.execute("SELECT version FROM schema_migrations")
-            return {r["version"] for r in cur.fetchall()}
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SHOW TABLES LIKE 'schema_migrations'")
+        if not cur.fetchone():
+            return set()
+        cur.execute("SELECT version FROM schema_migrations")
+        return {r["version"] for r in cur.fetchall()}
 
 
 def run_migrations() -> int:
@@ -776,9 +775,8 @@ def run_migrations() -> int:
     """
     from jen.models.db import jen_db
 
-    with jen_db() as db:
-        with db.cursor() as cur:
-            cur.execute("""
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INT PRIMARY KEY,
                     description VARCHAR(255) NOT NULL,

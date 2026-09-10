@@ -57,7 +57,7 @@ class TestKeaAllTables:
         from jen.services.dbexport import KEA_ALL_TABLES, KEA_EXPORT_GROUPS
 
         expected = {t for grp in KEA_EXPORT_GROUPS.values() for t in grp["tables"]}
-        assert KEA_ALL_TABLES == expected
+        assert expected == KEA_ALL_TABLES
         # sanity: the known real tables are present
         assert "hosts" in KEA_ALL_TABLES
         assert "lease4" in KEA_ALL_TABLES

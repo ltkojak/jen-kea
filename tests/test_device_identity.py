@@ -5,6 +5,8 @@ Trusted-device identification (v4.3.0): user-agent parsing and the
 friendly description format used for MFA trusted devices.
 """
 
+from pathlib import Path
+
 from jen.services.fingerprint import describe_client_device, friendly_user_agent
 
 IPHONE = (
@@ -147,6 +149,6 @@ class TestWerkzeugUserAgentTrap:
             for f in files:
                 if f.endswith(".py"):
                     p = os.path.join(root, f)
-                    if "request.user_agent" in open(p).read():
+                    if "request.user_agent" in Path(p).read_text(encoding="utf-8"):
                         offenders.append(p)
         assert not offenders, f"banned idiom found in: {offenders}"

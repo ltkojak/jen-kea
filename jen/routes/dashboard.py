@@ -4,6 +4,7 @@ jen/routes/dashboard.py
 Dashboard and stats routes.
 """
 
+import contextlib
 import json
 import logging
 import secrets
@@ -194,16 +195,15 @@ def dashboard():
 def api_saved_searches():
     page = request.args.get("page", "")
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                if page:
-                    cur.execute(
-                        "SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name",
-                        (current_user.id, page),
-                    )
-                else:
-                    cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
-                searches = cur.fetchall()
+        with __db.jen_db() as db, db.cursor() as cur:
+            if page:
+                cur.execute(
+                    "SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name",
+                    (current_user.id, page),
+                )
+            else:
+                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
+            searches = cur.fetchall()
         return jsonify([dict(s) for s in searches])
     except Exception:
         return jsonify([])
@@ -249,10 +249,9 @@ def save_dashboard_prefs():
 @login_required
 def get_dashboard_prefs():
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=%s", (current_user.id,))
-                row = cur.fetchone()
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=%s", (current_user.id,))
+            row = cur.fetchone()
         widgets = json.loads(row["widgets"]) if row else ["subnet_stats", "totals", "recent_leases", "server_status"]
         return jsonify({"widgets": widgets})
     except Exception:
@@ -382,11 +381,10 @@ def api_lease_history():
             return jsonify({"history": {}, "error": "Access denied"}), 403
     accessible_ids = list(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                if subnet_id:
-                    cur.execute(
-                        """
+        with __db.jen_db() as db, db.cursor() as cur:
+            if subnet_id:
+                cur.execute(
+                    """
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                                AVG(dynamic_leases) AS dynamic,
@@ -398,12 +396,12 @@ def api_lease_history():
                         GROUP BY subnet_id, hour
                         ORDER BY hour ASC
                     """,
-                        (subnet_id, days),
-                    )
-                elif accessible_ids:
-                    placeholders = ",".join(["%s"] * len(accessible_ids))
-                    cur.execute(
-                        f"""
+                    (subnet_id, days),
+                )
+            elif accessible_ids:
+                placeholders = ",".join(["%s"] * len(accessible_ids))
+                cur.execute(
+                    f"""
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
                                AVG(dynamic_leases) AS dynamic,
@@ -415,11 +413,11 @@ def api_lease_history():
                         GROUP BY subnet_id, hour
                         ORDER BY subnet_id, hour ASC
                     """,
-                        accessible_ids + [days],
-                    )
-                else:
-                    cur.execute("SELECT 1 FROM DUAL WHERE 1=0")  # no accessible subnets
-                rows = cur.fetchall()
+                    accessible_ids + [days],
+                )
+            else:
+                cur.execute("SELECT 1 FROM DUAL WHERE 1=0")  # no accessible subnets
+            rows = cur.fetchall()
 
         # Group by subnet_id
         history = {}
@@ -513,15 +511,14 @@ def api_top_devices():
 def api_alert_summary():
     """Recent alerts for the dashboard alert summary widget."""
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("""
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("""
                     SELECT alert_type, channel_type, message, status, error, sent_at
                     FROM alert_log
                     ORDER BY sent_at DESC
                     LIMIT 10
                 """)
-                rows = cur.fetchall()
+            rows = cur.fetchall()
         alerts = []
         # v4.4.9: alert_log has no subnet_id column, and message text is
         # freeform — some alert types (utilization_high, new_lease, etc.)
@@ -683,13 +680,12 @@ def prometheus_metrics():
     lines.append("# TYPE jen_subnet_active_leases gauge")
     active_by_subnet = {}
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                for subnet_id, info in extensions.SUBNET_MAP.items():
-                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
-                    cnt = cur.fetchone()["cnt"]
-                    active_by_subnet[subnet_id] = cnt
-                    lines.append(f'jen_subnet_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+        with __db.kea_db() as db, db.cursor() as cur:
+            for subnet_id, info in extensions.SUBNET_MAP.items():
+                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                cnt = cur.fetchone()["cnt"]
+                active_by_subnet[subnet_id] = cnt
+                lines.append(f'jen_subnet_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
     except Exception:
         pass
 
@@ -697,12 +693,11 @@ def prometheus_metrics():
     lines.append("# HELP jen_subnet_reserved_hosts Number of static reservations per subnet")
     lines.append("# TYPE jen_subnet_reserved_hosts gauge")
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                for subnet_id, info in extensions.SUBNET_MAP.items():
-                    cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                    cnt = cur.fetchone()["cnt"]
-                    lines.append(f'jen_subnet_reserved_hosts{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+        with __db.kea_db() as db, db.cursor() as cur:
+            for subnet_id, info in extensions.SUBNET_MAP.items():
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                cnt = cur.fetchone()["cnt"]
+                lines.append(f'jen_subnet_reserved_hosts{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
     except Exception:
         pass
 
@@ -719,25 +714,24 @@ def prometheus_metrics():
     )
     lines.append("# TYPE jen_subnet_utilization_ratio gauge")
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                for subnet_id, info in extensions.SUBNET_MAP.items():
-                    cur.execute(
-                        """
+        with __db.jen_db() as db, db.cursor() as cur:
+            for subnet_id, info in extensions.SUBNET_MAP.items():
+                cur.execute(
+                    """
                         SELECT active_leases, pool_size FROM lease_history
                         WHERE subnet_id=%s ORDER BY snapshot_time DESC LIMIT 1
                     """,
-                        (subnet_id,),
+                    (subnet_id,),
+                )
+                row = cur.fetchone()
+                if row and row["pool_size"]:
+                    util = row["active_leases"] / row["pool_size"]
+                    lines.append(
+                        f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}'
                     )
-                    row = cur.fetchone()
-                    if row and row["pool_size"]:
-                        util = row["active_leases"] / row["pool_size"]
-                        lines.append(
-                            f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}'
-                        )
-                        lines.append(
-                            f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}'
-                        )
+                    lines.append(
+                        f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}'
+                    )
     except Exception:
         pass
 
@@ -750,13 +744,12 @@ def prometheus_metrics():
     )
     lines.append("# TYPE jen_alerts_sent_total counter")
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT alert_type, status, COUNT(*) as cnt FROM alert_log GROUP BY alert_type, status")
-                for row in cur.fetchall():
-                    atype = str(row["alert_type"]).replace('"', "")
-                    status = str(row["status"]).replace('"', "")
-                    lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {row["cnt"]}')
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT alert_type, status, COUNT(*) as cnt FROM alert_log GROUP BY alert_type, status")
+            for row in cur.fetchall():
+                atype = str(row["alert_type"]).replace('"', "")
+                status = str(row["status"]).replace('"', "")
+                lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {row["cnt"]}')
     except Exception:
         pass
 
@@ -794,10 +787,8 @@ def prometheus_metrics():
     )
     lines.append("# TYPE jen_ipv6_enabled gauge")
     ipv6_on = False
-    try:
+    with contextlib.suppress(Exception):
         ipv6_on = __kea6.is_ipv6_enabled()
-    except Exception:
-        pass
     lines.append(f"jen_ipv6_enabled {1 if ipv6_on else 0}")
 
     if ipv6_on and extensions.SUBNET6_MAP:

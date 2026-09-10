@@ -82,69 +82,66 @@ def reservations():
     total = 0
     accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     try:
-        with __db.kea_db() as kdb:
-            with __db.jen_db() as jdb:
-                with kdb.cursor() as cur:
-                    where = ["h.dhcp4_subnet_id > 0"]
-                    params = []
-                    if subnet_filter != "all":
-                        try:
-                            sid = int(subnet_filter)
-                            # v5.1.12 — this branch used to skip straight to
-                            # can_access_subnet() without first checking the
-                            # id is a subnet Jen actually knows about. A
-                            # superadmin's can_access_subnet() is always
-                            # True, so any integer at all — including a
-                            # stale/mistyped id left over from a config
-                            # change — passed straight through as a real
-                            # filter and silently returned whatever
-                            # currently holds that dhcp4_subnet_id, with no
-                            # indication the requested subnet doesn't exist.
-                            # leases.py already guarded this; bringing
-                            # reservations/devices in line with it.
-                            if sid not in extensions.SUBNET_MAP:
-                                subnet_filter = "all"
-                            elif current_user.can_access_subnet(sid):
-                                where.append("h.dhcp4_subnet_id=%s")
-                                params.append(sid)
-                            else:
-                                subnet_filter = "all"
-                        except ValueError:
-                            subnet_filter = "all"
-                    if subnet_filter == "all" and not current_user.all_subnets:
-                        from jen.services.access import add_subnet_restriction
-
-                        where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
-                    if search:
-                        where.append(
-                            "(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)"
-                        )
-                        s = f"%{search}%"
-                        params += [s, s, s.replace(":", "")]
-                    # v5.1.3 — reservation active/inactive status, same
-                    # concept Windows DHCP shows: does the reserved IP
-                    # currently have a live, non-expired lease bound to
-                    # it? EXISTS/NOT EXISTS rather than a JOIN in the
-                    # WHERE-building list, since this list is shared
-                    # between the COUNT query and the main SELECT and a
-                    # LEFT JOIN would double-count/complicate COUNT(*).
-                    active_lease_exists = (
-                        "EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address "
-                        "AND l.state=0 AND l.expire > NOW())"
-                    )
-                    if status_filter == "active":
-                        where.append(active_lease_exists)
-                    elif status_filter == "inactive":
-                        where.append(f"NOT {active_lease_exists}")
-                    cur.execute(f"SELECT COUNT(*) as cnt FROM hosts h WHERE {' AND '.join(where)}", params)
-                    total = cur.fetchone()["cnt"]
-                    if per_page:
-                        offset = (page - 1) * per_page
-                        limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+        with __db.kea_db() as kdb, __db.jen_db() as jdb, kdb.cursor() as cur:
+            where = ["h.dhcp4_subnet_id > 0"]
+            params = []
+            if subnet_filter != "all":
+                try:
+                    sid = int(subnet_filter)
+                    # v5.1.12 — this branch used to skip straight to
+                    # can_access_subnet() without first checking the
+                    # id is a subnet Jen actually knows about. A
+                    # superadmin's can_access_subnet() is always
+                    # True, so any integer at all — including a
+                    # stale/mistyped id left over from a config
+                    # change — passed straight through as a real
+                    # filter and silently returned whatever
+                    # currently holds that dhcp4_subnet_id, with no
+                    # indication the requested subnet doesn't exist.
+                    # leases.py already guarded this; bringing
+                    # reservations/devices in line with it.
+                    if sid not in extensions.SUBNET_MAP:
+                        subnet_filter = "all"
+                    elif current_user.can_access_subnet(sid):
+                        where.append("h.dhcp4_subnet_id=%s")
+                        params.append(sid)
                     else:
-                        limit_clause = ""
-                    cur.execute(
-                        f"""
+                        subnet_filter = "all"
+                except ValueError:
+                    subnet_filter = "all"
+            if subnet_filter == "all" and not current_user.all_subnets:
+                from jen.services.access import add_subnet_restriction
+
+                where, params = add_subnet_restriction(where, params, "h", "dhcp4_subnet_id")
+            if search:
+                where.append(
+                    "(inet_ntoa(h.ipv4_address) LIKE %s OR h.hostname LIKE %s OR HEX(h.dhcp_identifier) LIKE %s)"
+                )
+                s = f"%{search}%"
+                params += [s, s, s.replace(":", "")]
+            # v5.1.3 — reservation active/inactive status, same
+            # concept Windows DHCP shows: does the reserved IP
+            # currently have a live, non-expired lease bound to
+            # it? EXISTS/NOT EXISTS rather than a JOIN in the
+            # WHERE-building list, since this list is shared
+            # between the COUNT query and the main SELECT and a
+            # LEFT JOIN would double-count/complicate COUNT(*).
+            active_lease_exists = (
+                "EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address AND l.state=0 AND l.expire > NOW())"
+            )
+            if status_filter == "active":
+                where.append(active_lease_exists)
+            elif status_filter == "inactive":
+                where.append(f"NOT {active_lease_exists}")
+            cur.execute(f"SELECT COUNT(*) as cnt FROM hosts h WHERE {' AND '.join(where)}", params)
+            total = cur.fetchone()["cnt"]
+            if per_page:
+                offset = (page - 1) * per_page
+                limit_clause = f"LIMIT {per_page} OFFSET {offset}"
+            else:
+                limit_clause = ""
+            cur.execute(
+                f"""
                         SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
                                h.hostname, HEX(h.dhcp_identifier) AS mac_hex,
                                h.dhcp4_subnet_id AS subnet_id,
@@ -156,48 +153,48 @@ def reservations():
                         ORDER BY {sort_col} {direction}
                         {limit_clause}
                     """,
-                        params,
+                params,
+            )
+            rows = cur.fetchall()
+            with jdb.cursor() as jcur:
+                for row in rows:
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
+                    note = jcur.fetchone()
+                    # Fetch DNS override from Kea options table
+                    cur.execute(
+                        "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6",
+                        (row["host_id"],),
                     )
-                    rows = cur.fetchall()
-                    with jdb.cursor() as jcur:
-                        for row in rows:
-                            mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                            jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
-                            note = jcur.fetchone()
-                            # Fetch DNS override from Kea options table
-                            cur.execute(
-                                "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6",
-                                (row["host_id"],),
-                            )
-                            dns_row = cur.fetchone()
-                            # Active: the reserved IP currently has a live
-                            # lease (the JOIN above only matches non-expired,
-                            # state=0 leases, so a match here means "in use
-                            # right now"). Conflict: that live lease belongs
-                            # to a DIFFERENT MAC than the reservation itself
-                            # — the reservation exists but something else is
-                            # currently sitting on its address, worth
-                            # flagging distinctly from a plain inactive
-                            # reservation rather than showing it as simply
-                            # "active" (technically true, but misleading).
-                            is_active = row["lease_expire"] is not None
-                            lease_mac = (
-                                ":".join(row["lease_mac_hex"][i : i + 2] for i in range(0, 12, 2))
-                                if row.get("lease_mac_hex")
-                                else ""
-                            )
-                            is_conflict = is_active and lease_mac and mac and lease_mac.lower() != mac.lower()
-                            hosts.append(
-                                {
-                                    **row,
-                                    "mac": mac,
-                                    "notes": note["notes"] if note else "",
-                                    "dns_override": dns_row["formatted_value"] if dns_row else "",
-                                    "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
-                                    "is_active": is_active,
-                                    "is_conflict": is_conflict,
-                                }
-                            )
+                    dns_row = cur.fetchone()
+                    # Active: the reserved IP currently has a live
+                    # lease (the JOIN above only matches non-expired,
+                    # state=0 leases, so a match here means "in use
+                    # right now"). Conflict: that live lease belongs
+                    # to a DIFFERENT MAC than the reservation itself
+                    # — the reservation exists but something else is
+                    # currently sitting on its address, worth
+                    # flagging distinctly from a plain inactive
+                    # reservation rather than showing it as simply
+                    # "active" (technically true, but misleading).
+                    is_active = row["lease_expire"] is not None
+                    lease_mac = (
+                        ":".join(row["lease_mac_hex"][i : i + 2] for i in range(0, 12, 2))
+                        if row.get("lease_mac_hex")
+                        else ""
+                    )
+                    is_conflict = is_active and lease_mac and mac and lease_mac.lower() != mac.lower()
+                    hosts.append(
+                        {
+                            **row,
+                            "mac": mac,
+                            "notes": note["notes"] if note else "",
+                            "dns_override": dns_row["formatted_value"] if dns_row else "",
+                            "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
+                            "is_active": is_active,
+                            "is_conflict": is_conflict,
+                        }
+                    )
     except Exception as e:
         logger.error(f"Could not load reservations: {e}")
         flash("Could not load reservations. Check server logs for details.", "error")
@@ -353,18 +350,16 @@ def add_reservation_post():
     if result.get("result") == 0:
         if notes:
             try:
-                with __db.kea_db() as db:
-                    with db.cursor() as cur:
-                        cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
-                        row = cur.fetchone()
-                        if row:
-                            with __db.jen_db() as jdb:
-                                with jdb.cursor() as jcur:
-                                    jcur.execute(
-                                        "INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
-                                        (row["host_id"], notes, notes),
-                                    )
-                                jdb.commit()
+                with __db.kea_db() as db, db.cursor() as cur:
+                    cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
+                    row = cur.fetchone()
+                    if row:
+                        with __db.jen_db() as jdb, jdb.cursor() as jcur:
+                            jcur.execute(
+                                "INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
+                                (row["host_id"], notes, notes),
+                            )
+                            jdb.commit()
             except Exception:
                 pass
         flash(f"Reservation added: {ip} → {mac}", "success")
@@ -380,29 +375,27 @@ def add_reservation_post():
 @_admin_required
 def edit_reservation(host_id):
     try:
-        with __db.kea_db() as db:
-            with __db.jen_db() as jdb:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
-                        (host_id,),
-                    )
-                    host = cur.fetchone()
-                    if not host:
-                        flash("Reservation not found.", "error")
-                        return redirect(url_for("reservations.reservations"))
-                    if not current_user.can_access_subnet(host["subnet_id"]):
-                        flash("You do not have access to that subnet.", "error")
-                        return redirect(url_for("reservations.reservations"))
-                    mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
-                    cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
-                    dns_row = cur.fetchone()
-                    host["mac"] = mac
-                    host["dns_override"] = dns_row["formatted_value"] if dns_row else ""
-                with jdb.cursor() as jcur:
-                    jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (host_id,))
-                    note = jcur.fetchone()
-                    host["notes"] = note["notes"] if note else ""
+        with __db.kea_db() as db, __db.jen_db() as jdb, db.cursor() as cur:
+            cur.execute(
+                "SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
+                (host_id,),
+            )
+            host = cur.fetchone()
+            if not host:
+                flash("Reservation not found.", "error")
+                return redirect(url_for("reservations.reservations"))
+            if not current_user.can_access_subnet(host["subnet_id"]):
+                flash("You do not have access to that subnet.", "error")
+                return redirect(url_for("reservations.reservations"))
+            mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
+            cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
+            dns_row = cur.fetchone()
+            host["mac"] = mac
+            host["dns_override"] = dns_row["formatted_value"] if dns_row else ""
+            with jdb.cursor() as jcur:
+                jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (host_id,))
+                note = jcur.fetchone()
+                host["notes"] = note["notes"] if note else ""
     except Exception as e:
         logger.error(f"Error loading reservation {host_id} for edit: {e}")
         flash("Error loading reservation. Check server logs for details.", "error")
@@ -420,36 +413,35 @@ def edit_reservation_post(host_id):
     notes = request.form.get("notes", "").strip()[:1000]
     dns_override = request.form.get("dns_override", "").strip()
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
-                    (host_id,),
-                )
-                host = cur.fetchone()
-                if not host:
-                    flash("Reservation not found.", "error")
-                    return redirect(url_for("reservations.reservations"))
-                if not current_user.can_access_subnet(host["subnet_id"]):
-                    flash("You do not have access to that subnet.", "error")
-                    return redirect(url_for("reservations.reservations"))
-                mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
-                __kea.kea_command(
-                    "reservation-del",
-                    arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
-                )
-                res = {
-                    "subnet-id": host["subnet_id"],
-                    "hw-address": mac,
-                    "ip-address": host["ip"],
-                    "hostname": hostname,
-                }
-                if dns_override:
-                    res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
-                result = __kea.kea_command("reservation-add", arguments={"reservation": res})
-                if result.get("result") != 0:
-                    flash(f"Kea error: {result.get('text')}", "error")
-                    return redirect(url_for("reservations.edit_reservation", host_id=host_id))
+        with __db.kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
+                (host_id,),
+            )
+            host = cur.fetchone()
+            if not host:
+                flash("Reservation not found.", "error")
+                return redirect(url_for("reservations.reservations"))
+            if not current_user.can_access_subnet(host["subnet_id"]):
+                flash("You do not have access to that subnet.", "error")
+                return redirect(url_for("reservations.reservations"))
+            mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
+            __kea.kea_command(
+                "reservation-del",
+                arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
+            )
+            res = {
+                "subnet-id": host["subnet_id"],
+                "hw-address": mac,
+                "ip-address": host["ip"],
+                "hostname": hostname,
+            }
+            if dns_override:
+                res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
+            result = __kea.kea_command("reservation-add", arguments={"reservation": res})
+            if result.get("result") != 0:
+                flash(f"Kea error: {result.get('text')}", "error")
+                return redirect(url_for("reservations.edit_reservation", host_id=host_id))
         # Kea's reservation-del + reservation-add churns hosts.host_id — it's an
         # AUTO_INCREMENT primary key, so the recreated row gets a brand new id
         # even though ip/mac/subnet are unchanged. Kea does that write over its
@@ -457,14 +449,13 @@ def edit_reservation_post(host_id):
         # a FRESH connection/transaction here too — reusing the one above would
         # still see the pre-Kea-write snapshot under REPEATABLE READ and could
         # report the stale host_id even though Kea already committed the new row.
-        with __db.kea_db() as db2:
-            with db2.cursor() as cur2:
-                cur2.execute(
-                    "SELECT host_id FROM hosts WHERE dhcp4_subnet_id=%s AND inet_ntoa(ipv4_address)=%s",
-                    (host["subnet_id"], host["ip"]),
-                )
-                new_host_row = cur2.fetchone()
-                new_host_id = new_host_row["host_id"] if new_host_row else host_id
+        with __db.kea_db() as db2, db2.cursor() as cur2:
+            cur2.execute(
+                "SELECT host_id FROM hosts WHERE dhcp4_subnet_id=%s AND inet_ntoa(ipv4_address)=%s",
+                (host["subnet_id"], host["ip"]),
+            )
+            new_host_row = cur2.fetchone()
+            new_host_id = new_host_row["host_id"] if new_host_row else host_id
         with __db.jen_db() as jdb:
             with jdb.cursor() as jcur:
                 if new_host_id != host_id:
@@ -488,44 +479,43 @@ def edit_reservation_post(host_id):
 def delete_reservation(host_id):
     is_htmx = request.headers.get("HX-Request") == "true"
     try:
-        with __db.kea_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
-                    (host_id,),
+        with __db.kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE host_id=%s",
+                (host_id,),
+            )
+            host = cur.fetchone()
+            if host and not current_user.can_access_subnet(host["subnet_id"]):
+                if is_htmx:
+                    return (
+                        '<tr><td colspan="7" style="color:var(--danger);padding:8px;">You do not have access to that subnet.</td></tr>',
+                        403,
+                    )
+                flash("You do not have access to that subnet.", "error")
+                return redirect(url_for("reservations.reservations"))
+            if host:
+                mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
+                result = __kea.kea_command(
+                    "reservation-del",
+                    arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
                 )
-                host = cur.fetchone()
-                if host and not current_user.can_access_subnet(host["subnet_id"]):
+                if result.get("result") == 0:
+                    with __db.jen_db() as jdb:
+                        with jdb.cursor() as jcur:
+                            jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
+                        jdb.commit()
+                    __user.audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
+                    if is_htmx:
+                        # Return empty string — HTMX swaps row with nothing (removes it)
+                        return "", 200
+                    flash(f"Reservation {host['ip']} deleted.", "success")
+                else:
                     if is_htmx:
                         return (
-                            '<tr><td colspan="7" style="color:var(--danger);padding:8px;">You do not have access to that subnet.</td></tr>',
-                            403,
+                            f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Kea error: {result.get("text")}</td></tr>',
+                            422,
                         )
-                    flash("You do not have access to that subnet.", "error")
-                    return redirect(url_for("reservations.reservations"))
-                if host:
-                    mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
-                    result = __kea.kea_command(
-                        "reservation-del",
-                        arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
-                    )
-                    if result.get("result") == 0:
-                        with __db.jen_db() as jdb:
-                            with jdb.cursor() as jcur:
-                                jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
-                            jdb.commit()
-                        __user.audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
-                        if is_htmx:
-                            # Return empty string — HTMX swaps row with nothing (removes it)
-                            return "", 200
-                        flash(f"Reservation {host['ip']} deleted.", "success")
-                    else:
-                        if is_htmx:
-                            return (
-                                f'<tr id="reservation-{host_id}"><td colspan="7" style="color:var(--danger);padding:8px;">Kea error: {result.get("text")}</td></tr>',
-                                422,
-                            )
-                        flash(f"Kea error: {result.get('text')}", "error")
+                    flash(f"Kea error: {result.get('text')}", "error")
     except Exception as e:
         logger.error(f"Error deleting reservation {host_id}: {e}")
         if is_htmx:
@@ -665,39 +655,38 @@ def delete_reservation6():
 @login_required
 def export_reservations():
     try:
-        with __db.kea_db() as db:
-            with __db.jen_db() as jdb:
-                output = io.StringIO()
-                writer = csv.writer(output)
-                writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
-                with db.cursor() as cur:
+        with __db.kea_db() as db, __db.jen_db() as jdb:
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp4_subnet_id > 0 ORDER BY ipv4_address"
+                )
+                for row in cur.fetchall():
+                    if not current_user.can_access_subnet(row["subnet_id"]):
+                        continue
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
                     cur.execute(
-                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip, hostname, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp4_subnet_id > 0 ORDER BY ipv4_address"
+                        "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],)
                     )
-                    for row in cur.fetchall():
-                        if not current_user.can_access_subnet(row["subnet_id"]):
-                            continue
-                        mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
-                        cur.execute(
-                            "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (row["host_id"],)
-                        )
-                        dns_row = cur.fetchone()
-                        dns = dns_row["formatted_value"] if dns_row else ""
-                        with jdb.cursor() as jcur:
-                            jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
-                            note = jcur.fetchone()
-                        subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")
-                        writer.writerow(
-                            [
-                                row["ip"],
-                                mac,
-                                row["hostname"] or "",
-                                row["subnet_id"],
-                                subnet_name,
-                                dns,
-                                note["notes"] if note else "",
-                            ]
-                        )
+                    dns_row = cur.fetchone()
+                    dns = dns_row["formatted_value"] if dns_row else ""
+                    with jdb.cursor() as jcur:
+                        jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
+                        note = jcur.fetchone()
+                    subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")
+                    writer.writerow(
+                        [
+                            row["ip"],
+                            mac,
+                            row["hostname"] or "",
+                            row["subnet_id"],
+                            subnet_name,
+                            dns,
+                            note["notes"] if note else "",
+                        ]
+                    )
         output.seek(0)
         return Response(
             output.getvalue(),
@@ -802,39 +791,38 @@ def bulk_delete_reservations():
     deleted = 0
     errors = 0
     try:
-        with __db.kea_db() as db:
-            with __db.jen_db() as jdb:
-                with db.cursor() as cur:
-                    for host_id in host_ids:
-                        try:
-                            host_id = int(host_id)
-                            cur.execute(
-                                "SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s",
-                                (host_id,),
-                            )
-                            host = cur.fetchone()
-                            if host and not current_user.can_access_subnet(host["dhcp4_subnet_id"]):
-                                errors += 1
-                                continue
-                            if host:
-                                mac = __kea.format_mac(host["dhcp_identifier"])
-                                result = __kea.kea_command(
-                                    "reservation-del",
-                                    arguments={
-                                        "subnet-id": host["dhcp4_subnet_id"],
-                                        "identifier-type": "hw-address",
-                                        "identifier": mac,
-                                    },
-                                )
-                                if result.get("result") == 0:
-                                    with jdb.cursor() as jcur:
-                                        jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
-                                    deleted += 1
-                                else:
-                                    errors += 1
-                        except Exception:
+        with __db.kea_db() as db, __db.jen_db() as jdb:
+            with db.cursor() as cur:
+                for host_id in host_ids:
+                    try:
+                        host_id = int(host_id)
+                        cur.execute(
+                            "SELECT inet_ntoa(ipv4_address) AS ip, dhcp_identifier, dhcp4_subnet_id FROM hosts WHERE host_id=%s",
+                            (host_id,),
+                        )
+                        host = cur.fetchone()
+                        if host and not current_user.can_access_subnet(host["dhcp4_subnet_id"]):
                             errors += 1
-                jdb.commit()
+                            continue
+                        if host:
+                            mac = __kea.format_mac(host["dhcp_identifier"])
+                            result = __kea.kea_command(
+                                "reservation-del",
+                                arguments={
+                                    "subnet-id": host["dhcp4_subnet_id"],
+                                    "identifier-type": "hw-address",
+                                    "identifier": mac,
+                                },
+                            )
+                            if result.get("result") == 0:
+                                with jdb.cursor() as jcur:
+                                    jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
+                                deleted += 1
+                            else:
+                                errors += 1
+                    except Exception:
+                        errors += 1
+            jdb.commit()
     except Exception as e:
         logger.error(f"Bulk delete reservations error: {e}")
         flash("Bulk delete failed. Check server logs for details.", "error")
@@ -856,51 +844,50 @@ def bulk_export_reservations():
         flash("No reservations selected.", "error")
         return redirect(url_for("reservations.reservations"))
     try:
-        with __db.kea_db() as db:
-            with __db.jen_db() as jdb:
-                output = io.StringIO()
-                writer = csv.writer(output)
-                writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
-                with db.cursor() as cur:
-                    for host_id in host_ids:
-                        try:
-                            host_id = int(host_id)
-                            cur.execute(
-                                """
+        with __db.kea_db() as db, __db.jen_db() as jdb:
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["ip", "mac", "hostname", "subnet_id", "subnet_name", "dns_override", "notes"])
+            with db.cursor() as cur:
+                for host_id in host_ids:
+                    try:
+                        host_id = int(host_id)
+                        cur.execute(
+                            """
                                 SELECT h.host_id, inet_ntoa(h.ipv4_address) AS ip,
                                        h.dhcp_identifier, h.hostname, h.dhcp4_subnet_id
                                 FROM hosts h WHERE h.host_id=%s
                             """,
-                                (host_id,),
+                            (host_id,),
+                        )
+                        row = cur.fetchone()
+                        if row and not current_user.can_access_subnet(row["dhcp4_subnet_id"]):
+                            continue
+                        if row:
+                            mac = __kea.format_mac(row["dhcp_identifier"])
+                            cur.execute(
+                                "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,)
                             )
-                            row = cur.fetchone()
-                            if row and not current_user.can_access_subnet(row["dhcp4_subnet_id"]):
-                                continue
-                            if row:
-                                mac = __kea.format_mac(row["dhcp_identifier"])
-                                cur.execute(
-                                    "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,)
-                                )
-                                dns_row = cur.fetchone()
-                                dns = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
-                                with jdb.cursor() as jcur:
-                                    jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (host_id,))
-                                    note_row = jcur.fetchone()
-                                    notes = note_row["notes"] if note_row else ""
-                                subnet_name = extensions.SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "")
-                                writer.writerow(
-                                    [
-                                        row["ip"],
-                                        mac,
-                                        row["hostname"] or "",
-                                        row["dhcp4_subnet_id"],
-                                        subnet_name,
-                                        dns,
-                                        notes,
-                                    ]
-                                )
-                        except Exception:
-                            pass
+                            dns_row = cur.fetchone()
+                            dns = dns_row["formatted_value"] if dns_row and dns_row["formatted_value"] else ""
+                            with jdb.cursor() as jcur:
+                                jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (host_id,))
+                                note_row = jcur.fetchone()
+                                notes = note_row["notes"] if note_row else ""
+                            subnet_name = extensions.SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "")
+                            writer.writerow(
+                                [
+                                    row["ip"],
+                                    mac,
+                                    row["hostname"] or "",
+                                    row["dhcp4_subnet_id"],
+                                    subnet_name,
+                                    dns,
+                                    notes,
+                                ]
+                            )
+                    except Exception:
+                        pass
         output.seek(0)
         __user.audit("BULK_EXPORT_RESERVATIONS", "reservations", f"Exported {len(host_ids)} selected")
         return Response(

@@ -90,10 +90,9 @@ def _cert_info():
 
 def _count(sql, params=()):
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(sql, params)
-                return cur.fetchone()["cnt"]
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchone()["cnt"]
     except Exception:
         return None
 

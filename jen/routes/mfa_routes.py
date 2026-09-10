@@ -29,10 +29,9 @@ def _load_user(user_id):
     from jen.models.user import User
 
     try:
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT id, username, role, session_timeout FROM users WHERE id=%s", (user_id,))
-                row = cur.fetchone()
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT id, username, role, session_timeout FROM users WHERE id=%s", (user_id,))
+            row = cur.fetchone()
         if row:
             return User(row["id"], row["username"], row["role"], row["session_timeout"])
     except Exception as e:
@@ -70,15 +69,14 @@ def _remaining_mfa_factor_count(user_id, excluding_method_id):
     from jen.models.db import jen_db
 
     try:
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT COUNT(*) AS c FROM mfa_methods WHERE user_id=%s AND enabled=1 AND id <> %s",
-                    (user_id, excluding_method_id or 0),
-                )
-                totp = cur.fetchone()["c"]
-                cur.execute("SELECT COUNT(*) AS c FROM webauthn_credentials WHERE user_id=%s", (user_id,))
-                passkeys = cur.fetchone()["c"]
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS c FROM mfa_methods WHERE user_id=%s AND enabled=1 AND id <> %s",
+                (user_id, excluding_method_id or 0),
+            )
+            totp = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM webauthn_credentials WHERE user_id=%s", (user_id,))
+            passkeys = cur.fetchone()["c"]
         return totp + passkeys
     except Exception as e:
         logger.error(f"_remaining_mfa_factor_count error for user {user_id}: {e}")
@@ -338,15 +336,14 @@ def mfa_enroll():
     qr.save(buf, format="PNG")
     qr_b64 = base64.b64encode(buf.getvalue()).decode()
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
-                    (uid,),
-                )
-                methods = cur.fetchall()
-                cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (uid,))
-                backup_count = cur.fetchone()["cnt"]
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, created_at, last_used FROM mfa_methods WHERE user_id=%s AND method_type='totp' AND enabled=1",
+                (uid,),
+            )
+            methods = cur.fetchall()
+            cur.execute("SELECT COUNT(*) as cnt FROM mfa_backup_codes WHERE user_id=%s AND used=0", (uid,))
+            backup_count = cur.fetchone()["cnt"]
     except Exception as e:
         logger.error(f"mfa_enroll fetch error: {e}")
         methods = []
@@ -368,16 +365,15 @@ def regenerate_backup_codes():
 @login_required
 def mfa_trusted_devices():
     try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    """SELECT id, device_name, created_at, expires_at, last_used,
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                """SELECT id, device_name, created_at, expires_at, last_used,
                                       ip_address, user_agent
                                FROM mfa_trusted_devices WHERE user_id=%s
                                ORDER BY created_at DESC""",
-                    (current_user.id,),
-                )
-                devices = cur.fetchall()
+                (current_user.id,),
+            )
+            devices = cur.fetchall()
         # Render-time fallback (v4.3.1): if a stored name still says Unknown
         # but we have a raw UA on file, show the parsed UA instead.
         for d in devices:
