@@ -120,9 +120,20 @@ volumes:
 
 | Volume | Contents |
 |---|---|
-| `jen-config` | `/etc/jen` — SSL certs, SSH keys, secret key, backups |
-| `jen-icons` | `/opt/jen/static/icons/custom` — uploaded brand icons |
+| `jen-config` | `/etc/jen` — SSL certs, SSH keys, secret key, `jen.config` snapshots |
+| `jen-content` | `/var/lib/jen` — uploaded icons, favicon and nav logo, database backups, registry-installed plugins (v5.13.0) |
+| `jen-icons` | `/opt/jen/static/icons/custom` — old brand-icon location, kept mounted for one release so the app migrates it into `jen-content` on first start |
 | `jen-mysql-data` | MariaDB data (Bundled mode only) |
+
+**Upgrading to 5.13.0:** user content moved out of the application tree
+(`/opt/jen` is now root-owned and read-only to the service account) into
+`/var/lib/jen`, backed by the new `jen-content` volume. On the first
+start after the upgrade Jen copies anything still in the old `jen-icons`
+volume into `jen-content` automatically. Once that start has succeeded
+you can drop the `jen-icons` line from your compose file and
+`docker volume rm jen-icons`. If a box had installed the `ipam` or
+`network-discovery` plugin from the registry, both the bundled copy and
+the migrated copy now exist — the `/var/lib/jen` copy wins.
 
 `/etc/jen/jen.config` lives in the `jen-config` volume. To change
 configuration, edit `.env` and re-run `docker compose ... up -d` — on the

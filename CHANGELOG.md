@@ -2,6 +2,77 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.13.0] - 2026-09-10
+
+User content moves out of the application tree, and `/opt/jen` becomes
+root-owned and read-only to the service account. A `sudo ./install.sh`
+upgrade does the whole migration; there is nothing to do by hand.
+
+### Why
+
+Through 5.12.x the `www-data` service account needed write access to
+parts of `/opt/jen` that it also executes — custom brand icons, the
+uploaded favicon and nav logo, database backups, registry-installed
+plugins, and the secret-key / MFA-key fallbacks all lived under the
+application tree. That is a persistence foothold: any bug that lets an
+attacker write a file as `www-data` lets them drop a `.py` file Jen
+imports and have it run on the next restart. Splitting the writable
+content out means the entire code tree can be `root:root` and read-only
+to the service account, the same posture the bundled virtualenv has had
+since 5.8.0.
+
+### What changed
+
+- **New content directory, `/var/lib/jen`** (`$JEN_ROOT/var` in a source
+  checkout; override with `JEN_CONTENT_DIR`). It holds `icons/`,
+  `branding/` (favicon, nav logo), `backups/` (database backups),
+  `plugins/` and `plugins-enabled/` (registry-installed plugins and their
+  enable markers), and `keys/` (the `.secret_key` / `.mfa_key` fallbacks
+  used when the `/etc/jen` copies are absent). It is `www-data`-owned,
+  mode `0750`, and — like `/etc/jen` — never touched by an upgrade.
+- **`/opt/jen` is now `root:root`, `a+rX`.** `install.sh` and the in-app
+  self-updater both chown the tree to root after copying files and
+  byte-compile it as root. `jen/`, `templates/`, `static/` and `plugins/`
+  are removed and re-copied wholesale on each upgrade rather than merged,
+  so a rollback restores exactly the previous release's files instead of
+  leaving new assets mixed in with old templates.
+- **Migration is automatic and reversible.** The installer and the
+  updater move the old locations into `/var/lib/jen` *before* the file
+  swap, so the pre-migration state is inside the rollback snapshot. On
+  top of that the app itself best-effort *copies* anything still in an
+  old path into the content directory on every boot — idempotent, never
+  clobbering, never able to crash startup — which also picks up the
+  Docker `jen-icons` named volume.
+- **Serving.** Custom icons and branding are served by a new blueprint at
+  `/content/icons/<name>.svg` and `/content/branding/<file>`; the old
+  `/static/icons/custom/…` and `/static/nav_logo.*` URLs are gone.
+- **Removing a custom favicon** now falls back to the shipped default
+  instead of leaving the page with none.
+- **Bundled vs registry plugins.** `ipam` and `network-discovery` ship in
+  `/opt/jen/plugins` and are read-only; a copy installed from the
+  registry lands in `/var/lib/jen/plugins` and wins. Uninstalling a
+  bundled plugin disables it rather than trying to delete release-owned
+  files.
+
+### Docker
+
+The compose files gain a `jen-content` volume at `/var/lib/jen`. The old
+`jen-icons` volume stays mounted for this one release so the app can
+migrate it; once the first upgraded start has succeeded you can drop that
+line and `docker volume rm jen-icons`. See `docs/docker.md`.
+
+### Also — the Settings landing page is fast again
+
+Opening **Settings** took about three seconds. Two of the little status
+hints on that page were the cause. The "N backups" hint called a routine
+that decompresses and JSON-parses every database backup file just to read
+its metadata header — seconds of work once daily backups accumulate, when
+all the hint needs is a file count. And the Kea reachability probe used
+the default 10-second HTTP timeout, so an unreachable Kea stalled the
+whole page. The backup hint is now a directory listing, and the probe
+runs on a 3-second timeout. No other page did the backup decompression,
+which is why only the landing menu was slow.
+
 ## [5.12.0] - 2026-09-10
 
 The Health Center.

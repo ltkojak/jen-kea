@@ -416,7 +416,7 @@ Go to **Settings → Appearance → Brand Icons** to:
 - Upload a custom SVG to override any bundled icon or add a new manufacturer
 - Remove custom icons to revert to bundled versions
 
-Custom icons are stored in `/opt/jen/static/icons/custom/` and survive upgrades.
+Custom icons are stored in `/var/lib/jen/icons/` (v5.13.0; `/opt/jen/static/icons/custom/` before that) and survive upgrades — that directory, like the rest of `/var/lib/jen`, is never touched by an upgrade.
 
 ---
 
@@ -566,7 +566,7 @@ sudo ./install.sh
 
 Select **Keep existing config** when prompted. The installer backs up the current application, installs the new files, restarts the service, and rolls back automatically if the service fails to start.
 
-Your config file, SSL certificates, SSH keys, custom icons, and user accounts are never modified during an upgrade.
+Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`, v5.13.0), are never modified during an upgrade. The application tree in `/opt/jen` is replaced wholesale and is root-owned and read-only to the service account. The first upgrade to 5.13.0 moves existing custom icons, favicon, nav logo, backups and registry plugins out of `/opt/jen` into `/var/lib/jen` automatically; nothing to do by hand.
 
 ---
 
@@ -680,16 +680,20 @@ resets when you install a renewed one.
 
 | Path | Purpose |
 |---|---|
-| `/opt/jen/jen.py` | Main application |
+| `/opt/jen/jen/` | Application code (root-owned, read-only to the service account) |
 | `/opt/jen/templates/` | HTML templates |
-| `/opt/jen/static/icons/brands/` | Bundled brand SVG icons |
-| `/opt/jen/static/icons/custom/` | User-uploaded custom brand icons |
-| `/opt/jen/static/` | Static assets (favicon, nav logo) |
+| `/opt/jen/static/icons/brands/` | Bundled brand SVG icons (release-owned) |
+| `/opt/jen/plugins/` | Bundled plugins: `ipam`, `network-discovery` (release-owned) |
+| `/var/lib/jen/icons/` | User-uploaded custom brand icons (v5.13.0) |
+| `/var/lib/jen/branding/` | Uploaded favicon and nav logo (v5.13.0) |
+| `/var/lib/jen/backups/` | Database backups (v5.13.0) |
+| `/var/lib/jen/plugins/`, `/var/lib/jen/plugins-enabled/` | Registry-installed plugins and enable markers (v5.13.0) |
+| `/var/lib/jen/keys/` | `.secret_key` / `.mfa_key` fallbacks when `/etc/jen` copies are absent (v5.13.0) |
 | `/etc/jen/jen.config` | Configuration — credentials and settings |
-| `/etc/jen/secret_key` | Flask session secret key (auto-generated) |
+| `/etc/jen/secret_key`, `/etc/jen/mfa_key` | Flask session secret + MFA encryption key (auto-generated) |
 | `/etc/jen/ssl/` | SSL certificates |
 | `/etc/jen/ssh/` | SSH keys for subnet editing |
-| `/etc/jen/backups/` | Automatic backups created during upgrades |
+| `/etc/jen/backups/` | `jen.config` snapshots created during upgrades |
 | `/etc/systemd/system/jen.service` | Systemd service definition |
 | `/etc/sudoers.d/jen` | Allows Jen to restart itself after cert upload |
 

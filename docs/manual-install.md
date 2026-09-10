@@ -22,8 +22,9 @@ system site-packages.
 
 | Path | Owner | Purpose |
 |---|---|---|
-| `/opt/jen/` | `www-data:www-data` | application code (`jen/`, `run.py`, `templates/`, `static/`, `requirements.txt`, `CHANGELOG.md`) |
+| `/opt/jen/` | `root:root`, `a+rX` | application code (`jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `requirements.txt`, `CHANGELOG.md`) — read-only to the service account (v5.13.0) |
 | `/opt/jen/venv/` | `root:root` | Python dependencies (service reads/executes, never writes) |
+| `/var/lib/jen/` | `www-data:www-data`, `0750` | user content: `icons/`, `branding/`, `backups/`, `plugins/`, `plugins-enabled/`, `keys/` — **never touched by upgrades** (v5.13.0) |
 | `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/`, `backups/` — **never touched by upgrades** |
 | `/etc/jen/jen.config` | `root:www-data`, `0640` | config + secrets |
 | `/etc/systemd/system/jen.service` | root | the unit |
@@ -35,8 +36,8 @@ system site-packages.
 tar xzf jen-vX.Y.Z.tar.gz && cd jen
 
 sudo mkdir -p /opt/jen /etc/jen/ssl /etc/jen/ssh /etc/jen/backups \
-    /opt/jen/static/icons/custom
-sudo cp -r run.py jen templates static requirements.txt CHANGELOG.md /opt/jen/
+    /var/lib/jen/{icons,branding,backups,plugins,plugins-enabled,keys}
+sudo cp -r run.py jen templates static plugins requirements.txt CHANGELOG.md /opt/jen/
 ```
 
 ## 3. Virtualenv
@@ -45,7 +46,7 @@ sudo cp -r run.py jen templates static requirements.txt CHANGELOG.md /opt/jen/
 sudo python3 -m venv /opt/jen/venv
 sudo /opt/jen/venv/bin/pip install --upgrade pip
 sudo /opt/jen/venv/bin/pip install -r /opt/jen/requirements.txt
-sudo /opt/jen/venv/bin/python -m compileall -q /opt/jen/venv/lib
+sudo /opt/jen/venv/bin/python -m compileall -q /opt/jen/venv/lib /opt/jen/jen /opt/jen/plugins
 # leave it root-owned
 ```
 
@@ -88,8 +89,9 @@ sudo chmod 700                      /usr/local/sbin/jen-update-root.py
 sudo cp jen-update.service          /etc/systemd/system/jen-update.service
 sudo cp jen-kea-helper              /opt/jen/jen-kea-helper   # data on the Jen host; Jen pushes it to Kea hosts
 
-sudo chown -R www-data:www-data /opt/jen/jen /opt/jen/run.py /opt/jen/templates /opt/jen/static /opt/jen/jen-kea-helper
-sudo chown -R www-data:www-data /etc/jen
+sudo chown -R root:root /opt/jen && sudo chmod -R a+rX /opt/jen   # app tree read-only to www-data (v5.13.0)
+sudo chown -R www-data:www-data /etc/jen /var/lib/jen
+sudo chmod 750 /var/lib/jen
 ```
 
 ### On each Kea host (v5.11.0+)
