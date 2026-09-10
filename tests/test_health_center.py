@@ -445,7 +445,9 @@ class _DateHandler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         self.rfile.read(length)
         body = b'{"result":0,"arguments":{"extended":"3.0.0"}}'
-        self.send_response(200)
+        # send_response_only, not send_response: the latter auto-adds its
+        # own current-time Date header, which would mask the one we set.
+        self.send_response_only(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         if type(self).send_date:

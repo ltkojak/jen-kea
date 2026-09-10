@@ -66,6 +66,13 @@ class Check:
 # ── shared context ─────────────────────────────────────────────────────────
 
 
+def _log_err(check_id: str, exc: Exception) -> None:
+    """A check's real error goes to the log; the page shows a generic
+    line. The Health Center is viewer-visible — a raw pymysql/requests
+    error can carry a host, port, or path a viewer shouldn't see."""
+    logger.warning(f"health check {check_id}: {exc}")
+
+
 def _fetch_dhcp4_config(server) -> dict | None:
     try:
         r = __kea.kea_command("config-get", server=server)
@@ -239,7 +246,8 @@ def _kea_config_drift(ctx) -> Check:
 
         issues = check_config_drift()
     except Exception as e:
-        c.status, c.detail = "fail", f"drift check errored: {e}"
+        _log_err("kea_config_drift", e)
+        c.status, c.detail = "fail", "drift check errored — see server logs"
         return c
     if not issues:
         c.status, c.detail = "ok", "Jen's subnet map agrees with Kea's live config"
@@ -306,7 +314,8 @@ def _pool_utilisation(ctx) -> Check:
     try:
         rows = _latest_lease_history()
     except Exception as e:
-        c.status, c.detail = "fail", f"could not read lease history: {e}"
+        _log_err("pool_utilisation", e)
+        c.status, c.detail = "fail", "could not read lease history — see server logs"
         return c
     rows = [r for r in rows if ctx["subnet_filter"](r["subnet_id"])]
     if not rows:
@@ -343,7 +352,8 @@ def _lease_snapshot_fresh(ctx) -> Check:
             cur.execute("SELECT MAX(snapshot_time) AS mx FROM lease_history")
             row = cur.fetchone()
     except Exception as e:
-        c.status, c.detail = "fail", f"could not read lease history: {e}"
+        _log_err("lease_snapshot_fresh", e)
+        c.status, c.detail = "fail", "could not read lease history — see server logs"
         return c
     mx = row["mx"] if row else None
     if mx is None:
@@ -384,7 +394,8 @@ def _d2_reachable(ctx) -> Check:
         ver = __kea.parse_kea_version(r.get("arguments", {}).get("extended", "") or r.get("text", ""))
         c.status, c.detail = "ok", f"D2 answered{' v' + _vstr(ver) if ver else ''}"
     else:
-        c.status, c.detail = "warn", f"D2 did not answer: {r.get('text', 'unknown error')}"
+        logger.warning(f"health check d2_reachable: {r.get('text', '')}")
+        c.status, c.detail = "warn", "D2 did not answer version-get"
     return c
 
 
@@ -398,7 +409,8 @@ def _d2_errors(ctx) -> Check:
         return c
     r = __kea.kea_command("statistic-get-all", service="d2", server=ctx["active_server"])
     if r.get("result") != 0:
-        c.status, c.detail = "skip", f"D2 statistics unavailable: {r.get('text', 'unknown error')}"
+        logger.warning(f"health check d2_errors: {r.get('text', '')}")
+        c.status, c.detail = "skip", "D2 statistics unavailable"
         return c
     args = r.get("arguments", {})
     ncr = _stat_value(args, "ncr-error")
@@ -453,7 +465,8 @@ def _db_roundtrip(cm, cid: str, title: str) -> Check:
             cur.fetchone()
         c.status, c.detail = "ok", f"responded in {(time.monotonic() - t0) * 1000:.0f} ms"
     except Exception as e:
-        c.status, c.detail = "fail", f"unreachable: {e}"
+        _log_err(cid, e)
+        c.status, c.detail = "fail", "unreachable — see server logs"
     return c
 
 
@@ -473,7 +486,8 @@ def _schema_current(ctx) -> Check:
         latest = latest_version()
         applied = applied_versions()
     except Exception as e:
-        c.status, c.detail = "fail", f"could not read schema_migrations: {e}"
+        _log_err("schema_current", e)
+        c.status, c.detail = "fail", "could not read schema_migrations — see server logs"
         return c
     if latest in applied:
         c.status, c.detail = "ok", f"at migration {latest}"

@@ -44,7 +44,7 @@ class TestSelfUpdateRouteIsNowJustATrigger:
             result.stderr = ""
             return result
 
-        with patch("jen.routes.settings.subprocess.run", side_effect=fake_run):
+        with patch("jen.routes.settings.updates.subprocess.run", side_effect=fake_run):
             r = logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
             )
@@ -63,7 +63,7 @@ class TestSelfUpdateRouteIsNowJustATrigger:
         if __import__("os").path.exists(sentinel):
             __import__("os").unlink(sentinel)  # clean slate, in case a prior test-run left one
 
-        with patch("jen.routes.settings.subprocess.run") as mock_run:
+        with patch("jen.routes.settings.updates.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
@@ -80,7 +80,7 @@ class TestSelfUpdateRouteIsNowJustATrigger:
         now. A regression here would mean someone partially reverted
         this fix."""
         with (
-            patch("jen.routes.settings.subprocess.run") as mock_run,
+            patch("jen.routes.settings.updates.subprocess.run") as mock_run,
             patch("requests.get") as mock_requests_get,
             patch("tarfile.open") as mock_tarfile_open,
         ):
@@ -92,7 +92,7 @@ class TestSelfUpdateRouteIsNowJustATrigger:
         mock_tarfile_open.assert_not_called()
 
     def test_service_start_failure_is_reported_without_leaking_raw_output(self, logged_in_client):
-        with patch("jen.routes.settings.subprocess.run") as mock_run:
+        with patch("jen.routes.settings.updates.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stderr="some internal systemd detail")
             r = logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
@@ -106,7 +106,7 @@ class TestSelfUpdateRouteIsNowJustATrigger:
 
         # restricted_client creates a plain 'admin'-role session, not superadmin
         restricted_client(client, db, allowed_subnets=[1], role="admin")
-        with patch("jen.routes.settings.subprocess.run") as mock_run:
+        with patch("jen.routes.settings.updates.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             r = client.post("/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True)
         assert r.status_code == 200
@@ -123,7 +123,7 @@ class TestSelfUpdateRedirectsToTheOverlayPage:
     finished. All four redirect paths now go to /settings/system."""
 
     def test_success_redirects_to_system_page_with_updating_flag(self, logged_in_client):
-        with patch("jen.routes.settings.subprocess.run") as mock_run:
+        with patch("jen.routes.settings.updates.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             r = logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=False
@@ -132,7 +132,7 @@ class TestSelfUpdateRedirectsToTheOverlayPage:
         assert r.headers["Location"].endswith("/settings/system?updating=1"), r.headers["Location"]
 
     def test_trigger_failure_redirects_to_system_page(self, logged_in_client):
-        with patch("jen.routes.settings.subprocess.run") as mock_run:
+        with patch("jen.routes.settings.updates.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stderr="systemd said no")
             r = logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=False
@@ -143,7 +143,7 @@ class TestSelfUpdateRedirectsToTheOverlayPage:
     def test_backup_failure_redirects_to_system_page(self, logged_in_client):
         with (
             patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")),
-            patch("jen.routes.settings.subprocess.run") as mock_run,
+            patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             r = logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "1"}, follow_redirects=False
@@ -175,7 +175,7 @@ class TestSelfUpdateOptionalDbBackup:
         with (
             patch("jen.services.dbexport.export_jen", side_effect=fake_export_jen),
             patch("jen.services.dbexport._write_backup", side_effect=fake_write_backup),
-            patch("jen.routes.settings.subprocess.run") as mock_run,
+            patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             r = logged_in_client.post(
@@ -189,7 +189,7 @@ class TestSelfUpdateOptionalDbBackup:
     def test_backup_failure_aborts_before_triggering_update(self, logged_in_client):
         with (
             patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")),
-            patch("jen.routes.settings.subprocess.run") as mock_run,
+            patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             r = logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "1"}, follow_redirects=True
@@ -203,7 +203,7 @@ class TestSelfUpdateOptionalDbBackup:
     def test_backup_not_requested_skips_export_entirely(self, logged_in_client):
         with (
             patch("jen.services.dbexport.export_jen") as mock_export,
-            patch("jen.routes.settings.subprocess.run") as mock_run,
+            patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             logged_in_client.post(
