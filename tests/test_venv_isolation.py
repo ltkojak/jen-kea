@@ -42,7 +42,7 @@ class TestRunPyReExec:
         /opt/jen/venv is the fallback."""
         src = RUN_PY[RUN_PY.index("def _venv_reexec_target") : RUN_PY.index("_reexec_target = _venv_reexec_target")]
         assert 'os.path.join(here, os.pardir, "venv")' in src
-        assert src.index("sibling_venv") < src.index("fallback_venv")
+        assert "for venv_dir in (sibling_venv, fallback_venv):" in src
 
     def test_run_py_imports_cleanly_here(self):
         import run
