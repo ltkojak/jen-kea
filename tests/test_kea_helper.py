@@ -105,7 +105,7 @@ class TestProtocolMisuse:
         stdout, stderr = io.StringIO(), io.StringIO()
         code = helper.main(argv=["jen-kea-helper", "version"], stdin=stdin, stdout=stdout, stderr=stderr)
         assert code == 2
-        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large"}
+        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 2}
 
     def test_stdout_is_exactly_one_json_document(self, helper):
         _, _, _ = _run(helper, "version", {})
