@@ -70,6 +70,15 @@ database = jen
 http_port  = 5050
 https_port = 8443
 
+# Optional: running Jen behind a reverse proxy (nginx, Caddy, Traefik, …).
+# Comma-separated list of proxy IPs or CIDRs Jen should trust. When the
+# request comes from one of these, Jen reads the real client IP from
+# X-Forwarded-For and the scheme from X-Forwarded-Proto (so rate limiting,
+# the audit log and MFA device records see the real client, and the Secure
+# cookie flag + HSTS turn on). The proxy MUST terminate HTTPS. Leave unset
+# if Jen is reached directly.
+# trusted_proxies = 127.0.0.1, 10.0.0.0/8
+
 # Optional: protect the /metrics (Prometheus) endpoint with a Bearer token.
 # If set, scraper must send: Authorization: Bearer <your-token>
 # Leave commented to allow unauthenticated access (e.g. if restricted at proxy level).

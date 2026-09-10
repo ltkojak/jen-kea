@@ -208,15 +208,17 @@ def set_global_setting(key: str, value: str) -> None:
 
 def audit(action: str, entity: str, details: str = "") -> None:
     """
-    Write an entry to the audit log asynchronously.
-    Runs in a background thread so it never blocks the HTTP response.
-    """
-    import threading
+    Write an entry to the audit log.
 
+    v5.17.0 (Q6 6F) — synchronous. The old fire-and-forget thread meant a
+    security-relevant event (LOGIN, LOGOUT, REAUTH, ADMIN_RESET_MFA, …)
+    could still be in flight — or lost to an error nobody saw — when the
+    response returned, and a test that checks "was this audited?" needed a
+    sleep. A single INSERT is cheap; block on it.
+    """
     from flask import request
     from flask_login import current_user
 
-    # Capture request context values now, before the thread runs
     try:
         user_id = current_user.id if current_user.is_authenticated else None
         username = current_user.username if current_user.is_authenticated else "system"
@@ -224,21 +226,18 @@ def audit(action: str, entity: str, details: str = "") -> None:
     except Exception:
         user_id, username, ip = None, "system", None
 
-    def _write():
-        from jen.models.db import jen_db
+    from jen.models.db import jen_db
 
-        try:
-            with jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO audit_log (user_id, username, action, entity, details, ip_address)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                        (user_id, username, action, entity, details, ip),
-                    )
-                db.commit()
-        except Exception as e:
-            logger.error(f"audit({action}, {entity}): {e}")
-
-    threading.Thread(target=_write, daemon=True).start()
+    try:
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO audit_log (user_id, username, action, entity, details, ip_address)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                    (user_id, username, action, entity, details, ip),
+                )
+            db.commit()
+    except Exception as e:
+        logger.error(f"audit({action}, {entity}): {e}")

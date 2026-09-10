@@ -217,8 +217,15 @@ forward_zone = {os.environ.get("JEN_DDNS_ZONE", "")}
 # ── gunicorn launch ─────────────────────────────────────────────────────────
 
 
-def gunicorn_argv(bind: str, threads: int, certfile: str = "", keyfile: str = "") -> list[str]:
-    """Build the gunicorn command line. Pure — unit-tested directly."""
+def gunicorn_argv(
+    bind: str, threads: int, certfile: str = "", keyfile: str = "", forwarded_allow_ips: str = ""
+) -> list[str]:
+    """Build the gunicorn command line. Pure — unit-tested directly.
+
+    v5.17.0 (Q6 6D) — `forwarded_allow_ips` is the raw [server]
+    trusted_proxies string; when set it's passed to gunicorn so its own
+    X-Forwarded-Proto handling agrees with Jen's TrustedProxyMiddleware.
+    Unset leaves gunicorn's default (127.0.0.1)."""
     argv = [
         sys.executable,
         "-m",
@@ -245,6 +252,9 @@ def gunicorn_argv(bind: str, threads: int, certfile: str = "", keyfile: str = ""
         # --ciphers + the TLS 1.2 floor from jen/gunicorn_conf.py's
         # ssl_context hook (gunicorn has no CLI flag for the version floor).
         argv += ["--certfile", certfile, "--keyfile", keyfile, "--ciphers", _TLS_CIPHERS]
+    _allow = ",".join(t.strip() for t in (forwarded_allow_ips or "").split(",") if t.strip())
+    if _allow:
+        argv += ["--forwarded-allow-ips", _allow]
     argv += ["--bind", bind]
     return argv
 
@@ -300,6 +310,7 @@ def main():
     http_port = extensions.HTTP_PORT
     https_port = extensions.HTTPS_PORT
     threads = extensions.WORKER_THREADS
+    trusted_proxies = extensions.cfg.get("server", "trusted_proxies", fallback="").strip()
     use_ssl = ssl_configured()
     if use_ssl and not _cert_pair_loadable(*_ssl_cert_paths()):
         # Tell the app (inherited by gunicorn via exec/Popen) so the HTTPS
@@ -319,7 +330,9 @@ def main():
 
     if use_ssl:
         cert, key = _ssl_cert_paths()
-        argv = gunicorn_argv(f"0.0.0.0:{https_port}", threads, certfile=cert, keyfile=key)
+        argv = gunicorn_argv(
+            f"0.0.0.0:{https_port}", threads, certfile=cert, keyfile=key, forwarded_allow_ips=trusted_proxies
+        )
         print(f"Jen v{JEN_VERSION} — gunicorn HTTPS:{https_port}  HTTP redirect:{http_port}  threads:{threads}")
         try:
             proc = subprocess.Popen(argv)
@@ -355,7 +368,7 @@ def main():
             rc = proc.returncode
         sys.exit(rc if rc is not None else 0)
 
-    argv = gunicorn_argv(f"0.0.0.0:{http_port}", threads)
+    argv = gunicorn_argv(f"0.0.0.0:{http_port}", threads, forwarded_allow_ips=trusted_proxies)
     print(f"Jen v{JEN_VERSION} — gunicorn HTTP:{http_port}  threads:{threads}")
     try:
         os.execvp(argv[0], argv)

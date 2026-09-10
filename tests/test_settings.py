@@ -318,11 +318,9 @@ class TestAuditLog:
     """Audit logging."""
 
     def test_audit_written_on_login(self, client, db):
-        """Successful login creates audit log entry."""
-        import time
-
+        """Successful login creates an audit log entry — synchronously as
+        of v5.17.0 (Q6 6F), so no sleep."""
         client.post("/login", data={"username": "admin", "password": "admin"})
-        time.sleep(1.0)  # audit is async — remote DB thread needs time
         with db.cursor() as cur:
             cur.execute(
                 "SELECT * FROM audit_log WHERE action='LOGIN' AND username='admin' ORDER BY created_at DESC LIMIT 1"
@@ -332,11 +330,8 @@ class TestAuditLog:
         assert row["action"] == "LOGIN"
 
     def test_audit_written_on_logout(self, logged_in_client, db):
-        """Logout creates audit log entry."""
-        import time
-
+        """Logout creates an audit log entry — synchronously (no sleep)."""
         logged_in_client.post("/logout")
-        time.sleep(1.0)
         with db.cursor() as cur:
             cur.execute("SELECT * FROM audit_log WHERE action='LOGOUT' ORDER BY created_at DESC LIMIT 1")
             row = cur.fetchone()

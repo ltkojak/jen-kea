@@ -36,6 +36,22 @@ from jen import extensions
 logger = logging.getLogger(__name__)
 
 
+def _parse_trusted_proxies(raw: str) -> list:
+    """Parse `[server] trusted_proxies` (comma list of IPs / CIDRs) into a
+    list of ip_network objects. A single host is accepted bare (`10.0.0.1`
+    → `10.0.0.1/32`). Malformed entries are logged and skipped."""
+    nets = []
+    for tok in (raw or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(tok, strict=False))
+        except ValueError:
+            logger.warning(f"[server] trusted_proxies: ignoring invalid entry {tok!r}")
+    return nets
+
+
 class AppConfig:
     """Owns loading, writing, and derivation of jen.config."""
 
@@ -123,6 +139,13 @@ class AppConfig:
         # translate straight into a gunicorn --threads argument.
         _threads = cfg.getint("server", "threads", fallback=8)
         extensions.WORKER_THREADS = max(1, min(_threads, 64))
+
+        # v5.17.0 (Q6 6D) — reverse-proxy trust. A comma list of IPs or
+        # CIDRs; when the request's peer is one of them, TrustedProxyMiddleware
+        # rewrites REMOTE_ADDR from X-Forwarded-For and url_scheme from
+        # X-Forwarded-Proto. A malformed entry is logged and skipped, not
+        # fatal — a broken proxy line must not stop the app booting.
+        extensions.TRUSTED_PROXIES = _parse_trusted_proxies(cfg.get("server", "trusted_proxies", fallback=""))
 
         extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host", fallback="")
         extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user", fallback="")

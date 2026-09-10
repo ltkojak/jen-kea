@@ -46,6 +46,15 @@ class TestGunicornArgv:
             argv = run.gunicorn_argv("x", threads)
             assert argv[argv.index("--workers") + 1] == "1"
 
+    def test_forwarded_allow_ips_omitted_when_unset(self):
+        assert "--forwarded-allow-ips" not in run.gunicorn_argv("x", 8)
+        assert "--forwarded-allow-ips" not in run.gunicorn_argv("x", 8, forwarded_allow_ips="  ,  ")
+
+    def test_forwarded_allow_ips_passed_through_when_set(self):
+        argv = run.gunicorn_argv("x", 8, forwarded_allow_ips=" 127.0.0.1 , 10.0.0.0/8 ")
+        i = argv.index("--forwarded-allow-ips")
+        assert argv[i + 1] == "127.0.0.1,10.0.0.0/8"
+
     def test_graceful_shutdown_flags_present(self):
         argv = run.gunicorn_argv("x", 8)
         assert "--graceful-timeout" in argv

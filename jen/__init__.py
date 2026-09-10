@@ -36,6 +36,13 @@ def _ssl_configured_cached() -> bool:
     return _ssl_configured_cache
 
 
+def _https_context() -> bool:
+    """True when the browser reaches Jen over HTTPS — either Jen terminates
+    TLS itself, or a trusted reverse proxy does (v5.17.0 / Q6 6D; the proxy
+    is required to serve HTTPS). Gates the Secure cookie flag and HSTS."""
+    return _ssl_configured_cached() or bool(extensions.TRUSTED_PROXIES)
+
+
 def _venv_migration_incomplete() -> bool:
     """v5.8.1 — a bare-metal /opt/jen install running on the *system*
     interpreter with no /opt/jen/venv: the v5.8.0 venv migration didn't
@@ -99,7 +106,14 @@ def create_app() -> Flask:
     # JS to read this cookie, and Lax still allows normal top-level navigation.
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    app.config["SESSION_COOKIE_SECURE"] = _ssl_configured_cached()
+    app.config["SESSION_COOKIE_SECURE"] = _https_context()
+
+    # v5.17.0 (Q6 6D) — behind a trusted reverse proxy, rewrite REMOTE_ADDR /
+    # url_scheme from the forwarding headers BEFORE Flask sees the request.
+    if extensions.TRUSTED_PROXIES:
+        from jen.services.proxy import TrustedProxyMiddleware
+
+        app.wsgi_app = TrustedProxyMiddleware(app.wsgi_app, extensions.TRUSTED_PROXIES)
 
     # ── Jinja filters ─────────────────────────────────────────────────────────
     @app.template_filter("utcfmt")
@@ -264,9 +278,10 @@ def create_app() -> Flask:
         cheap. Clickjacking (missing X-Frame-Options / frame-ancestors) is
         a real vector against an admin UI even with CSRF tokens in place,
         since a real click on a real embedded page bypasses CSRF entirely.
-        HSTS is conditional on SSL actually being configured, same as the
-        SESSION_COOKIE_SECURE flag above — sending it over plain HTTP would
-        be actively wrong, not just useless.
+        HSTS is conditional on the browser reaching Jen over HTTPS —
+        either Jen terminates TLS or a trusted reverse proxy does
+        (_https_context()), same as the SESSION_COOKIE_SECURE flag above.
+        Sending it to a plain-HTTP client would be actively wrong.
 
         CSP note: templates use inline <script> blocks, inline style=
         attributes, and inline onclick/onchange handlers throughout (HTMX +
@@ -289,7 +304,7 @@ def create_app() -> Flask:
             "style-src 'self' 'unsafe-inline'; "
             "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
         )
-        if _ssl_configured_cached():
+        if _https_context():
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
 

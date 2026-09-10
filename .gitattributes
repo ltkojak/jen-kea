@@ -11,3 +11,7 @@ legacy/ export-ignore
 jen-kea-helper text eol=lf
 jen-update-root.py text eol=lf
 run.py text eol=lf
+
+# v5.17.0 — systemd rejects a unit file with CRLF line endings.
+jen.service text eol=lf
+jen-update.service text eol=lf

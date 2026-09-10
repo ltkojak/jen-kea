@@ -211,6 +211,16 @@ class TestRateLimiting:
             src = inspect.getsource(fn)
             assert "threading" not in src and "Thread(" not in src, f"{fn.__name__} still defers its write"
 
+    def test_no_fire_and_forget_writes_in_auth_or_user_models(self):
+        """v5.17.0 (Q6 6F) — audit() and the clear_* rate-limit resets are
+        synchronous now; a whole file grep is the durable guard."""
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for rel in ("jen/services/auth.py", "jen/models/user.py"):
+            src = (root / rel).read_text(encoding="utf-8")
+            assert "threading.Thread" not in src, f"{rel} still starts a background thread"
+
     def test_prune_helper_runs_at_most_once_an_hour(self, monkeypatch):
         """v5.10.4 — the 24h login_attempts cleanup DELETE no longer
         rides along on every failed login; _maybe_prune_login_attempts

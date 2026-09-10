@@ -108,6 +108,28 @@ class TestAppConfig:
             app_config.load()
 
 
+class TestTrustedProxies:
+    """v5.17.0 (Q6 6D) — [server] trusted_proxies parsing."""
+
+    def test_default_is_empty(self, isolated_config):
+        assert extensions.TRUSTED_PROXIES == []
+
+    def test_ips_and_cidrs_parse(self, isolated_config):
+        import ipaddress
+
+        app_config.write_value("server", "trusted_proxies", "127.0.0.1, 10.0.0.0/8 , ::1")
+        nets = extensions.TRUSTED_PROXIES
+        assert ipaddress.ip_address("10.9.9.9") in nets[1]
+        assert ipaddress.ip_address("127.0.0.1") in nets[0]
+        assert len(nets) == 3  # bare host became /32
+
+    def test_a_bad_entry_is_skipped_not_fatal(self, isolated_config):
+        from jen.config import _parse_trusted_proxies
+
+        nets = _parse_trusted_proxies("10.0.0.0/8, not-an-ip, 192.168.0.0/16")
+        assert len(nets) == 2
+
+
 class TestKea3ConnectionMode:
     """v5.10.0 — [kea] connection_mode + api_ca / api_tls_verify, and
     the api6_url the server dicts carry for direct mode. connection_mode

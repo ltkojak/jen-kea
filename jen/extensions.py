@@ -95,6 +95,11 @@ HTTPS_PORT: int = 8443
 # [server] threads in jen.config and Settings → System.
 WORKER_THREADS: int = 8
 
+# v5.17.0 (Q6 6D) — reverse-proxy trust. List of ipaddress network objects
+# parsed from [server] trusted_proxies; empty (the default) = no proxy,
+# XFF/XFP headers are ignored and TrustedProxyMiddleware isn't installed.
+TRUSTED_PROXIES: list = []
+
 KEA_SSH_HOST: str = ""
 KEA_SSH_USER: str = ""
 KEA_CONF: str = "/etc/kea/kea-dhcp4.conf"

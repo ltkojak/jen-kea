@@ -215,19 +215,16 @@ def record_login_attempt(ip, username):
 
 
 def clear_login_attempts(ip, username):
-    """Fire-and-forget — don't block the login response."""
-    import threading
-
-    def _clear():
-        try:
-            with __jen_db_ctx() as db:
-                with db.cursor() as cur:
-                    cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
-                db.commit()
-        except Exception as e:
-            logger.error(f"Rate limit clear error: {e}")
-
-    threading.Thread(target=_clear, daemon=True).start()
+    """v5.17.0 (Q6 6F) — synchronous. A single scoped DELETE; the
+    fire-and-forget thread only saved microseconds and made "did the
+    lockout counter actually reset?" untestable without a sleep."""
+    try:
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
+            db.commit()
+    except Exception as e:
+        logger.error(f"Rate limit clear error: {e}")
 
 
 def is_locked_out(ip, username):
@@ -323,19 +320,14 @@ def record_mfa_attempt(user_id):
 
 
 def clear_mfa_attempts(user_id):
-    """Fire-and-forget — don't block the response."""
-    import threading
-
-    def _clear():
-        try:
-            with __jen_db_ctx() as db:
-                with db.cursor() as cur:
-                    cur.execute("DELETE FROM mfa_attempts WHERE user_id=%s", (user_id,))
-                db.commit()
-        except Exception as e:
-            logger.error(f"MFA rate limit clear error: {e}")
-
-    threading.Thread(target=_clear, daemon=True).start()
+    """v5.17.0 (Q6 6F) — synchronous (see clear_login_attempts)."""
+    try:
+        with __jen_db_ctx() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM mfa_attempts WHERE user_id=%s", (user_id,))
+            db.commit()
+    except Exception as e:
+        logger.error(f"MFA rate limit clear error: {e}")
 
 
 def is_mfa_locked_out(user_id):

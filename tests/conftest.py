@@ -210,6 +210,7 @@ def _patch_extensions():
     extensions.HTTP_PORT = 5099
     extensions.HTTPS_PORT = 8499
     extensions.WORKER_THREADS = 8
+    extensions.TRUSTED_PROXIES = []
     extensions.CONFIG_FILE = "/tmp/jen_test.config"
 
     # v5.13.0 — user-writable content is under CONTENT_DIR now. Repoint the
