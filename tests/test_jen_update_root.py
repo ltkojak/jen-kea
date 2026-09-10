@@ -427,9 +427,10 @@ class TestBuildReleaseVenv:
 
         src = inspect.getsource(jen_update_root.main)
         assert '"/bin/chown", "-R", "root:root", staging' in src
-        # main() never chowns anything to www-data — the app tree and venv
-        # are root-owned; only /var/lib/jen is www-data (migrate_user_content).
-        assert "www-data" not in src
+        # main() itself only ever chowns things to root:root — the one
+        # www-data chown lives in migrate_user_content (CONTENT_DIR).
+        assert '"root:root", staging' in src
+        assert '"www-data:www-data", staging' not in src
 
 
 class TestValidateStagedRelease:

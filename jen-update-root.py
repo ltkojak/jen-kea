@@ -572,7 +572,7 @@ def snapshot_install(snapshot_dir, install_dir=INSTALL_DIR):
             shutil.copy2(live_path, os.path.join(ext_dir, name))
 
 
-def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR, current_link=CURRENT_LINK):
+def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR, current_link=None):
     """Put a snapshot_install() snapshot back — the flat /opt/jen tree,
     then the external files, then daemon-reload + chown + restart jen.
     v5.14.0 — this is the MIGRATION-run rollback: a half-created `current`
@@ -580,6 +580,8 @@ def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR, current_link=CURRENT
     from. (The steady-state versioned rollback is just an os.replace() of
     the `current` link back to the previous release — main() does that
     inline; the previous release dir was never touched.)"""
+    if current_link is None:
+        current_link = CURRENT_LINK
     if os.path.islink(current_link) or os.path.lexists(current_link):
         with contextlib.suppress(OSError):
             os.unlink(current_link)
@@ -867,11 +869,13 @@ def _confirm_running_version(version, attempts=5, delay=3):
     )
 
 
-def _switch_current(target_release, current_link=CURRENT_LINK):
+def _switch_current(target_release, current_link=None):
     """Atomically point `current` at `releases/<target_release>`. The
     symlink target is RELATIVE so /opt/jen can be bind-mounted; the swap
     is os.replace() of the link itself (atomic on POSIX), never
     os.remove()+os.symlink() which has a window where `current` is gone."""
+    if current_link is None:
+        current_link = CURRENT_LINK
     tmp_link = current_link + ".tmp"
     if os.path.lexists(tmp_link):
         os.unlink(tmp_link)
