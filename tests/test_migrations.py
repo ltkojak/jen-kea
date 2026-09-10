@@ -66,6 +66,32 @@ class TestDashboardWidgetsPortability:
         assert 19 in applied_versions()
 
 
+class TestKeaConfigRevisionsTable:
+    """v5.16.0 / migration 20 — the Kea config history table."""
+
+    def test_migration_20_recorded(self):
+        assert 20 in applied_versions()
+
+    def test_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM kea_config_revisions")
+            cols = {c["Field"]: c for c in cur.fetchall()}
+        assert set(cols) == {
+            "id",
+            "server_id",
+            "service",
+            "sha256",
+            "config",
+            "summary",
+            "username",
+            "source",
+            "created_at",
+        }
+        assert "mediumtext" in cols["config"]["Type"].lower()
+        assert cols["service"]["Type"].lower() == "varchar(8)"
+        assert cols["source"]["Default"] == "jen"
+
+
 class TestAdminRoleRegression:
     """
     Prior to v4.2.0, init_jen_db promoted every 'admin' user to superadmin

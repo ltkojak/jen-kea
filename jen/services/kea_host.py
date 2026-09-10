@@ -21,6 +21,7 @@ Every high-level call returns a `HostResult` dict:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import re
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 HELPER_PATH = "/usr/local/sbin/jen-kea-helper"
 JEN_HELPER_MIN_VERSION = 1
+# v5.16.0 — the version Jen wants for atomic-guarded writes + external
+# change capture. A host below this still works; the Settings → Kea SSH
+# table shows an "upgrade available" hint and nothing else changes.
+JEN_HELPER_WANT_VERSION = 2
 _HELPER_STATUS_KEY = "kea_helper_status"
 
 # stderr fragments that mean "the helper isn't callable here" rather than
@@ -126,6 +131,19 @@ def _known_version(server_id):
     return helper_status().get(str(server_id), {}).get("version")
 
 
+def _record_from_resp(server_id, resp: dict) -> None:
+    """v5.16.0 — learn the real helper version from any op's response
+    envelope (`helper_version`, added to every v2 response), falling back
+    to the last-known value or the minimum. Replaces the old
+    `record_helper_status(id, _known_version(id) or MIN)` pattern that
+    could only ever record the minimum outside a `version` op."""
+    v = None
+    if isinstance(resp, dict) and resp.get("helper_version") is not None:
+        with contextlib.suppress(TypeError, ValueError):
+            v = int(resp["helper_version"])
+    record_helper_status(server_id, v or _known_version(server_id) or JEN_HELPER_MIN_VERSION)
+
+
 # ── legacy-path warning ────────────────────────────────────────────────────
 
 
@@ -206,6 +224,8 @@ def _from_helper_test(resp: dict, ok_code: str) -> dict:
         out = {"ok": True, "code": ok_code, "via": "helper"}
         if "backup" in resp:
             out["backup"] = resp["backup"]
+        if "sha256" in resp:
+            out["sha256"] = resp["sha256"]
         return out
     err = resp.get("error")
     if err == "testerror":
@@ -218,6 +238,14 @@ def _from_helper_test(resp: dict, ok_code: str) -> dict:
         return {"ok": False, "code": "tlsmissing", "path": p, "detail": p, "via": "helper"}
     if err == "exists":
         return {"ok": False, "code": "exists", "detail": "config already exists", "via": "helper"}
+    if err == "conflict":
+        return {
+            "ok": False,
+            "code": "conflict",
+            "sha256": resp.get("sha256", ""),
+            "detail": "the config on the host changed since you started",
+            "via": "helper",
+        }
     return {"ok": False, "code": "error", "detail": resp.get("detail") or err or "helper refused", "via": "helper"}
 
 
@@ -228,27 +256,57 @@ def _conf_path(server, service):
     return __authoring.conf_path_for(server, service)
 
 
-def read_config(server: dict, service: str) -> dict | None:
-    """The parsed Kea config for `service` on `server`, or None if it's
-    missing or unreadable."""
+def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str | None]:
+    """(parsed config, sha256-of-raw-bytes). The SHA is None on a v1
+    helper or the legacy path — Jen then falls back to a canonical-JSON
+    compare for the concurrency guard, and skips external-change capture.
+
+    v5.16.0 — when the SHA is known and differs from the newest recorded
+    revision's, the on-host file was hand-edited since Jen last wrote it:
+    record it as an `external` revision so the history stays complete."""
     path = _conf_path(server, service)
+    cfg: dict | None = None
+    sha: str | None = None
     try:
         resp = helper_call(server, "read-config", {"service": service, "path": path})
-        record_helper_status(server.get("id"), _known_version(server.get("id")) or JEN_HELPER_MIN_VERSION)
+        _record_from_resp(server.get("id"), resp)
         if resp.get("ok"):
-            return resp.get("config")
-        return None
+            cfg = resp.get("config")
+            sha = resp.get("sha256")
     except HelperMissing:
         _flag_legacy(server)
         ssh = __kea6._connect_ssh(server)
         try:
-            return __authoring.read_remote_json(ssh, path)
+            cfg = __authoring.read_remote_json(ssh, path)
         finally:
             with contextlib.suppress(Exception):
                 ssh.close()
     except HelperError as e:
         logger.warning(f"read-config helper error on {server.get('name')}: {e}")
-        return None
+        return None, None
+
+    if cfg is not None and sha:
+        _capture_external_change(server.get("id"), service, cfg, sha)
+    return cfg, sha
+
+
+def read_config(server: dict, service: str) -> dict | None:
+    """The parsed Kea config for `service` on `server`, or None if it's
+    missing or unreadable. Thin wrapper over read_config_versioned()."""
+    return read_config_versioned(server, service)[0]
+
+
+def _capture_external_change(server_id, service: str, cfg: dict, sha: str) -> None:
+    if server_id is None:
+        return
+    try:
+        from jen.services import config_revisions as _rev
+
+        last = _rev.latest(server_id, service)
+        if last is not None and last.get("sha256") and last["sha256"] != sha:
+            _rev.record(server_id, service, cfg, sha, "changed outside Jen", source="external")
+    except Exception as e:
+        logger.warning(f"external-change capture failed for server {server_id}/{service}: {e}")
 
 
 def _tls_list(tls_paths):
@@ -263,7 +321,7 @@ def test_config(server: dict, service: str, cfg: dict, tls_paths=()) -> dict:
             "test-config",
             {"service": service, "path": path, "config": cfg, "tls_paths": _tls_list(tls_paths)},
         )
-        record_helper_status(server.get("id"), _known_version(server.get("id")) or JEN_HELPER_MIN_VERSION)
+        _record_from_resp(server.get("id"), resp)
         return _from_helper_test(resp, "preview-ok")
     except HelperMissing:
         _flag_legacy(server)
@@ -276,38 +334,123 @@ def test_config(server: dict, service: str, cfg: dict, tls_paths=()) -> dict:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 
 
-def apply_config(server: dict, service: str, cfg: dict, tls_paths=(), allow_overwrite: bool = True) -> dict:
+def _jen_side_conflict(server: dict, service: str, cfg: dict) -> dict | None:
+    """Best-effort concurrency check for a v1 / legacy host, which gives
+    no SHA. Re-read the live file and compare its canonical JSON against
+    the newest recorded revision; a mismatch means someone else changed
+    it. Returns a conflict HostResult (and flashes once) or None to
+    proceed. `cfg` is the config Jen is about to write (unused for the
+    compare — the reference is the last *recorded* config, not the
+    incoming one)."""
+    from jen.services import config_revisions as _rev
+
+    _flash_no_atomic_guard(server)
+    last = _rev.latest(server.get("id"), service)
+    if last is None:
+        return None  # nothing to compare against — first write for this server/service
+    current, _sha = read_config_versioned(server, service)
+    if current is None:
+        return None  # can't read it back — let the write proceed and be validated by -t
+    if _rev.canonical(current) != _rev.canonical(json.loads(last["config"])):
+        name = server.get("name") or server.get("ssh_host") or "?"
+        return {
+            "ok": False,
+            "code": "conflict",
+            "detail": f"the config on {name} changed since you started",
+            "via": "jen",
+        }
+    return None
+
+
+def _flash_no_atomic_guard(server: dict) -> None:
+    if not has_request_context():
+        return
+    seen = getattr(g, "_kea_noguard_flashed", None)
+    if seen is None:
+        seen = g._kea_noguard_flashed = set()
+    name = server.get("name") or server.get("ssh_host") or "?"
+    if name in seen:
+        return
+    seen.add(name)
+    flash(f"No atomic guard on {name}: helper v1 / legacy — the write proceeded on a best-effort check.", "warning")
+
+
+def apply_config(
+    server: dict,
+    service: str,
+    cfg: dict,
+    tls_paths=(),
+    allow_overwrite: bool = True,
+    expect_sha256: str | None = None,
+    summary: str | None = None,
+) -> dict:
+    """Write `cfg` to the host. `expect_sha256` (a SHA from an earlier
+    read, or "" for "must not exist") makes the write conditional — the
+    v2 helper enforces it atomically under a file lock; a v1 / legacy
+    host gets a best-effort canonical-JSON compare instead. On success
+    (any path) the applied config is recorded as a revision with
+    `summary`."""
     path = _conf_path(server, service)
+    payload = {
+        "service": service,
+        "path": path,
+        "config": cfg,
+        "tls_paths": _tls_list(tls_paths),
+        "allow_overwrite": allow_overwrite,
+    }
+    if expect_sha256 is not None:
+        payload["expect_sha256"] = expect_sha256
+
+    result = None
     try:
-        resp = helper_call(
-            server,
-            "apply-config",
-            {
-                "service": service,
-                "path": path,
-                "config": cfg,
-                "tls_paths": _tls_list(tls_paths),
-                "allow_overwrite": allow_overwrite,
-            },
-        )
-        record_helper_status(server.get("id"), _known_version(server.get("id")) or JEN_HELPER_MIN_VERSION)
-        return _from_helper_test(resp, "ok")
+        resp = helper_call(server, "apply-config", payload)
+        _record_from_resp(server.get("id"), resp)
+        # A v1 helper ignores expect_sha256 → fall back to the Jen-side check.
+        if (
+            expect_sha256 is not None
+            and (resp.get("helper_version") or JEN_HELPER_MIN_VERSION) < JEN_HELPER_WANT_VERSION
+            and resp.get("error") != "conflict"
+        ):
+            conflict = _jen_side_conflict(server, service, cfg)
+            if conflict is not None:
+                return conflict
+        result = _from_helper_test(resp, "ok")
     except HelperMissing:
         _flag_legacy(server)
+        if expect_sha256 is not None:
+            conflict = _jen_side_conflict(server, service, cfg)
+            if conflict is not None:
+                return conflict
         script = __authoring.render_author_config_script(
             service, path, cfg, allow_overwrite=allow_overwrite, dry_run=False, tls_paths=list(tls_paths or [])
         )
         out, err = _legacy_python3(server, script)
-        return _legacy_suffix(_parse_legacy_script_out(out, err, "legacy"))
+        result = _legacy_suffix(_parse_legacy_script_out(out, err, "legacy"))
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
+
+    if result.get("ok"):
+        _record_revision_after_apply(server, service, cfg, result.get("sha256"), summary, "jen")
+    return result
+
+
+def _record_revision_after_apply(server, service, cfg, sha, summary, source):
+    try:
+        from jen.services import config_revisions as _rev
+
+        # No SHA from the helper (v1 / legacy) → compute the canonical one
+        # so the row still has something stable to compare and diff.
+        sha = sha or hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
+        _rev.record(server.get("id"), service, cfg, sha, summary or f"{source} {service}", source=source)
+    except Exception as e:
+        logger.warning(f"config revision not recorded for server {server.get('id')}/{service}: {e}")
 
 
 def service_action(server: dict, service: str, action: str) -> dict:
     """action ∈ restart | enable | disable | status."""
     try:
         resp = helper_call(server, "service", {"service": service, "action": action})
-        record_helper_status(server.get("id"), _known_version(server.get("id")) or JEN_HELPER_MIN_VERSION)
+        _record_from_resp(server.get("id"), resp)
         if resp.get("ok"):
             return {
                 "ok": True,
@@ -351,7 +494,7 @@ def service_action(server: dict, service: str, action: str) -> dict:
 def tail_log(server: dict, path: str, lines: int = 200) -> dict:
     try:
         resp = helper_call(server, "tail-log", {"path": path, "lines": lines})
-        record_helper_status(server.get("id"), _known_version(server.get("id")) or JEN_HELPER_MIN_VERSION)
+        _record_from_resp(server.get("id"), resp)
         if resp.get("ok"):
             return {"ok": True, "code": "ok", "lines": resp.get("lines", []), "via": "helper"}
         if resp.get("error") == "missing":
@@ -372,7 +515,7 @@ def tail_log(server: dict, path: str, lines: int = 200) -> dict:
 def install_package(server: dict, service: str) -> dict:
     try:
         resp = helper_call(server, "install-package", {"service": service}, timeout=300)
-        record_helper_status(server.get("id"), _known_version(server.get("id")) or JEN_HELPER_MIN_VERSION)
+        _record_from_resp(server.get("id"), resp)
         return {
             "ok": bool(resp.get("ok")),
             "code": "ok" if resp.get("ok") else "error",

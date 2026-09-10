@@ -25,9 +25,11 @@ _REAL_RECORD = kea_host.record_helper_status
 
 @pytest.fixture
 def quiet_status(monkeypatch):
-    """No settings-table writes for the transport tests."""
+    """No settings-table or history writes for the transport tests."""
     monkeypatch.setattr(kea_host, "record_helper_status", lambda *a, **k: None)
     monkeypatch.setattr(kea_host, "helper_status", dict)
+    monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+    monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a, **k: None)
 
 
 def _connect_seq(monkeypatch, *queues):
@@ -261,3 +263,118 @@ class TestStatusTracking:
         assert data["1"]["version"] == 1
         assert data["2"]["version"] is None
         assert "checked" in data["1"]
+
+
+class TestHelperVersionFromResponse:
+    """v5.16.0 — _record_from_resp learns the real version from any op's
+    envelope, not just a `version` op."""
+
+    def test_records_helper_version_from_a_data_op(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(kea_host, "record_helper_status", lambda sid, v: recorded.append((sid, v)))
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}, "helper_version": 2}), "")])
+        kea_host.read_config(SERVER, "dhcp4")
+        assert (1, 2) in recorded
+
+    def test_falls_back_to_min_when_envelope_lacks_it(self, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(kea_host, "record_helper_status", lambda sid, v: recorded.append((sid, v)))
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}}), "")])
+        kea_host.read_config(SERVER, "dhcp4")
+        assert (1, kea_host.JEN_HELPER_MIN_VERSION) in recorded
+
+
+class TestReadConfigVersioned:
+    def test_returns_cfg_and_sha_from_a_v2_helper(self, monkeypatch, quiet_status):
+        _connect_seq(
+            monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}, "sha256": "abc", "helper_version": 2}), "")]
+        )
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: None)
+        cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert cfg == {"Dhcp4": {}} and sha == "abc"
+
+    def test_sha_is_none_on_a_v1_helper(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}}), "")])
+        cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert cfg == {"Dhcp4": {}} and sha is None
+
+    def test_external_change_is_recorded_when_sha_differs(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {"n": 2}}, "sha256": "new"}), "")])
+        calls = []
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: {"sha256": "old"})
+        monkeypatch.setattr(
+            "jen.services.config_revisions.record",
+            lambda *a, **k: calls.append((a, k)),
+        )
+        kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert calls and calls[0][1].get("source") == "external"
+
+    def test_no_external_capture_when_sha_matches(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}, "sha256": "same"}), "")])
+        calls = []
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: {"sha256": "same"})
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: calls.append(1))
+        kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert not calls
+
+
+class TestApplyGuarded:
+    def test_expect_sha256_is_passed_to_the_helper(self, monkeypatch, quiet_status):
+        made = _connect_seq(monkeypatch, [(json.dumps({"ok": True, "sha256": "written", "helper_version": 2}), "")])
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}}, expect_sha256="base-sha")
+        assert json.loads(made[0].stdin_writes[0])["expect_sha256"] == "base-sha"
+
+    def test_no_expect_sha256_key_when_not_given(self, monkeypatch, quiet_status):
+        made = _connect_seq(monkeypatch, [(json.dumps({"ok": True, "helper_version": 2}), "")])
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}})
+        assert "expect_sha256" not in json.loads(made[0].stdin_writes[0])
+
+    def test_helper_conflict_maps_to_code_conflict(self, monkeypatch, quiet_status):
+        _connect_seq(
+            monkeypatch,
+            [(json.dumps({"ok": False, "error": "conflict", "sha256": "current", "helper_version": 2}), "")],
+        )
+        res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}}, expect_sha256="stale")
+        assert res["code"] == "conflict" and res["sha256"] == "current" and res["via"] == "helper"
+
+    def test_v1_helper_jen_side_compare_proceeds_when_unchanged(self, monkeypatch, app, quiet_status):
+        _connect_seq(
+            monkeypatch,
+            [(json.dumps({"ok": True}), "")],  # apply (v1: no helper_version)
+            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 1}}}), "")],  # re-read for the jen-side check
+        )
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest", lambda *a: {"config": '{\n  "Dhcp4": {\n    "a": 1\n  }\n}'}
+        )
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256="anything")
+        assert res["ok"] is True
+
+    def test_v1_helper_jen_side_compare_conflicts_when_changed(self, monkeypatch, app, quiet_status):
+        _connect_seq(
+            monkeypatch,
+            [(json.dumps({"ok": True}), "")],  # apply (v1)
+            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 999}}}), "")],  # re-read: different
+        )
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest", lambda *a: {"config": '{\n  "Dhcp4": {\n    "a": 1\n  }\n}'}
+        )
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256="anything")
+        assert res["ok"] is False and res["code"] == "conflict" and res["via"] == "jen"
+
+    def test_success_records_a_revision(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "sha256": "s1", "helper_version": 2}), "")])
+        recorded = []
+        monkeypatch.setattr(
+            "jen.services.config_revisions.record",
+            lambda sid, svc, cfg, sha, summary, source="jen": recorded.append((sid, svc, sha, summary, source)),
+        )
+        kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}}, summary="edit subnet 5")
+        assert recorded == [(1, "dhcp4", "s1", "edit subnet 5", "jen")]

@@ -259,6 +259,24 @@ _BASELINE_TABLES = [
         INDEX idx_user (user_id),
         INDEX idx_attempted (attempted_at)
     )""",
+    # v5.16.0 — every Kea config Jen writes is recorded here with a diff
+    # against the previous one, viewable and restorable. MEDIUMTEXT (not
+    # JSON) sidesteps MariaDB's implicit json_valid CHECK and MySQL 8's
+    # no-literal-DEFAULT-on-TEXT rule; the config is stored as
+    # json.dumps(cfg, indent=2, sort_keys=True) so diffs are stable.
+    # `service` is VARCHAR(8) — Q15 reuses this table with service='d2'.
+    """CREATE TABLE IF NOT EXISTS kea_config_revisions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        server_id INT NOT NULL,
+        service VARCHAR(8) NOT NULL,
+        sha256 CHAR(64) NOT NULL,
+        config MEDIUMTEXT NOT NULL,
+        summary VARCHAR(255) NOT NULL DEFAULT '',
+        username VARCHAR(64) NOT NULL DEFAULT '',
+        source VARCHAR(16) NOT NULL DEFAULT 'jen',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_server_service (server_id, service, id)
+    )""",
 ]
 
 
@@ -706,6 +724,32 @@ def _m019_dashboard_widgets_varchar(db):
             logger.info("Migration 19: dashboard_prefs.widgets TEXT → VARCHAR(512)")
 
 
+def _m020_kea_config_revisions(db):
+    """
+    v5.16.0 — `kea_config_revisions` records every Kea config Jen writes
+    (and every external change it notices), with a stable-diffable JSON
+    body, so history is viewable and revisions restorable. In the
+    baseline for a fresh DB; this creates it on an existing one.
+    Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS kea_config_revisions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                service VARCHAR(8) NOT NULL,
+                sha256 CHAR(64) NOT NULL,
+                config MEDIUMTEXT NOT NULL,
+                summary VARCHAR(255) NOT NULL DEFAULT '',
+                username VARCHAR(64) NOT NULL DEFAULT '',
+                source VARCHAR(16) NOT NULL DEFAULT 'jen',
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY idx_server_service (server_id, service, id)
+            )"""
+        )
+    logger.info("Migration 20: kea_config_revisions table")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -736,6 +780,7 @@ MIGRATIONS = [
         "dashboard_prefs.widgets TEXT → VARCHAR(512) for MySQL 8 portability (v5.8.0)",
         _m019_dashboard_widgets_varchar,
     ),
+    (20, "kea_config_revisions table — Kea config history + restore (v5.16.0)", _m020_kea_config_revisions),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
