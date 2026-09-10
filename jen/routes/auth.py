@@ -31,6 +31,10 @@ def __ip_to_int(ip):
     return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
 
 
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -128,6 +132,7 @@ def login():
                     session["mfa_pending_username"] = username
                     session.pop("mfa_pending_enroll", None)
                     session["mfa_next"] = _next or url_for("dashboard.dashboard")
+                    session["auth_at"] = _now_iso()  # password done; "pending" counts as fresh
                     return redirect(url_for("mfa_routes.mfa_verify"))
                 elif needs_mfa and not mfa_enrolled:
                     # Password is verified, but MFA is mandatory and the
@@ -141,11 +146,16 @@ def login():
                     session["mfa_pending_username"] = username
                     session["mfa_pending_enroll"] = True
                     session["mfa_next"] = _next or url_for("dashboard.dashboard")
+                    session["auth_at"] = _now_iso()  # password done; "pending" counts as fresh
                     flash("MFA is required for your account — set up an authenticator to finish signing in.", "warning")
                     return redirect(url_for("mfa_routes.mfa_enroll"))
 
+            # v5.17.0 (Q6 6B) — drop everything the pre-auth session carried
+            # (Flask sessions are signed cookies; "rotate" == clear + rebuild).
+            session.clear()
             login_user(user)
-            session["last_active"] = datetime.now(timezone.utc).isoformat()
+            session["last_active"] = _now_iso()
+            session["auth_at"] = _now_iso()
             session["_user_cache"] = {
                 "id": user.id,
                 "username": user.username,
@@ -166,14 +176,72 @@ def login():
     return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username="")
 
 
-@bp.route("/logout")
+@bp.route("/logout", methods=["GET", "POST"])
 @login_required
 def logout():
+    # v5.17.0 (Q6 6C) — GET confirms, POST acts. A stray link / prefetch /
+    # <img src> can no longer sign a user out.
+    if request.method == "GET":
+        return render_template("logout_confirm.html")
     __user.audit("LOGOUT", "auth", f"User {current_user.username} logged out")
-    session.pop("_user_cache", None)
-    session.pop("_avatar_url", None)
     logout_user()
+    session.clear()
     return redirect(url_for("auth.login"))
+
+
+@bp.route("/auth/reauth", methods=["GET", "POST"])
+@login_required
+def reauth():
+    """v5.17.0 (Q6 6A) — password (and MFA, if enrolled) confirmation for
+    a route guarded by `recent_auth_required`. On success it stamps a
+    fresh `session["auth_at"]` and returns to `session["reauth_next"]`."""
+    next_url = session.get("reauth_next") or url_for("mfa_routes.mfa_enroll")
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = url_for("mfa_routes.mfa_enroll")
+    has_mfa = __mfa.user_has_mfa(current_user.id)
+
+    if request.method == "GET":
+        return render_template("reauth.html", has_mfa=has_mfa, next_url=next_url)
+
+    ip = request.remote_addr
+    username = current_user.username
+
+    locked, remaining = __auth.is_locked_out(ip, username)
+    if locked:
+        if remaining >= 999:
+            flash("Account is locked. Contact an administrator.", "error")
+        else:
+            flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
+        return render_template("reauth.html", has_mfa=has_mfa, next_url=next_url)
+
+    password = request.form.get("password", "")
+    code = request.form.get("code", "").strip().replace(" ", "")
+
+    ok = False
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT password FROM users WHERE id=%s", (current_user.id,))
+            row = cur.fetchone()
+        if row and __user.verify_password(row["password"], password):
+            if has_mfa:
+                ok = (len(code) >= 16 and __mfa.verify_backup_code(current_user.id, code)) or __mfa.verify_totp(
+                    current_user.id, code
+                )
+            else:
+                ok = True
+    except Exception as e:
+        logger.error(f"reauth error for {username}: {e}")
+
+    if not ok:
+        __auth.record_login_attempt(ip, username)
+        flash("Confirmation failed — check your password" + (" and code." if has_mfa else "."), "error")
+        return render_template("reauth.html", has_mfa=has_mfa, next_url=next_url)
+
+    __auth.clear_login_attempts(ip, username)
+    session["auth_at"] = _now_iso()
+    session.pop("reauth_next", None)
+    __user.audit("REAUTH", "auth", f"{username} re-confirmed identity")
+    return redirect(next_url)
 
 
 @bp.route("/force-password-change", methods=["GET", "POST"])

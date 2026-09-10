@@ -392,6 +392,7 @@ def logged_in_client(client):
         sess["_user_id"] = "1"
         sess["_fresh"] = True
         sess["last_active"] = now
+        sess["auth_at"] = now  # v5.17.0 — recent_auth_required treats this session as freshly authed
     return client
 
 
@@ -463,5 +464,7 @@ def restricted_client(client, db, allowed_subnets, role="admin", username="restr
         }
         sess["_user_id"] = str(user_id)
         sess["_fresh"] = True
-        sess["last_active"] = datetime.now(timezone.utc).isoformat()
+        _now = datetime.now(timezone.utc).isoformat()
+        sess["last_active"] = _now
+        sess["auth_at"] = _now
     return client, user_id

@@ -113,7 +113,7 @@ class TestBackupCodeLoginFlow:
             assert "mfa_pending_user_id" not in sess
 
         # that code is now spent; a second login can't reuse it
-        client.get("/logout")
+        client.post("/logout")
         client.post("/login", data={"username": "_bkp_flow", "password": self.PW})
         r = client.post("/mfa/verify", data={"code": codes[0]}, follow_redirects=True)
         assert b"invalid" in r.data.lower() or b"incorrect" in r.data.lower()

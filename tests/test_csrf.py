@@ -40,6 +40,7 @@ def logged_in_csrf_client(csrf_client):
         sess["_user_id"] = "1"
         sess["_fresh"] = True
         sess["last_active"] = now
+        sess["auth_at"] = now
     return csrf_client
 
 
@@ -157,6 +158,19 @@ class TestCsrfMiddlewareIntegration:
         token = _valid_token_for(app, logged_in_csrf_client)
         r = logged_in_csrf_client.post(self.ROUTE, data={"subnet_id": "1", "notes": "x", "csrf_token": token})
         assert r.status_code == 200
+
+    def test_post_logout_without_a_token_is_rejected(self, logged_in_csrf_client):
+        """v5.17.0 (Q6 6C) — logout is a POST now, so it's CSRF-protected."""
+        r = logged_in_csrf_client.post("/logout")
+        assert r.status_code == 403
+        # still signed in
+        assert logged_in_csrf_client.get("/", follow_redirects=False).status_code == 200
+
+    def test_post_logout_with_a_valid_token_signs_out(self, app, logged_in_csrf_client):
+        token = _valid_token_for(app, logged_in_csrf_client)
+        r = logged_in_csrf_client.post("/logout", data={"csrf_token": token}, follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert "login" in r.headers["Location"]
 
     def test_post_with_token_via_header_succeeds(self, app, logged_in_csrf_client, mock_kea):
         """Mirrors how the JS fetch() calls send it — as X-CSRFToken, not

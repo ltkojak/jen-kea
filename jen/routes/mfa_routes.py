@@ -17,6 +17,7 @@ import jen.services.auth as __auth
 import jen.services.crypto as __crypto
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,13 @@ def _pending_enroll_user():
 
 def _complete_pending_login(user):
     """Turn a finished forced-enrollment into a real session."""
+    # v5.17.0 (Q6 6B) — rotate the session; clear() also drops the
+    # mfa_pending_* keys the old pop loop removed.
+    session.clear()
     login_user(user)
-    session["last_active"] = datetime.now(timezone.utc).isoformat()
-    for key in ("mfa_pending_user_id", "mfa_pending_username", "mfa_pending_enroll"):
-        session.pop(key, None)
+    now = datetime.now(timezone.utc).isoformat()
+    session["last_active"] = now
+    session["auth_at"] = now  # password + first factor just verified
     __user.audit("LOGIN", "auth", f"User {user.username} logged in (after MFA enrollment)")
 
 
@@ -121,12 +125,15 @@ def mfa_verify():
             user = _load_user(pending_id)
             if user:
                 __auth.clear_mfa_attempts(pending_id)
-                login_user(user)
-                session["last_active"] = datetime.now(timezone.utc).isoformat()
-                session.pop("mfa_pending_user_id", None)
-                session.pop("mfa_pending_username", None)
                 remember = request.form.get("remember_device")
                 next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
+                # v5.17.0 (Q6 6B) — rotate the session now that both factors
+                # are verified; read mfa_next above first (clear() drops it).
+                session.clear()
+                login_user(user)
+                _now = datetime.now(timezone.utc).isoformat()
+                session["last_active"] = _now
+                session["auth_at"] = _now
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
                     # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
@@ -180,12 +187,15 @@ def mfa_verify():
             user = _load_user(pending_id)
             if user:
                 __auth.clear_mfa_attempts(pending_id)
-                login_user(user)
-                session["last_active"] = datetime.now(timezone.utc).isoformat()
-                session.pop("mfa_pending_user_id", None)
-                session.pop("mfa_pending_username", None)
                 remember = request.form.get("remember_device")
                 next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
+                # v5.17.0 (Q6 6B) — rotate the session now that both factors
+                # are verified; read mfa_next above first (clear() drops it).
+                session.clear()
+                login_user(user)
+                _now = datetime.now(timezone.utc).isoformat()
+                session["last_active"] = _now
+                session["auth_at"] = _now
                 if remember:
                     days_raw = request.form.get("remember_days", "30")
                     # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
@@ -242,6 +252,7 @@ def mfa_verify():
 
 
 @bp.route("/mfa/enroll", methods=["GET", "POST"])
+@_recent_auth_required()
 def mfa_enroll():
     import base64
     import io as _io
@@ -355,6 +366,7 @@ def mfa_enroll():
 
 @bp.route("/mfa/regenerate-backup-codes", methods=["POST"])
 @login_required
+@_recent_auth_required()
 def regenerate_backup_codes():
     codes = __mfa.generate_backup_codes(current_user.id)
     __user.audit("MFA_NEW_BACKUP", "auth", current_user.username)
@@ -363,6 +375,7 @@ def regenerate_backup_codes():
 
 @bp.route("/mfa/trusted-devices")
 @login_required
+@_recent_auth_required()
 def mfa_trusted_devices():
     try:
         with __db.jen_db() as db, db.cursor() as cur:
@@ -388,6 +401,7 @@ def mfa_trusted_devices():
 @bp.route("/mfa/trusted-devices/remove/<int:device_id>", methods=["POST"])
 @bp.route("/mfa/revoke-device/<int:device_id>", methods=["POST"])  # legacy alias
 @login_required
+@_recent_auth_required()
 def remove_trusted_device(device_id):
     try:
         with __db.jen_db() as db:
@@ -404,6 +418,7 @@ def remove_trusted_device(device_id):
 
 @bp.route("/mfa/revoke-all-devices", methods=["POST"])
 @login_required
+@_recent_auth_required()
 def revoke_all_trusted_devices():
     try:
         with __db.jen_db() as db:
@@ -422,6 +437,7 @@ def revoke_all_trusted_devices():
 @bp.route("/mfa/admin-reset/<int:user_id>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required()
 def admin_reset_mfa(user_id):
     try:
         with __db.jen_db() as db:

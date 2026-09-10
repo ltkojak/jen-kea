@@ -255,6 +255,8 @@
         .nav-dropdown input:checked ~ .nav-dropdown-content { display: block; }
         .nav-dropdown-content a { display: block; padding: 10px 14px; color: var(--text); font-size: 13px; }
         .nav-dropdown-content a:hover { background: var(--surface2); text-decoration: none; }
+        .nav-dropdown-content button.linkish { display: block; width: 100%; text-align: left; padding: 10px 14px; font-size: 13px; background: none; border: none; cursor: pointer; font-family: inherit; }
+        .nav-dropdown-content button.linkish:hover { background: var(--surface2); }
         .nav-dropdown-header { padding: 10px 14px; }
         .nav-dropdown-divider { height: 1px; background: var(--border); margin: 4px 0; }
         .nav-avatar-wrap .nav-dropdown-content { min-width:200px; right: 0; left: auto; }
@@ -442,7 +444,10 @@
                 <a href="/mfa/enroll">🔐 Security & MFA</a>
                 <a href="/mfa/trusted-devices">📱 Trusted Devices</a>
                 <div class="nav-dropdown-divider"></div>
-                <a href="/logout" style="color:var(--danger);">⏻ Logout</a>
+                <form method="POST" action="/logout" style="margin:0;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="linkish" style="color:var(--danger);">⏻ Logout</button>
+                </form>
             </div>
         </div>
     </div>

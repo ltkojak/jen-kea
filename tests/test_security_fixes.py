@@ -453,13 +453,17 @@ class TestMfaAdminResetSuperadminOnly:
     def test_allowed_for_superadmin(self, client, db):
         _, target_id = _restricted_client(client, db, allowed_subnets=None, role="admin", username="plainadmin5")
         # Switch the same client's session over to the superadmin account.
+        from datetime import datetime, timezone
+
         with client.session_transaction() as sess:
             sess["_user_cache"] = {"id": 1, "username": "admin", "role": "superadmin", "session_timeout": None}
             sess["_user_id"] = "1"
             sess["_fresh"] = True
+            sess["auth_at"] = datetime.now(timezone.utc).isoformat()
         r = client.post(f"/mfa/admin-reset/{target_id}", follow_redirects=True)
         assert r.status_code == 200
         assert b"superadmin access required" not in r.data.lower()
+        assert b"mfa reset" in r.data.lower()
 
 
 class TestSearchSubnetFiltering:

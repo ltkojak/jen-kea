@@ -103,9 +103,10 @@ class TestEnforcementMiddleware:
 
     def test_flagged_user_can_still_log_out(self, client, db):
         client, _ = _client_with_must_change_password(client, db)
-        r = client.get("/logout", follow_redirects=False)
+        r = client.post("/logout", follow_redirects=False)
         assert r.status_code in (301, 302)
         assert "/force-password-change" not in r.headers.get("Location", "")
+        assert "login" in r.headers.get("Location", "")
 
     def test_unflagged_user_not_redirected(self, logged_in_client):
         r = logged_in_client.get("/", follow_redirects=False)

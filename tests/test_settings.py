@@ -335,7 +335,7 @@ class TestAuditLog:
         """Logout creates audit log entry."""
         import time
 
-        logged_in_client.get("/logout")
+        logged_in_client.post("/logout")
         time.sleep(1.0)
         with db.cursor() as cur:
             cur.execute("SELECT * FROM audit_log WHERE action='LOGOUT' ORDER BY created_at DESC LIMIT 1")

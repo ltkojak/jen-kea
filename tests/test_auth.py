@@ -59,6 +59,17 @@ class TestLogin:
         with client.session_transaction() as sess:
             assert "last_active" in sess
 
+    def test_login_rotates_the_session(self, client):
+        """v5.17.0 (Q6 6B) — whatever the pre-auth session carried is
+        dropped; only the fresh authenticated keys remain."""
+        with client.session_transaction() as sess:
+            sess["stale_pre_auth_key"] = "leak-me"
+        client.post("/login", data={"username": "admin", "password": "admin"})
+        with client.session_transaction() as sess:
+            assert "stale_pre_auth_key" not in sess
+            assert sess.get("_user_cache", {}).get("username") == "admin"
+            assert "auth_at" in sess
+
 
 class TestPasswordRehashOnLogin:
     """v5.8.0 — a legacy hash is upgraded to the current scheme on a
@@ -127,27 +138,28 @@ class TestPasswordRehashOnLogin:
 
 
 class TestLogout:
-    """Logout route — GET /logout"""
+    """Logout route — GET confirms, POST acts (v5.17.0 / Q6 6C)."""
 
-    def test_logout_redirects_to_login(self, logged_in_client):
-        """Logout redirects to login page."""
-        r = logged_in_client.get("/logout", follow_redirects=False)
+    def test_get_logout_shows_a_confirm_page_and_keeps_the_session(self, logged_in_client):
+        r = logged_in_client.get("/logout")
+        assert r.status_code == 200
+        assert b"Sign out" in r.data
+        # still authenticated — a following protected GET works
+        assert logged_in_client.get("/", follow_redirects=False).status_code == 200
+
+    def test_post_logout_redirects_to_login(self, logged_in_client):
+        r = logged_in_client.post("/logout", follow_redirects=False)
         assert r.status_code in (301, 302)
         assert "login" in r.headers["Location"]
 
-    def test_logout_clears_session_cache(self, logged_in_client):
-        """Logout removes _user_cache from session."""
-        logged_in_client.get("/logout")
-        with logged_in_client.session_transaction() as sess:
-            assert "_user_cache" not in sess
-
-    def test_logout_clears_avatar_cache(self, logged_in_client):
-        """Logout removes _avatar_url from session."""
+    def test_post_logout_clears_the_session(self, logged_in_client):
         with logged_in_client.session_transaction() as sess:
             sess["_avatar_url"] = "data:image/png;base64,test"
-        logged_in_client.get("/logout")
+        logged_in_client.post("/logout")
         with logged_in_client.session_transaction() as sess:
+            assert "_user_cache" not in sess
             assert "_avatar_url" not in sess
+            assert "_user_id" not in sess
 
 
 class TestAuthRequired:

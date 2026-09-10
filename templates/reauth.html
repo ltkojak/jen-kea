@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Confirm your identity{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔐 Confirm your identity</h1>
+    <p>This action changes your security settings, so re-enter your password{% if has_mfa %} and a current code{% endif %}.</p>
+</div>
+
+<div class="card" style="max-width:420px;">
+    <form method="POST" action="{{ url_for('auth.reauth') }}" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Password</label>
+            <input type="password" name="password" required autofocus>
+        </div>
+        {% if has_mfa %}
+        <div class="form-group">
+            <label>Authenticator or backup code</label>
+            <input type="text" name="code" inputmode="text" autocomplete="one-time-code"
+                   placeholder="000000 or XXXXXXXX-XXXXXXXX">
+        </div>
+        {% endif %}
+        <div style="display:flex;gap:8px;margin-top:8px;">
+            <button type="submit" class="btn btn-primary">Confirm</button>
+            <a href="{{ next_url }}" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

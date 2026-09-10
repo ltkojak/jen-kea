@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign out{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>⏻ Sign out</h1>
+    <p>End your session on this device?</p>
+</div>
+
+<div class="card" style="max-width:420px;">
+    <form method="POST" action="{{ url_for('auth.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div style="display:flex;gap:8px;">
+            <button type="submit" class="btn btn-danger">Sign out</button>
+            <a href="{{ url_for('dashboard.dashboard') }}" class="btn btn-secondary">Stay signed in</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
