@@ -88,11 +88,15 @@ class TestUpdateOverlayLivesWithThePoller:
         assert b'id="update-overlay"' in resp.data
         assert b"params.get('updating')" in resp.data
 
-    def test_poll_budget_is_at_least_three_minutes(self):
+    def test_poll_give_up_budget_is_at_least_three_minutes(self):
         """The poller ticks every 2s. The server-side health window is
         90s ([server] update_health_timeout) plus restart + byte-compile
-        time, so every `attempts > N` give-up point must allow at least
-        ~3 minutes (N >= 90)."""
+        time, so the two "give up and tell the operator" points must
+        allow at least ~3 minutes (N >= 90). The separate `attempts > 1`
+        guard on the failed-service branch is deliberately low and is
+        excluded here (N < 10)."""
         budgets = [int(n) for n in re.findall(r"attempts\s*>\s*(\d+)", _SETTINGS_SYSTEM_HTML)]
-        assert len(budgets) == 2, f"expected exactly two poll-budget checks, found {budgets}"
-        assert all(n >= 90 for n in budgets), budgets
+        give_up = [n for n in budgets if n >= 10]
+        assert len(give_up) == 2, f"expected exactly two give-up budgets, found {budgets}"
+        assert all(n >= 90 for n in give_up), give_up
+        assert not [n for n in budgets if 10 <= n < 90], f"a give-up budget is under 3 min: {budgets}"
