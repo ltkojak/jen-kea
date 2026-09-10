@@ -2,6 +2,34 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.11.1] - 2026-09-10
+
+Housekeeping — a wider lint net and the OUI table out of the code. No
+behaviour change; a `sudo ./install.sh` upgrade is all that's needed.
+
+### Changed
+
+- Ruff's rule set gains `flake8-simplify` (SIM), `flake8-comprehensions`
+  (C4), `flake8-pie` (PIE) and `RUF100` (stale `# noqa`). The one-time
+  cleanup pass behind them is mechanical: nested `with` statements
+  collapsed into a single multi-context `with`, `try/except/pass` blocks
+  that only swallow an error rewritten as `contextlib.suppress`,
+  `dict(a=1, …)` call-style construction turned into `{"a": 1, …}`
+  literals, and a scattering of redundant comprehensions and `.keys()`
+  calls tidied. `SIM108` (rewrite `if/else` as a ternary) is left off on
+  purpose — it trades readability for brevity. `run.py`'s venv re-exec
+  guard deliberately keeps its literal `try/except`: the test suite
+  slices it out and runs it as a standalone script, so it has to stay
+  dependency-free.
+- The MAC-prefix (OUI) vendor table — roughly 1,350 `"00:1a:2b" →
+  ("Vendor", "type", "icon")` entries that made up 1,300+ of
+  `jen/services/fingerprint.py`'s 1,700 lines — moved into a plain
+  `jen/services/oui_db.json` data file that the module loads once at
+  import. Lookups resolve to exactly the same vendors as before.
+  `scripts/oui_to_json.py` regenerates the file. It travels inside
+  `jen/`, so `install.sh` and the in-app updater pick it up with no
+  packaging change.
+
 ## [5.11.0] - 2026-09-10
 
 The privilege boundary on the Kea hosts.
