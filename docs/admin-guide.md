@@ -117,9 +117,10 @@ ISC **deprecated the Control Agent (`kea-ctrl-agent`) in Kea 3.0** and
 (`kea-dhcp4`, `kea-dhcp6`, `kea-dhcp-ddns`) exposes its own HTTP/HTTPS
 command API through a `control-sockets` list. Set `connection_mode =
 direct` and point `api_url` at each daemon's socket — dhcp4 under `[kea]`,
-dhcp6 under `[kea6]` (there is **no** fallback from v6 to the v4 URL in
-direct mode; a kea-dhcp4 daemon cannot answer DHCPv6 commands). ISC's
-example uses port **8004** for dhcp4; Jen's docs use **8006** for dhcp6.
+dhcp6 under `[kea6]` for the primary and `api6_url` per additional server
+(there is **no** fallback from v6 to the v4 URL in direct mode; a
+kea-dhcp4 daemon cannot answer DHCPv6 commands). ISC's example uses port
+**8004** for dhcp4; Jen's docs use **8006** for dhcp6.
 
 Always **keep the existing `unix` entry** in `control-sockets` alongside
 the new one (`kea-shell` and some hooks use it), and **firewall the

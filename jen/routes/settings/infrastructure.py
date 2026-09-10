@@ -662,6 +662,11 @@ def save_infra_ssh():
 @login_required
 @_admin_required
 def save_extra_servers():
+    # v5.10.3 — extra_id[] carries each row's ORIGINAL kea_server_N number
+    # (blank for a row added in the UI). It is the identity used to carry a
+    # blank password and any hand-added key forward, so reordering or
+    # deleting rows no longer swaps them between servers.
+    ids = request.form.getlist("extra_id[]")
     names = request.form.getlist("extra_name[]")
     roles = request.form.getlist("extra_role[]")
     api_urls = request.form.getlist("extra_api_url[]")
@@ -696,13 +701,17 @@ def save_extra_servers():
             flash(f"Invalid IPv6 API URL: {u.strip()} (direct mode needs an explicit port)", "error")
             return redirect(url_for("settings.settings_kea"))
 
+    renumbered = []
+
     def _rewrite_extra_servers(cfg):
-        # v5.10.2 — snapshot every current [kea_server_N] so keys the form
-        # doesn't manage (ssh_key, any hand-added value) survive the
-        # remove-and-rebuild. Preservation is by POSITION: row i ↔
-        # kea_server_{i}. Reordering/removing rows moves preserved keys
-        # with the position, not the server — the form already assumes
-        # this same position→section mapping.
+        # v5.10.3 — snapshot every current [kea_server_N] so keys the form
+        # doesn't manage (ssh_key, any hand-added value) and a blank
+        # password survive the remove-and-rebuild. Preservation is by the
+        # row's ORIGINAL section id (extra_id[]), NOT by position: before
+        # this, reordering two rows wrote each server into the other's old
+        # section number and each silently inherited the other's api_pass /
+        # api6_pass / ssh_key. A row added in the UI has no id and
+        # preserves nothing.
         existing = {}
         n = 2
         while cfg.has_section(f"kea_server_{n}"):
@@ -710,7 +719,15 @@ def save_extra_servers():
             cfg.remove_section(f"kea_server_{n}")
             n += 1
 
-        for i, (
+        # A tampered/duplicated id must not pull another server's secrets in.
+        seen_ids = set()
+
+        # Sections are renumbered contiguously from 2, skipping blank rows —
+        # a gap would make derive_kea_servers() stop early and hide every
+        # server after it.
+        out = 2
+        for (
+            extra_id,
             name,
             role,
             api_url,
@@ -722,56 +739,62 @@ def save_extra_servers():
             ssh_host,
             ssh_user,
             kea_conf,
-        ) in enumerate(
-            zip(
-                names,
-                roles,
-                api_urls,
-                api_users,
-                api_passes,
-                api6_urls,
-                api6_users,
-                api6_passes,
-                ssh_hosts,
-                ssh_users,
-                kea_confs,
-                strict=True,
-            ),
-            start=2,
+        ) in zip(
+            ids,
+            names,
+            roles,
+            api_urls,
+            api_users,
+            api_passes,
+            api6_urls,
+            api6_users,
+            api6_passes,
+            ssh_hosts,
+            ssh_users,
+            kea_confs,
+            strict=True,
         ):
             if not api_url.strip():
                 continue
-            sec = f"kea_server_{i}"
+            raw_id = extra_id.strip()
+            orig_id = int(raw_id) if raw_id.isdigit() else None
+            if orig_id is not None and (orig_id not in existing or orig_id in seen_ids):
+                orig_id = None  # unknown or duplicated — treat the row as new
+            if orig_id is not None:
+                seen_ids.add(orig_id)
+                if orig_id != out:
+                    renumbered.append(f"{orig_id}->{out}")
+            prev = existing.get(orig_id, {}) if orig_id is not None else {}
+
+            sec = f"kea_server_{out}"
             cfg.add_section(sec)
-            cfg.set(sec, "name", name.strip() or f"Kea Server {i}")
+            cfg.set(sec, "name", name.strip() or f"Kea Server {out}")
             cfg.set(sec, "role", role.strip() or "standby")
             cfg.set(sec, "api_url", api_url.strip())
             cfg.set(sec, "api_user", api_user.strip())
             if api_pass.strip():
                 cfg.set(sec, "api_pass", api_pass.strip())
             else:
-                # Preserve existing password from the current config
-                try:
-                    existing_pass = extensions.cfg.get(sec, "api_pass", fallback=extensions.KEA_API_PASS)
-                    cfg.set(sec, "api_pass", existing_pass)
-                except Exception:
-                    cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
+                # Blank ⇒ keep THIS server's existing password (by id), or
+                # fall back to the primary's for a genuinely new row.
+                cfg.set(sec, "api_pass", prev.get("api_pass") or extensions.KEA_API_PASS)
             # v5.10.2 — per-server v6 endpoint. Blank managed field ⇒ key
-            # absent (that IS the clear). api6_pass blank ⇒ preserve.
+            # absent (that IS the clear). api6_pass blank ⇒ preserve by id.
             if api6_url.strip():
                 cfg.set(sec, "api6_url", api6_url.strip())
             if api6_user.strip():
                 cfg.set(sec, "api6_user", api6_user.strip())
             if api6_pass.strip():
                 cfg.set(sec, "api6_pass", api6_pass.strip())
-            elif extensions.cfg.has_section(sec) and extensions.cfg.has_option(sec, "api6_pass"):
-                cfg.set(sec, "api6_pass", extensions.cfg.get(sec, "api6_pass"))
+            elif prev.get("api6_pass"):
+                cfg.set(sec, "api6_pass", prev["api6_pass"])
             cfg.set(sec, "ssh_host", ssh_host.strip())
             cfg.set(sec, "ssh_user", ssh_user.strip())
             cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
-            for k, v in existing.get(i, {}).items():
+            for k, v in prev.items():
                 if k not in _EXTRA_SERVER_FORM_KEYS:
                     cfg.set(sec, k, v)
+            out += 1
 
     try:
         __config.app_config.mutate(_rewrite_extra_servers)
@@ -779,7 +802,7 @@ def save_extra_servers():
         # strict=True on the zip() inside _rewrite_extra_servers means a
         # form submission whose extra_*[] fields don't all have the same
         # number of entries — malformed or tampered, since Jen's own
-        # template always submits all eleven together per server row —
+        # template always submits all twelve together per server row —
         # raises here instead of silently truncating to the shortest
         # list and misaligning one server's fields with another's.
         logger.error(f"Mismatched extra-server form field lengths: {e}")
@@ -787,9 +810,14 @@ def save_extra_servers():
         return redirect(url_for("settings.settings_kea"))
 
     count = len(extensions.KEA_SERVERS) - 1
-    flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
+    note = " (renumbered)" if renumbered else ""
+    flash(f"Additional servers saved — {count} extra server(s) configured{note}.", "success")
     __user.set_global_setting("restart_pending", "true")
-    __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
+    __user.audit(
+        "SAVE_INFRA",
+        "extra_servers",
+        f"{count} additional servers configured" + (f" renumbered={','.join(renumbered)}" if renumbered else ""),
+    )
     return redirect(url_for("settings.settings_kea"))
 
 

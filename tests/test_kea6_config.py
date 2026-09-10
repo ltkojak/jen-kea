@@ -111,6 +111,7 @@ class TestKea6ConfigFallback:
             "KEA6_DB_NAME",
             "SUBNET_MAP",
             "SUBNET6_MAP",
+            "KEA_SERVERS",
             "JEN_DB_HOST",
             "JEN_DB_USER",
             "JEN_DB_PASS",
@@ -178,6 +179,21 @@ class TestKea6ConfigFallback:
         AppConfig().apply(self._base_cfg(kea_extra="api_ca = /etc/jen/ssl/kea-ca.pem\napi_tls_verify = false"))
         assert extensions.KEA_API_CA == "/etc/jen/ssl/kea-ca.pem"
         assert extensions.KEA_API_TLS_VERIFY is False
+
+    def test_standby_v6_endpoint_is_its_own_not_the_primarys(self, monkeypatch):
+        """v5.10.3 end-to-end: config → derive_kea_servers → _endpoint_for.
+        The primary's [kea6] must not leak into a standby's dhcp6 routing."""
+        from jen.services.kea import _endpoint_for
+
+        AppConfig().apply(
+            self._base_cfg(
+                "[kea6]\napi_url = http://kea01:8006\napi_user = u6\napi_pass = p6\n"
+                "[kea_server_2]\napi_url = http://kea02:8000\napi_user = u2\napi_pass = p2\n"
+            )
+        )
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        assert _endpoint_for(extensions.KEA_SERVERS[0], "dhcp6") == ("http://kea01:8006", "u6", "p6")
+        assert _endpoint_for(extensions.KEA_SERVERS[1], "dhcp6") == ("http://kea02:8000", "u2", "p2")
 
 
 class TestIsIpv6Enabled:

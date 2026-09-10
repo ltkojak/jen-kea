@@ -176,6 +176,52 @@ class TestDirectMode:
         assert fake_http.calls == []
 
 
+class TestPerServerV6Precedence:
+    """v5.10.3 — a server's dhcp6 endpoint is THAT server's. Before this,
+    the chain hopped through the KEA6_* globals (the PRIMARY's [kea6], or
+    in ca mode the primary's [kea] api_url) before reaching the server's
+    own api_url — so an HA standby sent its dhcp6 commands to the primary
+    with the primary's credentials. The autouse _kea_globals fixture sets
+    KEA6_* to the primary's values, which is exactly the trap."""
+
+    STANDBY = {"api_url": "http://kea02:8000", "api_user": "u2", "api_pass": "p2"}
+
+    def test_ca_standby_without_api6_uses_its_own_v4_endpoint(self, fake_http):
+        kea_svc.kea_command("config-get", service="dhcp6", server=dict(self.STANDBY))
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02:8000"  # NOT the primary's kea4:8000
+        assert c["auth"] == ("u2", "p2")  # NOT the primary's u4/p4
+        assert c["json"] == {"command": "config-get", "service": ["dhcp6"]}
+
+    def test_ca_standby_api6_fields_win(self, fake_http):
+        srv = dict(self.STANDBY, api6_url="http://kea02:8006", api6_user="u26", api6_pass="p26")
+        kea_svc.kea_command("config-get", service="dhcp6", server=srv)
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02:8006"
+        assert c["auth"] == ("u26", "p26")
+
+    def test_ca_standby_api6_url_only_keeps_its_own_v4_creds(self, fake_http):
+        srv = dict(self.STANDBY, api6_url="http://kea02:8006")
+        kea_svc.kea_command("config-get", service="dhcp6", server=srv)
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02:8006"
+        assert c["auth"] == ("u2", "p2")  # not the global KEA6_API_USER ("u4")
+
+    def test_direct_standby_with_api6_url_posts_there(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        srv = dict(self.STANDBY, api6_url="http://kea02:8006")
+        kea_svc.kea_command("config-get", service="dhcp6", server=srv)
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02:8006"
+        assert "service" not in c["json"]
+
+    def test_primary_path_still_uses_the_globals(self, fake_http, monkeypatch):
+        """server=None is the primary-only call — KEA6_* is right there."""
+        monkeypatch.setattr(extensions, "KEA6_API_URL", "http://kea6-primary:8006")
+        kea_svc.kea_command("config-get", service="dhcp6")
+        assert fake_http.calls[0]["url"] == "http://kea6-primary:8006"
+
+
 class TestResponseNormalisation:
     def test_list_wrapped_response_is_unwrapped(self, fake_http):
         fake_http.reply = [{"result": 0, "text": "ok"}]

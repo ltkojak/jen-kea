@@ -194,6 +194,11 @@ def _patch_extensions():
             "api_url": "http://localhost:18000",
             "api_user": "test",
             "api_pass": "test",
+            # v5.10.3 — mirror what derive_kea_servers() produces; a server's
+            # v6 endpoint is read off its own dict now, not the KEA6_* globals.
+            "api6_url": "",
+            "api6_user": "",
+            "api6_pass": "",
             "ssh_host": "",
             "ssh_user": "",
             "ssh_key": "",

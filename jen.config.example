@@ -136,6 +136,9 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 #                 REQUIRED here if you run IPv6 in direct mode. ISC's
 #                 example uses port 8004 for dhcp4; use 8006 for dhcp6.
 # api_user / api_pass still fall back to [kea] in both modes.
+# [kea6] applies to the PRIMARY server only — each [kea_server_N] sets its
+# own api6_url / api6_user / api6_pass, and falls back to that server's own
+# api_url / api_user / api_pass (ca mode), never to the primary's.
 # [kea6_db] always falls back to [kea_db].
 
 # [kea6]

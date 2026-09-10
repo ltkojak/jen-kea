@@ -11,12 +11,13 @@ Two connection modes, picked by [kea] connection_mode:
   direct        — talk to each daemon's own HTTP control socket. ISC
                   deprecated the Control Agent in Kea 3.0 and REMOVED it
                   in 3.2, so a 3.2+ install has nothing to run in ca mode.
-                  dhcp4 commands go to KEA_API_URL, dhcp6 commands to
-                  KEA6_API_URL (no fallback — a v4 daemon can't answer v6),
-                  and the "service" field is omitted (3.2 rejects a wrong
-                  one; omitting is the portable choice — the daemon still
-                  wraps its reply in a one-element list for compatibility,
-                  so the response handling below is unchanged).
+                  dhcp4 commands go to KEA_API_URL, dhcp6 commands to that
+                  server's api6_url (KEA6_API_URL for the primary) with no
+                  fallback — a v4 daemon can't answer v6 — and the
+                  "service" field is omitted (3.2 rejects a wrong one;
+                  omitting is the portable choice — the daemon still wraps
+                  its reply in a one-element list for compatibility, so the
+                  response handling below is unchanged).
 """
 
 import logging
@@ -67,6 +68,14 @@ def _endpoint_for(server: dict, service: str):
     dhcp4 (and anything that isn't "dhcp6") behaves exactly as it has
     since v4.0.0: the given server dict, or the [kea] globals when server
     is None. Only dhcp6 routing is mode-aware.
+
+    v5.10.3 — a server's v6 endpoint is THAT SERVER's: its api6_* fields,
+    else (ca mode) its own api_url/api_user/api_pass. The KEA6_* globals
+    are the primary's [kea6] override and are used only for the
+    server-is-None (primary) path; derive_kea_servers() bakes [kea6] into
+    the primary dict's api6_* so the primary still gets them here. Before
+    this, a standby with no api6_url sent its dhcp6 commands to the
+    PRIMARY's endpoint with the primary's credentials.
     """
     direct = extensions.KEA_CONNECTION_MODE == "direct"
 
@@ -77,9 +86,9 @@ def _endpoint_for(server: dict, service: str):
             pwd = extensions.KEA6_API_PASS
         else:
             v4_url_fallback = "" if direct else server.get("api_url", "")
-            url = server.get("api6_url") or extensions.KEA6_API_URL or v4_url_fallback
-            user = server.get("api6_user") or extensions.KEA6_API_USER or server.get("api_user", "")
-            pwd = server.get("api6_pass") or extensions.KEA6_API_PASS or server.get("api_pass", "")
+            url = server.get("api6_url") or v4_url_fallback
+            user = server.get("api6_user") or server.get("api_user", "")
+            pwd = server.get("api6_pass") or server.get("api_pass", "")
         if direct and not url:
             return {
                 "result": 1,
