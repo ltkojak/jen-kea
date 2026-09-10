@@ -425,7 +425,54 @@ def legacy_grant_present(server: dict) -> bool:
     """Is the old `NOPASSWD: /usr/bin/python3` grant still there? Used to
     decide whether the in-app 'Install helper' button can work."""
     try:
-        out, err = _legacy_ssh(server, "sudo -n /usr/bin/python3 -c 'print(1)' 2>&1", timeout=15)
+        out, _err = _legacy_ssh(server, "sudo -n /usr/bin/python3 -c 'print(1)' 2>&1", timeout=15)
         return out.strip() == "1"
     except Exception:
         return False
+
+
+def _helper_source():
+    """The jen-kea-helper text shipped with this install."""
+    import os
+
+    from jen import extensions
+
+    path = os.path.join(extensions.JEN_ROOT, "jen-kea-helper")
+    with open(path) as f:
+        return f.read()
+
+
+def install_helper(server: dict) -> dict:
+    """Deploy jen-kea-helper onto `server` — the one place the legacy
+    `sudo python3` path is still used deliberately. Returns
+    {"ok": bool, "version": int|None, "code": str, "detail": str}."""
+    from jen import extensions
+
+    try:
+        source = _helper_source()
+    except OSError as e:
+        return {"ok": False, "version": None, "code": "no-source", "detail": str(e)}
+
+    # Already there and current? Don't need the legacy grant then.
+    chk = check_helper(server)
+    if chk.get("version") and chk["version"] >= JEN_HELPER_MIN_VERSION:
+        return {"ok": True, "version": chk["version"], "code": "already", "detail": ""}
+
+    if not legacy_grant_present(server):
+        return {"ok": False, "version": None, "code": "no-path", "detail": "no legacy python3 grant to install through"}
+
+    ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
+    script = __authoring.render_install_helper_script(source, ssh_user, JEN_HELPER_MIN_VERSION)
+    out, err = _legacy_python3(server, script, timeout=60)
+    if out.startswith("ok:"):
+        try:
+            version = int(out[3:].strip() or 0)
+        except ValueError:
+            version = JEN_HELPER_MIN_VERSION
+        record_helper_status(server.get("id"), version)
+        return {"ok": True, "version": version, "code": "installed", "detail": ""}
+    if out.startswith("sudoerror:"):
+        return {"ok": False, "version": None, "code": "sudoerror", "detail": out[len("sudoerror:") :]}
+    if out.startswith("writeerror:"):
+        return {"ok": False, "version": None, "code": "writeerror", "detail": out[len("writeerror:") :]}
+    return {"ok": False, "version": None, "code": "error", "detail": err or out or "helper install failed"}

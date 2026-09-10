@@ -506,3 +506,53 @@ if result.returncode != 0 or 'ERROR' in combined:
 
 {on_pass}
 """
+
+
+def render_install_helper_script(helper_source: str, ssh_user: str, helper_version: int) -> str:
+    """v5.11.0 — the remote script that installs jen-kea-helper. Run ONCE
+    over the legacy `… | sudo python3` path (the one place it's still
+    needed): writes /usr/local/sbin/jen-kea-helper (root:root 0755) and a
+    one-line /etc/sudoers.d/jen-kea-helper for `ssh_user`, validating the
+    sudoers file with `visudo -c` before it goes live and removing it on
+    failure. Prints `ok:<version>` / `sudoerror:<detail>` /
+    `writeerror:<detail>`.
+
+    `ssh_user` is `valid_unix_username`-checked on save; `repr()`'d into
+    the script here regardless."""
+    sudoers_line = f"{ssh_user} ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper\n"
+    return f"""
+import os, sys, subprocess, tempfile
+
+HELPER = {helper_source!r}
+SUDOERS = {sudoers_line!r}
+DEST = "/usr/local/sbin/jen-kea-helper"
+SUDOERS_PATH = "/etc/sudoers.d/jen-kea-helper"
+
+try:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(DEST))
+    with os.fdopen(fd, "w") as f:
+        f.write(HELPER)
+    os.chmod(tmp, 0o755)
+    os.chown(tmp, 0, 0)
+    os.replace(tmp, DEST)
+except Exception as e:
+    print("writeerror:" + str(e))
+    sys.exit(1)
+
+try:
+    fd, stmp = tempfile.mkstemp(dir="/etc/sudoers.d")
+    with os.fdopen(fd, "w") as f:
+        f.write(SUDOERS)
+    os.chmod(stmp, 0o440)
+    check = subprocess.run(["visudo", "-c", "-f", stmp], capture_output=True, text=True)
+    if check.returncode != 0:
+        os.unlink(stmp)
+        print("sudoerror:" + (check.stderr or check.stdout or "visudo rejected the file").strip()[:200])
+        sys.exit(1)
+    os.replace(stmp, SUDOERS_PATH)
+except Exception as e:
+    print("sudoerror:" + str(e))
+    sys.exit(1)
+
+print("ok:{helper_version}")
+"""

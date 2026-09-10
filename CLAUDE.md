@@ -162,19 +162,29 @@ Each yields a pooled connection and auto commit/rollback/return. `kea6_db()` reu
 
 ### Kea hosts (SSH)
 
-Config pushes, restarts, log reads and the IPv6 toggle reach each Kea server over SSH
-(`jen/routes/subnets.py`, `jen/services/kea6.py`, `jen/services/kea_authoring.py`,
-`jen/routes/ddns.py`, `jen/routes/servers.py`). Conventions that have bitten before:
+**v5.11.0 — every Kea-side operation goes through `jen/services/kea_host.py`**, the one
+client. It prefers `jen-kea-helper` (a fixed-function root script on the Kea host, one
+sudoers line — see `docs/ARCHITECTURE.md` §3.3) and falls back to the pre-5.11.0
+`sudo python3` / dual-name-systemctl / `sudo tail` / apt path per host, flashing a
+warning and recording a null status. Config mutation is pure (`jen/services/kea_config_edit.py`);
+`jen-kea-helper` is the shipped helper file at the repo root.
 
+- **Adding a Kea-side capability = a new helper op** in `jen-kea-helper` (with its own
+  path/arg validation) **+** a matching high-level method on `kea_host.py` (with a legacy
+  fallback) **+** a docs change to the "Kea host helper" and "Legacy grant" subsections in
+  BOTH `docs/admin-guide.md` and `docs/troubleshooting.md` (rule 9). Do NOT add a new
+  `sudo …` string to a route.
+- The `| sudo python3` pipe may appear ONLY in `kea_host.py` (the legacy engine) and
+  `kea_authoring.py::render_install_helper_script` (deploys the helper once). No route
+  shells out to `ssh` (except ddns.py's non-sudo `dig`/`host` lookup). A source-guard
+  test in `tests/test_kea_host.py` enforces both.
 - Kea's systemd unit is `kea-dhcpX-server` on ISC packages and `isc-kea-dhcpX-server` on
-  older Debian/Ubuntu packages — **always try both**
-  (`systemctl … kea-dhcp4-server 2>/dev/null || systemctl … isc-kea-dhcp4-server`).
+  older Debian/Ubuntu packages — the helper (`_resolve_unit`) and the legacy fallback
+  both try both.
 - Anything interpolated into a remote command string is validated on save
   (`valid_remote_path()`, `valid_ssh_target()`, `valid_unix_username()` in
   `jen/services/auth.py`) **and** `shlex.quote`d at the call site. Local `subprocess`
   calls are always list-args.
-- Every new remote `sudo` command is a documented sudoers change on the Kea side — rule 9
-  below.
 
 ### Access control
 
@@ -299,9 +309,11 @@ Process:
    word, not by meaning. (See `jen-sudoers`, `jen-update-root.py`, and
    `tests/test_sudoers_command_matching.py`.) `docs/ARCHITECTURE.md` §3.1 describes that
    grant — update it in the same change too; it has gone stale before.
-9. **The same rule applies on the Kea hosts.** Any new `sudo …` Jen runs over SSH on a
-   Kea server must be added to the documented Kea-side sudoers line in
-   `docs/admin-guide.md` and `docs/troubleshooting.md` in the same change (and to the
-   helper's op allowlist once `jen-kea-helper` exists). Today that line grants
-   `/usr/bin/python3`, i.e. root — see `docs/ARCHITECTURE.md` §3.3. Don't widen it
-   casually, and don't add a new remote command without stating it.
+9. **The same rule applies on the Kea hosts (v5.11.0).** A new Kea-side capability is a
+   new op in `jen-kea-helper` — with its own path/argument validation — plus a matching
+   `jen/services/kea_host.py` method (helper call + legacy fallback), plus a docs change
+   to the "Kea host helper" and "Legacy grant" subsections in BOTH `docs/admin-guide.md`
+   and `docs/troubleshooting.md`, plus the `docs/ARCHITECTURE.md` §3.3 op list. Never add
+   a `sudo …` string straight to a route. The helper is behind ONE sudoers line
+   (`/usr/local/sbin/jen-kea-helper`, bare command); the legacy `/usr/bin/python3` grant
+   is the banner-warned fallback and is never removed in 5.x.

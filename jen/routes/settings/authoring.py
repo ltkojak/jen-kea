@@ -20,6 +20,7 @@ import jen.services.kea_host as __host
 from jen import extensions
 from jen.config import AppConfig
 from jen.routes.settings import bp
+from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -620,3 +621,64 @@ def install_kea_binary(service):
     all_ok = bool(results) and all(r["ok"] for r in results)
     __user.audit("INSTALL_KEA_BINARY", service, f"all_ok={all_ok} servers={len(results)}")
     return jsonify({"ok": all_ok, "servers": results})
+
+
+def _find_server(server_id):
+    return next((s for s in extensions.KEA_SERVERS if s.get("id") == server_id), None)
+
+
+@bp.route("/settings/infrastructure/check-kea-helper/<int:server_id>", methods=["POST"])
+@login_required
+@_admin_required
+def check_kea_helper(server_id):
+    """Probe jen-kea-helper on one server and record its status."""
+    server = _find_server(server_id)
+    if not server or not server.get("ssh_host"):
+        flash("Server not found or SSH not configured.", "error")
+        return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+    res = __host.check_helper(server)
+    if res.get("version"):
+        flash(f"{server.get('name', server_id)}: jen-kea-helper v{res['version']}.", "success")
+    else:
+        flash(
+            f"{server.get('name', server_id)}: the helper did not answer — it isn't installed, "
+            "or the sudoers line is missing. Jen is using the legacy root python3 path for this host.",
+            "warning",
+        )
+    return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+
+
+@bp.route("/settings/infrastructure/install-kea-helper/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+def install_kea_helper(server_id):
+    """Deploy jen-kea-helper onto one server via the legacy sudo-python3
+    path (the one time it's needed) + write its one-line sudoers file."""
+    server = _find_server(server_id)
+    if not server or not server.get("ssh_host"):
+        flash("Server not found or SSH not configured.", "error")
+        return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+    name = server.get("name", server_id)
+    res = __host.install_helper(server)
+    if res["ok"] and res["code"] == "already":
+        flash(f"{name}: jen-kea-helper v{res['version']} is already installed.", "success")
+    elif res["ok"]:
+        __user.audit("INSTALL_KEA_HELPER", str(name), f"helper v{res['version']}")
+        flash(
+            f"{name}: jen-kea-helper v{res['version']} installed. Once every host shows the helper "
+            "you can remove the legacy /etc/sudoers.d/jen (the python3 = root grant).",
+            "success",
+        )
+    elif res["code"] == "no-path":
+        flash(
+            f"{name}: neither the helper nor the legacy python3 grant is present — "
+            "install the helper by hand (Admin Guide → Kea host helper).",
+            "error",
+        )
+    elif res["code"] == "no-source":
+        flash("jen-kea-helper is missing from this Jen install — reinstall Jen.", "error")
+    elif res["code"] == "sudoerror":
+        flash(f"{name}: the sudoers file failed validation, nothing was installed: {res['detail']}", "error")
+    else:
+        flash(f"{name}: helper install failed: {res['detail']}", "error")
+    return redirect(url_for("settings.settings_kea") + "#kea-ssh")

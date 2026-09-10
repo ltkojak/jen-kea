@@ -169,29 +169,45 @@ SSH error: [Errno 111] Connection refused
 
 Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` config is correct.
 
+### Kea host helper (v5.11.0+)
+
+Every Kea-side action Jen performs goes through `jen-kea-helper` at
+`/usr/local/sbin/jen-kea-helper`, behind one sudoers line. **Settings →
+Kea → SSH** shows `v1` for each host that has it.
+
+Two failure signatures, both meaning "Jen fell back to the legacy root
+`python3` path for that host":
+
+- `sudo: a password is required` — the **sudoers line is missing** for
+  this SSH user. Add
+  `youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper` to
+  `/etc/sudoers.d/jen-kea-helper` (`sudo visudo -c -f` it).
+- `jen-kea-helper: command not found` / `No such file or directory` —
+  the **helper isn't installed**. Use **Install helper** in Settings →
+  Kea → SSH (needs the legacy `/etc/sudoers.d/jen` grant present once),
+  or copy it by hand:
+  `sudo install -o root -g root -m 0755 /opt/jen/jen-kea-helper /usr/local/sbin/jen-kea-helper`.
+
+Once every host shows `v1` you can delete `/etc/sudoers.d/jen` (the old
+`python3` = root grant). Full details: **Admin Guide → Kea host helper**.
+
 ### Permission denied on kea-dhcp4.conf
 
 ```
 PermissionError: [Errno 13] Permission denied: '/etc/kea/kea-dhcp4.conf'
 ```
 
-The SSH user needs sudo access to write the config file. On your Kea server:
+The SSH user needs the helper's sudoers line (or, on the legacy path,
+the `/usr/bin/python3` grant). On your Kea server:
 ```bash
-sudo cat /etc/sudoers.d/jen-kea
+sudo cat /etc/sudoers.d/jen-kea-helper   # the one-line helper grant
+sudo cat /etc/sudoers.d/jen              # the legacy fallback, if still present
 ```
 
-It must grant `/usr/bin/python3` (Jen pipes its config-edit script into
-`sudo python3` — that grant is root; `docs/ARCHITECTURE.md` §3.3 says so
-plainly), both Kea unit names for restarts, the DDNS log for `tail`, and
-`apt-get` (with `SETENV`) if you use the in-app Kea package installer.
-The complete, current line set is in the **Admin Guide → Add Sudoers
-Entry on Kea Server**; copy it from there rather than from an older
-one-liner (pre-5.8.4 docs listed `kea-dhcp4`, `cp` and `tee`, which Jen
-no longer runs directly, and only one of the two unit names).
-
+The complete line sets are in the **Admin Guide → Kea host helper**.
 Validate after editing:
 ```bash
-sudo visudo -c -f /etc/sudoers.d/jen-kea
+sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
 ```
 
 ### SSH key permission denied

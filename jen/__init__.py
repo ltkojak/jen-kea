@@ -435,6 +435,20 @@ def create_app() -> Flask:
                 ipv6_enabled = is_ipv6_enabled()
             except Exception:
                 ipv6_enabled = False
+        # v5.11.0 — name Kea hosts still on the legacy root `python3` path
+        # (no jen-kea-helper). Read from the persisted status only — never
+        # SSH at render time.
+        kea_legacy_hosts = []
+        if current_user and current_user.is_authenticated and current_user.role in ("admin", "superadmin"):
+            try:
+                from jen.services.kea_host import helper_status
+
+                _status = helper_status()
+                for s in extensions.KEA_SERVERS:
+                    if s.get("ssh_host") and not _status.get(str(s.get("id")), {}).get("version"):
+                        kea_legacy_hosts.append(s.get("name", f"Kea Server {s.get('id')}"))
+            except Exception:
+                kea_legacy_hosts = []
         return {
             "branding_name": "Jen",
             "branding_nav_color": get_global_setting("branding_nav_color", ""),
@@ -444,6 +458,7 @@ def create_app() -> Flask:
             "restart_pending": restart_pending,
             "venv_migration_incomplete": _VENV_MIGRATION_INCOMPLETE,
             "ipv6_enabled": ipv6_enabled,
+            "kea_legacy_hosts": kea_legacy_hosts,
             "csrf_token": lambda: csrf_svc.generate_csrf_token(app),
         }
 

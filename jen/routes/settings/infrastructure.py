@@ -54,6 +54,28 @@ def settings_infrastructure():
     return redirect(url_for("settings.settings_kea"), code=301)
 
 
+def _kea_servers_with_helper_status():
+    """Per-server rows for the SSH card's helper table: id, name,
+    ssh_host and the persisted helper status ('v1' / null / unknown)."""
+    from jen.services import kea_host
+
+    status = kea_host.helper_status()
+    rows = []
+    for s in extensions.KEA_SERVERS:
+        st = status.get(str(s.get("id")), {})
+        rows.append(
+            {
+                "id": s.get("id"),
+                "name": s.get("name", f"Kea Server {s.get('id')}"),
+                "ssh_host": s.get("ssh_host", ""),
+                "helper_version": st.get("version"),  # int, None, or missing key
+                "helper_known": bool(st),
+                "helper_checked": st.get("checked", ""),
+            }
+        )
+    return rows
+
+
 @bp.route("/settings/kea")
 @login_required
 @_admin_required
@@ -177,9 +199,9 @@ def settings_kea():
         ca_removed=ca_removed,
         direct_port_warnings=direct_port_warnings,
         # v5.10.3 — id + name only; the real server dicts carry passwords.
-        kea_servers=[
-            {"id": s.get("id"), "name": s.get("name", f"Kea Server {s.get('id')}")} for s in extensions.KEA_SERVERS
-        ],
+        # v5.11.0 — plus ssh_host + the persisted jen-kea-helper status
+        # (never SSHes to render — see jen/services/kea_host.py).
+        kea_servers=_kea_servers_with_helper_status(),
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,

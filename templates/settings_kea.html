@@ -115,7 +115,7 @@
         {% if ssh_configured %}<span style="color:var(--success);font-size:12px;">● Key present</span>
         {% else %}<span style="color:var(--warning);font-size:12px;">● No key generated</span>{% endif %}
     </div>
-    <p class="form-hint" style="margin-bottom:12px;">Used for config pushes, restarts, the DDNS log and package checks. The SSH user needs the sudoers entry from the Admin Guide — note that it grants <code>python3</code>, which is root (see <code>docs/ARCHITECTURE.md</code> §3.3).</p>
+    <p class="form-hint" style="margin-bottom:12px;">Used for config pushes, restarts, the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
     <form method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -142,6 +142,44 @@
     <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" onsubmit="return false;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">{% if ssh_configured %}🔄 Regenerate SSH Key{% else %}🔑 Generate SSH Key{% endif %}</button>
     </form>
+
+    {% set ssh_servers = kea_servers | selectattr('ssh_host') | list %}
+    {% if ssh_servers %}
+    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
+        <div class="stat-label" style="margin-bottom:8px;">Kea host helper</div>
+        <table style="width:100%;font-size:13px;">
+            <thead><tr>
+                <th style="text-align:left;padding:4px 8px;">Server</th>
+                <th style="text-align:left;padding:4px 8px;">SSH host</th>
+                <th style="text-align:left;padding:4px 8px;">Helper</th>
+                <th style="text-align:right;padding:4px 8px;"></th>
+            </tr></thead>
+            <tbody>
+            {% for s in ssh_servers %}
+            <tr>
+                <td style="padding:4px 8px;">{{ s.name }}</td>
+                <td class="mono" style="padding:4px 8px;font-size:12px;">{{ s.ssh_host }}</td>
+                <td style="padding:4px 8px;">
+                    {% if s.helper_version and s.helper_version >= 1 %}<span style="color:var(--success);">v{{ s.helper_version }}</span>
+                    {% elif s.helper_known %}<span style="color:var(--warning);">not installed — legacy path</span>
+                    {% else %}<span style="color:var(--text-muted);">unknown — check</span>{% endif %}
+                </td>
+                <td style="text-align:right;padding:4px 8px;white-space:nowrap;">
+                    <form method="POST" action="/settings/infrastructure/check-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-secondary">Check</button>
+                    </form>
+                    {% if current_user.role == 'superadmin' %}
+                    <form method="POST" action="/settings/infrastructure/install-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-secondary">{% if s.helper_version %}Update helper{% else %}Install helper{% endif %}</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Servers & HA -->

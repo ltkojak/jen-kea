@@ -86,10 +86,25 @@ sudo cp jen-update-root.py          /usr/local/sbin/jen-update-root.py
 sudo chown root:root                /usr/local/sbin/jen-update-root.py
 sudo chmod 700                      /usr/local/sbin/jen-update-root.py
 sudo cp jen-update.service          /etc/systemd/system/jen-update.service
+sudo cp jen-kea-helper              /opt/jen/jen-kea-helper   # data on the Jen host; Jen pushes it to Kea hosts
 
-sudo chown -R www-data:www-data /opt/jen/jen /opt/jen/run.py /opt/jen/templates /opt/jen/static
+sudo chown -R www-data:www-data /opt/jen/jen /opt/jen/run.py /opt/jen/templates /opt/jen/static /opt/jen/jen-kea-helper
 sudo chown -R www-data:www-data /etc/jen
 ```
+
+### On each Kea host (v5.11.0+)
+
+```bash
+# copy /opt/jen/jen-kea-helper from the Jen host first, then:
+sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-helper
+echo 'youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper' | sudo tee /etc/sudoers.d/jen-kea-helper
+sudo chmod 440 /etc/sudoers.d/jen-kea-helper
+sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
+```
+
+Or click **Install helper** in Settings → Kea → SSH (needs the legacy
+`/etc/sudoers.d/jen` grant present once). See the Admin Guide → Kea host
+helper for the legacy fallback grant.
 
 ## 6. Start
 

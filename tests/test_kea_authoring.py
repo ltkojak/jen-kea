@@ -1163,6 +1163,85 @@ class TestInstallKeaBinaryRoute:
         assert data["servers"][0]["ok"] is False
 
 
+class TestKeaHelperRoutes:
+    """v5.11.0 — /settings/infrastructure/{check,install}-kea-helper."""
+
+    def _one_ssh_server(self, monkeypatch):
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4", "ssh_user": "kea"}]
+        )
+
+    def test_install_requires_superadmin(self, client, db):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, allowed_subnets=[], role="admin")
+        r = c.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=False)
+        assert r.status_code == 302
+
+    def test_check_is_admin_ok(self, logged_in_client, monkeypatch):
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 1})
+        r = logged_in_client.post("/settings/infrastructure/check-kea-helper/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"jen-kea-helper v1" in r.data
+
+    def test_check_reports_legacy_when_no_version(self, logged_in_client, monkeypatch):
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
+        r = logged_in_client.post("/settings/infrastructure/check-kea-helper/1", follow_redirects=True)
+        assert b"legacy root python3 path" in r.data
+
+    def test_install_flashes_the_installed_version(self, logged_in_client, monkeypatch):
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        monkeypatch.setattr(
+            kea_host, "install_helper", lambda s: {"ok": True, "version": 1, "code": "installed", "detail": ""}
+        )
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
+        assert b"jen-kea-helper v1 installed" in r.data
+
+    def test_install_unknown_server(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/9", follow_redirects=True)
+        assert b"not found" in r.data.lower()
+
+
+class TestKeaHelperBanner:
+    def test_banner_lists_legacy_hosts_for_admin(self, logged_in_client, monkeypatch, db):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-legacy", "ssh_host": "1.2.3.4"}])
+        from jen.models.user import set_global_setting
+
+        set_global_setting("kea_helper_status", "{}")  # nothing recorded -> legacy
+        r = logged_in_client.get("/about")
+        assert b"Kea host helper not installed" in r.data
+        assert b"kea-legacy" in r.data
+
+    def test_banner_absent_once_helper_recorded(self, logged_in_client, monkeypatch, db):
+        import json
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-ok", "ssh_host": "1.2.3.4"}])
+        from jen.models.user import set_global_setting
+
+        set_global_setting("kea_helper_status", json.dumps({"1": {"version": 1, "checked": "2026-01-01"}}))
+        r = logged_in_client.get("/about")
+        assert b"Kea host helper not installed" not in r.data
+
+    def test_banner_absent_for_viewer(self, client, db, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-legacy", "ssh_host": "1.2.3.4"}])
+        from jen.models.user import set_global_setting
+        from tests.conftest import restricted_client
+
+        set_global_setting("kea_helper_status", "{}")
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
+        r = c.get("/about")
+        assert b"Kea host helper not installed" not in r.data
+
+
 class TestAuthorKeaPreviewMissingBinary:
     def test_preview_surfaces_missing_binary_cleanly(self, logged_in_client, monkeypatch):
         """The exact scenario from the bug report: kea-dhcp6 not

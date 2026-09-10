@@ -34,6 +34,8 @@ EXPECTED_ENDPOINTS = {
     "settings.check_kea_binaries",
     "settings.check_config_drift_route",
     "settings.install_kea_binary",
+    "settings.check_kea_helper",
+    "settings.install_kea_helper",
     "settings.save_infra_jen_db",
     "settings.save_infra_ssh",
     "settings.save_extra_servers",

@@ -521,6 +521,14 @@
         <code>sudo ./install.sh --repair</code> on the host to finish it.
     </div>
     {% endif %}
+    {% if kea_legacy_hosts %}
+    <div style="background:#2a1f00;border:1px solid var(--warning);border-radius:var(--radius);
+                padding:10px 16px;margin-bottom:12px;font-size:13px;">
+        ⚠️ <strong>Kea host helper not installed</strong> on {{ kea_legacy_hosts | join(', ') }} —
+        Jen is using the legacy root <code>python3</code> path for {{ 'them' if kea_legacy_hosts|length > 1 else 'it' }}.
+        <a href="/settings/kea#kea-ssh">Settings &rarr; Kea &rarr; SSH</a>.
+    </div>
+    {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}

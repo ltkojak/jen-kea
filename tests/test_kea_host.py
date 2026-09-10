@@ -193,6 +193,48 @@ class TestNoDirectRootPathsOutsideKeaHost:
         assert not offenders, offenders
 
 
+class TestHelperDeployment:
+    def test_render_install_helper_script_embeds_source_and_sudoers_line(self):
+        from jen.services.kea_authoring import render_install_helper_script
+
+        script = render_install_helper_script("HELPER_VERSION = 1\n# body\n", "matthew", 1)
+        assert "HELPER_VERSION = 1" in script
+        assert "matthew ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper" in script
+        assert "visudo" in script and 'print("ok:1")' in script
+        import ast
+
+        ast.parse(script)  # the remote script must be valid python
+
+    def test_install_helper_parses_ok(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 1\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:1", ""))
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 1, "code": "installed", "detail": ""}
+
+    def test_install_helper_needs_a_path_in(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: False)
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "no-path"
+
+    def test_install_helper_already_installed_short_circuits(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 1})
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 1, "code": "already", "detail": ""}
+
+    def test_install_helper_sudoerror(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("sudoerror:bad line 2", ""))
+        res = kea_host.install_helper(SERVER)
+        assert res["code"] == "sudoerror" and res["detail"] == "bad line 2"
+
+
 class TestStatusTracking:
     def test_record_and_read_round_trip(self, monkeypatch):
         store = {}
