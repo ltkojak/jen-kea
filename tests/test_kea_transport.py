@@ -86,6 +86,14 @@ class TestGoldenCaMode:
         assert c["verify"] is True  # == requests' own default
         assert c["cert"] is None  # == requests' own default (no client cert)
 
+    def test_timeout_defaults_to_10_and_is_overridable(self, fake_http):
+        # v5.13.0 — the Settings landing hint passes a short timeout so
+        # an unreachable Kea can't stall the whole page.
+        kea_svc.kea_command("version-get")
+        assert fake_http.calls[0]["timeout"] == 10
+        kea_svc.kea_command("version-get", timeout=3)
+        assert fake_http.calls[1]["timeout"] == 3
+
     def test_dhcp4_with_arguments(self, fake_http):
         kea_svc.kea_command("subnet4-get", arguments={"id": 1})
         assert fake_http.calls[0]["json"] == {

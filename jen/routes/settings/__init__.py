@@ -78,6 +78,10 @@ def settings():
     On a phone this IS the Settings navigation. Hints are deliberately
     cheap: one Kea version-get, one openssl call, a few COUNTs, a
     directory listing — nothing that contacts GitHub or SSHes anywhere.
+
+    v5.13.0 — the backup hint counts `.json.gz` files instead of
+    decompressing and JSON-parsing every one, and the version-get runs
+    on a 3s timeout so an unreachable Kea can't stall the whole page.
     """
     from jen.services.plugins import discover_plugins
 
@@ -85,7 +89,7 @@ def settings():
 
     # v5.10.0 — one version-get does double duty: reachability + the
     # number we need to warn when ca mode won't survive the running Kea.
-    _kea_ver = __kea.kea_command("version-get")
+    _kea_ver = __kea.kea_command("version-get", timeout=3)
     kea_up = _kea_ver.get("result") == 0
     hints["kea"] = [("Kea: connected", "ok") if kea_up else ("Kea: unreachable", "bad")]
     if kea_up and extensions.KEA_CONNECTION_MODE == "ca":
@@ -137,9 +141,9 @@ def settings():
     try:
         from jen.services import dbexport
 
-        backups = dbexport.list_backups()
-        if backups:
-            hints["databases"].append((f"{len(backups)} backup{'s' if len(backups) != 1 else ''}", "ok"))
+        n = dbexport.backup_count()
+        if n:
+            hints["databases"].append((f"{n} backup{'s' if n != 1 else ''}", "ok"))
         else:
             hints["databases"].append(("No backups yet", "warn"))
     except Exception:

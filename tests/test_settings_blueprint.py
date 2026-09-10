@@ -99,6 +99,18 @@ class TestSettingsBlueprintSplit:
         assert r.status_code == 200
         assert b"settings-grid" in r.data
 
+    def test_landing_backup_hint_counts_files_not_contents(self):
+        """v5.13.0 — the landing page must not decompress every backup
+        just to show 'N backups'; it calls dbexport.backup_count()."""
+        import inspect
+
+        from jen.routes.settings import settings
+
+        src = inspect.getsource(settings)
+        assert "dbexport.backup_count()" in src
+        assert "dbexport.list_backups()" not in src
+        assert 'kea_command("version-get", timeout=3)' in src
+
     def test_a_route_from_each_split_module_responds(self, logged_in_client, mock_kea):
         # one GET route per module, smoke-level.
         import os

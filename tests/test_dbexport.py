@@ -89,3 +89,41 @@ class TestColumnFiltering:
         row_keys = ["totally_made_up_column"]
         cols = [c for c in row_keys if c in real_cols]
         assert cols == []
+
+
+class TestBackupCount:
+    """v5.13.0 — the Settings landing page needs only the NUMBER of
+    backups, not their contents. backup_count() is a directory listing;
+    list_backups() decompresses and JSON-parses every file for its
+    `_meta` header, which is far too heavy for a status hint."""
+
+    def test_counts_only_json_gz_files(self, tmp_path, monkeypatch):
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        (tmp_path / "a.json.gz").write_bytes(b"x")
+        (tmp_path / "b.json.gz").write_bytes(b"x")
+        (tmp_path / "notes.txt").write_text("ignore me")
+        (tmp_path / "c.json").write_text("{}")
+        assert dbexport.backup_count() == 2
+
+    def test_zero_when_dir_missing(self, tmp_path, monkeypatch):
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path / "nope"))
+        assert dbexport.backup_count() == 0
+
+    def test_zero_when_dir_empty(self, tmp_path, monkeypatch):
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        assert dbexport.backup_count() == 0
+
+    def test_does_not_open_any_file(self, tmp_path, monkeypatch):
+        """The whole point: a corrupt / unreadable backup file must not
+        break the count the way list_backups() would."""
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        (tmp_path / "corrupt.json.gz").write_bytes(b"not gzip at all")
+        assert dbexport.backup_count() == 1

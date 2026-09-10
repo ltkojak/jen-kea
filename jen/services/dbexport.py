@@ -728,6 +728,16 @@ def _prune_backups(keep_count):
             os.remove(old)
 
 
+def backup_count() -> int:
+    """Number of backup files — a directory listing, nothing more. The
+    Settings landing page needs only this; list_backups() decompresses and
+    JSON-parses every file for its `_meta` header, which is far too heavy
+    for a status hint once daily backups accumulate (v5.13.0)."""
+    if not os.path.isdir(BACKUP_DIR):
+        return 0
+    return sum(1 for f in os.listdir(BACKUP_DIR) if f.endswith(".json.gz"))
+
+
 def list_backups():
     """Return list of backup file dicts for the UI."""
     if not os.path.isdir(BACKUP_DIR):

@@ -179,10 +179,14 @@ def _endpoint_for(server: dict, service: str):
     return server.get("api_url", ""), server.get("api_user", ""), server.get("api_pass", "")
 
 
-def kea_command(command: str, service: str = "dhcp4", arguments: dict = None, server: dict = None) -> dict:
+def kea_command(
+    command: str, service: str = "dhcp4", arguments: dict = None, server: dict = None, timeout: int = 10
+) -> dict:
     """
     Send a command to a specific Kea server (or the primary if None).
-    Always returns a dict — never raises.
+    Always returns a dict — never raises. `timeout` defaults to 10s;
+    pass a smaller value on a page that must not stall when Kea is slow
+    (the Settings landing hint uses 3s).
     """
     endpoint = _endpoint_for(server, service)
     if isinstance(endpoint, dict):  # e.g. direct mode with no [kea6] api_url
@@ -196,7 +200,9 @@ def kea_command(command: str, service: str = "dhcp4", arguments: dict = None, se
     if arguments:
         payload["arguments"] = arguments
     try:
-        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10, verify=_tls_verify(), cert=_tls_client_cert())
+        resp = http.post(
+            url, json=payload, auth=(user, pwd), timeout=timeout, verify=_tls_verify(), cert=_tls_client_cert()
+        )
         resp.raise_for_status()
         data = resp.json()
         return data[0] if isinstance(data, list) else data
