@@ -187,3 +187,44 @@ class TestKeaHelperShipsInTheImage:
 
     def test_install_sh_copies_the_helper(self):
         assert 'cp "$SCRIPT_DIR/jen-kea-helper" "$INSTALL_DIR/jen-kea-helper"' in _text("install.sh")
+
+
+class TestContentDirLayout:
+    """v5.13.0 — user-writable content moved to /var/lib/jen; /opt/jen is
+    root-owned and read-only to the service user."""
+
+    def test_dockerfile_root_owns_the_app_tree(self):
+        df = _text("Dockerfile")
+        assert "chown -R root:root /opt/jen" in df
+        assert "chown -R www-data:www-data /etc/jen /var/lib/jen" in df
+        assert "chown -R www-data:www-data /opt/jen" not in df
+
+    def test_dockerfile_copies_bundled_plugins(self):
+        assert re.search(r"^COPY plugins/\s+/opt/jen/plugins/\s*$", _text("Dockerfile"), re.M)
+
+    def test_dockerfile_volume_is_content_dir_not_icons_path(self):
+        df = _text("Dockerfile")
+        assert 'VOLUME ["/etc/jen", "/var/lib/jen"]' in df
+        assert "/opt/jen/static/icons/custom" not in df.split("VOLUME")[1]
+
+    def test_compose_files_mount_the_content_volume(self):
+        for name in COMPOSE:
+            t = _text(name)
+            assert "jen-content:/var/lib/jen" in t, name
+            assert "  jen-content:" in t, name
+
+    def test_installer_migrates_content_and_root_owns_the_tree(self):
+        sh = _text("install.sh")
+        assert "migrate_content" in sh
+        assert 'chown -R root:root "$INSTALL_DIR"' in sh
+        assert 'chown -R "$JEN_USER:$JEN_USER" "$INSTALL_DIR"' not in sh
+        assert "/var/lib/jen/backups" in sh  # pre-upgrade DB backup
+        assert "/opt/jen/backups" not in sh
+
+    def test_uninstall_removes_content_dir_on_full_wipe(self):
+        assert 'rm -rf "$CONFIG_DIR" "$CONTENT_DIR"' in _text("uninstall.sh")
+
+    def test_updater_migrates_and_rolls_back_content_items(self):
+        u = _text("jen-update-root.py")
+        assert '"static"' in u and '"plugins"' in u  # _ROLLBACK_ITEMS
+        assert "def migrate_user_content" in u

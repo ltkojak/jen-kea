@@ -113,7 +113,7 @@ class TestInstallExtractedFiles:
     operations against real temp directories, not string-matching on
     shell commands."""
 
-    def _make_extracted_dir(self, tmp_path, with_static=True, with_service=True, with_sudoers=True):
+    def _make_extracted_dir(self, tmp_path, with_static=True, with_service=True, with_sudoers=True, with_plugins=False):
         extracted = tmp_path / "extracted"
         (extracted / "jen").mkdir(parents=True)
         (extracted / "jen" / "__init__.py").write_text('JEN_VERSION = "5.2.6"\n')
@@ -126,6 +126,9 @@ class TestInstallExtractedFiles:
             (extracted / "static" / "js").mkdir(parents=True)
             (extracted / "static" / "favicon.ico").write_bytes(b"SHIPPED-DEFAULT-FAVICON")
             (extracted / "static" / "js" / "htmx.min.js").write_text("// fake htmx\n")
+        if with_plugins:
+            (extracted / "plugins" / "ipam").mkdir(parents=True)
+            (extracted / "plugins" / "ipam" / "manifest.json").write_text('{"id":"ipam"}')
         if with_service:
             (extracted / "jen.service").write_text("[Unit]\nDescription=fake\n")
         if with_sudoers:
@@ -175,28 +178,44 @@ class TestInstallExtractedFiles:
         assert (install_dir / "templates" / "index.html").exists()
         assert not (install_dir / "templates" / "stale.html").exists()
 
-    def test_static_copy_preserves_existing_favicon(self, jen_update_root, tmp_path):
-        """v5.1.8's fix, now living in this script — a real uploaded
-        favicon must survive a static/ update, not get overwritten by
-        the shipped default."""
+    def test_static_replaced_wholesale(self, jen_update_root, tmp_path):
+        """v5.13.0 — static/ is release-owned now (a custom favicon and
+        uploaded icons/logos moved to CONTENT_DIR). rmtree + recopy, so a
+        stale file goes and the shipped favicon always wins."""
         extracted = self._make_extracted_dir(tmp_path, with_service=False, with_sudoers=False)
         install_dir = tmp_path / "install"
         (install_dir / "static").mkdir(parents=True)
-        (install_dir / "static" / "favicon.ico").write_bytes(b"MATTHEWS-CUSTOM-FAVICON")
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            jen_update_root.install_extracted_files(str(extracted), str(install_dir))
-        assert (install_dir / "static" / "favicon.ico").read_bytes() == b"MATTHEWS-CUSTOM-FAVICON"
-        assert (install_dir / "static" / "js" / "htmx.min.js").exists()
-
-    def test_static_copy_installs_shipped_favicon_when_none_exists(self, jen_update_root, tmp_path):
-        extracted = self._make_extracted_dir(tmp_path, with_service=False, with_sudoers=False)
-        install_dir = tmp_path / "install"
-        install_dir.mkdir()
+        (install_dir / "static" / "favicon.ico").write_bytes(b"OLD-CUSTOM-FAVICON")
+        (install_dir / "static" / "stale.js").write_text("old\n")
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             jen_update_root.install_extracted_files(str(extracted), str(install_dir))
         assert (install_dir / "static" / "favicon.ico").read_bytes() == b"SHIPPED-DEFAULT-FAVICON"
+        assert not (install_dir / "static" / "stale.js").exists()
+        assert (install_dir / "static" / "js" / "htmx.min.js").exists()
+
+    def test_bundled_plugins_replaced_wholesale(self, jen_update_root, tmp_path):
+        extracted = self._make_extracted_dir(
+            tmp_path, with_static=False, with_service=False, with_sudoers=False, with_plugins=True
+        )
+        install_dir = tmp_path / "install"
+        (install_dir / "plugins" / "stale-plugin").mkdir(parents=True)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            jen_update_root.install_extracted_files(str(extracted), str(install_dir))
+        assert (install_dir / "plugins" / "ipam" / "manifest.json").exists()
+        assert not (install_dir / "plugins" / "stale-plugin").exists()
+
+    def test_app_tree_is_chowned_root_not_www_data(self, jen_update_root, tmp_path):
+        extracted = self._make_extracted_dir(tmp_path, with_service=False, with_sudoers=False)
+        install_dir = tmp_path / "install"
+        install_dir.mkdir()
+        calls = []
+        with patch("subprocess.run", side_effect=lambda cmd, **kw: calls.append(cmd) or MagicMock(returncode=0)):
+            jen_update_root.install_extracted_files(str(extracted), str(install_dir))
+        chowns = [c for c in calls if c and c[0] == "/bin/chown"]
+        assert chowns and all("www-data:www-data" not in c for c in chowns)
+        assert any(c[:3] == ["/bin/chown", "-R", "root:root"] for c in chowns)
 
     def test_valid_sudoers_installed_after_visudo_check_passes(self, jen_update_root, tmp_path):
         extracted = self._make_extracted_dir(tmp_path, with_static=False, with_service=False)
@@ -484,7 +503,9 @@ class TestSnapshotRollback:
         (install / "jen" / "app.py").write_text("v1\n")
         (install / "run.py").write_text("run-v1\n")
         (install / "static").mkdir()
-        (install / "static" / "user-icon.svg").write_text("user data\n")
+        (install / "static" / "favicon.ico").write_text("v1-icon\n")
+        (install / "plugins" / "ipam").mkdir(parents=True)
+        (install / "plugins" / "ipam" / "manifest.json").write_text("v1\n")
 
         snap = tmp_path / "snap"
         jen_update_root.snapshot_install(str(snap), install_dir=str(install))
@@ -492,14 +513,21 @@ class TestSnapshotRollback:
         # simulate a bad update overwriting the tree
         (install / "jen" / "app.py").write_text("v2-broken\n")
         (install / "run.py").write_text("run-v2-broken\n")
+        (install / "static" / "favicon.ico").write_text("v2-icon\n")
+        (install / "plugins" / "ipam" / "manifest.json").write_text("v2\n")
 
         with patch("subprocess.run"):
             jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
 
         assert (install / "jen" / "app.py").read_text() == "v1\n"
         assert (install / "run.py").read_text() == "run-v1\n"
-        # static/ is left alone by both snapshot and restore
-        assert (install / "static" / "user-icon.svg").read_text() == "user data\n"
+        # v5.13.0 — static/ and plugins/ are release-owned rollback items now
+        assert (install / "static" / "favicon.ico").read_text() == "v1-icon\n"
+        assert (install / "plugins" / "ipam" / "manifest.json").read_text() == "v1\n"
+
+    def test_static_and_plugins_are_rollback_items(self, jen_update_root):
+        assert "static" in jen_update_root._ROLLBACK_ITEMS
+        assert "plugins" in jen_update_root._ROLLBACK_ITEMS
 
     def test_restore_restarts_jen(self, jen_update_root, tmp_path):
         install = tmp_path / "opt-jen"
@@ -511,6 +539,80 @@ class TestSnapshotRollback:
             jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
         calls = [" ".join(map(str, c.args[0])) for c in mock_run.call_args_list]
         assert any("systemctl restart jen" in c for c in calls)
+
+    def test_restore_chowns_root_not_www_data(self, jen_update_root, tmp_path):
+        install = tmp_path / "opt-jen"
+        (install / "jen").mkdir(parents=True)
+        snap = tmp_path / "snap"
+        jen_update_root.snapshot_install(str(snap), install_dir=str(install))
+        with patch("subprocess.run") as mock_run:
+            jen_update_root.restore_snapshot(str(snap), install_dir=str(install))
+        chowns = [c.args[0] for c in mock_run.call_args_list if c.args[0][0] == "/bin/chown"]
+        assert chowns and all("www-data:www-data" not in c for c in chowns)
+
+
+class TestMigrateUserContent:
+    """v5.13.0 — MOVE pre-5.13 content from the /opt/jen tree into /var/lib/jen."""
+
+    def _tree(self, tmp_path):
+        install = tmp_path / "opt-jen"
+        content = tmp_path / "var-lib-jen"
+        extracted = tmp_path / "extracted"
+        (install / "static" / "icons" / "custom").mkdir(parents=True)
+        (extracted / "static").mkdir(parents=True)
+        (extracted / "static" / "favicon.ico").write_bytes(b"SHIPPED-DEFAULT")
+        return install, content, extracted
+
+    def _run(self, jen_update_root, install, content, extracted):
+        with patch("subprocess.run"):
+            jen_update_root.migrate_user_content(str(install), str(content), str(extracted))
+
+    def test_moves_icons_navlogo_backups_keys(self, jen_update_root, tmp_path):
+        install, content, extracted = self._tree(tmp_path)
+        (install / "static" / "icons" / "custom" / "acme.svg").write_text("<svg/>")
+        (install / "static" / "nav_logo.png").write_bytes(b"png")
+        (install / "backups").mkdir()
+        (install / "backups" / "jen.json.gz").write_bytes(b"gz")
+        (install / ".secret_key").write_text("k" * 40)
+        self._run(jen_update_root, install, content, extracted)
+        assert (content / "icons" / "acme.svg").exists()
+        assert not (install / "static" / "icons" / "custom" / "acme.svg").exists()  # MOVED
+        assert (content / "branding" / "nav_logo.png").exists()
+        assert (content / "backups" / "jen.json.gz").exists()
+        assert (content / "keys" / ".secret_key").read_text() == "k" * 40
+
+    def test_favicon_only_when_differs_from_shipped(self, jen_update_root, tmp_path):
+        install, content, extracted = self._tree(tmp_path)
+        (install / "static" / "favicon.ico").write_bytes(b"SHIPPED-DEFAULT")  # identical
+        self._run(jen_update_root, install, content, extracted)
+        assert not (content / "branding" / "favicon.ico").exists()
+        (install / "static" / "favicon.ico").write_bytes(b"a-real-custom-favicon")
+        self._run(jen_update_root, install, content, extracted)
+        assert (content / "branding" / "favicon.ico").read_bytes() == b"a-real-custom-favicon"
+
+    def test_plugins_split_shipped_vs_installed(self, jen_update_root, tmp_path):
+        install, content, extracted = self._tree(tmp_path)
+        (install / "plugins" / "ipam").mkdir(parents=True)
+        (install / "plugins" / "ipam" / ".enabled").write_text("")
+        (install / "plugins" / "thirdparty").mkdir()
+        (install / "plugins" / "thirdparty" / "manifest.json").write_text('{"id":"thirdparty"}')
+        (install / "plugins" / "thirdparty" / ".enabled").write_text("")
+        self._run(jen_update_root, install, content, extracted)
+        assert (content / "plugins-enabled" / "ipam").exists()  # bundled marker moved
+        assert (content / "plugins-enabled" / "thirdparty").exists()
+        assert (content / "plugins" / "thirdparty" / "manifest.json").exists()  # non-shipped dir moved
+        assert not (content / "plugins" / "ipam").exists()  # shipped dir NOT moved
+
+    def test_idempotent(self, jen_update_root, tmp_path):
+        install, content, extracted = self._tree(tmp_path)
+        (install / "static" / "icons" / "custom" / "acme.svg").write_text("<svg/>")
+        self._run(jen_update_root, install, content, extracted)
+        self._run(jen_update_root, install, content, extracted)  # no error
+        assert (content / "icons" / "acme.svg").exists()
+
+    def test_main_calls_migrate_before_install(self):
+        src = _SCRIPT_PATH.read_text()
+        assert src.index("migrate_user_content(INSTALL_DIR") < src.index("install_extracted_files(extracted")
 
     def test_snapshot_and_restore_cover_the_external_unit_files(self, jen_update_root, tmp_path):
         install = tmp_path / "opt-jen"

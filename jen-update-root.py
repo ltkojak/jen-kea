@@ -130,15 +130,26 @@ CONFIG_FILE = "/etc/jen/jen.config"
 SSL_CERT = "/etc/jen/ssl/certificate.crt"
 SSL_KEY = "/etc/jen/ssl/private.key"
 
+# v5.13.0 — user-writable content lives here, outside /opt/jen. Hardcoded
+# in jen/extensions.py the same way the SSL paths above are; the updater
+# migrates pre-5.13 content into it and chowns it to www-data.
+CONTENT_DIR = "/var/lib/jen"
+
 # The parts of /opt/jen that install_extracted_files() replaces wholesale
-# (rmtree + recopy) rather than merging — so a failed update has to be
-# able to put exactly these back. static/ is an additive copy (never
-# rmtree'd) and mixes shipped assets with user icon/favicon uploads, so
-# it's NOT here: a rollback leaves the new JS/CSS in place against the
-# old templates. Real fix is separating release-owned static from
-# user-uploaded content — tracked against the 6.0.0 versioned-release-dir
-# work (see PENDING / docs/ARCHITECTURE.md §6).
-_ROLLBACK_ITEMS = ("jen", "run.py", "templates", "requirements.txt", "CHANGELOG.md", "jen-kea-helper")
+# (rmtree + recopy) — so a failed update has to be able to put exactly
+# these back. As of v5.13.0 `static/` and `plugins/` are fully
+# release-owned (user uploads and registry-installed plugins moved to
+# CONTENT_DIR), so they rmtree cleanly and belong here.
+_ROLLBACK_ITEMS = (
+    "jen",
+    "run.py",
+    "templates",
+    "static",
+    "plugins",
+    "requirements.txt",
+    "CHANGELOG.md",
+    "jen-kea-helper",
+)
 
 # Files an update also replaces that live OUTSIDE /opt/jen. A bad
 # jen.service / sudoers / updater would make the app fail AND make a
@@ -247,28 +258,24 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
             shutil.rmtree(target)
         shutil.copytree(templates_src, target)
 
-    # static/ — additive copy, preserving favicon.ico (may be a real
-    # user upload, not just the shipped default — see v5.1.8).
+    # static/ — release-owned as of v5.13.0 (a custom favicon and uploaded
+    # icons/logos moved to CONTENT_DIR). rmtree + recopy, same as jen/.
     static_src = os.path.join(extracted, "static")
     if os.path.isdir(static_src):
-        static_dest = os.path.join(install_dir, "static")
-        os.makedirs(static_dest, exist_ok=True)
-        existing_favicon = os.path.join(static_dest, "favicon.ico")
-        preserved_favicon = None
-        if os.path.isfile(existing_favicon):
-            # kept past the block on purpose — closed here, unlinked much later
-            preserved_favicon = tempfile.NamedTemporaryFile(delete=False)  # noqa: SIM115
-            preserved_favicon.close()
-            shutil.copy2(existing_favicon, preserved_favicon.name)
-        for root, _dirs, files in os.walk(static_src):
-            rel = os.path.relpath(root, static_src)
-            dest_root = static_dest if rel == "." else os.path.join(static_dest, rel)
-            os.makedirs(dest_root, exist_ok=True)
-            for fname in files:
-                shutil.copy2(os.path.join(root, fname), os.path.join(dest_root, fname))
-        if preserved_favicon:
-            shutil.copy2(preserved_favicon.name, existing_favicon)
-            os.unlink(preserved_favicon.name)
+        target = os.path.join(install_dir, "static")
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        shutil.copytree(static_src, target)
+
+    # plugins/ — the SHIPPED plugin tree (ipam, network-discovery).
+    # Registry-installed plugins live under CONTENT_DIR now, so this is
+    # also release-owned: rmtree + recopy.
+    plugins_src = os.path.join(extracted, "plugins")
+    if os.path.isdir(plugins_src):
+        target = os.path.join(install_dir, "plugins")
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        shutil.copytree(plugins_src, target)
 
     # systemd service file
     service_src = os.path.join(extracted, "jen.service")
@@ -287,22 +294,87 @@ def install_extracted_files(extracted, install_dir=INSTALL_DIR):
             shutil.copy2(sudoers_src, "/etc/sudoers.d/jen")
             os.chmod("/etc/sudoers.d/jen", 0o440)
 
-    # Ownership — everything the web process needs to read/write goes
-    # to www-data. This script and its own directory are never touched
-    # by this chown, since they're not under install_dir at all.
-    subprocess.run(
-        [
-            "/bin/chown",
-            "-R",
-            "www-data:www-data",
-            os.path.join(install_dir, "jen"),
-            os.path.join(install_dir, "run.py"),
-            os.path.join(install_dir, "templates"),
-            os.path.join(install_dir, "static"),
-            os.path.join(install_dir, "jen-kea-helper"),
-        ],
-        check=False,
-    )
+    # Ownership — v5.13.0 makes the whole application tree root-owned and
+    # read-only to the service user (user-writable content is under
+    # CONTENT_DIR, chowned separately in main()). This script and its own
+    # directory are never touched — they're not under install_dir at all.
+    # main() byte-compiles jen/ + plugins/ with the venv interpreter right
+    # after this (www-data can no longer write __pycache__).
+    subprocess.run(["/bin/chown", "-R", "root:root", install_dir], check=False)
+    subprocess.run(["/bin/chmod", "-R", "a+rX", install_dir], check=False)
+
+
+_SHIPPED_PLUGIN_IDS = ("ipam", "network-discovery")
+
+
+def migrate_user_content(install_dir=INSTALL_DIR, content_dir=CONTENT_DIR, extracted=None):
+    """v5.13.0 — MOVE pre-5.13 user content from the /opt/jen tree into
+    CONTENT_DIR, once, before the file install replaces those locations.
+    Idempotent (skips anything already at the destination), never
+    clobbers, and ends by making CONTENT_DIR www-data:www-data 0750.
+
+    Pure enough to test against tmp dirs: pass `extracted` so the favicon
+    comparison uses the fresh tarball's shipped default."""
+    icons = os.path.join(content_dir, "icons")
+    branding = os.path.join(content_dir, "branding")
+    backups = os.path.join(content_dir, "backups")
+    plug = os.path.join(content_dir, "plugins")
+    plug_en = os.path.join(content_dir, "plugins-enabled")
+    keys = os.path.join(content_dir, "keys")
+    for d in (icons, branding, backups, plug, plug_en, keys):
+        os.makedirs(d, exist_ok=True)
+
+    def _mv(src, dst):
+        if os.path.exists(src) and not os.path.exists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(src, dst)
+
+    old_static = os.path.join(install_dir, "static")
+    old_custom = os.path.join(old_static, "icons", "custom")
+    if os.path.isdir(old_custom):
+        for name in os.listdir(old_custom):
+            _mv(os.path.join(old_custom, name), os.path.join(icons, name))
+    for ext in ("png", "svg", "jpg", "jpeg", "webp"):
+        _mv(os.path.join(old_static, f"nav_logo.{ext}"), os.path.join(branding, f"nav_logo.{ext}"))
+
+    old_favicon = os.path.join(old_static, "favicon.ico")
+    shipped_favicon = os.path.join(extracted, "static", "favicon.ico") if extracted else None
+    if os.path.isfile(old_favicon) and not os.path.exists(os.path.join(branding, "favicon.ico")):
+        differs = True
+        if shipped_favicon and os.path.isfile(shipped_favicon):
+            differs = _file_sha256(old_favicon) != _file_sha256(shipped_favicon)
+        if differs:
+            shutil.move(old_favicon, os.path.join(branding, "favicon.ico"))
+
+    old_backups = os.path.join(install_dir, "backups")
+    if os.path.isdir(old_backups):
+        for name in os.listdir(old_backups):
+            _mv(os.path.join(old_backups, name), os.path.join(backups, name))
+
+    old_plugins = os.path.join(install_dir, "plugins")
+    if os.path.isdir(old_plugins):
+        for pid in os.listdir(old_plugins):
+            src = os.path.join(old_plugins, pid)
+            if not os.path.isdir(src):
+                continue
+            if pid not in _SHIPPED_PLUGIN_IDS:
+                _mv(src, os.path.join(plug, pid))
+                src = os.path.join(plug, pid)  # the .enabled marker moved with the dir
+            marker = os.path.join(src, ".enabled")
+            new_marker = os.path.join(plug_en, pid)
+            if os.path.isfile(marker) and not os.path.exists(new_marker):
+                shutil.move(marker, new_marker)
+
+    for fn in (".secret_key", ".mfa_key"):
+        _mv(os.path.join(install_dir, fn), os.path.join(keys, fn))
+
+    subprocess.run(["/bin/chown", "-R", "www-data:www-data", content_dir], check=False)
+    subprocess.run(["/bin/chmod", "750", content_dir], check=False)
+
+
+def _file_sha256(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
 
 
 def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, update_service_path=UPDATE_SERVICE_PATH):
@@ -570,8 +642,10 @@ def restore_snapshot(snapshot_dir, install_dir=INSTALL_DIR):
                 reload_needed = True
     if reload_needed:
         subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=False)
+    # v5.13.0 — the application tree is root-owned; CONTENT_DIR (untouched
+    # by a rollback) stays www-data.
     subprocess.run(
-        ["/bin/chown", "-R", "www-data:www-data", *[os.path.join(install_dir, i) for i in _ROLLBACK_ITEMS]],
+        ["/bin/chown", "-R", "root:root", *[os.path.join(install_dir, i) for i in _ROLLBACK_ITEMS]],
         check=False,
     )
     subprocess.run(["/usr/bin/systemctl", "restart", "jen"], check=False)
@@ -923,14 +997,18 @@ def main():
         # /opt/jen half-updated.)
         try:
             log("Installing files…")
+            migrate_user_content(INSTALL_DIR, CONTENT_DIR, extracted)
             install_extracted_files(extracted, INSTALL_DIR)
             install_self_update_files(extracted)
             # Byte-compile the freshly-installed tree with the SAME interpreter
             # that will run it, so the first request after restart isn't paying
             # compile cost (and a syntax error surfaces here, pre-restart, where
             # the rollback path still applies).
+            _compile_targets = [
+                os.path.join(INSTALL_DIR, d) for d in ("jen", "plugins") if os.path.isdir(os.path.join(INSTALL_DIR, d))
+            ]
             compiled = subprocess.run(
-                [python_bin, "-m", "compileall", "-q", os.path.join(INSTALL_DIR, "jen")],
+                [python_bin, "-m", "compileall", "-q", *_compile_targets],
                 capture_output=True,
                 text=True,
             )

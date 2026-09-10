@@ -19,10 +19,11 @@ JEN_VERSION="5.12.0"
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
+CONTENT_DIR="/var/lib/jen"          # v5.13.0 — user-writable content (uploads, backups, plugins)
 SERVICE_FILE="/etc/systemd/system/jen.service"
 SUDOERS_FILE="/etc/sudoers.d/jen"
 CONFIG_FILE="/etc/jen/jen.config"
-BACKUP_DIR="/etc/jen/backups"
+BACKUP_DIR="/etc/jen/backups"       # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
 JEN_USER="www-data"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLLBACK_JEN=""
@@ -803,6 +804,65 @@ rollback() {
     warn "Rollback complete — previous version restored"
 }
 
+# ── Migrate user content out of /opt/jen (v5.13.0) ───────────────────────────
+# MOVE uploaded icons, the nav logo, a custom favicon, DB backups,
+# registry-installed plugins and plugin enable markers, and the key
+# fallbacks from the old /opt/jen locations into $CONTENT_DIR. Runs BEFORE
+# install_files (which makes /opt/jen root-owned). Idempotent, never
+# clobbers an existing destination.
+_content_mv() {  # move $1 -> $2 only if $1 exists and $2 doesn't
+    if [[ -e "$1" && ! -e "$2" ]]; then
+        mkdir -p "$(dirname "$2")"
+        mv "$1" "$2"
+    fi
+}
+
+migrate_content() {
+    local shipped_favicon="$SCRIPT_DIR/static/favicon.ico"
+    local d pid f ext
+    for d in icons branding backups plugins plugins-enabled keys; do
+        mkdir -p "$CONTENT_DIR/$d"
+    done
+
+    if [[ -d "$INSTALL_DIR/static/icons/custom" ]]; then
+        for f in "$INSTALL_DIR/static/icons/custom/"*; do
+            [[ -e "$f" ]] || continue
+            _content_mv "$f" "$CONTENT_DIR/icons/$(basename "$f")"
+        done
+    fi
+    for ext in png svg jpg jpeg webp; do
+        _content_mv "$INSTALL_DIR/static/nav_logo.$ext" "$CONTENT_DIR/branding/nav_logo.$ext"
+    done
+    if [[ -f "$INSTALL_DIR/static/favicon.ico" && ! -e "$CONTENT_DIR/branding/favicon.ico" ]]; then
+        if [[ ! -f "$shipped_favicon" ]] || ! cmp -s "$INSTALL_DIR/static/favicon.ico" "$shipped_favicon"; then
+            mv "$INSTALL_DIR/static/favicon.ico" "$CONTENT_DIR/branding/favicon.ico"
+        fi
+    fi
+    if [[ -d "$INSTALL_DIR/backups" ]]; then
+        for f in "$INSTALL_DIR/backups/"*; do
+            [[ -e "$f" ]] || continue
+            _content_mv "$f" "$CONTENT_DIR/backups/$(basename "$f")"
+        done
+    fi
+    if [[ -d "$INSTALL_DIR/plugins" ]]; then
+        for d in "$INSTALL_DIR/plugins/"*/; do
+            [[ -d "$d" ]] || continue
+            pid="$(basename "$d")"
+            if [[ "$pid" != "ipam" && "$pid" != "network-discovery" ]]; then
+                _content_mv "${d%/}" "$CONTENT_DIR/plugins/$pid"
+                d="$CONTENT_DIR/plugins/$pid/"
+            fi
+            _content_mv "${d}.enabled" "$CONTENT_DIR/plugins-enabled/$pid"
+        done
+    fi
+    _content_mv "$INSTALL_DIR/.secret_key" "$CONTENT_DIR/keys/.secret_key"
+    _content_mv "$INSTALL_DIR/.mfa_key"    "$CONTENT_DIR/keys/.mfa_key"
+
+    chown -R "$JEN_USER:$JEN_USER" "$CONTENT_DIR"
+    chmod 750 "$CONTENT_DIR"
+    ok "User content is under $CONTENT_DIR"
+}
+
 # ── Install files ─────────────────────────────────────────────────────────────
 install_files() {
     blank
@@ -810,10 +870,7 @@ install_files() {
     divider
     blank
 
-    mkdir -p "$INSTALL_DIR/templates" "$INSTALL_DIR/static" \
-             "$INSTALL_DIR/static/icons/brands" \
-             "$INSTALL_DIR/static/icons/custom" \
-             "$INSTALL_DIR/plugins" \
+    mkdir -p "$INSTALL_DIR/templates" \
              "$CONFIG_DIR/ssl" "$CONFIG_DIR/ssh"
 
     spinner_start "Installing application files..."
@@ -859,23 +916,33 @@ install_files() {
 
     if [[ -d "$SCRIPT_DIR/jen" ]]; then
         spinner_start "Installing jen/ package..."
-        mkdir -p "$INSTALL_DIR/jen"
-        cp -r "$SCRIPT_DIR/jen/." "$INSTALL_DIR/jen/"
+        rm -rf "$INSTALL_DIR/jen"
+        cp -r "$SCRIPT_DIR/jen" "$INSTALL_DIR/jen"
         spinner_stop
         ok "Installed jen/ package  ${DIM}($(find "$INSTALL_DIR/jen" -name '*.py' | wc -l) modules)${NC}"
     fi
 
     spinner_start "Installing templates..."
-    cp -r "$SCRIPT_DIR/templates/." "$INSTALL_DIR/templates/"
+    rm -rf "$INSTALL_DIR/templates"
+    cp -r "$SCRIPT_DIR/templates" "$INSTALL_DIR/templates"
     spinner_stop
     ok "Installed templates  ${DIM}($(ls "$SCRIPT_DIR/templates/" | wc -l) files)${NC}"
 
-    if [[ -d "$SCRIPT_DIR/static/icons/brands" ]]; then
-        spinner_start "Installing brand icons..."
-        cp "$SCRIPT_DIR/static/icons/brands/"*.svg \
-           "$INSTALL_DIR/static/icons/brands/" 2>/dev/null || true
+    # v5.13.0 — static/ and plugins/ are fully release-owned now (custom
+    # icons/logos/favicon and registry-installed plugins moved to
+    # $CONTENT_DIR by migrate_content). rm -rf + recopy, same as jen/.
+    spinner_start "Installing static assets..."
+    rm -rf "$INSTALL_DIR/static"
+    cp -r "$SCRIPT_DIR/static" "$INSTALL_DIR/static"
+    spinner_stop
+    ok "Installed static assets  ${DIM}($(find "$SCRIPT_DIR/static" -type f | wc -l) files)${NC}"
+
+    if [[ -d "$SCRIPT_DIR/plugins" ]]; then
+        spinner_start "Installing bundled plugins..."
+        rm -rf "$INSTALL_DIR/plugins"
+        cp -r "$SCRIPT_DIR/plugins" "$INSTALL_DIR/plugins"
         spinner_stop
-        ok "Installed brand icons  ${DIM}($(ls "$INSTALL_DIR/static/icons/brands/" 2>/dev/null | wc -l) icons)${NC}"
+        ok "Installed bundled plugins"
     fi
 
     cp "$SCRIPT_DIR/jen.service" "$SERVICE_FILE"
@@ -905,43 +972,27 @@ install_files() {
         ok "Installed jen-update.service"
     fi
 
-    # Everything under static/ (favicon, vendored JS like htmx and
-    # Chart.js, etc.) ships in the package tarball — copy the whole
-    # tree generically rather than hand-listing individual files here.
-    # A prior version of this script only special-cased htmx.min.js and
-    # icons/brands/*.svg by name; any new vendored file (e.g. Chart.js,
-    # added for the Reports page in v5.1.4) silently never made it to
-    # $INSTALL_DIR, so it 404'd with no visible error. This also drops
-    # the old fallback that downloaded htmx from unpkg.com over the
-    # network if missing locally — everything needed is already bundled
-    # in the package, so there's no reason for install-time internet
-    # access at all. static/icons/custom/ is gitignored runtime user
-    # data, not part of the package, so this copy never touches it.
-    #
-    # favicon.ico is a separate case: it IS shipped in the package as
-    # the stock default, but it's also the exact path Settings > System
-    # writes a user-uploaded favicon to. A blanket copy here would
-    # silently overwrite a real uploaded favicon with the stock one on
-    # every upgrade. Preserve whatever favicon.ico already exists
-    # (default or custom — both mean "leave it alone") and only install
-    # the shipped default when none exists yet.
-    spinner_start "Installing static assets (JS, icons, favicon)..."
-    if [[ -f "$INSTALL_DIR/static/favicon.ico" ]]; then
-        cp "$INSTALL_DIR/static/favicon.ico" /tmp/jen_favicon_preserve.ico
-    fi
-    cp -r "$SCRIPT_DIR/static/." "$INSTALL_DIR/static/"
-    if [[ -f /tmp/jen_favicon_preserve.ico ]]; then
-        cp /tmp/jen_favicon_preserve.ico "$INSTALL_DIR/static/favicon.ico"
-        rm -f /tmp/jen_favicon_preserve.ico
-    fi
-    spinner_stop
-    ok "Installed static assets  ${DIM}($(find "$SCRIPT_DIR/static" -type f | wc -l) files)${NC}"
-
+    # v5.13.0 — the whole application tree is root-owned and read-only to
+    # the service user. User-writable content lives under $CONTENT_DIR
+    # (migrate_content, above, chowns that to $JEN_USER). jen.config keeps
+    # its own service-user ownership (write_config, below).
     spinner_start "Setting permissions..."
-    chown -R "$JEN_USER:$JEN_USER" "$INSTALL_DIR" "$CONFIG_DIR"
+    chown -R root:root "$INSTALL_DIR"
+    chmod -R a+rX "$INSTALL_DIR"
+    chown -R "$JEN_USER:$JEN_USER" "$CONFIG_DIR"
     spinner_stop
-    ok "Permissions set  ${DIM}(owner: ${JEN_USER})${NC}"
+    ok "Permissions set  ${DIM}(app tree: root, content: ${JEN_USER})${NC}"
     blank
+}
+
+# ── Byte-compile the app as root ─────────────────────────────────────────────
+# v5.13.0 — /opt/jen is root-owned now, so $JEN_USER can't write __pycache__.
+# Compile with the venv interpreter (built by setup_venv) so the .pyc match
+# what actually runs.
+compile_app() {
+    local py="$VENV_PY"
+    [[ -x "$py" ]] || py="python3"
+    "$py" -m compileall -q "$INSTALL_DIR/jen" "$INSTALL_DIR/plugins" >/dev/null 2>&1 || true
 }
 
 # ── Start service ─────────────────────────────────────────────────────────────
@@ -1370,7 +1421,7 @@ main() {
         blank
         if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
             spinner_start "Backing up Jen and Kea databases..."
-            mkdir -p /opt/jen/backups
+            mkdir -p /var/lib/jen/backups
             # $PYBIN is the venv python on a 5.8.x→ upgrade, else system
             # python3 (which a pre-5.8.0 install populated with pymysql).
             if "$PYBIN" -c "
@@ -1397,7 +1448,7 @@ for which in ['jen','kea']:
             data[tbl] = [{k: str(v) if hasattr(v,'isoformat') else v for k,v in r.items()} for r in rows]
         conn.close()
         payload = {'_meta':{'database':which,'exported_at':ts,'jen_export_version':1,'tables':tables},'data':data}
-        fname = f'/opt/jen/backups/{which}-pre-upgrade-${JEN_VERSION}-{ts}.json.gz'
+        fname = f'/var/lib/jen/backups/{which}-pre-upgrade-${JEN_VERSION}-{ts}.json.gz'
         with gzip.open(fname,'wt',encoding='utf-8') as f:
             json.dump(payload,f,default=str)
         import os; os.chmod(fname,0o600)
@@ -1406,7 +1457,7 @@ for which in ['jen','kea']:
         print(f'fail:{which}:{e}', file=sys.stderr)
 " 2>/tmp/jen_backup_err; then
                 spinner_stop
-                ok "Pre-upgrade backups saved to /opt/jen/backups/"
+                ok "Pre-upgrade backups saved to /var/lib/jen/backups/"
             else
                 spinner_stop
                 warn "Pre-upgrade backup failed (non-fatal) — check /tmp/jen_backup_err"
@@ -1418,8 +1469,10 @@ for which in ['jen','kea']:
     install_dependencies
     collect_config
     backup_existing
+    migrate_content
     install_files
     setup_venv
+    compile_app
     write_config
     start_service
     verify_install

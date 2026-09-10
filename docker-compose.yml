@@ -26,9 +26,14 @@ services:
       - "${HTTP_PORT:-5050}:5050"
       - "${HTTPS_PORT:-8443}:8443"
     volumes:
-      # Persistent config, certs, SSH keys, and backups
+      # Persistent config, certs, SSH keys
       - jen-config:/etc/jen
-      # Persistent custom brand icons — survives container updates
+      # Persistent user content — uploaded icons/logo/favicon, DB backups,
+      # registry-installed plugins. v5.13.0 moved this out of /opt/jen.
+      - jen-content:/var/lib/jen
+      # v5.13.0 transition: keep the old volume mounted for ONE release so
+      # the app-side migration can copy pre-5.13 custom icons into
+      # jen-content on first start. Remove after upgrading — see docs/docker.md.
       - jen-icons:/opt/jen/static/icons/custom
       # Escape hatch: mount a hand-written jen.config instead of using env vars.
       # - ./jen.config:/etc/jen/jen.config:ro
@@ -52,6 +57,8 @@ services:
 volumes:
   jen-config:
     name: jen-config
+  jen-content:
+    name: jen-content
   jen-icons:
     name: jen-icons
 

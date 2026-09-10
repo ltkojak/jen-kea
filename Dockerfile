@@ -33,23 +33,26 @@ RUN groupadd -r www-data 2>/dev/null || true && \
     useradd -r -g www-data -s /sbin/nologin www-data 2>/dev/null || true
 
 # Create directories
-RUN mkdir -p /opt/jen/static/icons/brands \
-             /opt/jen/static/icons/custom \
-             /opt/jen/templates \
-             /etc/jen/ssl /etc/jen/ssh /etc/jen/backups
+RUN mkdir -p /opt/jen/templates \
+             /etc/jen/ssl /etc/jen/ssh /etc/jen/backups \
+             /var/lib/jen/icons /var/lib/jen/branding /var/lib/jen/backups \
+             /var/lib/jen/plugins /var/lib/jen/plugins-enabled /var/lib/jen/keys
 
 # Copy application files
 COPY run.py        /opt/jen/run.py
 COPY jen/          /opt/jen/jen/
 COPY templates/    /opt/jen/templates/
 COPY static/       /opt/jen/static/
+COPY plugins/      /opt/jen/plugins/
 COPY jen-kea-helper /opt/jen/jen-kea-helper
 
-# Set permissions
-RUN chown -R www-data:www-data /opt/jen /etc/jen
+# v5.13.0 — the application tree is root-owned and read-only to the service
+# user; user-writable content is under /var/lib/jen.
+RUN chown -R root:root /opt/jen && chmod -R a+rX /opt/jen && \
+    chown -R www-data:www-data /etc/jen /var/lib/jen && chmod 750 /var/lib/jen
 
-# Volumes — persist config, certs, SSH keys, backups, and custom icons
-VOLUME ["/etc/jen", "/opt/jen/static/icons/custom"]
+# Volumes — persist config/certs/SSH keys and all user-writable content.
+VOLUME ["/etc/jen", "/var/lib/jen"]
 
 # Expose ports
 EXPOSE 5050 8443

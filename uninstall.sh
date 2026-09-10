@@ -9,6 +9,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
+CONTENT_DIR="/var/lib/jen"          # v5.13.0 — uploads, DB backups, plugins
 SERVICE_FILE="/etc/systemd/system/jen.service"
 SUDOERS_FILE="/etc/sudoers.d/jen"
 
@@ -80,7 +81,7 @@ blank
 info "Config file:   ${CONFIG_DIR}/jen.config"
 info "SSL certs:     ${CONFIG_DIR}/ssl/"
 info "SSH keys:      ${CONFIG_DIR}/ssh/"
-info "Backups:       ${CONFIG_DIR}/backups/"
+info "User content:  ${CONTENT_DIR}/  ${DIM}(uploads, DB backups, plugins)${NC}"
 blank
 echo -e "  ${DIM}These are kept so you can reinstall without losing your setup.${NC}"
 echo -e "  ${DIM}You can optionally remove them too — you'll be asked below.${NC}"
@@ -112,9 +113,9 @@ fi
 blank
 echo -e "  ${B}Config + data removal:${NC}"
 blank
-echo -e "    ${B}1)${NC}  Remove app only  ${DIM}(keep config, certs, keys, backups)${NC}  ${G}← recommended${NC}"
-echo -e "    ${B}2)${NC}  Remove app + config  ${DIM}(keep certs, keys, backups)${NC}"
-echo -e "    ${B}3)${NC}  Remove everything  ${R}(wipe all Jen data — irreversible)${NC}"
+echo -e "    ${B}1)${NC}  Remove app only  ${DIM}(keep config, certs, keys, uploads, backups)${NC}  ${G}← recommended${NC}"
+echo -e "    ${B}2)${NC}  Remove app + config  ${DIM}(keep certs, keys, uploads, backups)${NC}"
+echo -e "    ${B}3)${NC}  Remove everything  ${R}(wipe all Jen data, uploads, and backups — irreversible)${NC}"
 blank
 printf "  ${Y}  ▸${NC} Choice [1]: "
 read -r REMOVAL_LEVEL
@@ -180,8 +181,8 @@ fi
 
 # ── Level 3: remove everything ────────────────────────────────────────────────
 if [[ "$REMOVAL_LEVEL" == "3" ]]; then
-    rm -rf "$CONFIG_DIR"
-    ok "Removed all Jen data  ${DIM}(${CONFIG_DIR})${NC}"
+    rm -rf "$CONFIG_DIR" "$CONTENT_DIR"
+    ok "Removed all Jen data  ${DIM}(${CONFIG_DIR}, ${CONTENT_DIR})${NC}"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
