@@ -67,6 +67,15 @@
             </div>
         </div>
 
+        <div class="form-group">
+            <label>Shared Network</label>
+            <select name="shared_network" id="f-network">
+                <option value="">— none (top-level subnet) —</option>
+                {% for n in shared_networks %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
+            </select>
+            <div class="form-hint">Optional. Subnets in one shared network share pool space and client classification.</div>
+        </div>
+
         <div style="display:flex;gap:8px;margin-top:16px;">
             <button type="button" class="btn btn-primary" onclick="showConfirm()">➕ Create Subnet</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
@@ -119,11 +128,13 @@ function showConfirm() {
         var okBtn = document.querySelector('#confirm-panel .btn-primary');
         if (okBtn) okBtn.disabled = true;
     } else {
+        var net = document.getElementById('f-network').value;
         summary.innerHTML =
             '<div><span style="color:var(--text-muted);">Subnet ID:</span> <span style="color:var(--primary);">' + id + '</span></div>' +
             '<div><span style="color:var(--text-muted);">Name:</span> <span style="color:var(--primary);">' + name + '</span></div>' +
             '<div><span style="color:var(--text-muted);">CIDR:</span> <span style="color:var(--primary);">' + cidr + '</span></div>' +
-            '<div><span style="color:var(--text-muted);">Pool:</span> <span style="color:var(--primary);">' + pool + '</span></div>';
+            '<div><span style="color:var(--text-muted);">Pool:</span> <span style="color:var(--primary);">' + pool + '</span></div>' +
+            (net ? '<div><span style="color:var(--text-muted);">Shared network:</span> <span style="color:var(--primary);">' + net + '</span></div>' : '');
         var okBtn2 = document.querySelector('#confirm-panel .btn-primary');
         if (okBtn2) okBtn2.disabled = false;
     }

@@ -46,18 +46,47 @@ function saveNote(id) {
 <div class="alert alert-warning">💡 Subnet editing requires SSH to be configured. Go to <a href="/settings/kea#kea-ssh">Settings → Kea → SSH Key Management</a> to set it up.</div>
 {% endif %}
 
+{% set grp = namespace(cur=false) %}
 {% for s in subnets %}
+{% if s.shared_network != grp.cur %}
+    {% set grp.cur = s.shared_network %}
+    {% if s.shared_network %}
+    <h2 style="margin:24px 0 8px;font-size:16px;">
+        Shared network: {{ s.shared_network }}{% for n in shared_networks if n.name == s.shared_network and n.interface %} · {{ n.interface }}{% endfor %}
+        {% if can_manage_networks and ssh_ready %}
+        <form method="POST" action="/subnets/shared-networks/delete" style="display:inline;margin-left:8px;" onsubmit="return false;"
+              data-confirm="Delete shared network '{{ s.shared_network }}'? It must have no subnets left. Kea restarts.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="name" value="{{ s.shared_network }}">
+            <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️ Delete network</button>
+        </form>
+        {% endif %}
+    </h2>
+    {% else %}
+    <h2 style="margin:8px 0;font-size:16px;">Subnets</h2>
+    {% endif %}
+{% endif %}
 <div class="card">
     <div class="card-header">
         <div style="display:flex;align-items:center;gap:12px;">
             <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
             <span class="mono" style="font-size:15px;">{{ s.cidr }}</span>
+            {% if s.shared_network %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);" title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
             {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
             <span class="badge badge-production" title="Paired IPv6 subnet">IPv6</span>
             {% endfor %}
         </div>
         {% if current_user.role in ('superadmin','admin') and ssh_ready %}
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+            {% if can_manage_networks and (shared_networks or s.shared_network) %}
+            <form method="POST" action="/subnets/move/{{ s.id }}" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <select name="shared_network" onchange="this.form.submit()" title="Move this subnet" style="font-size:12px;padding:2px 4px;">
+                    <option value="" {% if not s.shared_network %}selected{% endif %}>— top level —</option>
+                    {% for n in shared_networks %}<option value="{{ n.name }}" {% if s.shared_network == n.name %}selected{% endif %}>{{ n.name }}</option>{% endfor %}
+                </select>
+            </form>
+            {% endif %}
             <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
             <form method="POST" action="/subnets/delete/{{ s.id }}" style="display:inline;"
                   onsubmit="return false;"
@@ -173,6 +202,25 @@ function saveNote(id) {
     {% endfor %}
 </div>
 {% endfor %}
+
+{% if can_manage_networks and ssh_ready %}
+<div class="card">
+    <div class="card-header"><span class="card-title">➕ New shared network</span></div>
+    <form method="POST" action="/subnets/shared-networks/add" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group" style="margin:0;">
+            <label>Name</label>
+            <input type="text" name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" placeholder="e.g. guest-wifi">
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label>Interface</label>
+            <input type="text" name="interface" placeholder="optional, e.g. eth1">
+        </div>
+        <button type="submit" class="btn btn-sm btn-primary">Create</button>
+    </form>
+    <p class="form-hint" style="margin-top:8px;">Empty to start — add subnets to it from the Add Subnet form, or move existing ones in with the dropdown on each card.</p>
+</div>
+{% endif %}
 
 {% for s6 in subnets6 if not s6.paired_subnet4_id %}
 <div class="card">

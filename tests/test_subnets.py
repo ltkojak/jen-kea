@@ -460,3 +460,177 @@ class TestSubnetApplyViaHostClient:
         r = logged_in_client.post("/subnets/edit/1", data={"pool": "10.0.0.5-10.0.0.9"}, follow_redirects=True)
         assert r.status_code == 200
         assert b"legacy root" in r.data
+
+
+class TestSharedNetworks:
+    """v5.15.0 — subnets inside Dhcp4.shared-networks are visible and
+    editable; new routes create/delete networks and move subnets."""
+
+    def _wire(self, monkeypatch, dhcp4):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
+
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr("jen.config.write_subnets_config", lambda m: None)
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 0, "arguments": dhcp4})
+        monkeypatch.setattr(
+            kea_svc,
+            "get_active_kea_server",
+            lambda: {"id": 1, "name": "Kea A", "api_url": "http://x", "api_user": "u", "api_pass": "p"},
+        )
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp4")] = {"Dhcp4": dhcp4["Dhcp4"]}
+        fake.responses["apply-config"] = {"ok": True, "backup": None}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        return fake
+
+    _NESTED = {
+        "Dhcp4": {
+            "subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "pools": [{"pool": "10.0.0.10 - 10.0.0.99"}]}],
+            "shared-networks": [
+                {
+                    "name": "guest",
+                    "interface": "eth1",
+                    "subnet4": [
+                        {"id": 70, "subnet": "10.0.70.0/24", "pools": [{"pool": "10.0.70.10 - 10.0.70.99"}]},
+                        {"id": 71, "subnet": "10.0.71.0/24"},
+                    ],
+                },
+                {"name": "iot", "subnet4": []},
+            ],
+        }
+    }
+
+    def _seed_map(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {
+                1: {"name": "LAN", "cidr": "10.0.0.0/24"},
+                70: {"name": "Guest", "cidr": "10.0.70.0/24"},
+                71: {"name": "Guest2", "cidr": "10.0.71.0/24"},
+            },
+        )
+
+    def test_page_groups_nested_subnets_under_a_heading(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.get("/subnets")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "Shared network: guest" in body and "eth1" in body
+        assert ">shared<" in body  # the chip
+        assert "New shared network" in body
+
+    def test_edit_a_nested_subnet_applies_the_change(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post("/subnets/edit/70", data={"pool": "10.0.70.5-10.0.70.250"}, follow_redirects=True)
+        assert r.status_code == 200
+        applied = fake.payload_for("apply-config")["config"]["Dhcp4"]["shared-networks"][0]["subnet4"][0]
+        assert applied["pools"] == [{"pool": "10.0.70.5-10.0.70.250"}]
+
+    def test_add_subnet_into_a_shared_network(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        monkeypatch.setattr("jen.routes.subnets._get_kea_subnet_ids", lambda: set())
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post(
+            "/subnets/add",
+            data={
+                "subnet_id": "72",
+                "name": "Cam",
+                "cidr": "10.0.72.0/24",
+                "pool": "10.0.72.10-10.0.72.99",
+                "shared_network": "guest",
+            },
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        guest = fake.payload_for("apply-config")["config"]["Dhcp4"]["shared-networks"][0]
+        assert [s["id"] for s in guest["subnet4"]] == [70, 71, 72]
+
+    def test_create_shared_network(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post(
+            "/subnets/shared-networks/add", data={"name": "cameras", "interface": "eth2"}, follow_redirects=True
+        )
+        assert r.status_code == 200
+        names = [n["name"] for n in fake.payload_for("apply-config")["config"]["Dhcp4"]["shared-networks"]]
+        assert "cameras" in names
+
+    def test_create_shared_network_rejects_bad_name(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        for bad in ("../etc", "has space", "semi;colon"):
+            r = logged_in_client.post("/subnets/shared-networks/add", data={"name": bad}, follow_redirects=True)
+            assert b"Invalid shared network name" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_delete_non_empty_shared_network_refused(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post("/subnets/shared-networks/delete", data={"name": "guest"}, follow_redirects=True)
+        assert b"still has subnets" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_delete_empty_shared_network(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post("/subnets/shared-networks/delete", data={"name": "iot"}, follow_redirects=True)
+        assert r.status_code == 200
+        left = [n["name"] for n in fake.payload_for("apply-config")["config"]["Dhcp4"]["shared-networks"]]
+        assert left == ["guest"]
+
+    def test_move_subnet_into_a_network(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post("/subnets/move/1", data={"shared_network": "iot"}, follow_redirects=True)
+        assert r.status_code == 200
+        cfg = fake.payload_for("apply-config")["config"]["Dhcp4"]
+        assert cfg.get("subnet4", []) == []
+        assert [s["id"] for s in cfg["shared-networks"][1]["subnet4"]] == [1]
+
+    def test_move_nochange_does_not_apply(self, logged_in_client, monkeypatch, mock_kea):
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.post("/subnets/move/1", data={"shared_network": ""}, follow_redirects=True)
+        assert b"already there" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_restricted_admin_cannot_move_a_subnet_they_do_not_own(self, client, db, monkeypatch, mock_kea):
+        from tests.conftest import restricted_client as _rc
+
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        _rc(client, db, allowed_subnets=[1], role="admin", username="sn_restricted")
+        r = client.post("/subnets/move/70", data={"shared_network": "iot"}, follow_redirects=True)
+        assert b"do not have access" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_restricted_admin_cannot_delete_a_network(self, client, db, monkeypatch, mock_kea):
+        from tests.conftest import restricted_client as _rc
+
+        self._seed_map(monkeypatch)
+        fake = self._wire(monkeypatch, self._NESTED)
+        _rc(client, db, allowed_subnets=[1], role="admin", username="sn_restricted2")
+        r = client.post("/subnets/shared-networks/delete", data={"name": "iot"}, follow_redirects=True)
+        assert b"access to all subnets" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_audit_rows_written(self, logged_in_client, monkeypatch, mock_kea, db):
+        self._seed_map(monkeypatch)
+        self._wire(monkeypatch, self._NESTED)
+        logged_in_client.post("/subnets/shared-networks/add", data={"name": "aud1"}, follow_redirects=True)
+        logged_in_client.post("/subnets/move/1", data={"shared_network": "iot"}, follow_redirects=True)
+        with db.cursor() as cur:
+            cur.execute("SELECT action FROM audit_log WHERE action IN ('ADD_SHARED_NETWORK','MOVE_SUBNET')")
+            actions = {r["action"] for r in cur.fetchall()}
+        assert {"ADD_SHARED_NETWORK", "MOVE_SUBNET"} <= actions

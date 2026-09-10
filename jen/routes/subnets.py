@@ -14,6 +14,7 @@ from flask_login import current_user, login_required
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.auth as __auth
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_edit as __edit
@@ -43,10 +44,12 @@ def subnets():
     subnet_data = []
     # Fetch Kea config for lease times, timers, pools
     kea_subnets = {}
+    shared_networks = []
     try:
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
             cfg = result["arguments"]["Dhcp4"]
+            shared_networks = __view.shared_networks4(cfg)
             global_lifetime = cfg.get("valid-lifetime", 0)
             global_renew = cfg.get("renew-timer", 0)
             global_rebind = cfg.get("rebind-timer", 0)
@@ -97,11 +100,19 @@ def subnets():
                             "pools": kea.get("pools", []),
                             "routers": kea.get("routers", ""),
                             "dns_servers": kea.get("dns_servers", ""),
+                            "shared_network": kea.get("shared_network"),
                         }
                     )
     except Exception as e:
         logger.error(f"Could not load subnet data: {e}")
         flash("Could not load subnet data. Check server logs for details.", "error")
+
+    # v5.15.0 — order the cards: top-level subnets first, then grouped by
+    # shared network in the order Kea declares them. The template renders a
+    # heading whenever `shared_network` changes.
+    _net_order = {n["name"]: i for i, n in enumerate(shared_networks)}
+    subnet_data.sort(key=lambda d: (d.get("shared_network") is not None, _net_order.get(d.get("shared_network"), 0)))
+
     ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
     subnet_notes = {}
     try:
@@ -117,6 +128,8 @@ def subnets():
         ssh_ready=ssh_ready,
         subnet_notes=subnet_notes,
         subnets6=_get_subnets6_data(),
+        shared_networks=shared_networks,
+        can_manage_networks=current_user.all_subnets,
     )
 
 
@@ -226,7 +239,14 @@ def add_subnet():
     if not ssh_ready:
         flash("Subnet creation requires SSH to be configured. Go to Settings → Kea → SSH to set it up.", "error")
         return redirect(url_for("subnets.subnets"))
-    return render_template("add_subnet.html", suggested_id=suggested_id)
+    shared_networks = []
+    try:
+        _r = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        if _r.get("result") == 0:
+            shared_networks = [n["name"] for n in __view.shared_networks4(_r["arguments"].get("Dhcp4", {}))]
+    except Exception:
+        pass
+    return render_template("add_subnet.html", suggested_id=suggested_id, shared_networks=shared_networks)
 
 
 @bp.route("/subnets/add", methods=["POST"])
@@ -251,8 +271,12 @@ def add_subnet_post():
     rebind = request.form.get("rebind_timer", "").strip()
     routers = ",".join(s.strip() for s in request.form.get("routers", "").split(",") if s.strip())
     dns = ",".join(s.strip() for s in request.form.get("dns_servers", "").split(",") if s.strip())
+    shared_network = request.form.get("shared_network", "").strip()
 
     # ── Validation — catch everything before touching Kea or Jen's config ─────
+    if shared_network and not __auth.valid_shared_network_name(shared_network):
+        flash("Invalid shared network name.", "error")
+        return redirect(url_for("subnets.add_subnet"))
     if not new_id or not new_id.isdigit() or int(new_id) <= 0:
         flash("Subnet ID must be a positive whole number.", "error")
         return redirect(url_for("subnets.add_subnet"))
@@ -347,9 +371,12 @@ def add_subnet_post():
             if cfg is None:
                 errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
                 continue
-            cfg, code = __edit.add_subnet4(cfg, new_subnet_block)
+            cfg, code = __edit.add_subnet4(cfg, new_subnet_block, shared_network=shared_network or None)
             if code == "idexists":
                 errors.append(f"❌ {name}: subnet ID {new_id} already exists on this server")
+                continue
+            if code == "nonetwork":
+                errors.append(f'❌ {name}: no shared network named "{shared_network}" on this server')
                 continue
             res = __host.apply_config(server, "dhcp4", cfg)
             if res["code"] == "ok":
@@ -385,7 +412,8 @@ def add_subnet_post():
     new_map[new_id] = {"name": new_name, "cidr": new_cidr}
     __config.write_subnets_config(new_map)
 
-    __user.audit("ADD_SUBNET", str(new_id), f"name={new_name} cidr={new_cidr} pool={new_pool}")
+    _net_note = f" network={shared_network}" if shared_network else ""
+    __user.audit("ADD_SUBNET", str(new_id), f"name={new_name} cidr={new_cidr} pool={new_pool}{_net_note}")
     return redirect(url_for("subnets.subnets"))
 
 
@@ -758,6 +786,136 @@ def edit_subnet_post(subnet_id):
         changes.append(f"dns={new_dns}")
     __user.audit("EDIT_SUBNET", str(subnet_id), ", ".join(changes) if changes else "no changes")
 
+    return redirect(url_for("subnets.subnets"))
+
+
+# ── Shared networks (v5.15.0) ───────────────────────────────────────────────
+
+
+def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages):
+    """v5.15.0 — read → mutate → apply → restart against every SSH-capable
+    Kea server, mirroring edit_subnet_post. `mutate_fn(cfg) -> (cfg, code)`;
+    `code_messages` maps a non-"ok" code to the flash text (error, nothing
+    pushed). Flashes per-server results; returns the last mutate code so
+    the caller can pick a redirect. "noservers" when nothing is
+    SSH-reachable."""
+    errors, results = [], []
+    last_code = "noservers"
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        name = server.get("name", server["ssh_host"])
+        try:
+            cfg = __host.read_config(server, "dhcp4")
+            if cfg is None:
+                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
+                continue
+            cfg, code = mutate_fn(cfg)
+            last_code = code
+            if code != "ok":
+                errors.append(f"❌ {name}: {code_messages.get(code, code)}")
+                continue
+            res = __host.apply_config(server, "dhcp4", cfg)
+            if res["code"] == "ok":
+                restart = __host.service_action(server, "dhcp4", "restart")
+                if restart["ok"]:
+                    results.append(f"✅ {name}: {done_phrase}, Kea restarted")
+                else:
+                    results.append(f"✅ {name}: {done_phrase} — restart Kea manually ({restart['detail']})")
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "testerror":
+                errors.append(
+                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
+                    f"Error: {res['detail']}"
+                )
+            else:
+                errors.append(f"❌ {name}: {res['detail']}")
+        except Exception as e:
+            errors.append(f"❌ {name}: {e}")
+
+    for r in results:
+        flash(r, "success")
+    for e in errors:
+        flash(e, "error")
+    return last_code
+
+
+@bp.route("/subnets/shared-networks/add", methods=["POST"])
+@login_required
+@_admin_required
+def add_shared_network():
+    name = request.form.get("name", "").strip()
+    interface = request.form.get("interface", "").strip() or None
+    if not __auth.valid_shared_network_name(name):
+        flash("Invalid shared network name — letters, digits, and _.- only (1-64 chars).", "error")
+        return redirect(url_for("subnets.subnets"))
+    if interface and not re.match(r"^[A-Za-z0-9_.:-]{1,32}$", interface):
+        flash("Invalid interface name.", "error")
+        return redirect(url_for("subnets.subnets"))
+
+    code = _apply_dhcp4_change(
+        lambda cfg: __edit.create_shared_network4(cfg, name, interface),
+        f'shared network "{name}" created',
+        {"exists": f'a shared network named "{name}" already exists'},
+    )
+    if code == "ok":
+        __user.audit("ADD_SHARED_NETWORK", name, f"interface={interface}" if interface else "")
+    return redirect(url_for("subnets.subnets"))
+
+
+@bp.route("/subnets/shared-networks/delete", methods=["POST"])
+@login_required
+@_admin_required
+def delete_shared_network():
+    if not current_user.all_subnets:
+        flash("Deleting a shared network needs access to all subnets.", "error")
+        return redirect(url_for("subnets.subnets"))
+    name = request.form.get("name", "").strip()
+    if not __auth.valid_shared_network_name(name):
+        flash("Invalid shared network name.", "error")
+        return redirect(url_for("subnets.subnets"))
+
+    code = _apply_dhcp4_change(
+        lambda cfg: __edit.delete_shared_network4(cfg, name),
+        f'shared network "{name}" deleted',
+        {
+            "notfound": f'no shared network named "{name}"',
+            "notempty": f'"{name}" still has subnets — move them out first',
+        },
+    )
+    if code == "ok":
+        __user.audit("DELETE_SHARED_NETWORK", name, "")
+    return redirect(url_for("subnets.subnets"))
+
+
+@bp.route("/subnets/move/<int:subnet_id>", methods=["POST"])
+@login_required
+@_admin_required
+def move_subnet(subnet_id):
+    if subnet_id not in extensions.SUBNET_MAP:
+        flash("Subnet not found.", "error")
+        return redirect(url_for("subnets.subnets"))
+    if not current_user.can_access_subnet(subnet_id):
+        flash("You do not have access to that subnet.", "error")
+        return redirect(url_for("subnets.subnets"))
+    target = request.form.get("shared_network", "").strip()
+    if target and not __auth.valid_shared_network_name(target):
+        flash("Invalid shared network name.", "error")
+        return redirect(url_for("subnets.subnets"))
+
+    where = f'to "{target}"' if target else "to the top level"
+    code = _apply_dhcp4_change(
+        lambda cfg: __edit.move_subnet4(cfg, subnet_id, target),
+        f"subnet {subnet_id} moved {where}",
+        {
+            "notfound": f"subnet {subnet_id} is not in the live Kea config",
+            "nonetwork": f'no shared network named "{target}"',
+            "nochange": f"subnet {subnet_id} is already there",
+        },
+    )
+    if code == "ok":
+        __user.audit("MOVE_SUBNET", str(subnet_id), f"network={target or '(top level)'}")
     return redirect(url_for("subnets.subnets"))
 
 
