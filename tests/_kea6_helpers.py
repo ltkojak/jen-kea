@@ -11,9 +11,10 @@ class FakeSSHClient:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
+        self.stdin_writes = []  # every payload written to a command's stdin, in order
         self.closed = False
 
-    def exec_command(self, cmd):
+    def exec_command(self, cmd, **_kwargs):  # accept + ignore timeout=, bufsize=, …
         self.calls.append(cmd)
         resp = self._responses.pop(0) if self._responses else ("", "")
         if len(resp) == 3:
@@ -29,6 +30,9 @@ class FakeSSHClient:
             def recv_exit_status(self):
                 return self._status
 
+            def shutdown_write(self):
+                pass
+
         class _Stream:
             def __init__(self, text, channel=None):
                 self._text = text
@@ -37,8 +41,22 @@ class FakeSSHClient:
             def read(self):
                 return self._text.encode()
 
+        class _Stdin:
+            # v5.11.0 — jen/services/kea_host.py writes a JSON request to
+            # the helper's stdin. Record it; older tests unpack this as
+            # `_` and never touch it.
+            def __init__(self, sink, channel):
+                self._sink = sink
+                self.channel = channel
+
+            def write(self, data):
+                self._sink.append(data)
+
+            def flush(self):
+                pass
+
         channel = _Channel(exit_status)
-        return None, _Stream(out, channel), _Stream(err, channel)
+        return _Stdin(self.stdin_writes, channel), _Stream(out, channel), _Stream(err, channel)
 
     def close(self):
         self.closed = True

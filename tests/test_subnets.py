@@ -107,226 +107,9 @@ class TestParseAndValidateSubnetEditForm:
         assert "Rebind Timer must be a positive integer" in error
 
 
-class TestBuildSubnetPatchScript:
-    """v4.4.24: extracted from edit_subnet_post()'s inline script so the
-    new preview endpoint (dry_run=True) can reuse the exact same
-    tested patch-and-validate logic without duplicating it."""
-
-    def test_dry_run_false_matches_original_inline_script_byte_for_byte(self):
-        """The refactor must not change edit_subnet_post()'s actual
-        behavior at all — this is a literal string-equality check
-        against a copy of the pre-refactor inline script."""
-        from jen.routes.subnets import _build_subnet_patch_script
-
-        subnet_id, kea_conf = 5, "/etc/kea/kea-dhcp4.conf"
-        new_pool, extra_pools = "10.0.0.10-10.0.0.200", ["10.0.1.10-10.0.1.200"]
-        new_lifetime, new_renew, new_rebind = "3600", "1800", "3150"
-        new_routers, new_dns = "10.0.0.1", "9.9.9.9,1.1.1.1"
-
-        original = f"""
-import json, sys, shutil, subprocess, os, tempfile
-
-path   = {repr(kea_conf)}
-backup = path + '.jen_backup'
-
-# Make a backup before touching anything
-shutil.copy2(path, backup)
-
-with open(path) as f:
-    cfg = json.load(f)
-
-changed = False
-for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
-    if s['id'] != {subnet_id}:
-        continue
-    new_pool = {repr(new_pool)}
-    if new_pool:
-        extra_pools = {repr(extra_pools)}
-        s['pools'] = [{{'pool': new_pool}}] + [{{'pool': p}} for p in extra_pools]
-        changed = True
-    new_lifetime = {repr(new_lifetime)}
-    new_renew    = {repr(new_renew)}
-    new_rebind   = {repr(new_rebind)}
-    if new_lifetime:
-        s['valid-lifetime'] = int(new_lifetime); changed = True
-    if new_renew:
-        s['renew-timer'] = int(new_renew); changed = True
-    if new_rebind:
-        s['rebind-timer'] = int(new_rebind); changed = True
-    new_routers = {repr(new_routers)}
-    new_dns     = {repr(new_dns)}
-    if new_routers or new_dns:
-        opts = s.get('option-data', [])
-        if new_routers:
-            found = False
-            for o in opts:
-                if o.get('name') == 'routers':
-                    o['data'] = new_routers; found = True; break
-            if not found:
-                opts.append({{'name': 'routers', 'code': 3, 'space': 'dhcp4',
-                              'csv-format': True, 'data': new_routers}})
-            changed = True
-        if new_dns:
-            found = False
-            for o in opts:
-                if o.get('name') == 'domain-name-servers':
-                    o['data'] = new_dns; found = True; break
-            if not found:
-                opts.append({{'name': 'domain-name-servers', 'code': 6, 'space': 'dhcp4',
-                              'csv-format': True, 'data': new_dns}})
-            changed = True
-        s['option-data'] = opts
-    break
-
-if not changed:
-    print('nochange')
-    sys.exit(0)
-
-# Write to a temp file first, test it, then move into place
-tmp = path + '.jen_tmp'
-with open(tmp, 'w') as f:
-    json.dump(cfg, f, indent=2)
-
-# Run kea-dhcp4 -t against the temp file
-try:
-    result = subprocess.run(
-        ['kea-dhcp4', '-t', tmp],
-        capture_output=True, text=True
-    )
-except FileNotFoundError:
-    os.unlink(tmp)
-    print('missingbinary:kea-dhcp4')
-    sys.exit(1)
-combined = result.stdout + result.stderr
-
-if result.returncode != 0 or 'ERROR' in combined:
-    # Config test failed — clean up temp, leave original untouched
-    os.unlink(tmp)
-    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
-    print('testerror:' + ' | '.join(error_lines[:3]))
-    sys.exit(1)
-
-# Config test passed — move temp into place
-os.replace(tmp, path)
-print('ok')
-"""
-        actual = _build_subnet_patch_script(
-            subnet_id,
-            kea_conf,
-            new_pool,
-            extra_pools,
-            new_lifetime,
-            new_renew,
-            new_rebind,
-            new_routers,
-            new_dns,
-            dry_run=False,
-        )
-        assert actual == original
-
-    def test_both_modes_produce_valid_python(self):
-        import ast
-
-        from jen.routes.subnets import _build_subnet_patch_script
-
-        for dry_run in (False, True):
-            script = _build_subnet_patch_script(
-                5,
-                "/etc/kea/kea-dhcp4.conf",
-                "10.0.0.10-10.0.0.200",
-                [],
-                "3600",
-                "",
-                "",
-                "",
-                "",
-                dry_run=dry_run,
-            )
-            ast.parse(script)  # raises on invalid syntax
-
-    def test_dry_run_true_never_writes_the_live_config(self, tmp_path):
-        """Actually execute the generated script (not just parse it),
-        with a fake kea-dhcp4 binary standing in for the real one, and
-        confirm via a real file hash that dry_run=True genuinely never
-        touches the original config — the guarantee the whole preview
-        feature depends on."""
-        import hashlib
-        import os
-        import subprocess
-
-        conf_path = tmp_path / "kea-dhcp4.conf"
-        conf_path.write_text('{"Dhcp4": {"subnet4": [{"id": 5, "pools": [{"pool": "10.0.0.10-10.0.0.100"}]}]}}')
-        original_hash = hashlib.md5(conf_path.read_bytes()).hexdigest()
-
-        fake_bin = tmp_path / "fakebin"
-        fake_bin.mkdir()
-        (fake_bin / "kea-dhcp4").write_text("#!/bin/bash\nexit 0\n")
-        os.chmod(fake_bin / "kea-dhcp4", 0o755)
-
-        from jen.routes.subnets import _build_subnet_patch_script
-
-        script = _build_subnet_patch_script(
-            5,
-            str(conf_path),
-            "10.0.0.10-10.0.0.200",
-            [],
-            "7200",
-            "",
-            "",
-            "",
-            "",
-            dry_run=True,
-        )
-        script_path = tmp_path / "script.py"
-        script_path.write_text(script)
-
-        env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
-        result = subprocess.run(["python3", str(script_path)], capture_output=True, text=True, env=env)
-
-        assert result.stdout.strip() == "preview-ok"
-        assert hashlib.md5(conf_path.read_bytes()).hexdigest() == original_hash, (
-            "dry_run=True must never modify the live config file"
-        )
-        # No leftover temp/backup files either
-        assert list(tmp_path.glob("*.jen_tmp")) == []
-        assert list(tmp_path.glob("*.jen_backup")) == []
-
-    def test_dry_run_true_on_failing_test_also_never_writes(self, tmp_path):
-        import hashlib
-        import os
-        import subprocess
-
-        conf_path = tmp_path / "kea-dhcp4.conf"
-        conf_path.write_text('{"Dhcp4": {"subnet4": [{"id": 5, "pools": [{"pool": "10.0.0.10-10.0.0.100"}]}]}}')
-        original_hash = hashlib.md5(conf_path.read_bytes()).hexdigest()
-
-        fake_bin = tmp_path / "fakebin"
-        fake_bin.mkdir()
-        (fake_bin / "kea-dhcp4").write_text('#!/bin/bash\necho "ERROR: bad config" >&2\nexit 1\n')
-        os.chmod(fake_bin / "kea-dhcp4", 0o755)
-
-        from jen.routes.subnets import _build_subnet_patch_script
-
-        script = _build_subnet_patch_script(
-            5,
-            str(conf_path),
-            "10.0.0.10-10.0.0.200",
-            [],
-            "",
-            "",
-            "",
-            "",
-            "",
-            dry_run=True,
-        )
-        script_path = tmp_path / "script.py"
-        script_path.write_text(script)
-
-        env = dict(os.environ, PATH=f"{fake_bin}:{os.environ['PATH']}")
-        result = subprocess.run(["python3", str(script_path)], capture_output=True, text=True, env=env)
-
-        assert result.stdout.strip().startswith("testerror:")
-        assert hashlib.md5(conf_path.read_bytes()).hexdigest() == original_hash
+# v5.11.0 — the config-mutation logic that used to live in
+# _build_subnet_patch_script() (and its byte-for-byte test here) moved to
+# jen/services/kea_config_edit.py; see tests/test_kea_config_edit.py.
 
 
 class TestComputeSubnetEditDiff:
@@ -393,9 +176,9 @@ class TestComputeSubnetEditDiff:
 
 class TestEditSubnetPreviewRoute:
     """Route-level tests using the real Flask test client. Paths that
-    reach the SSH loop are covered by mocking paramiko.SSHClient
-    directly — the auth/validation/no-op short-circuits below don't
-    need SSH mocking since they return before that loop ever runs."""
+    reach the per-server loop are covered with a FakeHelper (v5.11.0 —
+    the preview reads the config via kea_host.read_config, patches it
+    locally, and kea_host.test_config()s the candidate)."""
 
     def test_requires_login(self, client):
         r = client.post("/subnets/edit/1/preview", follow_redirects=False)
@@ -441,50 +224,36 @@ class TestEditSubnetPreviewRoute:
         assert data["servers"] == []
         assert data["all_passed"] is True
 
-    def test_ssh_test_pass_reports_ok(self, logged_in_client, monkeypatch):
-        from unittest.mock import MagicMock, patch
-
+    def _one_server(self, monkeypatch):
         from jen import extensions
+        from jen.services import kea_host
 
         monkeypatch.setattr(
             extensions, "KEA_SERVERS", [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
         )
         monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
+        from tests._kea_host_fakes import FakeHelper
 
-        fake_ssh = MagicMock()
-        fake_stdout = MagicMock()
-        fake_stdout.read.return_value = b"preview-ok"
-        fake_stderr = MagicMock()
-        fake_stderr.read.return_value = b""
-        fake_ssh.exec_command.return_value = (MagicMock(), fake_stdout, fake_stderr)
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp4")] = {"Dhcp4": {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}]}}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        return fake
 
-        with patch("paramiko.SSHClient", return_value=fake_ssh):
-            r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
+    def test_helper_test_pass_reports_ok(self, logged_in_client, monkeypatch):
+        fake = self._one_server(monkeypatch)
+        fake.responses["test-config"] = {"ok": True}
+        r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
         assert r.status_code == 200
         data = r.get_json()
         assert data["all_passed"] is True
         assert data["servers"][0]["ok"] is True
         assert data["servers"][0]["message"] == "Config test passed"
+        assert "test-config" in fake.ops()
 
-    def test_ssh_test_fail_reports_error_and_all_passed_false(self, logged_in_client, monkeypatch):
-        from unittest.mock import MagicMock, patch
-
-        from jen import extensions
-
-        monkeypatch.setattr(
-            extensions, "KEA_SERVERS", [{"id": 1, "name": "Test Kea", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
-        )
-        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
-
-        fake_ssh = MagicMock()
-        fake_stdout = MagicMock()
-        fake_stdout.read.return_value = b"testerror:ERROR: bad pool range"
-        fake_stderr = MagicMock()
-        fake_stderr.read.return_value = b""
-        fake_ssh.exec_command.return_value = (MagicMock(), fake_stdout, fake_stderr)
-
-        with patch("paramiko.SSHClient", return_value=fake_ssh):
-            r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
+    def test_helper_test_fail_reports_error_and_all_passed_false(self, logged_in_client, monkeypatch):
+        fake = self._one_server(monkeypatch)
+        fake.responses["test-config"] = {"ok": False, "error": "testerror", "detail": "ERROR: bad pool range"}
+        r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "10.0.0.10-10.0.0.200"})
         assert r.status_code == 200
         data = r.get_json()
         assert data["all_passed"] is False
@@ -592,10 +361,10 @@ class TestEditSubnetExtraPoolsPreserved:
         extra_pools = [p.strip() for p in raw.split("|") if p.strip()]
         assert extra_pools == []
 
-    def test_generated_remote_script_preserves_extra_pools(self):
-        """The remote config-patch script is built as an f-string embedding
-        repr(extra_pools). Confirm the merge logic it contains is correct by
-        exercising the same expression the route uses to build s['pools']."""
+    def test_pool_merge_expression_preserves_extra_pools(self):
+        """kea_config_edit.patch_subnet4 builds s['pools'] as
+        [primary] + [extra…]. Exercise that same expression here; the
+        end-to-end coverage is in tests/test_kea_config_edit.py."""
         new_pool = "10.10.10.50 - 10.10.10.250"
         extra_pools = ["10.10.11.50 - 10.10.11.250"]
         pools = [{"pool": new_pool}] + [{"pool": p} for p in extra_pools]
@@ -609,3 +378,79 @@ class TestEditSubnetExtraPoolsPreserved:
         extra_pools = []
         pools = [{"pool": new_pool}] + [{"pool": p} for p in extra_pools]
         assert pools == [{"pool": "10.10.30.10 - 10.10.30.200"}]
+
+
+class TestSubnetApplyViaHostClient:
+    """v5.11.0 — add / delete / edit_subnet_post push through
+    jen.services.kea_host (helper op `apply-config` + `service restart`),
+    with kea_config_edit doing the local mutation."""
+
+    def _wire(self, monkeypatch, subnet4=None):
+        from jen import extensions
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
+
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr("jen.config.write_subnets_config", lambda m: None)
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp4")] = {"Dhcp4": {"subnet4": subnet4 if subnet4 is not None else []}}
+        fake.responses["apply-config"] = {"ok": True, "backup": None}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        return fake
+
+    def test_add_subnet_pushes_apply_and_restart(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch)
+        monkeypatch.setattr("jen.routes.subnets._get_kea_subnet_ids", lambda: set())
+        r = logged_in_client.post(
+            "/subnets/add",
+            data={"subnet_id": "42", "name": "New", "cidr": "10.9.42.0/24", "pool": "10.9.42.10-10.9.42.200"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        ops = fake.ops()
+        assert "apply-config" in ops and "service" in ops
+        applied = fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"]
+        assert [s["id"] for s in applied] == [42]
+        assert fake.payload_for("service") == {"service": "dhcp4", "action": "restart"}
+
+    def test_delete_subnet_removes_block_and_restarts(self, logged_in_client, monkeypatch, mock_kea, db):
+        fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        r = logged_in_client.post("/subnets/delete/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"] == []
+        assert "service" in fake.ops()
+
+    def test_edit_subnet_post_no_change_does_not_apply(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        r = logged_in_client.post("/subnets/edit/1", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert "apply-config" not in fake.ops()
+
+    def test_edit_subnet_post_applies_the_patched_config(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        r = logged_in_client.post("/subnets/edit/1", data={"pool": "10.0.0.10-10.0.0.99"}, follow_redirects=True)
+        assert r.status_code == 200
+        s = fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"][0]
+        assert s["pools"] == [{"pool": "10.0.0.10-10.0.0.99"}]
+
+    def test_legacy_fallback_flashes_a_warning(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch, subnet4=[{"id": 1}])
+        fake.missing_for.add(1)  # helper not installed → legacy path
+
+        # legacy read_config + apply + restart all go through _connect_ssh
+        from tests._kea6_helpers import FakeSSHClient
+
+        seq = [
+            FakeSSHClient([('{"Dhcp4": {"subnet4": [{"id": 1}]}}', "")]),  # legacy `cat`
+            FakeSSHClient([("ok", "")]),  # legacy apply
+            FakeSSHClient([("done", "")]),  # legacy restart
+        ]
+        monkeypatch.setattr(
+            "jen.services.kea6._connect_ssh", lambda s: seq.pop(0) if seq else FakeSSHClient([("", "")])
+        )
+        r = logged_in_client.post("/subnets/edit/1", data={"pool": "10.0.0.5-10.0.0.9"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"legacy root" in r.data

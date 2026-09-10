@@ -4,7 +4,6 @@ jen/routes/subnets.py
 Subnet view and editing routes.
 """
 
-import json
 import logging
 import os
 import re
@@ -15,9 +14,10 @@ from flask_login import current_user, login_required
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
-import jen.services.auth as __auth
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_config_edit as __edit
+import jen.services.kea_host as __host
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 
@@ -204,122 +204,6 @@ def _get_subnet_kea_data(subnet_id):
     }
 
 
-def _build_subnet_patch_script(
-    subnet_id, kea_conf, new_pool, extra_pools, new_lifetime, new_renew, new_rebind, new_routers, new_dns, dry_run=False
-):
-    """
-    Build the remote Python script that patches subnet_id's config,
-    writes it to a temp file, and runs `kea-dhcp4 -t` against it.
-
-    v4.4.24: extracted from edit_subnet_post() so the same tested,
-    hardened patch-and-validate logic can be reused by the new preview
-    endpoint (dry_run=True — test only, never touch the live config)
-    without duplicating it. edit_subnet_post() itself is unchanged
-    behaviorally: it calls this with dry_run=False, which produces the
-    exact same script it always has.
-
-    dry_run=False (edit_subnet_post's actual apply path, unchanged):
-      test passes  -> os.replace(tmp, path), prints 'ok'
-      test fails   -> os.unlink(tmp), prints 'testerror:...', original
-                       config untouched either way
-    dry_run=True (the new preview endpoint):
-      test passes  -> os.unlink(tmp) (never applied), prints 'preview-ok'
-      test fails   -> os.unlink(tmp), prints 'testerror:...'
-      Live config is never touched in either outcome — the backup
-      step is skipped entirely too, since nothing is ever written to
-      the real path.
-    """
-    if dry_run:
-        backup_step = ""
-        on_pass = "os.unlink(tmp)\nprint('preview-ok')"
-    else:
-        backup_step = "# Make a backup before touching anything\nshutil.copy2(path, backup)\n\n"
-        on_pass = "# Config test passed — move temp into place\nos.replace(tmp, path)\nprint('ok')"
-
-    return f"""
-import json, sys, shutil, subprocess, os, tempfile
-
-path   = {repr(kea_conf)}
-backup = path + '.jen_backup'
-
-{backup_step}with open(path) as f:
-    cfg = json.load(f)
-
-changed = False
-for s in cfg.get('Dhcp4', {{}}).get('subnet4', []):
-    if s['id'] != {subnet_id}:
-        continue
-    new_pool = {repr(new_pool)}
-    if new_pool:
-        extra_pools = {repr(extra_pools)}
-        s['pools'] = [{{'pool': new_pool}}] + [{{'pool': p}} for p in extra_pools]
-        changed = True
-    new_lifetime = {repr(new_lifetime)}
-    new_renew    = {repr(new_renew)}
-    new_rebind   = {repr(new_rebind)}
-    if new_lifetime:
-        s['valid-lifetime'] = int(new_lifetime); changed = True
-    if new_renew:
-        s['renew-timer'] = int(new_renew); changed = True
-    if new_rebind:
-        s['rebind-timer'] = int(new_rebind); changed = True
-    new_routers = {repr(new_routers)}
-    new_dns     = {repr(new_dns)}
-    if new_routers or new_dns:
-        opts = s.get('option-data', [])
-        if new_routers:
-            found = False
-            for o in opts:
-                if o.get('name') == 'routers':
-                    o['data'] = new_routers; found = True; break
-            if not found:
-                opts.append({{'name': 'routers', 'code': 3, 'space': 'dhcp4',
-                              'csv-format': True, 'data': new_routers}})
-            changed = True
-        if new_dns:
-            found = False
-            for o in opts:
-                if o.get('name') == 'domain-name-servers':
-                    o['data'] = new_dns; found = True; break
-            if not found:
-                opts.append({{'name': 'domain-name-servers', 'code': 6, 'space': 'dhcp4',
-                              'csv-format': True, 'data': new_dns}})
-            changed = True
-        s['option-data'] = opts
-    break
-
-if not changed:
-    print('nochange')
-    sys.exit(0)
-
-# Write to a temp file first, test it, then move into place
-tmp = path + '.jen_tmp'
-with open(tmp, 'w') as f:
-    json.dump(cfg, f, indent=2)
-
-# Run kea-dhcp4 -t against the temp file
-try:
-    result = subprocess.run(
-        ['kea-dhcp4', '-t', tmp],
-        capture_output=True, text=True
-    )
-except FileNotFoundError:
-    os.unlink(tmp)
-    print('missingbinary:kea-dhcp4')
-    sys.exit(1)
-combined = result.stdout + result.stderr
-
-if result.returncode != 0 or 'ERROR' in combined:
-    # Config test failed — clean up temp, leave original untouched
-    os.unlink(tmp)
-    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
-    print('testerror:' + ' | '.join(error_lines[:3]))
-    sys.exit(1)
-
-{on_pass}
-"""
-
-
 def _get_kea_subnet_ids():
     """Return the set of subnet IDs Kea actually has configured right now."""
     try:
@@ -431,125 +315,59 @@ def add_subnet_post():
                 return redirect(url_for("subnets.add_subnet"))
     # ─────────────────────────────────────────────────────────────────────────
 
+    option_data = []
+    if routers:
+        option_data.append({"name": "routers", "code": 3, "space": "dhcp4", "csv-format": True, "data": routers})
+    if dns:
+        option_data.append(
+            {"name": "domain-name-servers", "code": 6, "space": "dhcp4", "csv-format": True, "data": dns}
+        )
+    new_subnet_block = {
+        "id": new_id,
+        "subnet": new_cidr,
+        "pools": [{"pool": new_pool}],
+        "option-data": option_data,
+    }
+    if lifetime:
+        new_subnet_block["valid-lifetime"] = int(lifetime)
+    if renew:
+        new_subnet_block["renew-timer"] = int(renew)
+    if rebind:
+        new_subnet_block["rebind-timer"] = int(rebind)
+
     errors, results = [], []
 
     for server in extensions.KEA_SERVERS:
         if not server.get("ssh_host"):
             continue
+        name = server.get("name", server["ssh_host"])
         try:
-            import base64
-
-            import paramiko
-
-            ssh = paramiko.SSHClient()
-            __auth.paramiko_load_known_hosts(ssh)
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(
-                server["ssh_host"],
-                username=server.get("ssh_user", extensions.KEA_SSH_USER),
-                key_filename=extensions.SSH_KEY_PATH,
-                timeout=10,
-            )
-            # Persist any newly-accepted host key (AutoAddPolicy only adds
-            # it in-memory) so the *next* connection actually checks against
-            # it instead of trusting a fresh key blind every single time.
-            try:
-                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
-            except Exception:
-                pass
-
-            kea_conf = server.get("kea_conf", "/etc/kea/kea-dhcp4.conf")
-
-            option_data = []
-            if routers:
-                option_data.append(
-                    {"name": "routers", "code": 3, "space": "dhcp4", "csv-format": True, "data": routers}
-                )
-            if dns:
-                option_data.append(
-                    {"name": "domain-name-servers", "code": 6, "space": "dhcp4", "csv-format": True, "data": dns}
-                )
-
-            new_subnet_block = {
-                "id": new_id,
-                "subnet": new_cidr,
-                "pools": [{"pool": new_pool}],
-                "option-data": option_data,
-            }
-            if lifetime:
-                new_subnet_block["valid-lifetime"] = int(lifetime)
-            if renew:
-                new_subnet_block["renew-timer"] = int(renew)
-            if rebind:
-                new_subnet_block["rebind-timer"] = int(rebind)
-
-            script = f"""
-import json, sys, shutil, subprocess, os
-
-path   = {repr(kea_conf)}
-backup = path + '.jen_backup'
-shutil.copy2(path, backup)
-
-with open(path) as f:
-    cfg = json.load(f)
-
-new_block = {json.dumps(new_subnet_block)}
-
-if any(s['id'] == {new_id} for s in cfg.get('Dhcp4', {{}}).get('subnet4', [])):
-    print('idexists')
-    sys.exit(1)
-
-cfg.setdefault('Dhcp4', {{}}).setdefault('subnet4', []).append(new_block)
-
-tmp = path + '.jen_tmp'
-with open(tmp, 'w') as f:
-    json.dump(cfg, f, indent=2)
-
-result = subprocess.run(['kea-dhcp4', '-t', tmp], capture_output=True, text=True)
-combined = result.stdout + result.stderr
-
-if result.returncode != 0 or 'ERROR' in combined:
-    os.unlink(tmp)
-    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
-    print('testerror:' + ' | '.join(error_lines[:3]))
-    sys.exit(1)
-
-os.replace(tmp, path)
-print('ok')
-"""
-            enc = base64.b64encode(script.encode()).decode()
-            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-            out = stdout.read().decode().strip()
-            err = stderr.read().decode().strip()
-
-            if out == "ok":
-                _, rs, _ = ssh.exec_command(
-                    "sudo systemctl restart kea-dhcp4-server 2>/dev/null || "
-                    "sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done"
-                )
-                rs.read()
-                results.append(
-                    f"✅ {server.get('name', server['ssh_host'])}: subnet {new_id} created and Kea restarted"
-                )
-            elif out == "idexists":
+            cfg = __host.read_config(server, "dhcp4")
+            if cfg is None:
+                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
+                continue
+            cfg, code = __edit.add_subnet4(cfg, new_subnet_block)
+            if code == "idexists":
+                errors.append(f"❌ {name}: subnet ID {new_id} already exists on this server")
+                continue
+            res = __host.apply_config(server, "dhcp4", cfg)
+            if res["code"] == "ok":
+                restart = __host.service_action(server, "dhcp4", "restart")
+                if restart["ok"]:
+                    results.append(f"✅ {name}: subnet {new_id} created and Kea restarted")
+                else:
+                    results.append(f"✅ {name}: subnet {new_id} created — restart Kea manually ({restart['detail']})")
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "testerror":
                 errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: subnet ID {new_id} already exists on this server"
-                )
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
-                errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again."
-                )
-            elif out.startswith("testerror:"):
-                error_detail = out[len("testerror:") :]
-                errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}"
+                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
+                    f"Error: {res['detail']}"
                 )
             else:
-                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
-            ssh.close()
+                errors.append(f"❌ {name}: {res['detail']}")
         except Exception as e:
-            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+            errors.append(f"❌ {name}: {e}")
 
     if errors and not results:
         for e in errors:
@@ -615,99 +433,36 @@ def delete_subnet(subnet_id):
     for server in extensions.KEA_SERVERS:
         if not server.get("ssh_host"):
             continue
+        name = server.get("name", server["ssh_host"])
         try:
-            import base64
-
-            import paramiko
-
-            ssh = paramiko.SSHClient()
-            __auth.paramiko_load_known_hosts(ssh)
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(
-                server["ssh_host"],
-                username=server.get("ssh_user", extensions.KEA_SSH_USER),
-                key_filename=extensions.SSH_KEY_PATH,
-                timeout=10,
-            )
-            # Persist any newly-accepted host key (AutoAddPolicy only adds
-            # it in-memory) so the *next* connection actually checks against
-            # it instead of trusting a fresh key blind every single time.
-            try:
-                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
-            except Exception:
-                pass
-
-            kea_conf = server.get("kea_conf", "/etc/kea/kea-dhcp4.conf")
-
-            script = f"""
-import json, sys, shutil, subprocess, os
-
-path   = {repr(kea_conf)}
-backup = path + '.jen_backup'
-shutil.copy2(path, backup)
-
-with open(path) as f:
-    cfg = json.load(f)
-
-subnets = cfg.get('Dhcp4', {{}}).get('subnet4', [])
-before = len(subnets)
-subnets = [s for s in subnets if s['id'] != {subnet_id}]
-
-if len(subnets) == before:
-    print('notfound')
-    sys.exit(0)
-
-cfg['Dhcp4']['subnet4'] = subnets
-
-tmp = path + '.jen_tmp'
-with open(tmp, 'w') as f:
-    json.dump(cfg, f, indent=2)
-
-result = subprocess.run(['kea-dhcp4', '-t', tmp], capture_output=True, text=True)
-combined = result.stdout + result.stderr
-
-if result.returncode != 0 or 'ERROR' in combined:
-    os.unlink(tmp)
-    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
-    print('testerror:' + ' | '.join(error_lines[:3]))
-    sys.exit(1)
-
-os.replace(tmp, path)
-print('ok')
-"""
-            enc = base64.b64encode(script.encode()).decode()
-            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-            out = stdout.read().decode().strip()
-            err = stderr.read().decode().strip()
-
-            if out == "ok":
-                _, rs, _ = ssh.exec_command(
-                    "sudo systemctl restart kea-dhcp4-server 2>/dev/null || "
-                    "sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done"
-                )
-                rs.read()
-                results.append(
-                    f"✅ {server.get('name', server['ssh_host'])}: subnet {subnet_id} removed and Kea restarted"
-                )
-            elif out == "notfound":
-                results.append(
-                    f"ℹ️ {server.get('name', server['ssh_host'])}: subnet {subnet_id} was not in Kea's config"
-                )
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
+            cfg = __host.read_config(server, "dhcp4")
+            if cfg is None:
+                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
+                continue
+            cfg, code = __edit.delete_subnet4(cfg, subnet_id)
+            if code == "notfound":
+                results.append(f"ℹ️ {name}: subnet {subnet_id} was not in Kea's config")
+                continue
+            res = __host.apply_config(server, "dhcp4", cfg)
+            if res["code"] == "ok":
+                restart = __host.service_action(server, "dhcp4", "restart")
+                if restart["ok"]:
+                    results.append(f"✅ {name}: subnet {subnet_id} removed and Kea restarted")
+                else:
+                    results.append(
+                        f"✅ {name}: subnet {subnet_id} removed — restart Kea manually ({restart['detail']})"
+                    )
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "testerror":
                 errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again."
-                )
-            elif out.startswith("testerror:"):
-                error_detail = out[len("testerror:") :]
-                errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}"
+                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
+                    f"Error: {res['detail']}"
                 )
             else:
-                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
-            ssh.close()
+                errors.append(f"❌ {name}: {res['detail']}")
         except Exception as e:
-            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+            errors.append(f"❌ {name}: {e}")
 
     for r in results:
         flash(r, "success")
@@ -853,20 +608,16 @@ def _compute_subnet_edit_diff(subnet_id, fields):
 @_admin_required
 def edit_subnet_preview(subnet_id):
     """
-    Dry-run preview for a subnet edit: validates the form (via the
-    exact same function edit_subnet_post() itself uses, so the two
-    can't drift apart), computes a human-readable diff against the
-    subnet's current live config, and runs kea-dhcp4 -t against each
-    configured server WITHOUT ever touching the live config file
-    (dry_run=True in _build_subnet_patch_script() — see there for
-    exactly what that guarantees, verified directly by executing both
-    the pass and fail paths and confirming the original file is
-    byte-identical before and after either way).
+    Dry-run preview for a subnet edit: validates the form (via the exact
+    same function edit_subnet_post() uses, so they can't drift), computes
+    a human-readable diff against the subnet's current live config, and
+    `kea-dhcp4 -t`s the candidate on each server WITHOUT touching the
+    live file — jen.services.kea_host.test_config() (helper op
+    `test-config`, or the legacy dry_run script) is the only mechanism
+    and never writes the live config under any outcome.
 
-    Never applies anything itself — edit_subnet_post() is the only
-    route that ever writes to the live config, completely unchanged,
-    reached only after the user reviews this preview and explicitly
-    submits the real form.
+    Never applies anything itself — edit_subnet_post() is the only route
+    that writes.
     """
     if subnet_id not in extensions.SUBNET_MAP:
         return jsonify({"ok": False, "error": "Subnet not found."}), 404
@@ -888,28 +639,13 @@ def edit_subnet_preview(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            import base64
-
-            import paramiko
-
-            ssh = paramiko.SSHClient()
-            __auth.paramiko_load_known_hosts(ssh)
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(
-                server["ssh_host"],
-                username=server.get("ssh_user", extensions.KEA_SSH_USER),
-                key_filename=extensions.SSH_KEY_PATH,
-                timeout=10,
-            )
-            try:
-                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
-            except Exception:
-                pass
-
-            kea_conf = server.get("kea_conf", "/etc/kea/kea-dhcp4.conf")
-            script = _build_subnet_patch_script(
+            cfg = __host.read_config(server, "dhcp4")
+            if cfg is None:
+                server_results.append({"name": name, "ok": False, "message": "kea-dhcp4.conf not found on this server"})
+                continue
+            cfg, changed = __edit.patch_subnet4(
+                cfg,
                 subnet_id,
-                kea_conf,
                 fields["new_pool"],
                 fields["extra_pools"],
                 fields["new_lifetime"],
@@ -917,32 +653,24 @@ def edit_subnet_preview(subnet_id):
                 fields["new_rebind"],
                 fields["new_routers"],
                 fields["new_dns"],
-                dry_run=True,
             )
-            enc = base64.b64encode(script.encode()).decode()
-            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-            out = stdout.read().decode().strip()
-            err = stderr.read().decode().strip()
-            ssh.close()
-
-            if out == "preview-ok":
-                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
-            elif out == "nochange":
+            if not changed:
                 server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
+                continue
+            res = __host.test_config(server, "dhcp4", cfg)
+            if res["ok"]:
+                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+            elif res["code"] == "missingbinary":
                 server_results.append(
                     {
                         "name": name,
                         "ok": False,
-                        "missing_binary": binary,
-                        "message": f"{binary} is not installed on this server.",
+                        "missing_binary": res["binary"],
+                        "message": f"{res['binary']} is not installed on this server.",
                     }
                 )
-            elif out.startswith("testerror:"):
-                server_results.append({"name": name, "ok": False, "message": out[len("testerror:") :]})
             else:
-                server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
+                server_results.append({"name": name, "ok": False, "message": res["detail"] or "Unknown error"})
         except Exception as e:
             server_results.append({"name": name, "ok": False, "message": str(e)})
 
@@ -979,72 +707,36 @@ def edit_subnet_post(subnet_id):
     for server in extensions.KEA_SERVERS:
         if not server.get("ssh_host"):
             continue
+        name = server.get("name", server["ssh_host"])
         try:
-            import base64
-
-            import paramiko
-
-            ssh = paramiko.SSHClient()
-            __auth.paramiko_load_known_hosts(ssh)
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            ssh.connect(
-                server["ssh_host"],
-                username=server.get("ssh_user", extensions.KEA_SSH_USER),
-                key_filename=extensions.SSH_KEY_PATH,
-                timeout=10,
+            cfg = __host.read_config(server, "dhcp4")
+            if cfg is None:
+                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
+                continue
+            cfg, changed = __edit.patch_subnet4(
+                cfg, subnet_id, new_pool, extra_pools, new_lifetime, new_renew, new_rebind, new_routers, new_dns
             )
-            # Persist any newly-accepted host key (AutoAddPolicy only adds
-            # it in-memory) so the *next* connection actually checks against
-            # it instead of trusting a fresh key blind every single time.
-            try:
-                ssh.save_host_keys(extensions.SSH_KNOWN_HOSTS)
-            except Exception:
-                pass
-
-            kea_conf = server.get("kea_conf", "/etc/kea/kea-dhcp4.conf")
-
-            script = _build_subnet_patch_script(
-                subnet_id,
-                kea_conf,
-                new_pool,
-                extra_pools,
-                new_lifetime,
-                new_renew,
-                new_rebind,
-                new_routers,
-                new_dns,
-                dry_run=False,
-            )
-            enc = base64.b64encode(script.encode()).decode()
-            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-            out = stdout.read().decode().strip()
-            err = stderr.read().decode().strip()
-
-            if out == "nochange":
-                results.append(f"ℹ️ {server.get('name', server['ssh_host'])}: nothing to change")
-            elif out == "ok":
-                # Config validated — now restart Kea
-                _, rs, re_ = ssh.exec_command(
-                    "sudo systemctl restart kea-dhcp4-server 2>/dev/null || "
-                    "sudo systemctl restart isc-kea-dhcp4-server 2>/dev/null; echo done"
-                )
-                rs.read()
-                results.append(f"✅ {server.get('name', server['ssh_host'])}: config validated, updated and restarted")
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
+            if not changed:
+                results.append(f"ℹ️ {name}: nothing to change")
+                continue
+            res = __host.apply_config(server, "dhcp4", cfg)
+            if res["code"] == "ok":
+                restart = __host.service_action(server, "dhcp4", "restart")
+                if restart["ok"]:
+                    results.append(f"✅ {name}: config validated, updated and restarted")
+                else:
+                    results.append(f"✅ {name}: config updated — restart Kea manually ({restart['detail']})")
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "testerror":
                 errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again."
-                )
-            elif out.startswith("testerror:"):
-                error_detail = out[len("testerror:") :]
-                errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}"
+                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
+                    f"Error: {res['detail']}"
                 )
             else:
-                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
-            ssh.close()
+                errors.append(f"❌ {name}: {res['detail']}")
         except Exception as e:
-            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+            errors.append(f"❌ {name}: {e}")
 
     for r in results:
         flash(r, "success")
