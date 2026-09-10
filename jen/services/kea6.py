@@ -81,22 +81,6 @@ def kea6_is_up(server: dict = None) -> bool:
 # of jen/services/ stays decoupled from Flask/auth.
 
 
-def _dual_name_systemctl(ssh, action: str) -> tuple:
-    """
-    Run `systemctl <action> kea-dhcp6-server`, falling back to the
-    `isc-kea-dhcp6-server` unit name — same dual-name handling the v4
-    restart logic already has (Debian/Ubuntu package names the unit
-    differently depending on how Kea was installed). Returns (out, err).
-    """
-    _, stdout, stderr = ssh.exec_command(
-        f"sudo systemctl {action} kea-dhcp6-server 2>/dev/null || "
-        f"sudo systemctl {action} isc-kea-dhcp6-server 2>/dev/null; echo done"
-    )
-    out = stdout.read().decode().strip()
-    err = stderr.read().decode().strip()
-    return out, err
-
-
 def _config_exists(ssh, kea6_conf: str) -> bool:
     """Confirm kea-dhcp6.conf actually exists on the remote server before
     attempting to enable — Jen never authors a v6 config from nothing on
@@ -159,42 +143,48 @@ def set_ipv6_service_state(enable: bool) -> list:
     results, so a partial failure across an HA pair doesn't leave Jen
     claiming v6 is enabled when some servers never actually started it.
     """
-    action = "enable --now" if enable else "disable --now"
+    # v5.11.0 — the systemctl call goes through jen.services.kea_host
+    # (helper op `service`, or the legacy dual-name systemctl). Lazy
+    # import: kea_host imports this module for _connect_ssh.
+    from jen.services import kea_host
+
+    action = "enable" if enable else "disable"
     results = []
     for server in extensions.KEA_SERVERS:
         if not server.get("ssh_host"):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            ssh = _connect_ssh(server)
-            try:
-                kea6_conf = _kea6_conf_path(server)
-                if enable and not _config_exists(ssh, kea6_conf):
-                    results.append(
-                        {
-                            "name": name,
-                            "ok": False,
-                            "message": f"No {kea6_conf} on this server — use "
-                            f"'Author a starting config' below to generate "
-                            f"one (pulling interfaces/DB info from your "
-                            f"existing kea-dhcp4.conf where possible), "
-                            f"then retry.",
-                        }
-                    )
-                    continue
-                out, err = _dual_name_systemctl(ssh, action)
-                if out == "done":
-                    results.append(
-                        {
-                            "name": name,
-                            "ok": True,
-                            "message": f"kea-dhcp6-server {'enabled and started' if enable else 'stopped and disabled'}",
-                        }
-                    )
-                else:
-                    results.append({"name": name, "ok": False, "message": err or out or "Unknown systemctl result"})
-            finally:
-                ssh.close()
+            if enable:
+                ssh = _connect_ssh(server)
+                try:
+                    kea6_conf = _kea6_conf_path(server)
+                    if not _config_exists(ssh, kea6_conf):
+                        results.append(
+                            {
+                                "name": name,
+                                "ok": False,
+                                "message": f"No {kea6_conf} on this server — use "
+                                f"'Author a starting config' below to generate "
+                                f"one (pulling interfaces/DB info from your "
+                                f"existing kea-dhcp4.conf where possible), "
+                                f"then retry.",
+                            }
+                        )
+                        continue
+                finally:
+                    ssh.close()
+            res = kea_host.service_action(server, "dhcp6", action)
+            if res["ok"]:
+                results.append(
+                    {
+                        "name": name,
+                        "ok": True,
+                        "message": f"kea-dhcp6-server {'enabled and started' if enable else 'stopped and disabled'}",
+                    }
+                )
+            else:
+                results.append({"name": name, "ok": False, "message": res.get("detail") or "Unknown systemctl result"})
         except Exception as e:
             results.append({"name": name, "ok": False, "message": str(e)})
     return results
@@ -629,97 +619,3 @@ def get_subnet6_kea_data(subnet_id: int, server: dict = None) -> dict:
     except Exception:
         pass
     return empty
-
-
-def build_subnet6_patch_script(
-    subnet_id, kea6_conf, new_pool, extra_pools, new_preferred, new_valid, new_renew, new_rebind, new_dns, dry_run=False
-):
-    """
-    Build the remote Python script that patches subnet_id's v6 config,
-    writes it to a temp file, and runs `kea-dhcp6 -t` against it.
-    Same dry_run contract as the v4 _build_subnet_patch_script() this
-    mirrors: dry_run=True never writes to the live config under any
-    outcome (pass or fail), only dry_run=False (the real apply path)
-    ever calls os.replace(tmp, path).
-    """
-    if dry_run:
-        backup_step = ""
-        on_pass = "os.unlink(tmp)\nprint('preview-ok')"
-    else:
-        backup_step = "# Make a backup before touching anything\nshutil.copy2(path, backup)\n\n"
-        on_pass = "# Config test passed — move temp into place\nos.replace(tmp, path)\nprint('ok')"
-
-    return f"""
-import json, sys, shutil, subprocess, os, tempfile
-
-path   = {repr(kea6_conf)}
-backup = path + '.jen_backup'
-
-{backup_step}with open(path) as f:
-    cfg = json.load(f)
-
-changed = False
-for s in cfg.get('Dhcp6', {{}}).get('subnet6', []):
-    if s['id'] != {subnet_id}:
-        continue
-    new_pool = {repr(new_pool)}
-    if new_pool:
-        extra_pools = {repr(extra_pools)}
-        s['pools'] = [{{'pool': new_pool}}] + [{{'pool': p}} for p in extra_pools]
-        changed = True
-    new_preferred = {repr(new_preferred)}
-    new_valid     = {repr(new_valid)}
-    new_renew     = {repr(new_renew)}
-    new_rebind    = {repr(new_rebind)}
-    if new_preferred:
-        s['preferred-lifetime'] = int(new_preferred); changed = True
-    if new_valid:
-        s['valid-lifetime'] = int(new_valid); changed = True
-    if new_renew:
-        s['renew-timer'] = int(new_renew); changed = True
-    if new_rebind:
-        s['rebind-timer'] = int(new_rebind); changed = True
-    new_dns = {repr(new_dns)}
-    if new_dns:
-        opts = s.get('option-data', [])
-        found = False
-        for o in opts:
-            if o.get('name') == 'dns-servers':
-                o['data'] = new_dns; found = True; break
-        if not found:
-            opts.append({{'name': 'dns-servers', 'code': 23, 'space': 'dhcp6',
-                          'csv-format': True, 'data': new_dns}})
-        s['option-data'] = opts
-        changed = True
-    break
-
-if not changed:
-    print('nochange')
-    sys.exit(0)
-
-# Write to a temp file first, test it, then move into place
-tmp = path + '.jen_tmp'
-with open(tmp, 'w') as f:
-    json.dump(cfg, f, indent=2)
-
-# Run kea-dhcp6 -t against the temp file
-try:
-    result = subprocess.run(
-        ['kea-dhcp6', '-t', tmp],
-        capture_output=True, text=True
-    )
-except FileNotFoundError:
-    os.unlink(tmp)
-    print('missingbinary:kea-dhcp6')
-    sys.exit(1)
-combined = result.stdout + result.stderr
-
-if result.returncode != 0 or 'ERROR' in combined:
-    # Config test failed — clean up temp, leave original untouched
-    os.unlink(tmp)
-    error_lines = [l for l in combined.splitlines() if 'ERROR' in l or 'Error' in l]
-    print('testerror:' + ' | '.join(error_lines[:3]))
-    sys.exit(1)
-
-{on_pass}
-"""

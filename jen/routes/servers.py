@@ -5,14 +5,13 @@ Kea server management routes.
 """
 
 import logging
-import subprocess
 
 from flask import Blueprint, flash, redirect, render_template, url_for
 from flask_login import login_required
 
 import jen.models.user as __user
-import jen.services.auth as __auth
 import jen.services.kea as __kea
+import jen.services.kea_host as __host
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 
@@ -134,26 +133,14 @@ def restart_kea_server(server_id):
         flash("SSH not configured for this server.", "error")
         return redirect(url_for("servers.servers"))
     try:
-        result = subprocess.run(
-            ["ssh"]
-            + __auth.ssh_cli_opts()
-            + [
-                f"{server['ssh_user']}@{server['ssh_host']}",
-                # v5.8.4 — both unit names, same as subnets.py / kea6.py:
-                # ISC's own packages install `kea-dhcp4-server`, older
-                # Debian/Ubuntu packages `isc-kea-dhcp4-server`. This
-                # route only ever tried the second, so the Servers-page
-                # restart button silently failed on ISC-package hosts.
-                "sudo systemctl restart kea-dhcp4-server 2>/dev/null || sudo systemctl restart isc-kea-dhcp4-server",
-            ],
-            capture_output=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
+        # v5.11.0 — via jen.services.kea_host (helper op `service`, or the
+        # legacy dual-name systemctl). Both unit names are tried inside it.
+        res = __host.service_action(server, "dhcp4", "restart")
+        if res["ok"]:
             flash(f"Kea restarted on {server['name']}.", "success")
-            __user.audit("RESTART_KEA", server["name"], "Remote restart via SSH")
+            __user.audit("RESTART_KEA", server["name"], "Remote restart via jen-kea-helper")
         else:
-            flash(f"Restart failed on {server['name']}: {result.stderr.decode()}", "error")
+            flash(f"Restart failed on {server['name']}: {res['detail']}", "error")
     except Exception as e:
         logger.error(f"SSH error restarting Kea on {server['name']}: {e}")
         flash(f"Could not reach {server['name']} — check server logs for details.", "error")

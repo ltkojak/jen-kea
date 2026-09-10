@@ -419,37 +419,6 @@ def detect_installed_kea_services(ssh) -> dict:
     return result
 
 
-def install_kea_service(ssh, service: str) -> tuple:
-    """
-    Install the kea-dhcp4-server/kea-dhcp6-server package via apt —
-    Jen's documented supported platform is Ubuntu 24.04 (see
-    docs/ARCHITECTURE.md), so this targets apt specifically rather than
-    trying to guess across package managers. Returns (ok, output) where
-    output is the tail of apt's combined stdout/stderr, shown to the
-    operator either way — on success as confirmation, on failure as the
-    actual reason (missing repo, network issue, held package, etc.)
-    rather than a bare "it didn't work."
-
-    Runs `apt-get update` first — a freshly provisioned host's package
-    index may not yet know about the kea-dhcp6-server package even when
-    kea-dhcp4-server (installed earlier, index already current at the
-    time) is present, and skipping it would turn a stale-cache failure
-    into a confusing "package not found" message.
-    """
-    package = f"kea-{service}-server"
-    cmd = f"sudo apt-get update -qq 2>&1 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {package} 2>&1"
-    try:
-        _, stdout, stderr = ssh.exec_command(cmd)
-        out = stdout.read().decode()
-        err = stderr.read().decode()
-        exit_status = stdout.channel.recv_exit_status()
-        combined = (out + err).strip()
-        tail = "\n".join(combined.splitlines()[-15:])  # apt output can be long; keep it readable
-        return exit_status == 0, tail
-    except Exception as e:
-        return False, str(e)
-
-
 def render_author_config_script(
     service: str,
     kea_conf_path: str,

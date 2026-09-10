@@ -94,6 +94,14 @@ class TestPatchSubnet6:
         edit.patch_subnet6(_V6, 100, "2001:db8:a::5-2001:db8:a::9", [], "", "", "", "", "")
         assert _V6 == original
 
+    def test_no_fields_is_no_change(self):
+        _cfg, changed = edit.patch_subnet6(_V6, 100, "", [], "", "", "", "", "")
+        assert changed is False
+
+    def test_unknown_subnet6_id_is_no_change(self):
+        _cfg, changed = edit.patch_subnet6(_V6, 999, "2001:db8::1-2001:db8::9", [], "", "", "", "", "")
+        assert changed is False
+
 
 class TestAddDeleteSubnet4:
     def test_add_new_block(self):

@@ -13,6 +13,7 @@ from flask_login import login_required
 
 import jen.services.auth as __auth
 import jen.services.kea as __kea
+import jen.services.kea_host as __host
 from jen import extensions
 
 logger = logging.getLogger(__name__)
@@ -40,38 +41,28 @@ def ddns():
         log_status = "error"
         log_message = "SSH host not configured. Set it in Settings → Kea → SSH."
     else:
+        # v5.11.0 — the DDNS log read goes through jen.services.kea_host
+        # (helper op `tail-log`, or the legacy `sudo tail` over SSH). The
+        # primary server carries the SSH details.
+        primary = next(iter(extensions.KEA_SERVERS), None) or {
+            "id": 1,
+            "ssh_host": extensions.KEA_SSH_HOST,
+            "ssh_user": extensions.KEA_SSH_USER,
+        }
         try:
-            result = subprocess.run(
-                ["ssh"]
-                + __auth.ssh_cli_opts()
-                + ["-o", "ConnectTimeout=10"]
-                + [
-                    f"{extensions.KEA_SSH_USER}@{extensions.KEA_SSH_HOST}",
-                    f"sudo tail -200 {shlex.quote(extensions.DDNS_LOG)}",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                err = result.stderr.strip()
-                if "No such file" in err or "No such file" in result.stdout:
-                    log_status = "missing"
-                    log_message = f"Log file not found on Kea server: {extensions.DDNS_LOG}"
-                else:
-                    log_status = "error"
-                    log_message = f"SSH error: {err or 'unknown error'}"
-                    logger.error(f"DDNS SSH error: {err}")
+            res = __host.tail_log(primary, extensions.DDNS_LOG, 200)
+            if res["code"] == "missing":
+                log_status = "missing"
+                log_message = f"Log file not found on Kea server: {extensions.DDNS_LOG}"
+            elif not res["ok"]:
+                log_status = "error"
+                log_message = f"SSH error: {res.get('detail') or 'unknown error'}"
+                logger.error(f"DDNS log read error: {res.get('detail')}")
             else:
-                raw_lines = result.stdout.splitlines()
-                lines = list(reversed(raw_lines))
+                lines = list(reversed(res.get("lines", [])))
                 if not lines:
                     log_status = "empty"
                     log_message = "Log file exists but contains no entries yet."
-        except subprocess.TimeoutExpired:
-            log_status = "error"
-            log_message = f"SSH connection timed out. Check that {extensions.KEA_SSH_HOST} is reachable."
-            logger.error("DDNS SSH timeout")
         except Exception as e:
             log_status = "error"
             log_message = "Could not read DDNS log. Check server logs for details."

@@ -23,52 +23,58 @@ class TestDdnsPageAuth:
 
 
 class TestDdnsLogFetch:
+    """v5.11.0 — the DDNS log read goes through jen.services.kea_host.tail_log
+    (helper op `tail-log` / legacy `sudo tail`). Stub it here."""
+
+    def _stub_tail(self, monkeypatch, result):
+        from jen.services import kea_host
+
+        calls = []
+        monkeypatch.setattr(kea_host, "tail_log", lambda srv, path, lines=200: (calls.append((path, lines)), result)[1])
+        return calls
+
     def test_ssh_host_not_configured(self, logged_in_client, monkeypatch):
         from jen import extensions
 
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
-        with patch("jen.routes.ddns.subprocess.run") as mock_run:
-            r = logged_in_client.get("/ddns")
-            assert r.status_code == 200
-            assert b"ssh host not configured" in r.data.lower()
-            mock_run.assert_not_called()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        calls = self._stub_tail(monkeypatch, {"ok": True, "code": "ok", "lines": []})
+        r = logged_in_client.get("/ddns")
+        assert r.status_code == 200
+        assert b"ssh host not configured" in r.data.lower()
+        assert calls == []
 
-    def test_successful_log_fetch_uses_hardened_ssh_opts(self, logged_in_client, monkeypatch):
+    def test_successful_log_fetch_shows_newest_first(self, logged_in_client, monkeypatch):
         from jen import extensions
 
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
-        monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
-        fake_result = MagicMock(returncode=0, stdout="line1\nline2\n", stderr="")
-        with patch("jen.routes.ddns.subprocess.run", return_value=fake_result) as mock_run:
-            r = logged_in_client.get("/ddns")
-            assert r.status_code == 200
-            assert mock_run.called
-            call_args = mock_run.call_args[0][0]
-            assert "StrictHostKeyChecking=accept-new" in call_args
-            assert "StrictHostKeyChecking=no" not in call_args
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
+        calls = self._stub_tail(monkeypatch, {"ok": True, "code": "ok", "lines": ["oldest", "newest"]})
+        r = logged_in_client.get("/ddns")
+        assert r.status_code == 200
+        assert calls and calls[0][0] == extensions.DDNS_LOG
+        body = r.data.decode()
+        assert body.index("newest") < body.index("oldest")  # reversed for display
 
     def test_missing_log_file(self, logged_in_client, monkeypatch):
         from jen import extensions
 
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
-        monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
-        fake_result = MagicMock(returncode=1, stdout="", stderr="No such file or directory")
-        with patch("jen.routes.ddns.subprocess.run", return_value=fake_result):
-            r = logged_in_client.get("/ddns")
-            assert r.status_code == 200
-            assert b"log file not found" in r.data.lower()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
+        self._stub_tail(monkeypatch, {"ok": False, "code": "missing", "detail": "log file not found"})
+        r = logged_in_client.get("/ddns")
+        assert r.status_code == 200
+        assert b"log file not found" in r.data.lower()
 
-    def test_ssh_timeout(self, logged_in_client, monkeypatch):
-        import subprocess
-
+    def test_ssh_error_is_reported(self, logged_in_client, monkeypatch):
         from jen import extensions
 
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
-        monkeypatch.setattr(extensions, "KEA_SSH_USER", "kea")
-        with patch("jen.routes.ddns.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=15)):
-            r = logged_in_client.get("/ddns")
-            assert r.status_code == 200
-            assert b"timed out" in r.data.lower()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "ssh_host": "10.0.0.5", "ssh_user": "kea"}])
+        self._stub_tail(monkeypatch, {"ok": False, "code": "error", "detail": "connection timed out"})
+        r = logged_in_client.get("/ddns")
+        assert r.status_code == 200
+        assert b"ssh error" in r.data.lower()
 
 
 class TestDdnsSshLookupProvider:

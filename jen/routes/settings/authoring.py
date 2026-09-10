@@ -16,6 +16,7 @@ import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
+import jen.services.kea_host as __host
 from jen import extensions
 from jen.config import AppConfig
 from jen.routes.settings import bp
@@ -427,21 +428,17 @@ def _author_kea_config_for(service, server, common, subnets):
 
 
 def _run_author_script(server, service, config, tls_paths, *, dry_run, allow_overwrite):
-    """One SSH round trip: base64 the remote script, run it under sudo
-    python3, return the stripped (out, err)."""
-    import base64
-
+    """Test or apply an authored config on `server` via
+    jen.services.kea_host — one helper op (`test-config` / `apply-config`,
+    with the TLS-file existence check inside it) or, on a host without the
+    helper, the legacy sudo-python3 engine. Returns (HostResult,
+    conf_path)."""
     conf_path = __authoring.conf_path_for(server, service)
-    script = __authoring.render_author_config_script(
-        service, conf_path, config, allow_overwrite=allow_overwrite, dry_run=dry_run, tls_paths=tls_paths
-    )
-    ssh = __kea6._connect_ssh(server)
-    try:
-        enc = base64.b64encode(script.encode()).decode()
-        _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-        return stdout.read().decode().strip(), stderr.read().decode().strip(), conf_path
-    finally:
-        ssh.close()
+    if dry_run:
+        res = __host.test_config(server, service, config, tls_paths=tls_paths)
+    else:
+        res = __host.apply_config(server, service, config, tls_paths=tls_paths, allow_overwrite=allow_overwrite)
+    return res, conf_path
 
 
 @bp.route("/settings/infrastructure/author-kea/<service>/preview", methods=["POST"])
@@ -466,26 +463,29 @@ def author_kea_config_preview(service):
             server_results.append({"name": name, "ok": False, "message": cfg_err})
             continue
         try:
-            out, err, _ = _run_author_script(server, service, config, tls_paths, dry_run=True, allow_overwrite=False)
+            res, _ = _run_author_script(server, service, config, tls_paths, dry_run=True, allow_overwrite=False)
             row = {"name": name, "config": __authoring.redact_secrets(config)}
             bind = common["bind_addresses"].get(server.get("id"))
             if bind:
                 row["bind_address"] = bind
             if warning:
                 row["warning"] = warning
-            if out == "preview-ok":
+            if res["ok"]:
                 row.update({"ok": True, "message": "Config test passed"})
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
+            elif res["code"] == "missingbinary":
                 row.update(
-                    {"ok": False, "missing_binary": binary, "message": f"{binary} is not installed on this server."}
+                    {
+                        "ok": False,
+                        "missing_binary": res["binary"],
+                        "message": f"{res['binary']} is not installed on this server.",
+                    }
                 )
-            elif out.startswith("tlsmissing:"):
-                row.update({"ok": False, "message": f"TLS file not found on this server: {out[len('tlsmissing:') :]}"})
-            elif out.startswith("testerror:"):
-                row.update({"ok": False, "message": out[len("testerror:") :]})
+            elif res["code"] == "tlsmissing":
+                row.update({"ok": False, "message": f"TLS file not found on this server: {res['path']}"})
+            elif res["code"] == "testerror":
+                row.update({"ok": False, "message": res["detail"]})
             else:
-                row.update({"ok": False, "message": err or out or "Unknown error"})
+                row.update({"ok": False, "message": res["detail"] or "Unknown error"})
             server_results.append(row)
             if first_config is None and row["ok"]:
                 first_config = row["config"]
@@ -520,22 +520,21 @@ def author_kea_config_post(service):
             errors.append(f"❌ {name}: {cfg_err}")
             continue
         try:
-            out, err, conf_path = _run_author_script(
+            res, conf_path = _run_author_script(
                 server, service, config, tls_paths, dry_run=False, allow_overwrite=allow_overwrite
             )
-            if out == "ok":
+            if res["code"] == "ok":
                 results.append(f"✅ {name}: {conf_path} written. Enable/restart the service to use it.")
-            elif out == "exists":
+            elif res["code"] == "exists":
                 errors.append(f'❌ {name}: {conf_path} already exists — check "overwrite" to replace it.')
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
-                errors.append(f"❌ {name}: {binary} is not installed on this server — install it and try again.")
-            elif out.startswith("tlsmissing:"):
-                errors.append(f"❌ {name}: TLS file not found on this server: {out[len('tlsmissing:') :]}")
-            elif out.startswith("testerror:"):
-                errors.append(f"❌ {name}: config test failed, nothing written. Error: {out[len('testerror:') :]}")
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "tlsmissing":
+                errors.append(f"❌ {name}: TLS file not found on this server: {res['path']}")
+            elif res["code"] == "testerror":
+                errors.append(f"❌ {name}: config test failed, nothing written. Error: {res['detail']}")
             else:
-                errors.append(f"❌ {name}: {err or out}")
+                errors.append(f"❌ {name}: {res['detail']}")
         except Exception as e:
             errors.append(f"❌ {name}: {str(e)}")
 
@@ -613,12 +612,8 @@ def install_kea_binary(service):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            ssh = __kea6._connect_ssh(server)
-            try:
-                ok, output = __authoring.install_kea_service(ssh, service)
-            finally:
-                ssh.close()
-            results.append({"name": name, "ok": ok, "output": output})
+            res = __host.install_package(server, service)
+            results.append({"name": name, "ok": res["ok"], "output": res.get("output", res.get("detail", ""))})
         except Exception as e:
             results.append({"name": name, "ok": False, "output": str(e)})
 

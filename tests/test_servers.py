@@ -9,8 +9,6 @@ boundary on both routes and the restart route's error-handling paths
 without ever actually invoking a real SSH connection.
 """
 
-from unittest.mock import MagicMock, patch
-
 from tests.conftest import restricted_client as _restricted_client
 
 
@@ -39,144 +37,73 @@ class TestRestartRouteAuth:
 
 
 class TestRestartRouteBehavior:
-    """These never invoke a real subprocess — subprocess.run is mocked
-    throughout, so this only tests Jen's own logic (server lookup,
-    ssh_host presence check, flash messaging, audit logging), not SSH
-    connectivity itself."""
+    """v5.11.0 — the restart goes through jen.services.kea_host.service_action
+    (helper op `service` / legacy dual-name systemctl). It's stubbed here;
+    the dual-name-unit handling itself is covered in test_kea_helper.py and
+    test_kea_host.py."""
+
+    _SERVER = {
+        "id": 1,
+        "name": "Test Kea",
+        "ssh_host": "10.0.0.5",
+        "ssh_user": "kea",
+        "api_url": "http://localhost:18000",
+        "api_user": "test",
+        "api_pass": "test",
+        "kea_conf": "",
+        "role": "primary",
+    }
+
+    def _stub(self, monkeypatch, result=None):
+        from jen.services import kea_host
+
+        calls = []
+        monkeypatch.setattr(
+            kea_host,
+            "service_action",
+            lambda srv, svc, act: (calls.append((srv.get("name"), svc, act)), result or {"ok": True, "code": "ok"})[1],
+        )
+        return calls
 
     def test_nonexistent_server_id(self, logged_in_client, monkeypatch):
         from jen import extensions
 
-        monkeypatch.setattr(
-            extensions,
-            "KEA_SERVERS",
-            [
-                {
-                    "id": 1,
-                    "name": "Test Kea",
-                    "ssh_host": "10.0.0.5",
-                    "ssh_user": "kea",
-                    "api_url": "http://localhost:18000",
-                    "api_user": "test",
-                    "api_pass": "test",
-                    "kea_conf": "",
-                    "role": "primary",
-                }
-            ],
-        )
-        with patch("jen.routes.servers.subprocess.run") as mock_run:
-            r = logged_in_client.post("/servers/restart/999", follow_redirects=True)
-            assert r.status_code == 200
-            assert b"not found" in r.data.lower()
-            mock_run.assert_not_called()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(self._SERVER)])
+        calls = self._stub(monkeypatch)
+        r = logged_in_client.post("/servers/restart/999", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"not found" in r.data.lower()
+        assert calls == []
 
     def test_server_without_ssh_configured(self, logged_in_client, monkeypatch):
         from jen import extensions
 
-        monkeypatch.setattr(
-            extensions,
-            "KEA_SERVERS",
-            [
-                {
-                    "id": 1,
-                    "name": "No SSH Kea",
-                    "ssh_host": "",
-                    "ssh_user": "",
-                    "api_url": "http://localhost:18000",
-                    "api_user": "test",
-                    "api_pass": "test",
-                    "kea_conf": "",
-                    "role": "primary",
-                }
-            ],
-        )
-        with patch("jen.routes.servers.subprocess.run") as mock_run:
-            r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
-            assert r.status_code == 200
-            assert b"ssh not configured" in r.data.lower()
-            mock_run.assert_not_called()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(self._SERVER, ssh_host="", ssh_user="")])
+        calls = self._stub(monkeypatch)
+        r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"ssh not configured" in r.data.lower()
+        assert calls == []
 
-    def test_successful_restart_uses_hardened_ssh_opts(self, logged_in_client, monkeypatch):
-        # v4.4.8 regression guard: confirm the restart command actually
-        # goes through auth.ssh_cli_opts() (StrictHostKeyChecking=accept-new)
-        # rather than the old inline StrictHostKeyChecking=no flags.
+    def test_successful_restart_delegates_to_kea_host(self, logged_in_client, monkeypatch):
         from jen import extensions
 
-        monkeypatch.setattr(
-            extensions,
-            "KEA_SERVERS",
-            [
-                {
-                    "id": 1,
-                    "name": "Test Kea",
-                    "ssh_host": "10.0.0.5",
-                    "ssh_user": "kea",
-                    "api_url": "http://localhost:18000",
-                    "api_user": "test",
-                    "api_pass": "test",
-                    "kea_conf": "",
-                    "role": "primary",
-                }
-            ],
-        )
-        fake_result = MagicMock(returncode=0, stderr=b"")
-        with patch("jen.routes.servers.subprocess.run", return_value=fake_result) as mock_run:
-            r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
-            assert r.status_code == 200
-            assert b"restarted" in r.data.lower()
-            assert mock_run.called
-            call_args = mock_run.call_args[0][0]  # the command list
-            assert "ssh" in call_args
-            assert "StrictHostKeyChecking=accept-new" in call_args
-            assert "StrictHostKeyChecking=no" not in call_args
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(self._SERVER)])
+        calls = self._stub(monkeypatch, {"ok": True, "code": "ok", "unit": "kea-dhcp4-server"})
+        r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"restarted" in r.data.lower()
+        assert calls == [("Test Kea", "dhcp4", "restart")]
 
-    def test_restart_tries_both_kea_unit_names(self, logged_in_client, monkeypatch):
-        """v5.8.4 — this route only ever tried `isc-kea-dhcp4-server`, so
-        the button silently failed on hosts running ISC's own packages
-        (unit `kea-dhcp4-server`). subnets.py and kea6.py already tried
-        both; this pins the same convention here."""
-        from unittest.mock import MagicMock, patch
-
+    def test_failed_restart_shows_the_detail_not_a_traceback(self, logged_in_client, monkeypatch):
         from jen import extensions
 
-        monkeypatch.setattr(
-            extensions,
-            "KEA_SERVERS",
-            [{"id": 1, "name": "primary", "ssh_host": "10.0.0.2", "ssh_user": "jen", "api_url": "", "role": "primary"}],
-        )
-        fake = MagicMock(returncode=0, stdout=b"", stderr=b"")
-        with patch("jen.routes.servers.subprocess.run", return_value=fake) as mock_run:
-            logged_in_client.post("/servers/restart/1", follow_redirects=True)
-        remote = mock_run.call_args.args[0][-1]
-        assert "systemctl restart kea-dhcp4-server" in remote
-        assert "systemctl restart isc-kea-dhcp4-server" in remote
-        assert "||" in remote
-
-    def test_failed_restart_shows_stderr(self, logged_in_client, monkeypatch):
-        from jen import extensions
-
-        monkeypatch.setattr(
-            extensions,
-            "KEA_SERVERS",
-            [
-                {
-                    "id": 1,
-                    "name": "Test Kea",
-                    "ssh_host": "10.0.0.5",
-                    "ssh_user": "kea",
-                    "api_url": "http://localhost:18000",
-                    "api_user": "test",
-                    "api_pass": "test",
-                    "kea_conf": "",
-                    "role": "primary",
-                }
-            ],
-        )
-        fake_result = MagicMock(returncode=1, stderr=b"Permission denied")
-        with patch("jen.routes.servers.subprocess.run", return_value=fake_result):
-            r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
-            assert r.status_code == 200
-            assert b"failed" in r.data.lower()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(self._SERVER)])
+        self._stub(monkeypatch, {"ok": False, "code": "error", "detail": "Permission denied"})
+        r = logged_in_client.post("/servers/restart/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"failed" in r.data.lower()
+        assert b"Permission denied" in r.data
 
 
 class TestHaStatusDerivation:

@@ -901,9 +901,9 @@ def edit_subnet6(subnet_id):
 @_admin_required
 def edit_subnet6_preview(subnet_id):
     """Dry-run preview for a v6 subnet edit — same guarantee as the v4
-    preview endpoint: kea-dhcp6 -t runs against a temp file on each
-    configured server, the live kea-dhcp6.conf is never touched under
-    any outcome (dry_run=True in build_subnet6_patch_script())."""
+    preview endpoint: kea_host.test_config() `kea-dhcp6 -t`s the
+    candidate on each server and never touches the live kea-dhcp6.conf
+    under any outcome."""
     if subnet_id not in extensions.SUBNET6_MAP:
         return jsonify({"ok": False, "error": "IPv6 subnet not found."}), 404
 
@@ -922,48 +922,38 @@ def edit_subnet6_preview(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            import base64
-
-            ssh = __kea6._connect_ssh(server)
-            try:
-                kea6_conf = __kea6._kea6_conf_path(server)
-                script = __kea6.build_subnet6_patch_script(
-                    subnet_id,
-                    kea6_conf,
-                    fields["new_pool"],
-                    fields["extra_pools"],
-                    fields["new_preferred"],
-                    fields["new_valid"],
-                    fields["new_renew"],
-                    fields["new_rebind"],
-                    fields["new_dns"],
-                    dry_run=True,
-                )
-                enc = base64.b64encode(script.encode()).decode()
-                _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-                out = stdout.read().decode().strip()
-                err = stderr.read().decode().strip()
-            finally:
-                ssh.close()
-
-            if out == "preview-ok":
-                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
-            elif out == "nochange":
+            cfg = __host.read_config(server, "dhcp6")
+            if cfg is None:
+                server_results.append({"name": name, "ok": False, "message": "kea-dhcp6.conf not found on this server"})
+                continue
+            cfg, changed = __edit.patch_subnet6(
+                cfg,
+                subnet_id,
+                fields["new_pool"],
+                fields["extra_pools"],
+                fields["new_preferred"],
+                fields["new_valid"],
+                fields["new_renew"],
+                fields["new_rebind"],
+                fields["new_dns"],
+            )
+            if not changed:
                 server_results.append({"name": name, "ok": True, "message": "No changes for this server"})
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
+                continue
+            res = __host.test_config(server, "dhcp6", cfg)
+            if res["ok"]:
+                server_results.append({"name": name, "ok": True, "message": "Config test passed"})
+            elif res["code"] == "missingbinary":
                 server_results.append(
                     {
                         "name": name,
                         "ok": False,
-                        "missing_binary": binary,
-                        "message": f"{binary} is not installed on this server.",
+                        "missing_binary": res["binary"],
+                        "message": f"{res['binary']} is not installed on this server.",
                     }
                 )
-            elif out.startswith("testerror:"):
-                server_results.append({"name": name, "ok": False, "message": out[len("testerror:") :]})
             else:
-                server_results.append({"name": name, "ok": False, "message": err or out or "Unknown error"})
+                server_results.append({"name": name, "ok": False, "message": res["detail"] or "Unknown error"})
         except Exception as e:
             server_results.append({"name": name, "ok": False, "message": str(e)})
 
@@ -988,14 +978,15 @@ def edit_subnet6_post(subnet_id):
     for server in extensions.KEA_SERVERS:
         if not server.get("ssh_host"):
             continue
+        name = server.get("name", server["ssh_host"])
         try:
-            import base64
-
-            ssh = __kea6._connect_ssh(server)
-            kea6_conf = __kea6._kea6_conf_path(server)
-            script = __kea6.build_subnet6_patch_script(
+            cfg = __host.read_config(server, "dhcp6")
+            if cfg is None:
+                errors.append(f"❌ {name}: kea-dhcp6.conf not found on this server")
+                continue
+            cfg, changed = __edit.patch_subnet6(
+                cfg,
                 subnet_id,
-                kea6_conf,
                 fields["new_pool"],
                 fields["extra_pools"],
                 fields["new_preferred"],
@@ -1003,35 +994,28 @@ def edit_subnet6_post(subnet_id):
                 fields["new_renew"],
                 fields["new_rebind"],
                 fields["new_dns"],
-                dry_run=False,
             )
-            enc = base64.b64encode(script.encode()).decode()
-            _, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3")
-            out = stdout.read().decode().strip()
-            err = stderr.read().decode().strip()
-
-            if out == "nochange":
-                results.append(f"ℹ️ {server.get('name', server['ssh_host'])}: nothing to change")
-            elif out == "ok":
-                # Config validated — restart kea-dhcp6-server (dual-name,
-                # same fallback the v4 restart and the Phase 1 toggle use).
-                out2, err2 = __kea6._dual_name_systemctl(ssh, "restart")
-                results.append(f"✅ {server.get('name', server['ssh_host'])}: config validated, updated and restarted")
-            elif out.startswith("missingbinary:"):
-                binary = out[len("missingbinary:") :]
+            if not changed:
+                results.append(f"ℹ️ {name}: nothing to change")
+                continue
+            res = __host.apply_config(server, "dhcp6", cfg)
+            if res["code"] == "ok":
+                restart = __host.service_action(server, "dhcp6", "restart")
+                if restart["ok"]:
+                    results.append(f"✅ {name}: config validated, updated and restarted")
+                else:
+                    results.append(f"✅ {name}: config updated — restart Kea manually ({restart['detail']})")
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "testerror":
                 errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: {binary} is not installed on this server — install it and try again."
-                )
-            elif out.startswith("testerror:"):
-                error_detail = out[len("testerror:") :]
-                errors.append(
-                    f"❌ {server.get('name', server['ssh_host'])}: config validation failed — Kea NOT restarted, original config preserved. Error: {error_detail}"
+                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
+                    f"Error: {res['detail']}"
                 )
             else:
-                errors.append(f"❌ {server.get('name', server['ssh_host'])}: {err or out}")
-            ssh.close()
+                errors.append(f"❌ {name}: {res['detail']}")
         except Exception as e:
-            errors.append(f"❌ {server.get('name', server.get('ssh_host', '?'))}: {str(e)}")
+            errors.append(f"❌ {name}: {e}")
 
     for r in results:
         flash(r, "success")

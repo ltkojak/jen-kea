@@ -650,7 +650,7 @@ class TestAuthorKeaConfigPreviewRoute:
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
-        fake_ssh = FakeSSHClient([("preview-ok", "")])
+        fake_ssh = FakeSSHClient([('{"ok": true}', "")])
         import jen.services.kea6 as kea6_module
 
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
@@ -702,7 +702,7 @@ class TestAuthorKeaConfigPreviewRoute:
         cmap = connect_map or {}
 
         def _connect(server):
-            return cmap.get(server.get("name"), FakeSSHClient([("preview-ok", "")]))
+            return cmap.get(server.get("name"), FakeSSHClient([('{"ok": true}', "")]))
 
         monkeypatch.setattr(kea6_module, "_connect_ssh", _connect)
 
@@ -804,7 +804,11 @@ class TestAuthorKeaConfigPreviewRoute:
         monkeypatch.setattr(extensions, "KEA_API_URL", "https://1.2.3.4:8004")
         monkeypatch.setattr(extensions, "KEA_API_USER", "u")
         monkeypatch.setattr(extensions, "KEA_API_PASS", "p")
-        self._direct_setup(monkeypatch, [srv], {"s1": FakeSSHClient([("tlsmissing:/etc/kea/tls/s.key", "")])})
+        self._direct_setup(
+            monkeypatch,
+            [srv],
+            {"s1": FakeSSHClient([('{"ok": false, "error": "tlsmissing", "path": "/etc/kea/tls/s.key"}', "")])},
+        )
         data = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp4/preview",
             data=self._direct_form(
@@ -821,7 +825,7 @@ class TestAuthorKeaConfigPreviewRoute:
     def test_direct_preview_never_leaks_a_password_to_the_browser(self, logged_in_client, monkeypatch):
         srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004", "api_pass": "s3cretsock"}
         monkeypatch.setattr(extensions, "KEA_DB_PASS", "s3cretdb")
-        fake = FakeSSHClient([("preview-ok", "")])
+        fake = FakeSSHClient([('{"ok": true}', "")])
         self._direct_setup(monkeypatch, [srv], {"s1": fake})
 
         body = logged_in_client.post(
@@ -1027,47 +1031,10 @@ class TestDetectInstalledKeaServices:
         assert "command -v" in cmd or "which" in cmd, "should still also try a PATH-based search"
 
 
-class TestInstallKeaService:
-    def test_success_returns_ok_and_tail_of_output(self):
-        from jen.services.kea_authoring import install_kea_service
-
-        output = "\n".join([f"line {i}" for i in range(30)]) + "\nSetting up kea-dhcp6-server ...\n"
-        ssh = FakeSSHClient([(output, "", 0)])
-        ok, tail = install_kea_service(ssh, "dhcp6")
-        assert ok is True
-        assert "Setting up kea-dhcp6-server" in tail
-        # Tail is capped, not the full (potentially huge) apt output.
-        assert len(tail.splitlines()) <= 15
-
-    def test_failure_returns_ok_false(self):
-        from jen.services.kea_authoring import install_kea_service
-
-        ssh = FakeSSHClient([("E: Unable to locate package kea-dhcp6-server", "", 100)])
-        ok, tail = install_kea_service(ssh, "dhcp6")
-        assert ok is False
-        assert "Unable to locate package" in tail
-
-    def test_ssh_exception_returns_ok_false_not_raise(self):
-        from jen.services.kea_authoring import install_kea_service
-
-        class BrokenSSH:
-            def exec_command(self, cmd):
-                raise RuntimeError("connection reset")
-
-        ok, tail = install_kea_service(BrokenSSH(), "dhcp6")
-        assert ok is False
-        assert "connection reset" in tail
-
-    def test_installs_correct_package_name_per_service(self):
-        from jen.services.kea_authoring import install_kea_service
-
-        ssh4 = FakeSSHClient([("", "", 0)])
-        ssh6 = FakeSSHClient([("", "", 0)])
-        install_kea_service(ssh4, "dhcp4")
-        install_kea_service(ssh6, "dhcp6")
-        assert "kea-dhcp4-server" in ssh4.calls[0]
-        assert "kea-dhcp6-server" in ssh6.calls[0]
-        assert "kea-dhcp6-server" not in ssh4.calls[0]
+# v5.11.0 — kea_authoring.install_kea_service() was folded into
+# jen/services/kea_host.py::install_package (helper op `install-package`
+# or the legacy apt-over-SSH). See tests/test_kea_host.py and
+# tests/test_kea_helper.py.
 
 
 class TestMissingBinaryScriptHandling:
@@ -1087,49 +1054,29 @@ class TestMissingBinaryScriptHandling:
         # just appear somewhere in the script text.
         assert "try:\n    result = subprocess.run" in script
 
-    def test_v6_subnet_patch_script_catches_missing_binary(self):
-        from jen.services.kea6 import build_subnet6_patch_script
-
-        script = build_subnet6_patch_script(
-            1,
-            "/etc/kea/kea-dhcp6.conf",
-            "2001:db8::10-2001:db8::20",
-            [],
-            "",
-            "",
-            "",
-            "",
-            "",
-            dry_run=True,
-        )
-        assert "except FileNotFoundError:" in script
-        assert "missingbinary:kea-dhcp6" in script
-
-    def test_v4_missing_binary_surfaces_via_the_helper_and_the_legacy_engine(self):
-        # v5.11.0 — v4 subnet edits no longer generate their own script;
-        # the missing-binary sentinel now comes from the helper's
-        # `test-config` op (tests/test_kea_helper.py) or, on the legacy
-        # path, from render_author_config_script (covered above).
+    def test_missing_binary_surfaces_via_the_helper_and_the_legacy_engine(self):
+        # v5.11.0 — subnet edits no longer generate their own script; the
+        # missing-binary sentinel now comes from the helper's `test-config`
+        # op (tests/test_kea_helper.py) or, on the legacy path, from
+        # render_author_config_script (which is what test/apply run there).
         from jen.services.kea_authoring import render_author_config_script
 
-        script = render_author_config_script(
-            "dhcp4", "/etc/kea/kea-dhcp4.conf", {"Dhcp4": {}}, allow_overwrite=True, dry_run=True
-        )
-        assert "except FileNotFoundError:" in script
-        assert "missingbinary:kea-dhcp4" in script
+        for svc, binary in (("dhcp4", "kea-dhcp4"), ("dhcp6", "kea-dhcp6")):
+            script = render_author_config_script(svc, f"/etc/kea/{binary}.conf", {}, allow_overwrite=True, dry_run=True)
+            assert "except FileNotFoundError:" in script
+            assert f"missingbinary:{binary}" in script
 
-    def test_all_generated_scripts_remain_valid_python(self):
+    def test_generated_scripts_remain_valid_python(self):
         """Guard against the fix itself introducing a syntax error into
         the script that actually runs on the remote Kea server."""
         import ast
 
-        from jen.services.kea6 import build_subnet6_patch_script
         from jen.services.kea_authoring import render_author_config_script
 
         scripts = [
             render_author_config_script("dhcp6", "/x", {"Dhcp6": {}}, False, True),
             render_author_config_script("dhcp4", "/x", {"Dhcp4": {}}, False, True),
-            build_subnet6_patch_script(1, "/x", "", [], "", "", "", "", "", dry_run=True),
+            render_author_config_script("dhcp4", "/x", {"Dhcp4": {}}, True, False),
         ]
         for script in scripts:
             ast.parse(script)  # raises SyntaxError if invalid
@@ -1226,7 +1173,7 @@ class TestAuthorKeaPreviewMissingBinary:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         import jen.services.kea6 as kea6_module
 
-        fake_ssh = FakeSSHClient([("missingbinary:kea-dhcp6", "")])
+        fake_ssh = FakeSSHClient([('{"ok": false, "error": "missingbinary", "binary": "kea-dhcp6"}', "")])
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
         resp = logged_in_client.post(
             "/settings/infrastructure/author-kea/dhcp6/preview",
@@ -1260,7 +1207,7 @@ class TestAuthorKeaConfigPostRoute:
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
-        fake_ssh = FakeSSHClient([("exists", "")])
+        fake_ssh = FakeSSHClient([('{"ok": false, "error": "exists"}', "")])
         import jen.services.kea6 as kea6_module
 
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
@@ -1286,7 +1233,7 @@ class TestAuthorKeaConfigPostRoute:
         server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})  # nothing in Jen yet
-        fake_ssh = FakeSSHClient([("ok", "")])
+        fake_ssh = FakeSSHClient([('{"ok": true, "backup": null}', "")])
         import jen.routes.settings as settings_module
         import jen.services.kea6 as kea6_module
 
@@ -1315,7 +1262,7 @@ class TestAuthorKeaConfigPostRoute:
         server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
-        fake_ssh = FakeSSHClient([("testerror:bad", "")])
+        fake_ssh = FakeSSHClient([('{"ok": false, "error": "testerror", "detail": "bad"}', "")])
         import jen.routes.settings as settings_module
         import jen.services.kea6 as kea6_module
 
@@ -1346,7 +1293,7 @@ class TestAuthorKeaConfigPostRoute:
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
-        fake_ssh = FakeSSHClient([("ok", "")])
+        fake_ssh = FakeSSHClient([('{"ok": true, "backup": null}', "")])
         import jen.routes.settings as settings_module
         import jen.services.kea6 as kea6_module
 
@@ -1373,7 +1320,7 @@ class TestAuthorKeaConfigPostRoute:
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
-        fake_ssh = FakeSSHClient([("testerror:bad interface", "")])
+        fake_ssh = FakeSSHClient([('{"ok": false, "error": "testerror", "detail": "bad interface"}', "")])
         import jen.services.kea6 as kea6_module
 
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)

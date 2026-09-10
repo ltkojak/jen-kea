@@ -7,7 +7,6 @@ Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
 from jen import extensions
-from tests._kea6_helpers import FakeSSHClient
 
 
 class TestSubnetsV6View:
@@ -171,98 +170,9 @@ class TestGetSubnet6KeaData:
         assert data["pools"] == []
 
 
-class TestBuildSubnet6PatchScript:
-    def test_dry_run_never_calls_os_replace(self):
-        from jen.services.kea6 import build_subnet6_patch_script
-
-        script = build_subnet6_patch_script(
-            1,
-            "/etc/kea/kea-dhcp6.conf",
-            "2001:db8::10-2001:db8::20",
-            [],
-            "3000",
-            "4000",
-            "1000",
-            "2000",
-            "",
-            dry_run=True,
-        )
-        assert "os.replace" not in script
-        assert "preview-ok" in script
-        assert "shutil.copy2" not in script  # no backup step in dry-run
-
-    def test_apply_run_includes_backup_and_replace(self):
-        from jen.services.kea6 import build_subnet6_patch_script
-
-        script = build_subnet6_patch_script(
-            1,
-            "/etc/kea/kea-dhcp6.conf",
-            "2001:db8::10-2001:db8::20",
-            [],
-            "3000",
-            "4000",
-            "1000",
-            "2000",
-            "",
-            dry_run=False,
-        )
-        assert "shutil.copy2" in script
-        assert "os.replace(tmp, path)" in script
-        assert "print('ok')" in script
-
-    def test_uses_kea_dhcp6_binary_not_kea_dhcp4(self):
-        from jen.services.kea6 import build_subnet6_patch_script
-
-        script = build_subnet6_patch_script(
-            1,
-            "/etc/kea/kea-dhcp6.conf",
-            "",
-            [],
-            "",
-            "",
-            "",
-            "",
-            "",
-            dry_run=True,
-        )
-        assert "'kea-dhcp6'" in script
-        assert "kea-dhcp4" not in script
-
-    def test_dns_option_uses_code_23_dhcp6_space(self):
-        from jen.services.kea6 import build_subnet6_patch_script
-
-        script = build_subnet6_patch_script(
-            1,
-            "/etc/kea/kea-dhcp6.conf",
-            "",
-            [],
-            "",
-            "",
-            "",
-            "",
-            "2001:4860:4860::8888",
-            dry_run=True,
-        )
-        assert "'dns-servers'" in script
-        assert "'code': 23" in script
-        assert "'space': 'dhcp6'" in script
-
-    def test_no_change_reports_nochange(self):
-        from jen.services.kea6 import build_subnet6_patch_script
-
-        script = build_subnet6_patch_script(
-            1,
-            "/etc/kea/kea-dhcp6.conf",
-            "",
-            [],
-            "",
-            "",
-            "",
-            "",
-            "",
-            dry_run=True,
-        )
-        assert "print('nochange')" in script
+# v5.11.0 — build_subnet6_patch_script() is gone; the v6 subnet-patch
+# mutation lives in jen/services/kea_config_edit.py::patch_subnet6
+# (tests/test_kea_config_edit.py).
 
 
 class TestParseAndValidateSubnet6EditForm:
@@ -396,43 +306,42 @@ class TestEditSubnet6PostRoute:
         resp = logged_in_client.post("/subnets/edit6/1", data={"preferred_lifetime": "3000"}, follow_redirects=False)
         assert resp.status_code == 302
 
-    def test_successful_apply_restarts_kea6(self, logged_in_client, monkeypatch):
-        import jen.services.kea6 as kea6_module
+    def _v6_helper(self, monkeypatch, subnet6=None):
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
 
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
-        server = {
-            "id": 1,
-            "name": "theelders",
-            "ssh_host": "10.10.11.250",
-            "ssh_user": "matthew",
-            "kea_conf": "/etc/kea/kea-dhcp4.conf",
-        }
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        fake_ssh = FakeSSHClient([("ok", ""), ("done", "")])
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "theelders", "ssh_host": "10.10.11.250", "kea_conf": "/etc/kea/kea-dhcp4.conf"}],
+        )
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp6")] = {"Dhcp6": {"subnet6": subnet6 if subnet6 is not None else [{"id": 1}]}}
+        fake.responses["apply-config"] = {"ok": True, "backup": None}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp6-server", "state": "active"}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        return fake
+
+    def test_successful_apply_restarts_kea6(self, logged_in_client, monkeypatch):
+        fake = self._v6_helper(monkeypatch)
         resp = logged_in_client.post("/subnets/edit6/1", data={"preferred_lifetime": "3000"}, follow_redirects=True)
         assert resp.status_code == 200
         assert b"validated, updated and restarted" in resp.data
-        assert any("restart" in c for c in fake_ssh.calls)
-        assert any("isc-kea-dhcp6-server" in c for c in fake_ssh.calls)
+        assert fake.payload_for("service") == {"service": "dhcp6", "action": "restart"}
+        s = fake.payload_for("apply-config")["config"]["Dhcp6"]["subnet6"][0]
+        assert s["preferred-lifetime"] == 3000
 
     def test_config_test_failure_does_not_restart(self, logged_in_client, monkeypatch):
-        import jen.services.kea6 as kea6_module
-
-        monkeypatch.setattr(
-            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        )
-        server = {"id": 1, "name": "theelders", "ssh_host": "10.10.11.250", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        fake_ssh = FakeSSHClient([("testerror:bad pool syntax", "")])
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        fake = self._v6_helper(monkeypatch)
+        fake.responses["apply-config"] = {"ok": False, "error": "testerror", "detail": "bad pool syntax"}
         resp = logged_in_client.post("/subnets/edit6/1", data={"preferred_lifetime": "3000"}, follow_redirects=True)
         assert resp.status_code == 200
         assert b"config validation failed" in resp.data
         assert b"bad pool syntax" in resp.data
-        assert len(fake_ssh.calls) == 1  # never attempted a restart call
+        assert "service" not in fake.ops()  # never attempted a restart
 
 
 class TestEditSubnet6PreviewRoute:
@@ -457,21 +366,23 @@ class TestEditSubnet6PreviewRoute:
         assert resp.get_json()["no_changes"] is True
 
     def test_dry_run_never_touches_live_config(self, logged_in_client, monkeypatch):
-        """The core safety guarantee: preview must call the script with
-        dry_run semantics (no 'ok'/os.replace outcome ever reachable)."""
-        import jen.services.kea6 as kea6_module
+        """The core safety guarantee: preview only test_config()s, never
+        apply_config() / service_action()."""
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
 
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
         server = {"id": 1, "name": "theelders", "ssh_host": "10.10.11.250", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        fake_ssh = FakeSSHClient([("preview-ok", "")])
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp6")] = {"Dhcp6": {"subnet6": [{"id": 1}]}}
+        fake.responses["test-config"] = {"ok": True}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
         resp = logged_in_client.post("/subnets/edit6/1/preview", data={"preferred_lifetime": "3000"})
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["servers"][0]["ok"] is True
         assert data["all_passed"] is True
-        # Only one SSH call — the dry-run test — never a second restart call.
-        assert len(fake_ssh.calls) == 1
+        assert "apply-config" not in fake.ops() and "service" not in fake.ops()

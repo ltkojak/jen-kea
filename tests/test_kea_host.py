@@ -7,11 +7,14 @@ legacy fallback against the same fake replying with the OLD tokens.
 """
 
 import json
+import pathlib
 
 import pytest
 
 from jen.services import kea_host
 from tests._kea6_helpers import FakeSSHClient
+
+_JEN = pathlib.Path(__file__).resolve().parent.parent / "jen"
 
 SERVER = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "ssh_user": "kea", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
 
@@ -159,6 +162,35 @@ class TestFlagLegacyDedupes:
             kea_host._flag_legacy({"id": 2, "name": "kea-b", "ssh_host": "x"})
         assert len(seen) == 2
         assert "kea-a" in seen[0] and "kea-b" in seen[1]
+
+
+class TestNoDirectRootPathsOutsideKeaHost:
+    """v5.11.0 — every Kea-host root operation goes through kea_host. The
+    legacy `sudo python3` pipe and `subprocess ["ssh", …]` should exist
+    ONLY inside kea_host.py (the fallback engine) and kea_authoring.py's
+    render_install_helper_script (which deploys the helper once)."""
+
+    def _py_files(self):
+        return [p for p in _JEN.rglob("*.py")]
+
+    def test_sudo_python3_pipe_only_in_kea_host_and_installer(self):
+        offenders = []
+        for p in self._py_files():
+            text = p.read_text(encoding="utf-8")
+            if "base64 -d | sudo python3" in text or "| sudo python3" in text:
+                if p.name not in ("kea_host.py", "kea_authoring.py"):
+                    offenders.append(str(p.relative_to(_JEN.parent)))
+        assert not offenders, offenders
+
+    def test_no_subprocess_ssh_in_routes(self):
+        offenders = []
+        for p in (_JEN / "routes").rglob("*.py"):
+            text = p.read_text(encoding="utf-8")
+            if 'subprocess.run(["ssh"' in text or "subprocess.run(['ssh'" in text or '["ssh"]\n' in text:
+                # ddns.py keeps a plain-SSH `dig`/`host` lookup (no sudo)
+                if p.name != "ddns.py":
+                    offenders.append(str(p.relative_to(_JEN.parent)))
+        assert not offenders, offenders
 
 
 class TestStatusTracking:

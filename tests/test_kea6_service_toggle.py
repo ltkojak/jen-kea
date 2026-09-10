@@ -80,17 +80,30 @@ class TestSetIpv6ServiceState:
         assert not any("systemctl" in c for c in fake_ssh.calls)
         assert fake_ssh.closed is True
 
+    def _stub_service_action(self, monkeypatch, result):
+        """v5.11.0 — the systemctl call goes through kea_host.service_action
+        now (helper op `service` / legacy dual-name). Stub it and record."""
+        from jen.services import kea_host
+
+        calls = []
+
+        def fake(server, service, action):
+            calls.append((server.get("name"), service, action))
+            return result(server) if callable(result) else result
+
+        monkeypatch.setattr(kea_host, "service_action", fake)
+        return calls
+
     def test_enable_succeeds_when_config_present_and_systemctl_ok(self, monkeypatch):
         from jen.services import kea6 as kea6_module
 
         server = self._server()
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        fake_ssh = FakeSSHClient([("yes", ""), ("done", "")])
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: FakeSSHClient([("yes", "")]))  # _config_exists
+        calls = self._stub_service_action(monkeypatch, {"ok": True, "code": "ok", "unit": "kea-dhcp6-server"})
         results = kea6_module.set_ipv6_service_state(True)
         assert results == [{"name": "theelders", "ok": True, "message": "kea-dhcp6-server enabled and started"}]
-        assert any("enable --now" in c for c in fake_ssh.calls)
-        assert any("isc-kea-dhcp6-server" in c for c in fake_ssh.calls)  # dual-name fallback present
+        assert calls == [("theelders", "dhcp6", "enable")]
 
     def test_disable_does_not_check_config_existence(self, monkeypatch):
         """Disabling should never block on the config file being present —
@@ -99,26 +112,27 @@ class TestSetIpv6ServiceState:
 
         server = self._server()
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        fake_ssh = FakeSSHClient([("done", "")])
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
+        connects = []
+        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: connects.append(1) or FakeSSHClient([("", "")]))
+        calls = self._stub_service_action(monkeypatch, {"ok": True, "code": "ok"})
         results = kea6_module.set_ipv6_service_state(False)
         assert results[0]["ok"] is True
-        assert "disable --now" in fake_ssh.calls[0]
-        assert len(fake_ssh.calls) == 1  # no config-existence check call at all
+        assert calls == [("theelders", "dhcp6", "disable")]
+        assert connects == []  # no SSH for the config-existence check on disable
 
-    def test_ssh_connect_failure_reported_per_server_not_fatal(self, monkeypatch):
+    def test_service_action_failure_reported_per_server_not_fatal(self, monkeypatch):
         from jen.services import kea6 as kea6_module
 
         s1 = self._server(name="theelders", ssh_host="10.10.11.250")
         s2 = self._server(name="standby", ssh_host="10.10.11.249")
         monkeypatch.setattr(extensions, "KEA_SERVERS", [s1, s2])
 
-        def flaky_connect(server):
+        def result(server):
             if server["name"] == "theelders":
-                raise TimeoutError("no route to host")
-            return FakeSSHClient([("done", "")])
+                return {"ok": False, "code": "error", "detail": "no route to host"}
+            return {"ok": True, "code": "ok"}
 
-        monkeypatch.setattr(kea6_module, "_connect_ssh", flaky_connect)
+        self._stub_service_action(monkeypatch, result)
         results = kea6_module.set_ipv6_service_state(False)
         assert len(results) == 2
         by_name = {r["name"]: r for r in results}
