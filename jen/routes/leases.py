@@ -417,8 +417,9 @@ def _get_pools(subnet_id):
     try:
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
-            cfg = result["arguments"]["Dhcp4"]
-            for s in cfg.get("subnet4", []):
+            from jen.services.kea_config_view import iter_subnet4
+
+            for s, _sn in iter_subnet4(result["arguments"].get("Dhcp4", {})):
                 if s["id"] == subnet_id:
                     for p in s.get("pools", []):
                         pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)

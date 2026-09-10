@@ -16,6 +16,7 @@ import jen.models.db as __db
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_config_view as __view
 from jen import extensions
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
 
@@ -95,7 +96,7 @@ def dashboard():
         kea_cfg = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         kea_subnets = {}
         if isinstance(kea_cfg, dict) and kea_cfg.get("result") == 0:
-            for s in kea_cfg.get("arguments", {}).get("Dhcp4", {}).get("subnet4", []):
+            for s, _sn in __view.iter_subnet4(kea_cfg.get("arguments", {}).get("Dhcp4", {})):
                 sid = s.get("id")
                 routers = ""
                 dns_servers = ""
@@ -296,7 +297,7 @@ def api_stats():
         pool_sizes = {}
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
-            for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+            for s, _sn in __view.iter_subnet4(result["arguments"].get("Dhcp4", {})):
                 for pool in s.get("pools", []):
                     p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
                     if "-" in p:

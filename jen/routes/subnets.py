@@ -17,6 +17,7 @@ import jen.models.user as __user
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_edit as __edit
+import jen.services.kea_config_view as __view
 import jen.services.kea_host as __host
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
@@ -49,7 +50,7 @@ def subnets():
             global_lifetime = cfg.get("valid-lifetime", 0)
             global_renew = cfg.get("renew-timer", 0)
             global_rebind = cfg.get("rebind-timer", 0)
-            for s in cfg.get("subnet4", []):
+            for s, sn_name in __view.iter_subnet4(cfg):
                 pools = []
                 for p in s.get("pools", []):
                     pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)
@@ -69,6 +70,7 @@ def subnets():
                     "pools": pools,
                     "routers": routers,
                     "dns_servers": dns_servers,
+                    "shared_network": sn_name,
                 }
     except Exception:
         pass
@@ -166,7 +168,7 @@ def _get_subnet_kea_data(subnet_id):
             global_lifetime = cfg.get("valid-lifetime", 0)
             global_renew = cfg.get("renew-timer", 0)
             global_rebind = cfg.get("rebind-timer", 0)
-            for s in cfg.get("subnet4", []):
+            for s, _sn in __view.iter_subnet4(cfg):
                 if s["id"] == subnet_id:
                     pools = []
                     for p in s.get("pools", []):
@@ -208,7 +210,7 @@ def _get_kea_subnet_ids():
     try:
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
-            return {s["id"] for s in result["arguments"]["Dhcp4"].get("subnet4", [])}
+            return {s["id"] for s, _sn in __view.iter_subnet4(result["arguments"].get("Dhcp4", {}))}
     except Exception:
         pass
     return set()

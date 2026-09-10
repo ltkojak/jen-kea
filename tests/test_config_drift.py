@@ -185,6 +185,28 @@ class TestFetchLiveSubnetMap:
         monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
         assert fetch_live_subnet_map("v4") == {}
 
+    def test_v4_sees_subnets_nested_in_shared_networks(self, monkeypatch):
+        """v5.15.0 — a subnet inside Dhcp4.shared-networks used to be
+        absent from the live map, so config-drift reported it as
+        'missing from Kea' (a false alarm)."""
+        import jen.services.kea as kea_module
+
+        def fake_kea_command(command, service="dhcp4", arguments=None, server=None):
+            return {
+                "result": 0,
+                "arguments": {
+                    "Dhcp4": {
+                        "subnet4": [{"id": 10, "subnet": "10.10.10.0/24"}],
+                        "shared-networks": [
+                            {"name": "guest", "subnet4": [{"id": 70, "subnet": "10.10.70.0/24"}]},
+                        ],
+                    }
+                },
+            }
+
+        monkeypatch.setattr(kea_module, "kea_command", fake_kea_command)
+        assert fetch_live_subnet_map("v4") == {10: "10.10.10.0/24", 70: "10.10.70.0/24"}
+
 
 class TestCheckConfigDrift:
     def test_v4_drift_detected_end_to_end(self, monkeypatch):

@@ -60,6 +60,12 @@ def __get_active_kea_server():
     return get_active_kea_server()
 
 
+def __iter_subnet4(dhcp4_cfg):
+    from jen.services.kea_config_view import iter_subnet4
+
+    return iter_subnet4(dhcp4_cfg)
+
+
 def __format_mac(*a, **kw):
     from jen.services.kea import format_mac
 
@@ -626,7 +632,7 @@ def take_lease_snapshot():
             pool_sizes = {}
             result = __kea_command("config-get", server=__get_active_kea_server())
             if result.get("result") == 0:
-                for s in result["arguments"]["Dhcp4"].get("subnet4", []):
+                for s, _sn in __iter_subnet4(result["arguments"].get("Dhcp4", {})):
                     for pool in s.get("pools", []):
                         p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
                         if "-" in p:
@@ -953,7 +959,7 @@ def check_alerts():
                     if kea_cfg.get("result") == 0:
                         threshold = int(__get_global_setting("alert_threshold_pct", "80"))
                         exhaustion_threshold = int(__get_global_setting("pool_exhaustion_free", "5"))
-                        for s in kea_cfg["arguments"]["Dhcp4"].get("subnet4", []):
+                        for s, _sn in __iter_subnet4(kea_cfg["arguments"].get("Dhcp4", {})):
                             sid = s["id"]
                             if sid not in extensions.SUBNET_MAP:
                                 continue

@@ -143,9 +143,14 @@ def fetch_live_subnet_map(family: str = "v4", server: dict = None) -> dict:
             dhcp_key, subnet_key = "Dhcp4", "subnet4"
         if result.get("result") != 0:
             return {}
-        cfg = result["arguments"][dhcp_key]
+        from jen.services import kea_config_view as _view
+
+        cfg = result["arguments"].get(dhcp_key, {})
+        iter_fn = _view.iter_subnet4 if subnet_key == "subnet4" else _view.iter_subnet6
+        # v5.15.0 — a subnet nested in Dhcp4.shared-networks used to be
+        # reported as "missing from Kea" (a false drift alarm).
         live = {}
-        for s in cfg.get(subnet_key, []):
+        for s, _sn in iter_fn(cfg):
             live[s["id"]] = s.get("subnet", "")
         return live
     except Exception as e:

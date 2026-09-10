@@ -143,7 +143,9 @@ def api_v1_subnets():
         try:
             cfg_result = kea_command("config-get", server=get_active_kea_server())
             if cfg_result.get("result") == 0:
-                for s in cfg_result["arguments"]["Dhcp4"].get("subnet4", []):
+                from jen.services.kea_config_view import iter_subnet4
+
+                for s, _sn in iter_subnet4(cfg_result["arguments"].get("Dhcp4", {})):
                     for r in result:
                         if r["id"] == s["id"]:
                             pool_size = 0

@@ -259,15 +259,16 @@ def _kea_config_drift(ctx) -> Check:
 
 
 def _kea_subnets_declared(ctx) -> Check:
-    # Q10 will switch this to jen/services/kea_config_view.iter_subnet4 so a
-    # subnet nested inside a shared-network is seen too; until then it reads
-    # top-level Dhcp4.subnet4, matching every other config-get consumer.
+    # v5.15.0 — via kea_config_view so a subnet nested in a shared-network
+    # is seen too (before, it was flagged as orphaned).
+    from jen.services.kea_config_view import iter_subnet4
+
     c = Check("kea_subnets_declared", "Every Kea subnet is named", "kea", fix_url="/settings/kea")
     cfg = ctx["dhcp4_config"]
     if cfg is None:
         c.status, c.detail = "skip", "config-get unavailable"
         return c
-    kea_ids = {s.get("id") for s in cfg.get("subnet4", []) if isinstance(s, dict) and s.get("id") is not None}
+    kea_ids = {s.get("id") for s, _sn in iter_subnet4(cfg) if s.get("id") is not None}
     jen_ids = set(extensions.SUBNET_MAP.keys())
     undeclared = sorted(kea_ids - jen_ids)
     orphaned = sorted(jen_ids - kea_ids)

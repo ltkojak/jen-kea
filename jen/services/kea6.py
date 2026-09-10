@@ -587,12 +587,14 @@ def get_subnet6_kea_data(subnet_id: int, server: dict = None) -> dict:
         result = kea6_command("config-get", server=server)
         if result.get("result") != 0:
             return empty
-        cfg = result["arguments"]["Dhcp6"]
+        from jen.services.kea_config_view import iter_subnet6
+
+        cfg = result["arguments"].get("Dhcp6", {})
         global_pref = cfg.get("preferred-lifetime", 0)
         global_valid = cfg.get("valid-lifetime", 0)
         global_renew = cfg.get("renew-timer", 0)
         global_rebind = cfg.get("rebind-timer", 0)
-        for s in cfg.get("subnet6", []):
+        for s, _sn in iter_subnet6(cfg):
             if s["id"] != subnet_id:
                 continue
             pools = []

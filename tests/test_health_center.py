@@ -209,6 +209,14 @@ class TestKeaSubnetsDeclared:
         c = health._kea_subnets_declared(_ctx(dhcp4_config=cfg))
         assert c.status == "warn" and "9" in c.detail
 
+    def test_counts_a_subnet_nested_in_a_shared_network(self, monkeypatch):
+        # v5.15.0 — id 70 lives in Dhcp4.shared-networks; before it was
+        # wrongly reported as orphaned (declared in Jen, absent in Kea).
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN"}, 70: {"name": "Guest"}})
+        cfg = {"subnet4": [{"id": 1}], "shared-networks": [{"name": "g", "subnet4": [{"id": 70}]}]}
+        c = health._kea_subnets_declared(_ctx(dhcp4_config=cfg))
+        assert c.status == "ok"
+
     def test_orphaned_jen_subnet_warns(self, monkeypatch):
         monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN"}, 7: {"name": "Old"}})
         cfg = {"subnet4": [{"id": 1}]}
