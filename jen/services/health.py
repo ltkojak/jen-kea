@@ -627,6 +627,7 @@ _CHECK_META = {
 
 CHECK_IDS = list(_CHECK_META.keys())
 GROUP_ORDER = ["kea", "capacity", "ddns", "jen"]
+GROUP_LABELS = {"kea": "Kea", "capacity": "Capacity", "ddns": "DDNS", "jen": "Jen"}
 
 
 def run_checks(ctx: dict | None = None) -> list[Check]:
@@ -655,3 +656,12 @@ def summarise(checks: list[Check]) -> dict:
     for c in checks:
         out[c.status] = out.get(c.status, 0) + 1
     return out
+
+
+def group_checks(checks: list[Check]) -> list[tuple[str, str, list[Check]]]:
+    """`[(group_id, group_label, [checks]), ...]` in GROUP_ORDER, for the
+    page and its partial."""
+    by_group: dict[str, list[Check]] = {}
+    for c in checks:
+        by_group.setdefault(c.group, []).append(c)
+    return [(g, GROUP_LABELS.get(g, g.title()), by_group[g]) for g in GROUP_ORDER if g in by_group]

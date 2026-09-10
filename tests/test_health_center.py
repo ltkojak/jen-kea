@@ -563,3 +563,75 @@ class _FakeCfg:
 
     def has_section(self, section):
         return section in self.data
+
+
+# ── the page, the JSON twin, the partial (step 2) ──────────────────────────
+
+
+def _check_status(payload: dict, check_id: str) -> str:
+    return next(c["status"] for c in payload["checks"] if c["id"] == check_id)
+
+
+class TestHealthCenterPage:
+    def test_page_renders_for_superadmin(self, logged_in_client, mock_kea, db):
+        r = logged_in_client.get("/health-center")
+        assert r.status_code == 200
+        body = r.data.decode()
+        for cid in health.CHECK_IDS:
+            assert f'data-check="{cid}"' in body, cid
+
+    def test_page_renders_for_plain_admin_and_viewer(self, client, db, mock_kea):
+        from tests.conftest import restricted_client
+
+        for role in ("admin", "viewer"):
+            c, _uid = restricted_client(client, db, allowed_subnets=None, role=role, username=f"hc_{role}")
+            assert c.get("/health-center").status_code == 200
+
+    def test_json_twin_shape(self, logged_in_client, mock_kea, db):
+        data = logged_in_client.get("/health-center/data").get_json()
+        assert set(data) == {"checked_at", "summary", "checks"}
+        assert set(data["summary"]) == {"ok", "warn", "fail", "skip"}
+        assert [c["id"] for c in data["checks"]] == health.CHECK_IDS
+        assert all({"id", "title", "group", "status", "detail"} <= set(c) for c in data["checks"])
+
+    def test_partial_is_not_a_full_page(self, logged_in_client, mock_kea, db):
+        r = logged_in_client.get("/health-center/data?partial=1")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "<html" not in body.lower()
+        assert 'data-check="db_jen"' in body
+
+    def test_login_required(self, client, db):
+        r = client.get("/health-center", follow_redirects=False)
+        assert r.status_code in (302, 401)
+
+    def test_restricted_viewer_capacity_is_scoped(self, client, db, mock_kea):
+        from tests.conftest import restricted_client
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history")
+            cur.execute(
+                "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
+                "VALUES (1, 98, 100, NOW()), (2, 5, 100, NOW())"
+            )
+        db.commit()
+
+        full, _u1 = restricted_client(client, db, allowed_subnets=None, role="admin", username="hc_full")
+        assert _check_status(full.get("/health-center/data").get_json(), "pool_utilisation") == "fail"
+
+        scoped, _u2 = restricted_client(client, db, allowed_subnets=[2], role="viewer", username="hc_scoped")
+        assert _check_status(scoped.get("/health-center/data").get_json(), "pool_utilisation") == "ok"
+
+
+class TestHealthNav:
+    def test_health_in_network_strip(self):
+        from jen.routes.settings import nav as navmod
+
+        assert "Health" in [t["label"] for t in navmod.SECTION_STRIPS["network"]]
+
+    def test_health_activates_network_and_its_strip_item(self):
+        from jen.routes.settings import nav as navmod
+
+        ctx = navmod.nav_context("health.health_center", "viewer")
+        assert [i for i in ctx["top"] if i["active"]][0]["id"] == "network"
+        assert [t["label"] for t in ctx["strip"] if t["active"]] == ["Health"]

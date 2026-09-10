@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Health Center{% endblock %}
+{% block content %}
+<style>
+    .hc-pill { display:inline-block; min-width:46px; text-align:center; padding:2px 8px; border-radius:20px;
+               font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
+    .hc-ok   { background:#1a3a1a; color:var(--success); }
+    .hc-warn { background:#2a2a1a; color:var(--warning); }
+    .hc-fail { background:#3a1a1a; color:var(--danger); }
+    .hc-skip { background:#1f1f1f; color:var(--text-muted); }
+    .hc-row  { display:flex; gap:12px; align-items:baseline; padding:10px 0; border-top:1px solid var(--border); }
+    .hc-row:first-child { border-top:0; }
+    .hc-row .hc-body { flex:1; min-width:0; }
+    .hc-row .hc-title { font-weight:600; }
+    .hc-row .hc-detail { color:var(--text-muted); font-size:13px; }
+    .hc-row .hc-fix { font-size:12px; white-space:nowrap; }
+    .hc-summary { display:flex; gap:14px; align-items:center; flex-wrap:wrap; font-size:13px; color:var(--text-muted); }
+    .hc-summary strong { color:var(--text); }
+</style>
+
+<div class="page-header">
+    <h1>🩺 Health Center</h1>
+    <p>Read-only checks against your Kea servers, databases, and Jen itself. No changes are made and no SSH is used.</p>
+</div>
+
+<div class="card">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span class="card-title">Status</span>
+        <button class="btn btn-secondary" hx-get="/health-center/data?partial=1" hx-target="#health-results"
+                hx-swap="innerHTML">Refresh</button>
+    </div>
+    <div id="health-results" hx-get="/health-center/data?partial=1" hx-target="#health-results"
+         hx-swap="innerHTML" hx-trigger="every 60s">
+        {% include "_health_checks.html" %}
+    </div>
+</div>
+{% endblock %}

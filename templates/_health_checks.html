@@ -1,0 +1,27 @@
+<div class="hc-summary" style="margin-bottom:14px;">
+    <span>checked <strong>{{ checked_at.strftime('%H:%M:%S') }} UTC</strong></span>
+    <span><strong>{{ summary.ok }}</strong> ok</span>
+    <span><strong>{{ summary.warn }}</strong> warn</span>
+    <span><strong>{{ summary.fail }}</strong> fail</span>
+    {% if summary.skip %}<span><strong>{{ summary.skip }}</strong> skipped</span>{% endif %}
+</div>
+
+{% for group_id, group_label, checks in grouped %}
+<div style="margin-bottom:18px;">
+    <div style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);margin-bottom:4px;">
+        {{ group_label }}
+    </div>
+    {% for c in checks %}
+    <div class="hc-row" data-check="{{ c.id }}" data-status="{{ c.status }}">
+        <span class="hc-pill hc-{{ c.status }}">{{ c.status }}</span>
+        <div class="hc-body">
+            <div class="hc-title">{{ c.title }}</div>
+            {% if c.detail %}<div class="hc-detail">{{ c.detail }}</div>{% endif %}
+        </div>
+        {% if c.fix_url and c.status in ('warn', 'fail') %}
+        <a class="hc-fix" href="{{ c.fix_url }}">{{ c.fix_hint or 'Fix' }} &rarr;</a>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
