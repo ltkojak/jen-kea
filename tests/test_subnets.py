@@ -475,6 +475,9 @@ class TestSharedNetworks:
         monkeypatch.setattr(
             extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
         )
+        # ssh_ready gate on the Subnets page: key file present + SSH host set
+        monkeypatch.setattr(extensions, "SSH_KEY_PATH", __file__)
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
         monkeypatch.setattr("jen.config.write_subnets_config", lambda m: None)
         monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 0, "arguments": dhcp4})
         monkeypatch.setattr(
