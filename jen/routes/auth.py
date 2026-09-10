@@ -35,6 +35,19 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _delete_initial_admin_password_file():
+    import os
+
+    from jen import extensions
+
+    path = os.path.join(extensions.CONTENT_DIR, "initial-admin-password")
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        logger.warning(f"could not remove {path}: {e}")
+
+
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -296,6 +309,9 @@ def force_password_change():
                 )
             db.commit()
         session.pop("_user_cache", None)
+        # v5.17.0 (Q6 6G) — the generated bootstrap credential is now
+        # useless; remove the file that held it.
+        _delete_initial_admin_password_file()
         __user.audit(
             "CHANGE_PASSWORD",
             current_user.username,

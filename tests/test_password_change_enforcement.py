@@ -1,11 +1,13 @@
 """
 tests/test_password_change_enforcement.py
 ────────────────────────────────────────────
-v5.2.7 — SECURITY FIX. A fresh install seeds an 'admin'/'admin'
-superadmin with nothing enforcing that the obvious default ever
-actually gets changed — the README says to change it immediately, but
-that was advisory only, not enforced anywhere in the application. See
-the users.must_change_password migration's docstring
+v5.2.7 — SECURITY FIX. A fresh install seeds an 'admin' superadmin with
+`must_change_password=1` so the initial credential must be changed
+before anything else in the app is reachable — the README's "change it
+immediately" used to be advisory only. (v5.17.0 / Q6 6G — the initial
+password is now a generated token, not the literal "admin", written to
+`<CONTENT_DIR>/initial-admin-password`.) See the
+users.must_change_password migration's docstring
 (jen/models/migrations.py) for the full rationale.
 
 These tests cover: the seed/creation paths that set the flag, the

@@ -129,7 +129,10 @@ journalctl -u jen -f
 
 `http://YOUR-SERVER:5050`, user `admin`. If you didn't pre-seed a
 password (`JEN_INITIAL_ADMIN_PASSWORD` in the environment at first DB
-seed), it's `admin` / `admin` and Jen forces a change on first login.
+seed), Jen generates one at first boot, prints it to the log, and writes
+it to `/var/lib/jen/initial-admin-password` (mode 0600) —
+`sudo cat /var/lib/jen/initial-admin-password`. Jen forces a change on
+first login and deletes the file once you complete it.
 
 ## Upgrading manually
 

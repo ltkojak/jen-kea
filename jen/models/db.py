@@ -321,6 +321,8 @@ def init_jen_db() -> None:
     CREATE TABLE or ALTER statements here; append a new numbered
     migration instead.
     """
+    import secrets
+
     from jen.models.migrations import run_migrations
     from jen.models.user import hash_password  # local import avoids circular
 
@@ -335,9 +337,14 @@ def init_jen_db() -> None:
     # install.sh's _set_admin_password() the way bare metal does, so it
     # passes the operator-chosen password through this env var for the
     # first-boot seed only. When it's set we seed with that password and
-    # must_change_password=0 (they picked it deliberately); otherwise the
-    # old admin/admin seed with the forced-change flag. The env var is only
-    # read here, at initial seed — it is never stored.
+    # must_change_password=0 (they picked it deliberately). The env var is
+    # only read here, at initial seed — it is never stored.
+    #
+    # v5.17.0 (Q6 6G) — with no env var, the seed no longer uses the
+    # literal "admin". It generates a random token, forces a change on
+    # first login, and writes the credential to
+    # <CONTENT_DIR>/initial-admin-password (0600) as well as printing it
+    # once. force_password_change() deletes that file on success.
     with jen_db() as db:
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) as cnt FROM users")
@@ -351,13 +358,35 @@ def init_jen_db() -> None:
                     )
                     print("Created superadmin 'admin' from JEN_INITIAL_ADMIN_PASSWORD.")
                 else:
+                    generated = secrets.token_urlsafe(12)
                     cur.execute(
                         "INSERT INTO users (username, password, role, must_change_password) "
                         "VALUES ('admin', %s, 'superadmin', 1)",
-                        (hash_password("admin"),),
+                        (hash_password(generated),),
                     )
+                    _write_initial_admin_password(generated)
                     print(
-                        "Created default superadmin user: admin / admin — "
-                        "you will be required to change this password on first login."
+                        f"Created superadmin 'admin' — initial password written to "
+                        f"{os.path.join(extensions.CONTENT_DIR, 'initial-admin-password')} "
+                        f"(also shown here once): {generated}\n"
+                        f"You will be required to change it on first login."
                     )
         db.commit()
+
+
+def _write_initial_admin_password(password: str) -> None:
+    """v5.17.0 (Q6 6G) — drop the generated bootstrap credential at
+    <CONTENT_DIR>/initial-admin-password, mode 0600. Best-effort: on a
+    Docker/dev box where CONTENT_DIR isn't writable the printed line is
+    still the fallback."""
+    path = os.path.join(extensions.CONTENT_DIR, "initial-admin-password")
+    try:
+        os.makedirs(extensions.CONTENT_DIR, exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, f"admin\n{password}\n".encode())
+        finally:
+            os.close(fd)
+        os.chmod(path, 0o600)
+    except OSError as e:
+        logger.warning(f"could not write {path}: {e}")

@@ -29,8 +29,13 @@ sudo ./install.sh
 ```
 
 **After installation:**
-- [ ] Log in with `admin / admin`
-- [ ] Change the default admin password immediately
+- [ ] Log in as `admin` with the password you set during `install.sh`. If
+  you were not prompted (a scripted or Docker install without
+  `JEN_INITIAL_ADMIN_PASSWORD`), the installer prints a generated one and
+  writes it to `/var/lib/jen/initial-admin-password` —
+  `sudo cat /var/lib/jen/initial-admin-password`.
+- [ ] Jen forces a password change on that first login; the file is
+  deleted once you complete it
 - [ ] Upload SSL certificate in Settings → Access & Security → SSL Certificate
 - [ ] Configure Telegram alerts if desired
 - [ ] Generate SSH key in Settings → Kea → SSH
@@ -264,6 +269,30 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
 |---|---|---|
 | `http_port` | HTTP port (redirects to HTTPS when cert installed) | `5050` |
 | `https_port` | HTTPS port | `8443` |
+| `trusted_proxies` | Comma list of reverse-proxy IPs / CIDRs to trust (v5.17.0) — see below | *(unset)* |
+| `metrics_token` | Bearer token required to scrape `/metrics` | *(unset)* |
+
+### Behind a reverse proxy (v5.17.0)
+
+If Jen sits behind nginx / Caddy / Traefik, set `trusted_proxies` to the
+proxy's address (an IP or CIDR, comma-separated for several):
+
+```ini
+[server]
+trusted_proxies = 127.0.0.1, 10.0.0.0/8
+```
+
+When a request arrives from one of those addresses, Jen reads the real
+client IP from `X-Forwarded-For` and the scheme from `X-Forwarded-Proto`.
+Without this, rate limiting, the audit log and MFA trusted-device records
+would all see the proxy's IP, and every client would look like the same
+one. Requests from any *other* address ignore those headers entirely.
+
+**The proxy must terminate HTTPS.** With `trusted_proxies` set Jen marks
+its session cookie `Secure` and sends HSTS, on the assumption the browser
+reached the proxy over TLS. Jen itself can then serve plain HTTP on the
+loopback / private network between it and the proxy (no cert needed in
+`[server]`).
 
 ### [kea_ssh] section
 
@@ -317,6 +346,19 @@ Go to **Settings → Access & Security → Users → Add User**. Enter a usernam
 ### Session Timeout
 
 Go to **Settings → Access & Security → Session Timeout** to set the global default timeout in minutes. Individual users can have their own timeout override set from the Users page.
+
+### Sessions and step-up (v5.17.0)
+
+- **Sign out** is a button, not a link — a `GET /logout` shows a confirm
+  page, only the `POST` ends the session. The session is fully cleared on
+  every login and every logout.
+- **Confirm-your-password prompts.** Changing your own MFA — enrolling
+  another authenticator, regenerating backup codes, adding or removing a
+  trusted device, or a superadmin resetting someone's MFA — requires that
+  you authenticated (password, plus a code if you have MFA) within the
+  last **10 minutes**. Otherwise Jen shows a short "confirm your identity"
+  screen first. A failed confirmation counts toward the same lockout as a
+  failed login.
 
 ---
 

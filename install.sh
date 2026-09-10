@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.16.0"
+JEN_VERSION="5.17.0"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -1160,7 +1160,12 @@ print_summary() {
     _box_line "    ${C}http://${server_ip}:${http_p}${NC}"
     _box_line ""
     if [[ "$IS_UPGRADE" == "false" && "$MODE_REPAIR" == "false" ]]; then
-        _box_line "  ${B}Login:${NC}  ${C}admin${NC}  /  ${Y}(password you set above)${NC}"
+        if [[ -n "${ADMIN_PASS:-}" ]]; then
+            _box_line "  ${B}Login:${NC}  ${C}admin${NC}  /  ${Y}(password you set above)${NC}"
+        else
+            _box_line "  ${B}Login:${NC}  ${C}admin${NC}"
+            _box_line "  ${DIM}Initial password: sudo cat ${CONTENT_DIR}/initial-admin-password${NC}"
+        fi
     else
         _box_line "  ${B}Login:${NC}  Your existing accounts are preserved"
     fi
@@ -1352,7 +1357,7 @@ _docker_pick_compose_and_run() {
     if grep -q '^JEN_INITIAL_ADMIN_PASSWORD=.\+' ./.env 2>/dev/null; then
         login_line="  ${B}Login:${NC}   admin  ${DIM}(the password you set during setup)${NC}"
     else
-        login_line="  ${B}Login:${NC}   admin / admin  ${Y}(change immediately!)${NC}"
+        login_line="  ${B}Login:${NC}   admin  ${DIM}(initial password: docker compose logs jen | grep 'initial password')${NC}"
     fi
     blank
     echo -e "  ${G}${B}Jen Docker installation complete!${NC}"

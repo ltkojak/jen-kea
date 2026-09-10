@@ -59,8 +59,10 @@ Fill in:
 - **`JEN_DB_HOST` / `JEN_DB_USER` / `JEN_DB_PASS` / `JEN_DB_NAME`** — your
   server
 - **`JEN_DATABASE_MODE`** — `external` here
-- **`JEN_INITIAL_ADMIN_PASSWORD`** — the first-login `admin` password
-  (leave blank for legacy `admin`/`admin` + forced change)
+- **`JEN_INITIAL_ADMIN_PASSWORD`** — the first-login `admin` password.
+  Leave it blank and Jen generates one at first boot: find it with
+  `docker compose logs jen | grep 'initial password'` (Jen still forces a
+  change on first login).
 
 > If a password or token contains `$`, a backtick, `#`, a space or a
 > quote, **single-quote the value** — `JEN_DB_PASS='p$ss w0rd'` — so

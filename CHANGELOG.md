@@ -2,6 +2,71 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.17.0] - 2026-09-11
+
+Authentication and host-hardening polish — seven independent items.
+`sudo ./install.sh` or the in-app update; nothing to do by hand. One
+new optional config key (`[server] trusted_proxies`) and a small
+first-login change (below).
+
+### Changing your own MFA now asks for your password
+
+Enrolling a second authenticator, regenerating backup codes, adding or
+removing a trusted device, and a superadmin resetting another user's MFA
+all now require that you authenticated — password, plus a code if you
+have MFA — within the last 10 minutes. Otherwise Jen shows a short
+"confirm your identity" screen first, then returns you to what you were
+doing. A stolen live session can no longer be used to quietly swap
+someone's second factor. A failed confirmation counts toward the same
+lockout as a failed login.
+
+### Sign-out is a button; sessions are cleared
+
+`/logout` is POST-only now — a `GET` shows a confirm page. A stray link,
+an `<img>` tag, or a browser prefetch can't end your session. The whole
+session is cleared on every login and every logout, so nothing a
+pre-authentication request left behind can carry into an authenticated
+one.
+
+### Running behind a reverse proxy
+
+New `[server] trusted_proxies` — a comma list of proxy IPs or CIDRs. When
+a request comes from one of them, Jen reads the real client IP from
+`X-Forwarded-For` and the scheme from `X-Forwarded-Proto`, so rate
+limiting, the audit log and MFA device records see the actual client
+instead of the proxy. Requests from any other address ignore those
+headers. With the setting on, Jen marks its session cookie `Secure` and
+sends HSTS (the proxy is expected to terminate HTTPS), and passes the
+same list to gunicorn. Documented in the admin guide and
+`jen.config.example`.
+
+### systemd sandboxing
+
+`jen.service` now runs with `ProtectSystem=strict` (only `/etc/jen` and
+`/var/lib/jen` writable), `PrivateTmp`, `PrivateDevices`, and the
+`Protect*` / `Restrict*` family. It deliberately does **not** set
+`NoNewPrivileges` / `CapabilityBoundingSet` — Jen shells out to `sudo`
+for the self-updater and needs the setuid transition. If a directive
+turns out to be wrong on your box, the in-app updater snapshots the unit
+and rolls back on a failed health check.
+
+### No default "admin" password
+
+A fresh install with no `JEN_INITIAL_ADMIN_PASSWORD` (and where you
+weren't prompted for one) no longer seeds the literal password `admin`.
+Jen generates a random one, writes it to
+`/var/lib/jen/initial-admin-password` (mode 0600) and prints it to the
+log, still forces a change on first login, and deletes the file once you
+complete that change. The guided installer is unchanged — it always
+prompts.
+
+### Also
+
+- The audit log and the rate-limit counter resets are written
+  synchronously now, not on a background thread — a security event can't
+  be lost to an error nobody sees, and it's there the instant the
+  response returns.
+
 ## [5.16.0] - 2026-09-11
 
 Kea config history, and an optimistic-concurrency guard on every config

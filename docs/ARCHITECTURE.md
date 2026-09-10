@@ -88,6 +88,18 @@ devices, or anything else tied to a subnet: apply subnet restriction
 there too, even if it feels obviously admin-only. It's the checklist
 item that has actually mattered in practice.
 
+**Step-up auth (v5.17.0 / Q6).** A live session is not enough for the
+routes that manage a user's own MFA (enroll a second factor, regenerate
+backup codes, add/remove a trusted device, an admin's MFA reset).
+`session["auth_at"]` records when a password (and MFA, if enrolled) was
+last verified; `access.recent_auth_required(minutes=10)` sends a stale
+session through `GET /auth/reauth` first. `session.clear()` runs before
+every `login_user()` so a pre-auth session can't carry anything into the
+authenticated one, and `/logout` is POST-only (a GET renders a confirm
+page) so a link or prefetch can't end a session. `audit()` and the
+rate-limit `clear_*` helpers write synchronously — a security event is
+never lost to an unseen background-thread error.
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather
@@ -131,6 +143,17 @@ commit, and this section is updated with it. Never add a parameter to
 either command. `jen-update-root.py` must never read `sys.argv` or any
 file `www-data` can write (`tests/test_jen_update_root.py` pins the
 first; the second is a review checklist item).
+
+**systemd sandboxing (v5.17.0 / Q6 6E).** `jen.service` runs with
+`ProtectSystem=strict` (only `/etc/jen` and `/var/lib/jen` writable —
+`/opt/jen` is read-only since v5.13.0), `PrivateTmp`, `PrivateDevices`
+and the `Protect*` / `Restrict*` family. It deliberately does **not**
+set `NoNewPrivileges`, `CapabilityBoundingSet` or `ProtectProc`: Jen's
+only privileged action is `sudo` (the two commands above, and the
+banner-warned legacy `python3` path on un-migrated Kea hosts), which
+needs the setuid transition. `jen-update.service` — the root updater —
+is intentionally left un-sandboxed; it writes `/opt/jen` and
+`/usr/local/sbin`. `tests/test_service_hardening.py` pins both.
 
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
@@ -254,6 +277,18 @@ the `/api/v1/*` routes apply the same subnet restriction as the human
 UI. A key with `subnet_access = NULL` is still global — that's the
 default for a key created by an unrestricted admin, and remains a valid
 "this is a trusted integration credential" choice.
+
+**Client IP behind a proxy (v5.17.0 / Q6 6D).** Rate limiting, the audit
+log and MFA trusted-device records all key off `request.remote_addr`.
+When `[server] trusted_proxies` is set (a list of proxy IPs / CIDRs),
+`TrustedProxyMiddleware` — installed ahead of Flask, and only when that
+list is non-empty — rewrites `REMOTE_ADDR` from the rightmost
+non-trusted `X-Forwarded-For` hop and `wsgi.url_scheme` from
+`X-Forwarded-Proto`, but *only* when the immediate peer is itself in the
+trusted list. An untrusted peer's forwarding headers are ignored
+entirely. With the setting on, the Secure cookie flag and HSTS turn on
+(the proxy is required to serve HTTPS) and gunicorn gets the same list
+as `--forwarded-allow-ips`.
 
 ### 3.5 Floor-pinned (not exact-pinned) Python dependencies
 
