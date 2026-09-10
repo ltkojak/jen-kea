@@ -1105,30 +1105,24 @@ class TestMissingBinaryScriptHandling:
         assert "except FileNotFoundError:" in script
         assert "missingbinary:kea-dhcp6" in script
 
-    def test_v4_subnet_patch_script_catches_missing_binary(self):
-        import jen.routes.subnets as subnets_module
+    def test_v4_missing_binary_surfaces_via_the_helper_and_the_legacy_engine(self):
+        # v5.11.0 — v4 subnet edits no longer generate their own script;
+        # the missing-binary sentinel now comes from the helper's
+        # `test-config` op (tests/test_kea_helper.py) or, on the legacy
+        # path, from render_author_config_script (covered above).
+        from jen.services.kea_authoring import render_author_config_script
 
-        script = subnets_module._build_subnet_patch_script(
-            1,
-            "/etc/kea/kea-dhcp4.conf",
-            "192.168.1.10-192.168.1.20",
-            [],
-            "",
-            "",
-            "",
-            "",
-            "",
-            dry_run=True,
+        script = render_author_config_script(
+            "dhcp4", "/etc/kea/kea-dhcp4.conf", {"Dhcp4": {}}, allow_overwrite=True, dry_run=True
         )
         assert "except FileNotFoundError:" in script
         assert "missingbinary:kea-dhcp4" in script
 
-    def test_all_three_generated_scripts_remain_valid_python(self):
+    def test_all_generated_scripts_remain_valid_python(self):
         """Guard against the fix itself introducing a syntax error into
         the script that actually runs on the remote Kea server."""
         import ast
 
-        import jen.routes.subnets as subnets_module
         from jen.services.kea6 import build_subnet6_patch_script
         from jen.services.kea_authoring import render_author_config_script
 
@@ -1136,7 +1130,6 @@ class TestMissingBinaryScriptHandling:
             render_author_config_script("dhcp6", "/x", {"Dhcp6": {}}, False, True),
             render_author_config_script("dhcp4", "/x", {"Dhcp4": {}}, False, True),
             build_subnet6_patch_script(1, "/x", "", [], "", "", "", "", "", dry_run=True),
-            subnets_module._build_subnet_patch_script(1, "/x", "", [], "", "", "", "", "", dry_run=True),
         ]
         for script in scripts:
             ast.parse(script)  # raises SyntaxError if invalid

@@ -418,6 +418,12 @@ class TestSubnetApplyViaHostClient:
 
     def test_delete_subnet_removes_block_and_restarts(self, logged_in_client, monkeypatch, mock_kea, db):
         fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        # delete_subnet refuses if the subnet still has active leases /
+        # reservations — clear them so the push path is reached.
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id=1")
+        db.commit()
         r = logged_in_client.post("/subnets/delete/1", follow_redirects=True)
         assert r.status_code == 200
         assert fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"] == []
