@@ -6,7 +6,6 @@ jen/services/kea_authoring.py — generating a starting kea-dhcp4/6 config when 
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
-import base64
 import json
 
 import pytest
@@ -833,10 +832,10 @@ class TestAuthorKeaConfigPreviewRoute:
         ).get_data(as_text=True)
         assert "s3cretsock" not in body and "s3cretdb" not in body
 
-        # but the REAL passwords reached the remote script
-        b64 = fake.calls[0].split("echo ")[1].split(" |")[0]
-        script = base64.b64decode(b64).decode()
-        assert "s3cretsock" in script and "s3cretdb" in script
+        # but the REAL passwords reached the helper (on stdin, as the
+        # test-config JSON payload)
+        sent = fake.stdin_writes[0]
+        assert "s3cretsock" in sent and "s3cretdb" in sent
 
     # ── v5.10.3: the bind address is per server ────────────────────────────
     def _pair_of_servers(self, monkeypatch):
@@ -1142,7 +1141,7 @@ class TestInstallKeaBinaryRoute:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         import jen.services.kea6 as kea6_module
 
-        ssh = FakeSSHClient([("Setting up kea-dhcp6-server ...", "", 0)])
+        ssh = FakeSSHClient([('{"ok": true, "output": "Setting up kea-dhcp6-server ..."}', "")])
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: ssh)
         resp = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp6")
         assert resp.status_code == 200
@@ -1155,7 +1154,7 @@ class TestInstallKeaBinaryRoute:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
         import jen.services.kea6 as kea6_module
 
-        ssh = FakeSSHClient([("E: Unable to locate package", "", 100)])
+        ssh = FakeSSHClient([('{"ok": false, "output": "E: Unable to locate package"}', "")])
         monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: ssh)
         resp = logged_in_client.post("/settings/infrastructure/install-kea-binary/dhcp6")
         assert resp.status_code == 200
