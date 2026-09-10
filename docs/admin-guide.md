@@ -104,8 +104,8 @@ All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root
 | `api_pass` | API authentication password | `your-password` |
 | `api_ca` | Optional. Path on the Jen host to a CA bundle — pins TLS verification for an `https://` `api_url`. | `/etc/jen/ssl/kea-ca.pem` |
 | `api_tls_verify` | Optional, default `true`. Set `false` to skip TLS verification for an `https://` `api_url` (only sensible with a self-signed cert and no `api_ca`). | `true` |
-| `api_client_cert` | Optional. Client-certificate PEM on the Jen host. Kea's per-daemon `https` socket defaults `cert-required` to `true` (mutual TLS), so without this an `https://` endpoint refuses the handshake. Set with `api_client_key` (both or neither). | `/etc/jen/ssl/jen-kea-client.pem` |
-| `api_client_key` | Optional. The private key for `api_client_cert`. Must be readable by `www-data` (`root:www-data` `640` under `/etc/jen/ssl/`). | `/etc/jen/ssl/jen-kea-client.key` |
+| `api_client_cert` | Optional. Client-certificate PEM on the Jen host. Kea's per-daemon `https` socket defaults `cert-required` to `true` (mutual TLS), so without this an `https://` endpoint refuses the handshake. Set with `api_client_key` (both or neither). **Validated on save** — the pair must load and match. | `/etc/jen/ssl/jen-kea-client.pem` |
+| `api_client_key` | Optional. The private key for `api_client_cert`. Must be readable by `www-data` (`root:www-data` `640` under `/etc/jen/ssl/`) — Jen checks that at save time, as the service user. | `/etc/jen/ssl/jen-kea-client.key` |
 
 All of these are optional and backward-compatible — an existing
 `jen.config` with none of them behaves exactly as it did before v5.10.0.
@@ -227,15 +227,18 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
   `restrict-commands` defaults to `true`, so the HA listener only accepts
   HA commands — Jen must talk to each daemon's *own* control socket.
 - The **Probe** button on Settings → Kea reports the running Kea version
-  and whether `ca` or `direct` answered, with a recommendation. Paste a
-  specific URL into the box next to it to test a candidate direct socket.
+  and whether `ca` or `direct` answered, with a recommendation. Pick the
+  server and `dhcp4`/`dhcp6` to test with **that** server's own URL and
+  credentials, or paste a specific URL into the box next to it to test a
+  candidate direct socket.
 - For a **brand-new** Kea with no config yet, "Author a starting
   kea-dhcpX.conf" (Settings → Kea, superadmin) writes the `control-sockets`
   list for you when `connection_mode = direct`: it respects the endpoint
-  scheme (http vs https), asks for the TLS paths and a bind address, sets
-  `cert-required` from whether Jen has a client certificate, and generates
-  per server from each server's own API settings. Every direct-mode API
-  URL must include an explicit port.
+  scheme (http vs https), asks for the TLS paths, sets `cert-required`
+  from whether Jen has a client certificate, and generates per server from
+  each server's own API settings — including a **bind address chosen per
+  server**, defaulting to the address Jen dials for that one. Every
+  direct-mode API URL must include an explicit port.
 
 ### [kea_db] section
 
@@ -662,11 +665,20 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # api6_pass = your-kea-api-password
 ```
 
+**A standby's DHCPv6 endpoint is its own.** Jen uses that server's
+`api6_url` if set, otherwise — in `ca` mode — that server's own `api_url`
+and credentials. The `[kea6]` section is the **primary's** override and is
+never used for another server (v5.10.3; before that a standby with no
+`api6_url` sent its DHCPv6 commands to the primary).
+
 The **Additional Servers** editor manages `name`, `role`, `api_url`,
 `api_user`, `api_pass`, `api6_url`, `api6_user`, `api6_pass`, `ssh_host`,
 `ssh_user`, and `kea_conf`. Any other key you've hand-added to a
 `[kea_server_N]` section (for example `ssh_key`) is preserved when you
-save from the UI (v5.10.2).
+save from the UI. Preservation follows the **server**, not its position in
+the list: reordering or removing rows keeps every server's password and
+hand-added keys with that server, and the remaining sections are
+renumbered contiguously (v5.10.3).
 
 ### How Active Node Routing Works
 

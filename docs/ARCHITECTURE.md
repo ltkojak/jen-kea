@@ -42,7 +42,8 @@ The command HTTP API is reached one of two ways, chosen by
   key sits under `/etc/jen/ssl` readable by `www-data`; a compromise of
   the Jen process exposes it exactly the way it already exposes the Kea
   SSH key — one more reason for the planned Kea-host helper (§3.3), not a
-  new class of exposure.
+  new class of exposure. Each server's v6 endpoint and authored bind
+  address are its own; `[kea6]` is the primary's override only.
 
 Deliberately **not** an agent-based architecture. There's no separate
 process running on each Kea server the way Stork's `stork-agent` works —

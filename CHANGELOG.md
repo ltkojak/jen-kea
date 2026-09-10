@@ -2,6 +2,89 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.10.3] - 2026-09-09
+
+5.10.2 made single-server direct mode correct. This makes the
+**multi-server** case correct too, and stops accepting mTLS material it
+can't actually use. All bug fixes and validation on features that already
+shipped — no new config keys, no manual upgrade steps.
+
+### A standby's IPv6 endpoint is its own
+
+In `ca` mode, an HA standby with no `api6_url` was sending **every DHCPv6
+command to the primary**, with the primary's credentials. Jen's endpoint
+resolution consulted the `[kea6]` globals before falling back to the
+server's own `api_url` — and those globals are the *primary's* `[kea6]`
+values, which in `ca` mode are just the primary's `[kea] api_url`. Server
+status, config-drift checks, v6 subnet reads and v6 reservation writes
+all pass a real server, so all of them were affected.
+
+A server's v6 endpoint is now that server's: its `api6_url` /
+`api6_user` / `api6_pass`, else (in `ca` mode) its own `api_url` and
+credentials. `[kea6]` is the primary's per-daemon override and reaches
+the primary the same way it always did.
+
+### Reordering servers no longer swaps their passwords
+
+Settings → Kea → Additional Servers rebuilds every `[kea_server_N]`
+section on save. It used to carry a blank password field, and any
+hand-added key like `ssh_key`, forward from **whatever section number the
+row landed on** — so reordering two rows quietly gave each server the
+other's `api_pass`, `api6_pass` and `ssh_key`, and deleting the first of
+two handed the survivor the deleted server's password. 5.10.2 documented
+the `ssh_key` half as a positional limitation; the password half was a
+credential swap.
+
+Each row now carries its original section number, and preservation
+follows the server. Sections are also renumbered contiguously: a row with
+a blank API URL used to leave a gap, and Jen stops reading
+`[kea_server_N]` at the first gap — so every server after a blank row was
+invisible.
+
+### Authoring binds each server's own address
+
+"Author a starting config" detected one bind address on the first Kea
+server and wrote it into every target server's control socket. An HA pair
+has two management IPs, so the second server was told to bind an address
+it doesn't have — which pushes you toward `0.0.0.0` just to make the
+error go away. There is now one bind picker per server, offering that
+server's own detected addresses and defaulting to the address Jen dials
+for it. A server with no bind address chosen fails only itself.
+
+Relatedly: in direct mode for DHCPv6 with no v6 socket configured, the
+form used to claim the endpoint was plain HTTP on an empty host and only
+told you the truth when you hit Preview. It now leads with what's missing.
+
+### The client certificate is checked before it's saved
+
+`api_client_cert` / `api_client_key` were only checked for *existence* —
+and existence is a `stat`, which says nothing about whether the files
+parse, whether the key matches the certificate, or whether the Jen
+service user can read the key at all. A `root:root 600` key passed
+validation and then failed every single Kea request. Jen now loads the
+pair (and `api_ca`) the way the HTTP client will, as the service user,
+and refuses to save material it couldn't use.
+
+### Probe any server, either daemon
+
+Probe always used the primary's URL and credentials, so there was no way
+to test a standby. It now takes a server and `dhcp4`/`dhcp6` and resolves
+the endpoint the same way the live transport does — the URL and
+credentials Jen will actually dial for that daemon on that server. With
+no selection it behaves exactly as before.
+
+### Quieter logs with TLS verification off
+
+With `api_tls_verify = false`, urllib3 emitted an `InsecureRequestWarning`
+on *every* request, and the dashboard polls. Jen now says it once, as a
+log warning naming the setting.
+
+### Not in this release
+
+Per-server client certificates (one `[kea]` pair still covers every
+server); replacing the remote `sudo python3` config-push path with a
+fixed-function helper; plugin-registry checksums.
+
 ## [5.10.2] - 2026-09-09
 
 The Kea 3 direct-control-socket work from 5.10.0/5.10.1 got the transport
