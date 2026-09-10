@@ -50,7 +50,6 @@ Docker / .env auto-config
     JEN_SUBNETS            (format: "1=Production,10.10.10.0/24;30=IoT,10.10.30.0/24")
 """
 
-import contextlib
 import os
 import sys
 
@@ -91,10 +90,15 @@ def _venv_reexec_target(venv_dir=_VENV_DIR):
 
 _reexec_target = _venv_reexec_target()
 if _reexec_target:
-    # On a broken venv (dangling interpreter symlink, etc.) fall through and
-    # continue on whatever interpreter we're already running under.
-    with contextlib.suppress(OSError):
+    # Literal try/except, not contextlib.suppress: this guard is sliced out and
+    # run standalone by tests/test_venv_isolation.py, so it must stay
+    # dependency-free (nothing imported below the slice point is available).
+    # A broken venv (dangling interpreter symlink, etc.) falls through to
+    # whatever interpreter we're already running under.
+    try:  # noqa: SIM105
         os.execv(_reexec_target, [_reexec_target, os.path.abspath(__file__), *sys.argv[1:]])
+    except OSError:
+        pass
 
 import logging  # noqa: E402
 import signal  # noqa: E402
@@ -190,9 +194,12 @@ forward_zone = {os.environ.get("JEN_DDNS_ZONE", "")}
     with open(config_path, "w") as f:
         f.write(config_content)
 
-    # Set permissions if possible (may not be root in Docker)
-    with contextlib.suppress(Exception):
+    # Set permissions if possible (may not be root in Docker).
+    # Literal try/except — run.py stays contextlib-free (see the re-exec guard note).
+    try:  # noqa: SIM105
         os.chmod(config_path, 0o640)
+    except Exception:
+        pass
 
     print(f"Jen: config generated from environment variables → {config_path}")
 
@@ -311,8 +318,10 @@ def main():
             return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
 
         def _forward(_signum, _frame):
-            with contextlib.suppress(Exception):
+            try:  # noqa: SIM105 — run.py stays contextlib-free
                 proc.send_signal(signal.SIGTERM)
+            except Exception:
+                pass
 
         signal.signal(signal.SIGTERM, _forward)
         signal.signal(signal.SIGINT, _forward)
