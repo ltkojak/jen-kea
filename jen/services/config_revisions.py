@@ -109,6 +109,24 @@ def list_revisions(server_id: int, service: str, limit: int = 100) -> list[dict]
         return []
 
 
+def count(server_id: int, service: str | None = None) -> int:
+    """How many revisions are stored for a server (optionally one service).
+    Used for the "Config history (N)" link on the /servers page."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            if service is None:
+                cur.execute("SELECT COUNT(*) AS n FROM kea_config_revisions WHERE server_id=%s", (server_id,))
+            else:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM kea_config_revisions WHERE server_id=%s AND service=%s",
+                    (server_id, service),
+                )
+            return int(cur.fetchone()["n"])
+    except Exception as e:
+        logger.warning(f"config_revisions.count failed: {e}")
+        return 0
+
+
 def get(rev_id: int) -> dict | None:
     try:
         with _jen_db() as db, db.cursor() as cur:

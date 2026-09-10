@@ -383,13 +383,15 @@ def apply_config(
     allow_overwrite: bool = True,
     expect_sha256: str | None = None,
     summary: str | None = None,
+    source: str = "jen",
 ) -> dict:
     """Write `cfg` to the host. `expect_sha256` (a SHA from an earlier
     read, or "" for "must not exist") makes the write conditional — the
     v2 helper enforces it atomically under a file lock; a v1 / legacy
     host gets a best-effort canonical-JSON compare instead. On success
     (any path) the applied config is recorded as a revision with
-    `summary`."""
+    `summary` and `source` (`source="restore"` when re-applying a prior
+    revision from the history page)."""
     path = _conf_path(server, service)
     payload = {
         "service": service,
@@ -430,7 +432,7 @@ def apply_config(
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 
     if result.get("ok"):
-        _record_revision_after_apply(server, service, cfg, result.get("sha256"), summary, "jen")
+        _record_revision_after_apply(server, service, cfg, result.get("sha256"), summary, source)
     return result
 
 

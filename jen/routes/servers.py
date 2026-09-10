@@ -4,19 +4,52 @@ jen/routes/servers.py
 Kea server management routes.
 """
 
+import json
 import logging
 
-from flask import Blueprint, flash, redirect, render_template, url_for
-from flask_login import login_required
+from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
 
 import jen.models.user as __user
 import jen.services.kea as __kea
+import jen.services.kea6 as __kea6
 import jen.services.kea_host as __host
 from jen import extensions
+from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("servers", __name__)
+
+_HISTORY_SERVICES = ("dhcp4", "dhcp6")
+
+
+def _find_server(server_id):
+    return next((s for s in extensions.KEA_SERVERS if s["id"] == server_id), None)
+
+
+def _history_service(raw):
+    return raw if raw in _HISTORY_SERVICES else "dhcp4"
+
+
+def _diff_rows(diff_lines):
+    """Tag each unified-diff line with a CSS class. The text itself is
+    escaped by Jinja autoescaping in the template — never rendered raw."""
+    rows = []
+    for ln in diff_lines:
+        if ln.startswith(("+++", "---")):
+            cls = "meta"
+        elif ln.startswith("@@"):
+            cls = "hunk"
+        elif ln.startswith("+"):
+            cls = "add"
+        elif ln.startswith("-"):
+            cls = "del"
+        else:
+            cls = "ctx"
+        rows.append({"cls": cls, "text": ln})
+    return rows
 
 
 def _JEN_VERSION():
@@ -110,6 +143,9 @@ def servers():
                     else "no server has reported an HA state yet"
                 )
 
+    history_allowed = current_user.all_subnets
+    history_counts = {s["server"]["id"]: __rev.count(s["server"]["id"]) for s in statuses} if history_allowed else {}
+
     return render_template(
         "servers.html",
         statuses=statuses,
@@ -118,6 +154,8 @@ def servers():
         ha_degraded=ha_degraded,
         ha_degraded_reason=ha_degraded_reason,
         subnet_map=extensions.SUBNET_MAP,
+        history_allowed=history_allowed,
+        history_counts=history_counts,
     )
 
 
@@ -145,3 +183,155 @@ def restart_kea_server(server_id):
         logger.error(f"SSH error restarting Kea on {server['name']}: {e}")
         flash(f"Could not reach {server['name']} — check server logs for details.", "error")
     return redirect(url_for("servers.servers"))
+
+
+# ── Config history (v5.16.0 — Q11) ─────────────────────────────────────────
+#
+# Every config Jen writes to a Kea host is recorded in kea_config_revisions
+# (jen/services/config_revisions.py). These pages show that history and let a
+# superadmin restore a prior revision. The full config for a server is
+# visible here — including subnets a restricted admin can't otherwise see —
+# so all three pages require unrestricted subnet access, not just admin.
+
+
+def _history_gate(server_id):
+    """(server, None) when the caller may view this server's history, or
+    (None, redirect) when they may not."""
+    server = _find_server(server_id)
+    if not server:
+        flash("Server not found.", "error")
+        return None, redirect(url_for("servers.servers"))
+    if not current_user.all_subnets:
+        flash("Config history needs access to all subnets.", "error")
+        return None, redirect(url_for("servers.servers"))
+    return server, None
+
+
+@bp.route("/servers/<int:server_id>/config-history")
+@login_required
+@_admin_required
+def config_history(server_id):
+    server, deny = _history_gate(server_id)
+    if deny:
+        return deny
+    service = _history_service(request.args.get("service", "dhcp4"))
+    revisions = __rev.list_revisions(server_id, service, limit=200)
+    return render_template(
+        "config_history.html",
+        server=server,
+        service=service,
+        revisions=revisions,
+        ipv6_enabled=__kea6.is_ipv6_enabled(),
+    )
+
+
+@bp.route("/servers/<int:server_id>/config-history/<int:rev_id>")
+@login_required
+@_admin_required
+def config_history_detail(server_id, rev_id):
+    server, deny = _history_gate(server_id)
+    if deny:
+        return deny
+    rev = __rev.get(rev_id)
+    if not rev or rev["server_id"] != server_id:
+        flash("Revision not found.", "error")
+        return redirect(url_for("servers.config_history", server_id=server_id))
+    service = rev["service"]
+    prev = __rev.previous(rev_id, server_id, service)
+    rows = _diff_rows(
+        __rev.diff(
+            prev["config"] if prev else "",
+            rev["config"],
+            a_label=f"#{prev['id']}" if prev else "(nothing before this)",
+            b_label=f"#{rev_id}",
+        )
+    )
+    latest = __rev.latest(server_id, service)
+    return render_template(
+        "config_history_detail.html",
+        server=server,
+        rev=rev,
+        rows=rows,
+        is_latest=bool(latest and latest["id"] == rev_id),
+        can_restore=current_user.is_superadmin and bool(server.get("ssh_host")),
+    )
+
+
+@bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/download")
+@login_required
+@_admin_required
+def config_history_download(server_id, rev_id):
+    server, deny = _history_gate(server_id)
+    if deny:
+        return deny
+    rev = __rev.get(rev_id)
+    if not rev or rev["server_id"] != server_id:
+        abort(404)
+    return Response(
+        rev["config"],
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="config-{rev["service"]}-rev{rev_id}.json"'},
+    )
+
+
+@bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/restore", methods=["POST"])
+@login_required
+@_superadmin_required
+def config_history_restore(server_id, rev_id):
+    server, deny = _history_gate(server_id)
+    if deny:
+        return deny
+    rev = __rev.get(rev_id)
+    if not rev or rev["server_id"] != server_id:
+        flash("Revision not found.", "error")
+        return redirect(url_for("servers.config_history", server_id=server_id))
+    service = rev["service"]
+    back = redirect(url_for("servers.config_history", server_id=server_id, service=service))
+
+    if not server.get("ssh_host"):
+        flash("SSH is not configured for this server.", "error")
+        return back
+    try:
+        cfg = json.loads(rev["config"])
+    except ValueError:
+        flash("This revision's stored config is not valid JSON — cannot restore.", "error")
+        return back
+
+    test = __host.test_config(server, service, cfg)
+    if not test["ok"]:
+        flash(
+            f"Restore aborted — {server['name']} rejected revision #{rev_id}: {test.get('detail') or 'unknown error'}",
+            "error",
+        )
+        return back
+
+    latest = __rev.latest(server_id, service)
+    res = __host.apply_config(
+        server,
+        service,
+        cfg,
+        expect_sha256=(latest["sha256"] if latest and latest.get("sha256") else None),
+        summary=f"restore of #{rev_id}",
+        source="restore",
+    )
+    if res.get("code") == "conflict":
+        flash(
+            f"The Kea config on {server['name']} changed since this page loaded — restore was NOT applied. "
+            "Reload and try again.",
+            "error",
+        )
+        return back
+    if not res.get("ok"):
+        flash(f"Restore failed on {server['name']}: {res.get('detail') or 'unknown error'}", "error")
+        return back
+
+    restart = __host.service_action(server, service, "restart")
+    if restart["ok"]:
+        flash(f"Restored revision #{rev_id} to {server['name']} and restarted Kea.", "success")
+    else:
+        flash(
+            f"Restored revision #{rev_id} to {server['name']} — restart Kea manually ({restart.get('detail') or ''}).",
+            "warning",
+        )
+    __user.audit("RESTORE_KEA_CONFIG", server["name"], f"service={service} revision={rev_id}")
+    return back

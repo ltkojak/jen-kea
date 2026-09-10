@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Revision #{{ rev.id }} — {{ server.name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🗂️ Revision #{{ rev.id }}</h1>
+    <p>{{ server.name }} · <code>{{ rev.service }}</code> · {{ rev.created_at }}
+       {% if rev.username %}· by {{ rev.username }}{% endif %}
+       · <span class="mono">{{ rev.sha256[:16] if rev.sha256 else '—' }}</span></p>
+</div>
+
+<div style="margin-bottom:16px;">
+    <a href="{{ url_for('servers.config_history', server_id=server.id, service=rev.service) }}" class="btn btn-secondary btn-sm">← Back to History</a>
+    <a href="{{ url_for('servers.config_history_download', server_id=server.id, rev_id=rev.id) }}" class="btn btn-secondary btn-sm">⬇ Download JSON</a>
+</div>
+
+{% if rev.source == 'external' %}
+<div class="alert alert-warning">⚠️ This revision was recorded because the config on the host changed <strong>outside Jen</strong> — someone edited <code>{{ rev.service }}</code>'s config file directly.</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">Unified diff — {{ rev.summary or 'no summary' }}</span></div>
+    {% if not rows %}
+    <p style="color:var(--text-muted);padding:12px;">No difference from the previous revision.</p>
+    {% else %}
+    <pre style="overflow-x:auto;font-size:12px;line-height:1.5;margin:0;padding:12px;background:var(--surface2);border-radius:var(--radius);"><code>{% for row in rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
+    {% endif %}
+</div>
+
+{% if can_restore %}
+<div class="card" style="border-color:var(--warning);">
+    <div class="card-header"><span class="card-title">⚡ Restore this revision</span></div>
+    <p style="font-size:13px;color:var(--text-muted);">
+        Re-applies this exact config to {{ server.name }} and restarts Kea{{ ' dhcp6' if rev.service == 'dhcp6' else '' }}.
+        It is validated with <code>kea-{{ rev.service }} -t</code> first, and refused if the live config changed
+        since this page loaded.
+        {% if is_latest %}<br><strong>This is already the current revision.</strong>{% endif %}
+    </p>
+    <form method="POST" action="{{ url_for('servers.config_history_restore', server_id=server.id, rev_id=rev.id) }}"
+          onsubmit="return false;" data-confirm="Restore revision #{{ rev.id }} to {{ server.name }} and restart Kea?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger">⚡ Restore &amp; Restart Kea</button>
+    </form>
+</div>
+{% endif %}
+{% endblock %}

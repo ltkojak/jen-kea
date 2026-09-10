@@ -2,8 +2,8 @@
 tests/test_config_revisions.py
 ──────────────────────────────
 v5.16.0 — jen/services/config_revisions.py: the Kea config history store
-behind migration 20. The route-level tests (history page 200/403, diff
-escaping, restore) live in test_servers*.py alongside the blueprint.
+behind migration 20, plus the /servers/<id>/config-history routes that
+render and restore it.
 """
 
 import json
@@ -12,6 +12,7 @@ import pytest
 
 from jen.models.db import jen_db
 from jen.services import config_revisions as rev
+from tests.conftest import restricted_client as _restricted_client
 
 _SID = 90210  # a server id no other test seeds
 
@@ -127,3 +128,142 @@ class TestDiff:
         out = rev.diff("a", "b", a_label="rev 3", b_label="rev 4")
         assert any("rev 3" in ln for ln in out[:2])
         assert any("rev 4" in ln for ln in out[:2])
+
+
+# ── Routes ────────────────────────────────────────────────────────────────
+
+_HSID = 77  # server id used by the route tests
+
+
+@pytest.fixture
+def hist(monkeypatch):
+    """A KEA_SERVERS with one SSH-capable server (id 77) and a clean
+    kea_config_revisions slice for it."""
+    from jen import extensions
+
+    server = {"id": _HSID, "name": "kea-hist", "ssh_host": "10.0.0.5", "ssh_user": "kea"}
+    monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+
+    def _wipe():
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM kea_config_revisions WHERE server_id=%s", (_HSID,))
+
+    _wipe()
+    yield server
+    _wipe()
+
+
+class TestHistoryListRoute:
+    def test_200_for_a_superadmin_and_shows_revisions(self, logged_in_client, hist):
+        rev.record(_HSID, "dhcp4", _cfg(1), "sha-aaaa1111", "add subnet 1")
+        r = logged_in_client.get(f"/servers/{_HSID}/config-history")
+        assert r.status_code == 200
+        assert b"add subnet 1" in r.data
+        assert b"sha-aaaa1111"[:12] in r.data  # short sha shown
+
+    def test_unknown_server_redirects(self, logged_in_client, hist):
+        r = logged_in_client.get("/servers/999/config-history", follow_redirects=False)
+        assert r.status_code in (301, 302, 308)
+
+    def test_restricted_admin_is_refused(self, client, db, hist, mock_kea):
+        c, _ = _restricted_client(client, db, allowed_subnets=[1], role="admin", username="hist_restr")
+        r = c.get(f"/servers/{_HSID}/config-history", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"access to all subnets" in r.data
+
+    def test_viewer_is_refused_by_admin_gate(self, client, db, hist):
+        c, _ = _restricted_client(client, db, allowed_subnets=None, role="viewer", username="hist_viewer")
+        r = c.get(f"/servers/{_HSID}/config-history", follow_redirects=True)
+        assert b"admin access required" in r.data.lower()
+
+    def test_requires_login(self, client, hist):
+        r = client.get(f"/servers/{_HSID}/config-history", follow_redirects=False)
+        assert r.status_code in (301, 302, 308)
+        assert "login" in r.headers.get("Location", "").lower()
+
+
+class TestHistoryDiffRoute:
+    def test_diff_against_previous_revision(self, logged_in_client, hist):
+        rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1")
+        r2 = rev.record(_HSID, "dhcp4", _cfg(2), "s2", "rev 2")
+        r = logged_in_client.get(f"/servers/{_HSID}/config-history/{r2}")
+        assert r.status_code == 200
+        assert b'"id": 1' in r.data or b"&#34;id&#34;: 1" in r.data  # the removed line
+        assert b"rev 2" in r.data
+
+    def test_a_script_tag_in_the_server_name_is_escaped(self, logged_in_client, hist, monkeypatch):
+        from jen import extensions
+
+        evil = dict(hist, name="<script>alert('x')</script>")
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [evil])
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1")
+        r = logged_in_client.get(f"/servers/{_HSID}/config-history/{rid}")
+        assert r.status_code == 200
+        assert b"<script>alert(" not in r.data
+        assert b"&lt;script&gt;" in r.data
+
+    def test_unknown_revision_redirects_to_the_list(self, logged_in_client, hist):
+        r = logged_in_client.get(f"/servers/{_HSID}/config-history/424242", follow_redirects=False)
+        assert r.status_code in (301, 302, 308)
+        assert "config-history" in r.headers.get("Location", "")
+
+    def test_download_serves_json(self, logged_in_client, hist):
+        rid = rev.record(_HSID, "dhcp4", _cfg(5), "s5", "rev 5")
+        r = logged_in_client.get(f"/servers/{_HSID}/config-history/{rid}/download")
+        assert r.status_code == 200
+        assert r.mimetype == "application/json"
+        assert json.loads(r.data) == _cfg(5)
+
+
+class TestHistoryRestoreRoute:
+    def _stub_host(self, monkeypatch, *, test_ok=True, apply_res=None):
+        calls = {"test": [], "apply": [], "restart": []}
+        monkeypatch.setattr(
+            "jen.services.kea_host.test_config",
+            lambda srv, svc, cfg, *a, **k: (calls["test"].append(svc), {"ok": test_ok, "detail": "bad"})[1],
+        )
+        monkeypatch.setattr(
+            "jen.services.kea_host.apply_config",
+            lambda srv, svc, cfg, **k: (
+                calls["apply"].append(k),
+                apply_res or {"ok": True, "code": "ok", "via": "helper"},
+            )[1],
+        )
+        monkeypatch.setattr(
+            "jen.services.kea_host.service_action",
+            lambda srv, svc, act: (calls["restart"].append((svc, act)), {"ok": True})[1],
+        )
+        return calls
+
+    def test_superadmin_restore_applies_with_latest_sha_and_restarts(self, logged_in_client, hist, monkeypatch):
+        old = rev.record(_HSID, "dhcp4", _cfg(1), "sha-old", "rev 1")
+        rev.record(_HSID, "dhcp4", _cfg(2), "sha-latest", "rev 2")
+        calls = self._stub_host(monkeypatch)
+        r = logged_in_client.post(f"/servers/{_HSID}/config-history/{old}/restore", follow_redirects=True)
+        assert r.status_code == 200
+        assert calls["apply"][0]["expect_sha256"] == "sha-latest"
+        assert calls["apply"][0]["source"] == "restore"
+        assert calls["apply"][0]["summary"] == f"restore of #{old}"
+        assert calls["restart"] == [("dhcp4", "restart")]
+        assert b"Restored revision" in r.data
+
+    def test_restore_is_forbidden_for_a_plain_admin(self, client, db, hist, monkeypatch):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1")
+        c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="hist_admin_ro")
+        r = c.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert b"superadmin" in r.data.lower()
+
+    def test_restore_conflict_flashes_and_does_not_restart(self, logged_in_client, hist, monkeypatch):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1")
+        calls = self._stub_host(monkeypatch, apply_res={"ok": False, "code": "conflict", "via": "helper"})
+        r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"changed since this page loaded" in r.data
+        assert calls["restart"] == []
+
+    def test_restore_aborts_when_the_config_fails_validation(self, logged_in_client, hist, monkeypatch):
+        rid = rev.record(_HSID, "dhcp4", _cfg(1), "s1", "rev 1")
+        calls = self._stub_host(monkeypatch, test_ok=False)
+        r = logged_in_client.post(f"/servers/{_HSID}/config-history/{rid}/restore", follow_redirects=True)
+        assert b"Restore aborted" in r.data
+        assert calls["apply"] == []

@@ -14,6 +14,7 @@ EXPECTED_ENDPOINTS = {
     "settings.settings",
     "settings.settings_system",
     "settings.save_audit_retention",
+    "settings.save_config_revision_keep",
     "settings.save_mfa_mode",
     "settings.settings_alerts",
     "settings.save_alert_channel",

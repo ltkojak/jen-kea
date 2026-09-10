@@ -9,7 +9,7 @@
 
 {{ subtabs(nav.subtabs['system'], 'system') }}
 
-{% set toc = [('sys-updates', 'Jen Updates'), ('sys-plugins', 'Plugins'), ('sys-ports', 'Ports & Threads'), ('sys-restart', 'Restart'), ('sys-retention', 'Retention')] %}
+{% set toc = [('sys-updates', 'Jen Updates'), ('sys-plugins', 'Plugins'), ('sys-ports', 'Ports & Threads'), ('sys-restart', 'Restart'), ('sys-retention', 'Retention'), ('sys-config-history', 'Kea Config History')] %}
 {% include '_card_toc.html' %}
 
 <!-- Jen Update -->
@@ -172,6 +172,24 @@
                 <input type="number" name="audit_retention_days"
                        value="{{ audit_retention_days }}" min="0" max="3650">
                 <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries — <a href="/settings/logs">view</a>.</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">💾 Save</button>
+    </form>
+</div>
+
+<!-- Kea Config History -->
+<div class="card" id="sys-config-history">
+    <div class="card-header">
+        <span class="card-title">🗂️ Kea Config History</span>
+    </div>
+    <form method="POST" action="/settings/save-config-revision-keep"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row" style="max-width:320px;">
+            <div class="form-group">
+                <label>Revisions to keep per server / service</label>
+                <input type="number" name="config_revision_keep"
+                       value="{{ config_revision_keep }}" min="1" max="1000">
+                <div class="form-hint">Every Kea config Jen writes is saved so you can diff and restore it (Servers → Config history). Older revisions beyond this count are pruned.</div>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">💾 Save</button>

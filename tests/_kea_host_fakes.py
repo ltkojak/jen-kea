@@ -14,9 +14,11 @@ so route tests can drive the helper path (and the legacy fallback, via
 class FakeHelper:
     def __init__(self):
         self.configs = {}  # (server_id, service) -> config dict
+        self.shas = {}  # (server_id, service) -> sha256 string (v2 read-config)
         self.responses = {}  # op -> dict | callable(server, op, payload) -> dict
         self.calls = []  # list of (server_id, op, payload)
         self.missing_for = set()  # server ids that raise HelperMissing
+        self.helper_version = 2  # what `version` and every envelope reports
 
     def helper_call(self, server, op, payload=None, timeout=60):
         from jen.services import kea_host
@@ -29,13 +31,17 @@ class FakeHelper:
             raise kea_host.HelperMissing("fake: helper not installed on this host")
 
         if op == "version":
-            return {"ok": True, "helper_version": 1, "python": "3.12.0"}
+            return {"ok": True, "helper_version": self.helper_version, "python": "3.12.0"}
 
         if op == "read-config":
             cfg = self.configs.get((sid, payload.get("service")))
             if cfg is None:
-                return {"ok": False, "error": "missing"}
-            return {"ok": True, "config": cfg}
+                return {"ok": False, "error": "missing", "helper_version": self.helper_version}
+            out = {"ok": True, "config": cfg, "helper_version": self.helper_version}
+            sha = self.shas.get((sid, payload.get("service")))
+            if sha is not None:
+                out["sha256"] = sha
+            return out
 
         r = self.responses.get(op)
         if r is None:

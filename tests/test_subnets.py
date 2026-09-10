@@ -637,3 +637,59 @@ class TestSharedNetworks:
             cur.execute("SELECT action FROM audit_log WHERE action IN ('ADD_SHARED_NETWORK','MOVE_SUBNET')")
             actions = {r["action"] for r in cur.fetchall()}
         assert {"ADD_SHARED_NETWORK", "MOVE_SUBNET"} <= actions
+
+
+class TestEditFormBaseSha:
+    """v5.16.0 (Q11) — the edit forms carry base_sha; a stale one makes
+    apply_config refuse with code=conflict and no restart happens."""
+
+    def _wire(self, monkeypatch, *, sha="sha-at-open", subnet4=None):
+        from jen import extensions
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
+
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr("jen.routes.subnets._get_subnet_kea_data", lambda sid: {"pool_str": "", "pools": []})
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp4")] = {"Dhcp4": {"subnet4": subnet4 if subnet4 is not None else [{"id": 1}]}}
+        fake.shas[(1, "dhcp4")] = sha
+
+        def _apply(server, op, payload):
+            want = payload.get("expect_sha256")
+            if want is not None and want != sha:
+                return {"ok": False, "error": "conflict", "sha256": sha, "helper_version": 2}
+            return {"ok": True, "sha256": sha, "helper_version": 2}
+
+        fake.responses["apply-config"] = _apply
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        return fake
+
+    def test_edit_form_has_the_base_sha_hidden_field(self, logged_in_client, monkeypatch, mock_kea):
+        self._wire(monkeypatch, sha="abc123def456")
+        r = logged_in_client.get("/subnets/edit/1")
+        assert r.status_code == 200
+        assert b'name="base_sha" value="abc123def456"' in r.data
+
+    def test_stale_base_sha_is_a_conflict_and_kea_is_not_restarted(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch, sha="fresh-sha", subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        r = logged_in_client.post(
+            "/subnets/edit/1",
+            data={"pool": "10.0.0.10-10.0.0.99", "base_sha": "STALE"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"changed since you opened this form" in r.data
+        assert "service" not in fake.ops()
+
+    def test_matching_base_sha_applies_and_restarts(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch, sha="fresh-sha", subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        r = logged_in_client.post(
+            "/subnets/edit/1",
+            data={"pool": "10.0.0.10-10.0.0.99", "base_sha": "fresh-sha"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert "service" in fake.ops()

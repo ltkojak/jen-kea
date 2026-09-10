@@ -181,6 +181,7 @@ def settings_system():
         restart_pending=__user.get_global_setting("restart_pending", "false") == "true",
         audit_retention_days=audit_retention_days,
         audit_log_count=audit_log_count if audit_log_count is not None else "?",
+        config_revision_keep=__user.get_global_setting("config_revision_keep", "50"),
     )
 
 
@@ -275,6 +276,24 @@ def save_audit_retention():
     else:
         flash("Audit log retention set to keep forever (0 = no limit).", "success")
     __user.audit("SETTINGS", "audit_retention", f"retention_days={days}")
+    return redirect(url_for("settings.settings_system"))
+
+
+@bp.route("/settings/save-config-revision-keep", methods=["POST"])
+@login_required
+@_admin_required
+def save_config_revision_keep():
+    raw = request.form.get("config_revision_keep", "50").strip()
+    try:
+        keep = int(raw)
+        if not 1 <= keep <= 1000:
+            raise ValueError()
+    except ValueError:
+        flash("Invalid value — enter a number between 1 and 1000.", "error")
+        return redirect(url_for("settings.settings_system"))
+    __user.set_global_setting("config_revision_keep", str(keep))
+    __user.audit("SETTINGS", "config_revision_keep", f"keep={keep}")
+    flash(f"Kea config history will keep the newest {keep} revisions per server and service.", "success")
     return redirect(url_for("settings.settings_system"))
 
 

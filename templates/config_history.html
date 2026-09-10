@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Config History — {{ server.name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🗂️ Config History</h1>
+    <p>{{ server.name }} — every Kea <code>{{ service }}</code> config Jen has written to this host, plus changes it noticed on disk.</p>
+</div>
+
+<div style="margin-bottom:16px;">
+    <a href="{{ url_for('servers.servers') }}" class="btn btn-secondary btn-sm">← Back to Servers</a>
+    {% if ipv6_enabled %}
+    <span style="margin-left:12px;">
+        <a href="{{ url_for('servers.config_history', server_id=server.id, service='dhcp4') }}"
+           class="btn btn-sm {% if service == 'dhcp4' %}btn-primary{% else %}btn-secondary{% endif %}">DHCPv4</a>
+        <a href="{{ url_for('servers.config_history', server_id=server.id, service='dhcp6') }}"
+           class="btn btn-sm {% if service == 'dhcp6' %}btn-primary{% else %}btn-secondary{% endif %}">DHCPv6</a>
+    </span>
+    {% endif %}
+</div>
+
+<div class="card">
+    {% if not revisions %}
+    <p style="color:var(--text-muted);padding:12px;">No revisions recorded yet for <code>{{ service }}</code> on this server. The first one is written the next time Jen applies a config change here.</p>
+    {% else %}
+    <table style="width:100%;font-size:13px;">
+        <thead>
+            <tr style="text-align:left;color:var(--text-muted);">
+                <th style="padding:8px;">When</th>
+                <th style="padding:8px;">Who</th>
+                <th style="padding:8px;">Source</th>
+                <th style="padding:8px;">Summary</th>
+                <th style="padding:8px;">SHA</th>
+                <th style="padding:8px;"></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in revisions %}
+            <tr style="border-top:1px solid var(--border);">
+                <td style="padding:8px;white-space:nowrap;">{{ r.created_at }}</td>
+                <td style="padding:8px;">{{ r.username or '—' }}</td>
+                <td style="padding:8px;">
+                    {% if r.source == 'external' %}
+                    <span class="badge badge-dynamic" title="changed on the host outside Jen">external</span>
+                    {% elif r.source == 'restore' %}
+                    <span class="badge badge-production">restore</span>
+                    {% else %}
+                    <span class="badge badge-reserved">jen</span>
+                    {% endif %}
+                </td>
+                <td style="padding:8px;">{{ r.summary or '—' }}</td>
+                <td style="padding:8px;" class="mono">{{ r.sha256[:12] if r.sha256 else '—' }}</td>
+                <td style="padding:8px;white-space:nowrap;">
+                    <a href="{{ url_for('servers.config_history_detail', server_id=server.id, rev_id=r.id) }}">View diff →</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+{% endblock %}

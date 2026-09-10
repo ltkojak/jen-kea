@@ -38,6 +38,40 @@ def __ip_to_int(ip):
     return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
 
 
+# ── Optimistic concurrency (v5.16.0 — Q11) ─────────────────────────────────
+#
+# The edit forms carry `base_sha` — the SHA of kea-dhcp4/6.conf as it was
+# when the form was opened. On submit it's passed to kea_host.apply_config
+# as expect_sha256; a v2 helper refuses the write atomically if the file
+# changed underneath, a v1 / legacy host gets a best-effort compare. The
+# add / delete / move routes have no earlier form, so they pass the SHA
+# read at the top of the same request (a much shorter window, still worth
+# guarding).
+
+
+def _form_base_sha():
+    return (request.form.get("base_sha") or "").strip() or None
+
+
+def _active_config_sha(service):
+    """SHA of the live config on the server Jen edits against — for the
+    edit form's hidden base_sha field. None on a v1 / legacy host or any
+    read error (the guard then degrades to a best-effort compare or,
+    with no sha at all, no guard)."""
+    try:
+        _cfg, sha = __host.read_config_versioned(__kea.get_active_kea_server(), service)
+        return sha
+    except Exception:
+        return None
+
+
+def _conflict_flash(server_name):
+    return (
+        f"The Kea config on {server_name} changed since you opened this form — "
+        "your edit was NOT applied. Reload and try again."
+    )
+
+
 @bp.route("/subnets")
 @login_required
 def subnets():
@@ -367,7 +401,7 @@ def add_subnet_post():
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp4")
+            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
             if cfg is None:
                 errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
                 continue
@@ -378,8 +412,10 @@ def add_subnet_post():
             if code == "nonetwork":
                 errors.append(f'❌ {name}: no shared network named "{shared_network}" on this server')
                 continue
-            res = __host.apply_config(server, "dhcp4", cfg)
-            if res["code"] == "ok":
+            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=_sha, summary=f"add subnet {new_id}")
+            if res["code"] == "conflict":
+                errors.append(f"❌ {name}: {_conflict_flash(name)}")
+            elif res["code"] == "ok":
                 restart = __host.service_action(server, "dhcp4", "restart")
                 if restart["ok"]:
                     results.append(f"✅ {name}: subnet {new_id} created and Kea restarted")
@@ -463,7 +499,7 @@ def delete_subnet(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp4")
+            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
             if cfg is None:
                 errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
                 continue
@@ -471,8 +507,10 @@ def delete_subnet(subnet_id):
             if code == "notfound":
                 results.append(f"ℹ️ {name}: subnet {subnet_id} was not in Kea's config")
                 continue
-            res = __host.apply_config(server, "dhcp4", cfg)
-            if res["code"] == "ok":
+            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=_sha, summary=f"delete subnet {subnet_id}")
+            if res["code"] == "conflict":
+                errors.append(f"❌ {name}: {_conflict_flash(name)}")
+            elif res["code"] == "ok":
                 restart = __host.service_action(server, "dhcp4", "restart")
                 if restart["ok"]:
                     results.append(f"✅ {name}: subnet {subnet_id} removed and Kea restarted")
@@ -520,6 +558,7 @@ def edit_subnet(subnet_id):
         flash("You do not have access to that subnet.", "error")
         return redirect(url_for("subnets.subnets"))
     kea_data = _get_subnet_kea_data(subnet_id)
+    kea_data["base_sha"] = _active_config_sha("dhcp4")
     return render_template(
         "edit_subnet.html",
         subnet_id=subnet_id,
@@ -667,9 +706,13 @@ def edit_subnet_preview(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp4")
+            cfg, live_sha = __host.read_config_versioned(server, "dhcp4")
             if cfg is None:
                 server_results.append({"name": name, "ok": False, "message": "kea-dhcp4.conf not found on this server"})
+                continue
+            base_sha = _form_base_sha()
+            if base_sha and live_sha and base_sha != live_sha:
+                server_results.append({"name": name, "ok": False, "message": _conflict_flash(name)})
                 continue
             cfg, changed = __edit.patch_subnet4(
                 cfg,
@@ -747,8 +790,12 @@ def edit_subnet_post(subnet_id):
             if not changed:
                 results.append(f"ℹ️ {name}: nothing to change")
                 continue
-            res = __host.apply_config(server, "dhcp4", cfg)
-            if res["code"] == "ok":
+            res = __host.apply_config(
+                server, "dhcp4", cfg, expect_sha256=_form_base_sha(), summary=f"edit subnet {subnet_id}"
+            )
+            if res["code"] == "conflict":
+                errors.append(f"❌ {name}: {_conflict_flash(name)}")
+            elif res["code"] == "ok":
                 restart = __host.service_action(server, "dhcp4", "restart")
                 if restart["ok"]:
                     results.append(f"✅ {name}: config validated, updated and restarted")
@@ -792,13 +839,15 @@ def edit_subnet_post(subnet_id):
 # ── Shared networks (v5.15.0) ───────────────────────────────────────────────
 
 
-def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages):
+def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
     """v5.15.0 — read → mutate → apply → restart against every SSH-capable
     Kea server, mirroring edit_subnet_post. `mutate_fn(cfg) -> (cfg, code)`;
     `code_messages` maps a non-"ok" code to the flash text (error, nothing
     pushed). Flashes per-server results; returns the last mutate code so
     the caller can pick a redirect. "noservers" when nothing is
-    SSH-reachable."""
+    SSH-reachable. v5.16.0 — passes the SHA read at the top of this request
+    to apply_config as the concurrency guard, and records the revision
+    under `summary`."""
     errors, results = [], []
     last_code = "noservers"
     for server in extensions.KEA_SERVERS:
@@ -806,7 +855,7 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp4")
+            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
             if cfg is None:
                 errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
                 continue
@@ -815,8 +864,11 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages):
             if code != "ok":
                 errors.append(f"❌ {name}: {code_messages.get(code, code)}")
                 continue
-            res = __host.apply_config(server, "dhcp4", cfg)
-            if res["code"] == "ok":
+            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=_sha, summary=summary or done_phrase)
+            if res["code"] == "conflict":
+                errors.append(f"❌ {name}: {_conflict_flash(name)}")
+                last_code = "conflict"
+            elif res["code"] == "ok":
                 restart = __host.service_action(server, "dhcp4", "restart")
                 if restart["ok"]:
                     results.append(f"✅ {name}: {done_phrase}, Kea restarted")
@@ -1049,6 +1101,7 @@ def edit_subnet6(subnet_id):
         flash("IPv6 subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     kea_data = __kea6.get_subnet6_kea_data(subnet_id)
+    kea_data["base_sha"] = _active_config_sha("dhcp6")
     return render_template(
         "edit_subnet6.html", subnet_id=subnet_id, subnet=extensions.SUBNET6_MAP[subnet_id], kea=kea_data
     )
@@ -1080,9 +1133,13 @@ def edit_subnet6_preview(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp6")
+            cfg, live_sha = __host.read_config_versioned(server, "dhcp6")
             if cfg is None:
                 server_results.append({"name": name, "ok": False, "message": "kea-dhcp6.conf not found on this server"})
+                continue
+            base_sha = _form_base_sha()
+            if base_sha and live_sha and base_sha != live_sha:
+                server_results.append({"name": name, "ok": False, "message": _conflict_flash(name)})
                 continue
             cfg, changed = __edit.patch_subnet6(
                 cfg,
@@ -1156,8 +1213,12 @@ def edit_subnet6_post(subnet_id):
             if not changed:
                 results.append(f"ℹ️ {name}: nothing to change")
                 continue
-            res = __host.apply_config(server, "dhcp6", cfg)
-            if res["code"] == "ok":
+            res = __host.apply_config(
+                server, "dhcp6", cfg, expect_sha256=_form_base_sha(), summary=f"edit subnet {subnet_id}"
+            )
+            if res["code"] == "conflict":
+                errors.append(f"❌ {name}: {_conflict_flash(name)}")
+            elif res["code"] == "ok":
                 restart = __host.service_action(server, "dhcp6", "restart")
                 if restart["ok"]:
                     results.append(f"✅ {name}: config validated, updated and restarted")

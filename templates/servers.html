@@ -61,6 +61,9 @@
               onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary">🔄 Restart Kea</button>
         </form>
+        {% if history_allowed %}
+        <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-secondary" style="margin-left:8px;">🗂️ Config history ({{ history_counts.get(s.server.id, 0) }})</a>
+        {% endif %}
     </div>
     {% endif %}
 </div>
@@ -124,6 +127,9 @@
               onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">🔄 Restart</button>
         </form>
+        {% if history_allowed %}
+        <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-sm btn-secondary" style="margin-left:6px;">🗂️ History ({{ history_counts.get(s.server.id, 0) }})</a>
+        {% endif %}
     </div>
     {% endif %}
 </div>
