@@ -23,6 +23,8 @@ Two connection modes, picked by [kea] connection_mode:
 import logging
 import re
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import requests as http
 import urllib3
@@ -137,6 +139,21 @@ def _endpoint_for(server: dict, service: str):
     """
     direct = extensions.KEA_CONNECTION_MODE == "direct"
 
+    if service == "d2":
+        # kea-dhcp-ddns (D2). In ca mode the Control Agent forwards a
+        # `service: ["d2"]` command to it, so D2 rides the same endpoint
+        # as dhcp4. Direct mode needs D2's own control socket URL — the
+        # [d2] config section that carries it is Q15's; until then this
+        # is a reserved error message, matching the dhcp6 branch below.
+        if direct:
+            return {
+                "result": 1,
+                "text": "D2 needs a kea-dhcp-ddns control-socket URL — set [d2] api_url (Settings → Kea).",
+            }
+        if server is None:
+            return extensions.KEA_API_URL, extensions.KEA_API_USER, extensions.KEA_API_PASS
+        return server.get("api_url", ""), server.get("api_user", ""), server.get("api_pass", "")
+
     if service == "dhcp6":
         if server is None:
             url = extensions.KEA6_API_URL
@@ -194,6 +211,43 @@ def kea_command(command: str, service: str = "dhcp4", arguments: dict = None, se
 def kea_command_all(command: str, service: str = "dhcp4", arguments: dict = None) -> list:
     """Send command to ALL configured servers. Returns [(server, result), ...]."""
     return [(server, kea_command(command, service, arguments, server=server)) for server in extensions.KEA_SERVERS]
+
+
+def server_clock_offset(server: dict = None) -> float | None:
+    """Seconds the given Kea server's clock is ahead of Jen's, read from
+    the HTTP `Date` header on a version-get reply. Positive = Kea ahead.
+    Returns None when the server sends no parseable Date header (some
+    builds omit it) or the request fails — the caller treats that as
+    "couldn't tell", never a failure.
+
+    Built exactly like kea_command's request (same _endpoint_for, auth,
+    verify, cert, timeout); never raises. Kea has no clock command, so
+    the response header is the only signal available."""
+    endpoint = _endpoint_for(server, "dhcp4")
+    if isinstance(endpoint, dict):
+        return None
+    url, user, pwd = endpoint
+    if extensions.KEA_CONNECTION_MODE == "direct":
+        payload = {"command": "version-get"}
+    else:
+        payload = {"command": "version-get", "service": ["dhcp4"]}
+    try:
+        t0 = datetime.now(timezone.utc)
+        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10, verify=_tls_verify(), cert=_tls_client_cert())
+        t1 = datetime.now(timezone.utc)
+    except Exception:
+        return None
+    date_hdr = resp.headers.get("Date")
+    if not date_hdr:
+        return None
+    try:
+        server_time = parsedate_to_datetime(date_hdr)
+    except (TypeError, ValueError):
+        return None
+    if server_time.tzinfo is None:  # e.g. a "-0000" zone parses naive
+        server_time = server_time.replace(tzinfo=timezone.utc)
+    local_midpoint = t0 + (t1 - t0) / 2
+    return (server_time - local_midpoint).total_seconds()
 
 
 def kea_is_up(server: dict = None) -> bool:

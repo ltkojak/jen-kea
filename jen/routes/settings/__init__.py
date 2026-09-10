@@ -24,7 +24,6 @@ pages moved, and the old URLs 301 to their new homes.
 
 import logging
 import os
-import subprocess
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -48,44 +47,14 @@ def _JEN_VERSION():
 
 
 def _cert_info():
-    """subject / issuer / expires (+ days_left) for the installed cert."""
-    info = {}
+    """subject / issuer / expires (+ days_left) for the installed cert.
+    v5.12.0 — the openssl logic moved to jen/services/certs.py so the
+    Health Center and the cert-expiry alert can share it."""
     if not __config.ssl_configured():
-        return info
-    try:
-        result = subprocess.run(
-            [
-                "openssl",
-                "x509",
-                "-in",
-                extensions.SSL_COMBINED if os.path.exists(extensions.SSL_COMBINED) else extensions.SSL_CERT,
-                "-noout",
-                "-subject",
-                "-enddate",
-                "-issuer",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        for line in result.stdout.splitlines():
-            if line.startswith("subject="):
-                info["subject"] = line.replace("subject=", "").strip()
-            elif line.startswith("notAfter="):
-                info["expires"] = line.replace("notAfter=", "").strip()
-            elif line.startswith("issuer="):
-                info["issuer"] = line.replace("issuer=", "").strip()
-        if info.get("expires"):
-            from datetime import datetime, timezone
+        return {}
+    from jen.services import certs
 
-            try:
-                exp = datetime.strptime(info["expires"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
-                info["days_left"] = (exp - datetime.now(timezone.utc)).days
-            except ValueError:
-                pass
-    except Exception as e:
-        logger.error(f"Error reading SSL certificate info: {e}")
-        info["error"] = "Could not read certificate info. Check server logs for details."
-    return info
+    return certs.cert_info(certs.installed_cert_path())
 
 
 def _count(sql, params=()):

@@ -35,16 +35,26 @@ logger = logging.getLogger(__name__)
 _started = False
 _lock = threading.Lock()
 
+# v5.12.0 — set to a UTC datetime the first time this process actually
+# starts the workers; stays None in the test suite and anywhere else that
+# imports the factory without a real entrypoint. The Health Center reads
+# it to tell "workers running" from "started under the test server".
+STARTED_AT = None
+
 
 def start_background_workers(app) -> bool:
     """Start the backup scheduler and the alert-monitoring loop for this
     process. Idempotent — returns True if this call started them, False
     if they were already running."""
-    global _started
+    global _started, STARTED_AT
     with _lock:
         if _started:
             return False
         _started = True
+
+    from datetime import datetime, timezone
+
+    STARTED_AT = datetime.now(timezone.utc)
 
     from jen.services.alerts import check_alerts
     from jen.services.scheduler import start_scheduler
@@ -60,7 +70,7 @@ def start_background_workers(app) -> bool:
 def stop_background_workers() -> None:
     """Best-effort shutdown of the scheduler. The alert loop is a daemon
     thread and dies with the process; there's nothing to join."""
-    global _started
+    global _started, STARTED_AT
     try:
         from jen.services.scheduler import stop_scheduler
 
@@ -69,3 +79,4 @@ def stop_background_workers() -> None:
         pass
     with _lock:
         _started = False
+        STARTED_AT = None
