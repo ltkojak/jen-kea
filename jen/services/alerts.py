@@ -84,6 +84,12 @@ def __get_global_setting(key, default=None):
     return get_global_setting(key, default)
 
 
+def __set_global_setting(key, value):
+    from jen.models.user import set_global_setting
+
+    return set_global_setting(key, value)
+
+
 def __get_jen_db_direct():
     from jen.models.db import get_jen_db
 
@@ -118,6 +124,7 @@ DEFAULT_TEMPLATES = {
     "kea_config_changed": "⚙️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
     "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
     "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
+    "cert_expiring": "🔒 <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate expires in <b>{days_left}</b> day(s).",
     "daily_summary": "📊 <b>Daily Summary</b>\n{summary}",
     "rogue_device": "🚨 <b>{subject}</b>\n{body}",
 }
@@ -191,6 +198,7 @@ ALERT_TYPE_LABELS = {
     "kea_config_changed": "Kea config changed via Jen",
     "config_drift_detected": "Config drift detected (Jen's subnet map disagrees with Kea)",
     "config_drift_resolved": "Config drift resolved",
+    "cert_expiring": "TLS certificate expiring soon",
     "daily_summary": "Daily summary",
     "rogue_device": "Rogue device detected (Network Discovery plugin)",
 }
@@ -692,6 +700,29 @@ def ip_to_int(ip):
     return sum(int(x) << (8 * (3 - i)) for i, x in enumerate(parts))
 
 
+def check_cert_expiry_alert() -> None:
+    """Fire `cert_expiring` when Jen's HTTPS certificate's days-left crosses
+    into a tighter bucket (30 → 7 → 1). The last-fired bucket lives in the
+    settings key `cert_expiry_alerted` so a restart doesn't re-alert; it
+    resets to 0 once the cert is renewed (days-left back above 30). No-op
+    when HTTPS isn't configured (`cert_days_left()` returns None)."""
+    from jen.services.health import cert_days_left
+
+    days = cert_days_left()
+    if days is None:
+        return
+    bucket = next((b for b in (1, 7, 30) if days <= b), None)
+    try:
+        fired = int(__get_global_setting("cert_expiry_alerted", "0") or "0")
+    except (TypeError, ValueError):
+        fired = 0
+    if bucket is not None and (fired == 0 or bucket < fired):
+        send_alert("cert_expiring", days_left=days)
+        __set_global_setting("cert_expiry_alerted", str(bucket))
+    elif bucket is None and fired:
+        __set_global_setting("cert_expiry_alerted", "0")
+
+
 def check_alerts():
     import time
 
@@ -702,6 +733,7 @@ def check_alerts():
     alerted_stale_macs = set()
     first_run = True
     last_summary_date = None
+    last_cert_check_date = None  # v5.12.0 — cert-expiry check runs once per process-day
     last_snapshot_time = 0
     last_ha_states = {}  # server_id -> last known HA state
     last_drift_issues = {}  # issue_key -> issue dict, for detected-once/resolved-once alerting
@@ -1051,6 +1083,14 @@ def check_alerts():
                     last_summary_date = today
             except Exception:
                 pass
+
+            # ── TLS certificate expiry (v5.12.0) — once per process-day ──
+            if last_cert_check_date != today:
+                last_cert_check_date = today
+                try:
+                    check_cert_expiry_alert()
+                except Exception as e:
+                    logger.error(f"Cert expiry check error: {e}")
 
         except Exception as e:
             logger.error(f"Alert thread error: {e}")

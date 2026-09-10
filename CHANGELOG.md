@@ -2,6 +2,41 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.12.0] - 2026-09-10
+
+The Health Center.
+
+### One page that tells you what's wrong
+
+**Network → Health** (`/health-center`) runs a fixed list of read-only
+checks and shows `ok` / `warn` / `fail` / `skip` for each, with a
+one-line detail and a link straight to the page that fixes it: Kea
+reachability and version, HA state, whether the `host_cmds` / `lease_cmds`
+/ `ha` hooks are loaded, clock skew between Kea and Jen (read off the
+HTTP `Date` header — Kea has no clock command), config drift, pool
+utilisation and snapshot freshness, kea-dhcp-ddns reachability and its
+error counters, TLS certificate expiry, both database round trips, the
+schema version, whether the `jen-kea-helper` is installed on each SSH
+host, and whether the background workers are running.
+
+It is **read-only** and does **no SSH at render time** — every check
+uses the Kea HTTP API, the two databases, local files, or state Jen
+already persisted. That's what makes it safe for a `viewer` to open and
+safe to poll; the page auto-refreshes every 60 seconds. A
+subnet-restricted user sees only their own subnets in the capacity
+checks. `/health-center/data` returns the same run as JSON for
+scripting.
+
+### Also
+
+- New **TLS certificate expiring** alert — fires once as the certificate
+  crosses 30, 7, and 1 days remaining, and resets when a renewed one is
+  installed. Configure it under Settings → Alerts & Integrations like any
+  other alert type.
+- The `openssl x509` certificate-reading logic moved from the settings
+  route into `jen/services/certs.py` so the check and the alert share it;
+  no behaviour change to the Settings → Access & Security page.
+
 ## [5.11.1] - 2026-09-10
 
 Housekeeping — a wider lint net and the OUI table out of the code. No

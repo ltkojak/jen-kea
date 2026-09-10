@@ -635,3 +635,51 @@ class TestHealthNav:
         ctx = navmod.nav_context("health.health_center", "viewer")
         assert [i for i in ctx["top"] if i["active"]][0]["id"] == "network"
         assert [t["label"] for t in ctx["strip"] if t["active"]] == ["Health"]
+
+
+# ── the cert_expiring alert (step 3) ───────────────────────────────────────
+
+
+class TestCertExpiringAlert:
+    def _run(self, monkeypatch, days, calls):
+        from jen.services import alerts
+
+        monkeypatch.setattr("jen.services.health.cert_days_left", lambda: days)
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **kw: calls.append(kw.get("days_left")))
+        alerts.check_cert_expiry_alert()
+
+    def test_no_ssl_never_fires(self, db, monkeypatch):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("cert_expiry_alerted", "0")
+        calls = []
+        self._run(monkeypatch, None, calls)
+        assert calls == []
+
+    def test_fires_once_per_bucket_and_only_tightens(self, db, monkeypatch):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("cert_expiry_alerted", "0")
+        calls = []
+        self._run(monkeypatch, 25, calls)
+        assert calls == [25]  # crossed 30
+        self._run(monkeypatch, 20, calls)
+        assert calls == [25]  # still the 30 bucket — no re-fire
+        self._run(monkeypatch, 6, calls)
+        assert calls == [25, 6]  # crossed 7
+        self._run(monkeypatch, 0, calls)
+        assert calls == [25, 6, 0]  # crossed 1
+        self._run(monkeypatch, -3, calls)
+        assert calls == [25, 6, 0]  # still the 1 bucket
+
+    def test_resets_and_can_fire_again_after_renewal(self, db, monkeypatch):
+        from jen.models.user import get_global_setting, set_global_setting
+
+        set_global_setting("cert_expiry_alerted", "0")
+        calls = []
+        self._run(monkeypatch, 5, calls)
+        assert calls == [5]
+        self._run(monkeypatch, 200, calls)  # renewed
+        assert get_global_setting("cert_expiry_alerted") == "0"
+        self._run(monkeypatch, 5, calls)
+        assert calls == [5, 5]

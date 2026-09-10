@@ -597,6 +597,12 @@ default — the default keeps the "one `install.sh` and done" story.
 
 Documenting these here rather than letting them go unstated:
 
+- **The Health Center (`/health-center`, v5.12.0) is deliberately
+  read-only and does no SSH at render time.** Every check runs against
+  the Kea HTTP API, the two databases, local files, or state Jen already
+  persisted — never a live SSH command to a Kea host. This is what makes
+  it safe for a `viewer` to open and safe to poll. It surfaces problems
+  and links to the page that fixes them; it does not fix anything itself.
 - **No DNS/BIND9 management.** Jen is DHCP-only.
 - **No professional external security audit.** See `SECURITY.md` for
   the honest framing of what level of scrutiny this project has

@@ -639,6 +639,43 @@ Available metrics:
 
 ---
 
+## Health Center
+
+**Network → Health** (`/health-center`) runs a fixed list of read-only
+checks and shows `ok` / `warn` / `fail` / `skip` for each, with a one-line
+detail and a link to the page that fixes it. It is **read-only** — no
+changes are made and **no SSH is used at render time**, so it's safe to
+leave open on a phone and safe to poll (it auto-refreshes every 60
+seconds). Viewers can see it; a subnet-restricted user sees only their
+own subnets in the capacity checks. `/health-center/data` returns the
+same run as JSON for scripting (`?partial=1` returns the HTML fragment).
+
+| Check | What it looks at | Where to fix it |
+|---|---|---|
+| **Kea servers reachable** | `version-get` per configured server | Settings → Kea; the server itself |
+| **Kea version supported** | direct mode needs Kea ≥ 2.7.2; `ca` mode warns on Kea ≥ 3.0 (Control Agent deprecated) and fails on ≥ 3.2 (removed) | Settings → Kea → connection mode |
+| **HA state healthy** | each server's HA state — `hot-standby`/`load-balancing` is ok, `partner-down`/`waiting`/`syncing` warn, `terminated` fails | Servers page; the Kea HA config |
+| **Kea hooks loaded** | `libdhcp_host_cmds.so` (reservations), `libdhcp_lease_cmds.so` (leases), and `libdhcp_ha.so` when HA is configured | add the hook to `kea-dhcp4.conf` and reload |
+| **Kea clock in sync** | the `Date` header Kea returns vs Jen's clock — warns > 30 s, fails > 5 min (HA and lease timers assume synced clocks) | NTP on the Kea host and the Jen host |
+| **Subnet map matches Kea** | `check_config_drift()` — Jen's `[subnets]` list vs Kea's live config | Settings → Kea → `[subnets]` |
+| **Every Kea subnet is named** | every subnet id in Kea's config has a name in Jen's `[subnets]`, and vice-versa | Settings → Kea → `[subnets]` |
+| **Pool utilisation** | the latest lease snapshot per subnet — warns at the alert threshold, fails at 95 % | Subnets page; widen the pool |
+| **Lease snapshots current** | the newest snapshot is no older than 2× the snapshot interval | Settings → System; check the background worker is running |
+| **kea-dhcp-ddns reachable** | when dhcp4 `dhcp-ddns.enable-updates` is on: `version-get` on the `d2` service (`ca` mode only) | DDNS page; the D2 service |
+| **kea-dhcp-ddns error counters** | D2's `ncr-error` + `update-error` statistics | DDNS page; the DNS server / TSIG keys |
+| **TLS certificate expiry** | days until Jen's HTTPS certificate expires — warns at 30 days, fails at 7 | Settings → Access & Security → upload a renewed certificate |
+| **Jen database** / **Kea database** | a `SELECT 1` round trip and its latency | the database host / credentials |
+| **Database schema current** | the applied migration version matches the latest | restart Jen (migrations run at startup) |
+| **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version | Settings → Kea → SSH → Install helper |
+| **Background workers running** | the scheduler + alert loop started with this process | only reported under gunicorn, not the werkzeug fallback |
+| **Jen up to date** | always `skip` here — run the check from **Settings → System → Updates** (it contacts GitHub) | — |
+
+The **TLS certificate expiring** alert (Settings → Alerts & Integrations)
+fires once when the certificate crosses 30, 7, and 1 days remaining, and
+resets when you install a renewed one.
+
+---
+
 ## File Locations Reference
 
 | Path | Purpose |
