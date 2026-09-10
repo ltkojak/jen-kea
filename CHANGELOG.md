@@ -2,6 +2,63 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.11.0] - 2026-09-10
+
+The privilege boundary on the Kea hosts.
+
+### `jen-kea-helper` — one sudoers line instead of root
+
+Until now, everything Jen did on a Kea host — editing a subnet, authoring
+a config, restarting a daemon, reading the DDNS log, installing a Kea
+package — was done by generating a Python script on the Jen host, piping
+it over SSH, and running it as root. The documented Kea-side sudoers grant
+was therefore `NOPASSWD: /usr/bin/python3`, which **is** root: a
+compromised Jen process was root on every Kea box it managed. This was the
+largest unaddressed item in the threat model (`docs/ARCHITECTURE.md`
+§3.3).
+
+`jen-kea-helper` replaces that with a small, fixed-function, root-owned
+script at `/usr/local/sbin/jen-kea-helper` behind **one** sudoers line:
+
+```
+youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper
+```
+
+Jen calls it as `sudo -n jen-kea-helper <op>` with a JSON request on
+stdin and gets a JSON reply. It exposes a closed set of operations
+(`read-config`, `test-config`, `apply-config`, `service`, `tail-log`,
+`install-package`), validates every path itself (Kea configs must sit in
+`/etc/kea` or `/usr/local/etc/kea`; logs must resolve under `/var/log`),
+and **never executes anything it is handed** — stdin is data only. There
+is deliberately no self-update operation.
+
+**Install it** from **Settings → Kea → SSH** (one click per host, while
+the old grant is still present), or by hand — see the Admin Guide → Kea
+host helper. The page shows `v1` for each host once it is reachable.
+
+### The legacy path stays, banner-warned
+
+A Kea host that does not have the helper yet falls back to the old
+`sudo python3` path automatically. Jen shows an admin banner naming every
+such host and flashes a warning on each use. **The fallback is not
+removed** — a host still on it keeps working. Once every host shows the
+helper you can delete `/etc/sudoers.d/jen` (the `python3 = root` grant).
+
+### Config editing moved into Jen
+
+As a by-product, the seven near-identical remote-script builders are gone.
+Subnet add / delete / edit (v4 and v6) now read the config, mutate it in
+pure Python (`jen/services/kea_config_edit.py`), and push the result back
+through the helper. The Servers-page restart button and the DDNS log read
+no longer shell out to `ssh` directly.
+
+### Also
+
+- Removed a stale committed symlink (`templates/templates`, from v4.4.10)
+  that shipped in every release tarball and made a plain `tar xzf` fail.
+- `.gitattributes` pins LF on the shipped scripts so a Windows checkout
+  can't break a `#!` line.
+
 ## [5.10.4] - 2026-09-10
 
 A patch for four small things, two of which have been quietly broken
