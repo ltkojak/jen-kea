@@ -2,6 +2,37 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.21.1] - 2026-09-11
+
+Plugin installs now verify a real checksum unconditionally — closing
+the last gap flagged when checksum verification first shipped in
+v5.3.3. No migration, no config change.
+
+### A missing plugin checksum is now refused, not a warning
+
+Installing a plugin has checked its downloaded `plugin.zip` against a
+`sha256` in the registry since v5.3.3, but a registry entry with no
+checksum at all was let through anyway, logged as a warning — a
+deliberate transition state at the time, since neither plugin that
+existed then (IPAM Lite, Network Discovery) had a trustworthy checksum
+to give it. That transition is over: both entries in
+`plugins/registry.json` now point at a specific release tag in their
+own repository (never the moving `main` branch) and carry the real
+checksum of that tag's package. A missing checksum is refused outright
+now, exactly like a mismatched one always was.
+
+Auditing the two existing entries for this found IPAM Lite's `main`
+had already moved two releases past what the registry still claimed —
+this release also brings the registry's version, description, and
+migration list back in sync with what's actually shipping, and removes
+the mechanism that used to paper over that kind of drift automatically
+(live-fetching each plugin's current manifest on every registry page
+load, which only worked cleanly while `download_url` pointed at a
+moving branch; pinned to a release tag, it could report a version that
+no longer matches what actually gets downloaded and checksummed). The
+registry file itself is the source of truth again, updated by hand
+each release — see the new `plugins/README.md` for the checklist.
+
 ## [5.21.0] - 2026-09-11
 
 The Servers page becomes an HA operations console: live local/remote

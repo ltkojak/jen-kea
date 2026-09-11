@@ -398,6 +398,47 @@ code path that reads `mfa_methods.secret` must go through
 `crypto.decrypt_secret()` and must not treat a `SecretDecryptError` as
 "authenticated".
 
+### 3.7 The plugin registry's trust root, and checksum-verified installs (v5.21.1)
+
+`plugins/registry.json` — the list Settings → Plugins shows and
+installs from — is fetched from
+`raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json`:
+this repository's own `main` branch. That's a mutable ref, not a
+pinned commit or tag, but it carries no more trust than the app itself
+already requires — anyone who could tamper with it could just as
+easily tamper with a Jen release the same way they'd tamper with any
+other software supply chain rooted in this repo. `fetch_registry()`
+(`jen/services/plugins.py`) trusts every field in it as-is; nothing
+about the registry itself is independently re-verified.
+
+**What IS independently verified is each plugin's package.**
+`install_plugin()` downloads `<download_url>/plugin.zip` and refuses
+outright — no exceptions — if the registry entry has no `sha256` or if
+the downloaded bytes don't match it, the same fail-closed rule
+`jen-update-root.py` applies to Jen's own release tarball.
+`download_url` is pinned to a
+release **tag** in the plugin's own repository (`.../raw/vX.Y.Z`), not
+`main` — a tag doesn't move, so the checksum computed against it at
+release time stays valid forever, where a checksum computed against a
+moving branch would go stale the next time that branch's tip changed.
+This closes the actual gap a compromised plugin repository (or a
+compromised registry.json pointing at one) would otherwise exploit: a
+plugin's `manifest.json` runs arbitrary `db_migrations` and its
+`plugin.py` is imported and executed as `www-data` on install, so an
+unverified zip is remote code execution, not just a bad file.
+
+**v5.21.1 removed the one thing that used to be "live" here.**
+`fetch_registry()` briefly (v5.3.x) live-fetched each plugin's own
+`manifest.json` from `main` to overlay version/description/
+db_migrations, so a release didn't need a second manual commit here to
+stay accurate. That's gone: once `download_url` is pinned to a tag,
+live-fetching from `main` could report a version and migration list
+that doesn't match what `install_plugin()` actually downloads and
+checksums from the tag. `plugins/registry.json`'s own fields are the
+source of truth again, updated by hand in the same commit that pins a
+new tag and its checksum — see `plugins/README.md` for the release
+checklist.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:
