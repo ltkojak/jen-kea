@@ -10,7 +10,10 @@
 
 <div style="margin-bottom:16px;">
     <a href="{{ url_for('servers.config_history', server_id=server.id, service=rev.service) }}" class="btn btn-secondary btn-sm">← Back to History</a>
-    <a href="{{ url_for('servers.config_history_download', server_id=server.id, rev_id=rev.id) }}" class="btn btn-secondary btn-sm">⬇ Download JSON</a>
+    <a href="{{ url_for('servers.config_history_download', server_id=server.id, rev_id=rev.id) }}" class="btn btn-secondary btn-sm">⬇ Download (masked)</a>
+    {% if can_download_raw %}
+    <a href="{{ url_for('servers.config_history_download_raw', server_id=server.id, rev_id=rev.id) }}" class="btn btn-secondary btn-sm" title="The real config, secrets included — re-confirms your password if it's been a while.">⬇ Download unmasked</a>
+    {% endif %}
 </div>
 
 {% if rev.source == 'external' %}
@@ -25,6 +28,7 @@
     <p style="color:var(--text-muted);padding:12px;">No difference from the previous revision.</p>
     {% else %}
     <pre style="overflow-x:auto;font-size:12px;line-height:1.5;margin:0;padding:12px;background:var(--surface2);border-radius:var(--radius);"><code>{% for row in rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
+    <p style="color:var(--text-muted);font-size:12px;padding:8px 12px 0;margin:0;">Secrets are masked; a change to a masked value does not show here.</p>
     {% endif %}
 </div>
 

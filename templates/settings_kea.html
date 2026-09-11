@@ -164,6 +164,7 @@
                     {% elif s.helper_version %}<span style="color:var(--warning);">v{{ s.helper_version }} — upgrade available (v{{ s.helper_want }})</span>
                     {% elif s.helper_known %}<span style="color:var(--warning);">not installed — legacy path</span>
                     {% else %}<span style="color:var(--text-muted);">unknown — check</span>{% endif %}
+                    {% if s.legacy_grant %}<br><span class="badge" style="background:var(--surface2);color:var(--warning);" title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
                 </td>
                 <td style="text-align:right;padding:4px 8px;white-space:nowrap;">
                     <form method="POST" action="/settings/infrastructure/check-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

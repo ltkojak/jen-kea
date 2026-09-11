@@ -328,6 +328,35 @@ class TestRedactSecrets:
         assert red["Dhcp4"]["lease-database"]["host"] == "h"  # non-secret untouched
         assert cfg["Dhcp4"]["lease-database"]["password"] == "dbpw"  # deep copy, original intact
 
+    def test_widened_key_set_v5_20_0(self):
+        # v5.20.0 — beyond the literal "password": a bare "secret" (D2's
+        # tsig-keys), HA's "basic-auth-password", and anything ending in
+        # -password/_password/-secret, so a future field doesn't need a
+        # code change here. "password-file" NAMES A PATH, not a value —
+        # it must stay visible.
+        from jen.services.kea_authoring import redact_secrets
+
+        cfg = {
+            "hooks-libraries": [
+                {
+                    "parameters": {
+                        "high-availability": [{"peers": [{"basic-auth-password": "haaapw"}]}],
+                    }
+                }
+            ],
+            "tsig-keys": [{"name": "k1", "secret": "tsigsecret"}],
+            "custom_password": "legacy-underscore-form",
+            "vendor-secret": "vendor-value",
+            "password-file": "/etc/kea/lease-db.pass",
+        }
+        red = redact_secrets(cfg)
+        haa_peer = red["hooks-libraries"][0]["parameters"]["high-availability"][0]["peers"][0]
+        assert haa_peer["basic-auth-password"] == "********"
+        assert red["tsig-keys"][0]["secret"] == "********"
+        assert red["custom_password"] == "********"
+        assert red["vendor-secret"] == "********"
+        assert red["password-file"] == "/etc/kea/lease-db.pass"  # a path, not a secret value
+
 
 class TestAutodetectAddresses:
     def test_parses_ip_o_addr_and_drops_loopback(self):

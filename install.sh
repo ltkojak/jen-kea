@@ -67,6 +67,9 @@ MODE_DOCKER=false
 IS_UPGRADE=false
 CONFIGURE=false
 EXISTING_VERSION=""
+# v5.20.0 — true for the whole install_files..verify_install mutation window
+# on an upgrade; fatal() rolls back automatically while this is set (below).
+ROLLBACK_ARMED=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -95,7 +98,7 @@ ok()      { echo -e "  ${G}[  OK  ]${NC}  $*"; }
 info()    { echo -e "  ${C}[ INFO ]${NC}  $*"; }
 warn()    { echo -e "  ${Y}[ WARN ]${NC}  $*"; }
 err()     { echo -e "  ${R}[ FAIL ]${NC}  $*"; }
-fatal()   { echo -e "  ${R}[ FATAL]${NC}  $*"; exit 1; }
+fatal()   { echo -e "  ${R}[ FATAL]${NC}  $*"; [[ "$ROLLBACK_ARMED" == "true" && "$IS_UPGRADE" == "true" ]] && rollback; exit 1; }
 step()    { echo -e "\n  ${B}${C}$*${NC}"; }
 divider() { echo -e "  ${DIM}${C}$(printf '─%.0s' {1..54})${NC}"; }
 blank()   { echo ""; }
@@ -819,6 +822,68 @@ backup_existing() {
     blank
 }
 
+# ── Snapshot external files (v5.20.0) ────────────────────────────────────────
+# install_files (below) overwrites files OUTSIDE $INSTALL_DIR — the systemd
+# unit, the sudoers grant, the root-privileged update script and its own
+# unit. None of those live under releases/<ver>/, so activate_release's
+# symlink flip can't roll them back. Snapshot them here so rollback() can
+# put them back too.
+_EXTERNAL_FILES=(
+    "$SERVICE_FILE"
+    "$SUDOERS_FILE"
+    "/usr/local/sbin/jen-update-root.py"
+    "/etc/systemd/system/jen-update.service"
+)
+snapshot_external_files() {
+    [[ "$IS_UPGRADE" == "false" ]] && return
+
+    local ts; ts=$(date +%Y%m%d_%H%M%S)
+    local dir="${BACKUP_DIR}/ext.${ts}"
+    local f found=false
+    for f in "${_EXTERNAL_FILES[@]}"; do
+        if [[ -f "$f" ]]; then
+            mkdir -p "$dir"
+            cp -p "$f" "$dir/$(basename "$f")"
+            found=true
+        fi
+    done
+    if [[ "$found" == "true" ]]; then
+        ROLLBACK_EXT="$dir"
+        export ROLLBACK_EXT
+    fi
+}
+
+# ── Restore external files (used by rollback(), both branches) ──────────────
+_restore_external_files() {
+    [[ -z "${ROLLBACK_EXT:-}" ]] && return
+    [[ -d "$ROLLBACK_EXT" ]] || return
+    local f base dest
+    for f in "$ROLLBACK_EXT"/*; do
+        [[ -f "$f" ]] || continue
+        base=$(basename "$f")
+        case "$base" in
+            "$(basename "$SERVICE_FILE")") dest="$SERVICE_FILE" ;;
+            "$(basename "$SUDOERS_FILE")") dest="$SUDOERS_FILE" ;;
+            jen-update-root.py) dest="/usr/local/sbin/jen-update-root.py" ;;
+            jen-update.service) dest="/etc/systemd/system/jen-update.service" ;;
+            *) continue ;;
+        esac
+        if [[ "$dest" == "$SUDOERS_FILE" ]]; then
+            local tmp; tmp=$(mktemp)
+            cp -p "$f" "$tmp"
+            if visudo -c -f "$tmp" >/dev/null 2>&1; then
+                mv "$tmp" "$dest"
+                chmod 440 "$dest"
+            else
+                warn "Rollback: restored sudoers file failed visudo -c — leaving current $dest in place"
+                rm -f "$tmp"
+            fi
+        else
+            cp -p "$f" "$dest"
+        fi
+    done
+}
+
 # ── Rollback ──────────────────────────────────────────────────────────────────
 rollback() {
     # v5.14.0 — prefer flipping `current` back to the newest OTHER release
@@ -831,6 +896,7 @@ rollback() {
         if [[ -n "$prev" && -d "$RELEASES_DIR/$prev/app" ]]; then
             warn "Rolling back to release $prev..."
             ln -sfn "releases/$prev" "$CURRENT_LINK.tmp" && mv -T "$CURRENT_LINK.tmp" "$CURRENT_LINK"
+            _restore_external_files
             systemctl daemon-reload
             systemctl restart jen 2>/dev/null || true
             warn "Rollback complete — release $prev restored"
@@ -838,17 +904,19 @@ rollback() {
         fi
     fi
     # Legacy flat copy-back (a still-flat box whose versioned migration failed).
-    [[ -z "${ROLLBACK_JEN:-}" ]] && return
-    [[ -f "$ROLLBACK_JEN" ]] || return
-    warn "Rolling back to previous installation..."
-    rm -f "$CURRENT_LINK"
-    cp "$ROLLBACK_JEN" "$INSTALL_DIR/run.py"
-    if [[ -n "${ROLLBACK_PKG:-}" && -d "$ROLLBACK_PKG" ]]; then
-        rm -rf "$INSTALL_DIR/jen"
-        cp -r "$ROLLBACK_PKG" "$INSTALL_DIR/jen"
+    if [[ -n "${ROLLBACK_JEN:-}" && -f "$ROLLBACK_JEN" ]]; then
+        warn "Rolling back to previous installation..."
+        rm -f "$CURRENT_LINK"
+        cp "$ROLLBACK_JEN" "$INSTALL_DIR/run.py"
+        if [[ -n "${ROLLBACK_PKG:-}" && -d "$ROLLBACK_PKG" ]]; then
+            rm -rf "$INSTALL_DIR/jen"
+            cp -r "$ROLLBACK_PKG" "$INSTALL_DIR/jen"
+        fi
+        _restore_external_files
+        systemctl daemon-reload
+        systemctl restart jen 2>/dev/null || true
+        warn "Rollback complete — previous version restored"
     fi
-    systemctl restart jen 2>/dev/null || true
-    warn "Rollback complete — previous version restored"
 }
 
 # ── Migrate user content out of /opt/jen (v5.13.0) ───────────────────────────
@@ -1042,7 +1110,6 @@ start_service() {
         blank
         journalctl -u jen -n 30 --no-pager
         blank
-        [[ "$IS_UPGRADE" == "true" ]] && rollback
         fatal "Installation failed — see logs above"
     fi
     blank
@@ -1401,12 +1468,15 @@ main() {
         install_dependencies
         CONFIGURE=false
         backup_existing
+        snapshot_external_files
+        ROLLBACK_ARMED=true
         install_files
         setup_venv
         compile_app
         activate_release
         start_service
         verify_install
+        ROLLBACK_ARMED=false
         remove_flat_leftovers
         print_summary
         exit 0
@@ -1497,6 +1567,8 @@ for which in ['jen','kea']:
     collect_config
     backup_existing
     migrate_content
+    snapshot_external_files
+    ROLLBACK_ARMED=true
     install_files
     setup_venv
     compile_app
@@ -1504,6 +1576,7 @@ for which in ['jen','kea']:
     activate_release
     start_service
     verify_install
+    ROLLBACK_ARMED=false
     remove_flat_leftovers
     print_summary
 }

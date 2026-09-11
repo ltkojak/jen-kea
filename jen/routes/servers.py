@@ -13,10 +13,12 @@ from flask_login import current_user, login_required
 import jen.models.user as __user
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_authoring as __authoring
 import jen.services.kea_host as __host
 from jen import extensions
 from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.crypto import SecretDecryptError
 
@@ -257,10 +259,15 @@ def config_history_detail(server_id, rev_id):
     is_latest = False
     try:
         prev = __rev.previous(rev_id, server_id, service)
+        # v5.20.0 (15E) — the diff shows MASKED bodies on both sides;
+        # secrets never appear in an admin-visible diff, only via the
+        # step-up-gated raw download below.
+        prev_masked = __rev.canonical(__authoring.redact_secrets(json.loads(prev["config"]))) if prev else ""
+        rev_masked = __rev.canonical(__authoring.redact_secrets(json.loads(rev["config"])))
         rows = _diff_rows(
             __rev.diff(
-                prev["config"] if prev else "",
-                rev["config"],
+                prev_masked,
+                rev_masked,
                 a_label=f"#{prev['id']}" if prev else "(nothing before this)",
                 b_label=f"#{rev_id}",
             )
@@ -276,6 +283,7 @@ def config_history_detail(server_id, rev_id):
         rows=rows,
         is_latest=is_latest,
         can_restore=current_user.is_superadmin and bool(server.get("ssh_host")),
+        can_download_raw=current_user.is_superadmin,
     )
 
 
@@ -283,6 +291,8 @@ def config_history_detail(server_id, rev_id):
 @login_required
 @_admin_required
 def config_history_download(server_id, rev_id):
+    """Masked download — secrets replaced with "********", same as the
+    diff view. See config_history_download_raw for the real body."""
     server, deny = _history_gate(server_id)
     if deny:
         return deny
@@ -293,10 +303,37 @@ def config_history_download(server_id, rev_id):
         return redirect(url_for("servers.config_history", server_id=server_id))
     if not rev or rev["server_id"] != server_id:
         abort(404)
+    masked = __rev.canonical(__authoring.redact_secrets(json.loads(rev["config"])))
+    return Response(
+        masked,
+        mimetype="application/json",
+        headers={"Content-Disposition": f'attachment; filename="config-{rev["service"]}-rev{rev_id}.json"'},
+    )
+
+
+@bp.route("/servers/<int:server_id>/config-history/<int:rev_id>/download-raw")
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def config_history_download_raw(server_id, rev_id):
+    """Unmasked download — the real secrets, for a superadmin who has
+    authenticated recently (Q6's step-up pattern). Every download is
+    audited."""
+    server, deny = _history_gate(server_id)
+    if deny:
+        return deny
+    try:
+        rev = __rev.get(rev_id)
+    except SecretDecryptError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("servers.config_history", server_id=server_id))
+    if not rev or rev["server_id"] != server_id:
+        abort(404)
+    __user.audit("DOWNLOAD_KEA_CONFIG_RAW", server["name"], f"service={rev['service']} revision={rev_id}")
     return Response(
         rev["config"],
         mimetype="application/json",
-        headers={"Content-Disposition": f'attachment; filename="config-{rev["service"]}-rev{rev_id}.json"'},
+        headers={"Content-Disposition": f'attachment; filename="config-{rev["service"]}-rev{rev_id}-unmasked.json"'},
     )
 
 

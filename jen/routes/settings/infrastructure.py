@@ -72,10 +72,12 @@ def settings_infrastructure():
 
 def _kea_servers_with_helper_status():
     """Per-server rows for the SSH card's helper table: id, name,
-    ssh_host, the persisted helper status ('v1' / null / unknown), and
+    ssh_host, the persisted helper status ('v1' / null / unknown),
     `helper_want` (v5.19.1 — the version Jen wants, so the template can
     show "upgrade available" for a version below it instead of treating
-    any installed version as fully current)."""
+    any installed version as fully current), and `legacy_grant`
+    (v5.20.0 — whether the old NOPASSWD: python3 grant is still present,
+    last learned the previous time Check/Update ran; never SSHes here)."""
     from jen.services import kea_host
 
     status = kea_host.helper_status()
@@ -91,6 +93,7 @@ def _kea_servers_with_helper_status():
                 "helper_want": kea_host.JEN_HELPER_WANT_VERSION,
                 "helper_known": bool(st),
                 "helper_checked": st.get("checked", ""),
+                "legacy_grant": st.get("legacy_grant"),  # True, False, or None (never checked)
             }
         )
     return rows

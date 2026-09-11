@@ -396,6 +396,32 @@ class TestHelperInstalled:
         assert c.status == "ok"
         assert f"v{kea_host.JEN_HELPER_WANT_VERSION}" in c.detail
 
+    def test_at_want_but_legacy_grant_still_present_warns(self, monkeypatch):
+        # v5.20.0 — the helper being current doesn't mean the host is
+        # hardened if the old NOPASSWD: python3 grant is still there.
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(
+            "jen.services.kea_host.helper_status",
+            lambda: {"1": {"version": kea_host.JEN_HELPER_WANT_VERSION, "legacy_grant": True}},
+        )
+        c = health._helper_installed(_ctx())
+        assert c.status == "warn"
+        assert "legacy python3 root grant is still present" in c.detail
+        assert "kea-a" in c.detail
+
+    def test_legacy_grant_false_or_absent_does_not_warn(self, monkeypatch):
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(
+            "jen.services.kea_host.helper_status",
+            lambda: {"1": {"version": kea_host.JEN_HELPER_WANT_VERSION, "legacy_grant": False}},
+        )
+        c = health._helper_installed(_ctx())
+        assert c.status == "ok"
+
     def test_below_want_warns_no_atomic_guard(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
         monkeypatch.setattr("jen.services.kea_host.helper_status", lambda: {"1": {"version": 1}})

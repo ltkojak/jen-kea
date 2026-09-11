@@ -505,7 +505,15 @@ def _helper_installed(ctx) -> Check:
     the atomic-concurrency guard / external-change capture that shipped
     in v2), and fully current. The old two-bucket version compared
     against JEN_HELPER_MIN_VERSION, so a v1 host — which is exactly the
-    case the "no atomic guard" warning exists for — showed as ok."""
+    case the "no atomic guard" warning exists for — showed as ok.
+
+    v5.20.0 — a fourth, independent condition: the helper is installed
+    (any version >= MIN) but the old NOPASSWD: python3 grant is STILL
+    present on the host. That grant is root, full stop (ARCHITECTURE
+    §3.1) — an admin who sees the helper recorded may assume the host is
+    hardened when the wide-open fallback path is still live. This is
+    checked from the last-recorded status (kea_host.check_helper sets it
+    at check/install time), never by SSHing here."""
     c = Check("helper_installed", "Kea host helper installed", "jen", fix_url="/settings/kea")
     ssh_servers = [s for s in extensions.KEA_SERVERS if s.get("ssh_host")]
     if not ssh_servers:
@@ -516,12 +524,17 @@ def _helper_installed(ctx) -> Check:
     status = kea_host.helper_status()
     legacy = []
     behind = []  # (name, version)
+    has_legacy_grant = []
     for s in ssh_servers:
-        v = status.get(str(s.get("id")), {}).get("version")
+        entry = status.get(str(s.get("id")), {})
+        v = entry.get("version")
         if not isinstance(v, int) or v < kea_host.JEN_HELPER_MIN_VERSION:
             legacy.append(_server_name(s))
-        elif v < kea_host.JEN_HELPER_WANT_VERSION:
-            behind.append((_server_name(s), v))
+        else:
+            if v < kea_host.JEN_HELPER_WANT_VERSION:
+                behind.append((_server_name(s), v))
+            if entry.get("legacy_grant") is True:
+                has_legacy_grant.append(_server_name(s))
 
     sentences = []
     if legacy:
@@ -535,6 +548,11 @@ def _helper_installed(ctx) -> Check:
         sentences.append(
             f"{names} on helper {vtext} — no atomic concurrency guard and no external-change capture; "
             "upgrade from Settings → Kea → SSH"
+        )
+    if has_legacy_grant:
+        sentences.append(
+            f"{', '.join(has_legacy_grant)}: helper installed but the legacy python3 root grant is still "
+            "present — remove /etc/sudoers.d/jen-kea on the host (admin-guide → Legacy grant)"
         )
 
     if sentences:

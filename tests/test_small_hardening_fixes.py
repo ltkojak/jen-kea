@@ -162,3 +162,99 @@ class TestDockerHealthcheckUsesRealShellLogic:
             )
         finally:
             httpd.shutdown()
+
+
+class TestInstallShExternalFileRollback:
+    """
+    v5.20.0 — install_files() (install.sh) overwrites four files OUTSIDE
+    /opt/jen: the systemd unit, the sudoers grant, and the root-privileged
+    update script + its own unit. None of those live under
+    releases/<ver>/, so activate_release()'s symlink flip can't roll them
+    back, and rollback() was only ever invoked from start_service() — a
+    fatal error anywhere between install_files and start_service left an
+    upgrade half rolled back: the release symlink flipped to the old
+    version, but the four external files stayed on the new one.
+    snapshot_external_files() + rollback() restoring them, plus arming
+    rollback for the whole install_files..verify_install window via
+    ROLLBACK_ARMED (checked in fatal()), closes that gap.
+
+    install.sh needs root, systemd and a real host, so it can't run in
+    CI or on this Windows dev box — this is a source-shape check that
+    the wiring is actually in place, same style as the rest of this file.
+    """
+
+    def _source(self):
+        return pathlib.Path("install.sh").read_text(encoding="utf-8")
+
+    def _function_body(self, source, name):
+        """Slice out a `name() { ... }` block. Bash in this script never
+        uses `{`/`}` for control flow (if/fi, for/done, case/esac), so
+        the next line that is exactly `}` is always the function's own
+        closing brace — safe even with nested if/for blocks inside."""
+        start = source.index(f"{name}() {{")
+        end = source.index("\n}", start)
+        return source[start:end]
+
+    def test_snapshot_called_before_install_files_in_main(self):
+        source = self._source()
+        main_body = self._function_body(source, "main")
+        snapshot_positions = [m.start() for m in re.finditer(r"\bsnapshot_external_files\b", main_body)]
+        install_files_positions = [m.start() for m in re.finditer(r"^\s*install_files\s*$", main_body, re.MULTILINE)]
+        assert snapshot_positions, "snapshot_external_files is never called in main()"
+        assert install_files_positions, "install_files is never called in main()"
+        for install_pos in install_files_positions:
+            assert any(sp < install_pos for sp in snapshot_positions), (
+                "install_files is called in main() without a preceding snapshot_external_files call"
+            )
+
+    def test_rollback_armed_brackets_install_files_through_verify_install(self):
+        source = self._source()
+        main_body = self._function_body(source, "main")
+        install_positions = [m.start() for m in re.finditer(r"^\s*install_files\s*$", main_body, re.MULTILINE)]
+        verify_positions = [m.start() for m in re.finditer(r"^\s*verify_install\s*$", main_body, re.MULTILINE)]
+        armed_positions = [m.start() for m in re.finditer(r"^\s*ROLLBACK_ARMED=true\s*$", main_body, re.MULTILINE)]
+        disarmed_positions = [m.start() for m in re.finditer(r"^\s*ROLLBACK_ARMED=false\s*$", main_body, re.MULTILINE)]
+        assert armed_positions, "ROLLBACK_ARMED=true is never set in main()"
+        assert disarmed_positions, "ROLLBACK_ARMED=false is never set in main()"
+        for install_pos in install_positions:
+            assert any(a < install_pos for a in armed_positions), "install_files runs before ROLLBACK_ARMED is set"
+        for verify_pos in verify_positions:
+            assert any(d > verify_pos for d in disarmed_positions), (
+                "ROLLBACK_ARMED is never cleared after verify_install"
+            )
+
+    def test_fatal_rolls_back_when_armed_during_an_upgrade(self):
+        source = self._source()
+        fatal_line = next(line for line in source.splitlines() if line.strip().startswith("fatal()"))
+        assert "ROLLBACK_ARMED" in fatal_line
+        assert "IS_UPGRADE" in fatal_line
+        assert "rollback" in fatal_line
+
+    def test_snapshot_function_names_all_four_external_files(self):
+        source = self._source()
+        match = re.search(r"_EXTERNAL_FILES=\((.*?)\)", source, re.DOTALL)
+        assert match, "could not find the _EXTERNAL_FILES array in install.sh"
+        body = match.group(1)
+        assert "SERVICE_FILE" in body, "jen.service is not in the external-files snapshot list"
+        assert "SUDOERS_FILE" in body, "the sudoers grant is not in the external-files snapshot list"
+        assert "/usr/local/sbin/jen-update-root.py" in body, (
+            "the root-privileged update script is not in the external-files snapshot list"
+        )
+        assert "/etc/systemd/system/jen-update.service" in body, (
+            "jen-update.service is not in the external-files snapshot list"
+        )
+
+    def test_rollback_restores_external_files_in_both_branches(self):
+        source = self._source()
+        rollback_body = self._function_body(source, "rollback")
+        assert rollback_body.count("_restore_external_files") == 2, (
+            "rollback() should restore external files in both the versioned-release branch "
+            "and the legacy flat-copy-back branch"
+        )
+
+    def test_sudoers_restore_is_validated_with_visudo_before_taking_effect(self):
+        source = self._source()
+        restore_body = self._function_body(source, "_restore_external_files")
+        assert "visudo -c -f" in restore_body, (
+            "a restored sudoers file must be validated with visudo before replacing the live one"
+        )

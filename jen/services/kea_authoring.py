@@ -211,15 +211,29 @@ def autodetect_addresses(ssh) -> list:
         return []
 
 
+# v5.20.0 (Q15) — widened from the single literal "password" key to also
+# cover HA peers' `basic-auth-password` and a generic `secret` (D2's
+# tsig-keys, Q19), plus anything ending in -password/_password/-secret
+# so a future field doesn't need a code change here to stay masked.
+_SECRET_KEYS = frozenset({"password", "secret", "basic-auth-password"})
+_SECRET_SUFFIXES = ("-password", "_password", "-secret")
+
+
+def _is_secret_key(key: str) -> bool:
+    return key in _SECRET_KEYS or key.endswith(_SECRET_SUFFIXES)
+
+
 def redact_secrets(cfg: dict) -> dict:
-    """v5.10.2 — deep copy of a generated Kea config with every dict value
-    whose key is "password" replaced by "********". For the browser
-    preview: the server needs the real lease-database / control-socket
-    passwords to run `kea-dhcpX -t`, the human reviewing the JSON does
-    not. Generic so it covers hosts-database(s), control-sockets auth
-    clients, and whatever comes next."""
+    """Deep copy of a Kea config with every dict value whose key looks
+    like a credential (see _is_secret_key) replaced by "********". For
+    the browser preview and the config-history diff/download: the
+    server needs the real lease-database / control-socket / HA-peer
+    passwords to run `kea-dhcpX -t` or apply the config, the human
+    reviewing it does not. Generic so it covers hosts-database(s),
+    control-sockets auth clients, HA peers, and whatever comes next —
+    never a key like `password-file`, which names a path, not a value."""
     if isinstance(cfg, dict):
-        return {k: ("********" if k == "password" else redact_secrets(v)) for k, v in cfg.items()}
+        return {k: ("********" if _is_secret_key(k) else redact_secrets(v)) for k, v in cfg.items()}
     if isinstance(cfg, list):
         return [redact_secrets(v) for v in cfg]
     return cfg

@@ -113,14 +113,24 @@ def helper_status() -> dict:
         return {}
 
 
-def record_helper_status(server_id, version) -> None:
+def record_helper_status(server_id, version, legacy_grant: bool | None = None) -> None:
     """Called after every helper attempt: `version` is the integer
     reported by a `version` op, an int carried forward for any other
-    successful op, or None for HelperMissing."""
+    successful op, or None for HelperMissing. `legacy_grant` (v5.20.0)
+    records whether the old NOPASSWD: /usr/bin/python3 sudoers grant is
+    still present on this host — True/False updates it, None (the
+    default — every caller except check_helper) leaves whatever was
+    last recorded, since most callers have no reason to SSH just to
+    check."""
     if server_id is None:
         return
     data = helper_status()
-    data[str(server_id)] = {"version": version, "checked": datetime.now(timezone.utc).isoformat()}
+    prev = data.get(str(server_id), {})
+    data[str(server_id)] = {
+        "version": version,
+        "checked": datetime.now(timezone.utc).isoformat(),
+        "legacy_grant": legacy_grant if legacy_grant is not None else prev.get("legacy_grant"),
+    }
     try:
         _user().set_global_setting(_HELPER_STATUS_KEY, json.dumps(data))
     except Exception as e:
@@ -604,17 +614,21 @@ def install_package(server: dict, service: str) -> dict:
 
 
 def check_helper(server: dict) -> dict:
-    """Run `version`, record the status, return the parsed result."""
+    """Run `version`, record the status — including whether the legacy
+    python3 grant is still present (v5.20.0), so Health Center can warn
+    about it without SSHing at render time — return the parsed result.
+    `install_helper()`'s own `check_helper()` calls get this for free."""
+    grant = legacy_grant_present(server)
     try:
         resp = helper_call(server, "version", {})
         version = resp.get("helper_version") if resp.get("ok") else None
-        record_helper_status(server.get("id"), version)
+        record_helper_status(server.get("id"), version, legacy_grant=grant)
         return {"ok": bool(version), "version": version, "via": "helper"}
     except HelperMissing:
-        record_helper_status(server.get("id"), None)
+        record_helper_status(server.get("id"), None, legacy_grant=grant)
         return {"ok": False, "version": None, "code": "missing"}
     except HelperError as e:
-        record_helper_status(server.get("id"), None)
+        record_helper_status(server.get("id"), None, legacy_grant=grant)
         return {"ok": False, "version": None, "code": "error", "detail": str(e)}
 
 

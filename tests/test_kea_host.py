@@ -310,6 +310,59 @@ class TestStatusTracking:
         assert data["2"]["version"] is None
         assert "checked" in data["1"]
 
+    def test_legacy_grant_persists_when_not_specified(self, monkeypatch):
+        store = {}
+
+        class _U:
+            @staticmethod
+            def get_global_setting(k, d=None):
+                return store.get(k, d)
+
+            @staticmethod
+            def set_global_setting(k, v):
+                store[k] = v
+
+        monkeypatch.setattr(kea_host, "_user", lambda: _U)
+        monkeypatch.setattr(kea_host, "helper_status", _REAL_HELPER_STATUS)
+        monkeypatch.setattr(kea_host, "record_helper_status", _REAL_RECORD)
+
+        kea_host.record_helper_status(1, 2, legacy_grant=True)
+        kea_host.record_helper_status(1, 2)  # a later call with no opinion on it
+        assert kea_host.helper_status()["1"]["legacy_grant"] is True
+
+        kea_host.record_helper_status(1, 2, legacy_grant=False)
+        assert kea_host.helper_status()["1"]["legacy_grant"] is False
+
+
+class TestCheckHelperRecordsLegacyGrant:
+    """v5.20.0 (15F) — check_helper probes legacy_grant_present() on
+    every call (including install_helper's own check_helper() calls) so
+    Health Center can warn without SSHing at render time."""
+
+    def test_probes_and_records_on_success(self, monkeypatch, quiet_status):
+        recorded = []
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(
+            kea_host,
+            "record_helper_status",
+            lambda sid, v, legacy_grant=None: recorded.append((sid, v, legacy_grant)),
+        )
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "helper_version": 2}), "")])
+        kea_host.check_helper(SERVER)
+        assert recorded == [(1, 2, True)]
+
+    def test_records_on_missing_too(self, monkeypatch, quiet_status):
+        recorded = []
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: False)
+        monkeypatch.setattr(
+            kea_host,
+            "record_helper_status",
+            lambda sid, v, legacy_grant=None: recorded.append((sid, v, legacy_grant)),
+        )
+        _connect_seq(monkeypatch, [("", "sudo: a password is required")])
+        kea_host.check_helper(SERVER)
+        assert recorded == [(1, None, False)]
+
 
 class TestHelperVersionFromResponse:
     """v5.16.0 — _record_from_resp learns the real version from any op's
