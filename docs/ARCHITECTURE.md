@@ -439,6 +439,66 @@ source of truth again, updated by hand in the same commit that pins a
 new tag and its checksum — see `plugins/README.md` for the release
 checklist.
 
+### 3.8 Content-Security-Policy: nonce-based script-src, `style-src` keeps `'unsafe-inline'` (v5.22.0)
+
+Through v5.21.x, `Content-Security-Policy` allowed `'unsafe-inline'` for
+both `script-src` and `style-src` — templates carried ~148 inline
+`on*=` handlers and ~23 literal `<script>` blocks, so a strict
+script-src wasn't reachable without touching most of the frontend.
+v5.22.0 does that work for scripts: `jen/services/csp.py::nonce()`
+generates one unguessable value per request (`g.csp_nonce`, exposed to
+templates as `csp_nonce`); every `<script>` tag carries
+`nonce="{{ csp_nonce }}"`, and every inline handler was converted to
+either base.html's `data-confirm`/`data-href`/`data-submit` delegated
+dispatcher or a named function bound with `addEventListener` (delegated
+wherever the element lives inside an htmx-swapped partial, since a
+direct binding wouldn't survive the swap). `script-src` is now `'self'
+'nonce-<value>'` — no `'unsafe-inline'` — and `htmx.config.allowEval =
+false` closes the eval-based escape hatch htmx otherwise keeps open for
+`hx-on` and `js:` expressions Jen doesn't use.
+
+`style-src` keeps `'unsafe-inline'` deliberately. Templates carry over
+1,200 inline `style=""` attributes; hardening that would mean rewriting
+the presentation layer into stylesheets, not converting a fixed,
+enumerable set of event handlers — a redesign, not a hardening pass.
+The risk this leaves open is narrower than an unrestricted style-src
+might suggest: CSS injection can exfiltrate data via `background:
+url(...)` selectors or deface the page, but (unlike script-src)
+Chrome/Firefox/Safari don't execute arbitrary code through `style=`
+content, and every user-controlled string rendered into HTML in this
+app already goes through Jinja's autoescaping — an attacker would need
+a separate HTML-injection bug first, at which point script-src's own
+removal of `'unsafe-inline'` is the more consequential guard.
+
+The rollout shipped in two steps within the same release: step 1 added
+the nonce infrastructure and handler conversion but sent the
+nonce-based policy only as `Content-Security-Policy-Report-Only`,
+alongside the still-permissive enforcing header — any conversion gap
+would show up as a browser-console violation report without breaking
+anything live. Step 2 (after confirming CI and a review pass found
+nothing) promoted the nonce-based policy to the enforcing header and
+dropped Report-Only. `tests/test_csp.py` guards the invariant going
+forward: every `<script>` has a nonce, no htmx-swapped partial contains
+one at all, no inline `on*=` attribute remains (checked repo-wide, with
+a staleness-checked allowlist for the one non-live occurrence in
+`branding.py`'s SVG-upload rejection regex), no `javascript:` href, and
+the header itself carries a fresh nonce per request that matches what
+the page actually renders.
+
+**Bundled plugin templates got the same conversion; a registry-installed
+copy did not.** `plugins/ipam/` and `plugins/network-discovery/` in
+this repo are Jen's own bundled copies, converted in this release like
+every other template. The plugin *registry* (§3.7) installs from each
+plugin's own separately-versioned external repository
+(`jen-plugin-ipam`, `jen-plugin-network-discovery`), pinned to a tag
+that predates this work — installing or updating via Settings → Plugins
+still pulls the older, unconverted templates until those repositories
+ship their own nonce/handler fix and the registry entries are re-pinned
+to a new tag in a later release. Until then, a registry-installed
+instance of either plugin will have inline handlers that a strict
+script-src blocks — buttons that did nothing, not a crash — see the
+CHANGELOG.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:

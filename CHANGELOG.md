@@ -2,6 +2,56 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.22.0] - 2026-09-11
+
+`Content-Security-Policy`'s `script-src` no longer needs `'unsafe-inline'`
+— every script on every page now runs off a per-request nonce instead.
+No migration, no config change.
+
+### A nonce for every script, and no more inline handlers
+
+Every `<script>` tag across the app now carries a fresh, per-request
+nonce (`jen/services/csp.py`, `g.csp_nonce`, exposed to templates as
+`csp_nonce`), and the roughly 148 inline `on*=` handlers scattered
+across templates and the two bundled plugins are gone — converted to
+either a single delegated dispatcher added to `base.html`
+(`data-confirm` for the existing confirm-dialog flow, `data-href` for
+navigation, `data-submit` for submitting the closest form) or a named
+function bound with `addEventListener`, delegated wherever the element
+lives inside an HTMX-swapped partial rather than bound directly (a
+direct binding doesn't survive the swap). `htmx.config.allowEval` is
+now `false`, closing the eval-based escape hatch htmx otherwise keeps
+open for `hx-on` attributes and `js:` expression prefixes this app
+never used.
+
+`style-src` is unchanged and still allows `'unsafe-inline'` — templates
+carry over 1,200 inline `style=""` attributes, and hardening that would
+mean rewriting the presentation layer, not converting a fixed,
+enumerable set of event handlers. See `docs/ARCHITECTURE.md` §3.8 for
+the full reasoning and the tradeoff this leaves open.
+
+The change shipped in two steps so a missed conversion spot couldn't
+take the app down: the nonce-based policy ran as
+`Content-Security-Policy-Report-Only` alongside the old, still-inline-
+permitting enforcing header first, then was promoted to enforcing once
+nothing turned up. `tests/test_csp.py` now guards the whole thing going
+forward — nonce present on every script, zero inline handlers anywhere
+in the app (checked repo-wide), no `javascript:` hrefs, and the header
+nonce always matching what the page actually renders.
+
+### Registry-installed plugin copies are not fixed by this release
+
+`plugins/ipam/` and `plugins/network-discovery/` bundled in this repo
+got the same conversion as every other template. The plugin *registry*
+(Settings → Plugins) installs each plugin from its own separately
+versioned repository, pinned to a release tag that predates this work
+— installing or updating either plugin from the registry still pulls
+the old templates with inline handlers. Under the new script-src those
+buttons simply do nothing (no error, no crash) until each plugin's own
+repository ships this same fix and `plugins/registry.json` is re-pinned
+to a new tag in a later release. Anyone running IPAM Lite or Network
+Discovery from the registry should expect this until then.
+
 ## [5.21.1] - 2026-09-11
 
 Plugin installs now verify a real checksum unconditionally — closing

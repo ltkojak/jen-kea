@@ -222,10 +222,15 @@ by design).
 ### Frontend
 
 Jinja templates in `templates/` + HTMX (`static/js/htmx.min.js`, vendored — see
-`tests/test_htmx_vendoring.py`) + hand-rolled dashboard JS + Chart.js. Templates use
-inline `<script>`, `style=`, and `onclick=` throughout, so the CSP deliberately allows
-`'unsafe-inline'` for script/style while still blocking external origins. Partial
-templates are `_`-prefixed and returned for HTMX swaps.
+`tests/test_htmx_vendoring.py`) + hand-rolled dashboard JS + Chart.js. Every `<script>`
+tag carries a per-request nonce (`jen/services/csp.py`, `csp_nonce` in templates) —
+`script-src` has no `'unsafe-inline'` (v5.22.0, Q18). Inline event handlers don't exist
+anymore either: everything goes through base.html's `data-confirm`/`data-href`/
+`data-submit` dispatcher or a named function bound with `addEventListener` (delegated
+for anything inside an htmx-swapped partial). `style-src` still allows `'unsafe-inline'`
+deliberately — 1,200+ inline `style=` attributes would need a real redesign to remove.
+Partial templates are `_`-prefixed and returned for HTMX swaps; none of the ones actually
+route-rendered for a swap may contain a `<script>` tag (`tests/test_csp.py` enforces it).
 
 - A value placed in a **JS context** — inside a `<script>` block or an `on*=` attribute —
   goes through `|tojson`, never bare `{{ }}`. HTML autoescaping is not JS escaping.
