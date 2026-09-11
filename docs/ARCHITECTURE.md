@@ -218,9 +218,15 @@ host:
   runs as root" is exactly the capability being removed; letting the
   helper update itself would put it straight back. Upgrading the helper
   (only when its integer `HELPER_VERSION` changes — rare, called out in
-  the release notes) is pressing **Install helper** in Settings → Kea →
-  SSH again — it re-copies the current file — or a manual
-  `install -m 0755` by an administrator.
+  the release notes) is pressing **Update helper** in Settings → Kea →
+  SSH — it re-copies the current file, then asks the freshly-copied
+  helper its own version rather than trusting what the copy script
+  printed (v5.19.1 fix: it used to trust the echo, and separately used
+  to treat any installed version as fully current instead of comparing
+  against the version Jen actually wants) — or a manual
+  `install -m 0755` by an administrator. Either path still needs the
+  legacy `sudo python3` grant present for that one run, same as a fresh
+  install.
 
 **Helper protocol v2 (v5.16.0 — optimistic concurrency).** `read-config`
 now also returns `"sha256"`, the hex SHA-256 of the raw config-file

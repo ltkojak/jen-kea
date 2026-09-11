@@ -243,7 +243,13 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
   from whether Jen has a client certificate, and generates per server from
   each server's own API settings — including a **bind address chosen per
   server**, defaulting to the address Jen dials for that one. Every
-  direct-mode API URL must include an explicit port.
+  direct-mode API URL must include an explicit port. The **Interfaces**
+  field is shared across every target by default, but an HA pair whose
+  nodes use different NIC names (`ens18` on one, `eth0` on the other,
+  say) can override it per server (v5.19.1) — a second field appears
+  under each server's bind-address picker once more than one SSH server
+  is configured; leave it blank to keep using the shared list for that
+  server.
 
 ### [kea_db] section
 
@@ -632,7 +638,10 @@ catches a malformed expression before Save ever pushes anything.
 *writing*, it keeps whatever spelling your config already uses, and
 only picks based on the connected Kea's version when the config uses
 neither yet. You'll never see a config that mixes both for the same
-purpose because of something Jen wrote.
+purpose because of something Jen wrote. Ticking the box without also
+attaching the class as **Additional** somewhere means Kea will never
+evaluate it — Jen warns about that both right after Save and on the
+edit page itself (v5.19.1) until you fix one side or the other.
 
 **Applies to.** Once a class exists, its edit page lists every subnet,
 pool, and shared network with a **Guard** / **Additional** checkbox
@@ -707,16 +716,27 @@ host and:
 sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
-then add the sudoers line above. **Settings → Kea → SSH** shows
-`helper v1` for each host once it is reachable.
+then add the sudoers line above. **Settings → Kea → SSH** shows the
+installed version for each host once it is reachable — green when it's
+current, amber ("upgrade available") when it isn't.
 
 **Upgrading the helper.** Rare — only when the release notes call out a
-new `HELPER_VERSION`. Press **Install helper** in Settings → Kea → SSH
-again: it re-copies the current file over the old one. (By hand, repeat
-the `install -m 0755` above.) There is no self-update op, on purpose.
-v5.16.0 ships **helper v2** (optimistic concurrency — see below); until
-a host is upgraded it shows `helper v1` with an "upgrade available"
-hint and keeps working with the best-effort guard.
+new `HELPER_VERSION`. Press **Update helper** in Settings → Kea → SSH
+(the same button, relabelled once a version is already recorded) — it
+re-copies the current file over the old one, then confirms the upgrade
+actually took by asking the freshly-copied helper its own version
+rather than trusting what the install script printed. If the copy
+somehow didn't take (a shadowing binary earlier on `$PATH`, a stale
+cache), the flash says so as "the copy did not take" instead of
+claiming success. This still runs over the legacy `sudo python3` path —
+the old grant needs to be present for one run, same as a fresh install;
+if it's already been removed, the flash gives you the manual
+`install -m 0755` command instead. There is no self-update op, on
+purpose. v5.16.0 shipped **helper v2** (optimistic concurrency — see
+below); a host still on v1 shows the amber hint and keeps working
+behind the best-effort guard until it's upgraded. **Health Center**
+(v5.19.1) also warns per host once a v1 helper is more than a passing
+state — see "Kea host helper installed" there.
 
 ### Kea config history (v5.16.0+)
 
@@ -740,11 +760,14 @@ delete / shared-network forms send the config's SHA as it was when the
 form was opened; if the file on the host changed underneath (another
 admin, a hand edit), the write is refused atomically and you get *"The
 Kea config on <host> changed since you opened this form — your edit was
-NOT applied. Reload and try again."* On a host still running **helper
-v1 or the legacy path** there is no atomic guard: Jen does a best-effort
-re-read-and-compare instead, warns *"No atomic guard on <host>"* once
-per request, and does **not** capture out-of-band changes as revisions
-(no SHA to compare). Upgrade the helper to close that gap.
+NOT applied. Reload and try again."* This SHA is per server (v5.19.1) —
+each server in an HA pair carries its own, since two servers' configs
+are never byte-identical (each has its own `this-server-name`, at
+least). On a host still running **helper v1 or the legacy path** there
+is no atomic guard: Jen does a best-effort re-read-and-compare instead,
+warns *"No atomic guard on <host>"* once per request, and does **not**
+capture out-of-band changes as revisions (no SHA to compare). Upgrade
+the helper to close that gap.
 
 ### Legacy grant (pre-5.11.0 — `python3` is root)
 

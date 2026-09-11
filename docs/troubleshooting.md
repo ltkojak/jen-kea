@@ -396,8 +396,9 @@ Jen noticed rather than made.
 If instead you see *"No atomic guard on <host>: helper v1 / legacy"*,
 the write went through on a best-effort check because that host is still
 on helper v1 or the legacy `python3` path — upgrade it (**Settings →
-Kea → SSH → Install helper**) to get the atomic guard and out-of-band
-change tracking.
+Kea → SSH** — the button reads *Update helper* once a version is
+already recorded, *Install helper* otherwise) to get the atomic guard
+and out-of-band change tracking.
 
 ---
 

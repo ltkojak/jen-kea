@@ -2,6 +2,58 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.19.1] - 2026-09-11
+
+A self-audit of the 5.16.0–5.19.0 line, cross-checked against an
+external review, found five real bugs and two unimplemented spec
+items. All are fixed here; none needs a migration or a config change.
+`sudo ./install.sh` or the in-app update.
+
+### HA pairs: every subnet edit has conflicted on the second server since 5.16.0
+
+The optimistic-concurrency guard added in 5.16.0 read the SHA of the
+**active** server's `kea-dhcp4.conf` once and sent that same value as
+the expected SHA to **every** SSH-configured server. Two servers in an
+HA pair never have a byte-identical config file — each has its own
+`this-server-name` at minimum — so the second server has refused every
+single edit with "changed since you opened this form" for three
+releases, even though nothing had actually changed on it. The edit
+forms now carry one SHA per server, and each server's write is checked
+only against its own file. If you run a single Kea server this never
+affected you; if you run HA, every edit to a subnet since upgrading to
+5.16.0 has needed a second attempt or a manual restart on the standby.
+
+### The helper "Update helper" button was a no-op
+
+Settings → Kea → SSH has shown an "Update" affordance since helper v2
+shipped in 5.16.0, but pressing it on a v1 host did nothing — the
+install code considered any installed version "already there" instead
+of comparing against the version Jen actually wants. It also trusted
+the remote script's own printed version number rather than confirming
+the copy landed. Both are fixed: the button now upgrades a v1 host to
+v2 for real, and verifies the upgrade by asking the freshly-copied
+helper its own version. The Settings table and the Health Center now
+both flag a helper that's installed but behind, not just one that's
+missing entirely.
+
+### Smaller fixes
+
+- **Creating** a shared network had no `all_subnets` check, though
+  deleting one has since Q10 — a subnet-restricted admin could add a
+  network into the live config.
+- A hand-edited config with a gap in its `[kea_server_N]` sections
+  (`kea_server_2` and `kea_server_4` with no `_3`, say) silently hid
+  every server after the gap, everywhere Jen reads the server list.
+- The "Author a starting config" wizard wrote one shared interface list
+  into every target server, so an HA pair with different NIC names
+  (`ens18` vs `eth0`) got the wrong one on whichever server wasn't
+  first; each server can now override it.
+- A client class ticked "only in additional list" but never attached
+  anywhere as an Additional class is silently never evaluated by Kea —
+  Jen now warns about it, both after Save and on the class's edit page.
+- The class-expression preview raised a bare 500 if the SSH validation
+  step failed instead of showing an error row.
+
 ## [5.19.0] - 2026-09-11
 
 Client classes: a guided rule builder for Kea's `Dhcp4.client-classes`,
