@@ -19,6 +19,7 @@ from flask_login import LoginManager, current_user, logout_user
 from jen import extensions
 from jen.config import app_config, ssl_configured
 from jen.models.user import User, get_global_setting
+from jen.services import csp as csp_svc
 from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,19 @@ def create_app() -> Flask:
                 logging.getLogger("jen.timing").warning(f"SLOW {elapsed:.0f}ms  {request.method} {request.path}")
         return response
 
+    @app.before_request
+    def _set_csp_nonce():
+        """v5.22.0 (Q18) — one nonce per request, generated before any
+        template can render and reused verbatim in the response's CSP
+        header (_set_security_headers, below) and every nonced <script>
+        tag the template emits. Skipped for static assets — nothing
+        there ever renders a template or needs the header's nonce to
+        match anything."""
+        from flask import g
+
+        if not request.path.startswith("/static/"):
+            g.csp_nonce = csp_svc.nonce()
+
     @app.after_request
     def _set_security_headers(response):
         """v4.4.5 — Jen is a DHCP admin panel; these are unconditional and
@@ -283,17 +297,28 @@ def create_app() -> Flask:
         (_https_context()), same as the SESSION_COOKIE_SECURE flag above.
         Sending it to a plain-HTTP client would be actively wrong.
 
-        CSP note: templates use inline <script> blocks, inline style=
-        attributes, and inline onclick/onchange handlers throughout (HTMX +
-        hand-rolled dashboard JS, not a bundler-based frontend). A strict
-        default-src 'self' CSP without 'unsafe-inline' for script-src/
-        style-src would break most pages. This policy is deliberately the
-        weaker-but-safe version: it still blocks loading any script, frame,
-        or object from an external origin (the actual clickjacking/
-        remote-injection threat), it just doesn't harden against inline
-        script execution, which would require a template rewrite to nonces
-        or hashes — worth doing eventually, not safe to ship blind here.
+        CSP note: templates use inline style= attributes throughout (1,200+
+        of them) — hardening style-src would mean a real redesign, not a
+        hardening pass, so it keeps 'unsafe-inline' deliberately (v5.22.0
+        note, Q18). script-src is the one that changed: every inline
+        <script> now carries a per-request nonce (jen/services/csp.py,
+        _set_csp_nonce above) and every inline on*= handler was converted
+        to either the data-confirm/data-href/data-submit dispatcher in
+        base.html or a named function bound with addEventListener inside
+        that page's own nonced script — so 'unsafe-inline' is no longer
+        needed for scripts at all.
+
+        v5.22.0 (Q18) step 1/2 — ships as Content-Security-Policy-Report-Only
+        first: the ENFORCING header below is untouched (still permits
+        inline scripts), so nothing can break even if the nonce/handler
+        conversion missed a spot; the Report-Only header carries the new
+        nonce-based script-src and reports violations to the browser
+        console without blocking anything. Step 2 promotes it to the
+        enforcing header and drops Report-Only, once nothing shows up
+        there on a real instance.
         """
+        from flask import g
+
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -304,6 +329,15 @@ def create_app() -> Flask:
             "style-src 'self' 'unsafe-inline'; "
             "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
         )
+        nonce = getattr(g, "csp_nonce", "")
+        if nonce:
+            response.headers.setdefault(
+                "Content-Security-Policy-Report-Only",
+                f"default-src 'self'; "
+                f"script-src 'self' 'nonce-{nonce}'; "
+                f"style-src 'self' 'unsafe-inline'; "
+                f"frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+            )
         if _https_context():
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
@@ -479,6 +513,8 @@ def create_app() -> Flask:
                         kea_legacy_hosts.append(s.get("name", f"Kea Server {s.get('id')}"))
             except Exception:
                 kea_legacy_hosts = []
+        from flask import g
+
         return {
             "branding_name": "Jen",
             "branding_nav_color": get_global_setting("branding_nav_color", ""),
@@ -491,6 +527,7 @@ def create_app() -> Flask:
             "ipv6_enabled": ipv6_enabled,
             "kea_legacy_hosts": kea_legacy_hosts,
             "csrf_token": lambda: csrf_svc.generate_csrf_token(app),
+            "csp_nonce": getattr(g, "csp_nonce", ""),
         }
 
     # ── Error handlers ────────────────────────────────────────────────────────

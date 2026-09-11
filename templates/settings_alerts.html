@@ -47,11 +47,11 @@
 <div class="card" id="al-channels">
     <div class="card-header">
         <span class="card-title">📡 Alert Channels</span>
-        <button class="btn btn-sm btn-primary" onclick="showAddChannel()">+ Add Channel</button>
+        <button class="btn btn-sm btn-primary" id="add-channel-btn">+ Add Channel</button>
     </div>
 
     {% if channels %}
-<script>
+<script nonce="{{ csp_nonce }}">
 var JEN_CHANNELS = {
 {% for ch in channels %}
   {{ ch.id }}: {id:{{ ch.id }}, channel_type:"{{ ch.channel_type }}", channel_name:{{ ch.channel_name|tojson }}, enabled:{{ ch.enabled }}, config:{{ ch.config|tojson }}, alert_types:{{ ch.alert_types|tojson }}, subnet_scope:{{ ch.subnet_scope|tojson }}},
@@ -92,10 +92,9 @@ var JEN_CHANNELS = {
                         <button type="submit" class="action-menu-item">{{ icon_test() }}Send test</button>
                     </form>
                     <button type="button" class="action-menu-item edit-channel-btn"
-                        data-id="{{ ch.id }}"
-                        onclick="editChannelFromBtn({{ ch.id }})">{{ icon_edit() }}Edit channel</button>
+                        data-id="{{ ch.id }}">{{ icon_edit() }}Edit channel</button>
                     <div class="action-menu-divider"></div>
-                    <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" onsubmit="return false;" data-confirm="Delete this alert channel?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <form method="POST" action="/settings/alerts/delete-channel/{{ ch.id }}" data-confirm="Delete this alert channel?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Delete channel</button>
                     </form>
                 </div>
@@ -145,7 +144,7 @@ var JEN_CHANNELS = {
                         <button type="submit" class="btn btn-sm btn-primary">Save</button>
                         <form method="POST" action="/settings/alerts/reset-template" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <input type="hidden" name="alert_type" value="{{ atype }}">
-                            <button type="submit" class="btn btn-sm btn-secondary" onclick="jenConfirm('Reset to default template?', function(){ this.closest('form') ? this.closest('form').submit() : window.location.href=this.href; }.bind(this))">Reset</button>
+                            <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template?">Reset</button>
                         </form>
                     </div>
                 </form>
@@ -166,7 +165,7 @@ var JEN_CHANNELS = {
             <div class="form-row">
                 <div class="form-group">
                     <label>Channel Type</label>
-                    <select name="channel_type" id="channelType" onchange="showChannelFields(this.value)">
+                    <select name="channel_type" id="channelType">
                         <option value="telegram">📱 Telegram</option>
                         <option value="email">📧 Email (SMTP)</option>
                         <option value="slack">💬 Slack Webhook</option>
@@ -366,7 +365,7 @@ var JEN_CHANNELS = {
             </div>
 
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button type="button" class="btn btn-secondary" id="channel-cancel-btn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Channel</button>
             </div>
         </form>
@@ -388,7 +387,7 @@ var JEN_CHANNELS = {
             </div>
             <div class="form-group">
                 <label>DNS Provider</label>
-                <select name="dns_provider" id="dnsProvider" onchange="showDnsFields(this.value)">
+                <select name="dns_provider" id="dnsProvider">
                     <option value="technitium" {% if infra.dns_provider == 'technitium' %}selected{% endif %}>Technitium DNS</option>
                     <option value="pihole" {% if infra.dns_provider == 'pihole' %}selected{% endif %}>Pi-hole</option>
                     <option value="adguard" {% if infra.dns_provider == 'adguard' %}selected{% endif %}>AdGuard Home</option>
@@ -483,7 +482,7 @@ var JEN_CHANNELS = {
             <div style="display:flex;gap:8px;max-width:460px;">
                 <input type="text" name="metrics_token" id="metrics-token-input" value="{{ metrics_token }}"
                        placeholder="e.g. a long random string" style="flex:1;" autocomplete="off">
-                <button type="button" class="btn" onclick="generateMetricsToken()">Generate</button>
+                <button type="button" class="btn" id="generate-metrics-token-btn">Generate</button>
             </div>
             <div class="form-hint">Scrape with: <code>curl -H "Authorization: Bearer &lt;token&gt;" https://.../metrics</code></div>
         </div>
@@ -621,4 +620,18 @@ document.getElementById('channelModal').addEventListener('click', function(e) {
     if (e.target === this) closeModal();
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+// v5.22.0 (Q18) — converted from inline on*= handlers.
+document.getElementById('add-channel-btn').addEventListener('click', showAddChannel);
+document.getElementById('channel-cancel-btn').addEventListener('click', closeModal);
+document.getElementById('channelType').addEventListener('change', function() { showChannelFields(this.value); });
+var dnsProviderEl = document.getElementById('dnsProvider');
+if (dnsProviderEl) dnsProviderEl.addEventListener('change', function() { showDnsFields(this.value); });
+var generateMetricsTokenBtn = document.getElementById('generate-metrics-token-btn');
+if (generateMetricsTokenBtn) generateMetricsTokenBtn.addEventListener('click', generateMetricsToken);
+// Delegated — edit-channel-btn is rendered once per channel in a loop.
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.edit-channel-btn');
+    if (btn) editChannelFromBtn(parseInt(btn.getAttribute('data-id'), 10));
+});
 {% endblock %}

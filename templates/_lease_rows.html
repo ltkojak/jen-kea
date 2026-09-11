@@ -5,7 +5,7 @@
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
     <td data-label="" class="no-label">
         {% if not l.has_reservation %}
-        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}" onchange="updateCount()">
+        <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}">
         {% endif %}
     </td>
     {% endif %}
@@ -29,7 +29,7 @@
                 {% else %}
                 <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 <div class="action-menu-divider"></div>
-                <form method="POST" action="/leases/release" onsubmit="return false;" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <form method="POST" action="/leases/release" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="ip" value="{{ l.ip }}">
                     <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Release lease</button>
                 </form>

@@ -22,12 +22,12 @@
         Click "Check for Updates" to see if a newer version is available.
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-secondary" onclick="checkForUpdates()" id="check-btn">
+        <button class="btn btn-secondary" id="check-btn">
             🔍 Check for Updates
         </button>
         {% if current_user.role == 'superadmin' %}
         <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
-              style="display:none;" onsubmit="return startUpdate(event)"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" id="update-version">
             <div style="margin-bottom:10px;">
                 <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
@@ -118,7 +118,7 @@
         HTTPS is not configured. Upload a certificate under <a href="/settings/security#sec-ssl">Access &amp; Security</a>.
         {% endif %}
     </p>
-    <form method="POST" action="{{ url_for('settings.save_ports') }}" onsubmit="return false;" data-confirm="Changing ports or threads will restart Jen. You may need to update bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="{{ url_for('settings.save_ports') }}" data-confirm="Changing ports or threads will restart Jen. You may need to update bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>HTTP Port{% if ssl_configured %} <span style="color:var(--text-muted);font-weight:400;">(redirect only)</span>{% endif %}</label>
@@ -155,7 +155,7 @@
         {% if restart_pending %}<span class="badge" style="background:#2a1f00;color:var(--warning);">Restart pending</span>{% endif %}
     </div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">Restarts the <code>jen</code> service. Takes a few seconds; in-flight requests finish first.</p>
-    <form method="POST" action="/settings/infrastructure/restart" onsubmit="return false;" data-confirm="Restart Jen now?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/infrastructure/restart" data-confirm="Restart Jen now?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn {% if restart_pending %}btn-warning{% else %}btn-secondary{% endif %}">🔄 Restart Jen</button>
     </form>
 </div>
@@ -196,7 +196,7 @@
     </form>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function checkForUpdates() {
     var btn = document.getElementById('check-btn');
     var status = document.getElementById('update-status');
@@ -262,6 +262,11 @@ function startUpdate(evt) {
     setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Installing files…'; }, 2500);
     setTimeout(function() { if (overlay.style.display !== 'none') msg.textContent = 'Restarting Jen…'; }, 5500);
     return true;
+}
+document.getElementById('check-btn').addEventListener('click', checkForUpdates);
+var updateForm = document.getElementById('update-form');
+if (updateForm && updateForm.tagName === 'FORM') {
+    updateForm.addEventListener('submit', startUpdate);
 }
 
 // On page load: only show the restart-polling overlay if the server

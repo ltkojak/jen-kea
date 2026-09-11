@@ -111,7 +111,7 @@
             <button type="submit" class="btn btn-primary">Save</button>
         </div>
     </form>
-    <form method="POST" action="/settings/clear-lockouts" style="display:inline;margin-top:8px;" onsubmit="return false;" data-confirm="Clear all login attempt records? This will unlock all locked accounts."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/clear-lockouts" style="display:inline;margin-top:8px;" data-confirm="Clear all login attempt records? This will unlock all locked accounts."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">🔓 Clear All Lockouts</button>
     </form>
 </div>
@@ -129,7 +129,7 @@
         {% if cert_info.issuer %}<div><div class="stat-label">Issuer</div><div class="mono" style="font-size:11px;">{{ cert_info.issuer }}</div></div>{% endif %}
         {% if cert_info.expires %}<div><div class="stat-label">Expires</div><div class="mono" style="font-size:11px;color:var(--warning);">{{ cert_info.expires }}</div></div>{% endif %}
     </div>
-    <form method="POST" action="/settings/remove-cert" onsubmit="return false;" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/remove-cert" data-confirm="Remove SSL certificate? Jen will restart in HTTP mode."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm" style="margin-bottom:16px;">🗑️ Remove Certificate</button>
     </form>
     {% endif %}

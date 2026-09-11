@@ -3,7 +3,7 @@
 <tr id="dev-row-{{ d.id }}">
     {% if current_user.role in ('superadmin','admin') %}
     <td data-label="" class="no-label">
-        <input type="checkbox" class="row-checkbox" name="device_ids[]" value="{{ d.id }}" onchange="updateCount()">
+        <input type="checkbox" class="row-checkbox" name="device_ids[]" value="{{ d.id }}">
     </td>
     {% endif %}
     <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
@@ -53,7 +53,7 @@
                 {% endif %}
                 {% if current_user.role in ('superadmin','admin') %}
                 <div class="action-menu-divider"></div>
-                <form method="POST" action="/devices/delete/{{ d.id }}" onsubmit="return false;" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <form method="POST" action="/devices/delete/{{ d.id }}" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Remove from inventory</button>
                 </form>
                 {% endif %}

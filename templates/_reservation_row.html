@@ -4,7 +4,7 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots %}
 <tr id="reservation-{{ h.host_id }}">
     <td data-label="" class="no-label">
-        <input type="checkbox" class="row-checkbox" name="host_ids[]" value="{{ h.host_id }}" onchange="updateCount()">
+        <input type="checkbox" class="row-checkbox" name="host_ids[]" value="{{ h.host_id }}">
     </td>
     <td data-label="IP" class="mono">{{ h.ip }}</td>
     <td data-label="Hostname" style="white-space:nowrap;">

@@ -10,9 +10,9 @@
 <div class="card" style="margin-bottom:20px;" id="step1">
     <div class="card-header"><h3>Step 1 — Choose Database to Migrate</h3></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-jen" onclick="selectDB('jen')">
+        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-jen">
             <div style="display:flex;align-items:center;gap:10px;">
-                <input type="radio" name="which" value="jen" id="radio-jen" onchange="selectDB('jen')">
+                <input type="radio" name="which" value="jen" id="radio-jen">
                 <div>
                     <div style="font-weight:700;color:var(--primary);font-size:15px;">🟢 Jen Database</div>
                     <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
@@ -22,9 +22,9 @@
                 </div>
             </div>
         </div>
-        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-kea" onclick="selectDB('kea')">
+        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-kea">
             <div style="display:flex;align-items:center;gap:10px;">
-                <input type="radio" name="which" value="kea" id="radio-kea" onchange="selectDB('kea')">
+                <input type="radio" name="which" value="kea" id="radio-kea">
                 <div>
                     <div style="font-weight:700;color:var(--warning);font-size:15px;">🟡 Kea Database</div>
                     <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
@@ -40,7 +40,7 @@
     <div id="jen-options" style="display:none;margin-top:16px;">
         <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Tables to Migrate</label>
         <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;">
-            <label style="font-size:12px;cursor:pointer;"><input type="checkbox" onchange="toggleAll('jen-mig-tables',this)" checked> <strong>All</strong></label>
+            <label style="font-size:12px;cursor:pointer;"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-mig-tables" checked> <strong>All</strong></label>
         </div>
         <div id="jen-mig-tables" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:6px;">
             {% for tbl in jen_tables %}
@@ -68,7 +68,7 @@
         </div>
     </div>
 
-    <button class="btn btn-primary" style="margin-top:16px;" onclick="showStep(2)">Next →</button>
+    <button class="btn btn-primary" id="step1-next-btn" style="margin-top:16px;">Next →</button>
 </div>
 
 <!-- Step 2: Target credentials -->
@@ -100,13 +100,13 @@
         </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-secondary" onclick="testConn()">🔌 Test Connection</button>
+        <button class="btn btn-secondary" id="test-conn-btn">🔌 Test Connection</button>
         <span id="conn-result" style="font-size:13px;"></span>
     </div>
     <div id="conn-info" style="display:none;margin-top:12px;" class="card" style="background:var(--surface2);"></div>
     <div style="display:flex;gap:10px;margin-top:16px;">
-        <button class="btn btn-secondary" onclick="showStep(1)">← Back</button>
-        <button class="btn btn-primary" id="btn-step3" disabled onclick="showStep(3)">Next →</button>
+        <button class="btn btn-secondary" id="step2-back-btn">← Back</button>
+        <button class="btn btn-primary" id="btn-step3" disabled>Next →</button>
     </div>
 </div>
 
@@ -119,8 +119,8 @@
         If the migration fails at any point, the target is rolled back and left completely clean.
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;">
-        <button class="btn btn-secondary" onclick="showStep(2)">← Back</button>
-        <button class="btn btn-danger" id="btn-run" onclick="runMigration()">⚡ Start Migration</button>
+        <button class="btn btn-secondary" id="step3-back-btn">← Back</button>
+        <button class="btn btn-danger" id="btn-run">⚡ Start Migration</button>
     </div>
 
     <!-- Progress output -->
@@ -131,7 +131,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 var _which = null;
 var _connOk = false;
 
@@ -261,6 +261,21 @@ function runMigration() {
 function toggleAll(groupId, cb) {
     document.querySelectorAll('#'+groupId+' input[type=checkbox]').forEach(function(c) { c.checked = cb.checked; });
 }
+
+// v5.22.0 (Q18) — converted from inline on*= handlers.
+document.getElementById('card-jen').addEventListener('click', function() { selectDB('jen'); });
+document.getElementById('radio-jen').addEventListener('change', function() { selectDB('jen'); });
+document.getElementById('card-kea').addEventListener('click', function() { selectDB('kea'); });
+document.getElementById('radio-kea').addEventListener('change', function() { selectDB('kea'); });
+document.querySelectorAll('.toggle-all-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() { toggleAll(cb.getAttribute('data-toggle-group'), cb); });
+});
+document.getElementById('step1-next-btn').addEventListener('click', function() { showStep(2); });
+document.getElementById('test-conn-btn').addEventListener('click', testConn);
+document.getElementById('step2-back-btn').addEventListener('click', function() { showStep(1); });
+document.getElementById('btn-step3').addEventListener('click', function() { showStep(3); });
+document.getElementById('step3-back-btn').addEventListener('click', function() { showStep(2); });
+document.getElementById('btn-run').addEventListener('click', runMigration);
 
 // Init
 selectDB('jen');

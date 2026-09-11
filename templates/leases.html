@@ -27,6 +27,16 @@ function confirmBulkRelease() {
     });
     return false;
 }
+// v5.22.0 (Q18) — delegated on document so these keep working after
+// _leases_results.html is swapped by htmx (checkboxes/buttons inside it
+// are replaced, so a listener bound directly to them wouldn't survive).
+document.addEventListener('click', function(e) {
+    if (e.target.closest('#leases-bulk-release-btn')) confirmBulkRelease();
+});
+document.addEventListener('change', function(e) {
+    if (e.target.matches('.row-checkbox')) updateCount();
+    if (e.target.id === 'selectAll') toggleAll(e.target);
+});
 {% endblock %}
 {% block content %}
 <div class="page-header">
@@ -108,19 +118,19 @@ function confirmBulkRelease() {
     </a>
     <a href="/ipmap" class="btn btn-secondary">🗺️ IP Map</a>
     {% if current_user.role in ('superadmin','admin') %}
-    <form method="POST" action="/leases/delete-stale" style="display:inline;" onsubmit="return false;" data-confirm="Delete all expired/stale leases from the database?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/leases/delete-stale" style="display:inline;" data-confirm="Delete all expired/stale leases from the database?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger btn-sm">🗑️ Delete Stale</button>
     </form>
     {% endif %}
     <!-- Saved filters -->
     <div style="display:flex;gap:6px;align-items:center;">
-        <button class="btn btn-secondary btn-sm" onclick="saveCurrentFilter()">🔖 Save Filter</button>
-        <select id="saved-filter-select" onchange="loadSavedFilter(this)" style="min-width:130px;font-size:12px;">
+        <button class="btn btn-secondary btn-sm" id="save-filter-btn">🔖 Save Filter</button>
+        <select id="saved-filter-select" style="min-width:130px;font-size:12px;">
             <option value="">Saved filters...</option>
         </select>
     </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 // Load saved filters for this page
 fetch('/api/saved-searches?page=leases')
     .then(r => r.json()).then(searches => {
@@ -147,6 +157,8 @@ function saveCurrentFilter() {
         else alert('Error: ' + d.error);
     });
 }
+document.getElementById('save-filter-btn').addEventListener('click', saveCurrentFilter);
+document.getElementById('saved-filter-select').addEventListener('change', function() { loadSavedFilter(this); });
 </script>
 
 <div id="leases-results">

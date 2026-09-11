@@ -31,7 +31,7 @@
         .tab.active { background:rgba(0,180,216,0.1); color:#00b4d8; border-color:rgba(0,180,216,0.4); }
         .user-badge { background:rgba(0,180,216,0.08); border:1px solid rgba(0,180,216,0.12); border-radius:20px; padding:4px 14px; font-size:12px; color:#4a8fa0; text-align:center; margin-bottom:20px; }
     </style>
-    <script>(function(){document.documentElement.setAttribute('data-theme',localStorage.getItem('jen-theme')||'dark');})();</script>
+    <script nonce="{{ csp_nonce }}">(function(){document.documentElement.setAttribute('data-theme',localStorage.getItem('jen-theme')||'dark');})();</script>
 </head>
 <body>
 <div class="bg-grid"></div>
@@ -46,9 +46,9 @@
 
     <div class="tab-bar">
         {% if has_totp %}
-        <button class="tab active" onclick="showTab('totp', this)">🔢 Authenticator</button>
+        <button class="tab active" data-tab="totp">🔢 Authenticator</button>
         {% endif %}
-        <button class="tab {% if not has_totp %}active{% endif %}" onclick="showTab('backup', this)">🔑 Backup Code</button>
+        <button class="tab {% if not has_totp %}active{% endif %}" data-tab="backup">🔑 Backup Code</button>
     </div>
 
     <!-- TOTP tab -->
@@ -62,7 +62,7 @@
             </div>
             <div class="remember-group">
                 <label>
-                    <input type="checkbox" name="remember_device" value="1" id="rememberCb" onchange="toggleRemember(this, 'rememberDays')">
+                    <input type="checkbox" name="remember_device" value="1" id="rememberCb">
                     Remember this device
                 </label>
                 <div id="rememberDays" style="display:none;margin-top:8px;">
@@ -92,7 +92,7 @@
             </div>
             <div class="remember-group">
                 <label>
-                    <input type="checkbox" name="remember_device" value="1" id="rememberCbBackup" onchange="toggleRemember(this, 'rememberDaysBackup')">
+                    <input type="checkbox" name="remember_device" value="1" id="rememberCbBackup">
                     Remember this device
                 </label>
                 <div id="rememberDaysBackup" style="display:none;margin-top:8px;">
@@ -114,7 +114,7 @@
     <div class="divider"></div>
     <a href="/login" style="display:block;text-align:center;color:#444;font-size:12px;text-decoration:none;">← Back to login</a>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 function showTab(name, btn) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
@@ -126,6 +126,13 @@ function showTab(name, btn) {
 function toggleRemember(cb, targetId) {
     document.getElementById(targetId).style.display = cb.checked ? 'block' : 'none';
 }
+document.querySelectorAll('.tab[data-tab]').forEach(function(btn) {
+    btn.addEventListener('click', function() { showTab(btn.getAttribute('data-tab'), btn); });
+});
+var rememberCb = document.getElementById('rememberCb');
+if (rememberCb) rememberCb.addEventListener('change', function() { toggleRemember(this, 'rememberDays'); });
+var rememberCbBackup = document.getElementById('rememberCbBackup');
+if (rememberCbBackup) rememberCbBackup.addEventListener('change', function() { toggleRemember(this, 'rememberDaysBackup'); });
 // Auto-submit TOTP when 6 digits entered
 document.querySelectorAll('input[inputmode=numeric]').forEach(inp => {
     inp.addEventListener('input', function() {

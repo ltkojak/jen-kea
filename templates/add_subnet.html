@@ -9,7 +9,7 @@
 <div class="alert alert-warning">⚠️ This creates a brand new subnet in <code>kea-dhcp4.conf</code> and restarts the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.</div>
 
 <div class="card" style="max-width:680px;">
-    <form method="POST" id="add-subnet-form" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" id="add-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <div class="form-row">
             <div class="form-group">
@@ -77,7 +77,7 @@
         </div>
 
         <div style="display:flex;gap:8px;margin-top:16px;">
-            <button type="button" class="btn btn-primary" onclick="showConfirm()">➕ Create Subnet</button>
+            <button type="button" class="btn btn-primary" id="create-subnet-btn">➕ Create Subnet</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -99,17 +99,24 @@
                      padding:10px 12px;margin-bottom:14px;font-family:monospace;
                      line-height:1.8;"></div>
                 <div style="display:flex;gap:8px;">
-                    <button type="button" class="btn btn-primary"
-                            onclick="submitForm()">✅ Yes, create it</button>
-                    <button type="button" class="btn btn-secondary"
-                            onclick="hideConfirm()">✕ Cancel</button>
+                    <button type="button" class="btn btn-primary" id="confirm-create-btn">✅ Yes, create it</button>
+                    <button type="button" class="btn btn-secondary" id="confirm-cancel-btn">✕ Cancel</button>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
+// v5.22.0 (Q18) — was onsubmit="return false;" on the form itself; an
+// Enter-key submit inside a text field is the only way this particular
+// form could ever submit natively (its own buttons are type="button"),
+// and it must still go through the confirm panel first.
+document.getElementById('add-subnet-form').addEventListener('submit', function(e) { e.preventDefault(); });
+document.getElementById('create-subnet-btn').addEventListener('click', showConfirm);
+document.getElementById('confirm-create-btn').addEventListener('click', submitForm);
+document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
+
 function showConfirm() {
     var id     = document.getElementById('f-id').value.trim();
     var name   = document.getElementById('f-name').value.trim();

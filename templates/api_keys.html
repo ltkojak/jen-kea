@@ -15,7 +15,13 @@
     <strong>🔑 New API Key — copy this now, it won't be shown again:</strong><br><br>
     <span id="newKeyVal" style="font-size:15px;letter-spacing:1px;">{{ session.pop('new_api_key') }}</span>
     <br><br>
-    <button onclick="navigator.clipboard.writeText(document.getElementById('newKeyVal').textContent);this.textContent='✓ Copied!'" class="btn btn-sm btn-secondary">📋 Copy to Clipboard</button>
+    <button id="copy-new-key-btn" class="btn btn-sm btn-secondary">📋 Copy to Clipboard</button>
+    <script nonce="{{ csp_nonce }}">
+    document.getElementById('copy-new-key-btn').addEventListener('click', function() {
+        navigator.clipboard.writeText(document.getElementById('newKeyVal').textContent);
+        this.textContent = '✓ Copied!';
+    });
+    </script>
     <span style="font-size:12px;margin-left:12px;color:var(--text-muted);">Key name: {{ session.pop('new_api_key_name', '') }}</span>
 </div>
 {% endif %}
@@ -100,12 +106,12 @@
                     <div class="action-menu-dropdown">
                         {% if k.active %}
                         <form method="POST" action="/settings/api-keys/revoke/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="button" class="action-menu-item" onclick="jenConfirm('Revoke this key? Any integrations using it will stop working.', function(){ this.closest('form').submit(); }.bind(this))">{{ icon_pause() }}Revoke key</button>
+                            <button type="button" class="action-menu-item" data-confirm="Revoke this key? Any integrations using it will stop working.">{{ icon_pause() }}Revoke key</button>
                         </form>
                         <div class="action-menu-divider"></div>
                         {% endif %}
                         <form method="POST" action="/settings/api-keys/delete/{{ k.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="button" class="action-menu-item danger" onclick="jenConfirm('Delete this key permanently?', function(){ this.closest('form').submit(); }.bind(this))">{{ icon_trash() }}Delete key</button>
+                            <button type="button" class="action-menu-item danger" data-confirm="Delete this key permanently?">{{ icon_trash() }}Delete key</button>
                         </form>
                     </div>
                 </div>

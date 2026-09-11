@@ -72,7 +72,7 @@
     <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">
         Scan in progress… <span id="dots-{{ subnet_id }}">.</span>
     </div>
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
         var dots = document.getElementById('dots-{{ subnet_id }}');
         var i = 0;

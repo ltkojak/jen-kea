@@ -422,7 +422,7 @@
 
     <div class="nav-right">
         <span class="kea-status" id="kea-indicator" title="Kea status"></span>
-        <button class="theme-toggle" onclick="toggleTheme()">🌙</button>
+        <button class="theme-toggle">🌙</button>
         <!-- User avatar dropdown -->
         <div class="nav-dropdown nav-avatar-wrap">
             <input type="checkbox" id="dd-avatar" class="nav-dd-toggle">
@@ -454,7 +454,7 @@
 
     <!-- Keyboard shortcut hint -->
     <div style="margin-left:4px;">
-        <button onclick="document.getElementById('kb-modal').style.display='flex'" title="Keyboard shortcuts (?)"
+        <button id="kb-hint-btn" title="Keyboard shortcuts (?)"
                 style="background:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);padding:4px 8px;cursor:pointer;font-size:11px;">⌨️</button>
     </div>
 
@@ -463,8 +463,7 @@
         <form action="/search" method="GET" style="display:flex;align-items:center;">
             <input type="text" name="q" placeholder="🔍 Search..." autocomplete="off"
                    value="{{ request.args.get('q', '') }}"
-                   style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:5px 10px;font-size:12px;width:160px;outline:none;transition:width 0.2s;"
-                   onfocus="this.style.width='220px'" onblur="this.style.width='160px'">
+                   style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:5px 10px;font-size:12px;width:160px;outline:none;transition:width 0.2s;">
         </form>
     </div>
 
@@ -555,7 +554,18 @@
     {% block content %}{% endblock %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
+// v5.22.0 (Q18) — htmx falls back to eval() for a couple of features
+// (hx-on inline attributes, the "js:" expression prefix) that Jen
+// doesn't use anywhere; disabling it closes an eval-based escape hatch
+// a strict script-src otherwise still has to tolerate. htmx.min.js is
+// `defer`red, so it has already run (and defined window.htmx) by the
+// time DOMContentLoaded fires, same as this inline script's own
+// deferred-relative-order guarantee.
+document.addEventListener('DOMContentLoaded', function() {
+    if (window.htmx) { htmx.config.allowEval = false; }
+});
+
 function escapeHtml(str) {
     // Shared helper for any client-side code that builds HTML from
     // untrusted or user/device-supplied strings (DHCP hostnames, notes,
@@ -626,7 +636,7 @@ function sortTable(table, col, th) {
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:420px;width:90%;max-height:80vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <strong>⌨️ Keyboard Shortcuts</strong>
-            <button onclick="document.getElementById('kb-modal').style.display='none'" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);">✕</button>
+            <button id="kb-modal-close-btn" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);">✕</button>
         </div>
         <table style="width:100%;font-size:13px;">
             <tr><td style="padding:6px 0;color:var(--text-muted);">Go to Dashboard</td><td><kbd>G</kbd> <kbd>D</kbd></td></tr>
@@ -642,7 +652,7 @@ function sortTable(table, col, th) {
 </div>
 <style>kbd { background:var(--surface2); border:1px solid var(--border); border-radius:3px; padding:2px 6px; font-size:11px; font-family:monospace; }</style>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     // Close avatar dropdown on outside click
     document.addEventListener('click', function(e) {
@@ -651,6 +661,29 @@ function sortTable(table, col, th) {
             if (el) el.checked = false;
         }
     });
+
+    // Theme toggle, keyboard-shortcuts hint/modal, search box focus width —
+    // all were inline on*= handlers before the CSP nonce conversion (v5.22.0).
+    document.querySelectorAll('.theme-toggle').forEach(function(btn) {
+        btn.addEventListener('click', toggleTheme);
+    });
+    var kbHintBtn = document.getElementById('kb-hint-btn');
+    if (kbHintBtn) {
+        kbHintBtn.addEventListener('click', function() {
+            document.getElementById('kb-modal').style.display = 'flex';
+        });
+    }
+    var kbModalCloseBtn = document.getElementById('kb-modal-close-btn');
+    if (kbModalCloseBtn) {
+        kbModalCloseBtn.addEventListener('click', function() {
+            document.getElementById('kb-modal').style.display = 'none';
+        });
+    }
+    var navSearchInput = document.querySelector('.nav-search input');
+    if (navSearchInput) {
+        navSearchInput.addEventListener('focus', function() { this.style.width = '220px'; });
+        navSearchInput.addEventListener('blur', function() { this.style.width = '160px'; });
+    }
 
     // Row action menus (⋯ buttons) — close on outside click, close on
     // Escape, only one open at a time, and (v5.1.20) positioned via
@@ -845,7 +878,7 @@ function sortTable(table, col, th) {
         </div>
     </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     var overlay = null;
     function getOverlay() {
@@ -873,25 +906,62 @@ function sortTable(table, col, th) {
         document.addEventListener('keydown', onKey);
     };
 
-    // Wire up all data-confirm forms on the page
-    function wireConfirmForms() {
-        document.querySelectorAll('form[data-confirm]').forEach(function(form) {
-            if (form._jenConfirmWired) return;
-            form._jenConfirmWired = true;
-            // Find the submit button inside the form
-            var btn = form.querySelector('[type=submit], button:not([type=button])');
-            if (btn) {
-                btn.addEventListener('click', function(e) {
+    // v5.22.0 (Q18) — the one nonced dispatcher every inline on*= handler
+    // that used to do a confirm, a plain navigation, or a plain form
+    // submit was converted to. Delegated so it keeps working after an
+    // HTMX swap without re-wiring each element by hand.
+    //
+    // data-confirm on a <form>: wired to that form's own submit button —
+    //   click it, confirm, then submit the form (the old form[data-confirm]
+    //   + onsubmit="return false;" pattern; the onsubmit was redundant
+    //   once this listener intercepts the button's click and is gone).
+    // data-confirm on anything else (a <button> or <a>): confirm, then
+    //   submit its closest <form> if it has one, else navigate to its
+    //   href if it has one — the same two variants the old per-button
+    //   onclick="jenConfirm(...)" calls each hand-rolled.
+    // data-href: plain click-to-navigate, no confirm.
+    // data-submit: plain click/change-to-submit-closest-form, no confirm.
+    function wireDispatch() {
+        document.querySelectorAll('[data-confirm]').forEach(function(el) {
+            if (el._jenWired) return;
+            el._jenWired = true;
+            if (el.tagName === 'FORM') {
+                var btn = el.querySelector('[type=submit], button:not([type=button])');
+                if (btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        jenConfirm(el.getAttribute('data-confirm'), function() { el.submit(); });
+                    });
+                }
+            } else {
+                el.addEventListener('click', function(e) {
                     e.preventDefault();
-                    var msg = form.getAttribute('data-confirm');
-                    jenConfirm(msg, function() { form.submit(); });
+                    jenConfirm(el.getAttribute('data-confirm'), function() {
+                        var f = el.closest('form');
+                        if (f) f.submit();
+                        else if (el.href) window.location.href = el.href;
+                    });
                 });
             }
         });
+        document.querySelectorAll('[data-href]').forEach(function(el) {
+            if (el._jenWired) return;
+            el._jenWired = true;
+            el.addEventListener('click', function() { window.location.href = el.getAttribute('data-href'); });
+        });
+        document.querySelectorAll('[data-submit]').forEach(function(el) {
+            if (el._jenWired) return;
+            el._jenWired = true;
+            var evt = (el.tagName === 'SELECT' || el.tagName === 'INPUT') ? 'change' : 'click';
+            el.addEventListener(evt, function() {
+                var f = el.closest('form') || (el.tagName === 'FORM' ? el : null);
+                if (f) f.submit();
+            });
+        });
     }
     // Run on DOM ready and after any HTMX swap (for partials like _device_rows)
-    document.addEventListener('DOMContentLoaded', wireConfirmForms);
-    document.addEventListener('htmx:afterSwap', wireConfirmForms);
+    document.addEventListener('DOMContentLoaded', wireDispatch);
+    document.addEventListener('htmx:afterSwap', wireDispatch);
 })();
 </script>
 </body>

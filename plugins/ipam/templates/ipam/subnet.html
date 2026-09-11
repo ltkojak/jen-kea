@@ -49,16 +49,16 @@
         <input type="text" id="ipam-search"
                placeholder="🔍  Search IP, hostname, label, MAC, owner…"
                style="width:100%;box-sizing:border-box;"
-               oninput="filterTable()" autocomplete="off">
+               autocomplete="off">
     </div>
 
     <!-- Filter tabs -->
     <div style="display:flex;gap:6px;flex-wrap:wrap;" id="filter-tabs">
-        <button onclick="setFilter('all')"       class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="all">All ({{ space|length }})</button>
-        <button onclick="setFilter('available')" class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="available">Available ({{ counts.available }})</button>
-        <button onclick="setFilter('dynamic')"   class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
-        <button onclick="setFilter('reserved')"  class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
-        <button onclick="setFilter('static')"    class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="static">Static ({{ counts.static }})</button>
+        <button class="btn btn-sm {% if status_filter == 'all'       %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="all">All ({{ space|length }})</button>
+        <button class="btn btn-sm {% if status_filter == 'available' %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="available">Available ({{ counts.available }})</button>
+        <button class="btn btn-sm {% if status_filter == 'dynamic'   %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="dynamic">Dynamic ({{ counts.dynamic }})</button>
+        <button class="btn btn-sm {% if status_filter == 'reserved'  %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="reserved">Reserved ({{ counts.reserved }})</button>
+        <button class="btn btn-sm {% if status_filter == 'static'    %}btn-primary{% else %}btn-secondary{% endif %}" data-filter="static">Static ({{ counts.static }})</button>
     </div>
     <div id="result-count" style="font-size:12px;color:var(--text-muted);margin-top:8px;display:none;"></div>
 </div>
@@ -102,15 +102,8 @@
         <td style="white-space:nowrap;">
             <!-- Action buttons -->
             <div style="display:flex;gap:4px;align-items:center;">
-                <button class="btn btn-sm btn-secondary" title="Edit" onclick="openEditModal(
-                    '{{ entry.ip }}',
-                    '{{ entry.status }}',
-                    '{{ entry.label | replace("'", "\\'") | replace('"', '&quot;') }}',
-                    '{{ entry.owner | replace("'", "\\'") | replace('"', '&quot;') }}',
-                    '{{ entry.notes | replace("'", "\\'") | replace('"', '&quot;') | replace("\n", "\\n") }}',
-                    '{{ entry.hostname or "" }}',
-                    '{{ entry.mac or "" }}'
-                )">✏️</button>
+                <button class="btn btn-sm btn-secondary edit-entry-btn" title="Edit"
+                    data-entry='{{ {"ip": entry.ip, "status": entry.status, "label": entry.label or "", "owner": entry.owner or "", "notes": entry.notes or "", "hostname": entry.hostname or "", "mac": entry.mac or ""} | tojson }}'>✏️</button>
 
                 {% if entry.status == 'available' or entry.status == 'static' %}
                 <!-- Create Reservation for available/static IPs -->
@@ -155,7 +148,7 @@
             <h3 style="margin:0;">✏️ Edit <span id="edit-ip" style="color:var(--primary);font-family:monospace;"></span></h3>
             <div id="edit-status-label" style="font-size:12px;color:var(--text-muted);margin-top:3px;"></div>
         </div>
-        <button onclick="closeEditModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button id="edit-modal-close-btn" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
     <!-- Read-only Kea info for dynamic/reserved -->
@@ -201,10 +194,9 @@
 
         <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
             <button type="submit" class="btn btn-primary">Save</button>
-            <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+            <button type="button" class="btn btn-secondary" id="edit-modal-cancel-btn">Cancel</button>
             <button type="button" id="edit-clear-btn" class="btn btn-secondary"
-                    style="margin-left:auto;color:var(--danger);"
-                    onclick="clearEntry()">Clear all notes</button>
+                    style="margin-left:auto;color:var(--danger);">Clear all notes</button>
         </div>
     </form>
 </div>
@@ -218,7 +210,7 @@
     <input type="hidden" name="ip" id="clear-ip-input">
 </form>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 // ── Filter state ──────────────────────────────────────────────────────────────
 var _currentFilter = '{{ status_filter }}';
 var _currentSearch = '';
@@ -326,6 +318,23 @@ document.getElementById('edit-modal').addEventListener('click', function(e) {
 });
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') closeEditModal();
+});
+
+// v5.22.0 (Q18) — converted from inline on*= handlers.
+document.getElementById('ipam-search').addEventListener('input', filterTable);
+document.getElementById('filter-tabs').addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-filter]');
+    if (btn) setFilter(btn.getAttribute('data-filter'));
+});
+document.getElementById('edit-modal-close-btn').addEventListener('click', closeEditModal);
+document.getElementById('edit-modal-cancel-btn').addEventListener('click', closeEditModal);
+document.getElementById('edit-clear-btn').addEventListener('click', clearEntry);
+// Delegated — one edit-entry-btn per address row.
+document.getElementById('ipam-table').addEventListener('click', function(e) {
+    var btn = e.target.closest('.edit-entry-btn');
+    if (!btn) return;
+    var d = JSON.parse(btn.getAttribute('data-entry'));
+    openEditModal(d.ip, d.status, d.label, d.owner, d.notes, d.hostname, d.mac);
 });
 
 // Apply initial filter state on load

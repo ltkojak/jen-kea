@@ -8,7 +8,7 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
         <span style="font-size:12px;color:var(--text-muted);">Time range:</span>
-        <select onchange="window.location='?days='+this.value" style="width:auto;">
+        <select id="days-select" style="width:auto;">
             <option value="1" {% if days==1 %}selected{% endif %}>Last 24 hours</option>
             <option value="3" {% if days==3 %}selected{% endif %}>Last 3 days</option>
             <option value="7" {% if days==7 %}selected{% endif %}>Last 7 days</option>
@@ -101,10 +101,13 @@
 
 {% endblock %}
 {% block scripts %}
+document.getElementById('days-select').addEventListener('change', function() {
+    window.location = '?days=' + this.value;
+});
 {% if data_points > 0 %}
 </script>
 <script src="/static/js/chart.umd.min.js"></script>
-<script>
+<script nonce="{{ csp_nonce }}">
 const HISTORY = {{ history | tojson }};
 const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
 

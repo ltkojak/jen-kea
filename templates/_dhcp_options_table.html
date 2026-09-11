@@ -39,7 +39,7 @@
                 <a href="/subnets/edit/{{ key }}" class="btn btn-sm btn-secondary">Edit form →</a>
                 {% else %}
                 <form method="POST" action="{{ url_for('subnets.dhcp_options_remove') }}" style="display:inline;"
-                      onsubmit="return false;" data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts.">
+                      data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts.">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="level" value="{{ level }}">
                     <input type="hidden" name="key" value="{{ key }}">
@@ -67,7 +67,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Option</label>
-                <select id="opt-select" onchange="jenOptSelectChanged()">
+                <select id="opt-select">
                     {% for c in catalog %}
                     <option value="{{ c.code }}" data-type="{{ c.type }}">{{ c.code }} — {{ c.name }}</option>
                     {% endfor %}
@@ -94,7 +94,7 @@
     </form>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function jenOptSelectChanged() {
     var sel = document.getElementById('opt-select');
     var isCustom = sel.value === 'custom';
@@ -119,4 +119,5 @@ function jenOptSelectChanged() {
         hint.textContent = 'Custom codes are written as raw hex (e.g. 0a1b2c).';
     }
 }
+document.getElementById('opt-select').addEventListener('change', jenOptSelectChanged);
 </script>

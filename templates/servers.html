@@ -58,7 +58,7 @@
     {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:16px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
-              onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary">🔄 Restart Kea</button>
         </form>
         {% if history_allowed %}
@@ -124,7 +124,7 @@
     {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:12px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
-              onsubmit="return false;" data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">🔄 Restart</button>
         </form>
         {% if history_allowed %}
@@ -178,39 +178,39 @@
         {% if current_user.role in ('superadmin','admin') %}
         <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='heartbeat') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['heartbeat'].confirm }}" title="{{ ha_actions['heartbeat'].help }}">
+                  data-confirm="{{ ha_actions['heartbeat'].confirm }}" title="{{ ha_actions['heartbeat'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">💓 Heartbeat</button>
             </form>
             {% if current_user.role == 'superadmin' %}
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='sync') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['sync'].confirm }}" title="{{ ha_actions['sync'].help }}">
+                  data-confirm="{{ ha_actions['sync'].confirm }}" title="{{ ha_actions['sync'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">🔁 Sync</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='continue') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['continue'].confirm }}" title="{{ ha_actions['continue'].help }}">
+                  data-confirm="{{ ha_actions['continue'].confirm }}" title="{{ ha_actions['continue'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">▶️ Continue</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-start') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['maintenance-start'].confirm }}" title="{{ ha_actions['maintenance-start'].help }}">
+                  data-confirm="{{ ha_actions['maintenance-start'].confirm }}" title="{{ ha_actions['maintenance-start'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">🛠️ Start Maintenance</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-cancel') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['maintenance-cancel'].confirm }}" title="{{ ha_actions['maintenance-cancel'].help }}">
+                  data-confirm="{{ ha_actions['maintenance-cancel'].confirm }}" title="{{ ha_actions['maintenance-cancel'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">✖️ Cancel Maintenance</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='reset') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['reset'].confirm }}" title="{{ ha_actions['reset'].help }}">
+                  data-confirm="{{ ha_actions['reset'].confirm }}" title="{{ ha_actions['reset'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">♻️ Reset</button>
             </form>
             {% if s.ha_config and s.ha_config.peers %}
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='scopes') }}"
-                  onsubmit="return false;" data-confirm="{{ ha_actions['scopes'].confirm }}" title="{{ ha_actions['scopes'].help }}"
+                  data-confirm="{{ ha_actions['scopes'].confirm }}" title="{{ ha_actions['scopes'].help }}"
                   style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 {% for p in s.ha_config.peers %}

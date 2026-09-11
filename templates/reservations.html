@@ -19,6 +19,16 @@ function updateCount() {
         all.checked = n === total && total > 0;
     }
 }
+// v5.22.0 (Q18) — delegated on document so these keep working after
+// _reservations_results.html is swapped by htmx.
+document.addEventListener('click', function(e) {
+    if (e.target.closest('#reservations-bulk-export-btn')) confirmBulk('export');
+    if (e.target.closest('#reservations-bulk-delete-btn')) confirmBulk('delete');
+});
+document.addEventListener('change', function(e) {
+    if (e.target.matches('.row-checkbox')) updateCount();
+    if (e.target.id === 'selectAll') toggleAll(e.target);
+});
 function confirmBulk(action) {
     const n = document.querySelectorAll('.row-checkbox:checked').length;
     if (n === 0) { alert('No reservations selected.'); return false; }
@@ -121,25 +131,25 @@ function confirmBulk(action) {
     <label class="btn btn-secondary" style="cursor:pointer;">
         ⬆ Import CSV
         <form id="import-form" method="POST" action="/reservations/import" enctype="multipart/form-data" style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('import-form').submit()">
+            <input type="file" name="csv_file" accept=".csv" data-submit>
         </form>
     </label>
     <label class="btn btn-secondary" style="cursor:pointer;" title="Preview what would be imported without making changes">
         🔍 Dry-run Import
         <form id="dryrun-form" method="POST" action="/reservations/import?dry_run=1" enctype="multipart/form-data" style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="file" name="csv_file" accept=".csv" onchange="document.getElementById('dryrun-form').submit()">
+            <input type="file" name="csv_file" accept=".csv" data-submit>
         </form>
     </label>
     {% endif %}
     <!-- Saved filters -->
     <div style="display:flex;gap:6px;align-items:center;">
-        <button class="btn btn-secondary btn-sm" onclick="saveCurrentFilter()">🔖 Save Filter</button>
-        <select id="saved-filter-select" onchange="loadSavedFilter(this)" style="min-width:130px;font-size:12px;">
+        <button class="btn btn-secondary btn-sm" id="save-filter-btn">🔖 Save Filter</button>
+        <select id="saved-filter-select" style="min-width:130px;font-size:12px;">
             <option value="">Saved filters...</option>
         </select>
     </div>
 </div>
-<script>
+<script nonce="{{ csp_nonce }}">
 fetch('/api/saved-searches?page=reservations')
     .then(r => r.json()).then(searches => {
         var sel = document.getElementById('saved-filter-select');
@@ -165,6 +175,8 @@ function saveCurrentFilter() {
         else alert('Error: ' + d.error);
     });
 }
+document.getElementById('save-filter-btn').addEventListener('click', saveCurrentFilter);
+document.getElementById('saved-filter-select').addEventListener('change', function() { loadSavedFilter(this); });
 </script>
 
 <div id="reservations-results">

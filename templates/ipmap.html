@@ -8,7 +8,7 @@
 
 <div class="filter-bar">
     <form method="GET">
-        <select name="subnet" onchange="this.form.submit()">
+        <select name="subnet" data-submit>
             {% for sid, info in subnet_map.items() %}
             <option value="{{ sid }}" {% if subnet_id==sid %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
             {% endfor %}

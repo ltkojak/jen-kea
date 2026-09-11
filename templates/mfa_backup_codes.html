@@ -18,8 +18,8 @@
     </div>
 
     <div style="display:flex;gap:8px;">
-        <button onclick="copyAll()" class="btn btn-secondary">📋 Copy All</button>
-        <button onclick="printCodes()" class="btn btn-secondary">🖨️ Print</button>
+        <button id="copy-codes-btn" class="btn btn-secondary">📋 Copy All</button>
+        <button id="print-codes-btn" class="btn btn-secondary">🖨️ Print</button>
         <a href="/mfa/enroll" class="btn btn-primary">✓ I've saved these codes</a>
     </div>
 </div>
@@ -30,4 +30,6 @@ function copyAll() {
     navigator.clipboard.writeText(codes.join('\n')).then(() => alert('Codes copied to clipboard'));
 }
 function printCodes() { window.print(); }
+document.getElementById('copy-codes-btn').addEventListener('click', copyAll);
+document.getElementById('print-codes-btn').addEventListener('click', printCodes);
 {% endblock %}

@@ -90,7 +90,7 @@
             <div style="margin-bottom:12px;">
                 <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Select Tables</label>
                 <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
-                    <label style="font-size:12px;cursor:pointer;"><input type="checkbox" onchange="toggleAll('jen-tables',this)" checked> <strong>All</strong></label>
+                    <label style="font-size:12px;cursor:pointer;"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-tables" checked> <strong>All</strong></label>
                 </div>
                 <div id="jen-tables" style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
                     {% for tbl, desc in jen_tables.items() %}
@@ -115,7 +115,7 @@
         </p>
         <form method="POST" action="/database/export/kea"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             {% for grp_id, grp in kea_groups.items() %}
-            <div class="card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" onclick="document.getElementById('kea-grp-{{ grp_id }}').checked=true;highlightKea('{{ grp_id }}');" id="kea-card-{{ grp_id }}">
+            <div class="card kea-group-card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" data-kea-group="{{ grp_id }}" id="kea-card-{{ grp_id }}">
                 <label style="cursor:pointer;display:flex;align-items:flex-start;gap:10px;">
                     <input type="radio" name="group" value="{{ grp_id }}" id="kea-grp-{{ grp_id }}"
                            {% if loop.first %}checked{% endif %} style="margin-top:3px;">
@@ -215,7 +215,7 @@
                     <div class="action-menu-dropdown">
                         <a href="/database/backup/download/{{ b.filename }}" class="action-menu-item">{{ icon_download() }}Download</a>
                         <div class="action-menu-divider"></div>
-                        <form method="POST" action="/database/backup/delete/{{ b.filename }}" onsubmit="return false;" data-confirm="Delete backup {{ b.filename }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <form method="POST" action="/database/backup/delete/{{ b.filename }}" data-confirm="Delete backup {{ b.filename }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="action-menu-item danger">{{ icon_trash() }}Delete backup</button>
                         </form>
                     </div>
@@ -297,7 +297,7 @@
 {% endif %}
 {% endif %}{# superadmin tools #}
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function toggleAll(groupId, cb) {
     document.querySelectorAll('#'+groupId+' input[type=checkbox]').forEach(function(c) { c.checked = cb.checked; });
 }
@@ -306,5 +306,15 @@ function highlightKea(grp) {
         c.style.borderColor = c.id === 'kea-card-'+grp ? 'var(--primary)' : '';
     });
 }
+document.querySelectorAll('.toggle-all-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() { toggleAll(cb.getAttribute('data-toggle-group'), cb); });
+});
+document.querySelectorAll('.kea-group-card').forEach(function(card) {
+    card.addEventListener('click', function() {
+        var grp = card.getAttribute('data-kea-group');
+        document.getElementById('kea-grp-' + grp).checked = true;
+        highlightKea(grp);
+    });
+});
 </script>
 {% endblock %}

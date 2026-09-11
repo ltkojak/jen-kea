@@ -39,7 +39,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 {% endif %}
 
 <div class="card" style="max-width:680px;">
-    <form method="POST" id="author-kea-form" onsubmit="return false;" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Interfaces</label>
             <input type="text" name="interfaces" id="f-interfaces"
@@ -126,7 +126,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         </label>
 
         <div style="display:flex;gap:8px;">
-            <button type="button" class="btn btn-danger" id="preview-btn" onclick="showPreview()" {% if endpoint_error %}disabled{% endif %}>🔍 Preview &amp; Validate</button>
+            <button type="button" class="btn btn-danger" id="preview-btn" {% if endpoint_error %}disabled{% endif %}>🔍 Preview &amp; Validate</button>
             <a href="/settings/kea" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -136,13 +136,13 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         <div id="preview-json" style="font-size:11px;background:var(--surface);border-radius:var(--radius);padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;font-family:monospace;margin-bottom:10px;"></div>
         <div id="preview-servers" style="font-size:12px;margin-bottom:14px;"></div>
         <div style="display:flex;gap:8px;">
-            <button type="button" class="btn btn-danger" id="apply-btn" onclick="submitForm()" disabled>✅ Write this config</button>
-            <button type="button" class="btn btn-secondary" onclick="document.getElementById('preview-panel').style.display='none';">✕ Cancel</button>
+            <button type="button" class="btn btn-danger" id="apply-btn" disabled>✅ Write this config</button>
+            <button type="button" class="btn btn-secondary" id="preview-cancel-btn">✕ Cancel</button>
         </div>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 async function showPreview() {
     var panel = document.getElementById('preview-panel');
     var jsonDiv = document.getElementById('preview-json');
@@ -187,9 +187,14 @@ async function showPreview() {
                 line += '<div style="color:var(--warning);margin-left:20px;">⚠️ ' + escapeHtml(s.warning) + '</div>';
             }
             if (s.missing_binary) {
+                // v5.22.0 (Q18) — data-missing-binary + the delegated
+                // listener below, instead of an innerHTML-injected
+                // onclick= string: CSP's script-src nonce covers <script>
+                // tags, not inline event-handler attributes however
+                // they're inserted into the DOM.
                 line += '<div style="margin:4px 0 8px 20px;">' +
-                    '<button type="button" class="btn btn-sm btn-secondary" onclick="installBinary(this, ' +
-                    JSON.stringify(s.missing_binary) + ')">📦 Install ' + escapeHtml(s.missing_binary) + ' now</button>' +
+                    '<button type="button" class="btn btn-sm btn-secondary install-binary-btn" data-missing-binary="' +
+                    escapeHtml(s.missing_binary) + '">📦 Install ' + escapeHtml(s.missing_binary) + ' now</button>' +
                     '<span class="install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span>' +
                     '</div>';
             }
@@ -264,5 +269,23 @@ function submitForm() {
     form.onsubmit = null;
     form.submit();
 }
+
+// v5.22.0 (Q18) — was onsubmit="return false;" on the form itself; an
+// Enter-key submit inside a text field is the only way this particular
+// form could ever submit natively (its own buttons are type="button"),
+// and it must still go through Preview & Validate first.
+document.getElementById('author-kea-form').addEventListener('submit', function(e) { e.preventDefault(); });
+document.getElementById('preview-btn').addEventListener('click', showPreview);
+document.getElementById('apply-btn').addEventListener('click', submitForm);
+document.getElementById('preview-cancel-btn').addEventListener('click', function() {
+    document.getElementById('preview-panel').style.display = 'none';
+});
+// Delegated — the preview buttons are (re)rendered by showPreview()'s
+// innerHTML assignment, so a listener bound directly to one wouldn't
+// survive the next preview run.
+document.getElementById('preview-servers').addEventListener('click', function(e) {
+    var btn = e.target.closest('.install-binary-btn');
+    if (btn) installBinary(btn, btn.getAttribute('data-missing-binary'));
+});
 </script>
 {% endblock %}

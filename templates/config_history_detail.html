@@ -42,7 +42,7 @@
         {% if is_latest %}<br><strong>This is already the current revision.</strong>{% endif %}
     </p>
     <form method="POST" action="{{ url_for('servers.config_history_restore', server_id=server.id, rev_id=rev.id) }}"
-          onsubmit="return false;" data-confirm="Restore revision #{{ rev.id }} to {{ server.name }} and restart Kea?">
+          data-confirm="Restore revision #{{ rev.id }} to {{ server.name }} and restart Kea?">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-danger">⚡ Restore &amp; Restart Kea</button>
     </form>

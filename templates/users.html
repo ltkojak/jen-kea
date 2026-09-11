@@ -8,7 +8,7 @@
         <h1>👤 Users</h1>
         <p>User management is restricted to SuperAdmins.</p>
     </div>
-    <button class="btn btn-primary" onclick="openAddModal()">＋ Add User</button>
+    <button class="btn btn-primary" id="add-user-btn">＋ Add User</button>
 </div>
 
 {{ subtabs(nav.subtabs['security'], 'users') }}
@@ -67,16 +67,8 @@
             {% if u.session_timeout %}{{ u.session_timeout }}m{% else %}{{ global_timeout }}m (global){% endif %}
         </td>
         <td>
-            <button class="btn btn-sm btn-secondary"
-                onclick="openEditModal(
-                    {{ u.id }},
-                    '{{ u.username }}',
-                    '{{ u.role }}',
-                    {{ u.subnet_ids | tojson if u.subnet_ids else 'null' }},
-                    {{ u.session_timeout or 'null' }},
-                    {{ 'true' if u.mfa_enrolled else 'false' }},
-                    {{ 'true' if u.id == current_user.id else 'false' }}
-                )">✏️ Edit</button>
+            <button class="btn btn-sm btn-secondary edit-user-btn"
+                data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id)} | tojson }}'>✏️ Edit</button>
         </td>
     </tr>
     {% endfor %}
@@ -100,7 +92,7 @@
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(480px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
         <h3 style="margin:0;">＋ Add User</h3>
-        <button onclick="closeModal('add-modal')" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button data-close-modal="add-modal" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
     <form method="POST" action="/users/add"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
@@ -114,7 +106,7 @@
         </div>
         <div class="form-group">
             <label>Role</label>
-            <select name="role" id="add-role" onchange="toggleAddSubnets()" style="width:100%;">
+            <select name="role" id="add-role" style="width:100%;">
                 <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
                 <option value="admin">🔧 Admin — manage assigned subnets</option>
                 <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
@@ -137,7 +129,7 @@
         </div>
         <div style="display:flex;gap:10px;margin-top:8px;">
             <button type="submit" class="btn btn-primary">Add User</button>
-            <button type="button" class="btn btn-secondary" onclick="closeModal('add-modal')">Cancel</button>
+            <button type="button" class="btn btn-secondary" data-close-modal="add-modal">Cancel</button>
         </div>
     </form>
 </div>
@@ -148,7 +140,7 @@
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(520px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
         <h3 style="margin:0;">✏️ Edit User: <span id="edit-username-label" style="color:var(--primary);"></span></h3>
-        <button onclick="closeModal('edit-modal')" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+        <button data-close-modal="edit-modal" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
     <form id="edit-form" method="POST" action=""><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -156,7 +148,7 @@
         <!-- Role -->
         <div class="form-group">
             <label>Role</label>
-            <select name="role" id="edit-role" onchange="toggleEditSubnets()" style="width:100%;">
+            <select name="role" id="edit-role" style="width:100%;">
                 <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
                 <option value="admin">🔧 Admin — manage assigned subnets</option>
                 <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
@@ -200,7 +192,7 @@
 
         <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
             <button type="submit" class="btn btn-primary">Save Changes</button>
-            <button type="button" class="btn btn-secondary" onclick="closeModal('edit-modal')">Cancel</button>
+            <button type="button" class="btn btn-secondary" data-close-modal="edit-modal">Cancel</button>
         </div>
     </form>
 
@@ -212,7 +204,7 @@
     </div>
     <div id="edit-mfa-status" style="font-size:13px;margin-bottom:10px;"></div>
     <form id="reset-mfa-form" method="POST" action=""
-          onsubmit="return false;" data-confirm="Reset MFA for this user? They will need to re-enroll on next login."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          data-confirm="Reset MFA for this user? They will need to re-enroll on next login."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">🔐 Reset MFA Enrollment</button>
     </form>
 
@@ -223,7 +215,7 @@
         <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--danger);">Danger Zone</label>
         <div style="margin-top:10px;">
             <form id="delete-form" method="POST" action=""
-                  onsubmit="return false;" data-confirm="Delete this user? This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  data-confirm="Delete this user? This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger">🗑️ Delete User</button>
             </form>
         </div>
@@ -231,7 +223,7 @@
 </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 var _subnetMap = {{ subnet_map | tojson }};
 
 function openAddModal() {
@@ -319,5 +311,19 @@ document.addEventListener('keydown', function(e) {
         closeModal('edit-modal');
     }
 });
+
+// v5.22.0 (Q18) — converted from inline on*= handlers.
+document.getElementById('add-user-btn').addEventListener('click', openAddModal);
+document.querySelectorAll('.edit-user-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var u = JSON.parse(btn.dataset.user);
+        openEditModal(u.id, u.username, u.role, u.subnet_ids, u.timeout, u.mfa, u.is_self);
+    });
+});
+document.querySelectorAll('[data-close-modal]').forEach(function(el) {
+    el.addEventListener('click', function() { closeModal(el.getAttribute('data-close-modal')); });
+});
+document.getElementById('add-role').addEventListener('change', toggleAddSubnets);
+document.getElementById('edit-role').addEventListener('change', toggleEditSubnets);
 </script>
 {% endblock %}

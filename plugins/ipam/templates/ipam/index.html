@@ -16,9 +16,7 @@
 {% set s = summaries.get(subnet_id, {}) %}
 <a href="{{ url_for('ipam.subnet_detail', subnet_id=subnet_id) }}"
    style="text-decoration:none;color:inherit;">
-<div class="card" style="cursor:pointer;transition:border-color .15s;"
-     onmouseover="this.style.borderColor='var(--primary)'"
-     onmouseout="this.style.borderColor='var(--border)'">
+<div class="card ipam-subnet-card" style="cursor:pointer;transition:border-color .15s;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;">
         <div>
             <div style="font-weight:600;font-size:14px;">{{ info.name }}</div>
@@ -71,4 +69,5 @@
     &nbsp;·&nbsp;Available — no lease, reservation, or note
 </div>
 
+<style>.ipam-subnet-card:hover { border-color: var(--primary); }</style>
 {% endblock %}

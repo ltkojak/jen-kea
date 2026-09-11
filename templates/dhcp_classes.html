@@ -70,7 +70,7 @@
                 {% if not r.builtin %}
                 <a href="{{ url_for('subnets.dhcp_class_edit_page', name=r.name) }}" class="btn btn-sm btn-secondary">Edit</a>
                 <form method="POST" action="{{ url_for('subnets.dhcp_class_delete') }}" style="display:inline;"
-                      onsubmit="return false;" data-confirm="Delete class &quot;{{ r.name }}&quot;? Kea restarts.">
+                      data-confirm="Delete class &quot;{{ r.name }}&quot;? Kea restarts.">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ r.name }}">
                     <button type="submit" class="btn btn-sm btn-danger">Delete</button>

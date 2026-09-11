@@ -9,7 +9,7 @@
 <div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop. <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
 
 <div class="card" style="max-width:680px;">
-    <form method="POST" id="edit-subnet-form" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for sid, sha in kea.base_shas.items() %}<input type="hidden" name="base_sha_{{ sid }}" value="{{ sha or '' }}">{% endfor %}
+    <form method="POST" id="edit-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for sid, sha in kea.base_shas.items() %}<input type="hidden" name="base_sha_{{ sid }}" value="{{ sha or '' }}">{% endfor %}
 
         <!-- Address Pool -->
         <div class="form-group">
@@ -93,7 +93,7 @@
         </div>
 
         <div style="display:flex;gap:8px;margin-top:16px;">
-            <button type="button" class="btn btn-danger" onclick="showConfirm()">⚡ Apply &amp; Restart Kea</button>
+            <button type="button" class="btn btn-danger" id="show-confirm-btn">⚡ Apply &amp; Restart Kea</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -116,17 +116,24 @@
                      line-height:1.8;"></div>
                 <div id="validation-summary" style="font-size:12px;margin-bottom:14px;"></div>
                 <div style="display:flex;gap:8px;">
-                    <button type="button" class="btn btn-danger" id="apply-btn"
-                            onclick="submitForm()">✅ Yes, apply and restart</button>
-                    <button type="button" class="btn btn-secondary"
-                            onclick="hideConfirm()">✕ Cancel</button>
+                    <button type="button" class="btn btn-danger" id="apply-btn">✅ Yes, apply and restart</button>
+                    <button type="button" class="btn btn-secondary" id="confirm-cancel-btn">✕ Cancel</button>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
+// v5.22.0 (Q18) — was onsubmit="return false;" on the form itself; an
+// Enter-key submit inside a text field is the only way this particular
+// form could ever submit natively (its own buttons are type="button"),
+// and it must still go through the confirm panel first.
+document.getElementById('edit-subnet-form').addEventListener('submit', function(e) { e.preventDefault(); });
+document.getElementById('show-confirm-btn').addEventListener('click', showConfirm);
+document.getElementById('apply-btn').addEventListener('click', submitForm);
+document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
+
 // Store original values for change summary
 var _orig = {
     pool:           {{ kea.pool_str | tojson }},

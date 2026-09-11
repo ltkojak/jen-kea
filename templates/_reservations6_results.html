@@ -27,7 +27,6 @@
         {% if current_user.role in ('superadmin','admin') %}
         <td>
             <form method="POST" action="/reservations/delete6" style="display:inline;"
-                  onsubmit="return false;"
                   data-confirm="Delete the IPv6 reservation for DUID {{ h.duid_hex }}? This cannot be undone.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="subnet_id" value="{{ h.subnet_id }}">
