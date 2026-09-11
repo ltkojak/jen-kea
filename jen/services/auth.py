@@ -111,6 +111,7 @@ def sanitize_search(search):
 UNIX_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 SAFE_REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
 SHARED_NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+CLASS_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
 def valid_ssh_target(value):
@@ -137,6 +138,13 @@ def valid_shared_network_name(value):
     fields, never a URL segment — letters/digits/`_.-`, 1-64 chars,
     can't start with `.` or `-`."""
     return bool(SHARED_NETWORK_NAME_RE.match((value or "").strip()))
+
+
+def valid_class_name(value):
+    """A Kea client-class name (v5.19.0 — Q13): must start with a
+    letter, then letters/digits/`_-`, max 64 chars. Travels only in POST
+    form fields, never a URL segment."""
+    return bool(CLASS_NAME_RE.match((value or "").strip()))
 
 
 def valid_dns_lookup_host(value):

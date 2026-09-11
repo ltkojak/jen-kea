@@ -33,6 +33,7 @@ from __future__ import annotations
 import copy
 
 from jen.services import dhcp_options as _opts_catalog
+from jen.services import kea_classes as _classes
 from jen.services import kea_config_view as _view
 
 
@@ -254,8 +255,9 @@ def move_subnet4(cfg, subnet_id, to_network):
 
 def _container_for_level4(cfg, level, key):
     """(container_dict, "ok") for `level`/`key`, or (None, "notfound").
-    level ∈ {"global", "shared-network", "subnet", "pool"}; key is None /
-    a shared-network name / a subnet id / a (subnet_id, pool_str) pair."""
+    level ∈ {"global", "shared-network", "subnet", "pool", "class"}; key
+    is None / a shared-network name / a subnet id / a
+    (subnet_id, pool_str) pair / a class name."""
     d4 = cfg.get("Dhcp4")
     if not isinstance(d4, dict):
         return None, "notfound"
@@ -277,6 +279,12 @@ def _container_for_level4(cfg, level, key):
         for p in found[0].get("pools") or []:
             if isinstance(p, dict) and p.get("pool") == pool_str:
                 return p, "ok"
+        return None, "notfound"
+    if level == "class":
+        # v5.19.0 (Q13) — a client-class's own option-data.
+        for c in d4.get("client-classes") or []:
+            if isinstance(c, dict) and c.get("name") == key:
+                return c, "ok"
         return None, "notfound"
     return None, "notfound"
 
@@ -340,4 +348,124 @@ def remove_option4(cfg, level, key, code):
     if idx < 0:
         return cfg, "notfound"
     opts.pop(idx)
+    return cfg, "ok"
+
+
+# ── Client classes (v5.19.0 — Q13) ──────────────────────────────────────────
+
+
+def _classes_of(cfg):
+    return cfg.setdefault("Dhcp4", {}).setdefault("client-classes", [])
+
+
+def _find_class(classes, name):
+    return next((i for i, c in enumerate(classes) if isinstance(c, dict) and c.get("name") == name), None)
+
+
+def upsert_class4(cfg, class_dict, position=None):
+    """Insert a new class, or replace an existing one (matched by
+    `class_dict["name"]`) in place. `position` only applies to a NEW
+    class — an update keeps its current position; reordering is
+    reorder_class4's job. Returns (new_cfg, "ok") — always succeeds,
+    matching the mutate_fn(cfg) -> (cfg, code) shape _apply_dhcp4_change
+    expects of every caller."""
+    cfg = copy.deepcopy(cfg)
+    classes = _classes_of(cfg)
+    name = class_dict.get("name")
+    idx = _find_class(classes, name)
+    if idx is not None:
+        classes[idx] = class_dict
+    elif position is not None and 0 <= position <= len(classes):
+        classes.insert(position, class_dict)
+    else:
+        classes.append(class_dict)
+    return cfg, "ok"
+
+
+def delete_class4(cfg, name):
+    """Returns (new_cfg, "ok"|"notfound"|"referenced"|"builtin"). Refuses
+    a built-in class outright, and any class still referenced by a
+    subnet/pool/shared-network attachment or another class's member()."""
+    cfg = copy.deepcopy(cfg)
+    if _classes.is_builtin(name):
+        return cfg, "builtin"
+    d4 = cfg.get("Dhcp4")
+    classes = d4.get("client-classes") if isinstance(d4, dict) else None
+    if not isinstance(classes, list):
+        return cfg, "notfound"
+    idx = _find_class(classes, name)
+    if idx is None:
+        return cfg, "notfound"
+    if _classes.references(d4, name):
+        return cfg, "referenced"
+    classes.pop(idx)
+    return cfg, "ok"
+
+
+def reorder_class4(cfg, name, direction):
+    """direction ∈ {"up", "down"}. Returns
+    (new_cfg, "ok"|"notfound"|"boundary") — evaluation order is list
+    order, so this swaps the class with its neighbor; "boundary" when
+    there's no neighbor that way."""
+    cfg = copy.deepcopy(cfg)
+    d4 = cfg.get("Dhcp4")
+    classes = d4.get("client-classes") if isinstance(d4, dict) else None
+    if not isinstance(classes, list):
+        return cfg, "notfound"
+    idx = _find_class(classes, name)
+    if idx is None:
+        return cfg, "notfound"
+    new_idx = idx - 1 if direction == "up" else idx + 1
+    if new_idx < 0 or new_idx >= len(classes):
+        return cfg, "boundary"
+    classes[idx], classes[new_idx] = classes[new_idx], classes[idx]
+    return cfg, "ok"
+
+
+def attach_class4(cfg, name, scope_level, scope_key, mode="guard", attach=True, version=None):
+    """Attach/detach `name` as a guard ("must match one of these to be
+    selected") or an additional class ("also evaluated for this scope
+    after selection") on a subnet, pool, or shared network. Returns
+    (new_cfg, "ok"|"notfound"). Writes whichever key spelling
+    attachment_keys() resolves for this config (reading elsewhere always
+    checks both)."""
+    cfg = copy.deepcopy(cfg)
+    d4 = cfg.get("Dhcp4")
+    if not isinstance(d4, dict):
+        return cfg, "notfound"
+    container, status = _container_for_level4(cfg, scope_level, scope_key)
+    if status != "ok":
+        return cfg, "notfound"
+    keys = _classes.attachment_keys(d4, version)
+
+    if mode == "guard":
+        key = keys["guard"]
+        if key == _classes.NEW_GUARD:
+            lst = [c for c in (container.get(key) or []) if isinstance(c, str)]
+            if attach:
+                if name not in lst:
+                    lst.append(name)
+            else:
+                lst = [c for c in lst if c != name]
+            if lst:
+                container[key] = lst
+            else:
+                container.pop(key, None)
+        else:  # OLD_GUARD is a single string, not a list
+            if attach:
+                container[key] = name
+            elif container.get(key) == name:
+                container.pop(key, None)
+    else:  # "additional" — always a list, either spelling
+        key = keys["additional"]
+        lst = [c for c in (container.get(key) or []) if isinstance(c, str)]
+        if attach:
+            if name not in lst:
+                lst.append(name)
+        else:
+            lst = [c for c in lst if c != name]
+        if lst:
+            container[key] = lst
+        else:
+            container.pop(key, None)
     return cfg, "ok"

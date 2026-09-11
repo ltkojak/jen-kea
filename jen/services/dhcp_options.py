@@ -78,7 +78,7 @@ TYPES = frozenset(
 # codes 3 and 6 at SUBNET level belong to the Edit Subnet form
 MANAGED_AT_SUBNET = frozenset({3, 6})
 
-LEVELS = ("global", "shared-network", "subnet", "pool")
+LEVELS = ("global", "shared-network", "subnet", "pool", "class")
 
 _HEX_RE = re.compile(r"^(0x)?[0-9a-fA-F]*$")
 _FQDN_RE = re.compile(
@@ -313,6 +313,12 @@ def _container_for_level(dhcp4_cfg, level, key):
         for p in found[0].get("pools") or []:
             if isinstance(p, dict) and p.get("pool") == pool_str:
                 return p, "ok"
+        return None, "notfound"
+    if level == "class":
+        # v5.19.0 (Q13) — a client-class's own option-data.
+        for c in dhcp4_cfg.get("client-classes") or []:
+            if isinstance(c, dict) and c.get("name") == key:
+                return c, "ok"
         return None, "notfound"
     return None, "notfound"
 

@@ -90,3 +90,10 @@ def shared_networks4(dhcp4_cfg) -> list[dict]:
 
 def shared_networks6(dhcp6_cfg) -> list[dict]:
     return _shared_networks_summary(dhcp6_cfg, "subnet6")
+
+
+def shared_networks4_raw(dhcp4_cfg) -> list[dict]:
+    """The raw v4 shared-network dicts themselves (v5.19.0 — Q13 needs
+    to read/scan class-attachment keys directly on them, not just the
+    name/interface/subnet_ids summary shared_networks4() returns)."""
+    return _shared_networks(dhcp4_cfg)

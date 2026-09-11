@@ -422,3 +422,218 @@ class TestUpsertOptionMatchesByCode:
         opts = new_cfg["Dhcp4"]["subnet4"][0]["option-data"]
         assert len(opts) == 1
         assert opts[0]["data"] == "10.0.0.9"
+
+
+_CLASSES_BASE = {
+    "Dhcp4": {
+        "subnet4": [{"id": 10}],
+        "shared-networks": [{"name": "guest", "subnet4": []}],
+        "client-classes": [{"name": "pxe", "test": "option[60].hex == 'PXEClient'"}],
+    }
+}
+
+
+class TestUpsertClass4:
+    def test_new_class_is_appended(self):
+        cfg, code = edit.upsert_class4(copy.deepcopy(_CLASSES_BASE), {"name": "acct", "test": "option[77].hex == 'x'"})
+        assert code == "ok"
+        assert [c["name"] for c in cfg["Dhcp4"]["client-classes"]] == ["pxe", "acct"]
+
+    def test_existing_class_is_replaced_in_place_not_duplicated(self):
+        cfg, code = edit.upsert_class4(copy.deepcopy(_CLASSES_BASE), {"name": "pxe", "test": "NEW"})
+        assert code == "ok"
+        assert len(cfg["Dhcp4"]["client-classes"]) == 1
+        assert cfg["Dhcp4"]["client-classes"][0]["test"] == "NEW"
+
+    def test_position_inserts_a_new_class_there(self):
+        cfg, code = edit.upsert_class4(copy.deepcopy(_CLASSES_BASE), {"name": "first", "test": "x"}, position=0)
+        assert code == "ok"
+        assert [c["name"] for c in cfg["Dhcp4"]["client-classes"]] == ["first", "pxe"]
+
+    def test_position_is_ignored_when_updating_an_existing_class(self):
+        cfg, code = edit.upsert_class4(copy.deepcopy(_CLASSES_BASE), {"name": "pxe", "test": "NEW"}, position=0)
+        assert [c["name"] for c in cfg["Dhcp4"]["client-classes"]] == ["pxe"]
+
+    def test_input_not_mutated(self):
+        original = copy.deepcopy(_CLASSES_BASE)
+        edit.upsert_class4(_CLASSES_BASE, {"name": "pxe", "test": "changed"})
+        assert original == _CLASSES_BASE
+
+    def test_into_a_config_with_no_classes_yet(self):
+        cfg, code = edit.upsert_class4({"Dhcp4": {}}, {"name": "pxe", "test": "x"})
+        assert code == "ok"
+        assert cfg["Dhcp4"]["client-classes"][0]["name"] == "pxe"
+
+
+class TestDeleteClass4:
+    def test_builtin_is_refused(self):
+        _cfg, code = edit.delete_class4(copy.deepcopy(_CLASSES_BASE), "DROP")
+        assert code == "builtin"
+
+    def test_missing_class_is_notfound(self):
+        _cfg, code = edit.delete_class4(copy.deepcopy(_CLASSES_BASE), "ghost")
+        assert code == "notfound"
+
+    def test_referenced_class_is_refused(self):
+        referenced = {
+            "Dhcp4": {
+                "subnet4": [{"id": 10, "client-classes": ["pxe"]}],
+                "client-classes": [{"name": "pxe", "test": "x"}],
+            }
+        }
+        cfg, code = edit.delete_class4(copy.deepcopy(referenced), "pxe")
+        assert code == "referenced"
+        assert cfg["Dhcp4"]["client-classes"] == [{"name": "pxe", "test": "x"}]  # untouched, not deleted
+
+    def test_unreferenced_class_is_deleted(self):
+        cfg, code = edit.delete_class4(copy.deepcopy(_CLASSES_BASE), "pxe")
+        assert code == "ok"
+        assert cfg["Dhcp4"]["client-classes"] == []
+
+    def test_input_not_mutated(self):
+        original = copy.deepcopy(_CLASSES_BASE)
+        edit.delete_class4(_CLASSES_BASE, "pxe")
+        assert original == _CLASSES_BASE
+
+
+class TestReorderClass4:
+    _THREE = {"Dhcp4": {"client-classes": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}}
+
+    def test_up_swaps_with_the_previous_entry(self):
+        cfg, code = edit.reorder_class4(copy.deepcopy(self._THREE), "b", "up")
+        assert code == "ok"
+        assert [c["name"] for c in cfg["Dhcp4"]["client-classes"]] == ["b", "a", "c"]
+
+    def test_down_swaps_with_the_next_entry(self):
+        cfg, code = edit.reorder_class4(copy.deepcopy(self._THREE), "b", "down")
+        assert code == "ok"
+        assert [c["name"] for c in cfg["Dhcp4"]["client-classes"]] == ["a", "c", "b"]
+
+    def test_moving_the_first_entry_up_hits_the_boundary(self):
+        _cfg, code = edit.reorder_class4(copy.deepcopy(self._THREE), "a", "up")
+        assert code == "boundary"
+
+    def test_moving_the_last_entry_down_hits_the_boundary(self):
+        _cfg, code = edit.reorder_class4(copy.deepcopy(self._THREE), "c", "down")
+        assert code == "boundary"
+
+    def test_missing_class_is_notfound(self):
+        _cfg, code = edit.reorder_class4(copy.deepcopy(self._THREE), "ghost", "up")
+        assert code == "notfound"
+
+
+class TestAttachClass4:
+    _SIMPLE = {"Dhcp4": {"subnet4": [{"id": 10}], "shared-networks": [{"name": "guest", "subnet4": []}]}}
+
+    def test_guard_attach_new_spelling(self):
+        cfg, code = edit.attach_class4(
+            copy.deepcopy(self._SIMPLE), "pxe", "subnet", 10, mode="guard", version=(3, 0, 0)
+        )
+        assert code == "ok"
+        assert cfg["Dhcp4"]["subnet4"][0]["client-classes"] == ["pxe"]
+
+    def test_guard_attach_old_spelling_is_a_singular_string(self):
+        cfg, code = edit.attach_class4(
+            copy.deepcopy(self._SIMPLE), "pxe", "subnet", 10, mode="guard", version=(2, 6, 0)
+        )
+        assert code == "ok"
+        assert cfg["Dhcp4"]["subnet4"][0]["client-class"] == "pxe"
+
+    def test_guard_reattach_is_idempotent_new_spelling(self):
+        once, _ = edit.attach_class4(copy.deepcopy(self._SIMPLE), "pxe", "subnet", 10, mode="guard", version=(3, 0, 0))
+        twice, code = edit.attach_class4(once, "pxe", "subnet", 10, mode="guard", version=(3, 0, 0))
+        assert code == "ok"
+        assert twice["Dhcp4"]["subnet4"][0]["client-classes"] == ["pxe"]
+
+    def test_guard_detach_new_spelling_removes_the_key_when_empty(self):
+        attached, _ = edit.attach_class4(
+            copy.deepcopy(self._SIMPLE), "pxe", "subnet", 10, mode="guard", version=(3, 0, 0)
+        )
+        detached, code = edit.attach_class4(
+            attached, "pxe", "subnet", 10, mode="guard", attach=False, version=(3, 0, 0)
+        )
+        assert code == "ok"
+        assert "client-classes" not in detached["Dhcp4"]["subnet4"][0]
+
+    def test_guard_detach_old_spelling(self):
+        attached, _ = edit.attach_class4(
+            copy.deepcopy(self._SIMPLE), "pxe", "subnet", 10, mode="guard", version=(2, 6, 0)
+        )
+        detached, code = edit.attach_class4(
+            attached, "pxe", "subnet", 10, mode="guard", attach=False, version=(2, 6, 0)
+        )
+        assert code == "ok"
+        assert "client-class" not in detached["Dhcp4"]["subnet4"][0]
+
+    def test_additional_attach_and_detach(self):
+        attached, code = edit.attach_class4(
+            copy.deepcopy(self._SIMPLE), "acct", "subnet", 10, mode="additional", version=(3, 0, 0)
+        )
+        assert code == "ok"
+        assert attached["Dhcp4"]["subnet4"][0]["evaluate-additional-classes"] == ["acct"]
+        detached, code = edit.attach_class4(
+            attached, "acct", "subnet", 10, mode="additional", attach=False, version=(3, 0, 0)
+        )
+        assert code == "ok"
+        assert "evaluate-additional-classes" not in detached["Dhcp4"]["subnet4"][0]
+
+    def test_attach_to_a_shared_network(self):
+        cfg, code = edit.attach_class4(
+            copy.deepcopy(self._SIMPLE), "pxe", "shared-network", "guest", mode="guard", version=(3, 0, 0)
+        )
+        assert code == "ok"
+        assert cfg["Dhcp4"]["shared-networks"][0]["client-classes"] == ["pxe"]
+
+    def test_attach_to_a_pool(self):
+        cfg_with_pool = {"Dhcp4": {"subnet4": [{"id": 10, "pools": [{"pool": "a-b"}]}]}}
+        cfg, code = edit.attach_class4(cfg_with_pool, "pxe", "pool", (10, "a-b"), mode="guard", version=(3, 0, 0))
+        assert code == "ok"
+        assert cfg["Dhcp4"]["subnet4"][0]["pools"][0]["client-classes"] == ["pxe"]
+
+    def test_missing_scope_is_notfound(self):
+        _cfg, code = edit.attach_class4(copy.deepcopy(self._SIMPLE), "pxe", "subnet", 999, mode="guard")
+        assert code == "notfound"
+
+    def test_existing_spelling_anywhere_in_the_config_wins_even_with_no_version(self):
+        cfg = {"Dhcp4": {"subnet4": [{"id": 10, "client-classes": ["other"]}, {"id": 20}]}}
+        result, code = edit.attach_class4(cfg, "pxe", "subnet", 20, mode="guard", version=None)
+        assert code == "ok"
+        assert result["Dhcp4"]["subnet4"][1]["client-classes"] == ["pxe"]
+
+
+class TestClassOptionData:
+    """Class option-data via Q12's set_option4/remove_option4 with
+    level='class', key=<class name>."""
+
+    def test_set_at_class_level(self):
+        cfg, code = edit.set_option4(
+            {"Dhcp4": {"client-classes": [{"name": "pxe"}]}}, "class", "pxe", 67, "boot-file-name", "pxelinux.0"
+        )
+        assert code == "ok"
+        assert cfg["Dhcp4"]["client-classes"][0]["option-data"] == [
+            {"name": "boot-file-name", "code": 67, "space": "dhcp4", "csv-format": True, "data": "pxelinux.0"}
+        ]
+
+    def test_remove_at_class_level(self):
+        cfg = {
+            "Dhcp4": {
+                "client-classes": [
+                    {"name": "pxe", "option-data": [{"name": "boot-file-name", "code": 67, "data": "pxelinux.0"}]}
+                ]
+            }
+        }
+        cfg2, code = edit.remove_option4(cfg, "class", "pxe", 67)
+        assert code == "ok"
+        assert cfg2["Dhcp4"]["client-classes"][0]["option-data"] == []
+
+    def test_set_on_a_missing_class_is_notfound(self):
+        _cfg, code = edit.set_option4({"Dhcp4": {"client-classes": []}}, "class", "ghost", 67, "boot-file-name", "x")
+        assert code == "notfound"
+
+    def test_class_level_is_not_subject_to_the_managed_at_subnet_refusal(self):
+        """Codes 3/6 are only special at level='subnet' — a class can
+        carry them freely (real Kea configs do, e.g. per-class routers)."""
+        cfg, code = edit.set_option4(
+            {"Dhcp4": {"client-classes": [{"name": "pxe"}]}}, "class", "pxe", 3, "routers", "10.0.0.1"
+        )
+        assert code == "ok"
