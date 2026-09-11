@@ -100,6 +100,18 @@ page) so a link or prefetch can't end a session. `audit()` and the
 rate-limit `clear_*` helpers write synchronously — a security event is
 never lost to an unseen background-thread error.
 
+**Kea config history at rest (v5.20.0).** `kea_config_revisions` bodies
+are encrypted (the same `crypto.py` Fernet key as MFA secrets and alert
+credentials — §3.6) — a database dump alone doesn't hand over Kea DB
+passwords, HA peer credentials, or DDNS TSIG keys. Above that, the
+config-history and diff pages themselves mask those same secret-shaped
+keys for anyone who can see them at all; only a `superadmin` can reach
+the real, unmasked body, and only through the same step-up gate as
+above (`@_recent_auth_required(minutes=10)`), with every unmasked
+download written to the audit log. A viewer or admin sees the same
+masked diff a superadmin does — the step-up boundary is specifically
+"the real secret values," not "the config history feature."
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather
@@ -252,7 +264,36 @@ Jen learns the real number from any op, not just `version`.
   refuse on mismatch) with a one-per-request "no atomic guard" warning.
   Every config Jen writes — and every out-of-band change it notices on
   the next read — is also recorded in `kea_config_revisions` (jen_db,
-  migration 20) as a diffable, restorable revision; see the admin guide.
+  migration 20, extended by migration 21) as a diffable, restorable
+  revision; see the admin guide.
+
+**A hash always says what it hashes (v5.20.0 — `hash_kind`).**
+`kea_config_revisions.sha256` has always held one of two genuinely
+different quantities with no way to tell them apart: the helper's
+raw-bytes hash (v2) or `sha256(canonical(cfg))`, a Jen-computed
+stand-in (v1 / legacy) — and a v1→v2 upgrade meant the two got compared
+against each other, always mismatching, so `config_history_restore`
+always conflicted until a fresh Jen write happened to replace the
+stored value. Migration 21 adds `hash_kind ∈ {raw, canonical, legacy}`
+(`legacy` marking a pre-5.20.0 row of unknown kind); `record()` now
+requires it as a keyword on every call. The first contact with a
+server/service, and the first read after a `canonical` host's helper
+crosses to v2, is recorded as a `baseline` revision rather than
+`external` — a crossover is not a hand edit, it's Jen re-establishing
+what it can trust to compare against. `config_history_restore` only
+passes `expect_sha256` when the latest revision's kind is `raw`;
+otherwise it reads the live hash immediately before applying, since a
+`canonical`/`legacy` value was never comparable to the helper's raw
+hash to begin with.
+
+**The legacy-grant check runs at check time, not just install time
+(v5.20.0).** `kea_host.check_helper()` — the one place Jen already
+talks to a Kea host to ask its helper version — now also probes whether
+`/etc/sudoers.d/jen-kea` (below) is still present and records that
+alongside the version, so Health Center can warn about it without
+adding an SSH round trip of its own (Health Center's own rule is no SSH
+at render time). This closes a gap where a host could have both the
+current helper **and** the old root grant, and nothing would say so.
 
 **The legacy fallback.** A host that does not have the helper yet falls
 back to the pre-5.11.0 path: Jen generates a Python script, base64s it,

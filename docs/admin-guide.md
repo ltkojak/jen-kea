@@ -738,6 +738,18 @@ behind the best-effort guard until it's upgraded. **Health Center**
 (v5.19.1) also warns per host once a v1 helper is more than a passing
 state — see "Kea host helper installed" there.
 
+**v5.20.0 — the legacy grant is now checked, not just used.** Every
+time Jen checks or installs the helper it also checks whether
+`/etc/sudoers.d/jen-kea` (below) is still present, and records that
+alongside the version. Settings → Kea → SSH shows a **"legacy grant
+still present"** chip next to a host's helper status once it does, and
+Health Center's "Kea host helper installed" check warns for the same
+reason — even on a host that's fully upgraded to the current helper
+version, since leaving the old grant in place after you no longer need
+it is itself the residual risk. Remove
+`/etc/sudoers.d/jen-kea` once every host you administer that way shows
+`helper v2` (or later) to clear both.
+
 ### Kea config history (v5.16.0+)
 
 Every Kea config Jen writes to a host is saved in Jen's database as a
@@ -745,7 +757,7 @@ revision — who, when, why, and the full config — and so is any change
 Jen notices was made **outside** Jen on the next read (a hand edit to
 `kea-dhcp4.conf`, say). Open it from **Servers → Config history** on
 each server card. A revision page shows a unified diff against the one
-before it, a **Download JSON** link, and — for superadmins — a
+before it, a **Download (masked)** link, and — for superadmins — a
 **Restore this revision** button that re-validates the old config with
 `kea-dhcpX -t`, re-applies it, and restarts Kea.
 
@@ -754,6 +766,31 @@ System → Kea Config History** (default 50; older ones are pruned).
 Because the page shows the whole config for a server — including subnets
 a subnet-restricted admin can't otherwise see — the history pages need
 access to **all** subnets, not just admin.
+
+**Bodies are encrypted at rest (v5.20.0).** Every stored revision is
+encrypted with the same Fernet key already used for MFA secrets and
+alert-channel credentials (`jen/services/crypto.py`) — a database
+dump alone doesn't hand over your Kea configs. This is transparent
+everywhere in the UI; a pre-5.20.0 install re-encrypts its existing
+history automatically on the first startup after upgrading.
+
+**History is masked by default (v5.20.0).** The diff and the
+**Download (masked)** link both redact any `password`, `secret`, or
+`basic-auth-password` key (and anything ending `-password`,
+`_password`, or `-secret`) to `********` — HA peer credentials, DB
+passwords, DDNS TSIG keys. A change to a masked value's text doesn't
+show up in the diff, by design. A superadmin sees a **Download
+unmasked** link as well, which re-asks for your password if it's been
+more than 10 minutes (the same step-up prompt as other sensitive
+actions) and is recorded in the audit log every time it's used.
+
+**The first "baseline" revision (v5.20.0).** The very first config
+Jen ever sees on a given server/service — and the first one it sees
+again right after that host's helper crosses from v1 to v2 — is
+recorded with a **baseline** badge instead of `external` or `restore`.
+This is expected, not a hand edit Jen noticed: it's just Jen recording
+"here's what I found" before anything it does is comparable to
+anything else.
 
 **Optimistic concurrency.** With helper v2, the edit-subnet / add /
 delete / shared-network forms send the config's SHA as it was when the
@@ -921,7 +958,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **TLS certificate expiry** | days until Jen's HTTPS certificate expires — warns at 30 days, fails at 7 | Settings → Access & Security → upload a renewed certificate |
 | **Jen database** / **Kea database** | a `SELECT 1` round trip and its latency | the database host / credentials |
 | **Database schema current** | the applied migration version matches the latest | restart Jen (migrations run at startup) |
-| **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version | Settings → Kea → SSH → Install helper |
+| **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version, and (v5.20.0) whether the legacy `python3` grant is still present | Settings → Kea → SSH → Install helper; remove `/etc/sudoers.d/jen-kea` |
 | **Background workers running** | the scheduler + alert loop started with this process | only reported under gunicorn, not the werkzeug fallback |
 | **Jen up to date** | always `skip` here — run the check from **Settings → System → Updates** (it contacts GitHub) | — |
 
@@ -1010,10 +1047,14 @@ The **Additional Servers** editor manages `name`, `role`, `api_url`,
 `api_user`, `api_pass`, `api6_url`, `api6_user`, `api6_pass`, `ssh_host`,
 `ssh_user`, and `kea_conf`. Any other key you've hand-added to a
 `[kea_server_N]` section (for example `ssh_key`) is preserved when you
-save from the UI. Preservation follows the **server**, not its position in
-the list: reordering or removing rows keeps every server's password and
-hand-added keys with that server, and the remaining sections are
-renumbered contiguously (v5.10.3).
+save from the UI. Preservation follows the **server**, not its position
+in the list: reordering or removing rows keeps every server's password
+and hand-added keys with that server. **The number in `[kea_server_N]`
+is that server's permanent identity** (v5.20.0) — config history,
+recorded helper status, and every `/servers/<id>` URL are keyed by it —
+so saving no longer renumbers the remaining sections; removing a server
+leaves a gap, and that's normal. Don't renumber `[kea_server_N]`
+sections by hand.
 
 ### How Active Node Routing Works
 

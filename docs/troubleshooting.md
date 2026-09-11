@@ -400,6 +400,16 @@ Kea → SSH** — the button reads *Update helper* once a version is
 already recorded, *Install helper* otherwise) to get the atomic guard
 and out-of-band change tracking.
 
+### A "baseline" revision appears after upgrading a host's helper (v5.20.0)
+
+This is expected, not a hand edit Jen noticed. The very first config Jen
+records for a server/service is always a **baseline**, and a host
+crossing from helper v1 to v2 gets a second one — the raw-bytes hash the
+v2 helper reports isn't comparable to the hash Jen computed itself under
+v1, so Jen records a fresh baseline to compare future reads against
+rather than flagging the difference as an **external** change. No action
+needed; it happens once per server/service, right after the upgrade.
+
 ---
 
 ## Upgrades and the versioned layout (v5.14.0+)

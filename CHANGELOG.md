@@ -2,6 +2,75 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.20.0] - 2026-09-11
+
+The second half of the same self-audit that produced 5.19.1: the items
+that change stored data or a numbering contract, rather than fix an
+outright bug, so they land one release later as a MINOR. `sudo
+./install.sh` or the in-app update runs a new migration (21) and
+re-encrypts existing config history automatically; nothing to do by
+hand.
+
+### Server numbers are now permanent, not renumbered on every save
+
+`[kea_server_N]` section numbers used to be renumbered contiguously
+every time you saved Settings → Kea → SSH, which quietly reassigned
+config history, recorded helper status, and every `/servers/<id>` URL
+to whatever server now happened to occupy that number. Delete the
+middle server of three and the survivor after it silently inherited
+the deleted one's entire history. Saving no longer renumbers anything:
+each server keeps its own section number for life, removing one leaves
+a gap, and that's the expected, permanent shape now — not a transient
+state to clean up.
+
+### Config history: encrypted at rest, masked by default, and a hash that says what it hashes
+
+Three related fixes to the config-history feature added in 5.16.0:
+
+- **Encrypted at rest.** Every stored revision is now encrypted with
+  the same key already protecting MFA secrets and alert credentials —
+  a database dump no longer hands over Kea DB passwords, HA peer
+  credentials, or DDNS TSIG keys in plaintext.
+- **Masked by default.** The diff and the download both redact
+  password- and secret-shaped keys to `********`. A superadmin can
+  still download the real body, gated behind the same 10-minute
+  step-up re-auth as other sensitive actions and recorded in the audit
+  log every time.
+- **A hash that says what it hashes.** The stored SHA used to be one
+  of two different quantities — the helper's raw-bytes hash, or a
+  Jen-computed stand-in for hosts without one — with no column saying
+  which. A host upgrading from helper v1 to v2 got a spurious
+  "changed outside Jen" entry on its first v2 read, and every restore
+  attempt after that conflicted permanently, because the two
+  quantities were being compared against each other. Revisions now
+  record which kind of hash they hold, the v1→v2 crossover is recorded
+  as a fresh baseline instead of an external change, and restore only
+  trusts a stored hash it can actually compare against — reading the
+  live one first when it can't.
+
+### Health Center now catches a helper host that still has the old root grant
+
+A Kea host could have the current `jen-kea-helper` installed **and**
+still have the old `NOPASSWD: /usr/bin/python3` sudoers grant sitting
+around from before it was installed, and nothing said so — Health
+Center's helper check only looked at the recorded version. The helper
+version check now also records whether that legacy grant is still
+present, and both Settings → Kea → SSH and Health Center flag it.
+
+### install.sh rolls back its files outside /opt/jen, too
+
+`install.sh` writes four files outside the versioned release tree on
+every install — the systemd unit, the sudoers grant, and the
+root-privileged self-update script and its own unit — and until now
+rollback only ever flipped the release symlink back, leaving those
+four files on the new release if something failed after they were
+overwritten. The installer now snapshots them immediately before
+writing new ones and restores all four (the sudoers file only after
+`visudo` validates it) as part of any rollback, and rollback now fires
+automatically on any fatal error during an upgrade, not only a failed
+service start. This is exercised on the next real upgrade rather than
+in CI, which has no root or systemd to install onto.
+
 ## [5.19.1] - 2026-09-11
 
 A self-audit of the 5.16.0–5.19.0 line, cross-checked against an

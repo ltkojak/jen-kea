@@ -106,7 +106,10 @@ user     = your-ssh-user
 key_path = /etc/jen/ssh/jen_rsa
 kea_conf = /etc/kea/kea-dhcp4.conf
 
-# For HA setups, add additional servers:
+# For HA setups, add additional servers. The number in [kea_server_N] is
+# that server's permanent identity — config history, helper status, and
+# URLs are keyed by it. Gaps after deleting a server are normal; don't
+# renumber sections by hand.
 # [kea_server_2]
 # name     = Kea Standby
 # role     = standby
