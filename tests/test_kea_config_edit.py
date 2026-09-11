@@ -254,3 +254,171 @@ class TestMoveSubnet4:
     def test_move_unknown_subnet_is_notfound(self):
         _cfg, code = edit.move_subnet4(_NESTED, 999, "iot")
         assert code == "notfound"
+
+
+class TestSetOption4:
+    """v5.18.0 (Q12) — set_option4 / remove_option4 at each level."""
+
+    def test_global_create_then_update_in_place(self):
+        cfg, code = edit.set_option4({"Dhcp4": {}}, "global", None, 42, "ntp-servers", "10.0.0.1, 10.0.0.2")
+        assert code == "ok"
+        assert cfg["Dhcp4"]["option-data"] == [
+            {"name": "ntp-servers", "code": 42, "space": "dhcp4", "csv-format": True, "data": "10.0.0.1, 10.0.0.2"}
+        ]
+        cfg2, code2 = edit.set_option4(cfg, "global", None, 42, "ntp-servers", "9.9.9.9")
+        assert code2 == "ok"
+        assert len(cfg2["Dhcp4"]["option-data"]) == 1
+        assert cfg2["Dhcp4"]["option-data"][0]["data"] == "9.9.9.9"
+
+    def test_shared_network_level(self):
+        cfg, code = edit.set_option4(_NESTED, "shared-network", "guest-wifi", 41, "nis-servers", "10.0.0.1")
+        assert code == "ok"
+        assert _net(cfg, "guest-wifi")["option-data"][0]["name"] == "nis-servers"
+        assert "option-data" not in _net(cfg, "iot")
+
+    def test_shared_network_missing_is_notfound(self):
+        _cfg, code = edit.set_option4(_NESTED, "shared-network", "ghost", 41, "nis-servers", "10.0.0.1")
+        assert code == "notfound"
+
+    def test_subnet_level_reaches_a_nested_subnet(self):
+        """Uses Q10's iter_subnet4 under the hood via subnet4_by_id — a
+        subnet inside a shared network is reachable the same as a
+        top-level one."""
+        cfg, code = edit.set_option4(_NESTED, "subnet", 70, 66, "tftp-server-name", "tftp.local")
+        assert code == "ok"
+        nested_70 = next(s for s in _net(cfg, "guest-wifi")["subnet4"] if s["id"] == 70)
+        assert nested_70["option-data"][0]["name"] == "tftp-server-name"
+
+    def test_subnet_missing_is_notfound(self):
+        _cfg, code = edit.set_option4(_NESTED, "subnet", 99999, 66, "tftp-server-name", "tftp.local")
+        assert code == "notfound"
+
+    def test_pool_level_keyed_by_pool_string(self):
+        cfg, code = edit.set_option4(_NESTED, "pool", (70, "10.0.70.10 - 10.0.70.99"), 67, "boot-file-name", "pxe.bin")
+        assert code == "ok"
+        nested_70 = next(s for s in _net(cfg, "guest-wifi")["subnet4"] if s["id"] == 70)
+        assert nested_70["pools"][0]["option-data"][0]["name"] == "boot-file-name"
+
+    def test_pool_missing_is_notfound(self):
+        _cfg, code = edit.set_option4(_NESTED, "pool", (70, "no-such-pool"), 67, "boot-file-name", "pxe.bin")
+        assert code == "notfound"
+
+    def test_managed_codes_refused_at_subnet_level(self):
+        for code_num, name in ((3, "routers"), (6, "domain-name-servers")):
+            _cfg, code = edit.set_option4(_NESTED, "subnet", 10, code_num, name, "10.0.0.1")
+            assert code == "managed", code_num
+
+    def test_managed_codes_are_not_special_at_other_levels(self):
+        """3/6 are only reserved on the Edit Subnet form's own level."""
+        cfg, code = edit.set_option4({"Dhcp4": {}}, "global", None, 3, "routers", "10.0.0.1")
+        assert code == "ok"
+        cfg2, code2 = edit.set_option4(_NESTED, "shared-network", "guest-wifi", 6, "domain-name-servers", "9.9.9.9")
+        assert code2 == "ok"
+        assert _net(cfg2, "guest-wifi")["option-data"][0]["code"] == 6
+
+    def test_custom_code_is_written_with_csv_format_false(self):
+        cfg, code = edit.set_option4({"Dhcp4": {}}, "global", None, 220, "my-custom-option", "0a1b2c", csv_format=False)
+        assert code == "ok"
+        entry = cfg["Dhcp4"]["option-data"][0]
+        assert entry == {
+            "name": "my-custom-option",
+            "code": 220,
+            "space": "dhcp4",
+            "csv-format": False,
+            "data": "0a1b2c",
+        }
+
+    def test_input_config_is_not_mutated(self):
+        cfg_before = copy.deepcopy(_NESTED)
+        edit.set_option4(_NESTED, "subnet", 10, 42, "ntp-servers", "10.0.0.1")
+        assert cfg_before == _NESTED
+
+    def test_matches_an_existing_code_only_entry_instead_of_duplicating(self):
+        """The existing entry carries only `code` (no `name`, as a custom
+        writer might leave it) — set_option4 must update it, not add a
+        second entry for the same option."""
+        cfg = {"Dhcp4": {"option-data": [{"code": 41, "data": "1.1.1.1"}]}}
+        cfg2, code = edit.set_option4(cfg, "global", None, 41, "nis-servers", "2.2.2.2")
+        assert code == "ok"
+        assert len(cfg2["Dhcp4"]["option-data"]) == 1
+        assert cfg2["Dhcp4"]["option-data"][0]["data"] == "2.2.2.2"
+        assert cfg2["Dhcp4"]["option-data"][0]["name"] == "nis-servers"
+
+
+class TestRemoveOption4:
+    _WITH_OPTION = {
+        "Dhcp4": {
+            "subnet4": [
+                {
+                    "id": 10,
+                    "option-data": [{"name": "ntp-servers", "code": 42, "space": "dhcp4", "data": "10.0.0.1"}],
+                }
+            ]
+        }
+    }
+
+    def test_remove_existing(self):
+        cfg, code = edit.remove_option4(self._WITH_OPTION, "subnet", 10, 42)
+        assert code == "ok"
+        assert cfg["Dhcp4"]["subnet4"][0]["option-data"] == []
+
+    def test_remove_missing_is_notfound(self):
+        _cfg, code = edit.remove_option4(self._WITH_OPTION, "subnet", 10, 999)
+        assert code == "notfound"
+
+    def test_remove_from_a_level_with_no_option_data_at_all_is_notfound(self):
+        _cfg, code = edit.remove_option4({"Dhcp4": {"subnet4": [{"id": 10}]}}, "subnet", 10, 42)
+        assert code == "notfound"
+
+    def test_managed_codes_refused_at_subnet_level(self):
+        _cfg, code = edit.remove_option4(_NESTED, "subnet", 10, 3)
+        assert code == "managed"
+
+    def test_input_config_is_not_mutated(self):
+        cfg_before = copy.deepcopy(self._WITH_OPTION)
+        edit.remove_option4(self._WITH_OPTION, "subnet", 10, 42)
+        assert cfg_before == self._WITH_OPTION
+
+    def test_matches_a_code_only_entry(self):
+        cfg = {"Dhcp4": {"option-data": [{"code": 41, "data": "1.1.1.1"}]}}
+        cfg2, code = edit.remove_option4(cfg, "global", None, 41)
+        assert code == "ok"
+        assert cfg2["Dhcp4"]["option-data"] == []
+
+
+class TestUpsertOptionMatchesByCode:
+    """Golden test for the v5.18.0 change to _upsert_option (used by
+    patch_subnet4 / patch_subnet6 for routers/dns-servers): an existing
+    entry with only `code` set (no `name`) must be updated in place, not
+    duplicated."""
+
+    def test_code_only_entry_is_updated_not_duplicated(self):
+        opts = [{"code": 3, "data": "1.1.1.1"}]
+        edit._upsert_option(opts, "routers", 3, "dhcp4", "2.2.2.2")
+        assert len(opts) == 1
+        assert opts[0]["data"] == "2.2.2.2"
+
+    def test_name_only_entry_still_matches_by_name(self):
+        opts = [{"name": "routers", "data": "1.1.1.1"}]
+        edit._upsert_option(opts, "routers", 3, "dhcp4", "2.2.2.2")
+        assert len(opts) == 1
+        assert opts[0]["data"] == "2.2.2.2"
+
+    def test_no_existing_entry_appends_one(self):
+        opts = []
+        edit._upsert_option(opts, "routers", 3, "dhcp4", "10.0.0.1")
+        assert opts == [{"name": "routers", "code": 3, "space": "dhcp4", "csv-format": True, "data": "10.0.0.1"}]
+
+    def test_patch_subnet4_still_updates_a_code_only_routers_entry(self):
+        """End-to-end through the real edit form path, not just the
+        helper directly."""
+        cfg = {
+            "Dhcp4": {
+                "subnet4": [{"id": 10, "option-data": [{"code": 3, "data": "1.1.1.1"}]}],
+            }
+        }
+        new_cfg, changed = edit.patch_subnet4(cfg, 10, "", [], "", "", "", "10.0.0.9", "")
+        assert changed is True
+        opts = new_cfg["Dhcp4"]["subnet4"][0]["option-data"]
+        assert len(opts) == 1
+        assert opts[0]["data"] == "10.0.0.9"

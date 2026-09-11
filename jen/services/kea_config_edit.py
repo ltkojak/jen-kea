@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import copy
 
+from jen.services import dhcp_options as _opts_catalog
 from jen.services import kea_config_view as _view
 
 
@@ -45,9 +46,17 @@ def _iter_subnets(cfg, dhcp_key, subnet_key):
 
 def _upsert_option(opts, name, code, space, data):
     """Set an existing option-data entry's `data` in place, or append a
-    new csv-format entry. Matches the old remote scripts exactly."""
+    new csv-format entry. Matches the old remote scripts' behavior, plus
+    (v5.18.0 / Q12) also matching an entry that carries only `code` (no
+    `name`) — e.g. one Jen's own option editor wrote as a custom code
+    that happens to coincide with routers/dns-servers — so it gets
+    updated instead of duplicated."""
     for o in opts:
-        if isinstance(o, dict) and o.get("name") == name:
+        if isinstance(o, dict) and o.get("code") == code:
+            o["data"] = data
+            return
+    for o in opts:
+        if isinstance(o, dict) and o.get("code") is None and o.get("name") == name:
             o["data"] = data
             return
     opts.append({"name": name, "code": code, "space": space, "csv-format": True, "data": data})
@@ -237,4 +246,98 @@ def move_subnet4(cfg, subnet_id, to_network):
         d4.setdefault("subnet4", []).append(subnet)
     else:
         dest.setdefault("subnet4", []).append(subnet)
+    return cfg, "ok"
+
+
+# ── DHCP options hierarchy (v5.18.0 — Q12) ──────────────────────────────────
+
+
+def _container_for_level4(cfg, level, key):
+    """(container_dict, "ok") for `level`/`key`, or (None, "notfound").
+    level ∈ {"global", "shared-network", "subnet", "pool"}; key is None /
+    a shared-network name / a subnet id / a (subnet_id, pool_str) pair."""
+    d4 = cfg.get("Dhcp4")
+    if not isinstance(d4, dict):
+        return None, "notfound"
+    if level == "global":
+        return d4, "ok"
+    if level == "shared-network":
+        for sn in d4.get("shared-networks") or []:
+            if isinstance(sn, dict) and sn.get("name") == key:
+                return sn, "ok"
+        return None, "notfound"
+    if level == "subnet":
+        found = _view.subnet4_by_id(d4, key)
+        return (found[0], "ok") if found else (None, "notfound")
+    if level == "pool":
+        subnet_id, pool_str = key
+        found = _view.subnet4_by_id(d4, subnet_id)
+        if found is None:
+            return None, "notfound"
+        for p in found[0].get("pools") or []:
+            if isinstance(p, dict) and p.get("pool") == pool_str:
+                return p, "ok"
+        return None, "notfound"
+    return None, "notfound"
+
+
+def _match_option_index(opts, code, name=None):
+    """Index of the option-data entry matching `code` (resolving a
+    name-only entry's code through the catalog first) else `name`. -1 if
+    nothing matches."""
+    if code is not None:
+        for i, o in enumerate(opts):
+            if not isinstance(o, dict):
+                continue
+            o_code = o.get("code")
+            if o_code is None and o.get("name") in _opts_catalog.NAME_TO_CODE:
+                o_code = _opts_catalog.NAME_TO_CODE[o["name"]]
+            if o_code == code:
+                return i
+    if name is not None:
+        for i, o in enumerate(opts):
+            if isinstance(o, dict) and o.get("name") == name:
+                return i
+    return -1
+
+
+def set_option4(cfg, level, key, code, name, data, csv_format=True):
+    """Create or update an option-data entry at `level`/`key`. New/updated
+    entries always carry `name`, `code`, `space: "dhcp4"` from the
+    caller — never trust an existing entry's own name/code pairing.
+    Returns (new_cfg, "ok"|"notfound"|"managed") — "managed" for codes 3
+    (routers) / 6 (domain-name-servers) at subnet level, which the Edit
+    Subnet form owns."""
+    cfg = copy.deepcopy(cfg)
+    if level == "subnet" and code in _opts_catalog.MANAGED_AT_SUBNET:
+        return cfg, "managed"
+    container, status = _container_for_level4(cfg, level, key)
+    if status != "ok":
+        return cfg, "notfound"
+    opts = container.setdefault("option-data", [])
+    idx = _match_option_index(opts, code, name)
+    entry = {"name": name, "code": code, "space": "dhcp4", "csv-format": bool(csv_format), "data": data}
+    if idx >= 0:
+        opts[idx] = entry
+    else:
+        opts.append(entry)
+    return cfg, "ok"
+
+
+def remove_option4(cfg, level, key, code):
+    """Remove an option-data entry by code. Returns
+    (new_cfg, "ok"|"notfound"|"managed")."""
+    cfg = copy.deepcopy(cfg)
+    if level == "subnet" and code in _opts_catalog.MANAGED_AT_SUBNET:
+        return cfg, "managed"
+    container, status = _container_for_level4(cfg, level, key)
+    if status != "ok":
+        return cfg, "notfound"
+    opts = container.get("option-data")
+    if not isinstance(opts, list):
+        return cfg, "notfound"
+    idx = _match_option_index(opts, code)
+    if idx < 0:
+        return cfg, "notfound"
+    opts.pop(idx)
     return cfg, "ok"
