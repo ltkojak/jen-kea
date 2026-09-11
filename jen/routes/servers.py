@@ -14,10 +14,13 @@ import jen.models.user as __user
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
+import jen.services.kea_ha as __ha
 import jen.services.kea_host as __host
 from jen import extensions
 from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import is_admin_or_above as _is_admin_or_above
+from jen.services.access import is_superadmin as _is_superadmin
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 from jen.services.crypto import SecretDecryptError
@@ -149,6 +152,23 @@ def servers():
     history_allowed = current_user.all_subnets
     history_counts = {s["server"]["id"]: __rev.count(s["server"]["id"]) for s in statuses} if history_allowed else {}
 
+    # v5.21.0 (Q16) — the HA console. status-get / config-get are only
+    # worth the extra round trips on a genuine multi-server deployment;
+    # a single-server install never has an HA hook to report.
+    compare_rows = []
+    if not single_server:
+        for s in statuses:
+            if s["up"]:
+                s["ha_status"] = __ha.ha_status(s["server"])
+                cfg_result = __kea.kea_command("config-get", server=s["server"])
+                dhcp4_cfg = cfg_result.get("arguments", {}).get("Dhcp4", {}) if cfg_result.get("result") == 0 else {}
+                s["ha_config"] = __ha.ha_config(dhcp4_cfg)
+            else:
+                s["ha_status"] = None
+                s["ha_config"] = None
+        if any(s["ha_status"] for s in statuses):
+            compare_rows = __ha.compare_assigned([s["server"] for s in statuses if s["up"]])
+
     return render_template(
         "servers.html",
         statuses=statuses,
@@ -159,6 +179,8 @@ def servers():
         subnet_map=extensions.SUBNET_MAP,
         history_allowed=history_allowed,
         history_counts=history_counts,
+        ha_actions=__ha.HA_ACTIONS,
+        compare_rows=compare_rows,
     )
 
 
@@ -185,6 +207,63 @@ def restart_kea_server(server_id):
     except Exception as e:
         logger.error(f"SSH error restarting Kea on {server['name']}: {e}")
         flash(f"Could not reach {server['name']} — check server logs for details.", "error")
+    return redirect(url_for("servers.servers"))
+
+
+# ── HA console (v5.21.0 — Q16) ────────────────────────────────────────────
+#
+# Every HA command Jen can send is in kea_ha.HA_ACTIONS — nothing outside
+# that allowlist ever reaches kea_command(). "heartbeat" is a read-only
+# state check (admin); everything else changes HA state (superadmin).
+
+
+def _ha_role_denied(role: str) -> bool:
+    if role == "superadmin":
+        return not _is_superadmin()
+    return not _is_admin_or_above()
+
+
+@bp.route("/servers/ha/<int:server_id>/<action>", methods=["POST"])
+@login_required
+def ha_action(server_id, action):
+    spec = __ha.HA_ACTIONS.get(action)
+    if not spec:
+        abort(404)
+    if _ha_role_denied(spec["role"]):
+        message = (
+            "SuperAdmin access required for this HA action."
+            if spec["role"] == "superadmin"
+            else "Admin access required."
+        )
+        return render_template("error.html", code=403, message=message), 403
+
+    server = _find_server(server_id)
+    if not server:
+        flash("Server not found.", "error")
+        return redirect(url_for("servers.servers"))
+
+    args = {}
+    if action == "sync":
+        cfg_result = __kea.kea_command("config-get", server=server)
+        dhcp4_cfg = cfg_result.get("arguments", {}).get("Dhcp4", {}) if cfg_result.get("result") == 0 else {}
+        ha_cfg = __ha.ha_config(dhcp4_cfg)
+        partner = __ha.partner_name(ha_cfg) if ha_cfg else None
+        if not partner:
+            flash(f"Could not determine {server['name']}'s HA partner from its config — not syncing.", "error")
+            return redirect(url_for("servers.servers"))
+        args = {"server-name": partner, "max-period": 60}
+    elif action == "scopes":
+        scopes = request.form.getlist("scopes")
+        if not scopes:
+            flash("Select at least one scope to serve.", "error")
+            return redirect(url_for("servers.servers"))
+        args = {"scopes": scopes}
+
+    result = __kea.kea_command(spec["command"], "dhcp4", args, server=server)
+    text = result.get("text") or ("Done." if result.get("result") == 0 else "Failed.")
+    level = "success" if result.get("result") == 0 else "error"
+    flash(f"{server['name']}: {text}", level)
+    __user.audit("ha_" + action, server["name"], text)
     return redirect(url_for("servers.servers"))
 
 

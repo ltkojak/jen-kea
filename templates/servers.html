@@ -132,9 +132,123 @@
         {% endif %}
     </div>
     {% endif %}
+    {% if s.ha_status %}
+    <!-- HA console (v5.21.0 — Q16) -->
+    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
+        <div style="font-weight:600;margin-bottom:6px;">🔀 HA Status</div>
+        <table style="width:100%;font-size:12px;">
+            <tr><td class="stat-label" style="width:90px;">Local</td>
+                <td>{{ (s.ha_status.local.role or '—')|title }} · {{ s.ha_status.local.state or '—' }}
+                    {% if s.ha_status.local.scopes %}<span style="color:var(--text-muted);">(scopes: {{ s.ha_status.local.scopes|join(', ') }})</span>{% endif %}
+                </td></tr>
+            <tr><td class="stat-label">Remote</td>
+                <td>{{ (s.ha_status.remote.role or '—')|title }} · {{ s.ha_status.remote.state or '—' }}
+                    <span style="color:var(--text-muted);">({{ s.ha_status.remote.age if s.ha_status.remote.age is not none else '—' }}s ago, in touch: {{ '✓' if s.ha_status.remote.in_touch else '✗' }})</span>
+                </td></tr>
+            <tr><td class="stat-label">Unacked</td>
+                <td>
+                    {{ s.ha_status.remote.unacked_clients if s.ha_status.remote.unacked_clients is not none else '—' }} unacked
+                    {% if s.ha_status.remote.unacked_clients_left is not none %}
+                    <span class="badge {% if s.ha_status.remote.unacked_clients_left <= 2 %}badge-danger{% else %}badge-dynamic{% endif %}" style="margin-left:6px;">
+                        {{ s.ha_status.remote.unacked_clients_left }} left{% if s.ha_status.remote.unacked_clients_left <= 2 %} — partner-down imminent{% endif %}
+                    </span>
+                    {% endif %}
+                </td></tr>
+            <tr><td class="stat-label">Analyzed</td>
+                <td>{{ s.ha_status.remote.analyzed_packets if s.ha_status.remote.analyzed_packets is not none else '—' }} packets</td></tr>
+        </table>
+
+        {% if s.ha_config %}
+        <details style="margin-top:8px;">
+            <summary style="cursor:pointer;color:var(--text-muted);">Config summary</summary>
+            <div style="margin-top:6px;color:var(--text-muted);">
+                Mode: {{ s.ha_config.mode }} · Heartbeat: {{ s.ha_config.heartbeat_delay }}ms ·
+                Max response delay: {{ s.ha_config.max_response_delay }}ms ·
+                Max ack delay: {{ s.ha_config.max_ack_delay }}ms ·
+                Max unacked clients: {{ s.ha_config.max_unacked_clients }}
+                <ul style="margin:6px 0 0 18px;">
+                {% for p in s.ha_config.peers %}
+                    <li>{{ p.name }} ({{ p.role }}){% if p.get('auto-failover') is not none %} — auto-failover: {{ p.get('auto-failover') }}{% endif %}</li>
+                {% endfor %}
+                </ul>
+            </div>
+        </details>
+        {% endif %}
+
+        {% if current_user.role in ('superadmin','admin') %}
+        <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='heartbeat') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['heartbeat'].confirm }}" title="{{ ha_actions['heartbeat'].help }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">💓 Heartbeat</button>
+            </form>
+            {% if current_user.role == 'superadmin' %}
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='sync') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['sync'].confirm }}" title="{{ ha_actions['sync'].help }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">🔁 Sync</button>
+            </form>
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='continue') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['continue'].confirm }}" title="{{ ha_actions['continue'].help }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">▶️ Continue</button>
+            </form>
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-start') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['maintenance-start'].confirm }}" title="{{ ha_actions['maintenance-start'].help }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">🛠️ Start Maintenance</button>
+            </form>
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-cancel') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['maintenance-cancel'].confirm }}" title="{{ ha_actions['maintenance-cancel'].help }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">✖️ Cancel Maintenance</button>
+            </form>
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='reset') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['reset'].confirm }}" title="{{ ha_actions['reset'].help }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">♻️ Reset</button>
+            </form>
+            {% if s.ha_config and s.ha_config.peers %}
+            <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='scopes') }}"
+                  onsubmit="return false;" data-confirm="{{ ha_actions['scopes'].confirm }}" title="{{ ha_actions['scopes'].help }}"
+                  style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% for p in s.ha_config.peers %}
+                <label style="font-size:11px;color:var(--text-muted);"><input type="checkbox" name="scopes" value="{{ p.name }}"> {{ p.name }}</label>
+                {% endfor %}
+                <button type="submit" class="btn btn-sm btn-secondary">🎯 Set Scopes</button>
+            </form>
+            {% endif %}
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 {% endfor %}
 </div>
+
+{% if compare_rows %}
+<!-- Compare leases (v5.21.0 — Q16) -->
+<div class="card">
+    <div class="card-header"><span class="card-title">📊 Compare Leases</span></div>
+    <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Assigned addresses per subnet, as reported by each server right now. A small transient difference is normal for a moment under load-balancing; a persistent one may mean lease sync has fallen behind.</p>
+    <div style="overflow-x:auto;">
+    <table style="width:100%;font-size:13px;">
+        <tr>
+            <th style="text-align:left;padding:4px 8px;">Subnet</th>
+            {% for s in statuses %}{% if s.up %}<th style="text-align:right;padding:4px 8px;">{{ s.server.name }}</th>{% endif %}{% endfor %}
+        </tr>
+        {% for row in compare_rows %}
+        <tr {% if row.mismatch %}style="background:rgba(200,50,50,0.08);"{% endif %}>
+            <td style="padding:4px 8px;">{{ row.name }}{% if row.mismatch %} <span class="badge badge-danger" style="font-size:10px;">mismatch</span>{% endif %}</td>
+            {% for s in statuses %}{% if s.up %}<td style="text-align:right;padding:4px 8px;" class="mono">{{ row.counts.get(s.server.name, 0) }}</td>{% endif %}{% endfor %}
+        </tr>
+        {% endfor %}
+    </table>
+    </div>
+</div>
+{% endif %}
 
 <!-- HA State guide -->
 <div class="card">

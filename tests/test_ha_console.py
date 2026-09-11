@@ -1,14 +1,17 @@
 """
 tests/test_ha_console.py
 ──────────────────────────
-v5.21.0 (Q16) — the HA operations console. This step covers
-jen/services/kea_ha.py: status-get normalization, the HA config
-summary read from a Dhcp4 config map, partner-name derivation, and the
-per-subnet lease-count comparison. Step 2 adds the route/page tests
-for POST /servers/ha/<id>/<action> and the /servers HA panel.
+v5.21.0 (Q16) — the HA operations console: jen/services/kea_ha.py
+(status-get normalization, HA config summary, per-subnet lease-count
+comparison) and the POST /servers/ha/<id>/<action> route that sends the
+allowlisted HA commands. `HA_ACTIONS` is the only door to a Kea HA
+command — these tests confirm nothing outside it reaches `kea_command()`,
+and that role gates (a mere admin can only heartbeat) are actually
+enforced, not just documented.
 """
 
 from jen.services import kea_ha
+from tests.conftest import restricted_client as _restricted_client
 
 # ── Fixtures shared by the service-layer and route tests ────────────────────
 
@@ -182,3 +185,221 @@ class TestCompareAssigned:
 
         monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 1, "text": "down"})
         assert kea_ha.compare_assigned(SERVERS) == []
+
+
+# ── Route: POST /servers/ha/<id>/<action> ────────────────────────────────────
+
+
+def _wire(monkeypatch, kea_command):
+    from jen import extensions
+    from jen.services import kea as kea_svc
+
+    monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(s) for s in SERVERS])
+    monkeypatch.setattr(kea_svc, "kea_command", kea_command)
+
+
+class TestHaActionRouteAuth:
+    def test_requires_login(self, client):
+        r = client.post("/servers/ha/1/heartbeat", follow_redirects=False)
+        assert r.status_code in (301, 302, 308)
+        assert "login" in r.headers.get("Location", "").lower()
+
+    def test_unknown_action_is_404(self, logged_in_client, monkeypatch):
+        _wire(monkeypatch, lambda *a, **kw: {"result": 0, "text": "ok"})
+        r = logged_in_client.post("/servers/ha/1/not-a-real-action")
+        assert r.status_code == 404
+
+    def test_viewer_is_forbidden(self, client, db, monkeypatch):
+        _wire(monkeypatch, lambda *a, **kw: {"result": 0, "text": "ok"})
+        _restricted_client(client, db, allowed_subnets=None, role="viewer", username="ha_viewer1")
+        r = client.post("/servers/ha/1/heartbeat")
+        assert r.status_code == 403
+
+    def test_admin_can_heartbeat_but_not_sync(self, client, db, monkeypatch):
+        calls = []
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append(command)
+            return {"result": 0, "text": "ok"}
+
+        _wire(monkeypatch, fake)
+        _restricted_client(client, db, allowed_subnets=None, role="admin", username="ha_admin1")
+
+        r = client.post("/servers/ha/1/heartbeat", follow_redirects=True)
+        assert r.status_code == 200
+        assert "ha-heartbeat" in calls
+
+        r = client.post("/servers/ha/1/sync")
+        assert r.status_code == 403
+
+    def test_superadmin_can_do_every_action(self, logged_in_client, monkeypatch):
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            if command == "config-get":
+                return {"result": 0, "arguments": {"Dhcp4": HA_DHCP4_CFG}}
+            return {"result": 0, "text": "ok"}
+
+        _wire(monkeypatch, fake)
+        for action in ("heartbeat", "sync", "continue", "maintenance-start", "maintenance-cancel", "reset"):
+            r = logged_in_client.post(f"/servers/ha/1/{action}", follow_redirects=True)
+            assert r.status_code == 200, f"{action} should be reachable by a superadmin"
+
+
+class TestHaActionRouteBehavior:
+    def test_each_action_sends_exactly_its_pinned_command(self, logged_in_client, monkeypatch):
+        calls = []
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append((command, service, arguments, server.get("name")))
+            if command == "config-get":
+                return {"result": 0, "arguments": {"Dhcp4": HA_DHCP4_CFG}}
+            return {"result": 0, "text": "ok"}
+
+        _wire(monkeypatch, fake)
+
+        logged_in_client.post("/servers/ha/1/heartbeat")
+        assert ("ha-heartbeat", "dhcp4", {}, "Primary") in calls
+
+        calls.clear()
+        logged_in_client.post("/servers/ha/1/continue")
+        assert ("ha-continue", "dhcp4", {}, "Primary") in calls
+
+        calls.clear()
+        logged_in_client.post("/servers/ha/1/maintenance-start")
+        assert ("ha-maintenance-start", "dhcp4", {}, "Primary") in calls
+
+        calls.clear()
+        logged_in_client.post("/servers/ha/1/maintenance-cancel")
+        assert ("ha-maintenance-cancel", "dhcp4", {}, "Primary") in calls
+
+        calls.clear()
+        logged_in_client.post("/servers/ha/1/reset")
+        assert ("ha-reset", "dhcp4", {}, "Primary") in calls
+
+    def test_sync_derives_the_partner_name_server_side(self, logged_in_client, monkeypatch):
+        calls = []
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append((command, arguments))
+            if command == "config-get":
+                return {"result": 0, "arguments": {"Dhcp4": HA_DHCP4_CFG}}
+            return {"result": 0, "text": "ok"}
+
+        _wire(monkeypatch, fake)
+        r = logged_in_client.post("/servers/ha/1/sync", follow_redirects=True)
+        assert r.status_code == 200
+        assert ("ha-sync", {"server-name": "server2", "max-period": 60}) in calls
+
+    def test_sync_refuses_when_partner_cannot_be_determined(self, logged_in_client, monkeypatch):
+        calls = []
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append(command)
+            if command == "config-get":
+                return {"result": 0, "arguments": {"Dhcp4": {}}}  # no HA hook configured
+            return {"result": 0, "text": "ok"}
+
+        _wire(monkeypatch, fake)
+        r = logged_in_client.post("/servers/ha/1/sync", follow_redirects=True)
+        assert r.status_code == 200
+        assert "ha-sync" not in calls
+        assert b"could not determine" in r.data.lower()
+
+    def test_scopes_sends_the_checked_form_values(self, logged_in_client, monkeypatch):
+        calls = []
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append((command, arguments))
+            return {"result": 0, "text": "ok"}
+
+        _wire(monkeypatch, fake)
+        r = logged_in_client.post("/servers/ha/1/scopes", data={"scopes": ["server2"]}, follow_redirects=True)
+        assert r.status_code == 200
+        assert ("ha-scopes", {"scopes": ["server2"]}) in calls
+
+    def test_scopes_refuses_with_nothing_checked(self, logged_in_client, monkeypatch):
+        calls = []
+        _wire(monkeypatch, lambda command, **kw: (calls.append(command), {"result": 0, "text": "ok"})[1])
+        r = logged_in_client.post("/servers/ha/1/scopes", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert calls == []
+        assert b"select at least one scope" in r.data.lower()
+
+    def test_kea_error_shows_a_danger_flash_not_a_traceback(self, logged_in_client, monkeypatch):
+        _wire(monkeypatch, lambda *a, **kw: {"result": 1, "text": "HA service not configured for dhcp4"})
+        r = logged_in_client.post("/servers/ha/1/heartbeat", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"HA service not configured for dhcp4" in r.data
+
+    def test_nonexistent_server_id(self, logged_in_client, monkeypatch):
+        _wire(monkeypatch, lambda *a, **kw: {"result": 0, "text": "ok"})
+        r = logged_in_client.post("/servers/ha/999/heartbeat", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"not found" in r.data.lower()
+
+    def test_audit_row_written_per_action(self, logged_in_client, monkeypatch, db):
+        _wire(monkeypatch, lambda *a, **kw: {"result": 0, "text": "heartbeat ok"})
+        logged_in_client.post("/servers/ha/1/heartbeat", follow_redirects=True)
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM audit_log WHERE action='ha_heartbeat' ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+        assert row is not None
+        assert row["details"] == "heartbeat ok"
+
+
+# ── Page rendering ────────────────────────────────────────────────────────────
+
+
+class TestServersPageHaPanel:
+    def _wire_page(self, monkeypatch, ha_states):
+        """ha_states: {server_name: status-get-arguments-or-None}."""
+        from jen import extensions
+        from jen.services import kea as kea_svc
+
+        cfg = [dict(s) for s in SERVERS]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", cfg)
+        monkeypatch.setattr(
+            extensions.cfg,
+            "get",
+            lambda section, key, fallback=None: "hot-standby" if (section, key) == ("kea", "ha_mode") else fallback,
+        )
+        monkeypatch.setattr(
+            kea_svc,
+            "get_all_server_status",
+            lambda: [
+                {"server": cfg[0], "up": True, "ha_state": "hot-standby", "ha_partner": "hot-standby", "version": ""},
+                {"server": cfg[1], "up": True, "ha_state": "hot-standby", "ha_partner": "hot-standby", "version": ""},
+            ],
+        )
+
+        def fake(command, service="dhcp4", arguments=None, server=None, timeout=10):
+            if command == "status-get":
+                state = ha_states.get(server["name"])
+                return state if state is not None else {"result": 0, "arguments": {}}
+            if command == "config-get":
+                return {"result": 0, "arguments": {"Dhcp4": {}}}
+            return {"result": 0, "arguments": {}}
+
+        monkeypatch.setattr(kea_svc, "kea_command", fake)
+
+    def test_ha_panel_shown_only_for_the_ha_enabled_server(self, logged_in_client, monkeypatch):
+        self._wire_page(monkeypatch, {"Primary": _status_get_response(), "Standby": None})
+        r = logged_in_client.get("/servers")
+        assert r.status_code == 200
+        assert b"HA Status" in r.data
+        assert r.data.count(b"HA Status") == 1
+
+    def test_no_ha_panel_when_neither_server_has_the_hook(self, logged_in_client, monkeypatch):
+        self._wire_page(monkeypatch, {"Primary": None, "Standby": None})
+        r = logged_in_client.get("/servers")
+        assert r.status_code == 200
+        assert b"HA Status" not in r.data
+
+    def test_unacked_badge_shown_below_threshold(self, logged_in_client, monkeypatch):
+        self._wire_page(monkeypatch, {"Primary": _status_get_response(unacked_left=1), "Standby": None})
+        r = logged_in_client.get("/servers")
+        assert b"partner-down imminent" in r.data
+
+    def test_unacked_badge_absent_above_threshold(self, logged_in_client, monkeypatch):
+        self._wire_page(monkeypatch, {"Primary": _status_get_response(unacked_left=5), "Standby": None})
+        r = logged_in_client.get("/servers")
+        assert b"partner-down imminent" not in r.data
