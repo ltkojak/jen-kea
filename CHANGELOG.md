@@ -2,6 +2,40 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.18.0] - 2026-09-11
+
+A catalog-driven editor for DHCP options at every level Kea supports,
+with a view that shows which value actually wins. `sudo ./install.sh`
+or the in-app update — nothing to do by hand.
+
+### DHCP options, at the level they're actually set
+
+Before this release, an option outside the handful the Edit Subnet form
+covers (router, DNS) meant hand-editing `kea-dhcp4.conf`. **Subnets →
+Options** now edits `option-data` at global, shared-network, subnet, and
+pool level, with a catalog of Kea's common DHCPv4 options — NTP, TFTP
+server, boot file, classless static routes, and two dozen more — each
+validated against its real type before anything reaches Kea. Anything
+not in the catalog is a **Custom code**, written as raw hex.
+
+Each subnet card now shows an "Options: N here · M inherited" line
+linking straight to that subnet's view.
+
+### See what's actually in effect, and why
+
+Options set at more than one level don't merge — the most specific one
+wins (pool > subnet > shared network > global). The new "Effective
+options" panel, shown for a subnet or pool, lists the value that's live
+and, struck through, every less-specific value it overrode. No more
+guessing why a subnet doesn't seem to be picking up a global NTP server
+you *know* you set.
+
+Routers and DNS servers at the **subnet** level stay on the Edit Subnet
+form, which already owns those two fields — the Options page shows them
+as "managed by Edit form" there and refuses a write, so there's no way
+to have the two forms silently fight over the same value. The same
+options at every other level are ordinary, editable entries.
+
 ## [5.17.0] - 2026-09-11
 
 Authentication and host-hardening polish — seven independent items.

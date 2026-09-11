@@ -541,6 +541,57 @@ empty network and create it under the new name.
 
 ---
 
+## DHCP Options (v5.18.0)
+
+**Subnets → Options** on a subnet card (or the "Options: N here · M
+inherited" line) opens a catalog-driven editor for `option-data` at four
+levels — **global**, **shared network**, **subnet**, and **pool** — plus
+an "Effective options" view that shows, for a given subnet or pool,
+which value actually wins and where the ones it beat came from.
+
+**Precedence.** For a lease, the most specific level wins:
+
+```
+pool  >  subnet  >  shared network  >  global
+```
+
+An option set at a more specific level *overrides* the same option set
+higher up — it doesn't merge with it. The Effective options panel lists
+every overridden value (struck through) alongside the one that's live.
+
+**Why routers and DNS servers aren't here at the subnet level.** Codes 3
+(`routers`) and 6 (`domain-name-servers`) at the **subnet** level are
+owned by the **Edit Subnet** form, which already has dedicated Router
+and DNS Servers fields — editing them from two places would be a good
+way to silently overwrite one with the other. The Options page shows
+them as **managed by Edit form** at that level with a link over, and
+refuses a write there (server-side, not just hidden in the UI). The
+*same* codes at global, shared-network, or pool level are ordinary
+options — Jen doesn't special-case them there.
+
+**Catalog and custom codes.** The "Add option" form offers Kea's common
+DHCPv4 options by name (subnet-mask, routers, DNS, NTP, TFTP, classless
+static routes, and more) with per-type validation before anything is
+pushed to Kea. Anything else is a **Custom code** (1–254): give it a
+number and, optionally, a name, and enter the value as raw hex — Jen
+writes it with `csv-format: false` since it has no type information for
+an option it doesn't recognize.
+
+**Classless static routes** (code 121) use Kea's csv syntax — one or
+more `network/prefix - router` pairs, comma-separated:
+
+```
+192.168.10.0/24 - 10.0.0.1, 0.0.0.0/0 - 10.0.0.1
+```
+
+**Not covered by this page:** per-client-class options (a later
+release), reservation-level options beyond the existing DNS field,
+`option-def` (custom option *definitions* — listed read-only at the
+bottom of the page), IPv6 options, and vendor-space options (e.g.
+`vendor-4491`) — those still require hand-editing `kea-dhcp4.conf`.
+
+---
+
 ## SSH Setup for Subnet Editing
 
 ### Generate the Key
