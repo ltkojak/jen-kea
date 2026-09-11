@@ -262,14 +262,21 @@ _BASELINE_TABLES = [
     # v5.16.0 — every Kea config Jen writes is recorded here with a diff
     # against the previous one, viewable and restorable. MEDIUMTEXT (not
     # JSON) sidesteps MariaDB's implicit json_valid CHECK and MySQL 8's
-    # no-literal-DEFAULT-on-TEXT rule; the config is stored as
-    # json.dumps(cfg, indent=2, sort_keys=True) so diffs are stable.
-    # `service` is VARCHAR(8) — Q15 reuses this table with service='d2'.
+    # no-literal-DEFAULT-on-TEXT rule; `config` is stored as
+    # crypto.encrypt_secret(json.dumps(cfg, indent=2, sort_keys=True))
+    # (v5.20.0 — a "v1:"-prefixed Fernet token, so diffs of the
+    # decrypted body stay stable). `service` is VARCHAR(8) — Q19 reuses
+    # this table with service='d2'. `hash_kind` (v5.20.0) records what
+    # `sha256` actually hashes: 'raw' (helper v2, the file's own bytes),
+    # 'canonical' (v1/legacy, sha256 of the canonical JSON — a DIFFERENT
+    # quantity), or 'legacy' (a pre-5.20.0 row whose kind was never
+    # recorded).
     """CREATE TABLE IF NOT EXISTS kea_config_revisions (
         id INT AUTO_INCREMENT PRIMARY KEY,
         server_id INT NOT NULL,
         service VARCHAR(8) NOT NULL,
         sha256 CHAR(64) NOT NULL,
+        hash_kind VARCHAR(12) NOT NULL DEFAULT 'legacy',
         config MEDIUMTEXT NOT NULL,
         summary VARCHAR(255) NOT NULL DEFAULT '',
         username VARCHAR(64) NOT NULL DEFAULT '',
@@ -750,6 +757,63 @@ def _m020_kea_config_revisions(db):
     logger.info("Migration 20: kea_config_revisions table")
 
 
+def _m021_config_revision_hash_kind_and_encrypt(db):
+    """
+    v5.20.0 — two related fixes to `kea_config_revisions` (migration 20,
+    v5.16.0), both from the 2026-09-11 audit:
+
+    (a) `hash_kind` records what `sha256` actually hashes. Helper v2
+    hashes the raw config-file bytes ("raw"); a v1/legacy host has no
+    raw hash, so Jen falls back to `sha256(canonical(cfg))`
+    ("canonical") — a DIFFERENT quantity stored in the same CHAR(64)
+    column with nothing to distinguish them. A host upgraded v1→v2
+    would compare its first raw-bytes read against a stale canonical
+    sha and record a spurious "external" revision; restoring on such a
+    host would pass the canonical sha as `expect_sha256` to a v2 helper
+    that only understands raw bytes, and always conflict. Existing rows
+    predate this distinction entirely, so they get "legacy" — an
+    explicit "unknown", not a guess.
+
+    (b) `config` bodies were stored as plaintext MEDIUMTEXT. A Kea
+    config can carry lease-database/hosts-database passwords,
+    control-socket basic-auth credentials, and HA peer basic-auth
+    passwords — the same exposure migrations 17/18 already fixed for
+    MFA secrets and alert-channel config. Same fix: wrap with
+    `crypto.encrypt_secret()` (a "v1:"-prefixed Fernet token; the
+    column is MEDIUMTEXT, not JSON, so no `json_valid()` concern).
+    Reads decrypt with a legacy-plaintext passthrough
+    (`jen/services/config_revisions.py`).
+
+    Idempotent: the ADD COLUMN is skipped if already present; the
+    re-encrypt WHERE clause skips rows already wrapped, so a re-run (or
+    a crash partway through — both run in the same transaction as the
+    `schema_migrations` INSERT) is safe. A missing/unreadable
+    encryption key makes `encrypt_secret()` raise, aborting startup
+    rather than recording this as applied — the same fail-loud contract
+    as 17/18.
+    """
+    from jen.services.crypto import PREFIX, encrypt_secret
+
+    with db.cursor() as cur:
+        if _column_missing(cur, "kea_config_revisions", "hash_kind"):
+            cur.execute("ALTER TABLE kea_config_revisions ADD COLUMN hash_kind VARCHAR(12) NOT NULL DEFAULT 'legacy'")
+            logger.info("Migration 21: kea_config_revisions.hash_kind column added")
+
+        cur.execute(
+            "SELECT id, config FROM kea_config_revisions "
+            "WHERE config IS NOT NULL AND config <> '' AND config NOT LIKE %s",
+            (PREFIX + "%",),
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            cur.execute(
+                "UPDATE kea_config_revisions SET config = %s WHERE id = %s",
+                (encrypt_secret(row["config"]), row["id"]),
+            )
+        if rows:
+            logger.warning("Migration 21: encrypted %d existing config revision(s) at rest", len(rows))
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -781,6 +845,11 @@ MIGRATIONS = [
         _m019_dashboard_widgets_varchar,
     ),
     (20, "kea_config_revisions table — Kea config history + restore (v5.16.0)", _m020_kea_config_revisions),
+    (
+        21,
+        "kea_config_revisions.hash_kind column + encrypt existing config bodies at rest (v5.20.0)",
+        _m021_config_revision_hash_kind_and_encrypt,
+    ),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

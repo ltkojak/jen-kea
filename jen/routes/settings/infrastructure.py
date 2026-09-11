@@ -46,6 +46,21 @@ _EXTRA_SERVER_FORM_KEYS = frozenset(
 )
 
 
+def _kea_server_section_ids(cfg) -> list[int]:
+    """Every `[kea_server_N]` (N >= 2 — 1 is the primary, `[kea]`) present
+    in `cfg`, sorted. v5.19.1 (Q14) — gap-tolerant: a
+    `while has_section(kea_server_n): n += 1` loop stops at the first
+    missing number, hiding every server after a hand-made gap. v5.20.0
+    (Q15) made section numbers stable identities on the SAVE side too
+    (`_rewrite_extra_servers`, below), so gaps are now a normal, expected
+    shape rather than a transient one this only had to tolerate on read."""
+    return sorted(
+        int(m.group(1))
+        for sec_name in cfg.sections()
+        if (m := re.fullmatch(r"kea_server_(\d+)", sec_name)) and int(m.group(1)) >= 2
+    )
+
+
 @bp.route("/settings/infrastructure")
 @login_required
 @_admin_required
@@ -109,17 +124,9 @@ def settings_kea():
                 ssh_pub_key = f.read().strip()
         except Exception:
             pass
-    # Load extra servers. v5.19.1 — gap-tolerant enumeration (same fix as
-    # config.py::derive_kea_servers): a `while has_section(kea_server_n)`
-    # loop stops at the first missing number, hiding every server after a
-    # hand-made gap.
+    # Load extra servers — gap-tolerant (see _kea_server_section_ids).
     extra_servers = []
-    nums = sorted(
-        int(m.group(1))
-        for sec_name in extensions.cfg.sections()
-        if (m := re.fullmatch(r"kea_server_(\d+)", sec_name)) and int(m.group(1)) >= 2
-    )
-    for n in nums:
+    for n in _kea_server_section_ids(extensions.cfg):
         sec = f"kea_server_{n}"
         extra_servers.append(
             {
@@ -774,8 +781,6 @@ def save_extra_servers():
             flash(f"Invalid IPv6 API URL: {u.strip()} (direct mode needs an explicit port)", "error")
             return redirect(url_for("settings.settings_kea"))
 
-    renumbered = []
-
     def _rewrite_extra_servers(cfg):
         # v5.10.3 — snapshot every current [kea_server_N] so keys the form
         # doesn't manage (ssh_key, any hand-added value) and a blank
@@ -785,20 +790,24 @@ def save_extra_servers():
         # section number and each silently inherited the other's api_pass /
         # api6_pass / ssh_key. A row added in the UI has no id and
         # preserves nothing.
-        existing = {}
-        n = 2
-        while cfg.has_section(f"kea_server_{n}"):
-            existing[n] = dict(cfg.items(f"kea_server_{n}"))
+        #
+        # v5.20.0 (Q15) — section numbers are now stable IDENTITIES, not
+        # positions: kea_config_revisions.server_id, kea_helper_status,
+        # and every /servers/<id> URL are keyed by this integer, so
+        # renumbering on every save silently reassigned a deleted
+        # server's history/status to whichever server next landed on its
+        # old number. A row with a known, unclaimed id keeps that exact
+        # number regardless of its position in the form; only a
+        # genuinely new/unknown/duplicated row gets a fresh one. A
+        # blank-api_url row is simply dropped — a gap left behind is
+        # normal now, not a bug.
+        existing = {n: dict(cfg.items(f"kea_server_{n}")) for n in _kea_server_section_ids(cfg)}
+        for n in existing:
             cfg.remove_section(f"kea_server_{n}")
-            n += 1
 
         # A tampered/duplicated id must not pull another server's secrets in.
         seen_ids = set()
 
-        # Sections are renumbered contiguously from 2, skipping blank rows —
-        # a gap would make derive_kea_servers() stop early and hide every
-        # server after it.
-        out = 2
         for (
             extra_id,
             name,
@@ -833,10 +842,9 @@ def save_extra_servers():
             orig_id = int(raw_id) if raw_id.isdigit() else None
             if orig_id is not None and (orig_id not in existing or orig_id in seen_ids):
                 orig_id = None  # unknown or duplicated — treat the row as new
-            if orig_id is not None:
-                seen_ids.add(orig_id)
-                if orig_id != out:
-                    renumbered.append(f"{orig_id}->{out}")
+
+            out = orig_id if orig_id is not None else max({1, *existing, *seen_ids}) + 1
+            seen_ids.add(out)
             prev = existing.get(orig_id, {}) if orig_id is not None else {}
 
             sec = f"kea_server_{out}"
@@ -867,7 +875,6 @@ def save_extra_servers():
             for k, v in prev.items():
                 if k not in _EXTRA_SERVER_FORM_KEYS:
                     cfg.set(sec, k, v)
-            out += 1
 
     try:
         __config.app_config.mutate(_rewrite_extra_servers)
@@ -883,14 +890,9 @@ def save_extra_servers():
         return redirect(url_for("settings.settings_kea"))
 
     count = len(extensions.KEA_SERVERS) - 1
-    note = " (renumbered)" if renumbered else ""
-    flash(f"Additional servers saved — {count} extra server(s) configured{note}.", "success")
+    flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     __user.set_global_setting("restart_pending", "true")
-    __user.audit(
-        "SAVE_INFRA",
-        "extra_servers",
-        f"{count} additional servers configured" + (f" renumbered={','.join(renumbered)}" if renumbered else ""),
-    )
+    __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
     return redirect(url_for("settings.settings_kea"))
 
 

@@ -3,17 +3,32 @@ jen/services/config_revisions.py
 ────────────────────────────────
 v5.16.0 — a history of every Kea config Jen writes to a host, plus the
 external changes it notices, stored in `kea_config_revisions` (migration
-20). Each row is `(server_id, service, sha256, config, summary,
-username, source, created_at)` where `config` is
-`json.dumps(cfg, indent=2, sort_keys=True)` — canonical so a unified
-diff between two rows is stable.
+20). Each row is `(server_id, service, sha256, hash_kind, config,
+summary, username, source, created_at)` where `config` is stored as
+`encrypt_secret(canonical(cfg))` (v5.20.0 — a "v1:"-prefixed Fernet
+token; `canonical()` is indent=2/sort_keys=True JSON so a unified diff
+of the DECRYPTED bodies is stable) and decrypted transparently by every
+reader below (a legacy plaintext row from before v5.20.0 passes through
+`decrypt_secret()` unchanged).
 
-`source ∈ {jen, external, restore}`:
+`source ∈ {jen, external, restore, baseline}`:
 - `jen`      — a config Jen applied via a form or route.
 - `external` — the file changed on the host between Jen writes (detected
-               by `read_config_versioned`, v2 helper only — no SHA, no
-               capture).
+               by `read_config_versioned`, v2 helper only).
 - `restore`  — a prior revision re-applied from the history page.
+- `baseline` — the first config Jen ever saw on a host, or the first one
+               it saw with a raw (helper v2) hash after only ever having
+               a canonical one (v1/legacy) — v5.20.0, so the very first
+               write is guarded and the very first diff has a "before".
+
+`hash_kind ∈ {raw, canonical, legacy}` records what `sha256` actually
+hashes (v5.20.0) — `raw` = sha256 of the live config file's own bytes
+(helper v2's `read-config`/`apply-config`), `canonical` = sha256 of
+`canonical(cfg)` (no raw hash available: v1 helper or the legacy path),
+`legacy` = a pre-5.20.0 row whose kind was never recorded. The two
+non-legacy kinds are NOT interchangeable — comparing a `raw` sha against
+a `canonical` one (or vice versa) always mismatches even when nothing
+changed.
 
 The number kept per (server, service) is the global setting
 `config_revision_keep` (default 50), pruned oldest-first after each
@@ -25,6 +40,8 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+
+from jen.services.crypto import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +78,31 @@ def _current_username() -> str:
         return ""
 
 
-def record(server_id: int, service: str, cfg: dict, sha256: str, summary: str, source: str = "jen") -> int | None:
-    """Insert a revision (config canonicalised here) and prune. Returns
-    the new row id, or None on a DB error (never raises — a failed
-    history write must not fail the config apply that triggered it)."""
-    body = canonical(cfg)
+def record(
+    server_id: int,
+    service: str,
+    cfg: dict,
+    sha256: str,
+    summary: str,
+    *,
+    hash_kind: str,
+    source: str = "jen",
+) -> int | None:
+    """Insert a revision (config canonicalised and encrypted here) and
+    prune. Returns the new row id, or None on a DB error (never raises
+    — a failed history write must not fail the config apply that
+    triggered it). `hash_kind` is required (v5.20.0) — every caller
+    knows whether `sha256` is a raw-bytes hash or a canonical-JSON one;
+    guessing here would be exactly the ambiguity this column exists to
+    remove."""
+    body = encrypt_secret(canonical(cfg))
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute(
                 "INSERT INTO kea_config_revisions "
-                "(server_id, service, sha256, config, summary, username, source) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (server_id, service, sha256 or "", body, (summary or "")[:255], _current_username(), source),
+                "(server_id, service, sha256, hash_kind, config, summary, username, source) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (server_id, service, sha256 or "", hash_kind, body, (summary or "")[:255], _current_username(), source),
             )
             rev_id = cur.lastrowid
         prune(server_id, service)
@@ -82,6 +112,18 @@ def record(server_id: int, service: str, cfg: dict, sha256: str, summary: str, s
         return None
 
 
+def _decrypted(row: dict | None) -> dict | None:
+    """Decrypt `row["config"]` in place. Raises SecretDecryptError (from
+    jen.services.crypto) if the row is encrypted but the key can't
+    decrypt it — deliberately NOT caught here, so a caller can tell that
+    apart from "no such revision" / a DB error and show it as its own
+    condition (a bad/missing /etc/jen/mfa_key), not silently return
+    None or garbled text."""
+    if row is not None and row.get("config") is not None:
+        row["config"] = decrypt_secret(row["config"], what="config revision")
+    return row
+
+
 def latest(server_id: int, service: str) -> dict | None:
     try:
         with _jen_db() as db, db.cursor() as cur:
@@ -89,10 +131,11 @@ def latest(server_id: int, service: str) -> dict | None:
                 "SELECT * FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT 1",
                 (server_id, service),
             )
-            return cur.fetchone()
+            row = cur.fetchone()
     except Exception as e:
         logger.warning(f"config_revisions.latest failed: {e}")
         return None
+    return _decrypted(row)
 
 
 def list_revisions(server_id: int, service: str, limit: int = 100) -> list[dict]:
@@ -131,10 +174,11 @@ def get(rev_id: int) -> dict | None:
     try:
         with _jen_db() as db, db.cursor() as cur:
             cur.execute("SELECT * FROM kea_config_revisions WHERE id=%s", (rev_id,))
-            return cur.fetchone()
+            row = cur.fetchone()
     except Exception as e:
         logger.warning(f"config_revisions.get failed: {e}")
         return None
+    return _decrypted(row)
 
 
 def previous(rev_id: int, server_id: int, service: str) -> dict | None:
@@ -146,10 +190,11 @@ def previous(rev_id: int, server_id: int, service: str) -> dict | None:
                 "WHERE server_id=%s AND service=%s AND id < %s ORDER BY id DESC LIMIT 1",
                 (server_id, service, rev_id),
             )
-            return cur.fetchone()
+            row = cur.fetchone()
     except Exception as e:
         logger.warning(f"config_revisions.previous failed: {e}")
         return None
+    return _decrypted(row)
 
 
 def diff(a_text: str, b_text: str, a_label: str = "previous", b_label: str = "this") -> list[str]:

@@ -43,6 +43,8 @@
                     <span class="badge badge-dynamic" title="changed on the host outside Jen">external</span>
                     {% elif r.source == 'restore' %}
                     <span class="badge badge-production">restore</span>
+                    {% elif r.source == 'baseline' %}
+                    <span class="badge" style="background:var(--surface2);" title="the first config Jen saw on this host">baseline</span>
                     {% else %}
                     <span class="badge badge-reserved">jen</span>
                     {% endif %}

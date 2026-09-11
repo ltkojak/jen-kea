@@ -259,11 +259,18 @@ def _conf_path(server, service):
 def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str | None]:
     """(parsed config, sha256-of-raw-bytes). The SHA is None on a v1
     helper or the legacy path — Jen then falls back to a canonical-JSON
-    compare for the concurrency guard, and skips external-change capture.
+    compare for the concurrency guard.
 
     v5.16.0 — when the SHA is known and differs from the newest recorded
     revision's, the on-host file was hand-edited since Jen last wrote it:
-    record it as an `external` revision so the history stays complete."""
+    record it as an `external` revision so the history stays complete.
+    v5.20.0 — the first time Jen ever sees a host's config (no revision
+    recorded yet), or the first time it sees one with a RAW hash after
+    only ever having a canonical one (a v1→v2 helper upgrade), that read
+    is recorded as a `baseline`, never `external` — there is nothing to
+    have changed relative to, and doing so also arms the optimistic-
+    concurrency guard from the very first write instead of leaving it
+    unguarded until Jen happens to write something first."""
     path = _conf_path(server, service)
     cfg: dict | None = None
     sha: str | None = None
@@ -285,8 +292,8 @@ def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str 
         logger.warning(f"read-config helper error on {server.get('name')}: {e}")
         return None, None
 
-    if cfg is not None and sha:
-        _capture_external_change(server.get("id"), service, cfg, sha)
+    if cfg is not None:
+        _capture_baseline_or_external_change(server.get("id"), service, cfg, sha)
     return cfg, sha
 
 
@@ -296,17 +303,61 @@ def read_config(server: dict, service: str) -> dict | None:
     return read_config_versioned(server, service)[0]
 
 
-def _capture_external_change(server_id, service: str, cfg: dict, sha: str) -> None:
+def _capture_baseline_or_external_change(server_id, service: str, cfg: dict, sha: str | None) -> None:
+    """v5.16.0 (external-change capture) + v5.20.0 (baseline + hash_kind).
+
+    `sha` known (helper v2): no revision recorded yet -> `baseline`
+    ("raw"); a revision exists but isn't "raw" yet (a v1->v2 helper
+    upgrade) -> `baseline` again, NOT `external` — the file didn't
+    change, Jen just gained the ability to hash it properly; the sha
+    differs from the latest recorded ONE THAT IS ALREADY "raw" -> a
+    genuine `external` change. `sha` unknown (v1/legacy): only the very
+    first contact records anything (a "canonical" baseline, so
+    `_jen_side_conflict`'s best-effort compare has something to compare
+    against) — there's no raw hash to detect a later external change
+    with, unchanged from before."""
     if server_id is None:
         return
     try:
         from jen.services import config_revisions as _rev
 
         last = _rev.latest(server_id, service)
-        if last is not None and last.get("sha256") and last["sha256"] != sha:
-            _rev.record(server_id, service, cfg, sha, "changed outside Jen", source="external")
+        if sha:
+            if last is None:
+                _rev.record(
+                    server_id,
+                    service,
+                    cfg,
+                    sha,
+                    "initial baseline — first config Jen saw on this host",
+                    source="baseline",
+                    hash_kind="raw",
+                )
+            elif last.get("hash_kind") != "raw":
+                _rev.record(
+                    server_id,
+                    service,
+                    cfg,
+                    sha,
+                    "baseline re-established (helper v2)",
+                    source="baseline",
+                    hash_kind="raw",
+                )
+            elif last.get("sha256") and last["sha256"] != sha:
+                _rev.record(server_id, service, cfg, sha, "changed outside Jen", source="external", hash_kind="raw")
+        elif last is None:
+            canon_sha = hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
+            _rev.record(
+                server_id,
+                service,
+                cfg,
+                canon_sha,
+                "initial baseline — first config Jen saw on this host (no raw hash: helper v1 / legacy)",
+                source="baseline",
+                hash_kind="canonical",
+            )
     except Exception as e:
-        logger.warning(f"external-change capture failed for server {server_id}/{service}: {e}")
+        logger.warning(f"config-revision baseline/external-change capture failed for server {server_id}/{service}: {e}")
 
 
 def _tls_list(tls_paths):
@@ -441,9 +492,17 @@ def _record_revision_after_apply(server, service, cfg, sha, summary, source):
         from jen.services import config_revisions as _rev
 
         # No SHA from the helper (v1 / legacy) → compute the canonical one
-        # so the row still has something stable to compare and diff.
-        sha = sha or hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
-        _rev.record(server.get("id"), service, cfg, sha, summary or f"{source} {service}", source=source)
+        # so the row still has something stable to compare and diff, and
+        # record what kind of hash it is (v5.20.0) so a later reader never
+        # compares a "raw" sha against a "canonical" one.
+        if sha:
+            hash_kind = "raw"
+        else:
+            sha = hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
+            hash_kind = "canonical"
+        _rev.record(
+            server.get("id"), service, cfg, sha, summary or f"{source} {service}", source=source, hash_kind=hash_kind
+        )
     except Exception as e:
         logger.warning(f"config revision not recorded for server {server.get('id')}/{service}: {e}")
 

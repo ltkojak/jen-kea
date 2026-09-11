@@ -18,6 +18,7 @@ from jen import extensions
 from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.crypto import SecretDecryptError
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("servers", __name__)
@@ -207,6 +208,22 @@ def _history_gate(server_id):
     return server, None
 
 
+def _get_revision_or_flash(server_id, rev_id):
+    """(rev, None) or (None, redirect). v5.20.0 — a revision's config is
+    encrypted at rest; SecretDecryptError (the wrong /etc/jen/mfa_key for
+    this row, typically after restoring a DB from a different install)
+    is Jen's own text, so it becomes a flash here instead of a 500."""
+    try:
+        rev = __rev.get(rev_id)
+    except SecretDecryptError as exc:
+        flash(str(exc), "error")
+        return None, redirect(url_for("servers.config_history", server_id=server_id))
+    if not rev or rev["server_id"] != server_id:
+        flash("Revision not found.", "error")
+        return None, redirect(url_for("servers.config_history", server_id=server_id))
+    return rev, None
+
+
 @bp.route("/servers/<int:server_id>/config-history")
 @login_required
 @_admin_required
@@ -232,27 +249,32 @@ def config_history_detail(server_id, rev_id):
     server, deny = _history_gate(server_id)
     if deny:
         return deny
-    rev = __rev.get(rev_id)
-    if not rev or rev["server_id"] != server_id:
-        flash("Revision not found.", "error")
-        return redirect(url_for("servers.config_history", server_id=server_id))
+    rev, deny = _get_revision_or_flash(server_id, rev_id)
+    if deny:
+        return deny
     service = rev["service"]
-    prev = __rev.previous(rev_id, server_id, service)
-    rows = _diff_rows(
-        __rev.diff(
-            prev["config"] if prev else "",
-            rev["config"],
-            a_label=f"#{prev['id']}" if prev else "(nothing before this)",
-            b_label=f"#{rev_id}",
+    rows = []
+    is_latest = False
+    try:
+        prev = __rev.previous(rev_id, server_id, service)
+        rows = _diff_rows(
+            __rev.diff(
+                prev["config"] if prev else "",
+                rev["config"],
+                a_label=f"#{prev['id']}" if prev else "(nothing before this)",
+                b_label=f"#{rev_id}",
+            )
         )
-    )
-    latest = __rev.latest(server_id, service)
+        latest = __rev.latest(server_id, service)
+        is_latest = bool(latest and latest["id"] == rev_id)
+    except SecretDecryptError as exc:
+        flash(str(exc), "error")
     return render_template(
         "config_history_detail.html",
         server=server,
         rev=rev,
         rows=rows,
-        is_latest=bool(latest and latest["id"] == rev_id),
+        is_latest=is_latest,
         can_restore=current_user.is_superadmin and bool(server.get("ssh_host")),
     )
 
@@ -264,7 +286,11 @@ def config_history_download(server_id, rev_id):
     server, deny = _history_gate(server_id)
     if deny:
         return deny
-    rev = __rev.get(rev_id)
+    try:
+        rev = __rev.get(rev_id)
+    except SecretDecryptError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("servers.config_history", server_id=server_id))
     if not rev or rev["server_id"] != server_id:
         abort(404)
     return Response(
@@ -281,10 +307,9 @@ def config_history_restore(server_id, rev_id):
     server, deny = _history_gate(server_id)
     if deny:
         return deny
-    rev = __rev.get(rev_id)
-    if not rev or rev["server_id"] != server_id:
-        flash("Revision not found.", "error")
-        return redirect(url_for("servers.config_history", server_id=server_id))
+    rev, deny = _get_revision_or_flash(server_id, rev_id)
+    if deny:
+        return deny
     service = rev["service"]
     back = redirect(url_for("servers.config_history", server_id=server_id, service=service))
 
@@ -305,12 +330,27 @@ def config_history_restore(server_id, rev_id):
         )
         return back
 
-    latest = __rev.latest(server_id, service)
+    try:
+        latest = __rev.latest(server_id, service)
+    except SecretDecryptError as exc:
+        flash(str(exc), "error")
+        return back
+    # v5.20.0 — a "raw" latest sha is directly comparable to what a
+    # helper v2 apply-config will re-hash; a "canonical"/"legacy" one is
+    # NOT (it hashes a different thing entirely, so comparing it would
+    # either always mismatch or coincidentally "match" nothing real).
+    # With no raw baseline to check against yet, read the LIVE sha right
+    # before the write instead of skipping the guard outright — the same
+    # short-window pattern the add/delete routes already use.
+    if latest and latest.get("hash_kind") == "raw":
+        expect = latest["sha256"]
+    else:
+        _live_cfg, expect = __host.read_config_versioned(server, service)
     res = __host.apply_config(
         server,
         service,
         cfg,
-        expect_sha256=(latest["sha256"] if latest and latest.get("sha256") else None),
+        expect_sha256=expect,
         summary=f"restore of #{rev_id}",
         source="restore",
     )

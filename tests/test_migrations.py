@@ -81,6 +81,7 @@ class TestKeaConfigRevisionsTable:
             "server_id",
             "service",
             "sha256",
+            "hash_kind",
             "config",
             "summary",
             "username",
@@ -90,6 +91,63 @@ class TestKeaConfigRevisionsTable:
         assert "mediumtext" in cols["config"]["Type"].lower()
         assert cols["service"]["Type"].lower() == "varchar(8)"
         assert cols["source"]["Default"] == "jen"
+
+
+class TestConfigRevisionHashKindAndEncryption:
+    """v5.20.0 / migration 21 — hash_kind distinguishes a raw-bytes sha
+    (helper v2) from a canonical-JSON one (v1/legacy), and config bodies
+    are encrypted at rest with the same Fernet key as MFA secrets and
+    alert-channel config (migrations 17/18)."""
+
+    def test_migration_21_recorded(self):
+        assert 21 in applied_versions()
+
+    def test_hash_kind_column_defaults_to_legacy(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM kea_config_revisions LIKE 'hash_kind'")
+            col = cur.fetchone()
+        assert "varchar" in col["Type"].lower()
+        assert col["Default"] == "legacy"
+
+    def test_encrypts_plaintext_body_preserves_content_and_is_idempotent(self):
+        import json
+
+        from jen.models.migrations import _m021_config_revision_hash_kind_and_encrypt
+        from jen.services.crypto import PREFIX
+
+        sid = 90211  # a server id no other test seeds
+        body = json.dumps({"Dhcp4": {"subnet4": [{"id": 1}]}}, indent=2, sort_keys=True)
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM kea_config_revisions WHERE server_id=%s", (sid,))
+                cur.execute(
+                    "INSERT INTO kea_config_revisions (server_id, service, sha256, hash_kind, config, source) "
+                    "VALUES (%s, 'dhcp4', 'plainsha', 'legacy', %s, 'jen')",
+                    (sid, body),
+                )
+            db.commit()
+        try:
+            with jen_db() as db:
+                _m021_config_revision_hash_kind_and_encrypt(db)
+                db.commit()
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM kea_config_revisions WHERE server_id=%s", (sid,))
+                after_first = cur.fetchone()["config"]
+            assert after_first.startswith(PREFIX)
+            assert "subnet4" not in after_first  # ciphertext hides the plaintext
+
+            # Re-run: already-encrypted row left byte-for-byte alone
+            with jen_db() as db:
+                _m021_config_revision_hash_kind_and_encrypt(db)
+                db.commit()
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT config FROM kea_config_revisions WHERE server_id=%s", (sid,))
+                assert cur.fetchone()["config"] == after_first
+        finally:
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM kea_config_revisions WHERE server_id=%s", (sid,))
+                db.commit()
 
 
 class TestAdminRoleRegression:

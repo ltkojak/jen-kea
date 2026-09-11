@@ -213,6 +213,7 @@
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
         <div style="font-weight:600;margin-bottom:6px;">Additional servers</div>
         <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">For HA peers and multi-server setups. Each needs its own API credentials and SSH config.</p>
+        <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">Listed in their own numeric order — each server's <code>[kea_server_N]</code> number is its permanent identity (config history, helper status, and URLs are keyed by it) and doesn't change when you add, remove, or re-save rows.</p>
         <div id="extra-servers-list">
         {% for srv in infra.extra_servers %}
         <div class="extra-server-row" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;">

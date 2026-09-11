@@ -208,7 +208,17 @@ class TestExtraServerIdentity:
     (extra_id[]), not its position. 5.10.2 rebuilt each row into the
     section at its new position and read the blank-password fallback and
     the unknown-key snapshot from THAT section — so reordering two rows
-    silently swapped their api_pass / api6_pass / ssh_key."""
+    silently swapped their api_pass / api6_pass / ssh_key.
+
+    v5.20.0 (Q15) — the section NUMBER is now a stable identity too, not
+    just what travels with it: a row with a known, unclaimed id keeps
+    its own `[kea_server_N]` number regardless of its position in the
+    form, and a save no longer renumbers the remaining sections
+    contiguously. `kea_config_revisions.server_id` and
+    `kea_helper_status` are keyed by this number, so the old
+    contiguous-renumbering behavior silently reassigned a deleted
+    server's history/status to whichever server next landed on its old
+    number."""
 
     def _save(self, client, form):
         return client.post("/settings/infrastructure/save-extra-servers", data=form, follow_redirects=True)
@@ -218,7 +228,9 @@ class TestExtraServerIdentity:
             (2, {"api_url": "http://s2:8000", "api_pass": "P2", "ssh_key": "/K2"}),
             (3, {"api_url": "http://s3:8000", "api_pass": "P3", "ssh_key": "/K3"}),
         )
-        # Swap the two rows in the UI, both password fields left blank.
+        # Submit the two rows in the OPPOSITE order — this must not move
+        # anything between sections: each row's extra_id[] IS its
+        # section now, full stop, regardless of where it sits in the form.
         self._save(
             logged_in_client,
             _rows(
@@ -227,14 +239,16 @@ class TestExtraServerIdentity:
             ),
         )
         disk = _on_disk(isolated_config)
-        assert disk.get("kea_server_2", "api_url") == "http://s3:8000"
-        assert disk.get("kea_server_2", "api_pass") == "P3"  # NOT P2
-        assert disk.get("kea_server_2", "ssh_key") == "/K3"
-        assert disk.get("kea_server_3", "api_url") == "http://s2:8000"
-        assert disk.get("kea_server_3", "api_pass") == "P2"
-        assert disk.get("kea_server_3", "ssh_key") == "/K2"
+        assert disk.get("kea_server_2", "name") == "Two"
+        assert disk.get("kea_server_2", "api_url") == "http://s2:8000"
+        assert disk.get("kea_server_2", "api_pass") == "P2"
+        assert disk.get("kea_server_2", "ssh_key") == "/K2"
+        assert disk.get("kea_server_3", "name") == "Three"
+        assert disk.get("kea_server_3", "api_url") == "http://s3:8000"
+        assert disk.get("kea_server_3", "api_pass") == "P3"
+        assert disk.get("kea_server_3", "ssh_key") == "/K3"
 
-    def test_deleting_the_middle_row_renumbers_without_a_gap(self, logged_in_client, db, mock_kea, isolated_config):
+    def test_deleting_the_middle_row_leaves_a_gap_and_keeps_ids(self, logged_in_client, db, mock_kea, isolated_config):
         _seed(
             (2, {"api_url": "http://s2:8000", "api_pass": "P2"}),
             (3, {"api_url": "http://s3:8000", "api_pass": "P3"}),
@@ -248,48 +262,104 @@ class TestExtraServerIdentity:
             ),
         )
         disk = _on_disk(isolated_config)
-        assert not disk.has_section("kea_server_4")
+        assert not disk.has_section("kea_server_3")  # a gap — normal now, not a bug
         assert disk.get("kea_server_2", "api_url") == "http://s2:8000"
-        assert disk.get("kea_server_3", "api_url") == "http://s4:8000"
-        assert disk.get("kea_server_3", "api_pass") == "P4"  # its own, not P3's
-        assert disk.get("kea_server_3", "ssh_key") == "/K4"
-        assert len(extensions.KEA_SERVERS) == 3  # primary + 2, none hidden by a gap
+        assert disk.get("kea_server_2", "api_pass") == "P2"
+        assert disk.get("kea_server_4", "api_url") == "http://s4:8000"
+        assert disk.get("kea_server_4", "api_pass") == "P4"  # its own — never renumbered away
+        assert disk.get("kea_server_4", "ssh_key") == "/K4"
+        assert len(extensions.KEA_SERVERS) == 3  # primary + 2, gap-tolerant read (Q14)
 
-    def test_blank_api_url_row_leaves_no_numbering_gap(self, logged_in_client, db, mock_kea, isolated_config):
+    def test_blank_api_url_row_is_dropped_and_the_rest_keep_their_ids(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
         self._save(
             logged_in_client,
             _rows(
-                {"extra_api_url[]": ""},  # blank row — skipped
+                {"extra_api_url[]": ""},  # blank row — dropped
                 {"extra_name[]": "A", "extra_api_url[]": "http://a:8000"},
                 {"extra_name[]": "B", "extra_api_url[]": "http://b:8000"},
             ),
         )
         disk = _on_disk(isolated_config)
+        # None of these rows had a prior identity (nothing was seeded),
+        # so the two real ones get sequential new ids starting at 2 —
+        # the same numbers the old contiguous-renumbering behavior
+        # produced, but because there's nothing to preserve yet, not
+        # because a gap was closed.
         assert disk.get("kea_server_2", "api_url") == "http://a:8000"
         assert disk.get("kea_server_3", "api_url") == "http://b:8000"
-        # derive_kea_servers() stops at the first gap — both must be visible
         assert len(extensions.KEA_SERVERS) == 3
 
     def test_a_new_row_carries_nothing_over(self, logged_in_client, db, mock_kea, isolated_config):
-        _seed((2, {"api_url": "http://s2:8000", "api_pass": "P2", "ssh_key": "/K2"}))
+        _seed(
+            (2, {"api_url": "http://s2:8000", "api_pass": "P2", "ssh_key": "/K2"}),
+            (4, {"api_url": "http://s4:8000", "api_pass": "P4"}),
+        )
         self._save(
             logged_in_client,
             _rows(
                 {"extra_id[]": "2", "extra_api_url[]": "http://s2:8000"},
+                {"extra_id[]": "4", "extra_api_url[]": "http://s4:8000"},
                 {"extra_id[]": "", "extra_name[]": "Fresh", "extra_api_url[]": "http://s9:8000"},
             ),
         )
         disk = _on_disk(isolated_config)
-        assert disk.get("kea_server_3", "api_pass") == "p4"  # the primary's, per isolated_config
-        assert not disk.has_option("kea_server_3", "ssh_key")
+        # The new row lands one past the highest id that exists (4), not
+        # one past the number of rows (which would be 5 either way here,
+        # but only coincidentally — the id space and the row count are
+        # different things now that ids don't renumber contiguously).
+        assert disk.get("kea_server_5", "api_url") == "http://s9:8000"
+        assert disk.get("kea_server_5", "api_pass") == "p4"  # the primary's, per isolated_config
+        assert not disk.has_option("kea_server_5", "ssh_key")
+        assert disk.get("kea_server_2", "api_pass") == "P2"  # untouched
+        assert disk.get("kea_server_4", "api_pass") == "P4"  # untouched
 
     @pytest.mark.parametrize("bogus", ["99", "abc", "-1"])
     def test_an_unknown_id_is_treated_as_a_new_row(self, logged_in_client, db, mock_kea, isolated_config, bogus):
         _seed((2, {"api_url": "http://s2:8000", "api_pass": "P2", "ssh_key": "/K2"}))
         self._save(logged_in_client, _rows({"extra_id[]": bogus, "extra_api_url[]": "http://new:8000"}))
         disk = _on_disk(isolated_config)
-        assert disk.get("kea_server_2", "api_pass") == "p4"  # not P2
-        assert not disk.has_option("kea_server_2", "ssh_key")
+        # Section 2 wasn't resubmitted at all (this save has only the
+        # one, unknown-id row), so it's gone; the bogus-id row is new
+        # and lands one past the highest id that existed THIS save (2),
+        # not at 2 itself.
+        assert not disk.has_section("kea_server_2")
+        assert disk.get("kea_server_3", "api_pass") == "p4"  # the primary's fallback
+        assert not disk.has_option("kea_server_3", "ssh_key")
+
+    def test_history_stays_attached_after_deleting_another_server(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        from jen.services import config_revisions as rev
+
+        _seed(
+            (3, {"api_url": "http://s3:8000", "api_pass": "P3"}),
+            (4, {"api_url": "http://s4:8000", "api_pass": "P4"}),
+        )
+        rev.record(3, "dhcp4", {"Dhcp4": {"subnet4": [{"id": 3}]}}, "sha3", "seed 3", source="jen", hash_kind="raw")
+        rev.record(4, "dhcp4", {"Dhcp4": {"subnet4": [{"id": 4}]}}, "sha4", "seed 4", source="jen", hash_kind="raw")
+        try:
+            # Delete server 3 by simply not resubmitting its row.
+            self._save(logged_in_client, _rows({"extra_id[]": "4", "extra_api_url[]": "http://s4:8000"}))
+            disk = _on_disk(isolated_config)
+            assert not disk.has_section("kea_server_3")
+            assert disk.get("kea_server_4", "api_url") == "http://s4:8000"
+
+            # Server 4's history stays attached to id 4 — untouched by
+            # server 3's deletion, and NOT reassigned to whatever a
+            # contiguous renumber would have put at that position.
+            latest4 = rev.latest(4, "dhcp4")
+            assert latest4 is not None and latest4["summary"] == "seed 4"
+            # Server 3's history is orphaned (its config section is
+            # gone) but still lives under id 3 — it is not silently
+            # inherited by another server.
+            latest3 = rev.latest(3, "dhcp4")
+            assert latest3 is not None and latest3["summary"] == "seed 3"
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM kea_config_revisions WHERE server_id IN (3, 4)")
+            db.commit()
 
     def test_a_duplicated_id_only_claims_the_first_row(self, logged_in_client, db, mock_kea, isolated_config):
         _seed((2, {"api_url": "http://s2:8000", "api_pass": "P2", "ssh_key": "/K2"}))

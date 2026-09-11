@@ -6,6 +6,7 @@ transport is exercised against tests._kea6_helpers.FakeSSHClient; the
 legacy fallback against the same fake replying with the OLD tokens.
 """
 
+import hashlib
 import json
 import pathlib
 
@@ -117,7 +118,7 @@ class TestLegacyFallback:
     """A HelperMissing on any high-level call runs the legacy command and
     reports via == 'legacy'."""
 
-    def test_read_config_falls_back_to_read_remote_json(self, monkeypatch, app):
+    def test_read_config_falls_back_to_read_remote_json(self, monkeypatch, app, quiet_status):
         _connect_seq(
             monkeypatch,
             [("", "sudo: a password is required")],  # helper probe → missing
@@ -314,7 +315,7 @@ class TestHelperVersionFromResponse:
     """v5.16.0 — _record_from_resp learns the real version from any op's
     envelope, not just a `version` op."""
 
-    def test_records_helper_version_from_a_data_op(self, monkeypatch):
+    def test_records_helper_version_from_a_data_op(self, monkeypatch, quiet_status):
         recorded = []
         monkeypatch.setattr(kea_host, "record_helper_status", lambda sid, v: recorded.append((sid, v)))
         monkeypatch.setattr(kea_host, "helper_status", dict)
@@ -322,7 +323,7 @@ class TestHelperVersionFromResponse:
         kea_host.read_config(SERVER, "dhcp4")
         assert (1, 2) in recorded
 
-    def test_falls_back_to_min_when_envelope_lacks_it(self, monkeypatch):
+    def test_falls_back_to_min_when_envelope_lacks_it(self, monkeypatch, quiet_status):
         recorded = []
         monkeypatch.setattr(kea_host, "record_helper_status", lambda sid, v: recorded.append((sid, v)))
         monkeypatch.setattr(kea_host, "helper_status", dict)
@@ -336,7 +337,6 @@ class TestReadConfigVersioned:
         _connect_seq(
             monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}, "sha256": "abc", "helper_version": 2}), "")]
         )
-        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: None)
         cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
         assert cfg == {"Dhcp4": {}} and sha == "abc"
 
@@ -345,21 +345,76 @@ class TestReadConfigVersioned:
         cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
         assert cfg == {"Dhcp4": {}} and sha is None
 
+    # ── v5.20.0: baseline + hash_kind ────────────────────────────────────
+    def test_first_v2_read_records_a_raw_baseline(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {"n": 1}}, "sha256": "abc"}), "")])
+        calls = []
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: None)
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: calls.append((a, k)))
+        kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert kwargs.get("source") == "baseline"
+        assert kwargs.get("hash_kind") == "raw"
+        assert args[3] == "abc"  # the sha, passed through unchanged
+
+    def test_first_v1_read_records_a_canonical_baseline(self, monkeypatch, quiet_status):
+        from jen.services import config_revisions as rev_mod
+
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {"n": 1}}}), "")])  # no sha256 -> v1
+        calls = []
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: None)
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: calls.append((a, k)))
+        kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert kwargs.get("source") == "baseline"
+        assert kwargs.get("hash_kind") == "canonical"
+        expected_sha = hashlib.sha256(rev_mod.canonical({"Dhcp4": {"n": 1}}).encode()).hexdigest()
+        assert args[3] == expected_sha
+
+    def test_v1_read_records_nothing_once_a_baseline_exists(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}}), "")])
+        calls = []
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest", lambda *a: {"sha256": "x", "hash_kind": "canonical"}
+        )
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: calls.append(1))
+        kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert not calls
+
+    def test_crossover_from_canonical_to_raw_is_a_baseline_not_external(self, monkeypatch, quiet_status):
+        # A host just upgraded v1->v2: the latest recorded revision is
+        # "canonical" (there was never a raw hash before). The first v2
+        # read must not be treated as an external change just because
+        # the two sha VALUES differ — they're different quantities.
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {"n": 2}}, "sha256": "raw-sha"}), "")])
+        calls = []
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest", lambda *a: {"sha256": "canon-sha", "hash_kind": "canonical"}
+        )
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: calls.append((a, k)))
+        kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert len(calls) == 1
+        assert calls[0][1].get("source") == "baseline"
+        assert calls[0][1].get("hash_kind") == "raw"
+
     def test_external_change_is_recorded_when_sha_differs(self, monkeypatch, quiet_status):
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {"n": 2}}, "sha256": "new"}), "")])
         calls = []
-        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: {"sha256": "old"})
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: {"sha256": "old", "hash_kind": "raw"})
         monkeypatch.setattr(
             "jen.services.config_revisions.record",
             lambda *a, **k: calls.append((a, k)),
         )
         kea_host.read_config_versioned(SERVER, "dhcp4")
         assert calls and calls[0][1].get("source") == "external"
+        assert calls[0][1].get("hash_kind") == "raw"
 
     def test_no_external_capture_when_sha_matches(self, monkeypatch, quiet_status):
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}, "sha256": "same"}), "")])
         calls = []
-        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: {"sha256": "same"})
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a: {"sha256": "same", "hash_kind": "raw"})
         monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: calls.append(1))
         kea_host.read_config_versioned(SERVER, "dhcp4")
         assert not calls
@@ -419,7 +474,26 @@ class TestApplyGuarded:
         recorded = []
         monkeypatch.setattr(
             "jen.services.config_revisions.record",
-            lambda sid, svc, cfg, sha, summary, source="jen": recorded.append((sid, svc, sha, summary, source)),
+            lambda sid, svc, cfg, sha, summary, *, hash_kind, source="jen": recorded.append(
+                (sid, svc, sha, summary, source, hash_kind)
+            ),
         )
         kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}}, summary="edit subnet 5")
-        assert recorded == [(1, "dhcp4", "s1", "edit subnet 5", "jen")]
+        assert recorded == [(1, "dhcp4", "s1", "edit subnet 5", "jen", "raw")]
+
+    def test_success_with_no_helper_sha_records_a_canonical_hash(self, monkeypatch, quiet_status):
+        # No sha256 in the response (v1/legacy) -> _record_revision_after_apply
+        # computes sha256(canonical(cfg)) itself and records it as "canonical".
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True}), "")])
+        recorded = []
+        monkeypatch.setattr(
+            "jen.services.config_revisions.record",
+            lambda sid, svc, cfg, sha, summary, *, hash_kind, source="jen": recorded.append((sha, hash_kind)),
+        )
+        kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 1}}, summary="edit subnet 5")
+        assert len(recorded) == 1
+        sha, hash_kind = recorded[0]
+        assert hash_kind == "canonical"
+        from jen.services import config_revisions as rev_mod
+
+        assert sha == hashlib.sha256(rev_mod.canonical({"Dhcp4": {"a": 1}}).encode()).hexdigest()
