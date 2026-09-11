@@ -1,0 +1,122 @@
+{# v5.19.0 (Q13) — extracted from the standalone Options page (Q12) so the
+   class-edit page can embed the SAME options table + add-option form,
+   scoped to level='class'. Expects `level`, `key`, `rows`, `catalog` in
+   context. Assumes it's included at most once per page — the element ids
+   below (opt-select, opt-custom, …) aren't namespaced per-inclusion. #}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">
+            {% if level == 'global' %}🌐 Global options
+            {% elif level == 'shared-network' %}🔗 Shared network: {{ key }}
+            {% elif level == 'subnet' %}{{ subnet_label }} — subnet options
+            {% elif level == 'pool' %}{{ subnet_label }} — pool <span class="mono">{{ pool_str }}</span>
+            {% elif level == 'class' %}⚙️ Class options
+            {% endif %}
+        </span>
+    </div>
+    {% if rows %}
+    <table style="width:100%;font-size:13px;">
+        <thead>
+            <tr style="text-align:left;color:var(--text-muted);">
+                <th style="padding:6px;">Code</th>
+                <th style="padding:6px;">Name</th>
+                <th style="padding:6px;">Value</th>
+                <th style="padding:6px;"></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+        <tr style="border-top:1px solid var(--border);">
+            <td style="padding:6px;" class="mono">{{ r.code if r.code is not none else '—' }}</td>
+            <td style="padding:6px;">
+                {{ r.name }}
+                {% if r.custom %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);">custom</span>{% endif %}
+                {% if r.managed %}<span class="badge" style="background:var(--surface2);color:var(--warning);" title="Owned by the Edit Subnet form">managed by Edit form</span>{% endif %}
+            </td>
+            <td style="padding:6px;word-break:break-all;" class="mono">{{ r.data }}</td>
+            <td style="padding:6px;white-space:nowrap;">
+                {% if r.managed %}
+                <a href="/subnets/edit/{{ key }}" class="btn btn-sm btn-secondary">Edit form →</a>
+                {% else %}
+                <form method="POST" action="{{ url_for('subnets.dhcp_options_remove') }}" style="display:inline;"
+                      onsubmit="return false;" data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="level" value="{{ level }}">
+                    <input type="hidden" name="key" value="{{ key }}">
+                    <input type="hidden" name="code" value="{{ r.code }}">
+                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-muted);padding:8px;">No options set at this level.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="card-header"><span class="card-title">➕ Add option</span></div>
+    <form method="POST" action="{{ url_for('subnets.dhcp_options_set') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="level" value="{{ level }}">
+        <input type="hidden" name="key" value="{{ key }}">
+        <input type="hidden" name="custom" id="opt-custom" value="0">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Option</label>
+                <select id="opt-select" onchange="jenOptSelectChanged()">
+                    {% for c in catalog %}
+                    <option value="{{ c.code }}" data-type="{{ c.type }}">{{ c.code }} — {{ c.name }}</option>
+                    {% endfor %}
+                    <option value="custom">Custom code…</option>
+                </select>
+                {% if catalog %}
+                <input type="hidden" name="code" id="opt-code-catalog" value="{{ catalog[0].code }}">
+                {% endif %}
+                <input type="number" name="code" id="opt-code-custom" min="1" max="254"
+                       placeholder="Code (1-254)" style="display:none;margin-top:6px;" disabled>
+            </div>
+            <div class="form-group">
+                <label>Custom name</label>
+                <input type="text" name="name" id="opt-custom-name" placeholder="e.g. my-custom-option"
+                       style="display:none;" disabled>
+            </div>
+            <div class="form-group">
+                <label>Value</label>
+                <input type="text" name="data" placeholder="Value for the selected option">
+                <div class="form-hint" id="opt-hint"></div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Set option</button>
+    </form>
+</div>
+
+<script>
+function jenOptSelectChanged() {
+    var sel = document.getElementById('opt-select');
+    var isCustom = sel.value === 'custom';
+    document.getElementById('opt-custom').value = isCustom ? '1' : '0';
+
+    var codeCatalog = document.getElementById('opt-code-catalog');
+    var codeCustom = document.getElementById('opt-code-custom');
+    var nameCustom = document.getElementById('opt-custom-name');
+    var hint = document.getElementById('opt-hint');
+
+    if (codeCatalog) codeCatalog.disabled = isCustom;
+    codeCustom.disabled = !isCustom;
+    codeCustom.style.display = isCustom ? '' : 'none';
+    nameCustom.disabled = !isCustom;
+    nameCustom.style.display = isCustom ? '' : 'none';
+
+    if (!isCustom) {
+        if (codeCatalog) codeCatalog.value = sel.value;
+        var opt = sel.options[sel.selectedIndex];
+        hint.textContent = 'Type: ' + (opt ? opt.dataset.type : '');
+    } else {
+        hint.textContent = 'Custom codes are written as raw hex (e.g. 0a1b2c).';
+    }
+}
+</script>

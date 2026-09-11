@@ -1,0 +1,284 @@
+{% extends "base.html" %}
+{% block title %}{{ 'New class' if is_new else name }} — Client Class{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🏷️ {{ 'New client class' if is_new else name }}</h1>
+    <p>Kea's <span class="mono">Dhcp4.client-classes</span> — a guided rule builder, or a raw expression for anything the builder can't express.</p>
+</div>
+
+<div style="margin-bottom:16px;">
+    <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary btn-sm">← Back to Classes</a>
+</div>
+
+{% if advanced_notice %}
+<div class="card" style="border-color:var(--warning);">
+    <p style="padding:8px;margin:0;">This class's expression doesn't match its saved guided rules (it was hand-edited) — opened in Advanced mode. Switching to Guided and saving will replace the expression with what the guided rules produce.</p>
+</div>
+{% endif %}
+
+<form id="class-form" method="POST" action="{{ url_for('subnets.dhcp_class_save') }}"
+      hx-post="{{ url_for('subnets.dhcp_class_preview') }}" hx-target="#class-preview" hx-swap="innerHTML"
+      hx-trigger="change, keyup delay:500ms changed">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="is_new" value="{{ '1' if is_new else '0' }}">
+    <input type="hidden" name="orig_name" value="{{ name }}">
+    <input type="hidden" name="mode" id="mode-input" value="{{ initial_mode }}">
+
+    <div class="card">
+        <div class="card-header"><span class="card-title">Name</span></div>
+        <div style="padding:8px;">
+            {% if is_new %}
+            <input type="text" name="name" placeholder="e.g. printer-vlan" maxlength="64" required style="max-width:320px;">
+            <div class="form-hint">Letters, digits, <span class="mono">_</span> and <span class="mono">-</span>; must start with a letter. Not editable once created.</div>
+            {% else %}
+            <input type="text" name="name" value="{{ name }}" readonly disabled style="max-width:320px;">
+            <div class="form-hint">Names can't be changed after creation.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">Expression</span>
+        </div>
+        <div style="padding:8px;">
+            <div style="margin-bottom:12px;">
+                <button type="button" id="tab-guided" class="btn btn-sm">Guided</button>
+                <button type="button" id="tab-advanced" class="btn btn-sm">Advanced</button>
+            </div>
+
+            <div id="guided-panel">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Match</label>
+                        <select name="combinator">
+                            <option value="all" {% if not builder or builder.combinator != 'any' %}selected{% endif %}>All of these rules</option>
+                            <option value="any" {% if builder and builder.combinator == 'any' %}selected{% endif %}>Any of these rules</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="align-self:flex-end;">
+                        <label>
+                            <input type="checkbox" name="negate" value="1" {% if builder and builder.negate %}checked{% endif %}>
+                            Negate (match clients that do <strong>not</strong> satisfy this)
+                        </label>
+                    </div>
+                </div>
+                <div id="rule-rows"></div>
+                <button type="button" id="add-rule-btn" class="btn btn-sm btn-secondary" style="margin-top:8px;">+ Add rule</button>
+            </div>
+
+            <div id="advanced-panel" style="display:none;">
+                <textarea name="test" id="advanced-test" rows="3" style="width:100%;font-family:monospace;"
+                          placeholder="e.g. option[60].hex == 'PXEClient'">{{ advanced_test }}</textarea>
+                <div class="form-hint">Kea classification expression. Single-quoted strings only — no escape sequence.</div>
+            </div>
+
+            <div id="class-preview" style="margin-top:12px;">
+                <p style="color:var(--text-muted);font-size:13px;">Preview will appear here as you edit.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><span class="card-title">Boot / next-server</span></div>
+        <div class="form-row" style="padding:8px;">
+            <div class="form-group">
+                <label>next-server</label>
+                <input type="text" name="next_server" value="{{ existing.get('next-server', '') if existing else '' }}" placeholder="e.g. 10.0.0.5">
+            </div>
+            <div class="form-group">
+                <label>server-hostname</label>
+                <input type="text" name="server_hostname" value="{{ existing.get('server-hostname', '') if existing else '' }}">
+            </div>
+            <div class="form-group">
+                <label>boot-file-name</label>
+                <input type="text" name="boot_file_name" value="{{ existing.get('boot-file-name', '') if existing else '' }}" placeholder="e.g. pxelinux.0">
+            </div>
+        </div>
+        <div style="padding:0 8px 8px;">
+            <label>
+                <input type="checkbox" name="only_additional" value="1" {% if only_additional %}checked{% endif %}>
+                Only evaluate this class when it's added as an additional class (not a guard)
+            </label>
+        </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save class</button>
+</form>
+
+{% if not is_new %}
+{% include "_dhcp_options_table.html" %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">Applies to</span></div>
+    {% if scope_rows %}
+    <table style="width:100%;font-size:13px;">
+        <thead>
+            <tr style="text-align:left;color:var(--text-muted);">
+                <th style="padding:6px;">Scope</th>
+                <th style="padding:6px;">Guard</th>
+                <th style="padding:6px;">Additional</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in scope_rows %}
+        <tr style="border-top:1px solid var(--border);">
+            <td style="padding:6px;">{{ row.label }}</td>
+            <td style="padding:6px;">
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_attach') }}" onchange="this.submit()">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="name" value="{{ name }}">
+                    <input type="hidden" name="scope_level" value="{{ row.level }}">
+                    <input type="hidden" name="scope_key" value="{{ row.key }}">
+                    <input type="hidden" name="mode" value="guard">
+                    <input type="checkbox" name="attach" value="1" {% if row.guard %}checked{% endif %}>
+                </form>
+            </td>
+            <td style="padding:6px;">
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_attach') }}" onchange="this.submit()">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="name" value="{{ name }}">
+                    <input type="hidden" name="scope_level" value="{{ row.level }}">
+                    <input type="hidden" name="scope_key" value="{{ row.key }}">
+                    <input type="hidden" name="mode" value="additional">
+                    <input type="checkbox" name="attach" value="1" {% if row.additional %}checked{% endif %}>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-muted);padding:8px;">No subnets, pools, or shared networks to attach this class to.</p>
+    {% endif %}
+</div>
+{% endif %}
+
+<script>
+(function() {
+    var FIELDS = {{ fields|tojson }};
+    var container = document.getElementById('rule-rows');
+    var addBtn = document.getElementById('add-rule-btn');
+    var initialRules = {{ (builder.rules if builder else [])|tojson }};
+
+    function opLabel(op) {
+        if (op === 'starts_with') return 'starts with';
+        if (op === 'equals') return 'equals';
+        return op;
+    }
+
+    function buildOpSelect(fieldKey, selectedOp) {
+        var sel = document.createElement('select');
+        sel.name = 'rule_op';
+        var meta = FIELDS[fieldKey] || {};
+        var ops = meta.ops || ['equals'];
+        ops.forEach(function(op) {
+            var o = document.createElement('option');
+            o.value = op;
+            o.textContent = opLabel(op);
+            if (op === selectedOp) o.selected = true;
+            sel.appendChild(o);
+        });
+        return sel;
+    }
+
+    function addRow(rule) {
+        rule = rule || { field: Object.keys(FIELDS)[0], op: 'equals', value: '' };
+        var row = document.createElement('div');
+        row.className = 'form-row jen-rule-row';
+
+        var fieldGroup = document.createElement('div');
+        fieldGroup.className = 'form-group';
+        var fieldLabel = document.createElement('label');
+        fieldLabel.textContent = 'Field';
+        var fieldSel = document.createElement('select');
+        fieldSel.name = 'rule_field';
+        Object.keys(FIELDS).forEach(function(key) {
+            var o = document.createElement('option');
+            o.value = key;
+            o.textContent = FIELDS[key].ui_label;
+            if (key === rule.field) o.selected = true;
+            fieldSel.appendChild(o);
+        });
+        fieldGroup.appendChild(fieldLabel);
+        fieldGroup.appendChild(fieldSel);
+
+        var opGroup = document.createElement('div');
+        opGroup.className = 'form-group';
+        var opLbl = document.createElement('label');
+        opLbl.textContent = 'Op';
+        var opSel = buildOpSelect(rule.field, rule.op);
+        opGroup.appendChild(opLbl);
+        opGroup.appendChild(opSel);
+
+        var valGroup = document.createElement('div');
+        valGroup.className = 'form-group';
+        var valLbl = document.createElement('label');
+        valLbl.textContent = 'Value';
+        var valInput = document.createElement('input');
+        valInput.type = 'text';
+        valInput.name = 'rule_value';
+        valInput.value = rule.value || '';
+        valGroup.appendChild(valLbl);
+        valGroup.appendChild(valInput);
+
+        var rmGroup = document.createElement('div');
+        rmGroup.className = 'form-group';
+        rmGroup.style.alignSelf = 'flex-end';
+        var rmBtn = document.createElement('button');
+        rmBtn.type = 'button';
+        rmBtn.className = 'btn btn-sm btn-secondary';
+        rmBtn.textContent = 'Remove';
+        rmBtn.addEventListener('click', function() {
+            row.remove();
+            row.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+        rmGroup.appendChild(rmBtn);
+
+        fieldSel.addEventListener('change', function() {
+            var newOpSel = buildOpSelect(fieldSel.value, null);
+            opGroup.replaceChild(newOpSel, opSel);
+            opSel = newOpSel;
+        });
+
+        row.appendChild(fieldGroup);
+        row.appendChild(opGroup);
+        row.appendChild(valGroup);
+        row.appendChild(rmGroup);
+        container.appendChild(row);
+    }
+
+    addBtn.addEventListener('click', function() {
+        addRow();
+    });
+
+    if (initialRules.length) {
+        initialRules.forEach(addRow);
+    } else {
+        addRow();
+    }
+
+    var modeInput = document.getElementById('mode-input');
+    var guidedPanel = document.getElementById('guided-panel');
+    var advancedPanel = document.getElementById('advanced-panel');
+    var tabGuided = document.getElementById('tab-guided');
+    var tabAdvanced = document.getElementById('tab-advanced');
+
+    function setMode(mode) {
+        modeInput.value = mode;
+        guidedPanel.style.display = mode === 'guided' ? '' : 'none';
+        advancedPanel.style.display = mode === 'advanced' ? '' : 'none';
+        tabGuided.classList.toggle('btn-primary', mode === 'guided');
+        tabGuided.classList.toggle('btn-secondary', mode !== 'guided');
+        tabAdvanced.classList.toggle('btn-primary', mode === 'advanced');
+        tabAdvanced.classList.toggle('btn-secondary', mode !== 'advanced');
+        modeInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    tabGuided.addEventListener('click', function() { setMode('guided'); });
+    tabAdvanced.addEventListener('click', function() { setMode('advanced'); });
+
+    setMode(modeInput.value);
+})();
+</script>
+{% endblock %}

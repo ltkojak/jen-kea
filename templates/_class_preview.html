@@ -1,0 +1,27 @@
+{# v5.19.0 (Q13) — the HTMX-swapped preview under the class-edit form's
+   expression panel. Expects `expression`, `error`, `test_result` (a
+   kea_host.test_config()-shaped dict, or None) in context. #}
+{% if error %}
+<div class="card" style="border-color:var(--danger);padding:8px;margin:0;">
+    <strong>⚠️ {{ error }}</strong>
+</div>
+{% else %}
+<div class="card" style="padding:8px;margin:0;">
+    <div class="mono" style="word-break:break-all;">{{ expression }}</div>
+</div>
+{% if test_result %}
+{% if test_result.ok %}
+<div class="card" style="border-color:var(--success);padding:8px;margin-top:8px;">
+    ✅ Kea accepted this config with the class inserted.
+</div>
+{% elif test_result.ok is none %}
+<div class="card" style="padding:8px;margin-top:8px;color:var(--text-muted);">
+    ℹ️ {{ test_result.detail }}
+</div>
+{% else %}
+<div class="card" style="border-color:var(--danger);padding:8px;margin-top:8px;">
+    ❌ Kea rejected this config: {{ test_result.detail }}
+</div>
+{% endif %}
+{% endif %}
+{% endif %}

@@ -38,7 +38,12 @@ function saveNote(id) {
         <p>Subnet configuration pulled live from Kea</p>
     </div>
     {% if current_user.role in ('superadmin','admin') %}
-    <a href="/subnets/add" class="btn btn-primary">➕ Add Subnet</a>
+    <div style="display:flex;gap:8px;">
+        {% if can_manage_networks %}
+        <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary">🏷️ Client Classes</a>
+        {% endif %}
+        <a href="/subnets/add" class="btn btn-primary">➕ Add Subnet</a>
+    </div>
     {% endif %}
 </div>
 

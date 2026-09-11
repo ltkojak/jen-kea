@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Client Classes{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🏷️ Client Classes</h1>
+    <p>Kea evaluates classes in this order. Guards decide which subnet/pool/shared-network a client is eligible for; additional classes just attach options without gating eligibility.</p>
+</div>
+
+<div style="margin-bottom:16px;">
+    <a href="/subnets" class="btn btn-secondary btn-sm">← Back to Subnets</a>
+    <a href="{{ url_for('subnets.dhcp_class_new_page') }}" class="btn btn-primary btn-sm">+ New class</a>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden;">
+    {% if rows %}
+    <table style="width:100%;font-size:13px;">
+        <thead>
+            <tr style="text-align:left;color:var(--text-muted);">
+                <th style="padding:8px;">Name</th>
+                <th style="padding:8px;">Mode</th>
+                <th style="padding:8px;">Expression</th>
+                <th style="padding:8px;">Options</th>
+                <th style="padding:8px;">Boot fields</th>
+                <th style="padding:8px;">Only additional</th>
+                <th style="padding:8px;">Referenced by</th>
+                <th style="padding:8px;"></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+        <tr style="border-top:1px solid var(--border);{% if r.builtin %}color:var(--text-muted);{% endif %}">
+            <td style="padding:8px;" class="mono">
+                {{ r.name }}
+                {% if r.builtin %}<span class="badge" style="background:var(--surface2);">built-in</span>{% endif %}
+            </td>
+            <td style="padding:8px;">
+                {% if r.builtin %}—
+                {% elif r.guided %}<span class="badge" style="background:var(--surface2);color:var(--primary);">guided</span>
+                {% else %}<span class="badge" style="background:var(--surface2);">advanced</span>
+                {% endif %}
+            </td>
+            <td style="padding:8px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" class="mono" title="{{ r.test }}">
+                {{ r.test or '—' }}
+            </td>
+            <td style="padding:8px;">{{ r.options_count }}</td>
+            <td style="padding:8px;font-size:12px;color:var(--text-muted);">
+                {% if r.next_server or r.server_hostname or r.boot_file_name %}
+                    {{ r.next_server or '' }}{% if r.server_hostname %} · {{ r.server_hostname }}{% endif %}{% if r.boot_file_name %} · {{ r.boot_file_name }}{% endif %}
+                {% else %}—{% endif %}
+            </td>
+            <td style="padding:8px;">{{ '✓' if r.only_additional else '' }}</td>
+            <td style="padding:8px;">
+                {% if r.references %}
+                <span title="{{ r.references|join(', ') }}">{{ r.references|length }}</span>
+                {% else %}0{% endif %}
+            </td>
+            <td style="padding:8px;white-space:nowrap;text-align:right;">
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_reorder') }}" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="name" value="{{ r.name }}">
+                    <input type="hidden" name="direction" value="up">
+                    <button type="submit" class="btn btn-sm btn-secondary" title="Move up" {% if loop.first %}disabled{% endif %}>↑</button>
+                </form>
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_reorder') }}" style="display:inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="name" value="{{ r.name }}">
+                    <input type="hidden" name="direction" value="down">
+                    <button type="submit" class="btn btn-sm btn-secondary" title="Move down" {% if loop.last %}disabled{% endif %}>↓</button>
+                </form>
+                {% if not r.builtin %}
+                <a href="{{ url_for('subnets.dhcp_class_edit_page', name=r.name) }}" class="btn btn-sm btn-secondary">Edit</a>
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_delete') }}" style="display:inline;"
+                      onsubmit="return false;" data-confirm="Delete class &quot;{{ r.name }}&quot;? Kea restarts.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="name" value="{{ r.name }}">
+                    <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--text-muted);padding:16px;">No client classes defined.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -18,6 +18,7 @@ import jen.services.auth as __auth
 import jen.services.dhcp_options as __opts
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_classes as __classes
 import jen.services.kea_config_edit as __edit
 import jen.services.kea_config_view as __view
 import jen.services.kea_host as __host
@@ -1003,13 +1004,16 @@ def _parse_option_level_key(level, key_raw):
         if sep and sid_str.isdigit() and pool_str:
             return "pool", (int(sid_str), pool_str)
         return None, None
+    if level == "class":
+        # v5.19.0 (Q13) — key is the class name, same shape as shared-network.
+        return ("class", key_raw) if key_raw else (None, None)
     return None, None
 
 
 def _option_key_display(level, key):
     """The form/query-string `key` value for a (level, key) pair — the
     inverse of _parse_option_level_key."""
-    if level == "shared-network":
+    if level in ("shared-network", "class"):
         return key
     if level == "subnet":
         return str(key)
@@ -1020,9 +1024,10 @@ def _option_key_display(level, key):
 
 def _dhcp_options_check_access(level, key):
     """Flashes and returns False when the current user can't manage
-    options at this level: global/shared-network need unrestricted
-    subnet access; subnet/pool are the usual per-subnet check."""
-    if level in ("global", "shared-network"):
+    options at this level: global/shared-network/class need unrestricted
+    subnet access (classes are global — v5.19.0 / Q13); subnet/pool are
+    the usual per-subnet check."""
+    if level in ("global", "shared-network", "class"):
         if current_user.all_subnets:
             return True
         flash("DHCP options at this level need access to all subnets.", "error")
@@ -1199,6 +1204,423 @@ def dhcp_options_remove():
     if result_code == "ok":
         __user.audit("REMOVE_DHCP_OPTION", name, f"level={level_raw} key={key_raw} code={code}")
     return _dhcp_options_redirect(level_raw, key_raw)
+
+
+# ── Client classes (v5.19.0 — Q13) ───────────────────────────────────────────
+#
+# Dhcp4.client-classes: a guided rule builder (or a raw expression) plus
+# where each class is attached (subnet/pool/shared-network, as a guard or
+# an additional class). Classes are global, so every route here needs
+# unrestricted subnet access, same as the shared-network/global levels of
+# the options page above.
+
+
+def _kea_version():
+    """The running Kea's (X, Y, Z) version, or None if it can't be
+    determined. Resolved once per request — kea_classes.attachment_keys
+    only needs it as a widest-compatible fallback when the config doesn't
+    already commit to an old/new key spelling somewhere."""
+    try:
+        result = __kea.kea_command("version-get", server=__kea.get_active_kea_server())
+    except Exception:
+        return None
+    if result.get("result") != 0:
+        return None
+    return __kea.parse_kea_version(result.get("arguments", {}).get("extended", "") or result.get("text", ""))
+
+
+def _live_dhcp4_cfg():
+    """The live Dhcp4 config (inner map) via the Control Agent API,
+    read-only — same source dhcp_options_page uses. {} on any failure."""
+    try:
+        result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        return result["arguments"]["Dhcp4"] if result.get("result") == 0 else {}
+    except Exception:
+        return {}
+
+
+def _classes_check_access():
+    if current_user.all_subnets:
+        return True
+    flash("Client classes need access to all subnets.", "error")
+    return False
+
+
+def _class_form_identity(form):
+    """(name, is_new) from the shared new/edit form fields — editing an
+    existing class keeps its name fixed to `orig_name` regardless of what
+    a tampered `name` field might carry."""
+    is_new = form.get("is_new") == "1"
+    orig_name = form.get("orig_name", "").strip()
+    name = form.get("name", "").strip() if is_new else orig_name
+    return name, is_new
+
+
+def _class_edit_redirect(is_new, name):
+    if is_new:
+        return redirect(url_for("subnets.dhcp_class_new_page"))
+    return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
+
+
+def _parse_guided_rules(form):
+    fields = form.getlist("rule_field")
+    ops = form.getlist("rule_op")
+    values = form.getlist("rule_value")
+    return [{"field": f, "op": o, "value": v} for f, o, v in zip(fields, ops, values, strict=False)]
+
+
+def _build_class_expression(form):
+    """(expression, user_context, error) from the shared new/edit form's
+    Guided/Advanced fields — used by both the preview and save routes so
+    they can never disagree about what a submission means."""
+    if form.get("mode") == "advanced":
+        expr = form.get("test", "").strip()
+        if not expr:
+            return None, None, "An expression is required."
+        return expr, None, None
+
+    rules = _parse_guided_rules(form)
+    combinator = form.get("combinator", "all")
+    negate = form.get("negate") == "1"
+    try:
+        expr = __classes.build_expression(rules, combinator, negate)
+    except ValueError as e:
+        return None, None, str(e)
+    user_context = {"jen": {"builder": {"rules": rules, "combinator": combinator, "negate": negate}, "v": 1}}
+    return expr, user_context, None
+
+
+def _class_row(c, dhcp4_cfg):
+    name = c.get("name")
+    builtin = __classes.is_builtin(name)
+    builder = ((c.get("user-context") or {}).get("jen") or {}).get("builder")
+    guided = False
+    if isinstance(builder, dict):
+        try:
+            expr = __classes.build_expression(
+                builder.get("rules") or [], builder.get("combinator", "all"), bool(builder.get("negate"))
+            )
+            guided = expr == (c.get("test") or "")
+        except ValueError:
+            guided = False
+    return {
+        "name": name,
+        "builtin": builtin,
+        "guided": guided,
+        "test": c.get("test", ""),
+        "options_count": len(c.get("option-data") or []),
+        "next_server": c.get("next-server"),
+        "server_hostname": c.get("server-hostname"),
+        "boot_file_name": c.get("boot-file-name"),
+        "only_additional": bool(c.get(__classes.NEW_ONLY) or c.get(__classes.OLD_ONLY)),
+        "references": [] if builtin else __classes.references(dhcp4_cfg, name),
+    }
+
+
+def _class_scope_rows(dhcp4_cfg, name):
+    """Every subnet (incl. nested under a shared network), its pools, and
+    every shared network — each carrying its current guard/additional
+    state for `name`. The 'Applies to' checklist."""
+    rows = []
+    for s, _sn_name in __view.iter_subnet4(dhcp4_cfg):
+        sid = s.get("id")
+        info = extensions.SUBNET_MAP.get(sid, {})
+        label = info.get("name") or s.get("subnet") or f"subnet {sid}"
+        rows.append(
+            {
+                "level": "subnet",
+                "key": str(sid),
+                "label": label,
+                "guard": name in __classes.guard_classes(s),
+                "additional": name in __classes.additional_classes(s),
+            }
+        )
+        for p in s.get("pools") or []:
+            if not isinstance(p, dict) or not p.get("pool"):
+                continue
+            rows.append(
+                {
+                    "level": "pool",
+                    "key": f"{sid}:{p['pool']}",
+                    "label": f"{label} — pool {p['pool']}",
+                    "guard": name in __classes.guard_classes(p),
+                    "additional": name in __classes.additional_classes(p),
+                }
+            )
+    for sn in __view.shared_networks4_raw(dhcp4_cfg):
+        rows.append(
+            {
+                "level": "shared-network",
+                "key": sn.get("name"),
+                "label": f"Shared network: {sn.get('name')}",
+                "guard": name in __classes.guard_classes(sn),
+                "additional": name in __classes.additional_classes(sn),
+            }
+        )
+    return rows
+
+
+@bp.route("/subnets/classes")
+@login_required
+@_admin_required
+def dhcp_classes_page():
+    if not _classes_check_access():
+        return redirect(url_for("subnets.subnets"))
+    cfg = _live_dhcp4_cfg()
+    classes = [c for c in cfg.get("client-classes") or [] if isinstance(c, dict)]
+    return render_template("dhcp_classes.html", rows=[_class_row(c, cfg) for c in classes])
+
+
+@bp.route("/subnets/classes/new", endpoint="dhcp_class_new_page")
+@bp.route("/subnets/classes/edit")
+@login_required
+@_admin_required
+def dhcp_class_edit_page():
+    if not _classes_check_access():
+        return redirect(url_for("subnets.subnets"))
+
+    name = request.args.get("name", "").strip()
+    cfg = _live_dhcp4_cfg()
+    existing = None
+    if name:
+        existing = next(
+            (c for c in cfg.get("client-classes") or [] if isinstance(c, dict) and c.get("name") == name), None
+        )
+        if existing is None:
+            flash(f'No class named "{name}" in the live config.', "error")
+            return redirect(url_for("subnets.dhcp_classes_page"))
+        if __classes.is_builtin(name):
+            flash(f'"{name}" is a built-in class and cannot be edited.', "error")
+            return redirect(url_for("subnets.dhcp_classes_page"))
+
+    builder = None
+    advanced_notice = False
+    advanced_test = ""
+    if existing is not None:
+        advanced_test = existing.get("test", "")
+        raw_builder = ((existing.get("user-context") or {}).get("jen") or {}).get("builder")
+        if isinstance(raw_builder, dict):
+            try:
+                expr = __classes.build_expression(
+                    raw_builder.get("rules") or [],
+                    raw_builder.get("combinator", "all"),
+                    bool(raw_builder.get("negate")),
+                )
+            except ValueError:
+                expr = None
+            if expr == advanced_test:
+                builder = raw_builder
+            else:
+                advanced_notice = True
+
+    rows = []
+    if existing is not None:
+        rows = __opts.options_at(cfg, "class", name)
+        for r in rows:
+            r["managed"] = False
+            r["custom"] = r["code"] not in __opts.V4_OPTIONS
+
+    return render_template(
+        "dhcp_class_edit.html",
+        name=name,
+        existing=existing,
+        is_new=existing is None,
+        fields=__classes.FIELDS,
+        builder=builder,
+        advanced_notice=advanced_notice,
+        advanced_test=advanced_test,
+        initial_mode="advanced" if (existing is not None and builder is None) else "guided",
+        only_additional=bool(existing and (existing.get(__classes.NEW_ONLY) or existing.get(__classes.OLD_ONLY))),
+        rows=rows,
+        catalog=__opts.catalog_choices(),
+        level="class",
+        key=name,
+        scope_rows=_class_scope_rows(cfg, name) if existing is not None else [],
+    )
+
+
+@bp.route("/subnets/classes/preview", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_class_preview():
+    if not current_user.all_subnets:
+        return render_template("_class_preview.html", expression="", error="Access denied.", test_result=None), 403
+
+    name, _is_new = _class_form_identity(request.form)
+    expr, _user_context, error = _build_class_expression(request.form)
+
+    if not error and not __auth.valid_class_name(name):
+        error = "A valid class name is required to preview."
+    if not error and __classes.is_builtin(name):
+        error = f'"{name}" is a built-in class name and cannot be used.'
+
+    test_result = None
+    if not error:
+        ssh_server = next((s for s in extensions.KEA_SERVERS if s.get("ssh_host")), None)
+        if ssh_server is None:
+            test_result = {"ok": None, "detail": "No SSH-reachable Kea server to validate against."}
+        else:
+            full_cfg, _sha = __host.read_config_versioned(ssh_server, "dhcp4")
+            if full_cfg is None:
+                test_result = {"ok": None, "detail": "Couldn't read the live config on that server."}
+            else:
+                existing = next(
+                    (
+                        c
+                        for c in (full_cfg.get("Dhcp4", {}).get("client-classes") or [])
+                        if isinstance(c, dict) and c.get("name") == name
+                    ),
+                    None,
+                )
+                candidate = __classes.merge_class_fields(existing, name, expr)
+                preview_cfg, _code = __edit.upsert_class4(full_cfg, candidate)
+                test_result = __host.test_config(ssh_server, "dhcp4", preview_cfg)
+
+    return render_template("_class_preview.html", expression=expr or "", error=error, test_result=test_result)
+
+
+@bp.route("/subnets/classes/save", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_class_save():
+    if not _classes_check_access():
+        return redirect(url_for("subnets.subnets"))
+
+    name, is_new = _class_form_identity(request.form)
+    if not __auth.valid_class_name(name):
+        flash("Invalid class name — letters, digits, _ and - only, must start with a letter, max 64 chars.", "error")
+        return _class_edit_redirect(is_new, name)
+    if __classes.is_builtin(name):
+        flash(f'"{name}" is a built-in class name and cannot be used.', "error")
+        return _class_edit_redirect(is_new, name)
+
+    expr, user_context, error = _build_class_expression(request.form)
+    if error:
+        flash(error, "error")
+        return _class_edit_redirect(is_new, name)
+
+    next_server = request.form.get("next_server", "").strip() or None
+    server_hostname = request.form.get("server_hostname", "").strip() or None
+    boot_file_name = request.form.get("boot_file_name", "").strip() or None
+    only_additional = request.form.get("only_additional") == "1"
+    version = _kea_version()
+
+    def _mutate(cfg):
+        d4 = cfg.get("Dhcp4") or {}
+        existing = next(
+            (c for c in d4.get("client-classes") or [] if isinstance(c, dict) and c.get("name") == name), None
+        )
+        keys = __classes.attachment_keys(d4, version)
+        merged = __classes.merge_class_fields(
+            existing,
+            name,
+            expr,
+            user_context=user_context,
+            next_server=next_server,
+            server_hostname=server_hostname,
+            boot_file_name=boot_file_name,
+            only_key=keys["only"],
+            only_additional=only_additional,
+        )
+        return __edit.upsert_class4(cfg, merged)
+
+    code = _apply_dhcp4_change(_mutate, f'class "{name}" saved', {}, summary=f'save class "{name}"')
+    if code == "ok":
+        __user.audit("SAVE_DHCP_CLASS", name, "new" if is_new else "edit")
+    return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
+
+
+@bp.route("/subnets/classes/delete", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_class_delete():
+    if not _classes_check_access():
+        return redirect(url_for("subnets.subnets"))
+
+    name = request.form.get("name", "").strip()
+    refs = __classes.references(_live_dhcp4_cfg(), name)
+    ref_msg = f'"{name}" is still referenced by: {", ".join(refs)} — detach it first.'
+
+    code = _apply_dhcp4_change(
+        lambda cfg: __edit.delete_class4(cfg, name),
+        f'class "{name}" deleted',
+        {
+            "builtin": f'"{name}" is a built-in class and cannot be deleted.',
+            "notfound": f'"{name}" is not in the live Kea config.',
+            "referenced": ref_msg,
+        },
+        summary=f'delete class "{name}"',
+    )
+    if code == "ok":
+        __user.audit("DELETE_DHCP_CLASS", name, "")
+    return redirect(url_for("subnets.dhcp_classes_page"))
+
+
+@bp.route("/subnets/classes/reorder", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_class_reorder():
+    if not _classes_check_access():
+        return redirect(url_for("subnets.subnets"))
+
+    name = request.form.get("name", "").strip()
+    direction = request.form.get("direction", "")
+    if direction not in ("up", "down"):
+        flash("Invalid reorder direction.", "error")
+        return redirect(url_for("subnets.dhcp_classes_page"))
+
+    code = _apply_dhcp4_change(
+        lambda cfg: __edit.reorder_class4(cfg, name, direction),
+        f'class "{name}" moved {direction}',
+        {
+            "notfound": f'"{name}" is not in the live Kea config.',
+            "boundary": f'"{name}" is already at the {"top" if direction == "up" else "bottom"}.',
+        },
+        summary=f'reorder class "{name}" {direction}',
+    )
+    if code == "ok":
+        __user.audit("REORDER_DHCP_CLASS", name, direction)
+    return redirect(url_for("subnets.dhcp_classes_page"))
+
+
+@bp.route("/subnets/classes/attach", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_class_attach():
+    if not _classes_check_access():
+        return redirect(url_for("subnets.subnets"))
+
+    name = request.form.get("name", "").strip()
+    scope_level, scope_key = _parse_option_level_key(
+        request.form.get("scope_level", ""), request.form.get("scope_key", "")
+    )
+    mode = request.form.get("mode", "guard")
+    attach = request.form.get("attach") == "1"
+
+    if (
+        scope_level not in ("subnet", "pool", "shared-network")
+        or scope_key is None
+        or mode
+        not in (
+            "guard",
+            "additional",
+        )
+    ):
+        flash("Invalid attachment target.", "error")
+        return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
+
+    version = _kea_version()
+    verb = "attached to" if attach else "detached from"
+    scope_display = _option_key_display(scope_level, scope_key)
+    code = _apply_dhcp4_change(
+        lambda cfg: __edit.attach_class4(cfg, name, scope_level, scope_key, mode=mode, attach=attach, version=version),
+        f'class "{name}" {verb} {scope_level} {scope_display}',
+        {"notfound": f"{scope_level} {scope_display} not found in the live Kea config"},
+        summary=f'{verb} class "{name}" {scope_level} {scope_display}',
+    )
+    if code == "ok":
+        __user.audit("ATTACH_DHCP_CLASS", name, f"{scope_level}={scope_display} mode={mode} attach={attach}")
+    return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
 
 
 # ── v6 subnet editing (Phase 3) ──────────────────────────────────────────────

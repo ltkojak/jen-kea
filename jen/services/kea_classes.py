@@ -62,7 +62,7 @@ def _scope_containers(dhcp4_cfg: dict) -> list[dict]:
 
 def attachment_keys(dhcp4_cfg: dict, version: tuple | None = None) -> dict:
     """{"guard", "additional", "only"} — the key names to WRITE. Reading
-    always checks both spellings (see _guard_classes/_additional_classes
+    always checks both spellings (see guard_classes/additional_classes
     below); this only decides which one a *write* uses: whichever
     spelling the config already has anywhere (subnets, pools, shared
     networks, classes) wins; if the config uses neither, write the new
@@ -92,7 +92,7 @@ def attachment_keys(dhcp4_cfg: dict, version: tuple | None = None) -> dict:
     )
 
 
-def _guard_classes(container: dict) -> list[str]:
+def guard_classes(container: dict) -> list[str]:
     """Class names this container guards on, reading BOTH spellings
     regardless of which one is actually present."""
     if not isinstance(container, dict):
@@ -104,7 +104,7 @@ def _guard_classes(container: dict) -> list[str]:
     return [v2] if isinstance(v2, str) else []
 
 
-def _additional_classes(container: dict) -> list[str]:
+def additional_classes(container: dict) -> list[str]:
     """Class names evaluated as 'additional' for this container, reading
     both spellings — always a list under either name."""
     if not isinstance(container, dict):
@@ -127,15 +127,15 @@ def references(dhcp4_cfg: dict, class_name: str) -> list[str]:
     out: list[str] = []
     for s, _sn in _view.iter_subnet4(dhcp4_cfg):
         label = f"subnet {s.get('id')}"
-        if class_name in _guard_classes(s) or class_name in _additional_classes(s):
+        if class_name in guard_classes(s) or class_name in additional_classes(s):
             out.append(label)
         for p in s.get("pools") or []:
             if not isinstance(p, dict):
                 continue
-            if class_name in _guard_classes(p) or class_name in _additional_classes(p):
+            if class_name in guard_classes(p) or class_name in additional_classes(p):
                 out.append(f"pool {p.get('pool')} of {label}")
     for sn in _view.shared_networks4_raw(dhcp4_cfg):
-        if class_name in _guard_classes(sn) or class_name in _additional_classes(sn):
+        if class_name in guard_classes(sn) or class_name in additional_classes(sn):
             out.append(f"shared network {sn.get('name')}")
     for c in dhcp4_cfg.get("client-classes") or []:
         if not isinstance(c, dict) or c.get("name") == class_name:
@@ -154,15 +154,35 @@ def references(dhcp4_cfg: dict, class_name: str) -> list[str]:
 # string-ish fields, and only equals for anything hex/mac/member.
 
 FIELDS = {
-    "vendor_class": {"kea": "option[60].hex", "kind": "string", "ops": ("equals", "starts_with")},
-    "user_class": {"kea": "option[77].hex", "kind": "string", "ops": ("equals", "starts_with")},
-    "hostname": {"kea": "option[12].text", "kind": "string", "ops": ("equals", "starts_with")},
-    "mac": {"kea": "pkt4.mac", "kind": "mac", "ops": ("equals",)},
-    "mac_oui": {"kea": "substring(pkt4.mac,0,3)", "kind": "oui", "ops": ("equals",)},
-    "client_id": {"kea": "option[61].hex", "kind": "hex", "ops": ("equals",)},
-    "circuit_id": {"kea": "relay4[1].hex", "kind": "string", "ops": ("equals",)},
-    "remote_id": {"kea": "relay4[2].hex", "kind": "hex", "ops": ("equals",)},
-    "member": {"kea": None, "kind": "member", "ops": ("equals",)},
+    "vendor_class": {
+        "kea": "option[60].hex",
+        "kind": "string",
+        "ops": ("equals", "starts_with"),
+        "ui_label": "Vendor class (option 60)",
+    },
+    "user_class": {
+        "kea": "option[77].hex",
+        "kind": "string",
+        "ops": ("equals", "starts_with"),
+        "ui_label": "User class (option 77)",
+    },
+    "hostname": {
+        "kea": "option[12].text",
+        "kind": "string",
+        "ops": ("equals", "starts_with"),
+        "ui_label": "Hostname (option 12)",
+    },
+    "mac": {"kea": "pkt4.mac", "kind": "mac", "ops": ("equals",), "ui_label": "MAC address"},
+    "mac_oui": {
+        "kea": "substring(pkt4.mac,0,3)",
+        "kind": "oui",
+        "ops": ("equals",),
+        "ui_label": "MAC OUI (first 3 bytes)",
+    },
+    "client_id": {"kea": "option[61].hex", "kind": "hex", "ops": ("equals",), "ui_label": "Client ID (option 61)"},
+    "circuit_id": {"kea": "relay4[1].hex", "kind": "string", "ops": ("equals",), "ui_label": "Circuit ID (relay)"},
+    "remote_id": {"kea": "relay4[2].hex", "kind": "hex", "ops": ("equals",), "ui_label": "Remote ID (relay)"},
+    "member": {"kea": None, "kind": "member", "ops": ("equals",), "ui_label": "Member of another class"},
 }
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
