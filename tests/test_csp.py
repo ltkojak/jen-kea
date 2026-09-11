@@ -166,35 +166,29 @@ class TestNoMermaidOrEval:
 
 
 class TestSecurityHeaders:
-    def test_report_only_header_present_with_nonce_and_no_unsafe_inline_script(self, logged_in_client):
+    def test_enforcing_header_has_nonce_and_no_unsafe_inline_script(self, logged_in_client):
+        """Step 2/2 — the nonce-based script-src is now enforcing, not
+        Report-Only; there is no Content-Security-Policy-Report-Only
+        header left to fall back on."""
         resp = logged_in_client.get("/")
-        ro = resp.headers.get("Content-Security-Policy-Report-Only")
-        assert ro is not None
-        m = re.search(r"script-src ([^;]+);", ro)
+        assert resp.headers.get("Content-Security-Policy-Report-Only") is None
+        csp = resp.headers.get("Content-Security-Policy")
+        assert csp is not None
+        m = re.search(r"script-src ([^;]+);", csp)
         assert m is not None
         script_src = m.group(1)
         assert "'unsafe-inline'" not in script_src
         assert "'nonce-" in script_src
 
-    def test_enforcing_header_still_has_unsafe_inline_script_for_now(self, logged_in_client):
-        """Step 1/2 ships Report-Only alongside the unchanged enforcing
-        header — nothing can break even if the handler conversion
-        missed a spot. Step 2 flips this."""
+    def test_style_src_keeps_unsafe_inline(self, logged_in_client):
         resp = logged_in_client.get("/")
         csp = resp.headers.get("Content-Security-Policy")
         assert csp is not None
-        assert "script-src 'self' 'unsafe-inline'" in csp
-
-    def test_style_src_keeps_unsafe_inline(self, logged_in_client):
-        resp = logged_in_client.get("/")
-        for header_name in ("Content-Security-Policy", "Content-Security-Policy-Report-Only"):
-            header = resp.headers.get(header_name)
-            assert header is not None
-            assert "style-src 'self' 'unsafe-inline'" in header
+        assert "style-src 'self' 'unsafe-inline'" in csp
 
     def test_two_requests_get_different_nonces(self, logged_in_client):
-        first = logged_in_client.get("/").headers.get("Content-Security-Policy-Report-Only")
-        second = logged_in_client.get("/").headers.get("Content-Security-Policy-Report-Only")
+        first = logged_in_client.get("/").headers.get("Content-Security-Policy")
+        second = logged_in_client.get("/").headers.get("Content-Security-Policy")
         nonce_re = re.compile(r"'nonce-([^']+)'")
         n1, n2 = nonce_re.search(first).group(1), nonce_re.search(second).group(1)
         assert n1 != n2
@@ -203,7 +197,7 @@ class TestSecurityHeaders:
         """The nonce a template actually emits must be the same value
         the browser is told to trust — that's the entire mechanism."""
         resp = logged_in_client.get("/")
-        ro = resp.headers.get("Content-Security-Policy-Report-Only")
-        header_nonce = re.search(r"'nonce-([^']+)'", ro).group(1)
+        csp = resp.headers.get("Content-Security-Policy")
+        header_nonce = re.search(r"'nonce-([^']+)'", csp).group(1)
         body = resp.get_data(as_text=True)
         assert f'nonce="{header_nonce}"' in body

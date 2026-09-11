@@ -308,36 +308,26 @@ def create_app() -> Flask:
         that page's own nonced script — so 'unsafe-inline' is no longer
         needed for scripts at all.
 
-        v5.22.0 (Q18) step 1/2 — ships as Content-Security-Policy-Report-Only
-        first: the ENFORCING header below is untouched (still permits
-        inline scripts), so nothing can break even if the nonce/handler
-        conversion missed a spot; the Report-Only header carries the new
-        nonce-based script-src and reports violations to the browser
-        console without blocking anything. Step 2 promotes it to the
-        enforcing header and drops Report-Only, once nothing shows up
-        there on a real instance.
+        v5.22.0 (Q18) step 2/2 — step 1 shipped this nonce-based
+        script-src as Content-Security-Policy-Report-Only next to an
+        unchanged, still-inline-permitting enforcing header, so a missed
+        conversion spot would only show up in the browser console.
+        Nothing did; this promotes the nonce-based policy to the
+        enforcing header and drops Report-Only.
         """
         from flask import g
 
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
+        nonce = getattr(g, "csp_nonce", "")
         response.headers.setdefault(
             "Content-Security-Policy",
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            f"script-src 'self' 'nonce-{nonce}'; "
             "style-src 'self' 'unsafe-inline'; "
             "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
         )
-        nonce = getattr(g, "csp_nonce", "")
-        if nonce:
-            response.headers.setdefault(
-                "Content-Security-Policy-Report-Only",
-                f"default-src 'self'; "
-                f"script-src 'self' 'nonce-{nonce}'; "
-                f"style-src 'self' 'unsafe-inline'; "
-                f"frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
-            )
         if _https_context():
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
