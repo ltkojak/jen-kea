@@ -386,3 +386,87 @@ class TestEditSubnet6PreviewRoute:
         assert data["servers"][0]["ok"] is True
         assert data["all_passed"] is True
         assert "apply-config" not in fake.ops() and "service" not in fake.ops()
+
+
+class TestEditSubnet6FormBaseSha:
+    """v5.19.1 (14B) — mirrors TestEditFormBaseSha in test_subnets.py for
+    the v6 edit form: one base_sha_<server id> per SSH server, each
+    checked only against that server's own file."""
+
+    def _wire(self, monkeypatch, *, servers=None, shas=None, subnet6=None):
+        import jen.services.kea6 as kea6_module
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
+
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        monkeypatch.setattr(
+            kea6_module,
+            "get_subnet6_kea_data",
+            lambda subnet_id: {
+                "pools": [],
+                "pool_str": "",
+                "preferred_lifetime": "",
+                "valid_lifetime": "",
+                "renew_timer": "",
+                "rebind_timer": "",
+                "dns_servers": "",
+            },
+        )
+        servers = servers or [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        shas = shas or {1: "sha-at-open"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        fake = FakeHelper()
+        for s in servers:
+            sid = s["id"]
+            fake.configs[(sid, "dhcp6")] = {"Dhcp6": {"subnet6": subnet6 if subnet6 is not None else [{"id": 1}]}}
+            fake.shas[(sid, "dhcp6")] = shas[sid]
+
+        def _apply(server, op, payload):
+            sid = server["id"]
+            live = shas[sid]
+            want = payload.get("expect_sha256")
+            if want is not None and want != live:
+                return {"ok": False, "error": "conflict", "sha256": live, "helper_version": 2}
+            return {"ok": True, "sha256": live, "helper_version": 2}
+
+        fake.responses["apply-config"] = _apply
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp6-server", "state": "active"}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        return fake
+
+    def _two_servers(self):
+        return [
+            {"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"},
+            {"id": 2, "name": "Kea B", "ssh_host": "10.0.0.6", "ssh_user": "kea"},
+        ]
+
+    def test_edit_form_has_a_hidden_field_per_server(self, logged_in_client, monkeypatch):
+        self._wire(monkeypatch, servers=self._two_servers(), shas={1: "A", 2: "B"})
+        r = logged_in_client.get("/subnets/edit6/1")
+        assert r.status_code == 200
+        assert b'name="base_sha_1" value="A"' in r.data
+        assert b'name="base_sha_2" value="B"' in r.data
+
+    def test_two_servers_with_different_shas_both_apply(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch, servers=self._two_servers(), shas={1: "A", 2: "B"})
+        r = logged_in_client.post(
+            "/subnets/edit6/1",
+            data={"preferred_lifetime": "3000", "base_sha_1": "A", "base_sha_2": "B"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"changed since you opened this form" not in r.data
+        assert fake.ops().count("service") == 2
+
+    def test_stale_sha_on_one_server_conflicts_only_there(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch, servers=self._two_servers(), shas={1: "A", 2: "B"})
+        r = logged_in_client.post(
+            "/subnets/edit6/1",
+            data={"preferred_lifetime": "3000", "base_sha_1": "A", "base_sha_2": "STALE"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert r.data.count(b"changed since you opened this form") == 1
+        assert fake.ops().count("service") == 1

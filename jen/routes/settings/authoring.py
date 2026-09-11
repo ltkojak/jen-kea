@@ -6,6 +6,7 @@ Generate a starter Kea config over SSH; check/install Kea binaries.
 
 import ipaddress
 import logging
+import re
 from urllib.parse import urlparse
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
@@ -321,11 +322,16 @@ def _author_kea_common(service, form):
 
     direct = extensions.KEA_CONNECTION_MODE == "direct"
     bind_addresses = {}
+    interfaces_by_server = {}
     tls = None
     if direct:
         # v5.10.3 — one bind address PER SERVER. An HA pair has two
         # management IPs; a single shared value meant kea02 was told to
         # bind kea01's address.
+        # v5.19.1 — likewise, an optional per-server interface list: an
+        # HA pair can have different NIC names on each node (ens18 vs
+        # eth0), and `interfaces` above used to be written into every
+        # target's config unconditionally.
         for srv in extensions.KEA_SERVERS:
             if not srv.get("ssh_host"):
                 continue
@@ -337,6 +343,15 @@ def _author_kea_common(service, form):
                 name = srv.get("name") or srv.get("ssh_host")
                 return None, None, f"Bind address for {name} must be an IP address, not a hostname (Kea binds it)."
             bind_addresses[sid] = raw
+
+            raw_ifaces = form.get(f"interfaces_{sid}", "").strip()
+            if raw_ifaces:
+                parsed = [i.strip() for i in raw_ifaces.replace(",", "\n").splitlines() if i.strip()]
+                for iface in parsed:
+                    if not re.match(r"^[A-Za-z0-9_.:-]{1,32}$", iface):
+                        name = srv.get("name") or srv.get("ssh_host")
+                        return None, None, f"Invalid interface name for {name}: {iface}"
+                interfaces_by_server[sid] = parsed
 
         # TLS paths are required only if a target endpoint is https.
         from jen.services.kea import _endpoint_for
@@ -379,6 +394,7 @@ def _author_kea_common(service, form):
     _, default_db = _author_kea_subnets_and_db(service)
     common = {
         "interfaces": interfaces,
+        "interfaces_by_server": interfaces_by_server,
         "control_socket_path": control_socket_path,
         "bind_addresses": bind_addresses,
         "tls": tls,
@@ -395,10 +411,18 @@ def _author_kea_common(service, form):
 def _author_kea_config_for(service, server, common, subnets):
     """Build the config for ONE target server. Returns
     (config, tls_paths, warning, error) — warning is amber (bind-address
-    mismatch / all-interfaces), error skips just this server."""
+    mismatch / all-interfaces), error skips just this server.
+
+    v5.19.1 — `common["interfaces"]` used to be written into every
+    target's config unconditionally, so an HA pair with different NIC
+    names on each node (ens18 vs eth0) got the wrong one on one of
+    them. A per-server override in `interfaces_by_server` (optional;
+    direct mode only, since that's the only mode with a per-server
+    section in the form) wins when present, in both connection modes."""
+    ifaces = common["interfaces_by_server"].get(server.get("id")) or common["interfaces"]
     if extensions.KEA_CONNECTION_MODE != "direct":
         config = __authoring.build_new_kea_config(
-            service, common["interfaces"], common["lease_db"], common["control_socket_path"], subnets, api_socket=None
+            service, ifaces, common["lease_db"], common["control_socket_path"], subnets, api_socket=None
         )
         return config, [], None, None
 
@@ -411,7 +435,7 @@ def _author_kea_config_for(service, server, common, subnets):
         return None, [], None, f"{name}: no bind address chosen for the control API."
     sock["address"] = bind
     config = __authoring.build_new_kea_config(
-        service, common["interfaces"], common["lease_db"], common["control_socket_path"], subnets, api_socket=sock
+        service, ifaces, common["lease_db"], common["control_socket_path"], subnets, api_socket=sock
     )
 
     tls_paths = []
@@ -467,6 +491,7 @@ def author_kea_config_preview(service):
         try:
             res, _ = _run_author_script(server, service, config, tls_paths, dry_run=True, allow_overwrite=False)
             row = {"name": name, "config": __authoring.redact_secrets(config)}
+            row["interfaces"] = common["interfaces_by_server"].get(server.get("id")) or common["interfaces"]
             bind = common["bind_addresses"].get(server.get("id"))
             if bind:
                 row["bind_address"] = bind

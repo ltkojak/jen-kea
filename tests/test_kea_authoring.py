@@ -905,6 +905,50 @@ class TestAuthorKeaConfigPreviewRoute:
         by_name = {r["name"]: r for r in data["servers"]}
         assert by_name["kea02"]["bind_address"] == "192.168.50.9"
 
+    # ── v5.19.1 (14E): interfaces are per server too ────────────────────────
+    def test_interfaces_per_server_override(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(
+                bind_address_1="10.10.10.20", bind_address_2="10.10.10.21", interfaces="ens18", interfaces_2="eth0"
+            ),
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        assert by_name["kea01"]["config"]["Dhcp4"]["interfaces-config"]["interfaces"] == ["ens18"]
+        assert by_name["kea02"]["config"]["Dhcp4"]["interfaces-config"]["interfaces"] == ["eth0"]
+        assert by_name["kea01"]["interfaces"] == ["ens18"]
+        assert by_name["kea02"]["interfaces"] == ["eth0"]
+
+    def test_interfaces_per_server_blank_falls_back_to_the_common_list(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(bind_address_1="10.10.10.20", bind_address_2="10.10.10.21", interfaces="ens18"),
+        ).get_json()
+        by_name = {r["name"]: r for r in data["servers"]}
+        assert by_name["kea01"]["config"]["Dhcp4"]["interfaces-config"]["interfaces"] == ["ens18"]
+        assert by_name["kea02"]["config"]["Dhcp4"]["interfaces-config"]["interfaces"] == ["ens18"]
+
+    def test_invalid_per_server_interface_name_is_rejected_naming_the_server(self, logged_in_client, monkeypatch):
+        self._pair_of_servers(monkeypatch)
+        r = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview",
+            data=self._direct_form(
+                bind_address_1="10.10.10.20", bind_address_2="10.10.10.21", interfaces_2="bad name!"
+            ),
+        )
+        assert r.status_code == 400
+        assert "kea02" in r.get_json()["error"]
+
+    def test_single_server_form_is_unaffected(self, logged_in_client, monkeypatch):
+        srv = {"id": 1, "name": "s1", "ssh_host": "1.2.3.4", "api_url": "http://1.2.3.4:8004"}
+        self._direct_setup(monkeypatch, [srv])
+        data = logged_in_client.post(
+            "/settings/infrastructure/author-kea/dhcp4/preview", data=self._direct_form()
+        ).get_json()
+        assert data["servers"][0]["config"]["Dhcp4"]["interfaces-config"]["interfaces"] == ["eth0"]
+
 
 class TestAuthorBindCandidates:
     """v5.10.3 — one picker per ssh server, each from its OWN detected

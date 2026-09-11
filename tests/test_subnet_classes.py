@@ -127,6 +127,26 @@ class TestClientClassRoutes:
         assert b"bad expression" in r.data
         assert "apply-config" not in fake.ops()
 
+    def test_preview_ssh_failure_shows_an_error_row_not_a_500(self, logged_in_client, monkeypatch, mock_kea):
+        # v5.19.1 (14G) — an SSH/helper failure on a legacy-path host used
+        # to raise straight out of the route, so the htmx target got a
+        # bare 500 instead of an error message.
+        from jen.services import kea_host
+
+        self._wire(monkeypatch)
+
+        def _raise(*_a, **_kw):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(kea_host, "helper_call", _raise)
+        r = logged_in_client.post(
+            "/subnets/classes/preview",
+            data={"is_new": "1", "orig_name": "", "name": "voice", "mode": "advanced", "test": "1 == 1"},
+        )
+        assert r.status_code == 200
+        assert b"Couldn't validate against" in r.data
+        assert b"boom" not in r.data
+
     def test_save_new_guided_class_pushes_expression_and_user_context(self, logged_in_client, monkeypatch, mock_kea):
         fake = self._wire(monkeypatch)
         r = logged_in_client.post(
@@ -161,6 +181,69 @@ class TestClientClassRoutes:
         manual = next(c for c in applied if c["name"] == "manual")
         assert manual["test"] == "member('printers')"
         assert "user-context" not in manual
+
+    def test_save_only_additional_without_attachment_warns(self, logged_in_client, monkeypatch, mock_kea):
+        # v5.19.1 (14F) — Q13's own pinned gotcha ("warn if
+        # only-in-additional-list is ticked but the class isn't attached
+        # as additional anywhere") was never implemented.
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/subnets/classes/save",
+            data={
+                "is_new": "0",
+                "orig_name": "voip",
+                "mode": "advanced",
+                "test": "option[60].hex == 'VoIP'",
+                "only_additional": "1",
+            },
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"is not attached as an Additional class anywhere yet" in r.data
+        applied = fake.payload_for("apply-config")["config"]["Dhcp4"]["client-classes"]
+        voip = next(c for c in applied if c["name"] == "voip")
+        assert voip.get("only-in-additional-list") is True
+
+    def test_save_only_additional_with_attachment_no_warning(self, logged_in_client, monkeypatch, mock_kea):
+        import copy
+
+        dhcp4 = copy.deepcopy(self._DHCP4)
+        dhcp4["Dhcp4"]["subnet4"][0]["evaluate-additional-classes"] = ["voip"]
+        self._wire(monkeypatch, dhcp4=dhcp4)
+        r = logged_in_client.post(
+            "/subnets/classes/save",
+            data={
+                "is_new": "0",
+                "orig_name": "voip",
+                "mode": "advanced",
+                "test": "option[60].hex == 'VoIP'",
+                "only_additional": "1",
+            },
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"is not attached as an Additional class anywhere yet" not in r.data
+
+    def test_edit_page_shows_only_additional_banner_when_unattached(self, logged_in_client, monkeypatch, mock_kea):
+        import copy
+
+        dhcp4 = copy.deepcopy(self._DHCP4)
+        dhcp4["Dhcp4"]["client-classes"][1]["only-in-additional-list"] = True  # voip
+        self._wire(monkeypatch, dhcp4=dhcp4)
+        r = logged_in_client.get("/subnets/classes/edit?name=voip")
+        assert r.status_code == 200
+        assert b"is not attached as an Additional class anywhere yet" in r.data
+
+    def test_edit_page_hides_banner_when_attached(self, logged_in_client, monkeypatch, mock_kea):
+        import copy
+
+        dhcp4 = copy.deepcopy(self._DHCP4)
+        dhcp4["Dhcp4"]["client-classes"][1]["only-in-additional-list"] = True  # voip
+        dhcp4["Dhcp4"]["subnet4"][0]["evaluate-additional-classes"] = ["voip"]
+        self._wire(monkeypatch, dhcp4=dhcp4)
+        r = logged_in_client.get("/subnets/classes/edit?name=voip")
+        assert r.status_code == 200
+        assert b"is not attached as an Additional class anywhere yet" not in r.data
 
     def test_save_rejects_builtin_name(self, logged_in_client, monkeypatch, mock_kea):
         fake = self._wire(monkeypatch)

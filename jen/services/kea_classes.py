@@ -116,6 +116,16 @@ def additional_classes(container: dict) -> list[str]:
     return []
 
 
+def attached_as_additional(dhcp4_cfg: dict, class_name: str) -> bool:
+    """True if `class_name` is attached as an ADDITIONAL class (never a
+    guard) on at least one subnet, pool, or shared network. v5.19.1 —
+    backs the "only-in-additional-list is ticked but this class is
+    never evaluated" warning: that flag only matters once the class is
+    attached somewhere as additional, and Kea silently never runs it
+    otherwise."""
+    return any(class_name in additional_classes(c) for c in _scope_containers(dhcp4_cfg))
+
+
 def references(dhcp4_cfg: dict, class_name: str) -> list[str]:
     """Every place `class_name` is referenced: a subnet/pool/shared-network
     guard or additional-classes attachment, or another class's expression

@@ -69,6 +69,10 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
                 {% if c.endpoint_host and not c.options %}That's a hostname and no global addresses were detected — type the IP this daemon should bind.
                 {% else %}The IP Kea's control API should listen on. Prefer a management address firewalled to the Jen host.{% endif %}
             </div>
+            {% if bind_candidates|length > 1 %}
+            <input type="text" name="interfaces_{{ c.id }}" placeholder="same as above" style="font-family:monospace;margin-top:6px;">
+            <div class="form-hint">Interfaces on this server (blank = the list above). Set this when an HA pair uses different NIC names, e.g. <code>ens18</code> on one node and <code>eth0</code> on the other.</div>
+            {% endif %}
             {% endif %}
         </div>
         {% endfor %}
@@ -175,6 +179,9 @@ async function showPreview() {
             var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
             if (s.bind_address) {
                 line += '<div style="color:var(--text-muted);margin-left:20px;font-size:11px;">binds ' + escapeHtml(s.bind_address) + '</div>';
+            }
+            if (s.interfaces && s.interfaces.length) {
+                line += '<div style="color:var(--text-muted);margin-left:20px;font-size:11px;">interfaces: ' + escapeHtml(s.interfaces.join(', ')) + '</div>';
             }
             if (s.warning) {
                 line += '<div style="color:var(--warning);margin-left:20px;">⚠️ ' + escapeHtml(s.warning) + '</div>';

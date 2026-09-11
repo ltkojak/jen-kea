@@ -109,6 +109,10 @@
 {% if not is_new %}
 {% include "_dhcp_options_table.html" %}
 
+{% if only_additional_warning %}
+<div class="alert alert-warning">⚠️ {{ only_additional_warning }}</div>
+{% endif %}
+
 <div class="card">
     <div class="card-header"><span class="card-title">Applies to</span></div>
     {% if scope_rows %}

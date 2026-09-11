@@ -268,6 +268,42 @@ class TestReferences:
         assert kc.references(self.CFG, "unused") == []
 
 
+class TestAttachedAsAdditional:
+    """v5.19.1 (14F) — backs the only-in-additional-list warning: the
+    flag only matters once the class is attached as ADDITIONAL
+    (never a guard) somewhere."""
+
+    def test_false_for_guard_only(self):
+        assert kc.attached_as_additional(TestReferences.CFG, "pxe") is False
+
+    def test_true_for_pool_additional(self):
+        assert kc.attached_as_additional(TestReferences.CFG, "acct") is True
+
+    def test_true_for_nested_subnet_additional(self):
+        cfg = {
+            "shared-networks": [{"name": "guest", "subnet4": [{"id": 70, "evaluate-additional-classes": ["acct2"]}]}],
+            "client-classes": [{"name": "acct2", "test": "1 == 1"}],
+        }
+        assert kc.attached_as_additional(cfg, "acct2") is True
+
+    def test_true_for_top_level_subnet_additional(self):
+        cfg = {
+            "subnet4": [{"id": 10, "require-client-classes": ["acct3"]}],
+            "client-classes": [{"name": "acct3", "test": "1 == 1"}],
+        }
+        assert kc.attached_as_additional(cfg, "acct3") is True
+
+    def test_true_for_shared_network_level_additional(self):
+        cfg = {
+            "shared-networks": [{"name": "guest", "evaluate-additional-classes": ["acct4"], "subnet4": []}],
+            "client-classes": [{"name": "acct4", "test": "1 == 1"}],
+        }
+        assert kc.attached_as_additional(cfg, "acct4") is True
+
+    def test_false_for_unreferenced_class(self):
+        assert kc.attached_as_additional(TestReferences.CFG, "unused") is False
+
+
 class TestMergeClassFields:
     def test_new_class_fields_all_set(self):
         d = kc.merge_class_fields(

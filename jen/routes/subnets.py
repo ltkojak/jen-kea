@@ -41,31 +41,43 @@ def __ip_to_int(ip):
     return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
 
 
-# ── Optimistic concurrency (v5.16.0 — Q11) ─────────────────────────────────
+# ── Optimistic concurrency (v5.16.0 — Q11; per-server v5.19.1 — Q14) ────────
 #
-# The edit forms carry `base_sha` — the SHA of kea-dhcp4/6.conf as it was
-# when the form was opened. On submit it's passed to kea_host.apply_config
-# as expect_sha256; a v2 helper refuses the write atomically if the file
-# changed underneath, a v1 / legacy host gets a best-effort compare. The
-# add / delete / move routes have no earlier form, so they pass the SHA
-# read at the top of the same request (a much shorter window, still worth
-# guarding).
+# The edit forms carry one `base_sha_<server id>` per SSH-capable server —
+# the SHA of kea-dhcp4/6.conf on THAT server as it was when the form was
+# opened. On submit each is passed to kea_host.apply_config as
+# expect_sha256 for that same server; a v2 helper refuses the write
+# atomically if the file changed underneath, a v1 / legacy host gets a
+# best-effort compare. The add / delete / move routes have no earlier
+# form, so they pass the SHA read at the top of the same request (a much
+# shorter window, still worth guarding) — those are unaffected here.
+#
+# v5.19.1 fix: this used to be ONE sha (the active server's) sent to
+# EVERY SSH server. Two HA nodes never have a byte-identical
+# kea-dhcp4.conf (this-server-name, peers, interfaces), so with helper v2
+# on both, the second node conflicted on every single edit. Each server
+# now gets its own sha, read from its own file.
 
 
-def _form_base_sha():
-    return (request.form.get("base_sha") or "").strip() or None
+def _form_base_sha(server):
+    return (request.form.get(f"base_sha_{server['id']}") or "").strip() or None
 
 
-def _active_config_sha(service):
-    """SHA of the live config on the server Jen edits against — for the
-    edit form's hidden base_sha field. None on a v1 / legacy host or any
-    read error (the guard then degrades to a best-effort compare or,
-    with no sha at all, no guard)."""
-    try:
-        _cfg, sha = __host.read_config_versioned(__kea.get_active_kea_server(), service)
-        return sha
-    except Exception:
-        return None
+def _config_shas(service):
+    """{server id: sha | None} for every SSH-capable server's current
+    kea-dhcp4/6.conf — one per row in the edit form's hidden fields. None
+    for a v1/legacy host or any read error (that server's guard then
+    degrades to a best-effort compare or, with no sha at all, no guard)."""
+    shas = {}
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        try:
+            _cfg, sha = __host.read_config_versioned(server, service)
+        except Exception:
+            sha = None
+        shas[server["id"]] = sha
+    return shas
 
 
 def _conflict_flash(server_name):
@@ -568,7 +580,7 @@ def edit_subnet(subnet_id):
         flash("You do not have access to that subnet.", "error")
         return redirect(url_for("subnets.subnets"))
     kea_data = _get_subnet_kea_data(subnet_id)
-    kea_data["base_sha"] = _active_config_sha("dhcp4")
+    kea_data["base_shas"] = _config_shas("dhcp4")
     return render_template(
         "edit_subnet.html",
         subnet_id=subnet_id,
@@ -720,7 +732,7 @@ def edit_subnet_preview(subnet_id):
             if cfg is None:
                 server_results.append({"name": name, "ok": False, "message": "kea-dhcp4.conf not found on this server"})
                 continue
-            base_sha = _form_base_sha()
+            base_sha = _form_base_sha(server)
             if base_sha and live_sha and base_sha != live_sha:
                 server_results.append({"name": name, "ok": False, "message": _conflict_flash(name)})
                 continue
@@ -790,7 +802,7 @@ def edit_subnet_post(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp4")
+            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
             if cfg is None:
                 errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
                 continue
@@ -801,7 +813,7 @@ def edit_subnet_post(subnet_id):
                 results.append(f"ℹ️ {name}: nothing to change")
                 continue
             res = __host.apply_config(
-                server, "dhcp4", cfg, expect_sha256=_form_base_sha(), summary=f"edit subnet {subnet_id}"
+                server, "dhcp4", cfg, expect_sha256=_form_base_sha(server), summary=f"edit subnet {subnet_id}"
             )
             if res["code"] == "conflict":
                 errors.append(f"❌ {name}: {_conflict_flash(name)}")
@@ -907,6 +919,9 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
 @login_required
 @_admin_required
 def add_shared_network():
+    if not current_user.all_subnets:
+        flash("Creating a shared network needs access to all subnets.", "error")
+        return redirect(url_for("subnets.subnets"))
     name = request.form.get("name", "").strip()
     interface = request.form.get("interface", "").strip() or None
     if not __auth.valid_shared_network_name(name):
@@ -1248,6 +1263,13 @@ def _classes_check_access():
     return False
 
 
+def _only_additional_warning(name):
+    return (
+        f'"{name}" is marked only-in-additional-list but is not attached as an Additional class anywhere yet — '
+        "Kea will never evaluate it until you tick Additional on a subnet, pool, or shared network."
+    )
+
+
 def _class_form_identity(form):
     """(name, is_new) from the shared new/edit form fields — editing an
     existing class keeps its name fixed to `orig_name` regardless of what
@@ -1422,6 +1444,11 @@ def dhcp_class_edit_page():
             r["managed"] = False
             r["custom"] = r["code"] not in __opts.V4_OPTIONS
 
+    only_additional = bool(existing and (existing.get(__classes.NEW_ONLY) or existing.get(__classes.OLD_ONLY)))
+    only_additional_unattached = bool(
+        existing is not None and only_additional and not __classes.attached_as_additional(cfg, name)
+    )
+
     return render_template(
         "dhcp_class_edit.html",
         name=name,
@@ -1432,7 +1459,8 @@ def dhcp_class_edit_page():
         advanced_notice=advanced_notice,
         advanced_test=advanced_test,
         initial_mode="advanced" if (existing is not None and builder is None) else "guided",
-        only_additional=bool(existing and (existing.get(__classes.NEW_ONLY) or existing.get(__classes.OLD_ONLY))),
+        only_additional=only_additional,
+        only_additional_warning=_only_additional_warning(name) if only_additional_unattached else None,
         rows=rows,
         catalog=__opts.catalog_choices(),
         level="class",
@@ -1462,21 +1490,32 @@ def dhcp_class_preview():
         if ssh_server is None:
             test_result = {"ok": None, "detail": "No SSH-reachable Kea server to validate against."}
         else:
-            full_cfg, _sha = __host.read_config_versioned(ssh_server, "dhcp4")
-            if full_cfg is None:
-                test_result = {"ok": None, "detail": "Couldn't read the live config on that server."}
-            else:
-                existing = next(
-                    (
-                        c
-                        for c in (full_cfg.get("Dhcp4", {}).get("client-classes") or [])
-                        if isinstance(c, dict) and c.get("name") == name
-                    ),
-                    None,
+            try:
+                full_cfg, _sha = __host.read_config_versioned(ssh_server, "dhcp4")
+                if full_cfg is None:
+                    test_result = {"ok": None, "detail": "Couldn't read the live config on that server."}
+                else:
+                    existing = next(
+                        (
+                            c
+                            for c in (full_cfg.get("Dhcp4", {}).get("client-classes") or [])
+                            if isinstance(c, dict) and c.get("name") == name
+                        ),
+                        None,
+                    )
+                    candidate = __classes.merge_class_fields(existing, name, expr)
+                    preview_cfg, _code = __edit.upsert_class4(full_cfg, candidate)
+                    test_result = __host.test_config(ssh_server, "dhcp4", preview_cfg)
+            except Exception:
+                # v5.19.1 (14G) — an SSH failure on a legacy-path host used
+                # to raise straight out of this route, showing a 500 in the
+                # htmx preview target instead of an error row.
+                logger.warning(
+                    f"class preview validation failed against {ssh_server.get('name') or ssh_server.get('ssh_host')}",
+                    exc_info=True,
                 )
-                candidate = __classes.merge_class_fields(existing, name, expr)
-                preview_cfg, _code = __edit.upsert_class4(full_cfg, candidate)
-                test_result = __host.test_config(ssh_server, "dhcp4", preview_cfg)
+                server_label = ssh_server.get("name") or ssh_server.get("ssh_host")
+                test_result = {"ok": None, "detail": f"Couldn't validate against {server_label} — see server logs."}
 
     return render_template("_class_preview.html", expression=expr or "", error=error, test_result=test_result)
 
@@ -1526,9 +1565,16 @@ def dhcp_class_save():
         )
         return __edit.upsert_class4(cfg, merged)
 
+    # v5.19.1 — read before the push: Kea restarts right after a
+    # successful apply, so a fresh API read here could lag or fail, and
+    # the attachment state a save is checking against doesn't change
+    # during the save itself.
+    pre_push_cfg = _live_dhcp4_cfg()
     code = _apply_dhcp4_change(_mutate, f'class "{name}" saved', {}, summary=f'save class "{name}"')
     if code == "ok":
         __user.audit("SAVE_DHCP_CLASS", name, "new" if is_new else "edit")
+        if only_additional and not __classes.attached_as_additional(pre_push_cfg, name):
+            flash(_only_additional_warning(name), "warning")
     return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
 
 
@@ -1755,7 +1801,7 @@ def edit_subnet6(subnet_id):
         flash("IPv6 subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     kea_data = __kea6.get_subnet6_kea_data(subnet_id)
-    kea_data["base_sha"] = _active_config_sha("dhcp6")
+    kea_data["base_shas"] = _config_shas("dhcp6")
     return render_template(
         "edit_subnet6.html", subnet_id=subnet_id, subnet=extensions.SUBNET6_MAP[subnet_id], kea=kea_data
     )
@@ -1791,7 +1837,7 @@ def edit_subnet6_preview(subnet_id):
             if cfg is None:
                 server_results.append({"name": name, "ok": False, "message": "kea-dhcp6.conf not found on this server"})
                 continue
-            base_sha = _form_base_sha()
+            base_sha = _form_base_sha(server)
             if base_sha and live_sha and base_sha != live_sha:
                 server_results.append({"name": name, "ok": False, "message": _conflict_flash(name)})
                 continue
@@ -1849,7 +1895,7 @@ def edit_subnet6_post(subnet_id):
             continue
         name = server.get("name", server["ssh_host"])
         try:
-            cfg = __host.read_config(server, "dhcp6")
+            cfg, _sha = __host.read_config_versioned(server, "dhcp6")
             if cfg is None:
                 errors.append(f"❌ {name}: kea-dhcp6.conf not found on this server")
                 continue
@@ -1868,7 +1914,7 @@ def edit_subnet6_post(subnet_id):
                 results.append(f"ℹ️ {name}: nothing to change")
                 continue
             res = __host.apply_config(
-                server, "dhcp6", cfg, expect_sha256=_form_base_sha(), summary=f"edit subnet {subnet_id}"
+                server, "dhcp6", cfg, expect_sha256=_form_base_sha(server), summary=f"edit subnet {subnet_id}"
             )
             if res["code"] == "conflict":
                 errors.append(f"❌ {name}: {_conflict_flash(name)}")

@@ -9,7 +9,7 @@
 <div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp6.conf</code> on your Kea server and restart the Kea IPv6 service. Kea will be briefly unavailable during restart. <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
 
 <div class="card" style="max-width:680px;">
-    <form method="POST" id="edit-subnet6-form" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="base_sha" value="{{ kea.base_sha or '' }}">
+    <form method="POST" id="edit-subnet6-form" onsubmit="return false;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for sid, sha in kea.base_shas.items() %}<input type="hidden" name="base_sha_{{ sid }}" value="{{ sha or '' }}">{% endfor %}
 
         <!-- Address Pool -->
         <div class="form-group">
