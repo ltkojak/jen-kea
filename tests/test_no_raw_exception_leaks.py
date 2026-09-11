@@ -153,6 +153,14 @@ ALLOWED_RAW_EXCEPTION_LINES = [
         "Telegram's own API error response (code + description) — the "
         "admin's own integration's diagnostic text, not a Python exception.",
     ),
+    (
+        "jen/routes/subnets.py",
+        'flash(f"{name}: {err}"',
+        "err is jen.services.dhcp_options.validate()'s own hand-written, "
+        "sanitized message (e.g. 'must be an IPv4 address') about the "
+        "value the admin just typed into the DHCP options form — never a "
+        "raw exception object.",
+    ),
 ]
 
 # These aren't exception leaks at all — an integer error/success COUNT
