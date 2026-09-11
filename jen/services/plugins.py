@@ -288,20 +288,19 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     that gets executed as www-data, plus whatever db_migrations the
     manifest declares.
 
-    Deliberately NOT fail-closed on a MISSING checksum, unlike the
-    self-updater — the two plugins that exist today (network-discovery,
-    ipam) don't have one in the registry yet, and I have no way to
-    manufacture a trustworthy hash for zip files hosted in separate
-    repositories I don't have a verified, out-of-band copy of; computing
-    one from what this function just downloaded would be circular and
-    add no real security. A registry entry WITHOUT a sha256 field logs
-    a warning and installs anyway — a deliberate, visible transition
-    state, not a silent gap. A registry entry WITH a sha256 field that
-    doesn't match is a hard failure, no exceptions, matching the
-    self-updater's fail-closed behavior for actual verification
-    failures. The goal is for every registry entry to carry a real
-    checksum going forward, at which point removing the "missing is
-    OK" branch entirely becomes the natural next step.
+    v5.21.1 — fail-closed on a MISSING checksum too, now matching the
+    self-updater exactly. `install_plugin` used to log a warning and
+    install anyway when a registry entry had no `sha256`, because
+    neither plugin that existed at the time (network-discovery, ipam)
+    had one yet, and computing one from what this function just
+    downloaded would have been circular — no real security. Every
+    registry entry now pins `download_url` to a release tag (not
+    `main`) and carries the real `sha256` of that tag's `plugin.zip`,
+    computed out-of-band from a verified download — see plugins/README.md
+    for the release process. With that in place, a missing checksum is
+    no longer a legitimate transition state; it means the registry
+    entry is malformed or was tampered with, and install refuses
+    outright, the same as a mismatch.
     """
     import hashlib
     import io
@@ -327,19 +326,15 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
             return False, f"Download failed: HTTP {resp.status_code}"
 
         expected_sha256 = registry_entry.get("sha256", "").strip().lower()
+        if not expected_sha256:
+            return False, "Registry entry has no checksum — refusing to install."
         actual_sha256 = hashlib.sha256(resp.content).hexdigest()
-        if expected_sha256:
-            if actual_sha256 != expected_sha256:
-                logger.error(
-                    f"Plugin '{plugin_id}' checksum mismatch: expected {expected_sha256}, "
-                    f"got {actual_sha256} — refusing to install."
-                )
-                return False, "Plugin package failed checksum verification. Refusing to install."
-        else:
-            logger.warning(
-                f"Plugin '{plugin_id}' has no sha256 in its registry entry — "
-                f"installing without integrity verification (actual hash: {actual_sha256})."
+        if actual_sha256 != expected_sha256:
+            logger.error(
+                f"Plugin '{plugin_id}' checksum mismatch: expected {expected_sha256}, "
+                f"got {actual_sha256} — refusing to install."
             )
+            return False, "Plugin package failed checksum verification. Refusing to install."
 
         os.makedirs(extensions.PLUGIN_DIR, exist_ok=True)
 
@@ -549,29 +544,21 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
 
 def fetch_registry(timeout: int = 10) -> tuple[list, str | None]:
     """
-    Fetch the plugin registry from GitHub, then overlay each plugin's
-    genuinely current version/description/db_migrations by live-fetching
-    its own manifest.json from its own repo — the same download_url
-    pattern install_plugin() already uses for the zip itself.
+    Fetch the plugin registry from GitHub. registry.json is the source
+    of truth for every field, including version/description/
+    db_migrations.
 
-    Registry.json's embedded version field used to be the ONLY source of
-    truth for "is an update available," which meant every plugin release
-    required a second, easy-to-forget manual commit syncing that field —
-    it drifted stale for IPAM more than once. Live-fetching eliminates
-    the duplicate data entirely rather than relying on remembering to
-    keep two copies in sync by hand every release.
-
-    Only version/description/db_migrations are overlaid — not
-    download_url, nav, or the other structural fields — so a plugin's
-    own manifest can't redirect where its zip gets downloaded from or
-    what nav entries it injects; it can only correct its own
-    version/description/migration-list display data.
-
-    Falls back to the static registry.json's own embedded version for
-    any single plugin whose live manifest fetch fails (network hiccup,
-    that plugin's repo temporarily unreachable) — better to show a
-    possibly-stale-but-known version than to drop the plugin from the
-    list or fail the whole page over one plugin's connectivity.
+    v5.3.x — this used to overlay each plugin's version/description/
+    db_migrations by live-fetching manifest.json from its own repo's
+    `main` branch, to avoid a second, easy-to-forget manual commit
+    syncing those fields on every plugin release. v5.21.1 (Q17) removes
+    that: every entry's download_url is now pinned to a release TAG
+    (not `main`) with a real sha256 of that tag's plugin.zip, so a live
+    fetch of `main`'s manifest.json would report a version and
+    migration list that may not even match what install_plugin()
+    downloads and checksums. registry.json itself is the one thing that
+    has to be updated by hand now, in the same commit that pins the tag
+    and computes the checksum — see plugins/README.md.
     """
     try:
         resp = requests.get(extensions.PLUGIN_REGISTRY_URL, timeout=timeout)
@@ -585,27 +572,6 @@ def fetch_registry(timeout: int = 10) -> tuple[list, str | None]:
     except Exception as e:
         logger.error(f"Registry fetch error: {e}")
         return [], "Registry fetch failed. Check server logs for details."
-
-    for entry in entries:
-        download_url = entry.get("download_url", "").rstrip("/")
-        if not download_url or not download_url.startswith("https://"):
-            continue
-        try:
-            live_resp = requests.get(f"{download_url}/manifest.json", timeout=5)
-            if live_resp.status_code != 200:
-                continue
-            live_manifest = live_resp.json()
-            if live_manifest.get("id") != entry.get("id"):
-                # Doesn't even claim to be this plugin — don't trust it,
-                # keep the static fallback rather than showing whatever
-                # this unexpected manifest says.
-                continue
-            for field in ("version", "description", "db_migrations"):
-                if field in live_manifest:
-                    entry[field] = live_manifest[field]
-        except Exception as e:
-            logger.warning(f"Could not live-fetch manifest for plugin '{entry.get('id')}': {e}")
-            continue  # keep this one plugin's static fallback, others unaffected
 
     return entries, None
 
