@@ -584,11 +584,78 @@ more `network/prefix - router` pairs, comma-separated:
 192.168.10.0/24 - 10.0.0.1, 0.0.0.0/0 - 10.0.0.1
 ```
 
-**Not covered by this page:** per-client-class options (a later
-release), reservation-level options beyond the existing DNS field,
-`option-def` (custom option *definitions* — listed read-only at the
-bottom of the page), IPv6 options, and vendor-space options (e.g.
+**Not covered by this page:** per-client-class options (see **Client
+Classes** below), reservation-level options beyond the existing DNS
+field, `option-def` (custom option *definitions* — listed read-only at
+the bottom of the page), IPv6 options, and vendor-space options (e.g.
 `vendor-4491`) — those still require hand-editing `kea-dhcp4.conf`.
+
+---
+
+## Client Classes (v5.19.0)
+
+**Subnets → Client Classes** manages Kea's `Dhcp4.client-classes` — the
+list Kea evaluates, in order, against every incoming packet. A class can
+**gate** eligibility for a subnet, pool, or shared network (a *guard*:
+only clients matching the class are considered for it) or just attach
+extra options to whichever clients match it without gating anything
+(*additional*).
+
+**Guided rules vs. a raw expression.** Most classes reduce to a small
+set of shapes — match a vendor class string, a MAC address or OUI, a
+relay circuit/remote ID, a hostname, or membership in another class.
+The guided builder covers those: pick a field, an operator, and a
+value, combine several rules with **all**/**any**, and optionally
+negate the whole thing. Anything the builder can't express — a
+`substring()` at an arbitrary offset, nested boolean logic, a
+comparison against `pkt4.len`, and so on — goes in the **Advanced** tab
+as Kea's own classification-expression syntax. Opening a class whose
+expression doesn't match what its saved guided rules would produce
+(because someone hand-edited it, in the Kea config directly or on an
+older Jen version) opens in Advanced mode with a notice, rather than
+silently overwriting the hand edit if you happen to hit Save.
+
+Kea string literals are single-quoted with **no escape sequence** — a
+value containing `'` can't be expressed as a guided rule or a literal
+in Advanced mode.
+
+**Preview.** As you edit, Jen shows the expression it will write and
+runs it past Kea's own config test (`kea-dhcp4 -t`) with the candidate
+class inserted into a copy of the live config — nothing is written to
+disk for this. A rejection here is Kea's own error message, so it
+catches a malformed expression before Save ever pushes anything.
+
+**Only in additional list.** Kea 2.7.4 renamed several attachment keys
+(`client-class` → `client-classes`, `require-client-classes` →
+`evaluate-additional-classes`, `only-if-required` →
+`only-in-additional-list`). Jen reads both spellings everywhere; when
+*writing*, it keeps whatever spelling your config already uses, and
+only picks based on the connected Kea's version when the config uses
+neither yet. You'll never see a config that mixes both for the same
+purpose because of something Jen wrote.
+
+**Applies to.** Once a class exists, its edit page lists every subnet,
+pool, and shared network with a **Guard** / **Additional** checkbox
+each — check one to attach, uncheck to detach. A brand-new class has no
+key to attach yet, so this list (and its option-data) only appears
+after the first save.
+
+**Deleting a class** that's still attached anywhere, or still named in
+another class's `member(...)` expression, is refused with the list of
+what's still using it — detach or edit those first.
+
+**Built-in classes** (`ALL`, `KNOWN`, `UNKNOWN`, `DROP`, the
+`VENDOR_CLASS_*`/`HA_*`/`AFTER_*`/`SPAWN_*` families, and `BOOTP`) show
+up grayed-out if Kea's config authors option-data against them, but
+Jen never creates, edits, or deletes them.
+
+**Not covered by this page:** IPv6 classes, custom `option-def`s for
+vendor spaces, per-class lease limits, pool selection driven by class
+beyond guard/additional attachment, and importing an existing Windows
+DHCP policy set (a later release) — those still require hand-editing
+`kea-dhcp4.conf`. There's also no way to test a class against a
+simulated packet — the config-test preview above is the closest Jen
+gets; anything more needs a real DHCP exchange against a test client.
 
 ---
 

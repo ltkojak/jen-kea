@@ -267,3 +267,11 @@ class TestClientClassRoutes:
         c, _ = _restricted_client(client, db, allowed_subnets=None, role="viewer", username="classes_viewer1")
         r = c.get("/subnets/classes", follow_redirects=True)
         assert b"admin access required" in r.data.lower()
+
+    # ── subnet card (v5.19.0 step 3) ─────────────────────────────────────
+
+    def test_subnet_card_shows_the_classes_line(self, logged_in_client, monkeypatch, mock_kea):
+        self._wire(monkeypatch)
+        r = logged_in_client.get("/subnets")
+        assert r.status_code == 200
+        assert b"Classes: printers" in r.data

@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.19.0] - 2026-09-11
+
+Client classes: a guided rule builder for Kea's `Dhcp4.client-classes`,
+a config-test preview before anything is saved, and a checklist for
+attaching each class to subnets, pools, and shared networks.
+`sudo ./install.sh` or the in-app update — nothing to do by hand.
+
+### Client classes, without hand-writing Kea expressions
+
+**Subnets → Client Classes** manages the list Kea evaluates against
+every incoming packet, in order. Most classes reduce to one of a small
+set of shapes — a vendor class string, a MAC address or OUI, a relay
+circuit/remote ID, a hostname, or membership in another class — and the
+new guided builder covers exactly those: pick a field, an operator, a
+value, combine several with all/any, optionally negate. Anything the
+builder can't express drops to an **Advanced** tab for a raw Kea
+expression. Opening a class whose expression doesn't match what its
+saved guided rules would produce — because it was hand-edited — opens
+in Advanced mode with a notice, rather than quietly clobbering the hand
+edit on the next save.
+
+As you edit, Jen shows the expression it's about to write and runs it
+past Kea's own config test with the candidate class inserted into a
+copy of the live config, so a broken expression shows Kea's own
+rejection before Save pushes anything.
+
+### Guard or additional, and the 2.7.4 rename
+
+A class can gate eligibility for a subnet/pool/shared-network (a
+*guard*) or just attach options without gating anything (*additional*).
+Once a class exists, its edit page lists every subnet, pool, and shared
+network with a checkbox for each. Kea 2.7.4 renamed the attachment keys
+(`client-class` → `client-classes`, `require-client-classes` →
+`evaluate-additional-classes`, `only-if-required` →
+`only-in-additional-list`); Jen reads both spellings everywhere and,
+when writing, keeps whatever spelling a config already committed to.
+
+Deleting a class still attached anywhere, or still named in another
+class's `member(...)`, is refused with the list of what's using it.
+Subnet cards gain a "Classes: a, b" line alongside the existing options
+line.
+
 ## [5.18.0] - 2026-09-11
 
 A catalog-driven editor for DHCP options at every level Kea supports,

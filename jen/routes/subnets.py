@@ -114,6 +114,7 @@ def subnets():
                     "shared_network": sn_name,
                     "options_here": options_here,
                     "options_inherited": options_inherited,
+                    "classes": __classes.guard_classes(s),
                 }
     except Exception:
         pass
@@ -143,6 +144,7 @@ def subnets():
                             "shared_network": kea.get("shared_network"),
                             "options_here": kea.get("options_here", 0),
                             "options_inherited": kea.get("options_inherited", 0),
+                            "classes": kea.get("classes", []),
                         }
                     )
     except Exception as e:
