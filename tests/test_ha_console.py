@@ -318,10 +318,14 @@ class TestHaActionRouteBehavior:
 
     def test_scopes_refuses_with_nothing_checked(self, logged_in_client, monkeypatch):
         calls = []
+        # follow_redirects=True lands back on GET /servers, which makes its
+        # own version-get/ha-heartbeat/status-get/etc. calls through this
+        # same stub — so the refusal is "ha-scopes never sent", not "calls
+        # stayed empty".
         _wire(monkeypatch, lambda command, **kw: (calls.append(command), {"result": 0, "text": "ok"})[1])
         r = logged_in_client.post("/servers/ha/1/scopes", data={}, follow_redirects=True)
         assert r.status_code == 200
-        assert calls == []
+        assert "ha-scopes" not in calls
         assert b"select at least one scope" in r.data.lower()
 
     def test_kea_error_shows_a_danger_flash_not_a_traceback(self, logged_in_client, monkeypatch):
