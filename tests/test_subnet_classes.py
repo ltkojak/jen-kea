@@ -144,7 +144,10 @@ class TestClientClassRoutes:
             data={"is_new": "1", "orig_name": "", "name": "voice", "mode": "advanced", "test": "1 == 1"},
         )
         assert r.status_code == 200
-        assert b"Couldn't validate against" in r.data
+        # Jinja escapes the apostrophe in "Couldn't" to &#39; — check the
+        # unambiguous rest of the sentence instead of the literal text.
+        assert b"validate against Kea A" in r.data
+        assert b"see server logs" in r.data
         assert b"boom" not in r.data
 
     def test_save_new_guided_class_pushes_expression_and_user_context(self, logged_in_client, monkeypatch, mock_kea):
