@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.21.0] - 2026-09-11
+
+The Servers page becomes an HA operations console: live local/remote
+state straight from Kea, a lease-count comparison across the pair, and
+Kea's own HA commands as confirmed, audited buttons — instead of having
+to reach for `kea-shell` or a raw `curl` against the Control Agent to
+do the same thing. No migration, no config change.
+
+### HA status, at a glance
+
+Any server whose Kea has the `libdhcp_ha.so` hook loaded now shows an
+HA Status panel: this server's role and state, the partner's
+last-known state and how long ago it was heard from, and
+unacked-clients-left with a warning badge once it's down to 2 or fewer
+— the point at which the partner is about to be declared down. A
+collapsed section underneath shows the HA config itself (mode, timers,
+peers) for anyone who wants to confirm it without SSHing in. Below the
+server grid, a new Compare Leases table cross-tabulates each subnet's
+assigned-address count across every server, highlighting any row where
+they disagree — expected to be zero, or a small transient difference
+under load-balancing, never a hard failure on its own.
+
+### The HA commands, as buttons
+
+Heartbeat (re-check state right now) needs only admin; sync, scopes,
+continue, start/cancel maintenance, and reset all need superadmin,
+since they change what Kea is actually doing. Sync in particular
+determines the partner's name from this server's own configuration —
+never trusting a value a form could be made to submit — so it always
+pulls from the correct partner in the pair. Every button asks for
+confirmation first and writes an audit row; a command Kea refuses
+flashes Kea's own explanation rather than a bare failure.
+
 ## [5.20.0] - 2026-09-11
 
 The second half of the same self-audit that produced 5.19.1: the items

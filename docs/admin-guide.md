@@ -1060,6 +1060,60 @@ sections by hand.
 
 When HA is configured, Jen automatically routes `config-get` and subnet editing commands to the active node. Jen queries `ha-heartbeat` on each server and selects the primary in `hot-standby`, `load-balancing`, or `partner-down` state. Falls back to the first reachable server if no active node is identified.
 
+### Operating HA from Jen (v5.21.0)
+
+**Servers** shows an **HA Status** panel on each server card that has the
+`libdhcp_ha.so` hook loaded: local role/state, the partner's last-known
+state and how long ago it was in touch, unacked-clients-left (a red
+"partner-down imminent" badge once it drops to 2 or fewer — the partner
+is close to being declared down), a collapsed config summary (mode,
+timers, peers), and a **Compare Leases** table below the server grid
+showing each subnet's assigned-address count side by side, with a
+mismatched row highlighted — a small, momentary difference is normal
+under load-balancing, a persistent one is worth investigating.
+
+The action buttons send Kea's own HA commands, each confirmed before it
+runs and recorded in the audit log:
+
+- **Heartbeat** (admin) — re-checks this server's HA state right now,
+  the same read-only `ha-heartbeat` call the page already uses elsewhere,
+  offered here as an on-demand refresh.
+- **Sync** (superadmin) — `ha-sync`: pulls the partner's lease database
+  onto this server. Jen determines the partner's name from this
+  server's own config — never from the form — so use it when you know
+  this server's leases have fallen behind and you want it caught up
+  from the partner, not the other way around. Can take a while on a
+  large lease database.
+- **Set Scopes** (superadmin) — `ha-scopes`: forces which server serves
+  which scope, overriding the HA state machine's own decision. Use this
+  only when you specifically need one server to stop or start serving a
+  scope outside of normal failover — Kea does not persist this across a
+  restart.
+- **Continue** (superadmin) — `ha-continue`: tells this server to leave
+  a `waiting` or `terminated` state and resume normal HA operation. Use
+  it once you've confirmed the condition that caused the stall (a config
+  mismatch, a manual `ha-reset` on the partner, etc.) is resolved.
+- **Start/Cancel Maintenance** (superadmin) — `ha-maintenance-start` /
+  `ha-maintenance-cancel`: tells the partner to take over from this
+  server for planned work (an OS update, a hardware swap), then cancels
+  that handover when you're done. Prefer this over stopping the Kea
+  service directly — it's a clean, HA-aware handover instead of the
+  partner discovering a dead peer.
+- **Reset** (superadmin) — `ha-reset`: re-runs the HA state machine from
+  scratch. This is the last resort Kea's own HA documentation describes
+  for a state that isn't otherwise recovering — don't reach for it
+  first.
+
+**Kea ≥ 3.2 in `ca` mode:** these HA commands go through the Control
+Agent, which Kea 3.2 removes (see "Kea Version Supported" in Health
+Center). On such a host, switch to `direct` mode first (Settings → Kea)
+— the existing deprecation banner already covers this, and the HA panel
+simply won't work until you do. In `direct` mode, Kea's
+`restrict-commands` hook parameter (default `true` since Kea 3.2)
+refuses an HA command that doesn't arrive on the HA hook's own control
+socket; Jen's direct mode already targets that socket, so no extra
+configuration is needed there.
+
 ### HA Failover Alerts
 
 Add an alert channel and enable the **HA failover / state change** alert type. You will receive a notification any time a server's HA state changes — including failovers, recovery, and sync events.
