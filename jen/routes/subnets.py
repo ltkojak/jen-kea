@@ -15,6 +15,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.dhcp_options as __opts
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_edit as __edit
@@ -22,6 +23,7 @@ import jen.services.kea_config_view as __view
 import jen.services.kea_host as __host
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import assert_subnet_access as _assert_subnet_access
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("subnets", __name__)
@@ -100,6 +102,7 @@ def subnets():
                         routers = opt.get("data", "")
                     elif opt.get("name") == "domain-name-servers":
                         dns_servers = opt.get("data", "")
+                options_here, options_inherited = __opts.count_here_and_inherited(cfg, s["id"])
                 kea_subnets[s["id"]] = {
                     "valid_lifetime": s.get("valid-lifetime", global_lifetime),
                     "renew_timer": s.get("renew-timer", global_renew),
@@ -108,6 +111,8 @@ def subnets():
                     "routers": routers,
                     "dns_servers": dns_servers,
                     "shared_network": sn_name,
+                    "options_here": options_here,
+                    "options_inherited": options_inherited,
                 }
     except Exception:
         pass
@@ -135,6 +140,8 @@ def subnets():
                             "routers": kea.get("routers", ""),
                             "dns_servers": kea.get("dns_servers", ""),
                             "shared_network": kea.get("shared_network"),
+                            "options_here": kea.get("options_here", 0),
+                            "options_inherited": kea.get("options_inherited", 0),
                         }
                     )
     except Exception as e:
@@ -969,6 +976,229 @@ def move_subnet(subnet_id):
     if code == "ok":
         __user.audit("MOVE_SUBNET", str(subnet_id), f"network={target or '(top level)'}")
     return redirect(url_for("subnets.subnets"))
+
+
+# ── DHCP options hierarchy (v5.18.0 — Q12) ──────────────────────────────────
+#
+# A catalog-driven editor for option-data at the global, shared-network,
+# subnet and pool levels, plus an "effective options" view. Codes 3
+# (routers) and 6 (domain-name-servers) at SUBNET level stay owned by the
+# Edit Subnet form — jen.services.dhcp_options / kea_config_edit both
+# refuse them there ("managed"). v6 is out of scope for this page.
+
+
+def _parse_option_level_key(level, key_raw):
+    """Normalize the level/key pair from a query string or form. Returns
+    (level, key) — level in dhcp_options.LEVELS with key shaped the way
+    kea_config_edit.set_option4/remove_option4 expect — or (None, None)
+    if either is malformed."""
+    if level == "global":
+        return "global", None
+    if level == "shared-network":
+        return ("shared-network", key_raw) if key_raw else (None, None)
+    if level == "subnet":
+        return ("subnet", int(key_raw)) if key_raw.isdigit() else (None, None)
+    if level == "pool":
+        sid_str, sep, pool_str = (key_raw or "").partition(":")
+        if sep and sid_str.isdigit() and pool_str:
+            return "pool", (int(sid_str), pool_str)
+        return None, None
+    return None, None
+
+
+def _option_key_display(level, key):
+    """The form/query-string `key` value for a (level, key) pair — the
+    inverse of _parse_option_level_key."""
+    if level == "shared-network":
+        return key
+    if level == "subnet":
+        return str(key)
+    if level == "pool":
+        return f"{key[0]}:{key[1]}"
+    return ""
+
+
+def _dhcp_options_check_access(level, key):
+    """Flashes and returns False when the current user can't manage
+    options at this level: global/shared-network need unrestricted
+    subnet access; subnet/pool are the usual per-subnet check."""
+    if level in ("global", "shared-network"):
+        if current_user.all_subnets:
+            return True
+        flash("DHCP options at this level need access to all subnets.", "error")
+        return False
+    if level == "subnet":
+        return _assert_subnet_access(key)
+    if level == "pool":
+        return _assert_subnet_access(key[0])
+    return False
+
+
+def _dhcp_options_picker(cfg):
+    """The level picker: global + each shared network (unrestricted
+    admins only), then every subnet the user can access with its pools."""
+    items = []
+    if current_user.all_subnets:
+        items.append({"kind": "global"})
+        for sn in __view.shared_networks4(cfg):
+            items.append({"kind": "shared-network", "name": sn["name"]})
+    for s, sn_name in __view.iter_subnet4(cfg):
+        sid = s.get("id")
+        if sid is None or not current_user.can_access_subnet(sid):
+            continue
+        info = extensions.SUBNET_MAP.get(sid, {})
+        pools = [p.get("pool") for p in (s.get("pools") or []) if isinstance(p, dict) and p.get("pool")]
+        items.append(
+            {
+                "kind": "subnet",
+                "id": sid,
+                "name": info.get("name") or s.get("subnet") or f"subnet {sid}",
+                "cidr": info.get("cidr") or s.get("subnet", ""),
+                "shared_network": sn_name,
+                "pools": pools,
+            }
+        )
+    return items
+
+
+def _dhcp_options_redirect(level_raw, key_raw):
+    return redirect(url_for("subnets.dhcp_options_page", level=level_raw, key=key_raw))
+
+
+@bp.route("/subnets/options")
+@login_required
+@_admin_required
+def dhcp_options_page():
+    level, key = _parse_option_level_key(request.args.get("level", "global"), request.args.get("key", ""))
+    if level is None:
+        flash("Invalid DHCP options level.", "error")
+        return redirect(url_for("subnets.dhcp_options_page"))
+    if not _dhcp_options_check_access(level, key):
+        return redirect(url_for("subnets.subnets"))
+
+    try:
+        result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        cfg = result["arguments"]["Dhcp4"] if result.get("result") == 0 else {}
+    except Exception:
+        cfg = {}
+
+    rows = __opts.options_at(cfg, level, key)
+    for r in rows:
+        r["managed"] = level == "subnet" and r["code"] in __opts.MANAGED_AT_SUBNET
+        r["custom"] = r["code"] not in __opts.V4_OPTIONS
+
+    effective = []
+    subnet_id = key[0] if level == "pool" else (key if level == "subnet" else None)
+    pool_str = key[1] if level == "pool" else None
+    subnet_label = None
+    if subnet_id is not None:
+        effective = __opts.effective_options(cfg, subnet_id, pool=pool_str)
+        for r in effective:
+            r["is_here"] = r["source"] == level
+        info = extensions.SUBNET_MAP.get(subnet_id, {})
+        subnet_label = info.get("name") or f"subnet {subnet_id}"
+
+    return render_template(
+        "dhcp_options.html",
+        level=level,
+        key=_option_key_display(level, key),
+        picker=_dhcp_options_picker(cfg),
+        rows=rows,
+        catalog=__opts.catalog_choices(),
+        effective=effective,
+        show_effective=level in ("subnet", "pool"),
+        subnet_label=subnet_label,
+        pool_str=pool_str,
+        option_defs=[d for d in (cfg.get("option-def") or []) if isinstance(d, dict)],
+        can_manage_networks=current_user.all_subnets,
+    )
+
+
+@bp.route("/subnets/options/set", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_options_set():
+    level_raw = request.form.get("level", "")
+    key_raw = request.form.get("key", "")
+    level, key = _parse_option_level_key(level_raw, key_raw)
+    if level is None:
+        flash("Invalid DHCP options level.", "error")
+        return redirect(url_for("subnets.dhcp_options_page"))
+    if not _dhcp_options_check_access(level, key):
+        return redirect(url_for("subnets.subnets"))
+
+    code_raw = request.form.get("code", "").strip()
+    try:
+        code = int(code_raw)
+    except ValueError:
+        flash("Invalid option code.", "error")
+        return _dhcp_options_redirect(level_raw, key_raw)
+
+    if request.form.get("custom") == "1":
+        name = (request.form.get("name", "").strip() or f"custom-{code}")[:64]
+        opt_type = "hex"
+        csv_format = False
+    else:
+        entry = __opts.V4_OPTIONS.get(code)
+        if not entry:
+            flash("Unknown catalog option — use Custom code for anything else.", "error")
+            return _dhcp_options_redirect(level_raw, key_raw)
+        name, opt_type, csv_format = entry["name"], entry["type"], True
+
+    data_raw = request.form.get("data", "").strip()
+    err = __opts.validate(opt_type, data_raw)
+    if err:
+        flash(f"{name}: {err}", "error")
+        return _dhcp_options_redirect(level_raw, key_raw)
+    data = __opts.normalize(opt_type, data_raw)
+
+    result_code = _apply_dhcp4_change(
+        lambda cfg: __edit.set_option4(cfg, level, key, code, name, data, csv_format=csv_format),
+        f'option "{name}" (code {code}) set at {level_raw}',
+        {
+            "managed": f'"{name}" (code {code}) is managed by the Edit Subnet form — edit the subnet instead.',
+            "notfound": f"{level_raw} not found in the live Kea config",
+        },
+        summary=f"set option {name} ({code}) at {level_raw}",
+    )
+    if result_code == "ok":
+        __user.audit("SET_DHCP_OPTION", name, f"level={level_raw} key={key_raw} code={code}")
+    return _dhcp_options_redirect(level_raw, key_raw)
+
+
+@bp.route("/subnets/options/remove", methods=["POST"])
+@login_required
+@_admin_required
+def dhcp_options_remove():
+    level_raw = request.form.get("level", "")
+    key_raw = request.form.get("key", "")
+    level, key = _parse_option_level_key(level_raw, key_raw)
+    if level is None:
+        flash("Invalid DHCP options level.", "error")
+        return redirect(url_for("subnets.dhcp_options_page"))
+    if not _dhcp_options_check_access(level, key):
+        return redirect(url_for("subnets.subnets"))
+
+    code_raw = request.form.get("code", "").strip()
+    try:
+        code = int(code_raw)
+    except ValueError:
+        flash("Invalid option code.", "error")
+        return _dhcp_options_redirect(level_raw, key_raw)
+    name = __opts.V4_OPTIONS.get(code, {}).get("name", f"code {code}")
+
+    result_code = _apply_dhcp4_change(
+        lambda cfg: __edit.remove_option4(cfg, level, key, code),
+        f'option "{name}" (code {code}) removed from {level_raw}',
+        {
+            "managed": f'"{name}" (code {code}) is managed by the Edit Subnet form — edit the subnet instead.',
+            "notfound": f"{name} (code {code}) is not set at {level_raw}",
+        },
+        summary=f"remove option {name} ({code}) at {level_raw}",
+    )
+    if result_code == "ok":
+        __user.audit("REMOVE_DHCP_OPTION", name, f"level={level_raw} key={key_raw} code={code}")
+    return _dhcp_options_redirect(level_raw, key_raw)
 
 
 # ── v6 subnet editing (Phase 3) ──────────────────────────────────────────────

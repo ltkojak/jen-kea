@@ -286,6 +286,58 @@ def effective_options(dhcp4_cfg, subnet_id, pool=None) -> list[dict]:
     return [row for _k, row in sorted(winners.items(), key=_sort)]
 
 
+def _container_for_level(dhcp4_cfg, level, key):
+    """(container_dict, "ok") for `level`/`key` against `dhcp4_cfg` (the
+    bare Dhcp4 map), or (None, "notfound"). Read-only counterpart of
+    kea_config_edit._container_for_level4, which operates on the outer
+    {"Dhcp4": …} shape needed for mutation — kept separate rather than
+    imported, so this read-only module has no dependency on the one that
+    writes."""
+    from jen.services import kea_config_view as _view
+
+    if level == "global":
+        return dhcp4_cfg, "ok"
+    if level == "shared-network":
+        for sn in dhcp4_cfg.get("shared-networks") or []:
+            if isinstance(sn, dict) and sn.get("name") == key:
+                return sn, "ok"
+        return None, "notfound"
+    if level == "subnet":
+        found = _view.subnet4_by_id(dhcp4_cfg, key)
+        return (found[0], "ok") if found else (None, "notfound")
+    if level == "pool":
+        subnet_id, pool_str = key
+        found = _view.subnet4_by_id(dhcp4_cfg, subnet_id)
+        if found is None:
+            return None, "notfound"
+        for p in found[0].get("pools") or []:
+            if isinstance(p, dict) and p.get("pool") == pool_str:
+                return p, "ok"
+        return None, "notfound"
+    return None, "notfound"
+
+
+def options_at(dhcp4_cfg, level, key) -> list[dict]:
+    """The option-data entries physically stored at `level`/`key` — NOT
+    the effective view — as display rows: {code, name, data,
+    csv_format}. Empty when the level/key doesn't exist in this config."""
+    container, status = _container_for_level(dhcp4_cfg, level, key)
+    if status != "ok":
+        return []
+    rows = []
+    for o in _opts(container):
+        code, name = _display(o)
+        rows.append(
+            {
+                "code": code,
+                "name": name,
+                "data": o.get("data", ""),
+                "csv_format": bool(o.get("csv-format", True)),
+            }
+        )
+    return rows
+
+
 def count_here_and_inherited(dhcp4_cfg, subnet_id) -> tuple[int, int]:
     """For the subnet card: (options set on this subnet, options it
     inherits from its shared network / global that it does NOT override)."""

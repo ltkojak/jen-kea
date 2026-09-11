@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}DHCP Options{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔧 DHCP Options</h1>
+    <p>Global, shared-network, subnet, and pool-level option-data. Routers (3) and DNS servers (6) at the subnet level stay on the <a href="/subnets">Edit Subnet</a> form.</p>
+</div>
+
+<div style="margin-bottom:16px;">
+    <a href="/subnets" class="btn btn-secondary btn-sm">← Back to Subnets</a>
+</div>
+
+<div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start;">
+
+    <!-- Level picker -->
+    <div class="card" style="padding:0;overflow:hidden;">
+        <div class="card-header"><span class="card-title">Levels</span></div>
+        <div style="padding:6px;max-height:70vh;overflow-y:auto;">
+            {% for item in picker %}
+                {% if item.kind == 'global' %}
+                <a href="{{ url_for('subnets.dhcp_options_page', level='global') }}"
+                   style="display:block;padding:6px 8px;border-radius:var(--radius);font-size:13px;{% if level=='global' %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
+                    🌐 Global
+                </a>
+                {% elif item.kind == 'shared-network' %}
+                <a href="{{ url_for('subnets.dhcp_options_page', level='shared-network', key=item.name) }}"
+                   style="display:block;padding:6px 8px;border-radius:var(--radius);font-size:13px;{% if level=='shared-network' and key==item.name %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
+                    🔗 {{ item.name }}
+                </a>
+                {% elif item.kind == 'subnet' %}
+                <div style="margin-top:4px;">
+                    <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=item.id) }}"
+                       style="display:block;padding:6px 8px;border-radius:var(--radius);font-size:13px;{% if level=='subnet' and key==item.id|string %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
+                        {{ item.name }} <span class="mono" style="color:var(--text-muted);font-size:11px;">{{ item.cidr }}</span>
+                    </a>
+                    {% for pool in item.pools %}
+                    {% set pool_key = item.id|string ~ ':' ~ pool %}
+                    <a href="{{ url_for('subnets.dhcp_options_page', level='pool', key=pool_key) }}"
+                       style="display:block;padding:4px 8px 4px 22px;border-radius:var(--radius);font-size:12px;color:var(--text-muted);{% if level=='pool' and key==pool_key %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
+                        ↳ Pool: {{ pool }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            {% endfor %}
+            {% if not picker %}
+            <div style="padding:8px;color:var(--text-muted);font-size:13px;">No subnets you can manage options for.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Main -->
+    <div>
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">
+                    {% if level == 'global' %}🌐 Global options
+                    {% elif level == 'shared-network' %}🔗 Shared network: {{ key }}
+                    {% elif level == 'subnet' %}{{ subnet_label }} — subnet options
+                    {% elif level == 'pool' %}{{ subnet_label }} — pool <span class="mono">{{ pool_str }}</span>
+                    {% endif %}
+                </span>
+            </div>
+            {% if rows %}
+            <table style="width:100%;font-size:13px;">
+                <thead>
+                    <tr style="text-align:left;color:var(--text-muted);">
+                        <th style="padding:6px;">Code</th>
+                        <th style="padding:6px;">Name</th>
+                        <th style="padding:6px;">Value</th>
+                        <th style="padding:6px;"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for r in rows %}
+                <tr style="border-top:1px solid var(--border);">
+                    <td style="padding:6px;" class="mono">{{ r.code if r.code is not none else '—' }}</td>
+                    <td style="padding:6px;">
+                        {{ r.name }}
+                        {% if r.custom %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);">custom</span>{% endif %}
+                        {% if r.managed %}<span class="badge" style="background:var(--surface2);color:var(--warning);" title="Owned by the Edit Subnet form">managed by Edit form</span>{% endif %}
+                    </td>
+                    <td style="padding:6px;word-break:break-all;" class="mono">{{ r.data }}</td>
+                    <td style="padding:6px;white-space:nowrap;">
+                        {% if r.managed %}
+                        <a href="/subnets/edit/{{ key }}" class="btn btn-sm btn-secondary">Edit form →</a>
+                        {% else %}
+                        <form method="POST" action="{{ url_for('subnets.dhcp_options_remove') }}" style="display:inline;"
+                              onsubmit="return false;" data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts.">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <input type="hidden" name="level" value="{{ level }}">
+                            <input type="hidden" name="key" value="{{ key }}">
+                            <input type="hidden" name="code" value="{{ r.code }}">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color:var(--text-muted);padding:8px;">No options set at this level.</p>
+            {% endif %}
+        </div>
+
+        <div class="card">
+            <div class="card-header"><span class="card-title">➕ Add option</span></div>
+            <form method="POST" action="{{ url_for('subnets.dhcp_options_set') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="level" value="{{ level }}">
+                <input type="hidden" name="key" value="{{ key }}">
+                <input type="hidden" name="custom" id="opt-custom" value="0">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Option</label>
+                        <select id="opt-select" onchange="jenOptSelectChanged()">
+                            {% for c in catalog %}
+                            <option value="{{ c.code }}" data-type="{{ c.type }}">{{ c.code }} — {{ c.name }}</option>
+                            {% endfor %}
+                            <option value="custom">Custom code…</option>
+                        </select>
+                        {% if catalog %}
+                        <input type="hidden" name="code" id="opt-code-catalog" value="{{ catalog[0].code }}">
+                        {% endif %}
+                        <input type="number" name="code" id="opt-code-custom" min="1" max="254"
+                               placeholder="Code (1-254)" style="display:none;margin-top:6px;" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Custom name</label>
+                        <input type="text" name="name" id="opt-custom-name" placeholder="e.g. my-custom-option"
+                               style="display:none;" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>Value</label>
+                        <input type="text" name="data" placeholder="Value for the selected option">
+                        <div class="form-hint" id="opt-hint"></div>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Set option</button>
+            </form>
+        </div>
+
+        {% if show_effective %}
+        <div class="card">
+            <div class="card-header"><span class="card-title">📋 Effective options</span></div>
+            {% if effective %}
+            <table style="width:100%;font-size:13px;">
+                <thead>
+                    <tr style="text-align:left;color:var(--text-muted);">
+                        <th style="padding:6px;">Code</th>
+                        <th style="padding:6px;">Name</th>
+                        <th style="padding:6px;">Value</th>
+                        <th style="padding:6px;">Source</th>
+                        <th style="padding:6px;">Overridden</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for r in effective %}
+                <tr style="border-top:1px solid var(--border);{% if r.is_here %}font-weight:600;{% endif %}">
+                    <td style="padding:6px;" class="mono">{{ r.code if r.code is not none else '—' }}</td>
+                    <td style="padding:6px;">{{ r.name }}</td>
+                    <td style="padding:6px;word-break:break-all;" class="mono">{{ r.data }}</td>
+                    <td style="padding:6px;"><span class="badge" style="background:var(--surface2);">{{ r.source }}</span></td>
+                    <td style="padding:6px;font-size:12px;color:var(--text-muted);">
+                        {% for o in r.overridden %}<span style="text-decoration:line-through;">{{ o }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p style="color:var(--text-muted);padding:8px;">No options apply to this {{ level }} — global, shared-network, subnet, and pool are all empty.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if option_defs %}
+        <div class="card">
+            <div class="card-header"><span class="card-title">📖 Option definitions (read-only)</span></div>
+            <table style="width:100%;font-size:13px;">
+                <thead>
+                    <tr style="text-align:left;color:var(--text-muted);">
+                        <th style="padding:6px;">Code</th>
+                        <th style="padding:6px;">Name</th>
+                        <th style="padding:6px;">Type</th>
+                        <th style="padding:6px;">Space</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for d in option_defs %}
+                <tr style="border-top:1px solid var(--border);">
+                    <td style="padding:6px;" class="mono">{{ d.code }}</td>
+                    <td style="padding:6px;">{{ d.name }}</td>
+                    <td style="padding:6px;">{{ d.type }}</td>
+                    <td style="padding:6px;">{{ d.space or 'dhcp4' }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+function jenOptSelectChanged() {
+    var sel = document.getElementById('opt-select');
+    var isCustom = sel.value === 'custom';
+    document.getElementById('opt-custom').value = isCustom ? '1' : '0';
+
+    var codeCatalog = document.getElementById('opt-code-catalog');
+    var codeCustom = document.getElementById('opt-code-custom');
+    var nameCustom = document.getElementById('opt-custom-name');
+    var hint = document.getElementById('opt-hint');
+
+    if (codeCatalog) codeCatalog.disabled = isCustom;
+    codeCustom.disabled = !isCustom;
+    codeCustom.style.display = isCustom ? '' : 'none';
+    nameCustom.disabled = !isCustom;
+    nameCustom.style.display = isCustom ? '' : 'none';
+
+    if (!isCustom) {
+        if (codeCatalog) codeCatalog.value = sel.value;
+        var opt = sel.options[sel.selectedIndex];
+        hint.textContent = 'Type: ' + (opt ? opt.dataset.type : '');
+    } else {
+        hint.textContent = 'Custom codes are written as raw hex (e.g. 0a1b2c).';
+    }
+}
+</script>
+{% endblock %}

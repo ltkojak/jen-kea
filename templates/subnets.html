@@ -156,6 +156,11 @@ function saveNote(id) {
         </table>
     </div>
     {% endif %}
+    <div style="margin-bottom:12px;font-size:12px;">
+        <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" style="color:var(--text-muted);">
+            🔧 Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
+        </a>
+    </div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
         <div class="stat-label" style="margin-bottom:6px;">Notes</div>
         <div id="note-display-{{ s.id }}"
