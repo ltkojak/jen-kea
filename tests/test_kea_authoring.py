@@ -1200,15 +1200,95 @@ class TestKeaHelperRoutes:
         from jen.services import kea_host
 
         monkeypatch.setattr(
-            kea_host, "install_helper", lambda s: {"ok": True, "version": 1, "code": "installed", "detail": ""}
+            kea_host, "install_helper", lambda s: {"ok": True, "version": 2, "code": "installed", "detail": ""}
         )
         r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
-        assert b"jen-kea-helper v1 installed" in r.data
+        assert b"jen-kea-helper v2 installed" in r.data
+
+    def test_install_flashes_upgraded(self, logged_in_client, monkeypatch):
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        monkeypatch.setattr(
+            kea_host, "install_helper", lambda s: {"ok": True, "version": 2, "code": "upgraded", "detail": ""}
+        )
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
+        assert b"upgraded to v2" in r.data
+
+    def test_install_no_path_shows_the_manual_command(self, logged_in_client, monkeypatch):
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        detail = (
+            "helper v1 is installed but v2 needs the legacy python3 grant to be re-added for one run, "
+            "or copy it by hand: sudo install -o root -g root -m 0755 ./jen-kea-helper "
+            "/usr/local/sbin/jen-kea-helper"
+        )
+        monkeypatch.setattr(
+            kea_host, "install_helper", lambda s: {"ok": False, "version": 1, "code": "no-path", "detail": detail}
+        )
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
+        assert b"sudo install -o root -g root -m 0755" in r.data
+
+    def test_install_stale_shows_the_detail(self, logged_in_client, monkeypatch):
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        monkeypatch.setattr(
+            kea_host,
+            "install_helper",
+            lambda s: {
+                "ok": False,
+                "version": 1,
+                "code": "stale",
+                "detail": "the copy did not take — the host still reports helper v1, expected v2",
+            },
+        )
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
+        assert b"did not take" in r.data
 
     def test_install_unknown_server(self, logged_in_client, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [])
         r = logged_in_client.post("/settings/infrastructure/install-kea-helper/9", follow_redirects=True)
         assert b"not found" in r.data.lower()
+
+
+class TestKeaHelperTableUpgradeHint:
+    """v5.19.1 — the Settings -> Kea -> SSH helper table compares each
+    host's recorded version against JEN_HELPER_WANT_VERSION, not just
+    JEN_HELPER_MIN_VERSION, so a v1 host shows an upgrade hint (and the
+    "Update helper" button) instead of looking fully current."""
+
+    def test_row_below_want_shows_upgrade_available_and_the_update_button(
+        self, logged_in_client, monkeypatch, db, mock_kea
+    ):
+        import json
+
+        from jen.models.user import set_global_setting
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4"}])
+        set_global_setting("kea_helper_status", json.dumps({"1": {"version": 1, "checked": "2026-01-01"}}))
+        r = logged_in_client.get("/settings/kea")
+        assert r.status_code == 200
+        assert b"upgrade available" in r.data
+        assert b"Update helper" in r.data
+
+    def test_row_at_want_shows_neither_hint_nor_button(self, logged_in_client, monkeypatch, db, mock_kea):
+        import json
+
+        from jen.models.user import set_global_setting
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4"}])
+        set_global_setting(
+            "kea_helper_status",
+            json.dumps({"1": {"version": kea_host.JEN_HELPER_WANT_VERSION, "checked": "2026-01-01"}}),
+        )
+        r = logged_in_client.get("/settings/kea")
+        assert r.status_code == 200
+        assert b"upgrade available" not in r.data
+        assert b"Update helper" not in r.data
+        assert b"Install helper" not in r.data
 
 
 class TestKeaHelperBanner:

@@ -160,7 +160,8 @@
                 <td style="padding:4px 8px;">{{ s.name }}</td>
                 <td class="mono" style="padding:4px 8px;font-size:12px;">{{ s.ssh_host }}</td>
                 <td style="padding:4px 8px;">
-                    {% if s.helper_version and s.helper_version >= 1 %}<span style="color:var(--success);">v{{ s.helper_version }}</span>
+                    {% if s.helper_version and s.helper_version >= s.helper_want %}<span style="color:var(--success);">v{{ s.helper_version }}</span>
+                    {% elif s.helper_version %}<span style="color:var(--warning);">v{{ s.helper_version }} — upgrade available (v{{ s.helper_want }})</span>
                     {% elif s.helper_known %}<span style="color:var(--warning);">not installed — legacy path</span>
                     {% else %}<span style="color:var(--text-muted);">unknown — check</span>{% endif %}
                 </td>
@@ -168,7 +169,7 @@
                     <form method="POST" action="/settings/infrastructure/check-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Check</button>
                     </form>
-                    {% if current_user.role == 'superadmin' %}
+                    {% if current_user.role == 'superadmin' and (not s.helper_version or s.helper_version < s.helper_want) %}
                     <form method="POST" action="/settings/infrastructure/install-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">{% if s.helper_version %}Update helper{% else %}Install helper{% endif %}</button>
                     </form>

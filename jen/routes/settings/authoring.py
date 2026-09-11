@@ -661,8 +661,14 @@ def install_kea_helper(server_id):
         return redirect(url_for("settings.settings_kea") + "#kea-ssh")
     name = server.get("name", server_id)
     res = __host.install_helper(server)
+    # v5.19.1 — install_helper() now targets JEN_HELPER_WANT_VERSION and
+    # re-checks after copying, so it can report a genuine "upgraded" or a
+    # copy that silently didn't take ("stale"), not just installed/already.
     if res["ok"] and res["code"] == "already":
         flash(f"{name}: jen-kea-helper v{res['version']} is already installed.", "success")
+    elif res["ok"] and res["code"] == "upgraded":
+        __user.audit("INSTALL_KEA_HELPER", str(name), f"upgraded to helper v{res['version']}")
+        flash(f"{name}: jen-kea-helper upgraded to v{res['version']}.", "success")
     elif res["ok"]:
         __user.audit("INSTALL_KEA_HELPER", str(name), f"helper v{res['version']}")
         flash(
@@ -670,12 +676,8 @@ def install_kea_helper(server_id):
             "you can remove the legacy /etc/sudoers.d/jen (the python3 = root grant).",
             "success",
         )
-    elif res["code"] == "no-path":
-        flash(
-            f"{name}: neither the helper nor the legacy python3 grant is present — "
-            "install the helper by hand (Admin Guide → Kea host helper).",
-            "error",
-        )
+    elif res["code"] in ("no-path", "stale"):
+        flash(f"{name}: {res['detail']}", "error")
     elif res["code"] == "no-source":
         flash("jen-kea-helper is missing from this Jen install — reinstall Jen.", "error")
     elif res["code"] == "sudoerror":

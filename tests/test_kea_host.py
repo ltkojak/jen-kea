@@ -211,12 +211,40 @@ class TestHelperDeployment:
         ast.parse(script)  # the remote script must be valid python
 
     def test_install_helper_parses_ok(self, monkeypatch, quiet_status):
-        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 1\n")
-        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
+        # v5.19.1 — install_helper() re-checks after the copy rather than
+        # trusting the script's own echoed version, so the fake check_helper
+        # answers differently on the two calls it makes here: nothing
+        # installed yet, then the real (WANT) version once the copy lands.
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
+        calls = iter([{"ok": False, "version": None}, {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
         monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
-        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:1", ""))
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", ""))
         res = kea_host.install_helper(SERVER)
-        assert res == {"ok": True, "version": 1, "code": "installed", "detail": ""}
+        assert res == {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION, "code": "installed", "detail": ""}
+
+    def test_install_helper_upgrades_an_old_version(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
+        calls = iter([{"ok": True, "version": 1}, {"ok": True, "version": 2}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", ""))
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 2, "code": "upgraded", "detail": ""}
+
+    def test_install_helper_copy_did_not_take_is_stale(self, monkeypatch, quiet_status):
+        # The script printed ok:2, but the helper's own `version` op still
+        # answers 1 on re-check — install_helper must not trust the echo.
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
+        calls = iter([{"ok": True, "version": 1}, {"ok": True, "version": 1}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", ""))
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False
+        assert res["code"] == "stale"
+        assert res["version"] == 1
+        assert "v1" in res["detail"] and "v2" in res["detail"]
 
     def test_install_helper_needs_a_path_in(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
@@ -224,12 +252,29 @@ class TestHelperDeployment:
         monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: False)
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False and res["code"] == "no-path"
+        assert res["detail"] == "no legacy python3 grant to install through"
 
-    def test_install_helper_already_installed_short_circuits(self, monkeypatch, quiet_status):
+    def test_install_helper_old_version_needs_a_path_in_shows_the_manual_command(self, monkeypatch, quiet_status):
+        # A helper is already there (v1), just below WANT — the message
+        # must give the manual copy command, not just "nothing installed".
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 1})
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: False)
         res = kea_host.install_helper(SERVER)
-        assert res == {"ok": True, "version": 1, "code": "already", "detail": ""}
+        assert res["ok"] is False and res["code"] == "no-path" and res["version"] == 1
+        assert "sudo install -o root -g root -m 0755" in res["detail"]
+        assert "/usr/local/sbin/jen-kea-helper" in res["detail"]
+
+    def test_install_helper_already_installed_short_circuits(self, monkeypatch, quiet_status):
+        # v5.19.1 — "already" now means "at or above JEN_HELPER_WANT_VERSION",
+        # not just JEN_HELPER_MIN_VERSION — a v1 host is the "no-path"/
+        # "stale" territory above, never "already".
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
+        monkeypatch.setattr(
+            kea_host, "check_helper", lambda s: {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION}
+        )
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION, "code": "already", "detail": ""}
 
     def test_install_helper_sudoerror(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")

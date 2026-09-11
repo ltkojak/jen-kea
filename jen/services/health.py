@@ -500,6 +500,12 @@ def _schema_current(ctx) -> Check:
 
 
 def _helper_installed(ctx) -> Check:
+    """v5.19.1 — three buckets, not two: no helper at all (legacy root
+    path), a helper below JEN_HELPER_WANT_VERSION (installed but missing
+    the atomic-concurrency guard / external-change capture that shipped
+    in v2), and fully current. The old two-bucket version compared
+    against JEN_HELPER_MIN_VERSION, so a v1 host — which is exactly the
+    case the "no atomic guard" warning exists for — showed as ok."""
     c = Check("helper_installed", "Kea host helper installed", "jen", fix_url="/settings/kea")
     ssh_servers = [s for s in extensions.KEA_SERVERS if s.get("ssh_host")]
     if not ssh_servers:
@@ -508,16 +514,36 @@ def _helper_installed(ctx) -> Check:
     from jen.services import kea_host
 
     status = kea_host.helper_status()
-    behind = []
+    legacy = []
+    behind = []  # (name, version)
     for s in ssh_servers:
         v = status.get(str(s.get("id")), {}).get("version")
         if not isinstance(v, int) or v < kea_host.JEN_HELPER_MIN_VERSION:
-            behind.append(_server_name(s))
+            legacy.append(_server_name(s))
+        elif v < kea_host.JEN_HELPER_WANT_VERSION:
+            behind.append((_server_name(s), v))
+
+    sentences = []
+    if legacy:
+        sentences.append(
+            f"{', '.join(legacy)} still on the legacy root path — install the helper from Settings → Kea → SSH"
+        )
     if behind:
-        c.status = "warn"
-        c.detail = f"{', '.join(behind)} still on the legacy root path — install the helper from Settings → Kea → SSH"
+        names = ", ".join(n for n, _v in behind)
+        versions = sorted({v for _n, v in behind})
+        vtext = "/".join(f"v{v}" for v in versions)
+        sentences.append(
+            f"{names} on helper {vtext} — no atomic concurrency guard and no external-change capture; "
+            "upgrade from Settings → Kea → SSH"
+        )
+
+    if sentences:
+        c.status, c.detail = "warn", "; ".join(sentences)
     else:
-        c.status, c.detail = "ok", f"helper recorded on {len(ssh_servers)}/{len(ssh_servers)} host(s)"
+        c.status, c.detail = (
+            "ok",
+            f"helper v{kea_host.JEN_HELPER_WANT_VERSION} on {len(ssh_servers)}/{len(ssh_servers)} host(s)",
+        )
     return c
 
 

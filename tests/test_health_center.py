@@ -375,22 +375,56 @@ class TestDbChecks:
 
 
 class TestHelperInstalled:
+    """v5.19.1 — three buckets against JEN_HELPER_WANT_VERSION, not two
+    against JEN_HELPER_MIN_VERSION: no helper at all (legacy warn), a
+    helper below WANT (new "no atomic concurrency guard" warn — this is
+    the case that used to show as "ok"), and fully current."""
+
     def test_no_ssh_skips(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}])
         c = health._helper_installed(_ctx())
         assert c.status == "skip"
 
-    def test_recorded_ok(self, monkeypatch):
+    def test_at_want_is_ok(self, monkeypatch):
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(
+            "jen.services.kea_host.helper_status", lambda: {"1": {"version": kea_host.JEN_HELPER_WANT_VERSION}}
+        )
+        c = health._helper_installed(_ctx())
+        assert c.status == "ok"
+        assert f"v{kea_host.JEN_HELPER_WANT_VERSION}" in c.detail
+
+    def test_below_want_warns_no_atomic_guard(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
         monkeypatch.setattr("jen.services.kea_host.helper_status", lambda: {"1": {"version": 1}})
         c = health._helper_installed(_ctx())
-        assert c.status == "ok"
+        assert c.status == "warn"
+        assert "no atomic concurrency guard" in c.detail
+        assert "kea-a" in c.detail
 
     def test_missing_warns(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
         monkeypatch.setattr("jen.services.kea_host.helper_status", dict)
         c = health._helper_installed(_ctx())
         assert c.status == "warn" and "kea-a" in c.detail
+        assert "legacy root path" in c.detail
+
+    def test_one_legacy_one_behind_joins_both_sentences(self, monkeypatch):
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [
+                {"id": 1, "name": "kea-legacy", "ssh_host": "10.0.0.5"},
+                {"id": 2, "name": "kea-old", "ssh_host": "10.0.0.6"},
+            ],
+        )
+        monkeypatch.setattr("jen.services.kea_host.helper_status", lambda: {"2": {"version": 1}})
+        c = health._helper_installed(_ctx())
+        assert c.status == "warn"
+        assert "kea-legacy" in c.detail and "legacy root path" in c.detail
+        assert "kea-old" in c.detail and "no atomic concurrency guard" in c.detail
 
 
 class TestBackgroundWorkers:

@@ -30,6 +30,7 @@ import contextlib
 import ipaddress
 import logging
 import os
+import re
 
 from jen import extensions
 
@@ -307,8 +308,23 @@ class AppConfig:
                 "role": cfg.get("kea", "role", fallback="primary"),
             }
         ]
-        n = 2
-        while cfg.has_section(f"kea_server_{n}"):
+        # v5.19.1 — gap-tolerant: a `while has_section(kea_server_n): n +=
+        # 1` loop stops at the first missing number, silently hiding every
+        # server after a hand-made gap (e.g. kea_server_2 + kea_server_4
+        # with no _3). Enumerate every matching section instead; a stray
+        # kea_server_0/_1 (the primary is `[kea]`, id 1) is ignored with a
+        # warning rather than colliding with the primary's id.
+        nums = []
+        for sec_name in cfg.sections():
+            m = re.fullmatch(r"kea_server_(\d+)", sec_name)
+            if not m:
+                continue
+            num = int(m.group(1))
+            if num < 2:
+                logging.getLogger(__name__).warning(f"ignoring [{sec_name}] — server ids start at 2 ([kea] is 1)")
+                continue
+            nums.append(num)
+        for n in sorted(nums):
             sec = f"kea_server_{n}"
             servers.append(
                 {
@@ -330,7 +346,6 @@ class AppConfig:
                     "role": cfg.get(sec, "role", fallback="standby"),
                 }
             )
-            n += 1
         return servers
 
     @staticmethod

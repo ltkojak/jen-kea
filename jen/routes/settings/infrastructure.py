@@ -6,6 +6,7 @@ Kea / database / SSH / DDNS / HA / ports / metrics settings.
 
 import logging
 import os
+import re
 import subprocess
 import threading
 
@@ -56,7 +57,10 @@ def settings_infrastructure():
 
 def _kea_servers_with_helper_status():
     """Per-server rows for the SSH card's helper table: id, name,
-    ssh_host and the persisted helper status ('v1' / null / unknown)."""
+    ssh_host, the persisted helper status ('v1' / null / unknown), and
+    `helper_want` (v5.19.1 — the version Jen wants, so the template can
+    show "upgrade available" for a version below it instead of treating
+    any installed version as fully current)."""
     from jen.services import kea_host
 
     status = kea_host.helper_status()
@@ -69,6 +73,7 @@ def _kea_servers_with_helper_status():
                 "name": s.get("name", f"Kea Server {s.get('id')}"),
                 "ssh_host": s.get("ssh_host", ""),
                 "helper_version": st.get("version"),  # int, None, or missing key
+                "helper_want": kea_host.JEN_HELPER_WANT_VERSION,
                 "helper_known": bool(st),
                 "helper_checked": st.get("checked", ""),
             }
@@ -104,10 +109,17 @@ def settings_kea():
                 ssh_pub_key = f.read().strip()
         except Exception:
             pass
-    # Load extra servers
+    # Load extra servers. v5.19.1 — gap-tolerant enumeration (same fix as
+    # config.py::derive_kea_servers): a `while has_section(kea_server_n)`
+    # loop stops at the first missing number, hiding every server after a
+    # hand-made gap.
     extra_servers = []
-    n = 2
-    while extensions.cfg.has_section(f"kea_server_{n}"):
+    nums = sorted(
+        int(m.group(1))
+        for sec_name in extensions.cfg.sections()
+        if (m := re.fullmatch(r"kea_server_(\d+)", sec_name)) and int(m.group(1)) >= 2
+    )
+    for n in nums:
         sec = f"kea_server_{n}"
         extra_servers.append(
             {
@@ -125,7 +137,6 @@ def settings_kea():
                 "role": extensions.cfg.get(sec, "role", fallback="standby"),
             }
         )
-        n += 1
 
     # v5.10.2 — direct mode needs an explicit port on every API URL. The
     # save routes validate their own field; this catches a URL that was

@@ -581,9 +581,19 @@ def _helper_source():
 
 
 def install_helper(server: dict) -> dict:
-    """Deploy jen-kea-helper onto `server` — the one place the legacy
-    `sudo python3` path is still used deliberately. Returns
-    {"ok": bool, "version": int|None, "code": str, "detail": str}."""
+    """Deploy (or upgrade) jen-kea-helper onto `server` — the one place
+    the legacy `sudo python3` path is still used deliberately. Returns
+    {"ok": bool, "version": int|None, "code": str, "detail": str}.
+
+    v5.19.1 — this used to short-circuit "already" at
+    JEN_HELPER_MIN_VERSION, so a v1 host answered "already installed"
+    forever and the "Update helper" button was a no-op. It now targets
+    JEN_HELPER_WANT_VERSION, and never trusts the remote script's own
+    echoed version number for the final answer — it re-runs
+    check_helper() after the copy and reports what the host actually
+    says, because a copy that silently didn't take (wrong path, stale
+    cache, a second file shadowing it) should never be recorded as a
+    successful upgrade."""
     from jen import extensions
 
     try:
@@ -591,26 +601,42 @@ def install_helper(server: dict) -> dict:
     except OSError as e:
         return {"ok": False, "version": None, "code": "no-source", "detail": str(e)}
 
-    # Already there and current? Don't need the legacy grant then.
     chk = check_helper(server)
-    if chk.get("version") and chk["version"] >= JEN_HELPER_MIN_VERSION:
-        return {"ok": True, "version": chk["version"], "code": "already", "detail": ""}
+    current = chk.get("version")
+    if isinstance(current, int) and current >= JEN_HELPER_WANT_VERSION:
+        return {"ok": True, "version": current, "code": "already", "detail": ""}
 
     if not legacy_grant_present(server):
-        return {"ok": False, "version": None, "code": "no-path", "detail": "no legacy python3 grant to install through"}
+        if current is None:
+            detail = "no legacy python3 grant to install through"
+        else:
+            detail = (
+                f"helper v{current} is installed but v{JEN_HELPER_WANT_VERSION} needs the legacy python3 grant "
+                "to be re-added for one run, or copy it by hand: sudo install -o root -g root -m 0755 "
+                "./jen-kea-helper /usr/local/sbin/jen-kea-helper"
+            )
+        return {"ok": False, "version": current, "code": "no-path", "detail": detail}
 
     ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
-    script = __authoring.render_install_helper_script(source, ssh_user, JEN_HELPER_MIN_VERSION)
+    script = __authoring.render_install_helper_script(source, ssh_user, JEN_HELPER_WANT_VERSION)
     out, err = _legacy_python3(server, script, timeout=60)
     if out.startswith("ok:"):
-        try:
-            version = int(out[3:].strip() or 0)
-        except ValueError:
-            version = JEN_HELPER_MIN_VERSION
-        record_helper_status(server.get("id"), version)
-        return {"ok": True, "version": version, "code": "installed", "detail": ""}
+        recheck = check_helper(server)
+        real = recheck.get("version")
+        if isinstance(real, int) and real >= JEN_HELPER_WANT_VERSION:
+            code = "upgraded" if current is not None else "installed"
+            return {"ok": True, "version": real, "code": code, "detail": ""}
+        return {
+            "ok": False,
+            "version": real,
+            "code": "stale",
+            "detail": (
+                f"the copy did not take — the host still reports helper v{real if real is not None else '?'}, "
+                f"expected v{JEN_HELPER_WANT_VERSION}"
+            ),
+        }
     if out.startswith("sudoerror:"):
-        return {"ok": False, "version": None, "code": "sudoerror", "detail": out[len("sudoerror:") :]}
+        return {"ok": False, "version": current, "code": "sudoerror", "detail": out[len("sudoerror:") :]}
     if out.startswith("writeerror:"):
-        return {"ok": False, "version": None, "code": "writeerror", "detail": out[len("writeerror:") :]}
-    return {"ok": False, "version": None, "code": "error", "detail": err or out or "helper install failed"}
+        return {"ok": False, "version": current, "code": "writeerror", "detail": out[len("writeerror:") :]}
+    return {"ok": False, "version": current, "code": "error", "detail": err or out or "helper install failed"}
