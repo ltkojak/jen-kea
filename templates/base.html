@@ -558,10 +558,10 @@
 // v5.22.0 (Q18) — htmx falls back to eval() for a couple of features
 // (hx-on inline attributes, the "js:" expression prefix) that Jen
 // doesn't use anywhere; disabling it closes an eval-based escape hatch
-// a strict script-src otherwise still has to tolerate. htmx.min.js is
-// `defer`red, so it has already run (and defined window.htmx) by the
-// time DOMContentLoaded fires, same as this inline script's own
-// deferred-relative-order guarantee.
+// a strict script-src would still have to tolerate without this.
+// htmx.min.js is `defer`red, so it has already run (and defined
+// window.htmx) by the time DOMContentLoaded fires, same as this
+// inline script's own deferred-relative-order guarantee.
 document.addEventListener('DOMContentLoaded', function() {
     if (window.htmx) { htmx.config.allowEval = false; }
 });
