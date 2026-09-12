@@ -62,6 +62,22 @@ def _index_exists(cur, table: str, index_name: str) -> bool:
     return cur.fetchone()["cnt"] > 0
 
 
+def _column_nullable(cur, table: str, column: str) -> bool:
+    cur.execute(f"SHOW COLUMNS FROM {table} LIKE %s", (column,))
+    row = cur.fetchone()
+    return bool(row) and str(row.get("Null", "")).upper() == "YES"
+
+
+def _foreign_key_exists(cur, table: str, constraint_name: str) -> bool:
+    cur.execute(
+        "SELECT COUNT(*) AS cnt FROM information_schema.TABLE_CONSTRAINTS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND CONSTRAINT_NAME = %s "
+        "AND CONSTRAINT_TYPE = 'FOREIGN KEY'",
+        (table, constraint_name),
+    )
+    return cur.fetchone()["cnt"] > 0
+
+
 # ── Migration 1: baseline schema (final current definitions) ─────────────────
 
 _BASELINE_TABLES = [
@@ -853,6 +869,73 @@ def _m022_users_oidc_columns(db):
             logger.info("Migration 22: uq_users_provider_ext unique key added")
 
 
+# Every table that names a user by id, and the FK each one gets in
+# migration 23. CASCADE for "this row is meaningless without its user";
+# api_keys.created_by is handled separately below (SET NULL, and the
+# column has to become nullable first).
+_M023_CASCADE_TABLES = (
+    "mfa_methods",
+    "mfa_backup_codes",
+    "mfa_trusted_devices",
+    "mfa_attempts",
+    "webauthn_credentials",
+    "saved_searches",
+    "dashboard_prefs",
+)
+
+
+def _m023_user_foreign_keys(db):
+    """
+    v5.25.0 (Q21, folded in from Q8C) — every table that names a user by
+    id gets a real foreign key, so deleting a user can no longer leave
+    orphaned MFA/search/dashboard rows behind (`users.py::delete_user`
+    doesn't run any manual per-table cleanup today — checked the actual
+    code, not assumed — so this migration is the first thing that
+    actually enforces this, not a belt-and-braces addition to an
+    existing manual delete). CASCADE for the tables above; `api_keys`
+    is different — a key a since-deleted user created should keep
+    working, just with no attributable creator, so `created_by` becomes
+    nullable and gets SET NULL instead of CASCADE.
+
+    Before each ALTER: delete rows that already point at a user that no
+    longer exists — a real orphan predates this migration (nothing
+    enforced referential integrity before it), and the ALTER fails
+    outright (error 1452) if even one survives. Idempotent via
+    information_schema.TABLE_CONSTRAINTS; every column here is a plain
+    INT, matching users.id exactly (a type mismatch is error 1215 —
+    verified against the baseline schema for all eight tables before
+    writing this).
+    """
+    with db.cursor() as cur:
+        for table in _M023_CASCADE_TABLES:
+            cur.execute(f"DELETE FROM {table} WHERE user_id NOT IN (SELECT id FROM users)")
+            if cur.rowcount:
+                logger.warning(f"Migration 23: deleted {cur.rowcount} orphaned {table} row(s)")
+            constraint = f"fk_{table}_user_id"
+            if not _foreign_key_exists(cur, table, constraint):
+                cur.execute(
+                    f"ALTER TABLE {table} ADD CONSTRAINT {constraint} "
+                    f"FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+                )
+                logger.info(f"Migration 23: {constraint} added")
+
+        if _column_nullable(cur, "api_keys", "created_by") is False:
+            cur.execute("ALTER TABLE api_keys MODIFY COLUMN created_by INT NULL")
+            logger.info("Migration 23: api_keys.created_by made nullable")
+        cur.execute(
+            "UPDATE api_keys SET created_by = NULL "
+            "WHERE created_by IS NOT NULL AND created_by NOT IN (SELECT id FROM users)"
+        )
+        if cur.rowcount:
+            logger.warning(f"Migration 23: nulled {cur.rowcount} orphaned api_keys.created_by reference(s)")
+        if not _foreign_key_exists(cur, "api_keys", "fk_api_keys_created_by"):
+            cur.execute(
+                "ALTER TABLE api_keys ADD CONSTRAINT fk_api_keys_created_by "
+                "FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL"
+            )
+            logger.info("Migration 23: fk_api_keys_created_by added")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -890,6 +973,11 @@ MIGRATIONS = [
         _m021_config_revision_hash_kind_and_encrypt,
     ),
     (22, "users.auth_provider/external_id columns for OIDC single sign-on (v5.25.0)", _m022_users_oidc_columns),
+    (
+        23,
+        "Foreign keys from mfa_*/webauthn_credentials/saved_searches/dashboard_prefs/api_keys to users (v5.25.0)",
+        _m023_user_foreign_keys,
+    ),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

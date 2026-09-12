@@ -283,3 +283,122 @@ class TestBackfillMustChangePasswordMigration:
                 with db.cursor() as cur:
                     cur.execute("DELETE FROM users WHERE username IN ('_mig16_stale_default', '_mig16_real_pw')")
                 db.commit()
+
+
+class TestForeignKeys:
+    """v5.25.0 / migration 23 (Q21, folded in from Q8C) — every table
+    that names a user by id gets a real foreign key. Run on both
+    MariaDB and MySQL 8 CI legs."""
+
+    _CASCADE_TABLES = (
+        "mfa_methods",
+        "mfa_backup_codes",
+        "mfa_trusted_devices",
+        "mfa_attempts",
+        "webauthn_credentials",
+        "saved_searches",
+        "dashboard_prefs",
+    )
+
+    def _fk_exists(self, cur, table, constraint):
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM information_schema.TABLE_CONSTRAINTS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND CONSTRAINT_NAME = %s "
+            "AND CONSTRAINT_TYPE = 'FOREIGN KEY'",
+            (table, constraint),
+        )
+        return cur.fetchone()["cnt"] > 0
+
+    def test_migration_recorded(self):
+        assert 23 in applied_versions()
+
+    def test_foreign_keys_present_on_every_cascade_table(self):
+        with jen_db() as db, db.cursor() as cur:
+            for table in self._CASCADE_TABLES:
+                assert self._fk_exists(cur, table, f"fk_{table}_user_id"), table
+
+    def test_api_keys_created_by_is_nullable_with_set_null_fk(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM api_keys LIKE 'created_by'")
+            assert cur.fetchone()["Null"] == "YES"
+            assert self._fk_exists(cur, "api_keys", "fk_api_keys_created_by")
+
+    def test_deleting_a_user_cascades_to_mfa_methods(self):
+        from jen.models.user import hash_password
+
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (username, password, role) VALUES ('_fk_cascade_test1', %s, 'viewer')",
+                    (hash_password("testpass123"),),
+                )
+                user_id = cur.lastrowid
+                cur.execute("INSERT INTO mfa_methods (user_id, method_type, name) VALUES (%s, 'totp', 'x')", (user_id,))
+            db.commit()
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
+            db.commit()
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM mfa_methods WHERE user_id=%s", (user_id,))
+            assert cur.fetchone()["cnt"] == 0
+
+    def test_deleting_a_user_sets_api_keys_created_by_null(self):
+        from jen.models.user import hash_password
+
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (username, password, role) VALUES ('_fk_setnull_test1', %s, 'viewer')",
+                    (hash_password("testpass123"),),
+                )
+                user_id = cur.lastrowid
+                cur.execute(
+                    "INSERT INTO api_keys (name, key_hash, key_prefix, created_by) VALUES (%s, %s, %s, %s)",
+                    ("fk test key", f"_fk_test_hash_{user_id}", "fktest01", user_id),
+                )
+                key_id = cur.lastrowid
+            db.commit()
+        try:
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
+                db.commit()
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("SELECT created_by FROM api_keys WHERE id=%s", (key_id,))
+                assert cur.fetchone()["created_by"] is None
+        finally:
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("DELETE FROM api_keys WHERE id=%s", (key_id,))
+                db.commit()
+
+    def test_rerun_seeds_and_cleans_an_orphan(self):
+        """The real pre-migration-23 scenario, reproduced: drop the FK,
+        insert a row pointing at a user_id that doesn't exist (the ADD
+        CONSTRAINT would refuse this once the FK is live), then re-run
+        the migration function directly and confirm it deletes the
+        orphan AND re-adds the constraint — not just an idempotent
+        skip when the FK is already present."""
+        from jen.models.migrations import _m023_user_foreign_keys
+
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("ALTER TABLE mfa_attempts DROP FOREIGN KEY fk_mfa_attempts_user_id")
+                cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (999999)")
+            db.commit()
+
+        with jen_db() as db:
+            _m023_user_foreign_keys(db)
+            db.commit()
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM mfa_attempts WHERE user_id=999999")
+            assert cur.fetchone()["cnt"] == 0
+            assert self._fk_exists(cur, "mfa_attempts", "fk_mfa_attempts_user_id")
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m023_user_foreign_keys
+
+        with jen_db() as db:
+            _m023_user_foreign_keys(db)  # must not raise when every FK already exists
