@@ -100,6 +100,27 @@ page) so a link or prefetch can't end a session. `audit()` and the
 rate-limit `clear_*` helpers write synchronously — a security event is
 never lost to an unseen background-thread error.
 
+**OIDC single sign-on is IdP-authoritative (v5.25.0 / Q21).** Once an
+account is linked to an identity provider, its role is recomputed from
+the token's claims on *every* login and overwritten in `users.role` —
+Jen never trusts a stale local value over what the IdP says right now.
+A repeat login is matched ONLY on `(auth_provider='oidc', external_id)`
+— the IdP's own stable subject (`sub`) claim — never on username or
+email. Usernames and email addresses are reassignable at most IdPs (an
+employee leaves, their email gets recycled to someone else six months
+later); `sub` is defined by the OIDC spec to never be reused, so it's
+the only claim safe to treat as a permanent identity. This also means
+Jen deliberately never auto-links an OIDC login to an existing local
+account by matching username or email — doing so would let anyone who
+can get a matching username/email registered at the IdP silently take
+over a pre-existing local account. The one sanctioned link path is
+manual: a superadmin enters the external ID by hand on the Users page,
+after confirming it out of band. An OIDC-linked account's local
+password is a random value generated once and immediately discarded —
+`/login` refuses it before ever reaching the password check, with the
+identical generic message a wrong password gets, so the login form
+itself can't be used to discover which accounts are SSO-managed.
+
 **Kea config history at rest (v5.20.0).** `kea_config_revisions` bodies
 are encrypted (the same `crypto.py` Fernet key as MFA secrets and alert
 credentials — §3.6) — a database dump alone doesn't hand over Kea DB

@@ -1304,3 +1304,131 @@ encodes per RFC 3442) has been verified against a hand-built synthetic
 export, not a real `Export-DhcpServer` run — a scope using an option Jen
 hasn't seen before is the likeliest place for a mismatch. Reviewing the
 diff before you apply is exactly for catching that.
+
+---
+
+## Single sign-on (OIDC) (v5.25.0)
+
+**Settings → Access & Security → Single Sign-On** (superadmin only) lets
+users log in through an external OpenID Connect provider — Authentik,
+Keycloak, Entra ID, Okta, or anything else that speaks OIDC — with a
+role mapped from a claim. Local accounts keep working exactly as before;
+this is an additional login path, not a replacement.
+
+### Setting it up
+
+1. Register Jen as an OIDC client (a "confidential client" / "web
+   application") at your IdP, with the redirect URI
+   `https://your-jen-host/login/oidc/callback`.
+2. On Settings → Access & Security, tick **Enable single sign-on** and
+   fill in:
+   - **Issuer URL** — your IdP's issuer, e.g.
+     `https://authentik.example.com/application/o/jen/`. Jen reads
+     `<issuer>/.well-known/openid-configuration` for everything else.
+     Must be `https://` (an `http://127.0.0.1`/`localhost` issuer is
+     allowed only for local testing).
+   - **Client ID** / **Client Secret** — from the IdP's client
+     registration. The secret is write-only, same as every other
+     password field in Jen: it's never shown again, and leaving it
+     blank on a later save keeps the existing value.
+   - **Role Mapping** — `role=claim-value[,claim-value...];...`, e.g.
+     `superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer`. The
+     right side names group(s)/claim value(s) at the IdP, not a Jen
+     concept — create groups (or an equivalent claim) there with those
+     exact names, or change the mapping to match names you already
+     have. A user who belongs to more than one mapped group gets the
+     highest-privilege one.
+   - **Default Role** — used when a user's groups match nothing above.
+     Set to **None** to deny login outright for anyone with no mapped
+     group, rather than quietly handing out Viewer to every employee at
+     the organization.
+3. Save. The **Sign in with SSO** button appears on the login page
+   immediately — no restart needed.
+
+### Provider examples
+
+**Authentik** — create a group per role (`jen-superadmin`, `jen-admin`,
+`jen-viewer`), assign users to them, and add a `groups` scope mapping to
+the application so the ID token/userinfo carries a `groups` claim listing
+group names. Role Mapping: `superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer`.
+
+**Keycloak** — use Keycloak's realm or client roles, and add a "Group
+Membership" or "User Realm Role" protocol mapper to the client so the
+token exposes a `groups` (or `roles`) claim. If you map realm roles
+instead of groups, set **Role Claim** to `roles` and point the mapping
+at your role names instead.
+
+**Entra ID (Azure AD)** — by default Entra sends `groups` as GUIDs
+(object IDs), not display names, unless you configure the app
+registration's optional claims to emit group names — Role Mapping
+accepts either, it's just matching strings, but a GUID-based mapping is
+harder for a human to audit later. Configuring "Emit groups as role
+claims" or adding the `groups` optional claim with the `sAMAccountName`
+or `NetbiosDomainAndSAMAccountName` group type gets you readable names.
+
+### The linking rules
+
+A repeat login is matched **only** on the IdP's `sub` claim — never on
+username or email, both of which can be reassigned or reused at most
+IdPs over time. First login for a new `sub`: if **Automatically create
+an account** is on, Jen creates one (username sanitized from the
+`preferred_username` claim, falling back to `email` then `sub` if that
+doesn't pass Jen's username rules) with a random, immediately-discarded
+password and the mapped role. If a *local* account already has that
+username, the login is refused with "an account named X already exists
+— ask an admin to rename it or link it" — Jen never auto-suffixes or
+guesses; ambiguity here is worse than a refusal. The sanctioned way to
+convert an existing local account is the **Link to SSO** action on the
+Users page (edit a user → enter their external ID / `sub` claim by
+hand, confirmed out of band) — from that point on it behaves exactly
+like an auto-created account.
+
+On every subsequent login, an OIDC user's role is recomputed from
+their current groups and overwritten if it changed — Jen doesn't trust
+a role assigned to them locally to still be correct. Subnet access
+stays Jen-managed either way; nothing about SSO touches it.
+
+### What's different for an SSO-managed account
+
+- **No local password.** The Users page hides the password-reset
+  fields and disables the role selector (with a note explaining why)
+  for a linked account — its role comes from the IdP, and its password
+  was never meant to be used. A local `/login` attempt for that
+  username is refused with the same generic "invalid username or
+  password" message a wrong password gets, so the login form can't be
+  used to figure out which accounts are SSO-managed.
+- **No Jen MFA.** The IdP owns multi-factor authentication for its own
+  users; Jen's MFA enrollment page shows "managed by your identity
+  provider" instead of offering to enroll a factor Jen would never
+  actually check.
+- **Deleting** an SSO-managed account works the same as any other.
+
+### The local login form
+
+**Keep the local username/password form on the login page** stays on
+by default — SSO is additive. Unchecking it hides the password form
+entirely, but `/login?local=1` always works regardless, as a
+break-glass path if the IdP is ever unreachable.
+
+### Behind a reverse proxy
+
+If Jen sits behind a proxy that changes the externally-visible URL (a
+different hostname, or terminating TLS in front of a plain-HTTP Jen),
+set `[server] trusted_proxies` (see "Configuration File Reference →
+Behind a reverse proxy" above) so Jen computes the right scheme/host
+for its own redirect URI. If that still doesn't match what your IdP
+expects, set **Redirect URI** explicitly to override it.
+
+### Logout
+
+Signing out of Jen only ends the Jen session — it does not sign you out
+of the identity provider (no RP-initiated logout). If your IdP session
+is still active, visiting `/login/oidc` again will sign you straight
+back in.
+
+### Not covered
+
+SAML and LDAP providers, SCIM provisioning, RP-initiated logout, API
+keys via OIDC, and mapping IdP groups to per-subnet access restrictions
+(the role mapping only ever produces superadmin/admin/viewer) are all
+out of scope for this release.

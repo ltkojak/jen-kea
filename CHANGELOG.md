@@ -2,6 +2,79 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.25.0] - 2026-09-12
+
+Single sign-on: **Settings → Access & Security → Single Sign-On** lets
+users log in through an OpenID Connect identity provider — Authentik,
+Keycloak, Entra ID, Okta, or anything else that speaks the protocol —
+with a role mapped from a claim, re-evaluated on every login. Local
+accounts keep working exactly as before; this is an additional login
+path, not a replacement. Also folded into this release: every table
+that names a user by id now has a real foreign key, so deleting a user
+can no longer leave orphaned rows behind.
+
+### Single sign-on (OIDC)
+
+A new `[oidc]` config section (optional, fully backward-compatible —
+every field defaults to off) and migration 22
+(`users.auth_provider`/`external_id`, unique on the pair) back the
+whole feature. `jen/services/oidc.py` handles the parts that matter
+most for correctness: `map_role()` picks the highest of
+superadmin/admin/viewer among the groups a token's role claim actually
+carries, and `find_or_create_user()` implements the linking rule this
+was built around from the start — a repeat login is matched **only**
+on the IdP's own `sub` claim, never on username or email, since both
+of those can be reassigned or reused at an IdP in ways `sub` by
+definition never is. A first login for a new `sub` creates a local
+user row with a random, immediately-discarded password (never usable
+for local login) and the mapped role; a username collision with an
+existing local account is refused outright rather than guessed around
+with an auto-suffix. `establish_session()` — the `login_user()` +
+session-cache block that used to live only inside the local password
+login route — is now shared code, so the SSO callback and the
+password form can never drift apart on what "signed in" actually
+means for session state.
+
+The login page grows a **Sign in with SSO** button when configured
+(hidden if a config typo left the client unregistered, rather than
+linking to a dead route), and can hide the local password form
+entirely — `/login?local=1` is always available regardless, as a
+break-glass path if the identity provider is ever unreachable. A local
+login attempt against an SSO-linked username is refused with the
+exact same generic "invalid username or password" message a wrong
+password gets, checked *before* the password comparison even runs, so
+the login form itself can't be used to enumerate which accounts are
+locally-managed. MFA is entirely the identity provider's problem for
+these accounts: the callback never sets Jen's own MFA-pending state,
+and the enrollment page says so instead of offering to add a factor
+Jen would never actually check.
+
+The Users page shows a badge on a linked account, disables its role
+selector (the role is recomputed from the IdP on every login — a
+manually-set one would just be overwritten anyway) and hides password
+reset, and gains a superadmin-only **Link to SSO** action for
+converting an existing local account by hand once its external ID has
+been confirmed out of band. New admin-guide "Single sign-on (OIDC)"
+section with Authentik/Keycloak/Entra ID setup notes (including Entra
+ID's group-claims-as-GUIDs default) and the linking rules in full.
+
+### Database foreign keys
+
+Migration 23, folded in from an older backlog item: `mfa_methods`,
+`mfa_backup_codes`, `mfa_trusted_devices`, `mfa_attempts`,
+`webauthn_credentials`, `saved_searches`, and `dashboard_prefs` all
+get a real `FOREIGN KEY ... ON DELETE CASCADE` to `users.id` —
+checking the actual `delete_user` route first showed it runs no
+manual per-table cleanup today, so this is the first thing that
+actually enforces referential integrity here, not a belt-and-braces
+addition to something already there. `api_keys.created_by` becomes
+nullable with `ON DELETE SET NULL` instead, since an API key a
+since-deleted user created should keep working, just with no
+attributable creator. Any pre-existing orphan row is deleted before
+its table's constraint is added (an orphan would otherwise make the
+`ALTER TABLE` fail outright), and the whole migration is idempotent —
+a fresh install and an upgraded one land in the same place.
+
 ## [5.24.0] - 2026-09-12
 
 A guided path off Windows DHCP: **Subnets → Import from Windows DHCP**
