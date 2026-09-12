@@ -318,3 +318,210 @@ class TestDdnsNamingTab:
         r = logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"}, follow_redirects=True)
         assert r.status_code == 200
         assert b"No Kea server has SSH configured" in r.data
+
+
+class TestDdnsD2ConfigTab:
+    """v5.23.0 (Q19) — D2's own config (kea-dhcp-ddns.conf), read from
+    the active server and pushed to every SSH-configured one."""
+
+    def _wire(self, monkeypatch, d2cfg=None):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
+
+        d2cfg = d2cfg if d2cfg is not None else {}
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr(
+            kea_svc,
+            "get_active_kea_server",
+            lambda: {"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"},
+        )
+        fake = FakeHelper()
+        fake.configs[(1, "d2")] = {"DhcpDdns": d2cfg}
+        fake.shas[(1, "d2")] = "d2sha1"
+        fake.responses["apply-config"] = {"ok": True, "backup": None, "sha256": "d2sha2"}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp-ddns-server", "state": "active"}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a, **k: None)
+        return fake
+
+    def test_get_renders_domains_and_keys(self, logged_in_client, monkeypatch):
+        self._wire(
+            monkeypatch,
+            {
+                "forward-ddns": {
+                    "ddns-domains": [
+                        {"name": "example.com.", "key-name": "tsig1", "dns-servers": [{"ip-address": "10.0.0.53"}]}
+                    ]
+                },
+                "tsig-keys": [{"name": "tsig1", "algorithm": "hmac-sha256", "secret": "s3cr3t"}],
+            },
+        )
+        r = logged_in_client.get("/ddns?tab=d2config")
+        assert r.status_code == 200
+        assert b"example.com." in r.data
+        assert b"tsig1" in r.data
+        assert b"hmac-sha256" in r.data
+        assert b"s3cr3t" not in r.data  # write-only, never re-displayed
+
+    def test_domain_add_rejects_a_bad_zone_name(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/domain/add",
+            data={"direction": "forward", "name": "no-trailing-dot", "servers": "10.0.0.53"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"fully-qualified" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_domain_add_rejects_a_bad_server(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/domain/add",
+            data={"direction": "forward", "name": "example.com.", "servers": "not-an-ip"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"not a valid IP" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_domain_add_pushes_to_every_server(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/domain/add",
+            data={"direction": "forward", "name": "example.com.", "servers": "10.0.0.53:53\n10.0.0.54"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        applied = fake.payload_for("apply-config")["config"]["DhcpDdns"]["forward-ddns"]["ddns-domains"][0]
+        assert applied["name"] == "example.com."
+        assert applied["dns-servers"] == [
+            {"ip-address": "10.0.0.53", "port": 53},
+            {"ip-address": "10.0.0.54", "port": 53},
+        ]
+        assert "service" in fake.ops()
+
+    def test_domain_remove(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch, {"forward-ddns": {"ddns-domains": [{"name": "example.com."}]}})
+        r = logged_in_client.post(
+            "/ddns/d2config/domain/remove",
+            data={"direction": "forward", "name": "example.com."},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        applied = fake.payload_for("apply-config")["config"]["DhcpDdns"]["forward-ddns"]["ddns-domains"]
+        assert applied == []
+
+    def test_tsig_add_rejects_bad_algorithm(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/tsig/add",
+            data={"name": "tsig1", "algorithm": "rot13", "secret": "x"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"Invalid TSIG algorithm" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_tsig_add_requires_a_secret(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/tsig/add",
+            data={"name": "tsig1", "algorithm": "hmac-sha256", "secret": ""},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"secret is required" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_tsig_add_pushes_and_secret_never_appears_in_the_flash_redirect(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/tsig/add",
+            data={"name": "tsig1", "algorithm": "hmac-sha256", "secret": "topsecretvalue"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        applied = fake.payload_for("apply-config")["config"]["DhcpDdns"]["tsig-keys"][0]
+        assert applied == {"name": "tsig1", "algorithm": "hmac-sha256", "secret": "topsecretvalue"}
+        assert b"topsecretvalue" not in r.data
+
+    def test_tsig_remove_refused_while_referenced(self, logged_in_client, monkeypatch):
+        fake = self._wire(
+            monkeypatch,
+            {
+                "forward-ddns": {"ddns-domains": [{"name": "example.com.", "key-name": "tsig1"}]},
+                "tsig-keys": [{"name": "tsig1", "algorithm": "hmac-sha256", "secret": "x"}],
+            },
+        )
+        r = logged_in_client.post("/ddns/d2config/tsig/remove", data={"name": "tsig1"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"still referenced" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_post_routes_require_admin(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        fake = self._wire(monkeypatch)
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="ddns_d2_viewer1")
+        r = client.post(
+            "/ddns/d2config/domain/add",
+            data={"direction": "forward", "name": "example.com.", "servers": "10.0.0.53"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"Admin access required" in r.data
+        assert "apply-config" not in fake.ops()
+
+
+class TestDdnsVerifyTab:
+    def test_no_input_shows_the_form_only(self, logged_in_client, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+        r = logged_in_client.get("/ddns?tab=verify")
+        assert r.status_code == 200
+        assert b"Verify DNS" in r.data
+
+    def test_invalid_hostname_shows_an_error(self, logged_in_client, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+        r = logged_in_client.get("/ddns?tab=verify", query_string={"hostname": "not valid host!"})
+        assert r.status_code == 200
+        assert b"Invalid hostname" in r.data
+
+    def test_forward_and_reverse_match(self, logged_in_client, mock_kea, monkeypatch):
+        import socket
+
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [(None, None, None, None, ("10.0.0.50", 0))])
+        monkeypatch.setattr(socket, "gethostbyaddr", lambda ip: ("host.example.com", [], [ip]))
+        r = logged_in_client.get("/ddns?tab=verify", query_string={"hostname": "host.example.com", "ip": "10.0.0.50"})
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "10.0.0.50" in body
+        assert "host.example.com" in body
+        assert body.count("✓ Yes") == 2  # forward matches given IP, reverse matches given hostname
+
+    def test_forward_lookup_failure_is_shown(self, logged_in_client, mock_kea, monkeypatch):
+        import socket
+
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+
+        def raise_gaierror(host, port):
+            raise socket.gaierror("Name or service not known")
+
+        monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
+        r = logged_in_client.get("/ddns?tab=verify", query_string={"hostname": "nope.example.com"})
+        assert r.status_code == 200
+        assert b"Name or service not known" in r.data

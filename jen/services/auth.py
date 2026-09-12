@@ -112,6 +112,11 @@ UNIX_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 SAFE_REMOTE_PATH_RE = re.compile(r"^/[A-Za-z0-9_./-]+$")
 SHARED_NETWORK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 CLASS_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+# v5.23.0 (Q19) — a D2 ddns-domains zone name. Always fully-qualified
+# with a trailing dot, Kea's own convention ("example.com.",
+# "1.168.192.in-addr.arpa.") — valid_hostname forbids that trailing dot,
+# so this is its own pattern rather than a reuse.
+DDNS_ZONE_NAME_RE = re.compile(r"^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+$")
 
 
 def valid_ssh_target(value):
@@ -145,6 +150,11 @@ def valid_class_name(value):
     letter, then letters/digits/`_-`, max 64 chars. Travels only in POST
     form fields, never a URL segment."""
     return bool(CLASS_NAME_RE.match((value or "").strip()))
+
+
+def valid_ddns_zone_name(value):
+    """A D2 ddns-domains zone name (v5.23.0, Q19) — see DDNS_ZONE_NAME_RE."""
+    return bool(DDNS_ZONE_NAME_RE.match((value or "").strip()))
 
 
 def valid_dns_lookup_host(value):

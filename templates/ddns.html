@@ -10,6 +10,8 @@
 {% set ddns_tabs = [
     {'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'},
     {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
+    {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
+    {'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'},
 ] %}
 {{ subtabs(ddns_tabs, tab) }}
 
@@ -135,6 +137,214 @@
         </div>
         <button type="submit" class="btn btn-primary">Save DDNS Naming</button>
     </form>
+    {% endif %}
+</div>
+
+{% elif tab == 'd2config' %}
+
+{% if config_unavailable %}
+<div class="alert alert-error">Could not read kea-dhcp-ddns.conf from the active server — check SSH configuration in Settings → Kea.</div>
+{% else %}
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+<div class="card">
+    <div class="card-header"><span class="card-title">➡️ Forward Domains</span></div>
+    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+        <thead><tr><th>Zone</th><th>Key</th><th>DNS servers</th><th></th></tr></thead>
+        <tbody>
+        {% for d in forward_domains %}
+        <tr>
+            <td class="mono">{{ d.name }}</td>
+            <td class="mono">{{ d.get('key-name', '—') }}</td>
+            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{{ s.get('ip-address') }}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td>
+                <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove forward zone {{ d.name }}?">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="direction" value="forward">
+                    <input type="hidden" name="name" value="{{ d.name }}">
+                    <button type="submit" class="btn btn-sm btn-secondary">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" style="color:var(--text-muted);text-align:center;padding:12px;">No forward domains.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <form method="POST" action="/ddns/d2config/domain/add">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="direction" value="forward">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Zone name</label>
+                <input type="text" name="name" placeholder="example.com." required>
+            </div>
+            <div class="form-group">
+                <label>TSIG key (optional)</label>
+                <select name="key_name">
+                    <option value="">None</option>
+                    {% for k in tsig_keys %}<option value="{{ k.name }}">{{ k.name }}</option>{% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>DNS servers</label>
+            <textarea name="servers" rows="2" placeholder="10.0.0.53:53" required></textarea>
+            <div class="form-hint">One <span class="mono">ip[:port]</span> per line — port defaults to 53.</div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Add Forward Domain</button>
+    </form>
+</div>
+
+<div class="card">
+    <div class="card-header"><span class="card-title">⬅️ Reverse Domains</span></div>
+    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+        <thead><tr><th>Zone</th><th>Key</th><th>DNS servers</th><th></th></tr></thead>
+        <tbody>
+        {% for d in reverse_domains %}
+        <tr>
+            <td class="mono">{{ d.name }}</td>
+            <td class="mono">{{ d.get('key-name', '—') }}</td>
+            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{{ s.get('ip-address') }}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td>
+                <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove reverse zone {{ d.name }}?">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="direction" value="reverse">
+                    <input type="hidden" name="name" value="{{ d.name }}">
+                    <button type="submit" class="btn btn-sm btn-secondary">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" style="color:var(--text-muted);text-align:center;padding:12px;">No reverse domains.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <form method="POST" action="/ddns/d2config/domain/add">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="direction" value="reverse">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Zone name</label>
+                <input type="text" name="name" placeholder="1.168.192.in-addr.arpa." required>
+                {% if reverse_zone_hints %}
+                <div class="form-hint">Suggested from your subnets: {% for h in reverse_zone_hints %}<span class="mono">{{ h }}</span>{% if not loop.last %}, {% endif %}{% endfor %} (classless /25–/30 networks need a hand-named zone).</div>
+                {% endif %}
+            </div>
+            <div class="form-group">
+                <label>TSIG key (optional)</label>
+                <select name="key_name">
+                    <option value="">None</option>
+                    {% for k in tsig_keys %}<option value="{{ k.name }}">{{ k.name }}</option>{% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="form-group">
+            <label>DNS servers</label>
+            <textarea name="servers" rows="2" placeholder="10.0.0.53:53" required></textarea>
+            <div class="form-hint">One <span class="mono">ip[:port]</span> per line — port defaults to 53.</div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Add Reverse Domain</button>
+    </form>
+</div>
+
+</div>
+
+<div class="card">
+    <div class="card-header"><span class="card-title">🔑 TSIG Keys</span></div>
+    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+        <thead><tr><th>Name</th><th>Algorithm</th><th></th></tr></thead>
+        <tbody>
+        {% for k in tsig_keys %}
+        <tr>
+            <td class="mono">{{ k.name }}</td>
+            <td class="mono">{{ k.algorithm }}</td>
+            <td>
+                <form method="POST" action="/ddns/d2config/tsig/remove" data-confirm="Remove TSIG key {{ k.name }}? Refused if a domain still uses it.">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="name" value="{{ k.name }}">
+                    <button type="submit" class="btn btn-sm btn-secondary">Remove</button>
+                </form>
+            </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:12px;">No TSIG keys.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <form method="POST" action="/ddns/d2config/tsig/add">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Name</label>
+                <input type="text" name="name" placeholder="tsig1" required>
+            </div>
+            <div class="form-group">
+                <label>Algorithm</label>
+                <select name="algorithm">
+                    {% for a in tsig_algorithms %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Secret</label>
+                <input type="password" name="secret" placeholder="base64 key material" required>
+                <div class="form-hint">Write-only — never shown again after saving.</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-sm">Add TSIG Key</button>
+    </form>
+</div>
+
+{% endif %}
+
+{% elif tab == 'verify' %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">✅ Verify DNS</span></div>
+    <div class="form-hint" style="margin-bottom:12px;">
+        Looks up a hostname and/or IP through the Jen host's own system resolver — whatever put the record
+        there, D2 or a provider. Forward zone: <span class="mono">{{ forward_zone or '(none configured)' }}</span> ·
+        Qualifying suffix: <span class="mono">{{ qualifying_suffix or '(none configured)' }}</span>.
+    </div>
+    <form method="GET">
+        <input type="hidden" name="tab" value="verify">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Hostname</label>
+                <input type="text" name="hostname" value="{{ verify_hostname }}" placeholder="host.example.com">
+            </div>
+            <div class="form-group">
+                <label>IP address</label>
+                <input type="text" name="ip" value="{{ verify_ip }}" placeholder="10.0.0.50">
+            </div>
+            <div class="form-group" style="align-self:flex-end;">
+                <button type="submit" class="btn btn-primary">Verify</button>
+            </div>
+        </div>
+    </form>
+    {% if verify_error %}
+    <div class="alert alert-error" style="margin-top:12px;">{{ verify_error }}</div>
+    {% elif verify_result %}
+    <table style="margin-top:16px;width:100%;font-size:13px;">
+        {% if verify_result.forward_ips is defined %}
+        <tr><td class="stat-label" style="width:160px;">Forward lookup</td><td class="mono">{{ verify_result.forward_ips | join(', ') }}</td></tr>
+        {% if verify_result.forward_ok is defined %}
+        <tr><td class="stat-label">Matches given IP</td><td>{% if verify_result.forward_ok %}<span style="color:var(--success);">✓ Yes</span>{% else %}<span style="color:var(--danger);">✗ No</span>{% endif %}</td></tr>
+        {% endif %}
+        {% elif verify_result.forward_error is defined %}
+        <tr><td class="stat-label">Forward lookup</td><td style="color:var(--danger);">✗ {{ verify_result.forward_error }}</td></tr>
+        {% endif %}
+        {% if verify_result.reverse_name is defined %}
+        <tr><td class="stat-label">Reverse lookup</td><td class="mono">{{ verify_result.reverse_name }}</td></tr>
+        {% if verify_result.reverse_ok is defined %}
+        <tr><td class="stat-label">Matches given hostname</td><td>{% if verify_result.reverse_ok %}<span style="color:var(--success);">✓ Yes</span>{% else %}<span style="color:var(--danger);">✗ No</span>{% endif %}</td></tr>
+        {% endif %}
+        {% elif verify_result.reverse_error is defined %}
+        <tr><td class="stat-label">Reverse lookup</td><td style="color:var(--danger);">✗ {{ verify_result.reverse_error }}</td></tr>
+        {% endif %}
+    </table>
+    <div class="form-hint" style="margin-top:8px;">This is the system resolver on the Jen host — a stale record here means DNS actually is wrong for real clients, not just for Jen.</div>
     {% endif %}
 </div>
 

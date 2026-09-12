@@ -4,8 +4,7 @@ jen/routes/ddns.py
 DDNS status and configuration routes.
 
 v5.23.0 (Q19) — grew from a single status/log page into in-page tabs:
-Status (this release) and Naming (this release); D2 Configuration and
-Verify land in a later step of the same release. Sub-navigation reuses
+Status, Naming, D2 Configuration, and Verify. Sub-navigation reuses
 base.html's shared `_settings_subtabs.html` macro directly rather than
 nav.py's SUBTABS table — that table is keyed by Settings groups only,
 and /ddns lives under the "network" section strip, not Settings, so
@@ -15,6 +14,7 @@ everything else is admin+.
 
 import logging
 import shlex
+import socket
 import subprocess
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
@@ -23,6 +23,7 @@ from flask_login import current_user, login_required
 import jen.services.auth as __auth
 import jen.services.kea as __kea
 import jen.services.kea_config_edit as __edit
+import jen.services.kea_ddns as __d2
 import jen.services.kea_host as __host
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
@@ -30,7 +31,7 @@ from jen.services.access import admin_required as _admin_required
 logger = logging.getLogger(__name__)
 bp = Blueprint("ddns", __name__)
 
-TABS = ("status", "naming")
+TABS = ("status", "naming", "d2config", "verify")
 
 
 def _stat_value(args: dict, key: str) -> int:
@@ -379,6 +380,10 @@ def ddns():
         ctx.update(_status_tab_context())
     elif tab == "naming":
         ctx.update(_naming_tab_context())
+    elif tab == "d2config":
+        ctx.update(_d2config_tab_context())
+    elif tab == "verify":
+        ctx.update(_verify_tab_context())
     return render_template("ddns.html", **ctx)
 
 
@@ -407,3 +412,252 @@ def ddns_naming_save():
         values["ddns-replace-client-name"] = "never"
     _save_ddns4(values)
     return redirect(url_for("ddns.ddns", tab="naming"))
+
+
+# ── D2 configuration (v5.23.0 — Q19) ────────────────────────────────────────
+
+
+def _d2config_tab_context():
+    """Reads D2's own config (kea-dhcp-ddns.conf) from the active
+    server, same "one representative server" reasoning as the Naming
+    tab — _save_d2_change below pushes to every SSH-configured server."""
+    server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
+    cfg = __host.read_config(server, "d2") if server and server.get("ssh_host") else None
+    d2cfg = (cfg or {}).get("DhcpDdns", {})
+    tsig_keys = [
+        {"name": k.get("name"), "algorithm": k.get("algorithm")}
+        for k in d2cfg.get("tsig-keys", [])
+        if isinstance(k, dict)
+    ]
+    reverse_hints = sorted(
+        {s for s in (__d2.suggest_reverse_zone(info.get("cidr", "")) for info in extensions.SUBNET_MAP.values()) if s}
+    )
+    return {
+        "config_unavailable": cfg is None,
+        "forward_domains": d2cfg.get("forward-ddns", {}).get("ddns-domains", []),
+        "reverse_domains": d2cfg.get("reverse-ddns", {}).get("ddns-domains", []),
+        "tsig_keys": tsig_keys,
+        "tsig_algorithms": __d2.TSIG_ALGORITHMS,
+        "reverse_zone_hints": reverse_hints,
+    }
+
+
+def _parse_dns_servers(raw: str):
+    """One "ip[:port]" per line (or comma-separated) → [(ip, port), ...].
+    Port defaults to 53. Returns (servers, error) — error is a message
+    string on the first bad entry, else None."""
+    servers = []
+    for chunk in raw.replace(",", "\n").splitlines():
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        ip, _, port_s = chunk.partition(":")
+        ip = ip.strip()
+        if not __auth.valid_ip(ip):
+            return [], f"'{ip}' is not a valid IP address."
+        port = 53
+        if port_s:
+            try:
+                port = int(port_s)
+            except ValueError:
+                return [], f"'{port_s}' is not a valid port."
+        servers.append((ip, port))
+    if not servers:
+        return [], "At least one DNS server is required."
+    return servers, None
+
+
+def _apply_d2_change(mutate_fn, done_phrase: str):
+    """Push a D2 config mutation to every SSH-configured Kea server,
+    each guarded by its OWN freshly-read sha (Q11) — same shape as
+    _save_ddns4 above, targeting kea-dhcp-ddns.conf instead of
+    kea-dhcp4.conf. mutate_fn(cfg) -> (cfg, "ok"|"notfound"|"referenced")."""
+    results, errors = [], []
+    saw_any = False
+    for server in extensions.KEA_SERVERS:
+        if not server.get("ssh_host"):
+            continue
+        saw_any = True
+        name = server.get("name") or server.get("ssh_host")
+        try:
+            cfg, sha = __host.read_config_versioned(server, "d2")
+            if cfg is None:
+                errors.append(f"❌ {name}: kea-dhcp-ddns.conf not found on this server")
+                continue
+            cfg, status = mutate_fn(cfg)
+            if status == "referenced":
+                errors.append(f"❌ {name}: still referenced by a domain — remove that first")
+                continue
+            if status == "notfound":
+                errors.append(f"❌ {name}: not found")
+                continue
+            res = __host.apply_config(server, "d2", cfg, expect_sha256=sha, summary=done_phrase)
+            if res["code"] == "conflict":
+                errors.append(f"❌ {name}: the D2 config on this server changed since you opened the form")
+            elif res["code"] == "ok":
+                restart = __host.service_action(server, "d2", "restart")
+                if restart["ok"]:
+                    results.append(f"✅ {name}: {done_phrase}, D2 restarted")
+                else:
+                    results.append(f"✅ {name}: {done_phrase} — restart D2 manually ({restart['detail']})")
+            elif res["code"] == "missingbinary":
+                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+            elif res["code"] == "testerror":
+                errors.append(
+                    f"❌ {name}: config validation failed — D2 NOT restarted, original config preserved. "
+                    f"Error: {res['detail']}"
+                )
+            else:
+                errors.append(f"❌ {name}: {res['detail']}")
+        except Exception as e:
+            errors.append(f"❌ {name}: {e}")
+    if not saw_any:
+        errors.append("No Kea server has SSH configured.")
+    for r in results:
+        flash(r, "success")
+    for e in errors:
+        flash(e, "error")
+
+
+@bp.route("/ddns/d2config/domain/add", methods=["POST"])
+@login_required
+@_admin_required
+def ddns_d2_domain_add():
+    direction = request.form.get("direction", "")
+    name = request.form.get("name", "").strip()
+    key_name = request.form.get("key_name", "").strip()
+    servers_raw = request.form.get("servers", "")
+
+    if direction not in ("forward", "reverse"):
+        flash("Invalid direction.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+    if not __auth.valid_ddns_zone_name(name):
+        flash("Zone name must be fully-qualified with a trailing dot, e.g. example.com.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+    servers, err = _parse_dns_servers(servers_raw)
+    if err:
+        flash(err, "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+
+    def mutate(cfg):
+        return __d2.add_ddns_domain(cfg, direction, name, key_name or None, servers)
+
+    _apply_d2_change(mutate, f"{direction} domain {name} saved")
+    return redirect(url_for("ddns.ddns", tab="d2config"))
+
+
+@bp.route("/ddns/d2config/domain/remove", methods=["POST"])
+@login_required
+@_admin_required
+def ddns_d2_domain_remove():
+    direction = request.form.get("direction", "")
+    name = request.form.get("name", "").strip()
+    if direction not in ("forward", "reverse") or not name:
+        flash("Invalid request.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+
+    def mutate(cfg):
+        return __d2.remove_ddns_domain(cfg, direction, name)
+
+    _apply_d2_change(mutate, f"{direction} domain {name} removed")
+    return redirect(url_for("ddns.ddns", tab="d2config"))
+
+
+@bp.route("/ddns/d2config/tsig/add", methods=["POST"])
+@login_required
+@_admin_required
+def ddns_d2_tsig_add():
+    name = request.form.get("name", "").strip()
+    algorithm = request.form.get("algorithm", "")
+    secret = request.form.get("secret", "")
+
+    if not __auth.valid_class_name(name):
+        # TSIG key names have no Kea-mandated shape; reusing this
+        # validator just keeps it to a sane, shell/JSON-safe identifier.
+        flash("Key name must start with a letter and contain only letters, digits, - or _.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+    if algorithm not in __d2.TSIG_ALGORITHMS:
+        flash("Invalid TSIG algorithm.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+    if not secret:
+        flash("A secret is required.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+
+    def mutate(cfg):
+        return __d2.set_tsig_key(cfg, name, algorithm, secret)
+
+    _apply_d2_change(mutate, f"TSIG key {name} saved")
+    return redirect(url_for("ddns.ddns", tab="d2config"))
+
+
+@bp.route("/ddns/d2config/tsig/remove", methods=["POST"])
+@login_required
+@_admin_required
+def ddns_d2_tsig_remove():
+    name = request.form.get("name", "").strip()
+    if not name:
+        flash("Invalid request.", "error")
+        return redirect(url_for("ddns.ddns", tab="d2config"))
+
+    def mutate(cfg):
+        return __d2.remove_tsig_key(cfg, name)
+
+    _apply_d2_change(mutate, f"TSIG key {name} removed")
+    return redirect(url_for("ddns.ddns", tab="d2config"))
+
+
+# ── Verify (v5.23.0 — Q19) ───────────────────────────────────────────────────
+
+
+def _run_verify(hostname: str, ip: str) -> dict:
+    """Forward (hostname -> IP) and reverse (IP -> hostname) lookups via
+    the Jen host's OWN system resolver — not Kea, not D2 directly; this
+    confirms what a client actually sees, whatever put that record there
+    (D2 or a provider)."""
+    out = {"hostname": hostname, "ip": ip}
+    if hostname:
+        try:
+            infos = socket.getaddrinfo(hostname, None)
+            out["forward_ips"] = sorted({info[4][0] for info in infos})
+            if ip:
+                out["forward_ok"] = ip in out["forward_ips"]
+        except socket.gaierror as e:
+            out["forward_error"] = str(e)
+    if ip:
+        try:
+            resolved_name, _aliases, _ips = socket.gethostbyaddr(ip)
+            out["reverse_name"] = resolved_name
+            if hostname:
+                out["reverse_ok"] = resolved_name.rstrip(".").lower() == hostname.rstrip(".").lower()
+        except (OSError, socket.herror) as e:
+            out["reverse_error"] = str(e)
+    return out
+
+
+def _verify_tab_context():
+    hostname = request.args.get("hostname", "").strip()
+    ip = request.args.get("ip", "").strip()
+    result = None
+    error = None
+    if hostname and not __auth.valid_hostname(hostname):
+        error = "Invalid hostname."
+    elif ip and not __auth.valid_ip(ip):
+        error = "Invalid IP address."
+    elif hostname or ip:
+        result = _run_verify(hostname, ip)
+
+    active_server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
+    qualifying_suffix = ""
+    if active_server is not None:
+        r = __kea.kea_command("config-get", server=active_server)
+        if r.get("result") == 0:
+            qualifying_suffix = (r.get("arguments") or {}).get("Dhcp4", {}).get("ddns-qualifying-suffix", "")
+
+    return {
+        "verify_hostname": hostname,
+        "verify_ip": ip,
+        "verify_error": error,
+        "verify_result": result,
+        "forward_zone": extensions.cfg.get("ddns", "forward_zone", fallback=""),
+        "qualifying_suffix": qualifying_suffix,
+    }

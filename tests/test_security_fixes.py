@@ -255,6 +255,23 @@ class TestRemoteCommandValidators:
         assert valid_shared_network_name("has space") is False
         assert valid_shared_network_name("semi;colon") is False
 
+    def test_valid_ddns_zone_name(self):
+        """v5.23.0 (Q19) — a D2 zone name, unlike valid_hostname, MUST
+        carry the trailing dot Kea's own examples always show."""
+        from jen.services.auth import valid_ddns_zone_name
+
+        assert valid_ddns_zone_name("example.com.") is True
+        assert valid_ddns_zone_name("1.168.192.in-addr.arpa.") is True
+        assert valid_ddns_zone_name("a.") is True
+        assert valid_ddns_zone_name("example.com") is False  # no trailing dot
+        assert valid_ddns_zone_name("") is False
+        assert valid_ddns_zone_name(".") is False
+        assert valid_ddns_zone_name("..") is False
+        assert valid_ddns_zone_name("-bad.com.") is False
+        assert valid_ddns_zone_name("has space.com.") is False
+        assert valid_ddns_zone_name("semi;colon.com.") is False
+        assert valid_ddns_zone_name("x" * 254 + ".") is False
+
 
 class TestValidApiUrl:
     """v5.10.2 — the Kea command-API URL check. In direct mode a daemon
