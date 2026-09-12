@@ -272,9 +272,15 @@ def login_oidc_callback():
         flash(messages.get(reason, "Sign-in with SSO failed."), "error")
         return redirect(url_for("auth.login"))
 
+    # v5.25.0 fixup — must read (and pop) oidc_next BEFORE
+    # establish_session(), which calls session.clear(): reading it after
+    # would always see it already gone, silently discarding `next` for
+    # every real login. Same reason local login() computes the MFA
+    # `_next` value before it ever gets to that block.
+    next_url = session.pop("oidc_next", "") or url_for("dashboard.dashboard")
+
     __auth.clear_login_attempts(ip, "oidc")
     __oidc.establish_session(row, f"User {row['username']} logged in via SSO from {ip}")
-    next_url = session.pop("oidc_next", "") or url_for("dashboard.dashboard")
     return redirect(next_url)
 
 
