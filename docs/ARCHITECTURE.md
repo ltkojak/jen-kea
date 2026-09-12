@@ -540,6 +540,47 @@ instance of either plugin will have inline handlers that a strict
 script-src blocks — buttons that did nothing, not a crash — see the
 CHANGELOG.
 
+### 3.9 Signed release manifests (v5.26.0)
+
+Through v5.25.x, `jen-update-root.py` verified a release by checksum
+alone: it refused to install a tarball whose SHA-256 didn't match the
+`SHA256SUMS` asset GitHub published alongside it (§3.5's neighbor —
+`verify_release_checksum()`). That's real protection against a
+corrupted or truncated download, but not against a forged one — anyone
+who could publish an arbitrary `SHA256SUMS`/tarball pair to this
+repository's releases (a compromised PAT, a hijacked Actions run) could
+get every Jen instance's auto-updater to install it, since nothing
+tied the checksum file back to a human decision to cut a release.
+
+From v5.26.0, `release.yml` also signs `SHA256SUMS` with `ssh-keygen -Y
+sign`, publishing `SHA256SUMS.sig` alongside it, using an ed25519 key
+whose private half exists **only** as the `RELEASE_SIGNING_KEY` GitHub
+Actions secret — it has never been written to disk on this repository's
+maintainer's own machine, nor checked into history. `verify_release_signature()`
+(`jen-update-root.py`) checks that signature with `ssh-keygen -Y
+verify` against `RELEASE_SIGNERS`, the public half embedded as a module
+constant — the permanent trust root every deployed Jen instance carries
+regardless of what GitHub's API returns on a given request. No new
+dependency: `openssh-client` (and therefore `ssh-keygen`) is already a
+baseline assumption for every target OS this project supports, the
+same as the SSH-based config push in §3.3.
+
+**Fail closed, from the release that introduces it.** v5.26.0 is both
+the first release whose updater code knows how to verify a signature
+*and* the first release that ships one — there is no "signing becomes
+mandatory two releases from now" transition window. A missing
+`SHA256SUMS.sig` asset is refused exactly like a missing `SHA256SUMS`
+already was: `jen-update-root.py` aborts before even downloading the
+(large) tarball, not merely before installing it.
+
+**Key rotation.** `RELEASE_SIGNERS` is a single "allowed signers" line
+today (`release@jen ssh-ed25519 <base64>`) but the format allows more
+than one line — rotating the signing key means adding the new public
+key as a second line for one release before the `RELEASE_SIGNING_KEY`
+secret is switched to the new private key, then removing the old line
+one release after that, so there's always at least one release where
+both the old and new key verify.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:

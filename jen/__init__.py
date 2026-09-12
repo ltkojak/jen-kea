@@ -24,7 +24,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.25.0"
+JEN_VERSION = "5.26.0"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -570,7 +570,7 @@ def create_app() -> Flask:
     # ── Blueprints ────────────────────────────────────────────────────────────
     _register_blueprints(app)
 
-    # ── OIDC single sign-on (v5.25.0, Q21) — lazy: no network call here,
+    # ── OIDC single sign-on (v5.26.0, Q21) — lazy: no network call here,
     # even when enabled; the client only fetches the issuer's discovery
     # document on the first actual login attempt.
     from jen.services.oidc import init_oidc

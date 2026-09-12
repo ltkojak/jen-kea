@@ -418,6 +418,18 @@ Jen installs each release into `/opt/jen/releases/<X.Y.Z>/` and points
 `/opt/jen/current` at the live one. `sudo journalctl -u jen-update.service`
 has the in-app updater's output.
 
+**"ERROR: no release signature published for vX.Y.Z" or "release
+signature verification failed" (v5.26.0+).** Every release from
+v5.26.0 on is signed, and the updater refuses to install anything it
+can't verify — this is the intended fail-closed behavior working
+correctly, not a bug to work around. It means either the release you're
+pointed at genuinely has no `SHA256SUMS.sig` asset (check the release
+page on GitHub) or the asset is present but doesn't verify against the
+key `jen-update-root.py` has embedded — which would mean the release
+was tampered with, or you're looking at a fork that signs with a
+different key. Don't disable the check; find out which of those it
+actually is first.
+
 **An in-app update to 5.14.0 rolled back.** Expected — the updater on a
 5.13.x box is the flat one and can't create the versioned layout. Take
 5.14.0 with `sudo ./install.sh` once; every in-app update after that

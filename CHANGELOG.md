@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.26.0] - 2026-09-12
+
+Signed releases: from this version on, every Jen release is
+cryptographically signed, and the in-app updater refuses to install
+anything it can't verify.
+
+### Signed release manifests
+
+Through v5.25.x, `jen-update-root.py` (the root-owned self-updater)
+verified a downloaded release by checksum alone — real protection
+against a corrupted download, but not against a forged one. Anyone who
+could publish an arbitrary `SHA256SUMS`/tarball pair to this
+repository's releases — a compromised PAT, a hijacked Actions run —
+could get every Jen instance's auto-updater to install it, since
+nothing tied the checksum file back to a human decision to cut a
+release.
+
+`release.yml` now signs `SHA256SUMS` with `ssh-keygen -Y sign`
+(ed25519) and publishes `SHA256SUMS.sig` alongside it. The private key
+exists only as this repository's `RELEASE_SIGNING_KEY` GitHub Actions
+secret — generated for this, never written anywhere else.
+`jen-update-root.py` gains `verify_release_signature()`, checked
+against `RELEASE_SIGNERS` (the public half, embedded as a permanent
+trust root) before the — potentially large — release tarball is even
+downloaded, let alone installed. No new dependency: `openssh-client`
+is already a baseline assumption for every OS this project targets,
+the same as the SSH-based config push it already relies on. A release
+with a missing or invalid signature is refused outright, exactly like
+a missing or mismatched checksum already was — there's no "signing
+becomes mandatory later" transition window; v5.26.0 is both the first
+release whose updater can verify a signature and the first one that
+ships with one.
+
 ## [5.25.0] - 2026-09-12
 
 Single sign-on: **Settings → Access & Security → Single Sign-On** lets
