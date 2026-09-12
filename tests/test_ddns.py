@@ -492,7 +492,7 @@ class TestDdnsVerifyTab:
         from jen import extensions
 
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
-        r = logged_in_client.get("/ddns?tab=verify", query_string={"hostname": "not valid host!"})
+        r = logged_in_client.get("/ddns", query_string={"tab": "verify", "hostname": "not valid host!"})
         assert r.status_code == 200
         assert b"Invalid hostname" in r.data
 
@@ -504,7 +504,9 @@ class TestDdnsVerifyTab:
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
         monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [(None, None, None, None, ("10.0.0.50", 0))])
         monkeypatch.setattr(socket, "gethostbyaddr", lambda ip: ("host.example.com", [], [ip]))
-        r = logged_in_client.get("/ddns?tab=verify", query_string={"hostname": "host.example.com", "ip": "10.0.0.50"})
+        r = logged_in_client.get(
+            "/ddns", query_string={"tab": "verify", "hostname": "host.example.com", "ip": "10.0.0.50"}
+        )
         assert r.status_code == 200
         body = r.data.decode()
         assert "10.0.0.50" in body
@@ -522,6 +524,6 @@ class TestDdnsVerifyTab:
             raise socket.gaierror("Name or service not known")
 
         monkeypatch.setattr(socket, "getaddrinfo", raise_gaierror)
-        r = logged_in_client.get("/ddns?tab=verify", query_string={"hostname": "nope.example.com"})
+        r = logged_in_client.get("/ddns", query_string={"tab": "verify", "hostname": "nope.example.com"})
         assert r.status_code == 200
         assert b"Name or service not known" in r.data
