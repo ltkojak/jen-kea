@@ -132,6 +132,18 @@ import urllib.request
 GITHUB_REPO = "ltkojak/jen-kea"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_ASSET_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
+
+# v5.26.0 — the permanent trust root for signed releases (Q22). release.yml
+# signs SHA256SUMS with the private half of this key (`ssh-keygen -Y sign`,
+# held only in the repo's RELEASE_SIGNING_KEY Actions secret) and publishes
+# SHA256SUMS.sig; verify_release_signature() below checks it with this
+# public half via `ssh-keygen -Y verify`. Rotation: add the new key
+# alongside this one (as a second line — an "allowed signers" file may list
+# more than one) for one release before switching the secret, then drop
+# the old one a release after that.
+RELEASE_SIGNERS = "release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD"
+RELEASE_SIGNATURE_IDENTITY = "release@jen"
+RELEASE_SIGNATURE_NAMESPACE = "jen-release"
 INSTALL_DIR = "/opt/jen"
 VENV_DIR = "/opt/jen/venv"  # legacy flat venv path (pre-5.14 / Docker); removed by the migration run
 RELEASES_DIR = "/opt/jen/releases"  # v5.14.0 — releases/<X.Y.Z>/{app,venv}
@@ -763,6 +775,56 @@ def verify_release_checksum(tarball_name, actual_hash, checksum_text):
     return expected_hash is not None and expected_hash == actual_hash
 
 
+def verify_release_signature(sums_text, sig_bytes, signers_text):
+    """
+    v5.26.0 (Q22) — confirm `sums_text` (the SHA256SUMS content) carries
+    a valid `ssh-keygen -Y sign` signature from an identity/key listed in
+    `signers_text` (an "allowed signers" file body — RELEASE_SIGNERS at
+    module scope in production; a throwaway test key in tests). Wraps a
+    subprocess call to `ssh-keygen -Y verify`, since Python's stdlib has
+    no ed25519-SSH-signature verifier and this avoids a new dependency
+    entirely (openssh-client ships on every target OS already).
+
+    Both the signers file and the signature itself need to be real files
+    on disk for `-f`/`-s` — verify writes them to a throwaway temp
+    directory and removes it unconditionally afterward, regardless of
+    the result. Returns False (never raises) on anything short of a
+    genuine, matching, correctly-namespaced signature: a non-zero
+    `ssh-keygen` exit, a missing binary, a timeout — matching
+    verify_release_checksum's fail-closed shape, so the caller's "if not
+    verify_...(): abort" pattern stays identical for both checks.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            signers_path = os.path.join(tmp, "allowed_signers")
+            sig_path = os.path.join(tmp, "release.sig")
+            with open(signers_path, "w") as f:
+                f.write(signers_text)
+            with open(sig_path, "wb") as f:
+                f.write(sig_bytes)
+            result = subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-Y",
+                    "verify",
+                    "-f",
+                    signers_path,
+                    "-I",
+                    RELEASE_SIGNATURE_IDENTITY,
+                    "-n",
+                    RELEASE_SIGNATURE_NAMESPACE,
+                    "-s",
+                    sig_path,
+                ],
+                input=sums_text.encode(),
+                capture_output=True,
+                timeout=10,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 KEEP_MARKER = ".keep"  # written into a snapshot the CRITICAL path wants preserved
 
 
@@ -1010,16 +1072,50 @@ def main():
         log("ERROR: checksum asset URL is not a genuine GitHub release download link.")
         return 1
 
-    log("Downloading release…")
-    tarball_bytes, actual_hash = fetch_bytes_with_sha256(asset_url)
+    # v5.26.0 — the checksum file itself must be signed, checked BEFORE
+    # the (large) tarball download even starts. Anyone who can forge a
+    # release — a compromised PAT, a hijacked Actions run — can publish
+    # any SHA256SUMS/tarball pair they like, but can't produce a
+    # signature RELEASE_SIGNERS accepts without the private half of a
+    # key that has never left GitHub Actions secrets. Fail closed: no
+    # signature asset published is refused exactly like no checksum
+    # asset published above, never a warn-and-proceed.
+    sig_asset_url = ""
+    for asset in assets:
+        if asset["name"].lower() in ("sha256sums.sig", "sha256sums.txt.sig", "checksums.txt.sig"):
+            sig_asset_url = asset["browser_download_url"]
+            break
 
-    tarball_name = asset_url.rsplit("/", 1)[-1]
+    if not sig_asset_url:
+        log(f"ERROR: no release signature published for v{version} — refusing to install unverified.")
+        return 1
+
+    if not sig_asset_url.startswith(GITHUB_ASSET_PREFIX):
+        log("ERROR: signature asset URL is not a genuine GitHub release download link.")
+        return 1
+
     try:
         checksum_text = fetch_text(checksum_asset_url)
     except Exception as e:
         log(f"ERROR: could not fetch checksum file — refusing to install unverified: {e}")
         return 1
 
+    try:
+        sig_bytes = fetch_text(sig_asset_url).encode()
+    except Exception as e:
+        log(f"ERROR: could not fetch release signature — refusing to install unverified: {e}")
+        return 1
+
+    if not verify_release_signature(checksum_text, sig_bytes, RELEASE_SIGNERS):
+        log("ERROR: release signature verification failed — refusing to install unverified.")
+        return 1
+
+    log("Release signature verified.")
+
+    log("Downloading release…")
+    tarball_bytes, actual_hash = fetch_bytes_with_sha256(asset_url)
+
+    tarball_name = asset_url.rsplit("/", 1)[-1]
     if not verify_release_checksum(tarball_name, actual_hash, checksum_text):
         log(f"ERROR: checksum verification failed for {tarball_name} — refusing to install unverified.")
         return 1

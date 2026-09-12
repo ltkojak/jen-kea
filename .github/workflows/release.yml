@@ -62,6 +62,23 @@ jobs:
           sha256sum jen-v${{ steps.version.outputs.version }}.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Sign checksums
+        # v5.26.0 (Q22) — every release from here on is signed with the
+        # private half of the ed25519 key whose public half is embedded
+        # as RELEASE_SIGNERS in jen-update-root.py; the self-updater
+        # refuses to install anything unsigned. ssh-keygen (openssh-client)
+        # is preinstalled on ubuntu-latest runners — no new dependency.
+        # The private key only ever exists as this one 0600 temp file,
+        # for the lifetime of this step, on a throwaway runner.
+        run: |
+          cd dist
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "${{ secrets.RELEASE_SIGNING_KEY }}" > "$key_file"
+          chmod 600 "$key_file"
+          ssh-keygen -Y sign -f "$key_file" -n jen-release SHA256SUMS
+          ls -la SHA256SUMS.sig
+
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
@@ -113,5 +130,6 @@ jobs:
           files: |
             dist/jen-v${{ steps.version.outputs.version }}.tar.gz
             dist/SHA256SUMS
+            dist/SHA256SUMS.sig
           draft: false
           prerelease: false

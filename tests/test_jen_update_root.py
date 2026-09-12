@@ -89,6 +89,90 @@ class TestVerifyReleaseChecksum:
         assert jen_update_root.verify_release_checksum("jen-v5.2.6.tar.gz", "abc123def456", checksum_text) is True
 
 
+class TestVerifyReleaseSignature:
+    """v5.26.0 (Q22) — real ssh-keygen subprocess calls against a
+    throwaway key generated fresh per test, never the production
+    RELEASE_SIGNERS key. openssh-client (ssh-keygen) ships on every
+    target OS this already assumes (CI runners, Jen hosts, this dev
+    box) — no mocking needed or wanted for a security-relevant check
+    like this."""
+
+    @pytest.fixture
+    def keypair(self, tmp_path):
+        import subprocess as _subprocess
+
+        key_path = tmp_path / "throwaway-key"
+        _subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-C", "release@jen", "-f", str(key_path), "-N", "", "-q"],
+            check=True,
+        )
+        pub_line = key_path.with_suffix(".pub").read_text().strip()
+        # "<type> <base64> <comment>" -> "<comment> <type> <base64>",
+        # the allowed-signers line shape verify_release_signature expects.
+        parts = pub_line.split()
+        signers_text = f"{parts[2]} {parts[0]} {parts[1]}"
+        return str(key_path), signers_text
+
+    def _sign(self, key_path, tmp_path, sums_text, namespace="jen-release"):
+        import subprocess as _subprocess
+
+        # write_bytes, not write_text: on Windows, text-mode writes
+        # translate "\n" to "\r\n", so the bytes ssh-keygen actually
+        # signs on disk would silently differ from `sums_text` as
+        # verify_release_signature receives it — a real signature
+        # mismatch, not a bug in the function under test.
+        sums_path = tmp_path / "SHA256SUMS"
+        sums_path.write_bytes(sums_text.encode())
+        _subprocess.run(
+            ["ssh-keygen", "-Y", "sign", "-f", key_path, "-n", namespace, str(sums_path)],
+            check=True,
+            capture_output=True,
+        )
+        return sums_path.with_name(sums_path.name + ".sig").read_bytes()
+
+    def test_valid_signature_verifies(self, jen_update_root, keypair, tmp_path):
+        key_path, signers_text = keypair
+        sums_text = "abc123def456  jen-v5.26.0.tar.gz\n"
+        sig_bytes = self._sign(key_path, tmp_path, sums_text)
+        assert jen_update_root.verify_release_signature(sums_text, sig_bytes, signers_text) is True
+
+    def test_tampered_sums_fails(self, jen_update_root, keypair, tmp_path):
+        key_path, signers_text = keypair
+        sig_bytes = self._sign(key_path, tmp_path, "abc123def456  jen-v5.26.0.tar.gz\n")
+        assert jen_update_root.verify_release_signature("tampered content\n", sig_bytes, signers_text) is False
+
+    def test_wrong_namespace_fails(self, jen_update_root, keypair, tmp_path):
+        key_path, signers_text = keypair
+        sums_text = "abc123def456  jen-v5.26.0.tar.gz\n"
+        sig_bytes = self._sign(key_path, tmp_path, sums_text, namespace="something-else")
+        assert jen_update_root.verify_release_signature(sums_text, sig_bytes, signers_text) is False
+
+    def test_unrelated_key_fails(self, jen_update_root, keypair, tmp_path):
+        # Signed with a genuinely different key than the one named in
+        # signers_text — not just a corrupted signature.
+        _, signers_text = keypair
+        import subprocess as _subprocess
+
+        other_key = tmp_path / "other-key"
+        _subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-C", "release@jen", "-f", str(other_key), "-N", "", "-q"],
+            check=True,
+        )
+        sums_text = "abc123def456  jen-v5.26.0.tar.gz\n"
+        sig_bytes = self._sign(str(other_key), tmp_path, sums_text)
+        assert jen_update_root.verify_release_signature(sums_text, sig_bytes, signers_text) is False
+
+    def test_garbage_signature_bytes_fails_not_raises(self, jen_update_root, keypair):
+        _, signers_text = keypair
+        assert jen_update_root.verify_release_signature("data\n", b"not a real signature", signers_text) is False
+
+    def test_real_release_signers_constant_is_a_well_formed_allowed_signers_line(self, jen_update_root):
+        parts = jen_update_root.RELEASE_SIGNERS.split()
+        assert len(parts) == 3
+        assert parts[0] == jen_update_root.RELEASE_SIGNATURE_IDENTITY
+        assert parts[1] == "ssh-ed25519"
+
+
 def _make_release_tarball(tmp_path, *, version="5.2.6", extra=None, slip=False):
     """A tar.gz shaped like a real GitHub release archive: every path
     under a top-level `jen/` component. `_extract_release()` strips that
@@ -812,6 +896,22 @@ class TestMainSourceShape:
     def test_prunes_before_touching_github(self, jen_update_root):
         src = self._main(jen_update_root)
         assert src.index("_prune_old_releases()") < src.index("fetch_json(")
+
+    def test_signature_is_verified_before_the_tarball_download(self, jen_update_root):
+        """v5.26.0 (Q22) — the pinned test: a missing/invalid signature
+        must abort before the (large) tarball download even starts."""
+        src = self._main(jen_update_root)
+        i_sig_check = src.index("verify_release_signature(")
+        i_download = src.index("fetch_bytes_with_sha256(asset_url)")
+        assert i_sig_check < i_download
+
+    def test_missing_signature_asset_aborts(self, jen_update_root):
+        src = self._main(jen_update_root)
+        i_sig_url = src.index('sig_asset_url = ""')
+        i_download = src.index("fetch_bytes_with_sha256(asset_url)")
+        region = src[i_sig_url:i_download]
+        assert "if not sig_asset_url:" in region
+        assert "return 1" in region
 
     def test_builds_venv_and_validates_before_any_switch(self, jen_update_root):
         src = self._main(jen_update_root)
