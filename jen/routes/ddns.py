@@ -115,7 +115,11 @@ def _status_tab_context():
     # hang or 500 a server that only has API access. kea_host.read_config
     # is for the Naming tab's own edit flow below, which genuinely needs
     # the raw file + sha for the write guard.
-    active_server = __kea.get_active_kea_server()
+    # get_active_kea_server() indexes KEA_SERVERS[0] as its last resort —
+    # safe in real deployments (derive_kea_servers() always seeds at
+    # least the primary) but not against a test's deliberately-empty
+    # list, so guard it explicitly rather than relying on that.
+    active_server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
     server_updates = []
     active_enabled = False
     for server in extensions.KEA_SERVERS:

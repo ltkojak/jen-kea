@@ -300,12 +300,16 @@ class TestDdnsNamingTab:
         assert applied["ddns-replace-client-name"] == "never"
 
     def test_post_requires_admin(self, client, db, monkeypatch):
+        """admin_required redirects (not a 403) — same behavior as every
+        other admin-gated route in this app."""
         from tests.conftest import restricted_client
 
-        self._wire(monkeypatch)
+        fake = self._wire(monkeypatch)
         restricted_client(client, db, allowed_subnets=None, role="viewer", username="ddns_naming_viewer1")
-        r = client.post("/ddns/naming/save", data={"enable-updates": "1"})
-        assert r.status_code == 403
+        r = client.post("/ddns/naming/save", data={"enable-updates": "1"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Admin access required" in r.data
+        assert "apply-config" not in fake.ops()
 
     def test_no_ssh_server_flashes_and_does_not_crash(self, logged_in_client, monkeypatch):
         from jen import extensions

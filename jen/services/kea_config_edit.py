@@ -468,6 +468,7 @@ def attach_class4(cfg, name, scope_level, scope_key, mode="guard", attach=True, 
             container[key] = lst
         else:
             container.pop(key, None)
+    return cfg, "ok"
 
 
 # ── DDNS naming (v5.23.0 — Q19) ──────────────────────────────────────────────
@@ -512,5 +513,4 @@ def set_ddns4(cfg, values: dict):
     for k in DDNS_NAMING_KEYS:
         if k in values:
             dhcp4[k] = values[k]
-    return cfg, "ok"
     return cfg, "ok"
