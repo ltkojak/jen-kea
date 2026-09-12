@@ -27,6 +27,7 @@ EXPECTED_ENDPOINTS = {
     "settings.save_infra_kea",
     "settings.save_infra_kea_db",
     "settings.save_infra_kea6",
+    "settings.save_infra_d2",
     "settings.probe_kea",
     "settings.toggle_ipv6",
     "settings.author_kea_config",

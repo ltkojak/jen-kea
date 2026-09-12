@@ -204,6 +204,10 @@ def settings_kea():
         "kea6_db_host": extensions.cfg.get("kea6_db", "host", fallback=""),
         "kea6_db_user": extensions.cfg.get("kea6_db", "user", fallback=""),
         "kea6_db_name": extensions.cfg.get("kea6_db", "database", fallback=""),
+        # v5.23.0 (Q19) — same "raw, not the fallen-back global" reasoning
+        # as kea6_api_url above.
+        "d2_api_url": extensions.cfg.get("d2", "api_url", fallback=""),
+        "d2_api_user": extensions.cfg.get("d2", "api_user", fallback=""),
     }
     restart_pending = __user.get_global_setting("restart_pending", "false") == "true"
     ipv6_enabled = __kea6.is_ipv6_enabled()
@@ -425,6 +429,72 @@ def save_infra_kea6():
     __user.set_global_setting("restart_pending", "true")
     flash(f"Kea6 settings saved: {summary}. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea6_api", summary)
+    return redirect(url_for("settings.settings_kea"))
+
+
+@bp.route("/settings/infrastructure/save-d2", methods=["POST"])
+@login_required
+@_admin_required
+def save_infra_d2():
+    """v5.23.0 (Q19) — [d2] api_url/api_user/api_pass, same inheritance
+    shape as save_infra_kea6 above (minus a _db companion — D2 has no
+    database of its own): blank text field removes the key so ca-mode
+    falls back to [kea] api_url again at the next reload; blank password
+    is kept unless "Inherit" is ticked."""
+    api_url = request.form.get("api_url", "").strip()
+    api_user = request.form.get("api_user", "").strip()
+    api_pass = request.form.get("api_pass", "").strip()
+    inherit_api_pass = request.form.get("inherit_api_pass", "") == "1"
+
+    if api_url and not __auth.valid_api_url(api_url, require_port=(extensions.KEA_CONNECTION_MODE == "direct")):
+        if extensions.KEA_CONNECTION_MODE == "direct":
+            flash(
+                "The D2 API URL must be a valid http(s):// URL with an explicit port "
+                "in direct mode (e.g. http://kea:53001).",
+                "error",
+            )
+        else:
+            flash("The D2 API URL must be a valid http:// or https:// URL.", "error")
+        return redirect(url_for("settings.settings_kea"))
+
+    text_fields = [("d2", "api_url", api_url), ("d2", "api_user", api_user)]
+    changed: list[str] = []
+
+    def _apply(cfg):
+        for section, opt, val in text_fields:
+            has = cfg.has_section(section) and cfg.has_option(section, opt)
+            if val:
+                if not has or cfg.get(section, opt) != val:
+                    if not cfg.has_section(section):
+                        cfg.add_section(section)
+                    cfg.set(section, opt, val)
+                    changed.append(f"{section}.{opt} set")
+            elif has:
+                cfg.remove_option(section, opt)
+                changed.append(f"{section}.{opt} cleared — inherits v4")
+        has_pass = cfg.has_section("d2") and cfg.has_option("d2", "api_pass")
+        if inherit_api_pass:
+            if has_pass:
+                cfg.remove_option("d2", "api_pass")
+                changed.append("d2.api_pass inherits v4")
+        elif api_pass:
+            if not cfg.has_section("d2"):
+                cfg.add_section("d2")
+            cfg.set("d2", "api_pass", api_pass)
+            changed.append("d2.api_pass set")
+        if cfg.has_section("d2") and not cfg.options("d2"):
+            cfg.remove_section("d2")
+
+    __config.app_config.mutate(_apply)
+
+    if not changed:
+        flash("No D2 changes.", "info")
+        return redirect(url_for("settings.settings_kea"))
+
+    summary = "; ".join(changed)
+    __user.set_global_setting("restart_pending", "true")
+    flash(f"D2 settings saved: {summary}. Restart Jen to apply.", "success")
+    __user.audit("SAVE_INFRA", "d2_api", summary)
     return redirect(url_for("settings.settings_kea"))
 
 

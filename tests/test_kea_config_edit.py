@@ -637,3 +637,52 @@ class TestClassOptionData:
             {"Dhcp4": {"client-classes": [{"name": "pxe"}]}}, "class", "pxe", 3, "routers", "10.0.0.1"
         )
         assert code == "ok"
+
+
+class TestSetDdns4:
+    """v5.23.0 (Q19) — Dhcp4.dhcp-ddns block + global naming knobs."""
+
+    def test_sets_the_dhcp_ddns_block(self):
+        cfg, code = edit.set_ddns4({"Dhcp4": {}}, {"enable-updates": True, "server-ip": "127.0.0.1"})
+        assert code == "ok"
+        assert cfg["Dhcp4"]["dhcp-ddns"] == {"enable-updates": True, "server-ip": "127.0.0.1"}
+
+    def test_sets_naming_knobs_at_the_top_level_not_inside_dhcp_ddns(self):
+        cfg, code = edit.set_ddns4({"Dhcp4": {}}, {"ddns-qualifying-suffix": "example.com"})
+        assert code == "ok"
+        assert cfg["Dhcp4"]["ddns-qualifying-suffix"] == "example.com"
+        assert "dhcp-ddns" not in cfg["Dhcp4"]
+
+    def test_updates_in_place_merging_with_existing_block_fields(self):
+        existing = {"Dhcp4": {"dhcp-ddns": {"enable-updates": True, "ncr-protocol": "UDP"}}}
+        cfg, code = edit.set_ddns4(existing, {"enable-updates": False})
+        assert code == "ok"
+        assert cfg["Dhcp4"]["dhcp-ddns"] == {"enable-updates": False, "ncr-protocol": "UDP"}
+
+    def test_absent_keys_are_left_untouched_not_cleared(self):
+        existing = {
+            "Dhcp4": {
+                "dhcp-ddns": {"enable-updates": True, "server-ip": "127.0.0.1"},
+                "ddns-qualifying-suffix": "old.example.com",
+            }
+        }
+        cfg, code = edit.set_ddns4(existing, {"enable-updates": False})
+        assert code == "ok"
+        assert cfg["Dhcp4"]["dhcp-ddns"]["server-ip"] == "127.0.0.1"
+        assert cfg["Dhcp4"]["ddns-qualifying-suffix"] == "old.example.com"
+
+    def test_does_not_mutate_the_caller_dict(self):
+        original = {"Dhcp4": {"dhcp-ddns": {"enable-updates": False}}}
+        snapshot = copy.deepcopy(original)
+        edit.set_ddns4(original, {"enable-updates": True})
+        assert original == snapshot
+
+    def test_no_block_keys_does_not_create_an_empty_dhcp_ddns_block(self):
+        cfg, code = edit.set_ddns4({"Dhcp4": {}}, {"ddns-send-updates": True})
+        assert code == "ok"
+        assert "dhcp-ddns" not in cfg["Dhcp4"]
+
+    def test_unknown_keys_are_ignored(self):
+        cfg, code = edit.set_ddns4({"Dhcp4": {}}, {"not-a-real-field": "x"})
+        assert code == "ok"
+        assert cfg["Dhcp4"] == {}

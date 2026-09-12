@@ -468,4 +468,49 @@ def attach_class4(cfg, name, scope_level, scope_key, mode="guard", attach=True, 
             container[key] = lst
         else:
             container.pop(key, None)
+
+
+# ── DDNS naming (v5.23.0 — Q19) ──────────────────────────────────────────────
+
+# Dhcp4.dhcp-ddns's own fields (whether Kea talks to D2 at all, and how).
+_DDNS_BLOCK_KEYS = frozenset({"enable-updates", "server-ip", "server-port", "ncr-protocol", "ncr-format"})
+
+# Top-level Dhcp4 naming knobs — how a hostname gets built/sent, not
+# whether D2 is contacted. Global-only for now (Q12's per-level model
+# could extend these to subnet level later — out of scope here).
+DDNS_NAMING_KEYS = frozenset(
+    {
+        "ddns-send-updates",
+        "ddns-override-no-update",
+        "ddns-override-client-update",
+        "ddns-replace-client-name",
+        "ddns-generated-prefix",
+        "ddns-qualifying-suffix",
+        "ddns-update-on-renew",
+        "ddns-conflict-resolution-mode",
+        "hostname-char-set",
+        "hostname-char-replacement",
+    }
+)
+
+
+def set_ddns4(cfg, values: dict):
+    """Write the `Dhcp4.dhcp-ddns` block plus the global naming knobs.
+    `values` carries whichever of _DDNS_BLOCK_KEYS / DDNS_NAMING_KEYS the
+    Naming form submitted — a key simply absent from `values` is left
+    untouched rather than cleared, since the form always submits every
+    field it renders and a missing key only ever means "this caller isn't
+    touching that knob," never "clear it." Always succeeds — there's no
+    managed/notfound case here, unlike the option/class editors — but
+    returns the (cfg, "ok") shape those use, for a consistent call site
+    in the route."""
+    cfg = copy.deepcopy(cfg)
+    dhcp4 = cfg.setdefault("Dhcp4", {})
+    block_values = {k: v for k, v in values.items() if k in _DDNS_BLOCK_KEYS}
+    if block_values:
+        dhcp4.setdefault("dhcp-ddns", {}).update(block_values)
+    for k in DDNS_NAMING_KEYS:
+        if k in values:
+            dhcp4[k] = values[k]
+    return cfg, "ok"
     return cfg, "ok"

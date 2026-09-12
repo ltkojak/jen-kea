@@ -12,7 +12,7 @@
 {% endif %}
 
 {% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
-{% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
+{% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-d2', 'D2'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
 {% include '_card_toc.html' %}
 
 {% if ca_removed %}
@@ -387,6 +387,47 @@
         <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp6.conf</a>
         <span class="form-hint" style="display:block;margin-top:4px;">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
     </div>
+</div>
+
+<!-- D2 (kea-dhcp-ddns) control socket (v5.23.0, Q19) -->
+<div class="card" id="kea-d2">
+    <div class="card-header"><span class="card-title">🔗 D2 Control Socket</span></div>
+    <div class="form-hint" style="margin-bottom:10px;">
+        {% if infra.kea_connection_mode == 'direct' %}
+        <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp-ddns's own</strong> HTTP control
+        socket. D2 is only reachable once this is set — Kea's example port is <strong>53001</strong>.
+        {% else %}
+        The common Kea setup is one Control Agent proxying to <code>kea-dhcp4</code>, <code>kea-dhcp6</code>,
+        and D2 alike. Only fill these in if D2 genuinely uses a separate CA/port.
+        {% endif %}
+        <br>Applies to Kea Server 1 only; additional servers set their own D2 endpoint under Servers &amp; HA.
+        <br>Blank text fields inherit the Kea settings above and clear any override saved here.
+        Passwords are kept unless you tick Inherit.
+    </div>
+    {% if infra.kea_connection_mode == 'direct' and not infra.d2_api_url %}
+    <div class="alert alert-warning">⚠️ Jen is in <code>direct</code> mode, but no D2 control socket URL is set — D2 status/config on the DDNS page will show errors until you set the API URL below.</div>
+    {% endif %}
+    <form method="POST" action="/settings/infrastructure/save-d2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp-ddns control socket URL{% else %}API URL{% endif %}</label>
+                <input type="text" name="api_url" value="{{ infra.d2_api_url }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url }} (inherited){% endif %}">
+            </div>
+            <div class="form-group">
+                <label>API Username</label>
+                <input type="text" name="api_user" value="{{ infra.d2_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited)">
+            </div>
+            <div class="form-group">
+                <label>API Password</label>
+                <input type="password" name="api_pass" placeholder="(kept unless changed)">
+                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;">
+                    <input type="checkbox" name="inherit_api_pass" value="1" style="width:auto;">
+                    Inherit the Kea API password
+                </label>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save D2 API</button>
+    </form>
 </div>
 
 <!-- Kea package install status (v5.1.2) -->

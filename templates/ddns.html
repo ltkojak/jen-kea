@@ -1,18 +1,153 @@
 {% extends "base.html" %}
-{% block title %}DDNS Status{% endblock %}
+{% block title %}DDNS{% endblock %}
 {% block content %}
+{% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>🔗 DDNS Status</h1>
-    <p>Kea DNS update activity{% if dns_provider == 'technitium' %} — Technitium DNS{% elif dns_provider == 'pihole' %} — Pi-hole{% elif dns_provider == 'adguard' %} — AdGuard Home{% elif dns_provider == 'ssh' %} — DNS via SSH{% endif %}</p>
+    <h1>🔗 DDNS</h1>
+    <p>Kea's DNS-update pipeline — provider integrations and D2 (kea-dhcp-ddns), side by side.</p>
 </div>
+
+{% set ddns_tabs = [
+    {'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'},
+    {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
+] %}
+{{ subtabs(ddns_tabs, tab) }}
+
+{% if tab == 'naming' %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">✏️ DDNS Naming</span></div>
+    <div class="form-hint" style="margin-bottom:12px;">
+        Whether dhcp4 tells D2 about a lease, and how the hostname it sends is built.
+        Saved here and pushed to every SSH-configured Kea server, then each one restarts.
+    </div>
+    {% if config_unavailable %}
+    <div class="alert alert-error">Could not read kea-dhcp4.conf from the active server — check SSH configuration in Settings → Kea.</div>
+    {% else %}
+    <form method="POST" action="/ddns/naming/save"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="enable-updates" value="1" {% if ddns_block.get('enable-updates') %}checked{% endif %}>
+                    Send DNS updates to D2
+                </label>
+                <div class="form-hint">Master switch — dhcp4's own <span class="mono">dhcp-ddns.enable-updates</span>.</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>D2 server IP</label>
+                <input type="text" name="server-ip" value="{{ ddns_block.get('server-ip', '127.0.0.1') }}">
+                <div class="form-hint">Where dhcp4 sends update requests — almost always D2 on the same host.</div>
+            </div>
+            <div class="form-group">
+                <label>D2 server port</label>
+                <input type="text" name="server-port" value="{{ ddns_block.get('server-port', 53001) }}">
+                <div class="form-hint">D2's listening port — Kea's default is 53001.</div>
+            </div>
+            <div class="form-group">
+                <label>NCR protocol</label>
+                <select name="ncr-protocol">
+                    <option value="UDP" {% if ddns_block.get('ncr-protocol', 'UDP') == 'UDP' %}selected{% endif %}>UDP</option>
+                    <option value="TCP" {% if ddns_block.get('ncr-protocol') == 'TCP' %}selected{% endif %}>TCP</option>
+                </select>
+                <div class="form-hint">How dhcp4 talks to D2 — UDP unless you have a specific reason to pick TCP.</div>
+            </div>
+        </div>
+
+        <div class="divider" style="margin:16px 0;"></div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="ddns-send-updates" value="1" {% if naming.get('ddns-send-updates', true) %}checked{% endif %}>
+                    Send updates for this server's own leases
+                </label>
+                <div class="form-hint">Per-server override of the master switch above — leave on unless this server shouldn't register names.</div>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="ddns-override-no-update" value="1" {% if naming.get('ddns-override-no-update') %}checked{% endif %}>
+                    Override client's "no update" request
+                </label>
+                <div class="form-hint">Update DNS even if the client's FQDN option says not to.</div>
+            </div>
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="ddns-override-client-update" value="1" {% if naming.get('ddns-override-client-update') %}checked{% endif %}>
+                    Server takes over the forward record
+                </label>
+                <div class="form-hint">Update the forward (A/AAAA) record even if the client asked to do it itself.</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Replace client-supplied name</label>
+                <select name="ddns-replace-client-name">
+                    <option value="never" {% if naming.get('ddns-replace-client-name', 'never') == 'never' %}selected{% endif %}>Never</option>
+                    <option value="always" {% if naming.get('ddns-replace-client-name') == 'always' %}selected{% endif %}>Always</option>
+                    <option value="when-present" {% if naming.get('ddns-replace-client-name') == 'when-present' %}selected{% endif %}>When present</option>
+                    <option value="when-not-present" {% if naming.get('ddns-replace-client-name') == 'when-not-present' %}selected{% endif %}>When not present</option>
+                </select>
+                <div class="form-hint">Whether Kea's own generated name replaces a hostname the client offered.</div>
+            </div>
+            <div class="form-group">
+                <label>Generated name prefix</label>
+                <input type="text" name="ddns-generated-prefix" value="{{ naming.get('ddns-generated-prefix', 'myhost') }}">
+                <div class="form-hint">Used when no usable client hostname exists — becomes <span class="mono">prefix-10-0-0-5</span>.</div>
+            </div>
+            <div class="form-group">
+                <label>Qualifying suffix</label>
+                <input type="text" name="ddns-qualifying-suffix" value="{{ naming.get('ddns-qualifying-suffix', '') }}" placeholder="example.com">
+                <div class="form-hint">Domain appended to build the FQDN — blank means the client must supply a fully-qualified name itself.</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>
+                    <input type="checkbox" name="ddns-update-on-renew" value="1" {% if naming.get('ddns-update-on-renew') %}checked{% endif %}>
+                    Update on renew
+                </label>
+                <div class="form-hint">Re-send the DNS update on every lease renewal, not just new leases.</div>
+            </div>
+            <div class="form-group">
+                <label>Conflict resolution</label>
+                <select name="ddns-conflict-resolution-mode">
+                    <option value="check-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode', 'check-with-dhcid') == 'check-with-dhcid' %}selected{% endif %}>Check with DHCID</option>
+                    <option value="no-check-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'no-check-with-dhcid' %}selected{% endif %}>No check with DHCID</option>
+                    <option value="check-exists-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'check-exists-with-dhcid' %}selected{% endif %}>Check exists with DHCID</option>
+                    <option value="no-check-without-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'no-check-without-dhcid' %}selected{% endif %}>No check without DHCID</option>
+                </select>
+                <div class="form-hint">How D2 decides whether an existing record belongs to this client before overwriting it (RFC 4703).</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Hostname character set</label>
+                <input type="text" name="hostname-char-set" value="{{ naming.get('hostname-char-set', '[^A-Za-z0-9.-]') }}">
+                <div class="form-hint">Regex of characters to replace in a client-supplied hostname — Kea's own syntax, free text.</div>
+            </div>
+            <div class="form-group">
+                <label>Replacement character</label>
+                <input type="text" name="hostname-char-replacement" value="{{ naming.get('hostname-char-replacement', 'x') }}">
+                <div class="form-hint">What a disallowed character becomes — blank deletes it instead.</div>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save DDNS Naming</button>
+    </form>
+    {% endif %}
+</div>
+
+{% else %}
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
 
 <div class="card">
     <div class="card-header"><span class="card-title">🔍 Hostname Lookup</span></div>
     <form method="GET">
+        <input type="hidden" name="tab" value="status">
         <div style="display:flex;gap:8px;">
-            <input type="text" name="lookup" value="{{ lookup_host }}" placeholder="hostname.domain.com" style="flex:1;">
+            <input type="text" name="host" value="{{ lookup_host }}" placeholder="hostname.domain.com" style="flex:1;">
             <button type="submit" class="btn btn-primary">Lookup</button>
         </div>
     </form>
@@ -42,9 +177,14 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">ℹ️ Log Info</span></div>
+    <div class="card-header"><span class="card-title">ℹ️ Mode &amp; Log Info</span></div>
     <table>
-        <tr><td class="stat-label" style="width:100px;">Log File</td><td class="mono" style="font-size:12px;">{{ ddns_log }}</td></tr>
+        <tr><td class="stat-label" style="width:120px;">Mode</td><td>
+            {% if mode == 'both' %}<span class="badge badge-dynamic">Provider + D2</span>
+            {% elif mode == 'd2' %}<span class="badge badge-dynamic">D2</span>
+            {% else %}<span class="badge badge-dynamic">Provider ({{ dns_provider }})</span>{% endif %}
+        </td></tr>
+        <tr><td class="stat-label">Log File</td><td class="mono" style="font-size:12px;">{{ ddns_log }}</td></tr>
         <tr><td class="stat-label">Status</td><td>
             {% if log_status == 'ok' %}<span style="color:var(--success);">✓ Reading</span>
             {% elif log_status == 'empty' %}<span style="color:var(--warning);">⚠ Empty</span>
@@ -60,6 +200,40 @@
 </div>
 
 <div class="card">
+    <div class="card-header"><span class="card-title">📡 dhcp4 → D2</span></div>
+    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+        <thead><tr><th>Server</th><th>Sends updates</th></tr></thead>
+        <tbody>
+        {% for s in server_updates %}
+        <tr>
+            <td>{{ s.name }}</td>
+            <td>
+                {% if s.enabled is none %}<span style="color:var(--text-muted);">— (no SSH)</span>
+                {% elif s.enabled %}<span style="color:var(--success);">✓ Enabled</span>
+                {% else %}<span style="color:var(--text-muted);">Disabled</span>{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
+        <div>
+            <span class="stat-label">D2</span>
+            {% if d2_status == 'ok' %}<span style="color:var(--success);">● {{ d2_detail }}</span>
+            {% elif d2_status == 'warn' %}<span style="color:var(--warning);">● {{ d2_detail }}</span>
+            {% else %}<span style="color:var(--text-muted);">● {{ d2_detail }}</span>{% endif %}
+        </div>
+        <a href="/health-center" class="btn btn-sm btn-secondary">🩺 Health Center</a>
+    </div>
+    {% if d2_stats %}
+    <table style="width:100%;font-size:12px;margin-top:12px;">
+        <thead><tr>{% for k in d2_stats %}<th class="mono">{{ k }}</th>{% endfor %}</tr></thead>
+        <tbody><tr>{% for k, v in d2_stats.items() %}<td class="mono" style="{% if 'error' in k and v > 0 %}color:var(--warning);{% endif %}">{{ v }}</td>{% endfor %}</tr></tbody>
+    </table>
+    {% endif %}
+</div>
+
+<div class="card">
     <div class="card-header"><span class="card-title">📄 Recent Log Activity</span></div>
     {% if lines %}
     <div style="background:var(--surface2);border-radius:var(--radius);padding:14px;max-height:500px;overflow-y:auto;">
@@ -72,4 +246,6 @@
     <div style="text-align:center;padding:32px;color:var(--text-muted);">No log data available. Check that the DDNS log path is configured correctly.</div>
     {% endif %}
 </div>
+
+{% endif %}
 {% endblock %}
