@@ -10,6 +10,7 @@
 {{ subtabs(nav.subtabs['security'], 'policies') }}
 
 {% set toc = [('sec-mfa', 'MFA Policy'), ('sec-session', 'Sessions'), ('sec-ratelimit', 'Rate Limiting'), ('sec-ssl', 'SSL Certificate')] %}
+{% if current_user.role == 'superadmin' %}{% set toc = toc + [('sec-sso', 'Single Sign-On')] %}{% endif %}
 {% include '_card_toc.html' %}
 
 <!-- MFA Settings -->
@@ -43,6 +44,89 @@
         </div>
     </form>
 </div>
+
+{% if current_user.role == 'superadmin' %}
+<!-- Single Sign-On (v5.25.0, Q21) -->
+<div class="card" id="sec-sso">
+    <div class="card-header">
+        <span class="card-title">🪪 Single Sign-On (OIDC)</span>
+        {% if oidc.enabled %}<span class="badge badge-reserved">Enabled</span>
+        {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>{% endif %}
+    </div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+        Let users log in through an external identity provider (Authentik, Keycloak, Entra ID, Okta…),
+        with roles mapped from a claim. Local accounts keep working either way.
+    </p>
+    <form method="POST" action="/settings/save-oidc"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label><input type="checkbox" name="enabled" value="1" style="width:auto;" {% if oidc.enabled %}checked{% endif %}> Enable single sign-on</label>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Issuer URL</label>
+                <input type="text" name="issuer" value="{{ oidc.issuer }}" placeholder="https://idp.example.com/application/o/jen/" style="width:100%;">
+                <div class="form-hint">Discovery is read from &lt;issuer&gt;/.well-known/openid-configuration. Must be https:// (http:// only for a local 127.0.0.1/localhost test IdP).</div>
+            </div>
+            <div class="form-group">
+                <label>Client ID</label>
+                <input type="text" name="client_id" value="{{ oidc.client_id }}" style="width:100%;">
+            </div>
+            <div class="form-group">
+                <label>Client Secret</label>
+                <input type="password" name="client_secret" placeholder="{% if oidc.has_client_secret %}(kept unless changed){% else %}(none set){% endif %}" style="width:100%;">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Scopes</label>
+                <input type="text" name="scopes" value="{{ oidc.scopes }}" style="width:100%;">
+            </div>
+            <div class="form-group">
+                <label>Username Claim</label>
+                <input type="text" name="username_claim" value="{{ oidc.username_claim }}" style="width:100%;">
+            </div>
+            <div class="form-group">
+                <label>Role Claim</label>
+                <input type="text" name="role_claim" value="{{ oidc.role_claim }}" style="width:100%;">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Role Mapping</label>
+            <input type="text" name="role_map" value="{{ oidc.role_map }}" placeholder="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer" style="width:100%;">
+            <div class="form-hint">Kea role → claim value(s), <code>;</code>-separated pairs; each right side may be a <code>,</code>-separated list.</div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Default Role</label>
+                <select name="default_role" style="width:100%;">
+                    <option value="viewer" {% if oidc.default_role == 'viewer' %}selected{% endif %}>Viewer</option>
+                    <option value="admin" {% if oidc.default_role == 'admin' %}selected{% endif %}>Admin</option>
+                    <option value="superadmin" {% if oidc.default_role == 'superadmin' %}selected{% endif %}>SuperAdmin</option>
+                    <option value="none" {% if oidc.default_role == 'none' %}selected{% endif %}>None — deny unmapped users</option>
+                </select>
+                <div class="form-hint">Used when a user's groups match nothing in the mapping above.</div>
+            </div>
+            <div class="form-group">
+                <label>Button Label</label>
+                <input type="text" name="button_label" value="{{ oidc.button_label }}" style="width:100%;">
+            </div>
+            <div class="form-group">
+                <label>Redirect URI</label>
+                <input type="text" name="redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="(auto-detected)" style="width:100%;">
+                <div class="form-hint">Leave blank unless Jen is behind a proxy that changes the external URL.</div>
+            </div>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" name="auto_create" value="1" style="width:auto;" {% if oidc.auto_create %}checked{% endif %}> Automatically create an account on first SSO login</label>
+        </div>
+        <div class="form-group">
+            <label><input type="checkbox" name="local_login" value="1" style="width:auto;" {% if oidc.local_login %}checked{% endif %}> Keep the local username/password form on the login page</label>
+            <div class="form-hint">If unchecked, the password form is hidden — <code>/login?local=1</code> is always available as an escape hatch.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">Save Single Sign-On Settings</button>
+    </form>
+</div>
+{% endif %}
 
 <!-- Session Settings -->
 <div class="card" id="sec-session">

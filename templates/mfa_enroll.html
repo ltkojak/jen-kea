@@ -6,6 +6,11 @@
     <p>Secure your account with an additional verification step</p>
 </div>
 
+{% if oidc_managed %}
+<div class="card">
+    <p>🪪 Multi-factor authentication for this account is managed by your identity provider — Jen doesn't enroll or store a second factor for single sign-on accounts.</p>
+</div>
+{% else %}
 <!-- Current methods -->
 {% if totp_methods or passkeys %}
 <div class="card">
@@ -81,5 +86,6 @@
     <div class="card-header"><span class="card-title">🔑 Passkeys (Coming Soon)</span></div>
     <p style="color:var(--text-muted);font-size:13px;">Passkey support using WebAuthn/FIDO2 is planned for a future update. Passkeys work with Keeper, 1Password, iCloud Keychain, Windows Hello, and hardware security keys like YubiKey.</p>
 </div>
+{% endif %}
 
 {% endblock %}

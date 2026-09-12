@@ -207,6 +207,21 @@ def settings_security():
     rl_attempts_1h = _count(
         "SELECT COUNT(*) AS cnt FROM login_attempts WHERE attempted_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
     )
+    oidc_settings = {
+        "enabled": extensions.OIDC_ENABLED,
+        "issuer": extensions.OIDC_ISSUER,
+        "client_id": extensions.OIDC_CLIENT_ID,
+        "has_client_secret": bool(extensions.OIDC_CLIENT_SECRET),
+        "scopes": extensions.OIDC_SCOPES,
+        "username_claim": extensions.OIDC_USERNAME_CLAIM,
+        "role_claim": extensions.OIDC_ROLE_CLAIM,
+        "role_map": extensions.OIDC_ROLE_MAP,
+        "default_role": extensions.OIDC_DEFAULT_ROLE,
+        "auto_create": extensions.OIDC_AUTO_CREATE,
+        "button_label": extensions.OIDC_BUTTON_LABEL,
+        "redirect_uri": extensions.OIDC_REDIRECT_URI,
+        "local_login": extensions.OIDC_LOCAL_LOGIN,
+    }
     return render_template(
         "settings_security.html",
         mfa_mode=__mfa.get_mfa_mode(),
@@ -218,6 +233,7 @@ def settings_security():
         cert_info=_cert_info(),
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
+        oidc=oidc_settings,
     )
 
 

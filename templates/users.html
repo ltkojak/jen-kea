@@ -33,6 +33,9 @@
             {% if u.id == current_user.id %}
             <span style="font-size:11px;color:var(--text-muted);"> (you)</span>
             {% endif %}
+            {% if u.auth_provider == 'oidc' %}
+            <span class="badge" style="background:rgba(0,180,216,0.12);color:var(--primary);font-size:10px;" title="Managed by single sign-on">🪪 SSO</span>
+            {% endif %}
         </td>
         <td>
             {% if u.role == 'superadmin' %}
@@ -68,7 +71,7 @@
         </td>
         <td>
             <button class="btn btn-sm btn-secondary edit-user-btn"
-                data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id)} | tojson }}'>✏️ Edit</button>
+                data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id), "is_oidc": (u.auth_provider == "oidc"), "external_id": (u.external_id or "")} | tojson }}'>✏️ Edit</button>
         </td>
     </tr>
     {% endfor %}
@@ -153,6 +156,7 @@
                 <option value="admin">🔧 Admin — manage assigned subnets</option>
                 <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
             </select>
+            <div class="form-hint" id="edit-role-oidc-hint" style="display:none;color:var(--warning);">Role is managed by the identity provider — it's recomputed from group membership on every SSO login.</div>
         </div>
 
         <!-- Subnet Access -->
@@ -177,23 +181,41 @@
         <hr style="border-color:var(--border);margin:18px 0;">
 
         <!-- Password reset -->
-        <div style="margin-bottom:14px;">
-            <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Reset Password</label>
-            <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Leave blank to keep current password.</div>
-        </div>
-        <div class="form-group">
-            <label>New Password</label>
-            <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" style="width:100%;">
-        </div>
-        <div class="form-group">
-            <label>Confirm New Password</label>
-            <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" style="width:100%;">
+        <div id="edit-password-section">
+            <div style="margin-bottom:14px;">
+                <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Reset Password</label>
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Leave blank to keep current password.</div>
+            </div>
+            <div class="form-group">
+                <label>New Password</label>
+                <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" style="width:100%;">
+            </div>
+            <div class="form-group">
+                <label>Confirm New Password</label>
+                <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" style="width:100%;">
+            </div>
         </div>
 
         <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
             <button type="submit" class="btn btn-primary">Save Changes</button>
             <button type="button" class="btn btn-secondary" data-close-modal="edit-modal">Cancel</button>
         </div>
+    </form>
+
+    <hr style="border-color:var(--border);margin:18px 0;">
+
+    <!-- Single Sign-On (v5.25.0, Q21) -->
+    <div style="margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Single Sign-On</label>
+    </div>
+    <div id="edit-sso-linked" style="font-size:13px;margin-bottom:10px;display:none;color:var(--text-muted);"></div>
+    <form id="link-sso-form" method="POST" action=""
+          data-confirm="Link this account to SSO? Local username/password login will be disabled for it immediately.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group" style="margin-bottom:8px;">
+            <input type="text" name="external_id" placeholder="External ID (the identity provider's sub claim)" style="width:100%;">
+        </div>
+        <button type="submit" class="btn btn-sm btn-secondary">🪪 Link to SSO</button>
     </form>
 
     <hr style="border-color:var(--border);margin:18px 0;">
@@ -231,15 +253,33 @@ function openAddModal() {
     toggleAddSubnets();
 }
 
-function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSelf) {
+function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSelf, isOidc, externalId) {
     document.getElementById('edit-username-label').textContent = username;
     document.getElementById('edit-form').action = '/users/edit/' + id;
     document.getElementById('reset-mfa-form').action = '/users/reset-mfa/' + id;
     document.getElementById('delete-form').action = '/users/delete/' + id;
+    document.getElementById('link-sso-form').action = '/users/link-sso/' + id;
 
     // Set role
     document.getElementById('edit-role').value = role;
     toggleEditSubnets();
+
+    // v5.25.0 (Q21) — an OIDC-linked account's role/password come from
+    // the identity provider: hide the password-reset section, show why
+    // the role select is disabled, and swap the "Link to SSO" form for
+    // a plain status line since it's already linked.
+    document.getElementById('edit-role-oidc-hint').style.display = isOidc ? '' : 'none';
+    document.getElementById('edit-password-section').style.display = isOidc ? 'none' : '';
+    var ssoLinked = document.getElementById('edit-sso-linked');
+    var ssoForm = document.getElementById('link-sso-form');
+    if (isOidc) {
+        ssoLinked.textContent = '🪪 Linked to SSO (external ID: ' + externalId + ')';
+        ssoLinked.style.display = '';
+        ssoForm.style.display = 'none';
+    } else {
+        ssoLinked.style.display = 'none';
+        ssoForm.style.display = '';
+    }
 
     // Set subnet selections
     var sel = document.getElementById('edit-subnets');
@@ -270,8 +310,8 @@ function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSe
     // Hide delete for self
     document.getElementById('delete-section').style.display = isSelf ? 'none' : '';
 
-    // Disable role change for self
-    document.getElementById('edit-role').disabled = isSelf;
+    // Disable role change for self, or for an SSO-managed account
+    document.getElementById('edit-role').disabled = isSelf || isOidc;
 
     document.getElementById('edit-modal').style.display = 'flex';
 }
@@ -317,7 +357,7 @@ document.getElementById('add-user-btn').addEventListener('click', openAddModal);
 document.querySelectorAll('.edit-user-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
         var u = JSON.parse(btn.dataset.user);
-        openEditModal(u.id, u.username, u.role, u.subnet_ids, u.timeout, u.mfa, u.is_self);
+        openEditModal(u.id, u.username, u.role, u.subnet_ids, u.timeout, u.mfa, u.is_self, u.is_oidc, u.external_id);
     });
 });
 document.querySelectorAll('[data-close-modal]').forEach(function(el) {

@@ -17,6 +17,7 @@ import jen.services.auth as __auth
 import jen.services.crypto as __crypto
 import jen.services.fingerprint as __fp
 import jen.services.mfa as __mfa
+import jen.services.oidc as __oidc
 from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
@@ -268,6 +269,13 @@ def mfa_enroll():
     if enrolling is None:
         return redirect(url_for("auth.login"))
     uid, uname = enrolling.id, enrolling.username
+
+    # v5.25.0 (Q21) — an OIDC-linked account never reaches this page
+    # forced (find_or_create_user/establish_session never set the
+    # mfa_pending_* keys), but an already-authenticated one can still
+    # click through from "My MFA Settings" — the IdP owns MFA for them.
+    if not is_forced and __oidc.is_oidc_user(uid):
+        return render_template("mfa_enroll.html", oidc_managed=True)
 
     if request.method == "POST":
         action = request.form.get("action")

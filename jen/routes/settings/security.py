@@ -13,11 +13,15 @@ import threading
 from flask import flash, redirect, request, url_for
 from flask_login import login_required
 
+import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.auth as __auth
+import jen.services.oidc as __oidc
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 
@@ -207,4 +211,69 @@ def remove_cert():
         subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
 
     threading.Thread(target=restart, daemon=True).start()
+    return redirect(url_for("settings.settings_security"))
+
+
+@bp.route("/settings/save-oidc", methods=["POST"])
+@login_required
+@_superadmin_required
+def save_oidc():
+    """v5.25.0 (Q21) — [oidc] single sign-on. Superadmin only: this
+    controls who can log in and with what role, a step above the rest
+    of this page's admin-editable settings. client_secret behaves like
+    every other password field in Jen — blank keeps the existing value,
+    non-blank replaces it; there's nothing to "inherit" here, so no
+    checkbox."""
+    enabled = request.form.get("enabled", "") == "1"
+    issuer = request.form.get("issuer", "").strip()
+    client_id = request.form.get("client_id", "").strip()
+    client_secret = request.form.get("client_secret", "").strip()
+    scopes = request.form.get("scopes", "").strip() or "openid profile email"
+    username_claim = request.form.get("username_claim", "").strip() or "preferred_username"
+    role_claim = request.form.get("role_claim", "").strip() or "groups"
+    role_map = request.form.get("role_map", "").strip()
+    default_role = request.form.get("default_role", "viewer").strip().lower()
+    auto_create = request.form.get("auto_create", "") == "1"
+    button_label = request.form.get("button_label", "").strip() or "Sign in with SSO"
+    redirect_uri = request.form.get("redirect_uri", "").strip()
+    local_login = request.form.get("local_login", "") == "1"
+
+    if enabled:
+        if not __auth.valid_oidc_issuer(issuer):
+            flash(
+                "The issuer must be an https:// URL (http:// is only allowed for a local "
+                "127.0.0.1/localhost test IdP).",
+                "error",
+            )
+            return redirect(url_for("settings.settings_security"))
+        if not client_id:
+            flash("A client ID is required to enable single sign-on.", "error")
+            return redirect(url_for("settings.settings_security"))
+    if default_role not in ("superadmin", "admin", "viewer", "none"):
+        flash("Default role must be superadmin, admin, viewer, or none.", "error")
+        return redirect(url_for("settings.settings_security"))
+    if role_map and not __oidc.parse_role_map(role_map):
+        flash("Role mapping could not be parsed — check the format (role=value;role=value,value).", "error")
+        return redirect(url_for("settings.settings_security"))
+
+    items = [
+        ("oidc", "enabled", "true" if enabled else "false"),
+        ("oidc", "issuer", issuer),
+        ("oidc", "client_id", client_id),
+        ("oidc", "scopes", scopes),
+        ("oidc", "username_claim", username_claim),
+        ("oidc", "role_claim", role_claim),
+        ("oidc", "role_map", role_map),
+        ("oidc", "default_role", default_role),
+        ("oidc", "auto_create", "true" if auto_create else "false"),
+        ("oidc", "button_label", button_label),
+        ("oidc", "redirect_uri", redirect_uri),
+        ("oidc", "local_login", "true" if local_login else "false"),
+    ]
+    if client_secret:
+        items.append(("oidc", "client_secret", client_secret))
+
+    __config.app_config.write_values(items)
+    flash("Single sign-on settings saved.", "success")
+    __user.audit("SAVE_SETTINGS", "oidc", f"enabled={enabled} issuer={issuer}")
     return redirect(url_for("settings.settings_security"))

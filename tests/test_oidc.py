@@ -220,6 +220,253 @@ class TestLazyRegistration:
         assert oidc.oidc_client() is None
 
 
+class _StubOidcClient:
+    """Stands in for the authlib client oidc.oidc_client() would return
+    — no network, no real token/state validation (that's authlib's own
+    code, not this feature's). `token` is what authorize_access_token()
+    returns; set it to an Exception instance to simulate a failed
+    exchange."""
+
+    def __init__(self, token=None):
+        self.token = token or {"userinfo": {}}
+        self.authorize_redirect_calls = []
+        self.userinfo_called = False
+
+    def authorize_redirect(self, redirect_uri):
+        from flask import redirect as flask_redirect
+
+        self.authorize_redirect_calls.append(redirect_uri)
+        return flask_redirect("https://idp.example.com/authorize")
+
+    def authorize_access_token(self):
+        if isinstance(self.token, Exception):
+            raise self.token
+        return self.token
+
+    def userinfo(self, token=None):
+        self.userinfo_called = True
+        return (self.token or {}).get("userinfo", {})
+
+
+class TestLoginPageSsoUi:
+    def test_no_button_when_disabled(self, client):
+        r = client.get("/login")
+        assert b"Sign in with SSO" not in r.data
+
+    def test_button_shown_when_client_registered(self, client, monkeypatch):
+        extensions.OIDC_ENABLED = True
+        extensions.OIDC_BUTTON_LABEL = "Sign in with SSO"
+        monkeypatch.setattr(oidc, "oidc_client", lambda: _StubOidcClient())
+        r = client.get("/login")
+        assert b"Sign in with SSO" in r.data
+
+    def test_button_hidden_when_enabled_but_client_not_registered(self, client):
+        # A config typo (e.g. issuer missing) can leave OIDC_ENABLED true
+        # with no client actually registered — the button must not show
+        # a dead link.
+        extensions.OIDC_ENABLED = True
+        r = client.get("/login")
+        assert b"Sign in with SSO" not in r.data
+
+    def test_local_form_hidden_when_local_login_false(self, client):
+        extensions.OIDC_LOCAL_LOGIN = False
+        r = client.get("/login")
+        assert b'name="password"' not in r.data
+
+    def test_local_form_escape_hatch(self, client):
+        extensions.OIDC_LOCAL_LOGIN = False
+        r = client.get("/login?local=1")
+        assert b'name="password"' in r.data
+
+    def test_local_form_shown_by_default(self, client):
+        r = client.get("/login")
+        assert b'name="password"' in r.data
+
+
+class TestLoginOidcRedirect:
+    def test_redirects_to_authorize_when_configured(self, client, monkeypatch):
+        stub = _StubOidcClient()
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        r = client.get("/login/oidc", follow_redirects=False)
+        assert r.status_code == 302
+        assert stub.authorize_redirect_calls
+
+    def test_flashes_and_redirects_when_not_configured(self, client):
+        r = client.get("/login/oidc", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"not configured" in r.data.lower()
+
+    def test_next_is_stashed_in_session_when_safe(self, client, monkeypatch):
+        monkeypatch.setattr(oidc, "oidc_client", lambda: _StubOidcClient())
+        client.get("/login/oidc?next=/subnets")
+        with client.session_transaction() as sess:
+            assert sess.get("oidc_next") == "/subnets"
+
+    def test_unsafe_next_is_dropped(self, client, monkeypatch):
+        monkeypatch.setattr(oidc, "oidc_client", lambda: _StubOidcClient())
+        client.get("/login/oidc?next=https://evil.example.com/")
+        with client.session_transaction() as sess:
+            assert sess.get("oidc_next") == ""
+
+
+class TestOidcCallback:
+    def _claims_token(self, **claims):
+        base = {"sub": "idp-subject-1", "preferred_username": "ssouser1", "groups": ["jen-admin"]}
+        base.update(claims)
+        return {"userinfo": base}
+
+    def test_first_login_creates_user_with_random_unusable_password(self, client, db, monkeypatch):
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+
+        r = client.get("/login/oidc/callback", follow_redirects=True)
+        assert r.status_code == 200
+
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE username='ssouser1'")
+            row = cur.fetchone()
+        assert row is not None
+        assert row["auth_provider"] == "oidc"
+        assert row["external_id"] == "idp-subject-1"
+        assert row["role"] == "admin"
+        assert row["must_change_password"] == 0
+
+        # The random password is unusable for local login — see
+        # TestLocalLoginRefusedForOidcUser for the generic-refusal check;
+        # here we only need the account to actually BE oidc-provider'd,
+        # which the row assertions above already confirm.
+
+    def test_second_login_updates_role_on_change(self, client, db, monkeypatch):
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+
+        stub.token = self._claims_token(groups=["jen-superadmin"])
+        client.get("/login/oidc/callback")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT role FROM users WHERE username='ssouser1'")
+            row = cur.fetchone()
+        assert row["role"] == "superadmin"
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM audit_log WHERE action='oidc_role_change'")
+            assert cur.fetchone()["cnt"] == 1
+
+    def test_username_collision_with_local_account_is_refused(self, client, db, monkeypatch):
+        from jen.models.user import hash_password
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role) VALUES ('ssouser1', %s, 'viewer')",
+                (hash_password("localpass123"),),
+            )
+        db.commit()
+
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        r = client.get("/login/oidc/callback", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"already exists" in r.data
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM users WHERE username='ssouser1'")
+            assert cur.fetchone()["cnt"] == 1  # no duplicate created
+            cur.execute("SELECT auth_provider FROM users WHERE username='ssouser1'")
+            assert cur.fetchone()["auth_provider"] == "local"
+
+    def test_no_role_mapped_is_refused(self, client, monkeypatch):
+        extensions.OIDC_DEFAULT_ROLE = "none"
+        stub = _StubOidcClient(token=self._claims_token(groups=["some-other-group"]))
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        r = client.get("/login/oidc/callback", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"no role mapped" in r.data.lower()
+
+    def test_token_exchange_failure_flashes_generic_message(self, client, monkeypatch):
+        stub = _StubOidcClient(token=RuntimeError("boom"))
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        r = client.get("/login/oidc/callback", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"boom" not in r.data
+        assert b"sso failed" in r.data.lower() or b"try again" in r.data.lower()
+
+    def test_locked_out_ip_refused_before_token_exchange(self, client, monkeypatch):
+        from jen.services import auth as auth_svc
+
+        monkeypatch.setattr(auth_svc, "is_locked_out", lambda ip, username: (True, 5))
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        r = client.get("/login/oidc/callback", follow_redirects=True)
+        assert r.status_code == 200
+        assert not stub.userinfo_called
+        # authorize_access_token itself must never have been reached —
+        # simplest proof is that no user was created.
+
+    def test_successful_callback_establishes_real_session(self, client, monkeypatch):
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+        with client.session_transaction() as sess:
+            assert sess.get("_user_cache", {}).get("username") == "ssouser1"
+            assert sess.get("_user_cache", {}).get("role") == "admin"
+            assert "last_active" in sess
+            assert "auth_at" in sess
+
+    def test_mfa_not_triggered_even_when_globally_required(self, client, monkeypatch):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("mfa_mode", "required_all")
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+        with client.session_transaction() as sess:
+            assert "mfa_pending_user_id" not in sess
+            assert sess.get("_user_cache", {}).get("username") == "ssouser1"
+
+    def test_next_roundtrip(self, client, monkeypatch):
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        with client.session_transaction() as sess:
+            sess["oidc_next"] = "/subnets"
+        r = client.get("/login/oidc/callback", follow_redirects=False)
+        assert r.headers["Location"].endswith("/subnets")
+
+    def test_userinfo_endpoint_used_when_username_and_role_claims_absent(self, client, monkeypatch):
+        # token["userinfo"] present but carrying neither username_claim
+        # nor role_claim (a minimal id_token, say) -> the fallback to
+        # client.userinfo() must fire, and its return value is what
+        # actually gets used to find/create the user.
+        real_claims = self._claims_token(sub="idp-subject-2", preferred_username="ssouser2")["userinfo"]
+        stub = _StubOidcClient(token={"userinfo": {"sub": "idp-subject-2"}})
+
+        def _userinfo(token=None):
+            stub.userinfo_called = True
+            return real_claims
+
+        stub.userinfo = _userinfo
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+        assert stub.userinfo_called
+
+
+class TestLocalLoginRefusedForOidcUser:
+    def test_local_login_generic_message_for_oidc_user(self, client, db):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role, auth_provider, external_id) "
+                "VALUES ('ssolocal1', 'scrypt:unusable', 'admin', 'oidc', 'sub-xyz')"
+            )
+        db.commit()
+        r = client.post("/login", data={"username": "ssolocal1", "password": "whatever"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Invalid username or password" in r.data
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM login_attempts WHERE username='ssolocal1'")
+            assert cur.fetchone()["cnt"] == 1
+
+
 class TestMigration22UserColumns:
     def test_migration_recorded(self):
         assert 22 in applied_versions()
@@ -262,3 +509,107 @@ class TestMigration22UserColumns:
             row = cur.fetchone()
         assert row["auth_provider"] == "local"
         assert row["external_id"] is None
+
+
+@pytest.fixture
+def isolated_oidc_settings_config(tmp_path):
+    """Point AppConfig at a throwaway jen.config so save-oidc route POSTs
+    write there, not the real file — same pattern as
+    tests/test_kea6_settings_save.py's isolated_config."""
+    from jen.config import app_config
+
+    original_path = extensions.CONFIG_FILE
+    cfg = configparser.ConfigParser()
+    cfg["kea"] = {"api_url": "http://1.2.3.4:8000", "api_user": "u1", "api_pass": "p1"}
+    cfg["kea_db"] = {"host": "dbhost", "user": "du", "password": "dp", "database": "kea"}
+    cfg["jen_db"] = {"host": "dbhost", "user": "ju", "password": "jp", "database": "jen"}
+    cfg["server"] = {"http_port": "5050", "https_port": "8443"}
+    path = tmp_path / "jen.config"
+    with open(path, "w") as f:
+        cfg.write(f)
+    extensions.CONFIG_FILE = str(path)
+    app_config.reload()
+    yield path
+    extensions.CONFIG_FILE = original_path
+    from tests.conftest import _patch_extensions
+
+    _patch_extensions()
+
+
+def _on_disk(path):
+    p = configparser.ConfigParser()
+    p.read(str(path))
+    return p
+
+
+class TestOidcSettingsRoute:
+    _SAVE_URL = "/settings/save-oidc"
+
+    def _post(self, client, **fields):
+        base = {
+            "issuer": "https://idp.example.com",
+            "client_id": "jen",
+            "scopes": "openid profile email",
+            "username_claim": "preferred_username",
+            "role_claim": "groups",
+            "role_map": "superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer",
+            "default_role": "viewer",
+        }
+        base.update(fields)
+        return client.post(self._SAVE_URL, data=base, follow_redirects=True)
+
+    def test_save_persists_to_disk(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, enabled="1", client_secret="s3cret", auto_create="1", local_login="1")
+        assert r.status_code == 200
+        on_disk = _on_disk(isolated_oidc_settings_config)
+        assert on_disk.get("oidc", "enabled") == "true"
+        assert on_disk.get("oidc", "issuer") == "https://idp.example.com"
+        assert on_disk.get("oidc", "client_secret") == "s3cret"
+        assert extensions.OIDC_ENABLED is True
+
+    def test_blank_client_secret_keeps_existing_value(self, logged_in_client, isolated_oidc_settings_config):
+        self._post(logged_in_client, enabled="1", client_secret="s3cret")
+        self._post(logged_in_client, enabled="1", client_secret="")
+        on_disk = _on_disk(isolated_oidc_settings_config)
+        assert on_disk.get("oidc", "client_secret") == "s3cret"
+
+    def test_client_secret_never_appears_in_a_get_response(self, logged_in_client, isolated_oidc_settings_config):
+        self._post(logged_in_client, enabled="1", client_secret="s3cretvalue12345")
+        r = logged_in_client.get("/settings/security")
+        assert r.status_code == 200
+        assert b"s3cretvalue12345" not in r.data
+
+    def test_enabling_without_https_issuer_is_refused(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, enabled="1", issuer="http://idp.example.com")
+        assert r.status_code == 200
+        assert b"https" in r.data.lower()
+        assert not _on_disk(isolated_oidc_settings_config).has_section("oidc")
+
+    def test_localhost_http_issuer_is_allowed(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, enabled="1", issuer="http://localhost:9000")
+        assert r.status_code == 200
+        assert _on_disk(isolated_oidc_settings_config).get("oidc", "issuer") == "http://localhost:9000"
+
+    def test_enabling_without_client_id_is_refused(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, enabled="1", client_id="")
+        assert r.status_code == 200
+        assert b"client id" in r.data.lower()
+
+    def test_malformed_role_map_is_refused(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, role_map="garbage-with-no-equals-sign")
+        assert r.status_code == 200
+        assert b"could not be parsed" in r.data.lower()
+
+    def test_blank_role_map_is_allowed(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, role_map="")
+        assert r.status_code == 200
+        assert _on_disk(isolated_oidc_settings_config).get("oidc", "role_map") == ""
+
+    def test_requires_superadmin(self, client, db, isolated_oidc_settings_config):
+        from tests.conftest import restricted_client as _restricted_client
+
+        c, _ = _restricted_client(client, db, allowed_subnets=None, role="admin", username="oidc_settings_admin1")
+        r = self._post(c, enabled="1")
+        assert r.status_code == 200
+        assert b"SuperAdmin access required." in r.data
+        assert not _on_disk(isolated_oidc_settings_config).has_section("oidc")

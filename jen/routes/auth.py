@@ -48,6 +48,24 @@ def _delete_initial_admin_password_file():
         logger.warning(f"could not remove {path}: {e}")
 
 
+def _render_login(prefill_username=""):
+    """v5.25.0 (Q21) — every login.html render needs the same SSO
+    context: whether to show the button (enabled AND actually
+    registered — a config typo shouldn't crash the login page), and
+    whether the local form shows at all (?local=1 is always the escape
+    hatch, even when the operator has hidden it by default)."""
+    from jen import extensions
+
+    return render_template(
+        "login.html",
+        jen_version=_JEN_VERSION(),
+        prefill_username=prefill_username,
+        oidc_enabled=extensions.OIDC_ENABLED and __oidc.oidc_client() is not None,
+        oidc_button_label=extensions.OIDC_BUTTON_LABEL,
+        show_local_form=extensions.OIDC_LOCAL_LOGIN or request.args.get("local") == "1",
+    )
+
+
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -57,14 +75,15 @@ def login():
 
         if not username or not password:
             flash("Username and password are required.", "error")
-            return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
+            return _render_login(prefill_username=username)
 
         # Single DB connection for the entire login flow
         try:
             with __db.jen_db() as db, db.cursor() as cur:
                 # User lookup
                 cur.execute(
-                    "SELECT id, username, role, session_timeout, password, subnet_access, token_version, must_change_password FROM users WHERE username=%s",
+                    "SELECT id, username, role, session_timeout, password, subnet_access, token_version, "
+                    "must_change_password, auth_provider FROM users WHERE username=%s",
                     (username,),
                 )
                 row = cur.fetchone()
@@ -83,7 +102,7 @@ def login():
         except Exception as e:
             logger.error(f"Login DB error: {e}")
             flash("Database error. Please try again.", "error")
-            return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
+            return _render_login(prefill_username=username)
 
         # v5.8.4 — one implementation of the lockout rule. This route used
         # to carry its own inline copy of jen.services.auth.is_locked_out()
@@ -97,7 +116,19 @@ def login():
                 flash("Account is locked. Contact an administrator.", "error")
             else:
                 flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
-            return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
+            return _render_login(prefill_username=username)
+
+        # v5.25.0 (Q21) — an OIDC-linked account has no usable local
+        # password (a discarded random one — see oidc.find_or_create_user).
+        # Refuse BEFORE the password check, with the exact same generic
+        # message a wrong password gets: telling a client "this account is
+        # SSO-only" would let /login be used to enumerate which accounts
+        # are locally-managed and which aren't.
+        if row and row.get("auth_provider") == "oidc":
+            __auth.record_login_attempt(ip, username)
+            __user.audit("oidc_denied", username, "local login attempted for an OIDC-linked account")
+            flash("Invalid username or password.", "error")
+            return _render_login(prefill_username=username)
 
         if row and __user.verify_password(row["password"], password):
             # Upgrade legacy SHA-256 / pbkdf2 / off-param scrypt to the current
@@ -165,9 +196,86 @@ def login():
         # Failed login — record attempt (async, don't block response)
         __auth.record_login_attempt(ip, username)
         flash("Invalid username or password.", "error")
-        return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username=username)
+        return _render_login(prefill_username=username)
 
-    return render_template("login.html", jen_version=_JEN_VERSION(), prefill_username="")
+    return _render_login()
+
+
+@bp.route("/login/oidc")
+def login_oidc():
+    """v5.25.0 (Q21) — kick off the OIDC authorization redirect. 503-style
+    flash (not a raw error) when SSO isn't actually enabled/registered —
+    a stale bookmark or a race with a config change must not 500."""
+    client = __oidc.oidc_client()
+    if client is None:
+        flash("Single sign-on is not configured.", "error")
+        return redirect(url_for("auth.login"))
+
+    from jen import extensions
+
+    _next = request.args.get("next", "")
+    if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
+        _next = ""
+    session["oidc_next"] = _next
+
+    redirect_uri = extensions.OIDC_REDIRECT_URI or url_for("auth.login_oidc_callback", _external=True)
+    return client.authorize_redirect(redirect_uri)
+
+
+@bp.route("/login/oidc/callback")
+def login_oidc_callback():
+    """The IdP redirects back here with the authorization code. Locked
+    out by IP/the shared "oidc" bucket BEFORE the token exchange — an
+    attacker hammering the callback shouldn't get unlimited attempts
+    just because there's no password to check here."""
+    from jen import extensions
+
+    client = __oidc.oidc_client()
+    if client is None:
+        flash("Single sign-on is not configured.", "error")
+        return redirect(url_for("auth.login"))
+
+    ip = request.remote_addr
+    locked, remaining = __auth.is_locked_out(ip, "oidc")
+    if locked:
+        if remaining >= 999:
+            flash("Sign-in is locked. Contact an administrator.", "error")
+        else:
+            flash(f"Too many failed sign-in attempts. Try again in {remaining} minute(s).", "error")
+        return redirect(url_for("auth.login"))
+
+    try:
+        token = client.authorize_access_token()
+    except Exception as e:
+        logger.warning(f"OIDC token exchange failed: {e}")
+        __auth.record_login_attempt(ip, "oidc")
+        flash("Sign-in with SSO failed. Please try again.", "error")
+        return redirect(url_for("auth.login"))
+
+    claims = token.get("userinfo") or {}
+    if extensions.OIDC_USERNAME_CLAIM not in claims and extensions.OIDC_ROLE_CLAIM not in claims:
+        try:
+            claims = client.userinfo(token=token)
+        except Exception as e:
+            logger.warning(f"OIDC userinfo fetch failed: {e}")
+
+    row, reason = __oidc.find_or_create_user(claims)
+    if row is None:
+        __auth.record_login_attempt(ip, "oidc")
+        messages = {
+            "no_role": "Your account has no role mapped — contact an administrator.",
+            "username_collision": "An account with that username already exists — ask an admin to rename it or link it.",
+            "auto_create_disabled": "Your account isn't provisioned yet — contact an administrator.",
+            "no_username": "Could not determine a username from your identity provider.",
+            "no_subject": "Your identity provider did not return a subject identifier.",
+        }
+        flash(messages.get(reason, "Sign-in with SSO failed."), "error")
+        return redirect(url_for("auth.login"))
+
+    __auth.clear_login_attempts(ip, "oidc")
+    __oidc.establish_session(row, f"User {row['username']} logged in via SSO from {ip}")
+    next_url = session.pop("oidc_next", "") or url_for("dashboard.dashboard")
+    return redirect(next_url)
 
 
 @bp.route("/logout", methods=["GET", "POST"])

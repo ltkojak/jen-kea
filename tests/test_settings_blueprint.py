@@ -52,6 +52,7 @@ EXPECTED_ENDPOINTS = {
     "settings.save_session_settings",
     "settings.save_rate_limit",
     "settings.clear_lockouts",
+    "settings.save_oidc",
     "settings.upload_cert",
     "settings.remove_cert",
     "settings.upload_favicon",

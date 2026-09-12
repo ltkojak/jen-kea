@@ -199,7 +199,8 @@ def users():
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT id, username, role, session_timeout, created_at, subnet_access FROM users ORDER BY username"
+                "SELECT id, username, role, session_timeout, created_at, subnet_access, "
+                "auth_provider, external_id FROM users ORDER BY username"
             )
             all_users = cur.fetchall()
             for u in all_users:
@@ -498,6 +499,50 @@ def set_user_subnets(user_id):
     return redirect(url_for("users.users"))
 
 
+@bp.route("/users/link-sso/<int:user_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+def link_user_to_sso(user_id):
+    """v5.25.0 (Q21) — the sanctioned way to convert an existing local
+    account to OIDC-managed: a superadmin enters the IdP's own subject
+    (the `sub`/external_id claim) for that user by hand, after
+    confirming it out of band — Jen has no way to verify it here.
+    Clears must_change_password (the local password is never used
+    again) and, from this point on, /login refuses this username
+    entirely (see auth.py's login()), same as any other OIDC account."""
+    external_id = request.form.get("external_id", "").strip()
+    if not external_id:
+        flash("An external ID (the IdP's subject/sub claim) is required to link an account.", "error")
+        return redirect(url_for("users.users"))
+
+    try:
+        with __db.jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("SELECT username, auth_provider FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
+                    return redirect(url_for("users.users"))
+                if row["auth_provider"] == "oidc":
+                    flash(f"'{row['username']}' is already linked to SSO.", "error")
+                    return redirect(url_for("users.users"))
+                cur.execute(
+                    "UPDATE users SET auth_provider='oidc', external_id=%s, must_change_password=0, "
+                    "token_version=token_version+1 WHERE id=%s",
+                    (external_id, user_id),
+                )
+            db.commit()
+        session.pop("_user_cache", None)
+        flash(f"'{row['username']}' is now linked to SSO — local login is disabled for this account.", "success")
+        __user.audit("LINK_SSO", row["username"], f"external_id={external_id}")
+    except pymysql.err.IntegrityError:
+        flash("That external ID is already linked to another account.", "error")
+    except Exception as e:
+        logger.error(f"Error linking user {user_id} to SSO: {e}")
+        flash("Error linking account. Check server logs for details.", "error")
+    return redirect(url_for("users.users"))
+
+
 # ─────────────────────────────────────────
 # Devices
 # ─────────────────────────────────────────
@@ -550,11 +595,23 @@ def edit_user(user_id):
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
-                cur.execute("SELECT username, role FROM users WHERE id=%s", (user_id,))
+                cur.execute("SELECT username, role, auth_provider FROM users WHERE id=%s", (user_id,))
                 row = cur.fetchone()
                 if not row:
                     flash("User not found.", "error")
                     return redirect(url_for("users.users"))
+
+                # v5.25.0 (Q21) — an OIDC-linked account's role is
+                # IdP-managed (recomputed on every login) and it has no
+                # usable local password. The edit form disables both
+                # controls client-side; ignore them here too rather than
+                # trust that a disabled <select>/<input> stays disabled —
+                # a disabled field simply isn't submitted by a normal
+                # browser, so a submitted role/new_password for this user
+                # would otherwise have come from somewhere else.
+                if row["auth_provider"] == "oidc":
+                    role = row["role"]
+                    new_pw = ""
 
                 # Protect last superadmin from demotion
                 if row["role"] == "superadmin" and role != "superadmin":

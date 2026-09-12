@@ -104,6 +104,20 @@ def map_role(claims: dict) -> str | None:
     return None if default == "none" else default
 
 
+def is_oidc_user(user_id: int) -> bool:
+    """True if this account is IdP-managed. `User` (jen/models/user.py)
+    doesn't carry auth_provider as an attribute — the handful of call
+    sites that need it (MFA enrollment, the Users-page edit form) ask
+    here rather than widening every User(...) construction for one
+    rarely-needed field."""
+    from jen.models.db import jen_db
+
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT auth_provider FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+    return bool(row) and row["auth_provider"] == "oidc"
+
+
 def _candidate_username(claims: dict) -> str | None:
     """preferred_username (or whatever username_claim names) may contain
     '@' or spaces — sanitize with the same validator a local username has

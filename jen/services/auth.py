@@ -176,6 +176,28 @@ def valid_dns_lookup_host(value):
     return valid_hostname(value) or valid_ip(value)
 
 
+def valid_oidc_issuer(value: str) -> bool:
+    """An OIDC issuer URL (v5.25.0, Q21): https:// required — a real IdP
+    exchange without TLS leaks the authorization code and access token
+    on the wire. The one exception is a local test IdP on
+    127.0.0.1/localhost, where http:// is allowed (this codebase's own
+    test suite runs one)."""
+    from urllib.parse import urlparse
+
+    value = (value or "").strip()
+    if not value:
+        return False
+    try:
+        p = urlparse(value)
+    except ValueError:
+        return False
+    if not p.hostname:
+        return False
+    if p.scheme == "https":
+        return True
+    return p.scheme == "http" and p.hostname in ("127.0.0.1", "localhost")
+
+
 def valid_api_url(url: str, require_port: bool = False) -> bool:
     """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
     in direct mode (require_port=True) — an explicit port. A daemon

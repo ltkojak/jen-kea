@@ -258,6 +258,15 @@
             {% endif %}
             {% endwith %}
 
+            {% if oidc_enabled %}
+            <a href="{{ url_for('auth.login_oidc', next=request.args.get('next', '')) }}"
+               class="btn-login" style="display:block;text-align:center;text-decoration:none;box-sizing:border-box;">{{ oidc_button_label }}</a>
+            {% if show_local_form %}
+            <div class="divider" style="margin:24px -40px;"></div>
+            {% endif %}
+            {% endif %}
+
+            {% if show_local_form %}
             <form method="POST" autocomplete="on"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-group">
                     <label>Username</label>
@@ -272,6 +281,7 @@
                 </div>
                 <button type="submit" class="btn-login">Sign In →</button>
             </form>
+            {% endif %}
 
             <div class="login-footer">
                 <span class="version-badge">v{{ jen_version }}</span>

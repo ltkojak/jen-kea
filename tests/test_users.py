@@ -199,3 +199,125 @@ class TestAboutPageDeploymentDetailIsAdminOnly:
         assert b">Config File</td>" not in r.data
         # the page itself still renders for a viewer
         assert b"About Jen" in r.data
+
+
+class TestOidcUsersPage:
+    """v5.25.0 (Q21) — the Users page's SSO badge, the edit form's
+    protections for an IdP-managed account (role/password are ignored
+    server-side even if somehow submitted — a disabled <select>/<input>
+    just isn't sent by a normal browser, so this is defense in depth,
+    not the only guard), and the "Link to SSO" route."""
+
+    def _seed_oidc_user(self, db, username="ssouser_edit1", role="admin", external_id="sub-abc"):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role, auth_provider, external_id) "
+                "VALUES (%s, 'scrypt:unusable', %s, 'oidc', %s)",
+                (username, role, external_id),
+            )
+            user_id = cur.lastrowid
+        db.commit()
+        return user_id
+
+    def test_sso_badge_shown_for_oidc_user(self, logged_in_client, db):
+        self._seed_oidc_user(db)
+        r = logged_in_client.get("/settings/users")
+        assert r.status_code == 200
+        assert b"SSO" in r.data
+
+    def test_edit_ignores_submitted_role_for_oidc_user(self, logged_in_client, db):
+        user_id = self._seed_oidc_user(db, role="admin")
+        r = logged_in_client.post(
+            f"/users/edit/{user_id}",
+            data={"role": "viewer", "timeout": ""},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        with db.cursor() as cur:
+            cur.execute("SELECT role FROM users WHERE id=%s", (user_id,))
+            assert cur.fetchone()["role"] == "admin"
+
+    def test_edit_ignores_submitted_password_for_oidc_user(self, logged_in_client, db):
+        user_id = self._seed_oidc_user(db)
+        with db.cursor() as cur:
+            cur.execute("SELECT password FROM users WHERE id=%s", (user_id,))
+            before = cur.fetchone()["password"]
+        logged_in_client.post(
+            f"/users/edit/{user_id}",
+            data={"role": "admin", "new_password": "brandnewpass123", "confirm_password": "brandnewpass123"},
+            follow_redirects=True,
+        )
+        with db.cursor() as cur:
+            cur.execute("SELECT password FROM users WHERE id=%s", (user_id,))
+            after = cur.fetchone()["password"]
+        assert after == before
+
+    def test_edit_still_allows_subnet_and_timeout_changes(self, logged_in_client, db):
+        user_id = self._seed_oidc_user(db, role="admin")
+        r = logged_in_client.post(
+            f"/users/edit/{user_id}",
+            data={"role": "admin", "timeout": "45", "subnet_ids": "all"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        with db.cursor() as cur:
+            cur.execute("SELECT session_timeout FROM users WHERE id=%s", (user_id,))
+            assert cur.fetchone()["session_timeout"] == 45
+
+    def test_link_to_sso_converts_a_local_user(self, logged_in_client, db):
+        from jen.models.user import hash_password as _hash
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role) VALUES ('link_me1', %s, 'viewer')",
+                (_hash("localpass123"),),
+            )
+            user_id = cur.lastrowid
+        db.commit()
+
+        r = logged_in_client.post(
+            f"/users/link-sso/{user_id}", data={"external_id": "idp-sub-999"}, follow_redirects=True
+        )
+        assert r.status_code == 200
+        with db.cursor() as cur:
+            cur.execute("SELECT auth_provider, external_id, must_change_password FROM users WHERE id=%s", (user_id,))
+            row = cur.fetchone()
+        assert row["auth_provider"] == "oidc"
+        assert row["external_id"] == "idp-sub-999"
+        assert row["must_change_password"] == 0
+
+    def test_link_to_sso_requires_external_id(self, logged_in_client, db):
+        from jen.models.user import hash_password as _hash
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role) VALUES ('link_me2', %s, 'viewer')",
+                (_hash("localpass123"),),
+            )
+            user_id = cur.lastrowid
+        db.commit()
+
+        r = logged_in_client.post(f"/users/link-sso/{user_id}", data={"external_id": ""}, follow_redirects=True)
+        assert r.status_code == 200
+        with db.cursor() as cur:
+            cur.execute("SELECT auth_provider FROM users WHERE id=%s", (user_id,))
+            assert cur.fetchone()["auth_provider"] == "local"
+
+    def test_link_to_sso_refuses_duplicate_external_id(self, logged_in_client, db):
+        self._seed_oidc_user(db, username="ssouser_dupe1", external_id="dupe-sub")
+        from jen.models.user import hash_password as _hash
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role) VALUES ('link_me3', %s, 'viewer')",
+                (_hash("localpass123"),),
+            )
+            user_id = cur.lastrowid
+        db.commit()
+
+        r = logged_in_client.post(f"/users/link-sso/{user_id}", data={"external_id": "dupe-sub"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"already linked" in r.data.lower()
+        with db.cursor() as cur:
+            cur.execute("SELECT auth_provider FROM users WHERE id=%s", (user_id,))
+            assert cur.fetchone()["auth_provider"] == "local"
