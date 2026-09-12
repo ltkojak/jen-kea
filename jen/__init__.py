@@ -570,6 +570,13 @@ def create_app() -> Flask:
     # ── Blueprints ────────────────────────────────────────────────────────────
     _register_blueprints(app)
 
+    # ── OIDC single sign-on (v5.25.0, Q21) — lazy: no network call here,
+    # even when enabled; the client only fetches the issuer's discovery
+    # document on the first actual login attempt.
+    from jen.services.oidc import init_oidc
+
+    init_oidc(app)
+
     # ── Plugin loader — after core blueprints, before DB init ─────────────────
     from jen.services.plugins import get_nav_items, load_plugins
 

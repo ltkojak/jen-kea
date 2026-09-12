@@ -134,6 +134,27 @@ D2_API_URL: str = ""
 D2_API_USER: str = ""
 D2_API_PASS: str = ""
 
+# ── OIDC single sign-on (v5.25.0, Q21) ────────────────────────────────────────
+# Optional [oidc] section, entirely backward-compatible — every field below
+# defaults to off/blank, so an install with no [oidc] section behaves exactly
+# as before. See jen/services/oidc.py for the login flow and the linking
+# rules (match ONLY on (auth_provider='oidc', external_id), never username
+# or email).
+OIDC_ENABLED: bool = False
+OIDC_ISSUER: str = ""
+OIDC_CLIENT_ID: str = ""
+OIDC_CLIENT_SECRET: str = ""
+OIDC_SCOPES: str = "openid profile email"
+OIDC_USERNAME_CLAIM: str = "preferred_username"
+OIDC_ROLE_CLAIM: str = "groups"
+# "<role>=<claim-value>[,<claim-value>...];..." — see oidc.parse_role_map().
+OIDC_ROLE_MAP: str = "superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer"
+OIDC_DEFAULT_ROLE: str = "viewer"  # or "none" — denies a user with no mapped group
+OIDC_AUTO_CREATE: bool = True
+OIDC_BUTTON_LABEL: str = "Sign in with SSO"
+OIDC_REDIRECT_URI: str = ""  # blank = derive from url_for(..., _external=True)
+OIDC_LOCAL_LOGIN: bool = True  # false hides the password form (escape hatch: /login?local=1)
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 KEA_SERVERS: list = []  # list of server dicts loaded from config
 SUBNET_MAP: dict = {}  # {subnet_id: {"name": str, "cidr": str}}

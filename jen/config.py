@@ -187,6 +187,26 @@ class AppConfig:
         extensions.D2_API_USER = cfg.get("d2", "api_user", fallback=extensions.KEA_API_USER)
         extensions.D2_API_PASS = cfg.get("d2", "api_pass", fallback=extensions.KEA_API_PASS)
 
+        # v5.25.0 (Q21) — [oidc] is entirely optional; apply() only reads
+        # values, it never validates (a bad issuer/role_map here must not
+        # stop a working install from booting — validation happens at
+        # save time, in the settings route).
+        extensions.OIDC_ENABLED = cfg.getboolean("oidc", "enabled", fallback=False)
+        extensions.OIDC_ISSUER = cfg.get("oidc", "issuer", fallback="").strip()
+        extensions.OIDC_CLIENT_ID = cfg.get("oidc", "client_id", fallback="").strip()
+        extensions.OIDC_CLIENT_SECRET = cfg.get("oidc", "client_secret", fallback="")
+        extensions.OIDC_SCOPES = cfg.get("oidc", "scopes", fallback="openid profile email")
+        extensions.OIDC_USERNAME_CLAIM = cfg.get("oidc", "username_claim", fallback="preferred_username")
+        extensions.OIDC_ROLE_CLAIM = cfg.get("oidc", "role_claim", fallback="groups")
+        extensions.OIDC_ROLE_MAP = cfg.get(
+            "oidc", "role_map", fallback="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer"
+        )
+        extensions.OIDC_DEFAULT_ROLE = cfg.get("oidc", "default_role", fallback="viewer").strip().lower()
+        extensions.OIDC_AUTO_CREATE = cfg.getboolean("oidc", "auto_create", fallback=True)
+        extensions.OIDC_BUTTON_LABEL = cfg.get("oidc", "button_label", fallback="Sign in with SSO")
+        extensions.OIDC_REDIRECT_URI = cfg.get("oidc", "redirect_uri", fallback="").strip()
+        extensions.OIDC_LOCAL_LOGIN = cfg.getboolean("oidc", "local_login", fallback=True)
+
         extensions.KEA_SERVERS = self.derive_kea_servers(cfg)
         extensions.SUBNET_MAP = self.derive_subnet_map(cfg)
         extensions.SUBNET6_MAP = self.derive_subnet_map(cfg, section="subnets6")

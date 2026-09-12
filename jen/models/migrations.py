@@ -53,6 +53,15 @@ def _column_type(cur, table: str, column: str) -> str:
     return str(row.get("Type", "")).lower() if row else ""
 
 
+def _index_exists(cur, table: str, index_name: str) -> bool:
+    cur.execute(
+        "SELECT COUNT(*) AS cnt FROM information_schema.STATISTICS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
+        (table, index_name),
+    )
+    return cur.fetchone()["cnt"] > 0
+
+
 # ── Migration 1: baseline schema (final current definitions) ─────────────────
 
 _BASELINE_TABLES = [
@@ -814,6 +823,36 @@ def _m021_config_revision_hash_kind_and_encrypt(db):
             logger.warning("Migration 21: encrypted %d existing config revision(s) at rest", len(rows))
 
 
+def _m022_users_oidc_columns(db):
+    """
+    v5.25.0 (Q21) — single sign-on via OpenID Connect. `auth_provider`
+    distinguishes a local-password account ('local', the default — every
+    existing user stays exactly as they are) from an IdP-managed one
+    ('oidc'); `external_id` is the IdP's own stable subject (the `sub`
+    claim). A repeat OIDC login is matched ONLY on
+    (auth_provider, external_id) — never on username or email, since
+    those can be reassigned or reused at the IdP in ways `sub` never is
+    (see jen/services/oidc.py::find_or_create_user). The unique key is
+    what makes that lookup actually enforce one row per (provider,
+    external_id) pair; MySQL/MariaDB treat every NULL in a unique index
+    as distinct from every other NULL, so local users (external_id
+    always NULL) never collide with each other on it.
+
+    Idempotent: each ADD COLUMN / ADD UNIQUE KEY is skipped if already
+    present, so a re-run (or a crash partway through) is safe.
+    """
+    with db.cursor() as cur:
+        if _column_missing(cur, "users", "auth_provider"):
+            cur.execute("ALTER TABLE users ADD COLUMN auth_provider VARCHAR(16) NOT NULL DEFAULT 'local'")
+            logger.info("Migration 22: users.auth_provider column added")
+        if _column_missing(cur, "users", "external_id"):
+            cur.execute("ALTER TABLE users ADD COLUMN external_id VARCHAR(255) NULL")
+            logger.info("Migration 22: users.external_id column added")
+        if not _index_exists(cur, "users", "uq_users_provider_ext"):
+            cur.execute("ALTER TABLE users ADD UNIQUE KEY uq_users_provider_ext (auth_provider, external_id)")
+            logger.info("Migration 22: uq_users_provider_ext unique key added")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MIGRATIONS = [
@@ -850,6 +889,7 @@ MIGRATIONS = [
         "kea_config_revisions.hash_kind column + encrypt existing config bodies at rest (v5.20.0)",
         _m021_config_revision_hash_kind_and_encrypt,
     ),
+    (22, "users.auth_provider/external_id columns for OIDC single sign-on (v5.25.0)", _m022_users_oidc_columns),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

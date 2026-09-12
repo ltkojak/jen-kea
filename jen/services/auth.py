@@ -117,6 +117,11 @@ CLASS_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 # "1.168.192.in-addr.arpa.") — valid_hostname forbids that trailing dot,
 # so this is its own pattern rather than a reuse.
 DDNS_ZONE_NAME_RE = re.compile(r"^(?=.{1,253}$)([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+$")
+# A Jen local username — the pattern users.py's add/edit routes have always
+# enforced inline; factored out here (v5.25.0, Q21) so oidc.py's
+# find_or_create_user can sanitize a claim value through the exact same
+# rule an admin-created username already has to pass.
+USERNAME_RE = re.compile(r"^[a-zA-Z0-9_\-\.]{1,100}$")
 
 
 def valid_ssh_target(value):
@@ -155,6 +160,12 @@ def valid_class_name(value):
 def valid_ddns_zone_name(value):
     """A D2 ddns-domains zone name (v5.23.0, Q19) — see DDNS_ZONE_NAME_RE."""
     return bool(DDNS_ZONE_NAME_RE.match((value or "").strip()))
+
+
+def valid_username(value):
+    """A Jen local username: letters, numbers, underscores, hyphens, and
+    dots, 1-100 chars. See USERNAME_RE."""
+    return bool(USERNAME_RE.match((value or "").strip()))
 
 
 def valid_dns_lookup_host(value):

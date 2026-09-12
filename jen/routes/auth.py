@@ -8,13 +8,13 @@ import logging
 from datetime import datetime, timezone
 
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
-from flask_login import current_user, login_required, login_user, logout_user
+from flask_login import current_user, login_required, logout_user
 
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.mfa as __mfa
-from jen.models.user import User
+import jen.services.oidc as __oidc
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("auth", __name__)
@@ -123,15 +123,6 @@ def login():
             # Clear rate limit attempts
             __auth.clear_login_attempts(ip, username)
 
-            user = User(
-                row["id"],
-                row["username"],
-                row["role"],
-                row["session_timeout"],
-                row.get("subnet_access"),
-                row.get("must_change_password"),
-            )
-
             # MFA check
             needs_mfa = mfa_mode == "required_all" or (
                 mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin")
@@ -165,20 +156,10 @@ def login():
 
             # v5.17.0 (Q6 6B) — drop everything the pre-auth session carried
             # (Flask sessions are signed cookies; "rotate" == clear + rebuild).
-            session.clear()
-            login_user(user)
-            session["last_active"] = _now_iso()
-            session["auth_at"] = _now_iso()
-            session["_user_cache"] = {
-                "id": user.id,
-                "username": user.username,
-                "role": user.role,
-                "session_timeout": user.session_timeout,
-                "subnet_access": row.get("subnet_access"),
-                "token_version": row.get("token_version", 0),
-                "must_change_password": bool(row.get("must_change_password")),
-            }
-            __user.audit("LOGIN", "auth", f"User {username} logged in from {ip}")
+            # v5.25.0 (Q21) — the clear/login_user/session-keys/audit block
+            # moved to oidc.establish_session() so the OIDC callback can
+            # share it exactly, rather than keeping its own copy in sync.
+            __oidc.establish_session(row, f"User {username} logged in from {ip}")
             return redirect(url_for("dashboard.dashboard"))
 
         # Failed login — record attempt (async, don't block response)

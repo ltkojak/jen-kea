@@ -5,7 +5,6 @@ User management and profile routes.
 """
 
 import logging
-import re
 
 import pymysql
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
@@ -259,7 +258,7 @@ def add_user():
     if not username:
         flash("Username is required.", "error")
         return redirect(url_for("users.users"))
-    if not re.match(r"^[a-zA-Z0-9_\-\.]{1,100}$", username):
+    if not __auth.valid_username(username):
         flash("Username may only contain letters, numbers, underscores, hyphens, and dots.", "error")
         return redirect(url_for("users.users"))
     if len(password) < 8:
