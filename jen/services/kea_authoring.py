@@ -58,16 +58,20 @@ SIBLING_DHCP_KEY = {"dhcp4": "Dhcp6", "dhcp6": "Dhcp4"}
 DHCP_KEY = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6"}
 
 
+_CONF_FILENAMES = {"dhcp4": "kea-dhcp4.conf", "dhcp6": "kea-dhcp6.conf", "d2": "kea-dhcp-ddns.conf"}
+
+
 def conf_path_for(server: dict, service: str) -> str:
     """
     Derive the path for `service`'s config file from the server's known
     kea_conf (always the v4 path today — see jen/services/kea6.py's
-    _kea6_conf_path(), same convention reused here for symmetry). Both
-    protocols' config files live side-by-side in the same directory.
+    _kea6_conf_path(), same convention reused here for symmetry). All
+    three config files (dhcp4, dhcp6, and D2's kea-dhcp-ddns.conf —
+    v5.23.0, Q19) live side-by-side in the same directory.
     """
     kea4_conf = server.get("kea_conf") or extensions.KEA_CONF
     dirname = os.path.dirname(kea4_conf)
-    filename = "kea-dhcp4.conf" if service == "dhcp4" else "kea-dhcp6.conf"
+    filename = _CONF_FILENAMES.get(service, "kea-dhcp6.conf")
     return os.path.join(dirname, filename)
 
 

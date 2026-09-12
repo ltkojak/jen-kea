@@ -122,6 +122,18 @@ KEA6_DB_PASS: str = ""
 KEA6_DB_NAME: str = ""
 KEA6_DB_SSL_CA: str = ""
 
+# ── D2 / kea-dhcp-ddns control socket (v5.23.0, Q19) ──────────────────────────
+# Optional [d2] section — only matters in `direct` connection mode, where
+# the Control Agent isn't there to route a "service": ["d2"] command
+# anywhere. In `ca` mode api_url falls back to [kea] api_url at config-apply
+# time (same fallback jen/config.py already does for [kea6]), since one CA
+# proxies D2 too. api_user/api_pass always fall back to [kea]'s. Applies to
+# the PRIMARY server only — each [kea_server_N] sets its own api_d2_url /
+# api_d2_user / api_d2_pass (see AppConfig.derive_kea_servers).
+D2_API_URL: str = ""
+D2_API_USER: str = ""
+D2_API_PASS: str = ""
+
 # ── Runtime state ────────────────────────────────────────────────────────────
 KEA_SERVERS: list = []  # list of server dicts loaded from config
 SUBNET_MAP: dict = {}  # {subnet_id: {"name": str, "cidr": str}}

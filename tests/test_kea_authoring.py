@@ -33,6 +33,14 @@ class TestConfPathFor:
         monkeypatch.setattr(extensions, "KEA_CONF", "/opt/kea/kea-dhcp4.conf")
         assert conf_path_for({}, "dhcp6") == "/opt/kea/kea-dhcp6.conf"
 
+    def test_d2_path_derived_from_dhcp4_sibling(self):
+        """v5.23.0 (Q19) — kea-dhcp-ddns.conf lives next to kea-dhcp4.conf,
+        same convention as dhcp6."""
+        from jen.services.kea_authoring import conf_path_for
+
+        server = {"kea_conf": "/etc/kea/kea-dhcp4.conf"}
+        assert conf_path_for(server, "d2") == "/etc/kea/kea-dhcp-ddns.conf"
+
 
 class TestCaConfPathFor:
     def test_sibling_to_kea_conf_dir(self):

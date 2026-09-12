@@ -87,6 +87,42 @@ class TestShape:
         assert not any("update" in op for op in helper._OPS)
 
 
+class TestD2Support:
+    """v5.23.0 (Q19) — "d2" (kea-dhcp-ddns) joins dhcp4/dhcp6 as a valid
+    service everywhere one is accepted."""
+
+    def test_d2_is_a_valid_service(self, helper):
+        assert helper._valid_service("d2") is True
+
+    def test_d2_binary_name(self, helper):
+        assert helper._SERVICE_BINARY["d2"] == "kea-dhcp-ddns"
+
+    def test_d2_unit_family_is_dhcp_ddns_not_d2(self, helper):
+        assert helper._SERVICE_UNIT_FAM["d2"] == "dhcp-ddns"
+
+    def test_read_config_accepts_d2_service(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = tmp_path / "kea-dhcp-ddns.conf"
+        p.write_text('{"DhcpDdns": {}}')
+        code, out, _ = _run(helper, "read-config", {"service": "d2", "path": str(p)})
+        assert out["ok"] is True and out["config"] == {"DhcpDdns": {}}
+
+    def test_install_package_uses_the_dhcp_ddns_server_package(self, helper, monkeypatch):
+        calls = []
+
+        class Proc:
+            returncode, stdout, stderr = 0, "installed ok\n", ""
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            return Proc()
+
+        monkeypatch.setattr(helper.subprocess, "run", fake_run)
+        code, out, _ = _run(helper, "install-package", {"service": "d2"})
+        assert out["ok"] is True
+        assert calls[1] == ["apt-get", "install", "-y", "kea-dhcp-ddns-server"]
+
+
 class TestProtocolMisuse:
     def test_unknown_op_exits_2_with_json(self, helper):
         code, out, _ = _run(helper, "frobnicate", {})
@@ -105,7 +141,7 @@ class TestProtocolMisuse:
         stdout, stderr = io.StringIO(), io.StringIO()
         code = helper.main(argv=["jen-kea-helper", "version"], stdin=stdin, stdout=stdout, stderr=stderr)
         assert code == 2
-        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 2}
+        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 3}
 
     def test_stdout_is_exactly_one_json_document(self, helper):
         _, _, _ = _run(helper, "version", {})
@@ -129,14 +165,15 @@ class TestVersion:
         code, out, err = _run(helper, "version", {}, keep_version=True)
         assert code == 0
         assert out["ok"] is True
-        assert out["helper_version"] == helper.HELPER_VERSION == 2
+        assert out["helper_version"] == helper.HELPER_VERSION == 3
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
 
 class TestHelperVersionEnvelope:
     """v2 (v5.16.0) — every response, including protocol-error responses,
-    carries helper_version so Jen learns the real number from any op."""
+    carries helper_version so Jen learns the real number from any op.
+    Bumped to 3 in v5.23.0 (Q19, d2 support)."""
 
     @pytest.mark.parametrize(
         "op,payload",
@@ -149,7 +186,7 @@ class TestHelperVersionEnvelope:
     )
     def test_every_response_carries_helper_version(self, helper, op, payload):
         _code, out, _err = _run(helper, op, payload, keep_version=True)
-        assert out["helper_version"] == 2
+        assert out["helper_version"] == 3
 
 
 class TestPathWalls:
@@ -169,7 +206,14 @@ class TestPathWalls:
         assert helper._allowed_conf_path(p) is False
 
     @pytest.mark.parametrize(
-        "p", ["/etc/kea/kea-dhcp4.conf", "/etc/kea/kea-dhcp6.conf", "/usr/local/etc/kea/kea-dhcp6.conf"]
+        "p",
+        [
+            "/etc/kea/kea-dhcp4.conf",
+            "/etc/kea/kea-dhcp6.conf",
+            "/usr/local/etc/kea/kea-dhcp6.conf",
+            "/etc/kea/kea-dhcp-ddns.conf",
+            "/usr/local/etc/kea/kea-dhcp-ddns.conf",
+        ],
     )
     def test_conf_path_allowed(self, helper, p):
         assert helper._allowed_conf_path(p) is True
@@ -268,6 +312,21 @@ class TestTestConfig:
             helper, "test-config", {"service": "dhcp4", "path": p, "config": {}}, path_env="/nonexistent"
         )
         assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4"}
+
+    def test_d2_missing_binary_names_kea_dhcp_ddns(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = str(tmp_path / "kea-dhcp-ddns.conf")
+        code, out, _ = _run(helper, "test-config", {"service": "d2", "path": p, "config": {}}, path_env="/nonexistent")
+        assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp-ddns"}
+
+    def test_d2_pass_runs_the_kea_dhcp_ddns_binary(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = str(tmp_path / "kea-dhcp-ddns.conf")
+        bindir = _fake_kea_bin(tmp_path, "kea-dhcp-ddns", exit_code=0)
+        code, out, _ = _run(
+            helper, "test-config", {"service": "d2", "path": p, "config": {"DhcpDdns": {}}}, path_env=bindir
+        )
+        assert out == {"ok": True}
 
     def test_pass_and_tmp_is_removed(self, helper, tmp_path, monkeypatch):
         p = self._paths(helper, tmp_path, monkeypatch)
@@ -464,6 +523,29 @@ class TestService:
         monkeypatch.setattr(helper.subprocess, "run", lambda *a, **k: Proc())
         code, out, _ = _run(helper, "service", {"service": "dhcp4", "action": "restart"})
         assert out == {"ok": False, "error": "no-unit"}
+
+    def test_d2_tries_the_dhcp_ddns_unit_names(self, helper, monkeypatch):
+        """v5.23.0 (Q19) — d2's unit family is "dhcp-ddns", not "d2"."""
+        calls = []
+
+        class Proc:
+            def __init__(self, rc=0, out="", err=""):
+                self.returncode, self.stdout, self.stderr = rc, out, err
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            if argv[:3] == ["systemctl", "show", "-p"]:
+                unit = argv[-1]
+                return Proc(out="loaded" if unit == "kea-dhcp-ddns-server" else "not-found")
+            if argv[:2] == ["systemctl", "is-active"]:
+                return Proc(out="active")
+            return Proc(rc=0)
+
+        monkeypatch.setattr(helper.subprocess, "run", fake_run)
+        code, out, _ = _run(helper, "service", {"service": "d2", "action": "restart"})
+        assert out == {"ok": True, "unit": "kea-dhcp-ddns-server", "state": "active"}
+        show_calls = [c[-1] for c in calls if c[:3] == ["systemctl", "show", "-p"]]
+        assert show_calls == ["kea-dhcp-ddns-server"]  # found on the first try
 
     def test_bad_action(self, helper):
         code, out, _ = _run(helper, "service", {"service": "dhcp4", "action": "obliterate"})

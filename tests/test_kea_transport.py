@@ -230,6 +230,97 @@ class TestPerServerV6Precedence:
         assert fake_http.calls[0]["url"] == "http://kea6-primary:8006"
 
 
+class TestD2Transport:
+    """v5.23.0 (Q19) — D2 (kea-dhcp-ddns) is mode-aware like dhcp6, but
+    with its own precedence: a server's api_d2_url wins outright; failing
+    that, the primary-only [d2] globals (server is None); failing that,
+    in ca mode, that server's own api_url (the CA proxies D2 too); direct
+    mode with nothing configured returns the Q9 error dict."""
+
+    @pytest.fixture(autouse=True)
+    def _d2_globals(self, monkeypatch):
+        # ca-mode default: D2_API_URL equals KEA_API_URL — AppConfig.apply's
+        # ca-mode fallback (same reasoning as _kea_globals's KEA6_API_URL
+        # default above). Direct-mode tests below explicitly clear this,
+        # same as TestDirectMode._direct does for KEA6_API_URL.
+        monkeypatch.setattr(extensions, "D2_API_URL", "http://kea4:8000")
+        monkeypatch.setattr(extensions, "D2_API_USER", "u4")
+        monkeypatch.setattr(extensions, "D2_API_PASS", "p4")
+
+    def test_ca_mode_primary_falls_back_to_kea_api_url_when_no_d2_global(self, fake_http):
+        kea_svc.kea_command("version-get", service="d2")
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea4:8000"
+        assert c["json"] == {"command": "version-get", "service": ["d2"]}
+
+    def test_ca_mode_primary_prefers_the_d2_global_when_set(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "D2_API_URL", "http://d2-primary:8000")
+        monkeypatch.setattr(extensions, "D2_API_USER", "ud2")
+        monkeypatch.setattr(extensions, "D2_API_PASS", "pd2")
+        kea_svc.kea_command("version-get", service="d2")
+        c = fake_http.calls[0]
+        assert c["url"] == "http://d2-primary:8000"
+        assert c["auth"] == ("ud2", "pd2")
+
+    def test_ca_mode_standby_without_api_d2_url_uses_its_own_v4_endpoint(self, fake_http):
+        srv = {"api_url": "http://kea02:8000", "api_user": "u2", "api_pass": "p2"}
+        kea_svc.kea_command("version-get", service="d2", server=srv)
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02:8000"
+        assert c["auth"] == ("u2", "p2")
+
+    def test_per_server_api_d2_url_wins_over_everything(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "D2_API_URL", "http://global-d2:8000")
+        srv = {
+            "api_url": "http://kea02:8000",
+            "api_user": "u2",
+            "api_pass": "p2",
+            "api_d2_url": "http://kea02-d2:8000",
+            "api_d2_user": "u2d2",
+            "api_d2_pass": "p2d2",
+        }
+        kea_svc.kea_command("version-get", service="d2", server=srv)
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02-d2:8000"
+        assert c["auth"] == ("u2d2", "p2d2")
+
+    def test_api_d2_url_only_keeps_its_own_v4_creds(self, fake_http):
+        srv = {"api_url": "http://kea02:8000", "api_user": "u2", "api_pass": "p2", "api_d2_url": "http://kea02-d2:8000"}
+        kea_svc.kea_command("version-get", service="d2", server=srv)
+        c = fake_http.calls[0]
+        assert c["url"] == "http://kea02-d2:8000"
+        assert c["auth"] == ("u2", "p2")  # not the global D2 user/pass
+
+    def test_direct_mode_with_nothing_configured_returns_an_error_dict_without_posting(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "D2_API_URL", "")  # no v4 fallback in direct mode
+        result = kea_svc.kea_command("version-get", service="d2")
+        assert result["result"] == 1
+        assert "kea-dhcp-ddns control-socket" in result["text"]
+        assert fake_http.calls == []
+
+    def test_direct_mode_uses_the_d2_global_for_the_primary(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "D2_API_URL", "http://d2:53001")
+        kea_svc.kea_command("version-get", service="d2")
+        c = fake_http.calls[0]
+        assert c["url"] == "http://d2:53001"
+        assert "service" not in c["json"]
+
+    def test_direct_mode_per_server_api_d2_url_posts_there(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        srv = {"api_url": "http://kea02:8000", "api_d2_url": "http://kea02-d2:53001"}
+        kea_svc.kea_command("version-get", service="d2", server=srv)
+        assert fake_http.calls[0]["url"] == "http://kea02-d2:53001"
+
+    def test_direct_mode_standby_with_no_api_d2_url_does_not_fall_back_to_its_v4_url(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        srv = {"api_url": "http://kea02:8000"}  # no api_d2_url
+        result = kea_svc.kea_command("version-get", service="d2", server=srv)
+        assert result["result"] == 1
+        assert fake_http.calls == []
+
+
 class TestResponseNormalization:
     def test_list_wrapped_response_is_unwrapped(self, fake_http):
         fake_http.reply = [{"result": 0, "text": "ok"}]

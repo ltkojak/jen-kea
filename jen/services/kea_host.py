@@ -41,6 +41,13 @@ JEN_HELPER_MIN_VERSION = 1
 # change capture. A host below this still works; the Settings → Kea SSH
 # table shows an "upgrade available" hint and nothing else changes.
 JEN_HELPER_WANT_VERSION = 2
+# v5.23.0 (Q19) — the version D2 support needs. Deliberately NOT folded
+# into JEN_HELPER_WANT_VERSION: D2 is an optional subsystem most installs
+# never touch, so bumping the general "upgrade available" threshold to 3
+# would nag every operator instead of only the ones who open the DDNS
+# page's D2 tabs. Checked there specifically (d2_supported below), not by
+# the Settings → Kea SSH table.
+D2_HELPER_MIN_VERSION = 3
 _HELPER_STATUS_KEY = "kea_helper_status"
 
 # stderr fragments that mean "the helper isn't callable here" rather than
@@ -139,6 +146,19 @@ def record_helper_status(server_id, version, legacy_grant: bool | None = None) -
 
 def _known_version(server_id):
     return helper_status().get(str(server_id), {}).get("version")
+
+
+def d2_supported(server_id) -> bool:
+    """True iff the last-recorded helper version for this server is known
+    to be >= D2_HELPER_MIN_VERSION. False (not None) when nothing has been
+    recorded yet — a page gating the D2 tabs on this should treat "unknown"
+    the same as "not yet confirmed," matching JEN_HELPER_MIN_VERSION's own
+    fail-closed default elsewhere in this module."""
+    v = _known_version(server_id)
+    return isinstance(v, int) and v >= D2_HELPER_MIN_VERSION
+
+
+_D2_NEEDS_HELPER = "D2 needs jen-kea-helper v3+ on this host — install or update it from Settings → Kea → SSH."
 
 
 def _record_from_resp(server_id, resp: dict) -> None:
@@ -383,9 +403,17 @@ def test_config(server: dict, service: str, cfg: dict, tls_paths=()) -> dict:
             {"service": service, "path": path, "config": cfg, "tls_paths": _tls_list(tls_paths)},
         )
         _record_from_resp(server.get("id"), resp)
+        if service == "d2" and not resp.get("ok") and resp.get("error") == "not-allowed":
+            return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "helper"}
         return _from_helper_test(resp, "preview-ok")
     except HelperMissing:
         _flag_legacy(server)
+        # v5.23.0 — D2 has no legacy engine: render_author_config_script's
+        # binary/unit logic below only knows dhcp4/dhcp6 (anything not
+        # "dhcp4" is treated as dhcp6), so a d2 call falling through here
+        # would silently run kea-dhcp6 -t against D2's own config content.
+        if service == "d2":
+            return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "legacy"}
         script = __authoring.render_author_config_script(
             service, path, cfg, allow_overwrite=True, dry_run=True, tls_paths=list(tls_paths or [])
         )
@@ -477,9 +505,17 @@ def apply_config(
             conflict = _jen_side_conflict(server, service, cfg)
             if conflict is not None:
                 return conflict
+        if service == "d2" and not resp.get("ok") and resp.get("error") == "not-allowed":
+            return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "helper"}
         result = _from_helper_test(resp, "ok")
     except HelperMissing:
         _flag_legacy(server)
+        # v5.23.0 — see the identical guard in test_config(): D2 has no
+        # legacy engine, and render_author_config_script's dhcp4/dhcp6-only
+        # binary logic would otherwise silently run kea-dhcp6 against D2's
+        # config.
+        if service == "d2":
+            return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "legacy"}
         if expect_sha256 is not None:
             conflict = _jen_side_conflict(server, service, cfg)
             if conflict is not None:
@@ -517,6 +553,9 @@ def _record_revision_after_apply(server, service, cfg, sha, summary, source):
         logger.warning(f"config revision not recorded for server {server.get('id')}/{service}: {e}")
 
 
+_SERVICE_UNIT_FAM = {"dhcp4": "dhcp4", "dhcp6": "dhcp6", "d2": "dhcp-ddns"}
+
+
 def service_action(server: dict, service: str, action: str) -> dict:
     """action ∈ restart | enable | disable | status."""
     try:
@@ -531,11 +570,14 @@ def service_action(server: dict, service: str, action: str) -> dict:
                 "via": "helper",
             }
         err = resp.get("error")
+        if service == "d2" and err == "not-allowed":
+            return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "helper"}
         if err == "no-unit":
+            fam = _SERVICE_UNIT_FAM.get(service, service)
             return {
                 "ok": False,
                 "code": "error",
-                "detail": f"no kea-{service}-server unit on this host",
+                "detail": f"no kea-{fam}-server unit on this host",
                 "via": "helper",
             }
         return {
@@ -546,7 +588,12 @@ def service_action(server: dict, service: str, action: str) -> dict:
         }
     except HelperMissing:
         _flag_legacy(server)
-        fam = "dhcp4" if service == "dhcp4" else "dhcp6"
+        # v5.23.0 — D2 has no legacy engine (see the identical guard in
+        # test_config()/apply_config()); falling through below would
+        # restart kea-dhcp6-server instead of D2's own unit.
+        if service == "d2":
+            return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "legacy"}
+        fam = _SERVICE_UNIT_FAM.get(service, service)
         act = "enable --now" if action == "enable" else "disable --now" if action == "disable" else action
         out, err = _legacy_ssh(
             server,

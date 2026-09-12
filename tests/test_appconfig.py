@@ -173,6 +173,45 @@ class TestKea3ConnectionMode:
         assert extensions.KEA_SERVERS[1]["api6_url"] == "http://s2:8006"
 
 
+class TestD2Config:
+    """v5.23.0 (Q19) — [d2] api_url/api_user/api_pass (primary only, same
+    ca-mode fallback shape as [kea6]) and per-server api_d2_* fields."""
+
+    def test_defaults_when_section_absent(self, isolated_config):
+        assert extensions.D2_API_URL == extensions.KEA_API_URL  # ca-mode fallback
+        assert extensions.D2_API_USER == extensions.KEA_API_USER
+        assert extensions.D2_API_PASS == extensions.KEA_API_PASS
+        assert extensions.KEA_SERVERS[0]["api_d2_url"] == ""
+
+    def test_d2_section_overrides_the_global(self, isolated_config):
+        app_config.write_values(
+            [
+                ("d2", "api_url", "http://d2:53001"),
+                ("d2", "api_user", "d2user"),
+                ("d2", "api_pass", "d2pass"),
+            ]
+        )
+        assert extensions.D2_API_URL == "http://d2:53001"
+        assert extensions.D2_API_USER == "d2user"
+        assert extensions.D2_API_PASS == "d2pass"
+        # the primary server dict carries the RAW value, not the fallback —
+        # jen.services.kea._endpoint_for's own `or` chain does the rest.
+        assert extensions.KEA_SERVERS[0]["api_d2_url"] == "http://d2:53001"
+
+    def test_no_fallback_to_kea_api_url_in_direct_mode(self, isolated_config):
+        app_config.write_value("kea", "connection_mode", "direct")
+        assert extensions.D2_API_URL == ""
+
+    def test_extra_server_api_d2_url_is_its_own_key(self, isolated_config):
+        def add(p):
+            p.add_section("kea_server_2")
+            p.set("kea_server_2", "api_url", "http://s2:8000")
+            p.set("kea_server_2", "api_d2_url", "http://s2-d2:53001")
+
+        app_config.mutate(add)
+        assert extensions.KEA_SERVERS[1]["api_d2_url"] == "http://s2-d2:53001"
+
+
 class TestAtomicWrite:
     """v5.10.4 — _write_parser() writes a sibling .tmp file and
     os.replace()s it into place: an interrupted write can't truncate

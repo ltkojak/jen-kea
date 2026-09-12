@@ -177,6 +177,16 @@ class AppConfig:
         extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
         extensions.KEA6_DB_SSL_CA = cfg.get("kea6_db", "ssl_ca", fallback=extensions.KEA_DB_SSL_CA)
 
+        # v5.23.0 (Q19) — D2's own control socket, same ca/direct fallback
+        # shape as [kea6] above: in ca mode api_url defaults to the v4 CA
+        # URL (one CA proxies D2 too); in direct mode there's no fallback,
+        # since a bare CA connection_mode of "direct" means every daemon
+        # (D2 included) has its own http control socket.
+        _d2_url_fallback = extensions.KEA_API_URL if extensions.KEA_CONNECTION_MODE == "ca" else ""
+        extensions.D2_API_URL = cfg.get("d2", "api_url", fallback=_d2_url_fallback)
+        extensions.D2_API_USER = cfg.get("d2", "api_user", fallback=extensions.KEA_API_USER)
+        extensions.D2_API_PASS = cfg.get("d2", "api_pass", fallback=extensions.KEA_API_PASS)
+
         extensions.KEA_SERVERS = self.derive_kea_servers(cfg)
         extensions.SUBNET_MAP = self.derive_subnet_map(cfg)
         extensions.SUBNET6_MAP = self.derive_subnet_map(cfg, section="subnets6")
@@ -299,6 +309,12 @@ class AppConfig:
                 # NOT a fallback — pre-filling would mask that chain.
                 "api6_user": cfg.get("kea6", "api_user", fallback=""),
                 "api6_pass": cfg.get("kea6", "api_pass", fallback=""),
+                # v5.23.0 (Q19) — same shape as api6_* above: the raw
+                # [d2] value, not a fallback (jen.services.kea._endpoint_for's
+                # `or` chain does the ca-mode/primary-only fallback).
+                "api_d2_url": cfg.get("d2", "api_url", fallback=""),
+                "api_d2_user": cfg.get("d2", "api_user", fallback=""),
+                "api_d2_pass": cfg.get("d2", "api_pass", fallback=""),
                 "api_user": primary_user,
                 "api_pass": primary_pass,
                 "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
@@ -337,6 +353,9 @@ class AppConfig:
                     # rest.
                     "api6_user": cfg.get(sec, "api6_user", fallback=""),
                     "api6_pass": cfg.get(sec, "api6_pass", fallback=""),
+                    "api_d2_url": cfg.get(sec, "api_d2_url", fallback=""),
+                    "api_d2_user": cfg.get(sec, "api_d2_user", fallback=""),
+                    "api_d2_pass": cfg.get(sec, "api_d2_pass", fallback=""),
                     "api_user": cfg.get(sec, "api_user", fallback=primary_user),
                     "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
                     "ssh_host": cfg.get(sec, "ssh_host", fallback=""),

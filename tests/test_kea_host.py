@@ -154,6 +154,79 @@ class TestLegacyFallback:
         assert res["ok"] is True and res["via"] == "legacy"
 
 
+class TestD2NeedsHelper:
+    """v5.23.0 (Q19) — D2 has no legacy engine at all: a v1/v2 helper
+    (helper present, but predates d2 support) answers "not-allowed", and
+    a genuinely missing helper must NOT fall through to
+    render_author_config_script / the `fam = dhcp4 if ... else dhcp6`
+    legacy systemctl string — both would silently treat d2 as dhcp6."""
+
+    def test_test_config_old_helper_gives_a_clear_message(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "not-allowed"}), "")])
+        res = kea_host.test_config(SERVER, "d2", {"DhcpDdns": {}})
+        assert res["ok"] is False and res["via"] == "helper"
+        assert "v3" in res["detail"] and "helper" in res["detail"].lower()
+
+    def test_apply_config_old_helper_gives_a_clear_message(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "not-allowed"}), "")])
+        res = kea_host.apply_config(SERVER, "d2", {"DhcpDdns": {}})
+        assert res["ok"] is False and res["via"] == "helper"
+        assert "v3" in res["detail"]
+
+    def test_service_action_old_helper_gives_a_clear_message(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "not-allowed"}), "")])
+        res = kea_host.service_action(SERVER, "d2", "restart")
+        assert res["ok"] is False and res["via"] == "helper"
+        assert "v3" in res["detail"]
+
+    def test_test_config_no_helper_does_not_fall_through_to_legacy(self, monkeypatch, app):
+        made = _connect_seq(monkeypatch, [("", "sudo: a password is required")])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.test_config(SERVER, "d2", {"DhcpDdns": {}})
+        assert res["ok"] is False and res["via"] == "legacy"
+        assert "v3" in res["detail"]
+        assert len(made) == 1  # never opened a second connection to run a legacy script
+
+    def test_apply_config_no_helper_does_not_fall_through_to_legacy(self, monkeypatch, app):
+        made = _connect_seq(monkeypatch, [("", "sudo: a password is required")])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "d2", {"DhcpDdns": {}})
+        assert res["ok"] is False and res["via"] == "legacy"
+        assert len(made) == 1
+
+    def test_service_action_no_helper_does_not_fall_through_to_legacy(self, monkeypatch, app):
+        made = _connect_seq(monkeypatch, [("", "sudo: a password is required")])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.service_action(SERVER, "d2", "restart")
+        assert res["ok"] is False and res["via"] == "legacy"
+        assert len(made) == 1
+
+    def test_service_action_no_unit_names_the_dhcp_ddns_unit(self, monkeypatch, quiet_status):
+        """A real v3 helper answering "no-unit" (D2 not installed) is a
+        different case from "not-allowed" (helper too old) — the message
+        should name the actual unit family, not "kea-d2-server"."""
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "no-unit"}), "")])
+        res = kea_host.service_action(SERVER, "d2", "restart")
+        assert "kea-dhcp-ddns-server" in res["detail"]
+
+
+class TestD2Supported:
+    def test_false_when_unknown(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        assert kea_host.d2_supported(1) is False
+
+    def test_false_when_below_min(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 2}})
+        assert kea_host.d2_supported(1) is False
+
+    def test_true_when_at_or_above_min(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 3}})
+        assert kea_host.d2_supported(1) is True
+
+
 class TestFlagLegacyDedupes:
     def test_one_flash_per_server_per_request(self, monkeypatch, app):
         seen = []

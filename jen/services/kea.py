@@ -123,11 +123,11 @@ def validate_client_tls_material(cert_path: str, key_path: str, ca_path: str) ->
 def _endpoint_for(server: dict, service: str):
     """
     Resolve (url, user, pwd) for one command — or return an error dict
-    when a dhcp6 command has nowhere to go in direct mode.
+    when a dhcp6 or d2 command has nowhere to go in direct mode.
 
-    dhcp4 (and anything that isn't "dhcp6") behaves exactly as it has
+    dhcp4 (and anything that isn't "dhcp6"/"d2") behaves exactly as it has
     since v4.0.0: the given server dict, or the [kea] globals when server
-    is None. Only dhcp6 routing is mode-aware.
+    is None. dhcp6 and d2 routing are mode-aware.
 
     v5.10.3 — a server's v6 endpoint is THAT SERVER's: its api6_* fields,
     else (ca mode) its own api_url/api_user/api_pass. The KEA6_* globals
@@ -140,19 +140,28 @@ def _endpoint_for(server: dict, service: str):
     direct = extensions.KEA_CONNECTION_MODE == "direct"
 
     if service == "d2":
-        # kea-dhcp-ddns (D2). In ca mode the Control Agent forwards a
-        # `service: ["d2"]` command to it, so D2 rides the same endpoint
-        # as dhcp4. Direct mode needs D2's own control socket URL — the
-        # [d2] config section that carries it is Q15's; until then this
-        # is a reserved error message, matching the dhcp6 branch below.
-        if direct:
+        # kea-dhcp-ddns (D2), v5.23.0 (Q19). In ca mode the Control Agent
+        # forwards a `service: ["d2"]` command to it, so D2 rides the same
+        # endpoint as dhcp4 by default. Direct mode needs D2's own control
+        # socket — same precedence shape as the dhcp6 branch below: a
+        # server's own api_d2_url wins, else (server is None — the primary
+        # only) the [d2] globals, which jen/config.py already folds the
+        # ca-mode fallback to KEA_API_URL into at config-apply time.
+        if server is None:
+            url = extensions.D2_API_URL
+            user = extensions.D2_API_USER
+            pwd = extensions.D2_API_PASS
+        else:
+            v4_url_fallback = "" if direct else server.get("api_url", "")
+            url = server.get("api_d2_url") or v4_url_fallback
+            user = server.get("api_d2_user") or server.get("api_user", "")
+            pwd = server.get("api_d2_pass") or server.get("api_pass", "")
+        if direct and not url:
             return {
                 "result": 1,
                 "text": "D2 needs a kea-dhcp-ddns control-socket URL — set [d2] api_url (Settings → Kea).",
             }
-        if server is None:
-            return extensions.KEA_API_URL, extensions.KEA_API_USER, extensions.KEA_API_PASS
-        return server.get("api_url", ""), server.get("api_user", ""), server.get("api_pass", "")
+        return url, user, pwd
 
     if service == "dhcp6":
         if server is None:
