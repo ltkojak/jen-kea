@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Review Windows DHCP Import{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🪟 Review Import</h1>
+    <p>Nothing has been written to Kea yet. Uncheck anything you don't want, adjust the subnet ID or name if needed, then continue.</p>
+</div>
+
+{% if plan.warnings %}
+<div class="card" style="border-color:var(--warning);margin-bottom:20px;">
+    <div class="card-header"><span class="card-title">⚠️ {{ plan.warnings|length }} warning(s) from the export</span></div>
+    <ul style="margin:0;padding-left:20px;font-size:13px;color:var(--text-muted);">
+        {% for w in plan.warnings %}
+        <li>{{ w }}</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('subnets.import_windows_preview') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    {% if plan.server_options %}
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><h3>Server-level options</h3></div>
+        <label style="font-size:13px;cursor:pointer;">
+            <input type="checkbox" name="server_options" value="1">
+            Import {{ server_options_count }} server-level option(s) as global options
+        </label>
+        <div class="form-hint">Off by default — server-level options usually overlap with what each subnet already sets.</div>
+    </div>
+    {% endif %}
+
+    <div class="card" style="margin-bottom:16px;padding:0;overflow-x:auto;">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Include</th>
+                    <th>Scope</th>
+                    <th>Subnet ID</th>
+                    <th>Name</th>
+                    <th>CIDR</th>
+                    <th>Pools</th>
+                    <th>Lease</th>
+                    <th>Options</th>
+                    <th>Reservations</th>
+                    <th>Policies</th>
+                    <th>Superscope</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>
+                        <input type="checkbox" name="include_{{ row.scope.scope_id }}" value="1"
+                               {% if row.scope.state|lower == 'active' %}checked{% endif %}>
+                    </td>
+                    <td>
+                        {{ row.scope.name }}
+                        {% if row.scope.state|lower != 'active' %}<span style="color:var(--warning);font-size:11px;"> inactive</span>{% endif %}
+                    </td>
+                    <td><input type="number" name="id_{{ row.scope.scope_id }}" value="{{ row.suggested_id }}" style="width:80px;"></td>
+                    <td><input type="text" name="name_{{ row.scope.scope_id }}" value="{{ row.suggested_name }}" style="width:140px;"></td>
+                    <td class="mono">{{ row.cidr }}</td>
+                    <td>{{ row.pool_count }}</td>
+                    <td>{{ row.scope.lease_seconds }}s</td>
+                    <td>{{ row.option_count }}</td>
+                    <td>{{ row.reservation_count }}</td>
+                    <td>{{ row.policy_importable }} / {{ row.policy_total }}</td>
+                    <td>{{ row.scope.superscope_name or '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-primary">👁️ Preview Changes</button>
+        <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">Cancel</a>
+    </div>
+</form>
+{% endblock %}

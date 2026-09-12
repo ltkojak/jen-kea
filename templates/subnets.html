@@ -52,6 +52,9 @@ document.addEventListener('click', function(e) {
         {% if can_manage_networks %}
         <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary">🏷️ Client Classes</a>
         {% endif %}
+        {% if current_user.role == 'superadmin' %}
+        <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">🪟 Import from Windows DHCP</a>
+        {% endif %}
         <a href="/subnets/add" class="btn btn-primary">➕ Add Subnet</a>
     </div>
     {% endif %}

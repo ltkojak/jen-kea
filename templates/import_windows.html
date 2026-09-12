@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Import from Windows DHCP{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🪟 Import from Windows DHCP</h1>
+    <p>Migrate scopes, reservations, and policies from a Windows DHCP server export.</p>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><h3>Step 1 — Upload the export</h3></div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+        On the Windows DHCP server, run:
+    </p>
+    <pre class="mono" style="padding:10px;background:var(--surface2);border-radius:var(--radius);font-size:12px;overflow-x:auto;">Export-DhcpServer -ComputerName &lt;server&gt; -Leases:$False -File C:\dhcp-export.xml</pre>
+    <p style="font-size:13px;color:var(--text-muted);margin:12px 0;">
+        Upload that XML file below. Nothing is written to Kea yet — the next step shows exactly what would
+        be created before anything changes.
+    </p>
+    <form method="POST" action="{{ url_for('subnets.import_windows') }}" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Export File</label>
+            <input type="file" name="xml_file" accept=".xml" required style="width:100%;">
+            <div class="form-hint">The raw XML from Export-DhcpServer, up to 5 MB.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">📤 Upload &amp; Review</button>
+    </form>
+</div>
+
+<div class="alert alert-info">
+    ℹ️ This only ever touches the <strong>primary</strong> Kea server's config. If you run an HA pair,
+    sync the change to the partner the same way you already do for any other config edit.
+</div>
+{% endblock %}

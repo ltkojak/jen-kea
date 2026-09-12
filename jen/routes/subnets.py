@@ -7,8 +7,10 @@ Subnet view and editing routes.
 import logging
 import os
 import re
+import time
+import uuid
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
 import jen.config as __config
@@ -22,9 +24,11 @@ import jen.services.kea_classes as __classes
 import jen.services.kea_config_edit as __edit
 import jen.services.kea_config_view as __view
 import jen.services.kea_host as __host
+import jen.services.win_dhcp_import as __win
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import assert_subnet_access as _assert_subnet_access
+from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("subnets", __name__)
@@ -1986,3 +1990,281 @@ def save_subnet_note():
     except Exception as e:
         logger.error(f"Error saving note for subnet {subnet_id}: {e}")
         return jsonify({"ok": False, "error": "Could not save note."})
+
+
+def _diff_rows(diff_lines):
+    """Tag each unified-diff line with a CSS class for the preview template.
+    Text is escaped by Jinja autoescaping — never rendered raw. Mirrors
+    jen/routes/servers.py's _diff_rows (config history); duplicated rather
+    than imported across blueprints for one small pure helper."""
+    rows = []
+    for ln in diff_lines:
+        if ln.startswith(("+++", "---")):
+            cls = "meta"
+        elif ln.startswith("@@"):
+            cls = "hunk"
+        elif ln.startswith("+"):
+            cls = "add"
+        elif ln.startswith("-"):
+            cls = "del"
+        else:
+            cls = "ctx"
+        rows.append({"cls": cls, "text": ln})
+    return rows
+
+
+# ── Windows DHCP migration wizard (v5.24.0 — Q20) ───────────────────────────
+#
+# A single gunicorn worker (-w 1, see docs/ARCHITECTURE.md §6) makes a
+# module-level in-memory store safe for this: no cross-process races to
+# guard against, and the documented tradeoff is that an in-flight import
+# is lost on a Jen restart — acceptable for a wizard nobody leaves
+# half-finished for 30 minutes. Never applies to more than the PRIMARY
+# server's config — an HA partner gets it the same way the operator
+# already syncs config today (stated on the page, not automated here).
+
+_WIN_IMPORT_PLANS: dict[str, dict] = {}
+_WIN_IMPORT_TTL_SECONDS = 30 * 60
+_WIN_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _prune_win_import_plans():
+    now = time.time()
+    for token in [t for t, entry in _WIN_IMPORT_PLANS.items() if entry["expires"] < now]:
+        _WIN_IMPORT_PLANS.pop(token, None)
+
+
+def _get_win_import_plan():
+    _prune_win_import_plans()
+    token = session.get("win_import_token")
+    return token, _WIN_IMPORT_PLANS.get(token) if token else None
+
+
+@bp.route("/subnets/import-windows", methods=["GET", "POST"])
+@login_required
+@_superadmin_required
+def import_windows():
+    _prune_win_import_plans()
+    if request.method == "GET":
+        return render_template("import_windows.html")
+
+    file = request.files.get("xml_file")
+    if not file or not file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("subnets.import_windows"))
+
+    data = file.read(_WIN_IMPORT_MAX_BYTES + 1)
+    if len(data) > _WIN_IMPORT_MAX_BYTES:
+        flash("That file is larger than the 5 MB limit for a DHCP export.", "error")
+        return redirect(url_for("subnets.import_windows"))
+
+    try:
+        plan = __win.parse_export(data)
+    except Exception as e:
+        logger.warning(f"Windows DHCP export failed to parse: {e}")
+        flash(
+            "Could not parse that file as a Windows DHCP export — make sure it's the genuine XML output "
+            "of Export-DhcpServer, not something else.",
+            "error",
+        )
+        return redirect(url_for("subnets.import_windows"))
+
+    token = uuid.uuid4().hex
+    _WIN_IMPORT_PLANS[token] = {
+        "plan": plan,
+        "expires": time.time() + _WIN_IMPORT_TTL_SECONDS,
+        "subnet_names": None,
+        "selections": None,
+    }
+    session["win_import_token"] = token
+    __user.audit(
+        "IMPORT_WINDOWS_DHCP", "upload", f"{len(plan.scopes)} scope(s) parsed, {len(plan.warnings)} warning(s)"
+    )
+    return redirect(url_for("subnets.import_windows_review"))
+
+
+def _suggested_subnet_names(plan):
+    """{scope_id: {"id": <next free>, "name": <sanitized scope name>}} —
+    computed fresh every time the review page renders, so ids stay
+    contiguous even if the operator unticks/reticks scopes between
+    loads (this is a suggestion, not a commitment until Apply)."""
+    existing_ids = _get_kea_subnet_ids() | set(extensions.SUBNET_MAP.keys())
+    next_id = max(existing_ids, default=0) + 1
+    out = {}
+    for scope in plan.scopes:
+        name = (
+            scope.name if __auth.valid_shared_network_name(scope.name) else re.sub(r"[^A-Za-z0-9_.-]", "_", scope.name)
+        )
+        out[scope.scope_id] = {"id": next_id, "name": name[:64] or scope.scope_id}
+        next_id += 1
+    return out
+
+
+@bp.route("/subnets/import-windows/review")
+@login_required
+@_superadmin_required
+def import_windows_review():
+    token, entry = _get_win_import_plan()
+    if entry is None:
+        flash("Your Windows DHCP import expired or was never started — upload the export again.", "error")
+        return redirect(url_for("subnets.import_windows"))
+    plan = entry["plan"]
+    suggested = _suggested_subnet_names(plan)
+    rows = []
+    for scope in plan.scopes:
+        mapped = __win.scope_to_subnet(scope, suggested[scope.scope_id]["id"])
+        rows.append(
+            {
+                "scope": scope,
+                "suggested_id": suggested[scope.scope_id]["id"],
+                "suggested_name": suggested[scope.scope_id]["name"],
+                "cidr": mapped.subnet["subnet"],
+                "pool_count": len(mapped.subnet["pools"]),
+                "option_count": len(mapped.subnet["option-data"]),
+                "reservation_count": len(scope.reservations),
+                "policy_total": len(scope.policies),
+                "policy_importable": len(mapped.classes),
+            }
+        )
+    return render_template(
+        "import_windows_review.html",
+        plan=plan,
+        rows=rows,
+        server_options_count=len(plan.server_options),
+    )
+
+
+def _read_review_form(plan, form):
+    """The review/preview form's fields -> (subnet_names, selections),
+    the exact shapes win_dhcp_import.to_kea expects."""
+    subnet_names = {}
+    scope_selected = {}
+    for scope in plan.scopes:
+        sid = scope.scope_id
+        scope_selected[sid] = form.get(f"include_{sid}") == "1"
+        try:
+            chosen_id = int(form.get(f"id_{sid}", "").strip())
+        except (TypeError, ValueError):
+            chosen_id = None
+        chosen_name = form.get(f"name_{sid}", "").strip() or scope.name
+        subnet_names[sid] = {"id": chosen_id, "name": chosen_name}
+    selections = {"scopes": scope_selected, "server_options": form.get("server_options") == "1"}
+    return subnet_names, selections
+
+
+@bp.route("/subnets/import-windows/preview", methods=["POST"])
+@login_required
+@_superadmin_required
+def import_windows_preview():
+    token, entry = _get_win_import_plan()
+    if entry is None:
+        flash("Your Windows DHCP import expired or was never started — upload the export again.", "error")
+        return redirect(url_for("subnets.import_windows"))
+    plan = entry["plan"]
+
+    subnet_names, selections = _read_review_form(plan, request.form)
+    bad_ids = [
+        sid for sid, sel in selections["scopes"].items() if sel and (subnet_names.get(sid) or {}).get("id") is None
+    ]
+    if bad_ids:
+        flash("Every included scope needs a valid whole-number subnet ID.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+    chosen_ids = [v["id"] for k, v in subnet_names.items() if selections["scopes"].get(k) and v["id"] is not None]
+    if len(chosen_ids) != len(set(chosen_ids)):
+        flash("Two included scopes were given the same subnet ID — make them unique.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    entry["subnet_names"] = subnet_names
+    entry["selections"] = selections
+
+    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
+    if primary is None or not primary.get("ssh_host"):
+        flash("The primary Kea server needs SSH configured before you can preview or apply an import.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    existing_cfg, _sha = __host.read_config_versioned(primary, "dhcp4")
+    if existing_cfg is None:
+        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    new_cfg, reservations, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
+    test_result = __host.test_config(primary, "dhcp4", new_cfg)
+
+    from jen.services import config_revisions as _rev
+
+    config_diff = _rev.diff(_rev.canonical(existing_cfg), _rev.canonical(new_cfg), "current", "after import")
+
+    return render_template(
+        "import_windows_preview.html",
+        report=report,
+        test_result=test_result,
+        diff_rows=_diff_rows(config_diff),
+        reservation_count=len(reservations),
+        subnet_count=len(subnets_to_declare),
+    )
+
+
+@bp.route("/subnets/import-windows/apply", methods=["POST"])
+@login_required
+@_superadmin_required
+def import_windows_apply():
+    token, entry = _get_win_import_plan()
+    if entry is None or entry.get("selections") is None:
+        flash("Your Windows DHCP import expired — upload the export again.", "error")
+        return redirect(url_for("subnets.import_windows"))
+    plan = entry["plan"]
+    subnet_names = entry["subnet_names"]
+    selections = entry["selections"]
+
+    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
+    if primary is None or not primary.get("ssh_host"):
+        flash("The primary Kea server needs SSH configured before you can apply an import.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    existing_cfg, sha = __host.read_config_versioned(primary, "dhcp4")
+    if existing_cfg is None:
+        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    new_cfg, reservation_rows, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
+
+    apply_result = __host.apply_config(primary, "dhcp4", new_cfg, expect_sha256=sha, summary="Windows DHCP import")
+    if apply_result["code"] == "conflict":
+        flash(_conflict_flash(primary.get("name", "the primary server")), "error")
+        return redirect(url_for("subnets.import_windows_review"))
+    if apply_result["code"] != "ok":
+        flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    restart = __host.service_action(primary, "dhcp4", "restart")
+    if restart["ok"]:
+        report.append("✅ Kea restarted on the primary server.")
+    else:
+        report.append(f"⚠️ Config applied, but Kea did not restart cleanly: {restart['detail']}")
+
+    reservation_results = {"added": 0, "errors": []}
+    for res in reservation_rows:
+        result = __kea.kea_command("reservation-add", arguments={"reservation": res})
+        if result.get("result") == 0:
+            reservation_results["added"] += 1
+        else:
+            reservation_results["errors"].append(
+                f"{res['ip-address']} / {res['hw-address']}: {result.get('text', 'unknown error')}"
+            )
+    report.append(f"Reservations: {reservation_results['added']} added, {len(reservation_results['errors'])} failed.")
+    report.extend(f"❌ reservation {e}" for e in reservation_results["errors"])
+
+    if subnets_to_declare:
+        new_map = dict(extensions.SUBNET_MAP)
+        new_map.update(subnets_to_declare)
+        __config.write_subnets_config(new_map)
+        report.append(f"{len(subnets_to_declare)} subnet(s) registered with Jen.")
+
+    _WIN_IMPORT_PLANS.pop(token, None)
+    session.pop("win_import_token", None)
+    __user.audit(
+        "IMPORT_WINDOWS_DHCP",
+        "apply",
+        f"{len(subnets_to_declare)} subnet(s), {reservation_results['added']} reservation(s)",
+    )
+    return render_template("import_windows_result.html", report=report)
