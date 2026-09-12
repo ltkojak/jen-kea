@@ -572,11 +572,23 @@ class TestServerClockOffset:
 
 
 class TestEndpointForD2:
+    """v5.23.0 (Q19) note: server=None (the primary) now reads
+    extensions.D2_API_URL/USER/PASS directly — AppConfig.apply() is what
+    bakes the ca-mode-falls-back-to-[kea] / direct-mode-no-fallback
+    behavior into that global (same shape as KEA6_API_URL), so these
+    tests set it explicitly to simulate each mode rather than relying on
+    _endpoint_for to re-derive it. See tests/test_kea_transport.py's
+    TestD2Transport for the full precedence matrix (per-server
+    api_d2_url, etc.)."""
+
     def test_ca_mode_uses_v4_endpoint(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
         monkeypatch.setattr(extensions, "KEA_API_URL", "http://kea:8000")
         monkeypatch.setattr(extensions, "KEA_API_USER", "u4")
         monkeypatch.setattr(extensions, "KEA_API_PASS", "p4")
+        monkeypatch.setattr(extensions, "D2_API_URL", "http://kea:8000")  # ca-mode fallback
+        monkeypatch.setattr(extensions, "D2_API_USER", "u4")
+        monkeypatch.setattr(extensions, "D2_API_PASS", "p4")
         assert kea_svc._endpoint_for(None, "d2") == ("http://kea:8000", "u4", "p4")
 
     def test_ca_mode_per_server(self, monkeypatch):
@@ -586,6 +598,7 @@ class TestEndpointForD2:
 
     def test_direct_mode_returns_error_dict(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(extensions, "D2_API_URL", "")  # no v4 fallback in direct mode
         r = kea_svc._endpoint_for(None, "d2")
         assert isinstance(r, dict) and r["result"] == 1 and "[d2] api_url" in r["text"]
 
