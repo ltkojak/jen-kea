@@ -1,0 +1,13 @@
+[Unit]
+Description=Jen plugin install/uninstall (one-shot, root-privileged)
+# v5.27.0 (Q23) — same shape and rationale as jen-update.service: this
+# unit exists so www-data can trigger a root-owned plugin install via
+# `sudo systemctl start --no-block jen-plugin-install.service` (zero
+# parameters, nothing attacker-controllable) instead of extracting
+# registry-downloaded plugin code directly into a directory it can
+# write to and Jen imports from.
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /usr/local/sbin/jen-update-root.py --plugins

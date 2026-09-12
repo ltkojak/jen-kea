@@ -112,13 +112,38 @@ for rollback, creates `current`, and on success removes the flat
 leftovers. `sudo ./install.sh --upgrade` does the same immediately.
 Docker stays flat (no venv, the container is the isolation) and reaches
 the app through the same `JEN_ROOT` fallback.
+
+v5.27.0 — root-owned plugin installs (Q23). A registry-installed
+plugin's code used to be extracted straight into a `www-data`-writable
+directory Jen also imports code from — the one remaining persistence
+foothold for a compromised web process (swap a plugin's `plugin.py`,
+Jen runs it on the next restart). This script now also handles plugin
+installs, on the same request/execute split as the update flow itself:
+`jen/services/plugins.py::install_plugin()`/`uninstall_plugin()` write
+an empty `<id>.install`/`<id>.remove` marker into
+`CONTENT_DIR/plugin-requests/` and trigger `sudo systemctl start
+--no-block jen-plugin-install.service` — a second, separate oneshot
+unit with the exact same zero-parameter shape as `jen-update.service`.
+`--plugins` (the ONE argv this script now ever accepts, and only
+because the sudoers rule pins that exact invocation — see
+`process_plugin_requests()`) re-derives everything from the trust root
+per marker: fetches `plugins/registry.json` fresh, requires a
+tag-pinned `download_url` and a real `sha256` (the same contract
+`install_plugin()`'s in-process path already enforces), downloads and
+verifies the zip, and extracts it root-owned into
+`/opt/jen/plugins-installed/<id>` — deliberately NOT `/opt/jen/plugins`,
+which `_remove_flat_leftovers()` above deletes wholesale after a
+migration run. Docker and dev checkouts have no systemd unit to
+trigger and keep installing in-process, unchanged.
 """
 
 import configparser
 import contextlib
 import hashlib
+import io
 import json
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -128,6 +153,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 
 GITHUB_REPO = "ltkojak/jen-kea"
 GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -151,6 +177,10 @@ CURRENT_LINK = "/opt/jen/current"  # v5.14.0 — relative symlink → releases/<
 SYSTEM_PYTHON = "/usr/bin/python3"
 SELF_INSTALL_PATH = "/usr/local/sbin/jen-update-root.py"
 UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
+# v5.27.0 (Q23) — the second oneshot unit, triggered by
+# jen/services/plugins.py the same way jen-update.service is triggered
+# by settings/updates.py; see main()'s --plugins dispatch.
+PLUGIN_INSTALL_SERVICE_PATH = "/etc/systemd/system/jen-plugin-install.service"
 CONFIG_FILE = "/etc/jen/jen.config"
 # Hardcoded in jen/extensions.py — not configurable. Their presence is
 # exactly what jen.config.ssl_configured() keys on, so the updater can
@@ -162,6 +192,26 @@ SSL_KEY = "/etc/jen/ssl/private.key"
 # in jen/extensions.py the same way the SSL paths above are; the updater
 # migrates pre-5.13 content into it and chowns it to www-data.
 CONTENT_DIR = "/var/lib/jen"
+
+# v5.27.0 (Q23) — root-owned plugin installs. PLUGIN_REQUESTS_DIR mirrors
+# extensions.CONTENT_PLUGIN_REQUESTS_DIR; ROOT_PLUGIN_DIR mirrors
+# extensions.PLUGIN_DIR_ROOT. Deliberately `/opt/jen/plugins-installed`,
+# NOT `/opt/jen/plugins` — the latter is one of _ROLLBACK_ITEMS below and
+# gets rmtree'd wholesale by _remove_flat_leftovers() after a migration
+# run; a real, checked collision, not a hypothetical one.
+PLUGIN_REQUESTS_DIR = "/var/lib/jen/plugin-requests"
+ROOT_PLUGIN_DIR = "/opt/jen/plugins-installed"
+PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
+# Mirrors jen/services/plugins.py::_PLUGIN_ID_RE — duplicated, not
+# imported, since this script can't import the jen package. Slightly
+# stricter (no leading hyphen) than the original; every real registry
+# id already satisfies both.
+_PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+# Same shape tests/test_plugin_registry.py already enforces on every
+# committed registry.json entry — a moving ref like `main` would make a
+# checksum computed once go stale on the very next commit.
+_TAG_PINNED_RE = re.compile(r"/raw/v\d+\.\d+\.\d+$")
 
 # v5.14.0 — the flat parts of /opt/jen. In the versioned layout the
 # previous release directory IS the rollback (it's never touched), so
@@ -190,6 +240,7 @@ _EXTERNAL_ITEMS = {
     "/etc/sudoers.d/jen": "sudoers-jen",
     SELF_INSTALL_PATH: "jen-update-root.py",
     UPDATE_SERVICE_PATH: "jen-update.service",
+    PLUGIN_INSTALL_SERVICE_PATH: "jen-plugin-install.service",
 }
 
 
@@ -334,7 +385,12 @@ def _file_sha256(path):
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, update_service_path=UPDATE_SERVICE_PATH):
+def install_self_update_files(
+    extracted,
+    self_install_path=SELF_INSTALL_PATH,
+    update_service_path=UPDATE_SERVICE_PATH,
+    plugin_install_service_path=PLUGIN_INSTALL_SERVICE_PATH,
+):
     """
     v5.3.3 fix — a real gap found by a third-party review of the v5.2.6
     redesign: the file install (the release directory, plus
@@ -396,6 +452,23 @@ def install_self_update_files(extracted, self_install_path=SELF_INSTALL_PATH, up
         os.replace(tmp_path, update_service_path)
         subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
         log(f"Updated {update_service_path} and reloaded systemd.")
+
+    # v5.27.0 (Q23) — same atomic-replace dance, for the plugin-install unit.
+    new_plugin_service_src = os.path.join(extracted, "jen-plugin-install.service")
+    if os.path.isfile(new_plugin_service_src):
+        dest_dir = os.path.dirname(plugin_install_service_path)
+        fd, tmp_path = tempfile.mkstemp(dir=dest_dir, prefix=".jen-plugin-install-service-", suffix=".tmp")
+        try:
+            with open(new_plugin_service_src, "rb") as src_f:
+                content = src_f.read()
+            os.write(fd, content)
+        finally:
+            os.close(fd)
+        os.chown(tmp_path, 0, 0)
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, plugin_install_service_path)
+        subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
+        log(f"Updated {plugin_install_service_path} and reloaded systemd.")
 
 
 def _venv_usable(python_bin):
@@ -825,6 +898,204 @@ def verify_release_signature(sums_text, sig_bytes, signers_text):
     return result.returncode == 0
 
 
+def _safe_extract_zip(zf, dest_dir):
+    """Extract a ZipFile to dest_dir, refusing any member whose resolved
+    path would land outside dest_dir ("Zip Slip"). Mirrors
+    jen/services/plugins.py::_safe_extract exactly — duplicated, not
+    imported, since this script can't import the jen package."""
+    dest_dir_real = os.path.realpath(dest_dir)
+    os.makedirs(dest_dir_real, exist_ok=True)
+    for member in zf.infolist():
+        member_path = os.path.realpath(os.path.join(dest_dir_real, member.filename))
+        if member_path != dest_dir_real and not member_path.startswith(dest_dir_real + os.sep):
+            raise ValueError(f"Unsafe path in plugin archive: {member.filename!r}")
+    zf.extractall(dest_dir_real)
+
+
+def _chown_recursive_root(path):
+    """chown -R root:root, in pure Python and best-effort per file —
+    guarded by hasattr so the rest of this function's caller stays
+    exercisable on a non-POSIX box (this whole script is stdlib-only
+    and py_compile-checked on Windows; os.chown doesn't exist there)."""
+    if not hasattr(os, "chown"):
+        return
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            with contextlib.suppress(OSError):
+                os.chown(os.path.join(root, name), 0, 0)
+    with contextlib.suppress(OSError):
+        os.chown(path, 0, 0)
+
+
+def _chmod_recursive_a_rX_go_w(path):
+    """Python re-implementation of `chmod -R a+rX,go-w`: world-readable
+    everywhere; world-executable on directories (unconditionally — a
+    directory needs +x to be listable) and on files that already have
+    SOME execute bit (mirrors chmod's capital-X, "only if already
+    executable for somebody"); never group- or other-writable. Kept in
+    pure Python rather than a `/bin/chmod` subprocess call so this stays
+    testable on a non-POSIX dev box."""
+    for root, dirs, files in os.walk(path):
+        for name in dirs:
+            p = os.path.join(root, name)
+            mode = (os.stat(p).st_mode | 0o444 | 0o111) & ~0o022
+            os.chmod(p, mode & 0o7777)
+        for name in files:
+            p = os.path.join(root, name)
+            mode = os.stat(p).st_mode | 0o444
+            if mode & 0o111:
+                mode |= 0o111
+            os.chmod(p, (mode & ~0o022) & 0o7777)
+    top_mode = (os.stat(path).st_mode | 0o444 | 0o111) & ~0o022
+    os.chmod(path, top_mode & 0o7777)
+
+
+def _looks_tag_pinned(download_url):
+    """Q17's contract, enforced here too: download_url must point at a
+    release tag (`.../raw/vX.Y.Z`), never a moving ref like `main` —
+    the same pattern tests/test_plugin_registry.py already checks
+    against the committed registry.json."""
+    return bool(_TAG_PINNED_RE.search(download_url))
+
+
+def _install_one_plugin(
+    plugin_id, root_plugin_dir=ROOT_PLUGIN_DIR, registry_url=PLUGIN_REGISTRY_URL, content_dir=CONTENT_DIR
+):
+    """Fetch plugins/registry.json fresh from the trust root, verify
+    this plugin's entry, download+checksum its zip, extract it
+    zip-slip-safe into a staging dir, then atomically replace the live
+    root-owned copy. If a legacy WRITABLE copy also exists (under
+    content_dir/plugins/<id>), remove it too — once the root-owned copy
+    exists, the writable one would otherwise still win under
+    discover_plugins()'s "later wins" precedence and this install would
+    have hardened nothing.
+
+    Returns a one-line result string: "ok" or "error: <reason>". Never
+    raises — every failure mode is caught and turned into a result
+    string, since the caller deletes the marker and writes this result
+    unconditionally either way."""
+    try:
+        registry = json.loads(fetch_text(registry_url))
+    except Exception as e:
+        return f"error: could not fetch registry: {e}"
+    if not isinstance(registry, list):
+        return "error: registry format invalid (expected a JSON array)"
+
+    entry = next((e for e in registry if e.get("id") == plugin_id), None)
+    if entry is None:
+        return f"error: '{plugin_id}' not found in registry"
+
+    download_url = str(entry.get("download_url", "")).rstrip("/")
+    if not download_url or not _looks_tag_pinned(download_url):
+        return "error: registry entry has no tag-pinned download URL"
+
+    expected_sha256 = str(entry.get("sha256", "")).strip().lower()
+    if not _HEX64_RE.match(expected_sha256):
+        return "error: registry entry has no valid checksum"
+
+    try:
+        zip_bytes, actual_sha256 = fetch_bytes_with_sha256(f"{download_url}/plugin.zip")
+    except Exception as e:
+        return f"error: download failed: {e}"
+
+    if actual_sha256 != expected_sha256:
+        return "error: checksum verification failed"
+
+    staging = os.path.join(root_plugin_dir, f"{plugin_id}.staging-{int(time.time())}")
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            _safe_extract_zip(zf, staging)
+    except Exception as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        return f"error: extraction failed: {e}"
+
+    manifest_path = os.path.join(staging, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        shutil.rmtree(staging, ignore_errors=True)
+        return "error: plugin archive missing manifest.json"
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except Exception as e:
+        shutil.rmtree(staging, ignore_errors=True)
+        return f"error: manifest.json is not valid JSON: {e}"
+    if manifest.get("id") != plugin_id:
+        shutil.rmtree(staging, ignore_errors=True)
+        return f"error: plugin id mismatch (expected {plugin_id!r}, got {manifest.get('id')!r})"
+
+    _chown_recursive_root(staging)
+    _chmod_recursive_a_rX_go_w(staging)
+
+    live_dir = os.path.join(root_plugin_dir, plugin_id)
+    if os.path.isdir(live_dir):
+        shutil.rmtree(live_dir)
+    os.makedirs(root_plugin_dir, exist_ok=True)
+    os.rename(staging, live_dir)
+
+    # A stale writable copy would otherwise still win over the fresh
+    # root-owned one — discover_plugins() checks the writable tree last.
+    writable_dir = os.path.join(content_dir, "plugins", plugin_id)
+    if os.path.isdir(writable_dir):
+        shutil.rmtree(writable_dir, ignore_errors=True)
+        log(f"Removed the now-superseded writable copy of '{plugin_id}'.")
+
+    return "ok"
+
+
+def process_plugin_requests(
+    requests_dir=PLUGIN_REQUESTS_DIR, root_plugin_dir=ROOT_PLUGIN_DIR, registry_url=PLUGIN_REGISTRY_URL
+):
+    """v5.27.0 (Q23) — the --plugins entry point. Scans requests_dir for
+    <id>.install / <id>.remove marker files — empty, written by
+    jen/services/plugins.py as the www-data-side "request", never
+    containing any data of their own — and re-derives everything else
+    from the same trust root the self-update flow already uses; nothing
+    here trusts anything www-data wrote beyond the marker's existence
+    and its filename. Always deletes the marker and writes a one-line
+    result to <requests_dir>/<id>.result, success or failure, so the UI
+    has something to show either way. Never touches the DB — plugin
+    migrations still run in-app, in load_plugins(), the existing path.
+    """
+    if not os.path.isdir(requests_dir):
+        return 0
+    for name in sorted(os.listdir(requests_dir)):
+        if name.endswith(".install"):
+            plugin_id, action = name[: -len(".install")], "install"
+        elif name.endswith(".remove"):
+            plugin_id, action = name[: -len(".remove")], "remove"
+        else:
+            continue
+
+        marker_path = os.path.join(requests_dir, name)
+        if not _PLUGIN_ID_RE.match(plugin_id):
+            log(f"ERROR: ignoring plugin request with an invalid id: {name!r}")
+            with contextlib.suppress(OSError):
+                os.remove(marker_path)
+            continue
+
+        log(f"Processing plugin {action} request for '{plugin_id}'…")
+        if action == "install":
+            result = _install_one_plugin(plugin_id, root_plugin_dir, registry_url)
+        else:
+            live_dir = os.path.join(root_plugin_dir, plugin_id)
+            shutil.rmtree(live_dir, ignore_errors=True)
+            result = "ok"
+
+        with contextlib.suppress(OSError):
+            os.remove(marker_path)
+
+        result_path = os.path.join(requests_dir, f"{plugin_id}.result")
+        try:
+            with open(result_path, "w") as f:
+                f.write(result + "\n")
+            os.chmod(result_path, 0o644)
+        except OSError as e:
+            log(f"ERROR: could not write result for '{plugin_id}': {e}")
+
+        log(f"Plugin {action} for '{plugin_id}': {result}")
+    return 0
+
+
 KEEP_MARKER = ".keep"  # written into a snapshot the CRITICAL path wants preserved
 
 
@@ -1017,6 +1288,18 @@ def _rollback_release(snapshot_dir, prev, migration_run, version, release_dir):
 
 
 def main():
+    # v5.27.0 (Q23) — the ONE argv this script ever accepts, and only
+    # because jen-sudoers pins the entire invocation byte-for-byte
+    # ("sudo systemctl start --no-block jen-plugin-install.service",
+    # which in turn runs this script with exactly this one flag,
+    # nothing attacker-controllable). Anything else is refused outright
+    # rather than silently falling through to the self-update flow.
+    if sys.argv[1:]:
+        if sys.argv[1:] == ["--plugins"]:
+            return process_plugin_requests()
+        log(f"ERROR: unrecognized arguments {sys.argv[1:]!r} — refusing.")
+        return 2
+
     _prune_old_releases()
     log("Checking GitHub for the latest release…")
     data = fetch_json(GITHUB_RELEASES_API)

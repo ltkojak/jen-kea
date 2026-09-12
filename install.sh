@@ -833,6 +833,7 @@ _EXTERNAL_FILES=(
     "$SUDOERS_FILE"
     "/usr/local/sbin/jen-update-root.py"
     "/etc/systemd/system/jen-update.service"
+    "/etc/systemd/system/jen-plugin-install.service"
 )
 snapshot_external_files() {
     [[ "$IS_UPGRADE" == "false" ]] && return
@@ -866,6 +867,7 @@ _restore_external_files() {
             "$(basename "$SUDOERS_FILE")") dest="$SUDOERS_FILE" ;;
             jen-update-root.py) dest="/usr/local/sbin/jen-update-root.py" ;;
             jen-update.service) dest="/etc/systemd/system/jen-update.service" ;;
+            jen-plugin-install.service) dest="/etc/systemd/system/jen-plugin-install.service" ;;
             *) continue ;;
         esac
         if [[ "$dest" == "$SUDOERS_FILE" ]]; then
@@ -1027,6 +1029,13 @@ install_files() {
     if [[ -f "$APP_DIR/jen-update.service" ]]; then
         cp "$APP_DIR/jen-update.service" /etc/systemd/system/jen-update.service
         ok "Installed jen-update.service"
+    fi
+    # v5.27.0 (Q23) — the second oneshot unit, same reasoning as
+    # jen-update.service above: jen-update-root.py --plugins runs as
+    # root, invoked by www-data only via this fixed unit.
+    if [[ -f "$APP_DIR/jen-plugin-install.service" ]]; then
+        cp "$APP_DIR/jen-plugin-install.service" /etc/systemd/system/jen-plugin-install.service
+        ok "Installed jen-plugin-install.service"
     fi
 
     # v5.13.0 — the whole application tree is root-owned and read-only to

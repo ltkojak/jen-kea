@@ -19,12 +19,14 @@ jen-update-root.py is a standalone script, not part of the jen/ package
 loaded here via importlib against its file path.
 """
 
+import hashlib
 import importlib.util
 import io
 import json
 import os
 import pathlib
 import tarfile
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -55,13 +57,19 @@ class TestScriptExistsWithCorrectShape:
 
         ast.parse(_SCRIPT_PATH.read_text())
 
-    def test_script_never_accepts_command_line_arguments(self):
-        """Core security property: this script must read NO input from its
-        caller (www-data, via the systemd unit) at all — it always
-        re-derives everything from GitHub itself."""
+    def test_script_never_accepts_free_form_command_line_arguments(self):
+        """Core security property: this script reads NO free-form input
+        from its caller (www-data, via a systemd unit) — it always
+        re-derives everything from GitHub itself. v5.27.0 (Q23) carved
+        out exactly ONE pinned exception: `sys.argv[1:] == ["--plugins"]`
+        dispatches to the plugin-install flow, and that's safe only
+        because jen-sudoers pins the entire invocation byte-for-byte —
+        www-data can request that this script run with EXACTLY that one
+        argv, never an attacker-chosen one. No general argument parser,
+        and no other argv value is ever consulted."""
         content = _SCRIPT_PATH.read_text()
-        assert "sys.argv" not in content
         assert "argparse" not in content
+        assert 'sys.argv[1:] == ["--plugins"]' in content
 
 
 class TestVerifyReleaseChecksum:
@@ -1195,3 +1203,352 @@ class TestConfirmRunningVersion:
         ):
             jen_update_root._confirm_running_version("9.9.9")
         slp.assert_not_called()
+
+
+# ── v5.27.0 (Q23) — root-owned plugin installs ──────────────────────────────
+
+
+def _make_plugin_zip(plugin_id="test-plugin", bad_member=None):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"id": plugin_id, "name": "Test", "version": "1.0.0"}))
+        zf.writestr(f"{plugin_id}/__init__.py", "# plugin code\n")
+        if bad_member:
+            zf.writestr(bad_member, "evil")
+    return buf.getvalue()
+
+
+def _serve_registry(entries, zips):
+    """A real local http.server serving a fake plugins/registry.json
+    (`entries`, a mutable list — mutate it in place after binding to
+    fill in the real port) and, for any path containing a key of
+    `zips`, that key's zip bytes at /raw/<key>/plugin.zip. Reuses this
+    file's own `_serve()` helper — same httpd-over-real-sockets
+    convention as TestServiceHealthy above, no mocked network I/O."""
+    import http.server
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.endswith("/registry.json"):
+                body = json.dumps(entries).encode()
+                self.send_response(200)
+            elif self.path.endswith("/plugin.zip"):
+                body = next((data for key, data in zips.items() if key in self.path), None)
+                if body is None:
+                    body = b""
+                    self.send_response(404)
+                else:
+                    self.send_response(200)
+            else:
+                body = b""
+                self.send_response(404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    return _serve(H)
+
+
+class TestProcessPluginRequests:
+    """A marker + a fake registry served from a real local http.server —
+    no mocked network I/O, matching this file's own established
+    convention (see TestServiceHealthy above). ROOT_PLUGIN_DIR and
+    PLUGIN_REQUESTS_DIR are always injected as tmp_path subdirectories;
+    this never touches the real /opt/jen/plugins-installed."""
+
+    def test_happy_path_lands_root_owned_and_writes_ok(self, jen_update_root, tmp_path):
+        zip_bytes = _make_plugin_zip("test-plugin")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "test-plugin", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "test-plugin.install").touch()
+
+            rc = jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            assert rc == 0
+            assert not (requests_dir / "test-plugin.install").exists()
+            assert (requests_dir / "test-plugin.result").read_text().strip() == "ok"
+            manifest = root_dir / "test-plugin" / "manifest.json"
+            assert manifest.is_file()
+            assert json.loads(manifest.read_text())["id"] == "test-plugin"
+
+            # Mode bits are checked unconditionally; ownership only when
+            # actually running as root (this dev/CI box mostly isn't).
+            mode = os.stat(root_dir / "test-plugin").st_mode
+            assert mode & 0o444 == 0o444, "not world-readable"
+            assert mode & 0o022 == 0, "group/other-writable"
+            if hasattr(os, "getuid") and os.getuid() == 0:
+                assert os.stat(root_dir / "test-plugin").st_uid == 0
+        finally:
+            stop()
+
+    def test_sha_mismatch_is_refused_nothing_extracted(self, jen_update_root, tmp_path):
+        zip_bytes = _make_plugin_zip("bad-plugin")
+        entries = [{"id": "bad-plugin", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": "0" * 64}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "bad-plugin.install").touch()
+
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            result = (requests_dir / "bad-plugin.result").read_text().strip()
+            assert result.startswith("error:")
+            assert "checksum" in result.lower()
+            assert not (root_dir / "bad-plugin").exists()
+        finally:
+            stop()
+
+    def test_missing_sha256_is_refused(self, jen_update_root, tmp_path):
+        entries = [{"id": "nosha-plugin", "download_url": "http://PLACEHOLDER/raw/v1.0.0"}]
+        port, stop = _serve_registry(entries, {})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "nosha-plugin.install").touch()
+
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            result = (requests_dir / "nosha-plugin.result").read_text().strip()
+            assert result.startswith("error:")
+            assert "checksum" in result.lower()
+        finally:
+            stop()
+
+    def test_untagged_download_url_is_refused(self, jen_update_root, tmp_path):
+        zip_bytes = _make_plugin_zip("main-plugin")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "main-plugin", "download_url": "http://PLACEHOLDER/raw/main", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"main": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/main"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "main-plugin.install").touch()
+
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            result = (requests_dir / "main-plugin.result").read_text().strip()
+            assert result.startswith("error:")
+            assert "tag" in result.lower()
+        finally:
+            stop()
+
+    def test_zip_slip_member_is_refused(self, jen_update_root, tmp_path):
+        zip_bytes = _make_plugin_zip("slip-plugin", bad_member="../../escaped")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "slip-plugin", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "slip-plugin.install").touch()
+
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            result = (requests_dir / "slip-plugin.result").read_text().strip()
+            assert result.startswith("error:")
+            assert not (root_dir / "slip-plugin").exists()
+            assert not (tmp_path.parent / "escaped").exists()
+        finally:
+            stop()
+
+    def test_id_mismatch_between_marker_and_manifest_is_refused(self, jen_update_root, tmp_path):
+        # The archive's manifest.json disagrees with the marker's own id
+        # — same "trust nothing from the archive beyond what's checked"
+        # rule install_plugin() already enforces in-process.
+        zip_bytes = _make_plugin_zip("actual-id")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "claimed-id", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "claimed-id.install").touch()
+
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            result = (requests_dir / "claimed-id.result").read_text().strip()
+            assert result.startswith("error:")
+            assert "mismatch" in result.lower()
+        finally:
+            stop()
+
+    def test_bad_id_in_marker_name_is_ignored_and_deleted(self, jen_update_root, tmp_path):
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        (requests_dir / "-bad-id-.install").touch()
+
+        jen_update_root.process_plugin_requests(str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json")
+        assert not (requests_dir / "-bad-id-.install").exists()
+        assert not (requests_dir / "-bad-id-.result").exists()
+
+    def test_not_found_in_registry_is_refused(self, jen_update_root, tmp_path):
+        entries = []
+        port, stop = _serve_registry(entries, {})
+        try:
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / "ghost-plugin.install").touch()
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+            result = (requests_dir / "ghost-plugin.result").read_text().strip()
+            assert result.startswith("error:")
+            assert "not found" in result.lower()
+        finally:
+            stop()
+
+    def test_remove_marker_deletes_the_live_dir(self, jen_update_root, tmp_path):
+        root_dir = tmp_path / "root"
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        plugin_dir = root_dir / "old-plugin"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "manifest.json").write_text("{}")
+        (requests_dir / "old-plugin.remove").touch()
+
+        jen_update_root.process_plugin_requests(str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json")
+        assert not plugin_dir.exists()
+        assert (requests_dir / "old-plugin.result").read_text().strip() == "ok"
+
+    def test_no_requests_dir_is_a_quiet_no_op(self, jen_update_root, tmp_path):
+        missing = tmp_path / "does-not-exist"
+        assert (
+            jen_update_root.process_plugin_requests(str(missing), str(tmp_path / "root"), "http://x/registry.json") == 0
+        )
+
+    def test_removes_a_superseded_writable_copy_on_successful_install(self, jen_update_root, tmp_path):
+        """Reinstall-to-harden: once the root-owned copy lands, a stale
+        writable copy under content_dir/plugins/<id> must not survive to
+        still win discover_plugins()'s "later wins" precedence."""
+        zip_bytes = _make_plugin_zip("harden-me")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "harden-me", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            content_dir = tmp_path / "content"
+            requests_dir.mkdir()
+            writable_copy = content_dir / "plugins" / "harden-me"
+            writable_copy.mkdir(parents=True)
+            (writable_copy / "manifest.json").write_text(json.dumps({"id": "harden-me"}))
+            (requests_dir / "harden-me.install").touch()
+
+            result = jen_update_root._install_one_plugin(
+                "harden-me", str(root_dir), f"http://127.0.0.1:{port}/registry.json", str(content_dir)
+            )
+            assert result == "ok"
+            assert (root_dir / "harden-me" / "manifest.json").is_file()
+            assert not writable_copy.exists(), "stale writable copy must be removed once root copy lands"
+        finally:
+            stop()
+
+
+class TestPluginInstallServiceUnitAndSudoers:
+    """v5.27.0 (Q23) — the second unit follows every installation path
+    jen-update.service already does; this is the test_dependency_
+    consistency.py-style check the pinned spec calls for, kept here
+    since it's really about jen-update-root.py's own _EXTERNAL_ITEMS."""
+
+    def test_unit_file_exists_at_repo_root(self):
+        assert pathlib.Path("jen-plugin-install.service").is_file()
+
+    def test_unit_is_a_zero_parameter_root_oneshot(self):
+        text = pathlib.Path("jen-plugin-install.service").read_text()
+        assert "Type=oneshot" in text
+        assert "User=root" in text
+        assert "ExecStart=/usr/bin/python3 /usr/local/sbin/jen-update-root.py --plugins" in text
+
+    def test_listed_in_external_items(self, jen_update_root):
+        assert jen_update_root.PLUGIN_INSTALL_SERVICE_PATH in jen_update_root._EXTERNAL_ITEMS
+        assert (
+            jen_update_root._EXTERNAL_ITEMS[jen_update_root.PLUGIN_INSTALL_SERVICE_PATH] == "jen-plugin-install.service"
+        )
+
+    def test_listed_in_install_sh(self):
+        text = pathlib.Path("install.sh").read_text()
+        assert "jen-plugin-install.service" in text
+
+    def test_root_plugin_dir_is_not_a_flat_leftover(self, jen_update_root):
+        """The Gotcha this session actually confirmed: /opt/jen/plugins
+        (a _ROLLBACK_ITEMS / _FLAT_LEFTOVERS entry) is rmtree'd wholesale
+        by _remove_flat_leftovers() after a migration run — a sibling
+        /opt/jen/plugins-installed must never collide with that."""
+        assert jen_update_root.ROOT_PLUGIN_DIR == "/opt/jen/plugins-installed"
+        assert os.path.basename(jen_update_root.ROOT_PLUGIN_DIR) not in jen_update_root._FLAT_LEFTOVERS
+
+
+class TestPruneOldReleasesLeavesPluginsInstalledAlone:
+    def test_sibling_plugins_installed_dir_survives_a_prune(self, jen_update_root, tmp_path):
+        install_dir = tmp_path / "opt-jen"
+        releases_dir = install_dir / "releases"
+        plugins_installed = install_dir / "plugins-installed"
+        releases_dir.mkdir(parents=True)
+        plugins_installed.mkdir()
+        (plugins_installed / "some-plugin").mkdir()
+        (plugins_installed / "some-plugin" / "manifest.json").write_text("{}")
+
+        for name in ("5.1.0", "5.2.0", "5.3.0"):
+            (releases_dir / name).mkdir()
+
+        jen_update_root._prune_old_releases(
+            releases_dir=str(releases_dir), current_link=str(install_dir / "current"), install_dir=str(install_dir)
+        )
+
+        assert (plugins_installed / "some-plugin" / "manifest.json").is_file(), (
+            "_prune_old_releases must never touch a sibling plugins-installed/ directory"
+        )
+
+
+class TestArgvDispatch:
+    """v5.27.0 (Q23) — main()'s one safe exception to "no caller input
+    at all": --plugins, and only that exact single argument."""
+
+    def test_plugins_flag_calls_process_plugin_requests(self, jen_update_root):
+        with (
+            patch.object(jen_update_root, "process_plugin_requests", return_value=0) as mock_process,
+            patch.object(jen_update_root.sys, "argv", ["jen-update-root.py", "--plugins"]),
+        ):
+            rc = jen_update_root.main()
+        assert rc == 0
+        mock_process.assert_called_once_with()
+
+    def test_any_other_argument_exits_2(self, jen_update_root):
+        with patch.object(jen_update_root.sys, "argv", ["jen-update-root.py", "--bogus"]):
+            rc = jen_update_root.main()
+        assert rc == 2
+
+    def test_multiple_arguments_including_plugins_is_still_refused(self, jen_update_root):
+        """Exact match only — "--plugins extra" is not "--plugins"."""
+        with patch.object(jen_update_root.sys, "argv", ["jen-update-root.py", "--plugins", "extra"]):
+            rc = jen_update_root.main()
+        assert rc == 2
