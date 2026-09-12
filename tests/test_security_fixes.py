@@ -142,9 +142,21 @@ class TestMfaLockout:
         db.commit()
 
     def test_not_locked_out_below_threshold(self, db):
+        # v5.25.0 (Q21) — mfa_attempts.user_id is now a real foreign key
+        # (migration 23); a hardcoded id that doesn't correspond to an
+        # actual user row is refused on INSERT rather than silently
+        # accepted, so this needs a real (throwaway) user to attach to.
+        from jen.models.user import hash_password
         from jen.services.auth import MFA_MAX_ATTEMPTS, is_mfa_locked_out
 
-        user_id = 2
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role) VALUES ('_mfa_lockout_probe1', %s, 'viewer')",
+                (hash_password("testpass123"),),
+            )
+            user_id = cur.lastrowid
+        db.commit()
+
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS - 1):
                 cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (%s)", (user_id,))
@@ -155,6 +167,7 @@ class TestMfaLockout:
 
         with db.cursor() as cur:
             cur.execute("DELETE FROM mfa_attempts WHERE user_id=%s", (user_id,))
+            cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
         db.commit()
 
     def test_lockout_is_never_permanent(self, db):
@@ -186,9 +199,19 @@ class TestMfaLockout:
         db.commit()
 
     def test_clear_mfa_attempts(self, db):
+        # v5.25.0 (Q21) — same reason as test_not_locked_out_below_threshold:
+        # mfa_attempts.user_id needs a real user row to reference now.
+        from jen.models.user import hash_password
         from jen.services.auth import MFA_MAX_ATTEMPTS, clear_mfa_attempts, is_mfa_locked_out
 
-        user_id = 3
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role) VALUES ('_mfa_lockout_probe2', %s, 'viewer')",
+                (hash_password("testpass123"),),
+            )
+            user_id = cur.lastrowid
+        db.commit()
+
         with db.cursor() as cur:
             for _ in range(MFA_MAX_ATTEMPTS):
                 cur.execute("INSERT INTO mfa_attempts (user_id) VALUES (%s)", (user_id,))

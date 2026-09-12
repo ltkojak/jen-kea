@@ -900,15 +900,28 @@ def _m023_user_foreign_keys(db):
     Before each ALTER: delete rows that already point at a user that no
     longer exists — a real orphan predates this migration (nothing
     enforced referential integrity before it), and the ALTER fails
-    outright (error 1452) if even one survives. Idempotent via
-    information_schema.TABLE_CONSTRAINTS; every column here is a plain
-    INT, matching users.id exactly (a type mismatch is error 1215 —
-    verified against the baseline schema for all eight tables before
-    writing this).
+    outright (error 1452) if even one survives. Each DELETE is spelled
+    out per table rather than built from a loop variable — bandit's
+    B608 can't tell an identifier drawn from `_M023_CASCADE_TABLES` (a
+    fixed internal tuple, never external input) apart from a genuinely
+    unsafe interpolation, so writing it out is simpler than arguing
+    with the scanner. Idempotent via information_schema.TABLE_CONSTRAINTS;
+    every column here is a plain INT, matching users.id exactly (a type
+    mismatch is error 1215 — verified against the baseline schema for
+    all eight tables before writing this).
     """
+    _DELETE_ORPHANS_SQL = {
+        "mfa_methods": "DELETE FROM mfa_methods WHERE user_id NOT IN (SELECT id FROM users)",
+        "mfa_backup_codes": "DELETE FROM mfa_backup_codes WHERE user_id NOT IN (SELECT id FROM users)",
+        "mfa_trusted_devices": "DELETE FROM mfa_trusted_devices WHERE user_id NOT IN (SELECT id FROM users)",
+        "mfa_attempts": "DELETE FROM mfa_attempts WHERE user_id NOT IN (SELECT id FROM users)",
+        "webauthn_credentials": "DELETE FROM webauthn_credentials WHERE user_id NOT IN (SELECT id FROM users)",
+        "saved_searches": "DELETE FROM saved_searches WHERE user_id NOT IN (SELECT id FROM users)",
+        "dashboard_prefs": "DELETE FROM dashboard_prefs WHERE user_id NOT IN (SELECT id FROM users)",
+    }
     with db.cursor() as cur:
         for table in _M023_CASCADE_TABLES:
-            cur.execute(f"DELETE FROM {table} WHERE user_id NOT IN (SELECT id FROM users)")
+            cur.execute(_DELETE_ORPHANS_SQL[table])
             if cur.rowcount:
                 logger.warning(f"Migration 23: deleted {cur.rowcount} orphaned {table} row(s)")
             constraint = f"fk_{table}_user_id"
