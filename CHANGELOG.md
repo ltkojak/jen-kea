@@ -2,6 +2,49 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.23.0] - 2026-09-12
+
+DDNS becomes a first-class D2 subsystem: Jen can now configure and
+monitor Kea's own `kea-dhcp-ddns` daemon, not just the external DNS
+provider integrations it already talked to. No migration; `[d2]` and
+`[ddns] mode` are both new, entirely optional config sections.
+
+### D2 (kea-dhcp-ddns), end to end
+
+The DDNS page grew from a single log-and-lookup screen into four tabs.
+**Status** shows which mode is active (`provider`, `d2`, or `both` —
+derived automatically from what's actually configured unless you set
+`[ddns] mode` explicitly), per-server `dhcp-ddns.enable-updates`, and
+D2's own up/version/statistics — read through the same live Kea API
+`/servers` and Health Center already use, so it needs no SSH to
+render. **Naming** writes dhcp4's own DDNS block and the ten knobs
+that control how a hostname gets built and sent, pushed to every
+SSH-configured server with a restart. **D2 Configuration** reads and
+writes D2's own config file directly — add or remove forward/reverse
+zones and TSIG keys, each push guarded by that specific server's
+current config hash so a stale read elsewhere can't silently clobber a
+change made in between, tested with `kea-dhcp-ddns -t` before writing,
+same lifecycle as every other config edit in Jen. Reverse zone names
+are suggested automatically for any subnet whose CIDR is a classful
+`/8`, `/16`, or `/24`. **Verify** runs real forward/reverse DNS lookups
+through the Jen host's own system resolver, so a green check means
+what an ordinary client would actually see — not just what Kea thinks
+it sent.
+
+Settings → Kea gains a D2 Control Socket card (same shape as the
+existing Kea6 one) for direct-mode deployments where D2 has its own
+control socket separate from dhcp4/dhcp6. `jen-kea-helper`'s protocol
+version moves to 3 — `"d2"` joins `"dhcp4"`/`"dhcp6"` as a recognized
+service everywhere one is accepted; a host still on an older helper
+gets a plain "needs v3+" message on the D2 tabs rather than a cryptic
+helper error, and is never routed through the legacy root-SSH fallback
+for D2 (that path's binary/unit-name logic would have silently treated
+a D2 config as dhcp6's).
+
+Viewers see the Status tab only — Naming, D2 Configuration, and Verify
+are all either write surfaces or things without a matching read-only
+view.
+
 ## [5.22.0] - 2026-09-11
 
 `Content-Security-Policy`'s `script-src` no longer needs `'unsafe-inline'`

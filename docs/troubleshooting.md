@@ -478,6 +478,43 @@ Go to **Settings → Infrastructure → High Availability** and set the HA mode 
 
 ---
 
+## DDNS / D2 (v5.23.0+)
+
+### D2 status shows "D2 did not answer version-get"
+
+1. `dhcp-ddns.enable-updates` must be `true` on the Naming tab first — D2 status is skipped entirely while it's off.
+2. In `direct` connection mode, confirm **Settings → Kea → D2 Control Socket** (`[d2] api_url`) is set and points at D2's real control socket (conventionally port 53001) — without it, D2 has no endpoint to answer on.
+3. Confirm `kea-dhcp-ddns` is actually running: `sudo systemctl status kea-dhcp-ddns-server` (or `isc-kea-dhcp-ddns-server` on older Debian/Ubuntu packages).
+
+### D2 Configuration tab says "Could not read kea-dhcp-ddns.conf"
+
+The active server needs SSH configured (Settings → Kea → SSH) and a Kea host helper at **v3 or newer** — v1/v2 helpers predate D2 support and refuse the read outright. Check the helper version in Settings → Kea → SSH and click **Update helper** if it's behind.
+
+### D2 statistics — what each error counter means
+
+The Status tab's D2 stats table mirrors `statistic-get-all`'s own names:
+
+| Statistic | Meaning | Likely cause |
+|---|---|---|
+| `ncr-received` | Update requests dhcp4 handed to D2 | Informational — not an error count |
+| `ncr-invalid` | A request D2 couldn't parse | Version mismatch between dhcp4 and D2, or a corrupted install |
+| `ncr-error` | D2 accepted the request but failed to act on it | Usually a downstream DNS problem (see `update-error` below) |
+| `update-sent` | DNS updates D2 actually transmitted | Informational |
+| `update-signed` | Of those, how many were TSIG-signed | Should equal `update-sent` if every zone has a key configured |
+| `update-unsigned` | Sent without a TSIG signature | Expected only for a zone with no `key-name` on the D2 Configuration tab — otherwise means the zone/key pairing didn't take |
+| `update-timeout` | The DNS server never replied | Check `dns-servers` IP/port on the D2 Configuration tab, and that the target DNS server is reachable from the D2 host specifically (not just from Jen) |
+| `update-error` | The DNS server replied with a rejection | Almost always a TSIG key mismatch (wrong secret, wrong algorithm, or the zone's `allow-update` doesn't reference the key by the same name) — re-generate and re-paste the key on both sides rather than guessing which half drifted |
+
+### TSIG key won't delete — "still referenced by a domain"
+
+Jen refuses to remove a TSIG key while any forward or reverse domain on the D2 Configuration tab still names it — remove or repoint those domains first. This mirrors client classes: an in-use key gone missing would leave D2 unable to sign updates for that zone at all.
+
+### Verify tab shows a mismatch that Status doesn't
+
+The Verify tab queries the Jen host's own system resolver (`socket.getaddrinfo`/`gethostbyaddr`) — the same path any ordinary client on that network would take. A mismatch here after D2 shows "ok" on Status usually means either the change hasn't propagated (DNS caching / zone transfer delay) or the Jen host's resolver is pointed at a different DNS server than clients actually use.
+
+---
+
 ## Mobile
 
 ### Pages are slow to respond on iPhone

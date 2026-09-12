@@ -211,7 +211,8 @@ Jen's logic has to be updated to match.
 operation Jen performs — read a config, `kea-dhcpX -t` a candidate,
 replace the live file, restart/enable/disable a daemon, tail a log,
 install a Kea package — goes through a fixed-function helper on the Kea
-host:
+host. `service` is one of `dhcp4`, `dhcp6`, or (v5.23.0) `d2`
+(kea-dhcp-ddns) everywhere one of these ops accepts it:
 
 - `jen-kea-helper` is a small pure-stdlib script installed at
   `/usr/local/sbin/jen-kea-helper`, owned `root:root` mode `0755`.
@@ -254,6 +255,25 @@ v2 response — protocol errors included — carries `"helper_version"`, so
 Jen learns the real number from any op, not just `version`.
 `JEN_HELPER_MIN_VERSION` stays 1: a v1 host keeps working, and
 `JEN_HELPER_WANT_VERSION = 2` only drives an "upgrade available" hint.
+
+**Helper protocol v3 (v5.23.0 — D2 support).** `"d2"` joins
+`"dhcp4"`/`"dhcp6"` as a valid `service` for `read-config`,
+`test-config`, `apply-config`, and `service`, resolving to the
+`kea-dhcp-ddns` binary and the `kea-dhcp-ddns-server` /
+`isc-kea-dhcp-ddns-server` unit pair. No protocol *shape* changed — a
+v2 caller talking to a v3 helper sees identical dhcp4/dhcp6 behavior —
+so this is purely an allowlist addition, not folded into
+`JEN_HELPER_WANT_VERSION`: D2 is an optional subsystem most installs
+never touch, and bumping the general "upgrade available" threshold to 3
+would nag every operator instead of just the ones who open the DDNS
+page's D2 tabs. `kea_host.d2_supported(server_id)` checks the
+per-server recorded version directly, gating the D2 tabs only. A host
+still on v1/v2 gets a plain "D2 needs jen-kea-helper v3+" message
+instead of a `not-allowed` helper error — and, deliberately, is never
+routed through the legacy `sudo python3` fallback for `d2` calls: that
+engine's binary/unit-name logic treats "anything that isn't dhcp4" as
+dhcp6, so a d2 call reaching it would have silently run `kea-dhcp6`
+commands against D2's own config file.
 
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →

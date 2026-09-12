@@ -179,6 +179,18 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # Kea DDNS log file path on the Kea server (read via SSH)
 log_path     = /var/log/kea/kea-ddns.log
 
+# Which DDNS mechanism the DDNS page's Status tab and Health Center
+# report on (v5.23.0):
+#   provider — an external DNS server's REST API or SSH dig/host below
+#   d2       — Kea's own kea-dhcp-ddns daemon (see [d2] below and the
+#              DDNS page's Naming / D2 Configuration tabs)
+#   both     — report on both; Jen doesn't reconcile them if you
+#              actually run both against the same records
+# Optional — derived at read time when absent: provider if dns_provider
+# is set to anything but none, else d2 if dhcp4's dhcp-ddns.enable-updates
+# is already on, else provider.
+# mode = provider
+
 # DNS provider for hostname lookup on the DDNS page:
 #   technitium  — Technitium DNS Server REST API
 #   pihole      — Pi-hole REST API (v5 and v6 supported)
@@ -203,3 +215,26 @@ forward_zone = your.domain.com
 
 # SSH / Bind9 / Unbound (dns_provider = ssh)
 # No additional config needed — uses the SSH connection from [kea_ssh]
+
+# [d2] is entirely optional (v5.23.0) — Kea's own DNS-update daemon,
+# kea-dhcp-ddns. Configure it from Settings → Kea → D2 Control Socket,
+# or here directly:
+#   ca mode     — api_url falls back to [kea] api_url (one Control
+#                 Agent proxies dhcp4/dhcp6/D2 alike — the common
+#                 case). Only set it if D2 uses a separate CA/port.
+#   direct mode — api_url is kea-dhcp-ddns's OWN http control socket
+#                 and there is NO fallback. ISC's example uses port
+#                 53001.
+# api_user / api_pass fall back to [kea] in both modes.
+# [d2] applies to the PRIMARY server only — each [kea_server_N] sets
+# its own api_d2_url / api_d2_user / api_d2_pass, and falls back to
+# that server's own api_url / api_user / api_pass (ca mode), never to
+# the primary's.
+# Forward/reverse zones and TSIG keys are configured entirely from the
+# DDNS page's D2 Configuration tab — there's no config-file equivalent,
+# since they live in kea-dhcp-ddns.conf on the Kea host, not jen.config.
+
+# [d2]
+# api_url  = http://YOUR-KEA-SERVER:53001
+# api_user = kea-api
+# api_pass = your-kea-api-password

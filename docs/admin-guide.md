@@ -1120,11 +1120,16 @@ Add an alert channel and enable the **HA failover / state change** alert type. Y
 
 ---
 
-## DDNS Provider Configuration
+## DDNS
 
-The DDNS page shows Kea DNS update log activity and supports hostname lookup. The DNS provider is configurable — Jen is not tied to Technitium.
+The **DDNS** page (Network → DDNS) has four tabs: **Status**, **Naming**, **D2 Configuration**, and **Verify**. It covers two independent mechanisms for keeping DNS in sync with DHCP leases, and Jen treats neither as more "correct" than the other:
 
-### Setting the DNS Provider
+- **Provider mode** — Jen itself pushes hostname records to an external DNS server's REST API (Technitium, Pi-hole, AdGuard Home) or over SSH (`dig`/`host` against BIND/Unbound). This existed before v5.23.0 and is unchanged.
+- **D2 mode** — Kea's own DNS-update daemon, `kea-dhcp-ddns` ("D2"), sends dynamic DNS updates (RFC 2136) directly from `kea-dhcp4` as leases are issued/renewed/released. Jen v5.23.0 added the ability to read D2's status, configure its forward/reverse zones and TSIG keys, and verify what actually landed in DNS.
+
+`[ddns] mode` picks which one the Status tab and Health Center report on: `provider` (default when a real provider is configured), `d2` (default when no provider is set but dhcp4's own DDNS is enabled), or `both`. This is display-only — running both mechanisms against the same records at once is an operator choice Jen doesn't second-guess, but it isn't a use case D2's own conflict-resolution options were designed to reconcile.
+
+### Provider mode
 
 Go to **Settings → Alerts & Integrations → DDNS & DNS Provider** and choose:
 
@@ -1139,11 +1144,73 @@ Or set it in `jen.config`:
 ```ini
 [ddns]
 log_path     = /var/log/kea/kea-ddns.log
-dns_provider = technitium   # technitium, generic, or none
+dns_provider = technitium   # technitium, pihole, adguard, ssh, or none
 api_url      = https://your-technitium-server/api
 api_token    = your-token
 forward_zone = your.domain.com
 ```
+
+The **Status** tab's Hostname Lookup card queries whichever provider is configured, unchanged from earlier releases.
+
+### D2 mode
+
+D2 needs three things before Jen can manage it: a reachable control socket, at least one forward or reverse zone, and (usually) a TSIG key so BIND/Unbound/Technitium accept the updates as authenticated rather than rejecting them outright.
+
+**1. Point Jen at D2's control socket.** In `ca` connection mode (the default) the Control Agent already proxies D2 alongside dhcp4/dhcp6 — nothing to configure. In `direct` mode, set **Settings → Kea → D2 Control Socket** (or `[d2] api_url` in `jen.config`) to D2's own HTTP control socket, conventionally port 53001:
+
+```ini
+[d2]
+api_url  = http://YOUR-KEA-SERVER:53001
+api_user = kea-api
+api_pass = your-kea-api-password
+```
+
+`api_user`/`api_pass` fall back to `[kea]`'s if unset. Additional servers set their own `api_d2_url`/`api_d2_user`/`api_d2_pass` under their own `[kea_server_N]` section.
+
+**2. Enable it on the dhcp4 side.** The **Naming** tab writes `Dhcp4.dhcp-ddns` (the master "send updates to D2" switch, D2's IP/port, and the NCR wire protocol) plus the naming knobs that control what hostname gets sent and how — qualifying suffix, generated-name prefix, conflict-resolution mode, and so on. Saving pushes to every SSH-configured Kea server and restarts dhcp4 on each.
+
+**3. Configure D2's own zones and keys.** The **D2 Configuration** tab reads and writes `kea-dhcp-ddns.conf` directly (via the same helper + optimistic-concurrency guard as every other config edit in Jen — see "Kea Config History" below). Example: a BIND-hosted `lan.example.com` forward zone and its matching `/24` reverse zone, secured with a TSIG key.
+
+On the BIND server, generate a key and allow D2 to update the zone:
+
+```
+tsig-keygen -a hmac-sha256 d2-key
+```
+
+```
+key "d2-key" {
+    algorithm hmac-sha256;
+    secret "<the base64 secret tsig-keygen printed>";
+};
+
+zone "lan.example.com" {
+    type primary;
+    file "/etc/bind/db.lan.example.com";
+    allow-update { key "d2-key"; };
+};
+
+zone "0.0.10.in-addr.arpa" {
+    type primary;
+    file "/etc/bind/db.10.0.0";
+    allow-update { key "d2-key"; };
+};
+```
+
+(A Technitium DNS server's UI equivalent: Zones → Add Zone → Primary, then Zone Options → Dynamic Updates → add the same TSIG key under Settings → DNS → TSIG.)
+
+In Jen's D2 Configuration tab:
+
+1. **TSIG Keys** → Add: name `d2-key`, algorithm `hmac-sha256` (must match what `tsig-keygen` used), paste the same base64 secret. The secret is write-only — Jen never re-displays it after saving, the same way an API key or database password never is.
+2. **Forward Domains** → Add: zone `lan.example.com.` (note the trailing dot — Kea's own convention, and Jen requires it), key `d2-key`, DNS servers `10.0.0.1:53` (one `ip[:port]` per line — port defaults to 53 if omitted).
+3. **Reverse Domains** → Add: zone `0.0.10.in-addr.arpa.`. Jen suggests this name next to the field for any subnet whose CIDR is a classful `/8`, `/16`, or `/24` — a classless `/25`–`/30` subnet needs its own RFC 2317 delegated zone name, which Jen can't safely guess and doesn't attempt to.
+
+Each Add/Remove pushes to every SSH-configured server, guarded by that server's own current config hash (a stale read elsewhere can't silently overwrite a change made in between), tests the result with `kea-dhcp-ddns -t` before writing, and restarts D2 — exactly the same lifecycle as every other Kea config edit in Jen.
+
+**4. Verify it actually worked.** The **Verify** tab runs `socket.getaddrinfo()`/`socket.gethostbyaddr()` from the Jen host's own system resolver — not from Kea, not from D2 directly — so a green check here means an ordinary client would see the same thing. Type a hostname and/or IP (or use one from an active lease) and Jen shows the forward and reverse results side by side with a ✓/✗ for whether they match what you typed.
+
+### Troubleshooting D2
+
+See `docs/troubleshooting.md` for a table mapping D2's `statistic-get-all` counters (`ncr-error`, `update-error`, etc.) to likely causes — TSIG key mismatches and an unreachable DNS server are the two most common.
 
 ---
 
