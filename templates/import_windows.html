@@ -31,4 +31,10 @@
     ℹ️ This only ever touches the <strong>primary</strong> Kea server's config. If you run an HA pair,
     sync the change to the partner the same way you already do for any other config edit.
 </div>
+
+<div class="alert alert-warning">
+    ⚠️ The option-value decoding here (especially classless static routes, option 121) has been verified
+    against Microsoft's documented export format, not against a real <code>Export-DhcpServer</code> run.
+    Run this against a lab Kea instance first, and read the preview diff carefully before you apply.
+</div>
 {% endblock %}

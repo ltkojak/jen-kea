@@ -2,7 +2,72 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.23.0] - 2026-09-12
+## [5.24.0] - 2026-09-12
+
+A guided path off Windows DHCP: **Subnets → Import from Windows DHCP**
+(superadmin only) takes the XML `Export-DhcpServer` produces and builds
+the Kea config it implies — scopes, pools, options, reservations, shared
+networks, and a best-effort translation of the Windows policy engine
+into Kea client classes — then shows you exactly what it would change
+before it changes anything. No migration; this is a new wizard, not a
+new config format.
+
+### What it reads and how it maps
+
+`jen/services/win_dhcp_import.py` parses the export with `defusedxml`
+(a hand-authored `Export-DhcpServer` file is untrusted input the moment
+it comes from someone else's DC, and `xml.etree` has no protection
+against an entity-expansion bomb) and is deliberately tolerant of the
+export's namespace and attribute-casing quirks, so an export copied
+between Windows Server versions still parses. A scope's start/end range
+minus its exclusion ranges becomes one or more Kea pools — a Windows
+scope that excludes its entire range still imports, as a reservation-only
+subnet with zero pools, since that's a real and legal Kea shape. Lease
+durations, the option catalog already built for the DHCP-options page,
+and MAC/IP reservations (skipping `Both`/`Bootp`-type entries and
+anything without a real MAC — Kea's host database wants one) all
+translate directly. A superscope becomes a Kea shared network only when
+two or more of its scopes are actually selected for import; with just
+one, it stays a plain top-level subnet, since Kea has no equivalent of a
+single-member superscope. Windows policies — the piece with no direct
+Kea analogue — become client classes built the same way the guided
+class builder (v5.19.0) already expresses rules, with a policy's IP
+range carving a guarded sub-pool out of the scope rather than gating
+the whole subnet; anything that can't collapse to one Kea expression
+(mixed `Equals`/`NotEquals` conditions, mostly) is skipped with a
+warning rather than silently dropped or guessed at.
+
+### The wizard itself
+
+Upload → review → preview → apply, each step read-only until the last.
+Review lists every scope with an include checkbox (active scopes
+checked by default) and lets you adjust the subnet ID or name before
+anything touches live state. Preview computes the merged config,
+validates it with `kea-dhcp4 -t`, and shows a real diff against what's
+running now — apply is refused if Kea would reject the result. Applying
+pushes the config, restarts Kea, adds the queued reservations one at a
+time through the live API (one bad row doesn't block the rest — failures
+are listed at the end, same per-row error handling as the existing bulk
+reservation CSV import), and registers the new subnets with Jen. It
+only ever writes to the primary Kea server — an HA partner needs syncing
+the way any other config change already does. In-flight import state
+lives in a module-level dict keyed by a one-time token rather than a
+database table, safe because Jen runs as a single gunicorn worker; it's
+lost on a restart, same tradeoff as the existing config-history plan
+cache.
+
+### One honest caveat
+
+No maintainer had a real Windows DHCP export on hand for this release,
+so `tests/fixtures/windows-dhcp-export.xml` is hand-authored from
+Microsoft's documented export shape rather than pulled from a live DC —
+the parser's option-value decoding, especially the classless-static-route
+bytes (option 121, and Microsoft's duplicate encoding of it at 249),
+is reasoned through against the RFC rather than confirmed against
+genuine `Export-DhcpServer` output. Run it against a lab Kea instance
+before trusting it with production scopes, and treat the preview diff
+as the real safety net it's designed to be — this is called out on the
+wizard's own page too, not just here.
 
 DDNS becomes a first-class D2 subsystem: Jen can now configure and
 monitor Kea's own `kea-dhcp-ddns` daemon, not just the external DNS

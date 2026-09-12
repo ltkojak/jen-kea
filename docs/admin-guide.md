@@ -659,12 +659,13 @@ up grayed-out if Kea's config authors option-data against them, but
 Jen never creates, edits, or deletes them.
 
 **Not covered by this page:** IPv6 classes, custom `option-def`s for
-vendor spaces, per-class lease limits, pool selection driven by class
-beyond guard/additional attachment, and importing an existing Windows
-DHCP policy set (a later release) — those still require hand-editing
+vendor spaces, per-class lease limits, and pool selection driven by class
+beyond guard/additional attachment — those still require hand-editing
 `kea-dhcp4.conf`. There's also no way to test a class against a
 simulated packet — the config-test preview above is the closest Jen
 gets; anything more needs a real DHCP exchange against a test client.
+(Importing an existing Windows DHCP policy set as classes is covered
+separately — see [Migrating from Windows DHCP](#migrating-from-windows-dhcp-v5240).)
 
 ---
 
@@ -1232,3 +1233,74 @@ No app configuration needed — ntfy delivers to any subscribed device automatic
 2. Choose the channel and copy the webhook URL
 3. Go to **Settings → Alerts & Integrations → Add Channel** in Jen
 4. Choose **Discord** and paste the webhook URL
+
+---
+
+## Migrating from Windows DHCP (v5.24.0)
+
+**Subnets → Import from Windows DHCP** (superadmin only) reads a Windows
+Server DHCP export and builds the equivalent Kea config for you to review
+before anything is applied.
+
+On the Windows DHCP server:
+
+```powershell
+Export-DhcpServer -ComputerName <server> -Leases:$False -File C:\dhcp-export.xml
+```
+
+Copy `dhcp-export.xml` to a machine you can reach Jen from and upload it.
+Nothing is written to Kea during upload or review — Jen only parses the
+file and shows you what it found.
+
+**What maps:**
+
+- Each scope → a `subnet4` with pools carved from its address range minus
+  its exclusion ranges, and its lease duration.
+- Scope options (routers, DNS, domain name, NTP, NetBIOS, boot server,
+  domain search, and the classless static route options, 121 and the
+  Microsoft-specific 249) → Kea `option-data`. An option Jen doesn't
+  recognize is skipped with a warning rather than guessed at.
+- Reservations → added to Kea's host database via `reservation-add` once
+  you apply. Only `Dhcp`-type reservations with a real MAC address import;
+  `Both`/`Bootp`-type reservations and anything with a non-MAC client ID
+  are skipped and listed in the warnings.
+- A superscope with two or more scopes actually selected for import
+  becomes a Kea shared network; a superscope with only one scope selected
+  stays a plain top-level subnet — Kea has no equivalent of a
+  single-member superscope.
+- Windows policies (the DHCP policy engine used for vendor/user class or
+  MAC-based option overrides) become Kea client classes. A policy scoped
+  to an IP range within the scope becomes a guard on just the pool
+  carved out for that range; a policy with no IP range guards the whole
+  subnet instead. A policy combining `Equals` and `NotEquals` conditions,
+  or negating more than one condition, can't be expressed as a single
+  Kea expression and is skipped with a warning — recreate it by hand
+  under **Client Classes** afterward if you need it.
+
+**What doesn't map** (skipped, with a warning, or simply not read):
+IPv6 scopes, DHCP failover/HA relationships (set those up separately —
+see [Kea HA Configuration](#kea-ha-configuration)), server-level policies
+(only scope-level policies are read), MAC filter allow/deny lists, and
+lease state — this is a config migration, not a lease migration.
+
+**Review, then preview, then apply.** The review step lists every scope
+with an include checkbox (active scopes are checked by default, inactive
+ones aren't) and lets you change the subnet ID or name Jen suggests
+before anything is computed. Preview runs `kea-dhcp4 -t` against the
+merged config and shows a real diff against what's live right now — apply
+is refused if Kea rejects the config. Applying pushes the config, restarts
+Kea, adds the queued reservations one at a time (a failure on one
+reservation doesn't stop the others — failures are listed at the end),
+and registers the new subnets with Jen.
+
+**This only ever touches the primary Kea server's config.** If you run
+an HA pair, sync the change to the standby the way you already do for any
+other config change — the wizard doesn't know about your HA relationship
+and won't push to a partner on its own.
+
+**Try it against a lab Kea instance first.** The parser's option-value
+decoding (in particular the classless static route bytes, which Windows
+encodes per RFC 3442) has been verified against a hand-built synthetic
+export, not a real `Export-DhcpServer` run — a scope using an option Jen
+hasn't seen before is the likeliest place for a mismatch. Reviewing the
+diff before you apply is exactly for catching that.
