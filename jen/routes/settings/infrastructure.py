@@ -673,10 +673,16 @@ def probe_kea():
                 "warn",
             )
         else:
+            # Maintainer decision (2026-09-13, Q26 Q1) — on the box that
+            # surfaced this, the fix was ADDING an http control socket
+            # to the daemon, not just pointing at a different port, so
+            # the recommendation points at where that's actually done.
             rec = (
                 f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — direct mode "
                 f"needs the daemon's http socket (conventionally :{daemon_port}). Either switch back to "
-                f"Control Agent mode, or add an http control socket to kea-{service} and point this at it.",
+                f"Control Agent mode, or add an http control socket to kea-{service} and point this at it — "
+                'see the admin guide\'s "Direct control sockets" section, or use Settings → Kea → '
+                '"Author a starting kea-dhcp4.conf" to generate one.',
                 "bad",
             )
     elif candidate:
@@ -696,9 +702,14 @@ def probe_kea():
             "warn",
         )
     elif v < (3, 2, 0):
+        # Maintainer decision (2026-09-13, Q26 Q1) — this recommendation
+        # is what led a real box into direct mode with no daemon http
+        # socket configured at all (D2's identity branch above is what
+        # now catches that case); reworded so it never again reads as
+        # "switch now" before the socket actually exists.
         rec = (
             f"Kea {version} still ships the Control Agent, but ISC deprecated it in 3.0 and removes it in "
-            "3.2. Add an http control socket to each daemon and switch this to direct mode now.",
+            "3.2. Switch to direct mode — after adding an http control socket to each daemon, not before.",
             "warn",
         )
     else:

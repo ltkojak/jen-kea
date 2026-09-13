@@ -151,8 +151,13 @@ class TestProbeRoute:
         fake = probe_http({"localhost:18000": _ok("3.2.0")})
         data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
         assert data["answered_mode"] == "direct"
-        assert len(fake.calls) == 1
-        assert "service" not in fake.calls[0]["json"]
+        # v5.28.1 (Q26, D2) — one version-get, plus one config-get (same
+        # URL) for the daemon-identity check; "does not double probe"
+        # means never re-tries a DIFFERENT url (e.g. the :8004 fallback)
+        # once direct mode already answered, which is what this asserts.
+        assert len(fake.calls) == 2
+        assert {c["url"] for c in fake.calls} == {"http://localhost:18000"}
+        assert all("service" not in c["json"] for c in fake.calls)
 
     def test_requires_admin(self, client, db):
         r = client.post("/settings/infrastructure/probe-kea")
@@ -197,9 +202,12 @@ class TestProbeCandidateUrl:
         assert data["answered_url"] == "https://kea-direct:8004"
         assert data["recommendation"]["level"] == "ok"
         assert "set this as the API URL" in data["recommendation"]["text"]
-        # one call only — no configured endpoint, no :8004 auto-fallback
-        assert len(fake.calls) == 1
-        assert "service" not in fake.calls[0]["json"]
+        # v5.28.1 (Q26, D2) — one version-get, plus one config-get (same
+        # URL) for the daemon-identity check; still no configured
+        # endpoint attempt and no :8004 auto-fallback.
+        assert len(fake.calls) == 2
+        assert {c["url"] for c in fake.calls} == {"https://kea-direct:8004"}
+        assert all("service" not in c["json"] for c in fake.calls)
 
     def test_candidate_that_refuses_is_ok_false_with_one_attempt(self, logged_in_client, db, probe_http, monkeypatch):
         fake = probe_http({})  # nothing answers
