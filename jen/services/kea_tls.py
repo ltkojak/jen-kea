@@ -36,6 +36,7 @@ Pure cryptography; no Flask, no SSH. Everything here is deterministic
 given the inputs except the keys and serial numbers.
 """
 
+import contextlib
 import ipaddress
 import logging
 import os
@@ -297,15 +298,16 @@ def _san_for(value: str):
 # ── leaves ──────────────────────────────────────────────────────────────────
 
 
-def issue_server_cert(server: dict, service: str, bind_address: str) -> dict:
+def issue_server_cert(server: dict, service: str, bind_address: str, ca: tuple[str, str] | None = None) -> dict:
     """Mint a server cert for `service` on `server`, SAN = the bind
     address (what Jen dials) plus the SSH host (IP or DNS name — the
-    other name an operator might type as the URL), signed by the CA
-    (which must exist — call ensure_ca() first). Keeps a copy of the
-    cert under kea-servers/ for Health. Returns exactly the `files`
-    payload the helper's install-tls op takes:
+    second name an operator might type as the URL), signed by the live
+    CA (which must exist — call ensure_ca() first) or, for a staged
+    rotation, by `ca = (cert_path, key_path)`. Keeps a copy of the cert
+    under kea-servers/ for Health. Returns exactly the `files` payload
+    the helper's install-tls op takes:
     {"ca.crt": pem, "server.crt": pem, "server.key": pem} (all str)."""
-    ca_cert, ca_key = _load_ca()
+    ca_cert, ca_key = (load_cert(ca[0]), load_key(ca[1])) if ca else _load_ca()
     key = _new_key()
     sans, seen = [], set()
     for candidate in (bind_address, server.get("ssh_host", "")):
@@ -366,6 +368,61 @@ def rotate_ca() -> dict:
     ca = ensure_ca(force=True)
     client = issue_client_cert(force=True)
     return {"ca": ca, "client": client}
+
+
+# ── staged rotation (the route's "all servers or nothing" Rotate) ───────────
+
+_STAGE_SUFFIX = ".next"
+
+
+def stage_rotation() -> dict:
+    """A new CA and a new client certificate written BESIDE the live
+    files as `<name>.next` — nothing Jen trusts changes. The Rotate flow
+    issues every server's new certificate from these, pushes, restarts
+    and probes each server using them, and only then commit_rotation()s;
+    any failure discard_rotation()s and the live CA was never touched.
+    Returns {"ca_cert", "ca_key", "client_cert", "client_key"}: the
+    staged paths."""
+    _ensure_dir(SSL_DIR)
+    ca_key = _new_key()
+    ca_cert = _build_ca(ca_key, f"Jen Kea CA {_hostname()} {datetime.now(timezone.utc):%Y-%m-%d}")
+    client_key = _new_key()
+    client_cert = _leaf(ca_cert, ca_key, client_key, f"jen {_hostname()}", [], client=True)
+    crt, key_path = ca_paths()
+    pem, client_key_path = client_paths()
+    staged = {
+        "ca_cert": crt + _STAGE_SUFFIX,
+        "ca_key": key_path + _STAGE_SUFFIX,
+        "client_cert": pem + _STAGE_SUFFIX,
+        "client_key": client_key_path + _STAGE_SUFFIX,
+    }
+    write_atomically(staged["ca_key"], _key_pem(ca_key), 0o600)
+    write_atomically(staged["ca_cert"], _cert_pem(ca_cert), 0o644)
+    write_atomically(staged["client_key"], _key_pem(client_key), 0o600)
+    write_atomically(staged["client_cert"], _cert_pem(client_cert), 0o644)
+    return staged
+
+
+def _live_for(staged_path: str) -> str:
+    return staged_path[: -len(_STAGE_SUFFIX)] if staged_path.endswith(_STAGE_SUFFIX) else staged_path
+
+
+def commit_rotation(staged: dict) -> None:
+    """Promote the staged files to live (each previous file kept as
+    `.prev`). Keys first, then certs, so a reader that finds a new cert
+    always finds its key."""
+    for k in ("ca_key", "ca_cert", "client_key", "client_cert"):
+        live = _live_for(staged[k])
+        if os.path.exists(live):
+            os.replace(live, live + ".prev")
+        os.replace(staged[k], live)
+    logger.info("kea_tls: rotated the Kea CA and Jen's client certificate")
+
+
+def discard_rotation(staged: dict) -> None:
+    for p in staged.values():
+        with contextlib.suppress(OSError):
+            os.unlink(p)
 
 
 def issued_server_copies() -> list[dict]:

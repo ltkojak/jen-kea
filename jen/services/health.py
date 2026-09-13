@@ -457,6 +457,56 @@ def _cert_expiry(ctx) -> Check:
     return c
 
 
+def _kea_tls_expiry(ctx) -> Check:
+    """v5.29.0 (Q29, C4) — the Jen-managed Kea CA, Jen's client cert,
+    and every server cert Jen issued (it keeps a copy per server/daemon
+    under /etc/jen/ssl/kea-servers/ exactly so this never has to SSH).
+    Leaves are 5-year and the CA 10-year, so the bands are wider than
+    the web-UI certificate's: warn at 90 days, fail at 14 or expired.
+    Skips entirely when no CA has ever been created — a Control Agent
+    or http-only install has nothing to watch."""
+    c = Check("kea_tls_expiry", "Kea mTLS certificates", "jen", fix_url="/settings/kea")
+    from jen.services import kea_tls
+
+    if not kea_tls.ca_present():
+        c.status, c.detail = "skip", "no Jen-managed Kea CA (Control Agent or http sockets)"
+        return c
+    items = [("the Kea CA", kea_tls.days_left(kea_tls.ca_paths()[0]))]
+    client_pem = kea_tls.client_paths()[0]
+    items.append(("Jen's client certificate", kea_tls.days_left(client_pem)))
+    if not kea_tls.issued_by(client_pem, kea_tls.ca_paths()[0]):
+        c.status = "fail"
+        c.detail = "Jen's client certificate is missing or not signed by the current CA — Rotate the Kea CA, or set up an https socket again"
+        return c
+    for copy in kea_tls.issued_server_copies():
+        items.append((f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}", copy["days_left"]))
+
+    expired = [(n, d) for n, d in items if d is not None and d < 0]
+    failing = [(n, d) for n, d in items if d is not None and 0 <= d <= 14]
+    warning = [(n, d) for n, d in items if d is not None and 14 < d <= 90]
+    if expired or failing:
+        parts = [f"{n} expired {abs(d)} day(s) ago" for n, d in expired] + [
+            f"{n} expires in {d} day(s)" for n, d in failing
+        ]
+        c.status, c.detail = "fail", "; ".join(parts) + " — Rotate the Kea CA (Settings → Kea)"
+    elif warning:
+        c.status = "warn"
+        c.detail = "; ".join(f"{n} expires in {d} day(s)" for n, d in warning) + " — plan a Rotate (Settings → Kea)"
+    else:
+        soonest = min((d for _n, d in items if d is not None), default=None)
+        n_servers = len(items) - 2
+        c.status = "ok"
+        c.detail = f"CA, client and {n_servers} server certificate(s) valid — soonest expiry in {soonest} day(s)"
+    return c
+
+
+def _server_name_by_id(server_id) -> str:
+    for s in extensions.KEA_SERVERS:
+        if str(s.get("id")) == str(server_id):
+            return _server_name(s)
+    return f"server {server_id}"
+
+
 def _db_roundtrip(cm, cid: str, title: str) -> Check:
     c = Check(cid, title, "jen")
     try:
@@ -640,6 +690,7 @@ _CHECKS = [
     _d2_reachable,
     _d2_errors,
     _cert_expiry,
+    _kea_tls_expiry,
     _db_jen,
     _db_kea,
     _schema_current,
@@ -662,6 +713,7 @@ _CHECK_META = {
     "d2_reachable": ("kea-dhcp-ddns reachable", "ddns"),
     "d2_errors": ("kea-dhcp-ddns error counters", "ddns"),
     "cert_expiry": ("TLS certificate expiry", "jen"),
+    "kea_tls_expiry": ("Kea mTLS certificates", "jen"),
     "db_jen": ("Jen database", "jen"),
     "db_kea": ("Kea database", "jen"),
     "schema_current": ("Database schema current", "jen"),

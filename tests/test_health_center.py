@@ -764,3 +764,66 @@ class TestCertExpiringAlert:
         assert get_global_setting("cert_expiry_alerted") == "0"
         self._run(monkeypatch, 5, calls)
         assert calls == [5, 5]
+
+
+class TestKeaTlsExpiry:
+    """v5.29.0 (Q29, C4) — the Jen-managed Kea CA / client cert / issued
+    server certs. Wider bands than the web-UI cert (5-year leaves):
+    warn ≤ 90 days, fail ≤ 14 or expired; skip when no CA exists."""
+
+    def _wire(self, monkeypatch, ca=3000, client=1500, copies=(), client_ok=True, present=True):
+        from jen.services import kea_tls
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}])
+        monkeypatch.setattr(kea_tls, "ca_present", lambda: present)
+        monkeypatch.setattr(kea_tls, "ca_paths", lambda: ("/ssl/kea-ca.crt", "/ssl/kea-ca.key"))
+        monkeypatch.setattr(kea_tls, "client_paths", lambda: ("/ssl/jen-kea-client.pem", "/ssl/jen-kea-client.key"))
+        monkeypatch.setattr(kea_tls, "issued_by", lambda cert, ca_path: client_ok)
+        days = {"/ssl/kea-ca.crt": ca, "/ssl/jen-kea-client.pem": client}
+        monkeypatch.setattr(kea_tls, "days_left", lambda p: days.get(p))
+        monkeypatch.setattr(
+            kea_tls,
+            "issued_server_copies",
+            lambda: [
+                {"server_id": sid, "service": svc, "path": f"/ssl/kea-servers/{sid}-{svc}.crt", "days_left": d}
+                for sid, svc, d in copies
+            ],
+        )
+
+    def test_no_ca_skips(self, monkeypatch):
+        self._wire(monkeypatch, present=False)
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "skip"
+
+    def test_all_far_out_is_ok_and_counts_servers(self, monkeypatch):
+        self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp4", 1650), ("1", "d2", 1600)])
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "ok"
+        assert "3 server certificate(s)" in c.detail and "1500" in c.detail
+
+    def test_a_server_cert_within_90_days_warns_and_names_it(self, monkeypatch):
+        self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp6", 45)])
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "warn"
+        assert "kea-b kea-dhcp6 expires in 45 day(s)" in c.detail
+        assert "kea-a" not in c.detail
+
+    def test_within_14_days_fails(self, monkeypatch):
+        self._wire(monkeypatch, client=10)
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "fail" and "client certificate expires in 10 day(s)" in c.detail
+
+    def test_expired_fails_and_says_so(self, monkeypatch):
+        self._wire(monkeypatch, copies=[("1", "dhcp4", -3)])
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "fail" and "kea-a kea-dhcp4 expired 3 day(s) ago" in c.detail
+
+    def test_client_cert_not_signed_by_the_current_ca_fails(self, monkeypatch):
+        self._wire(monkeypatch, client_ok=False)
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "fail" and "not signed by the current CA" in c.detail
+
+    def test_registered_in_the_jen_group(self):
+        assert "kea_tls_expiry" in health.CHECK_IDS
+        assert health._CHECK_META["kea_tls_expiry"][1] == "jen"
+        assert health._kea_tls_expiry in health._CHECKS

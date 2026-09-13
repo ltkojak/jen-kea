@@ -23,6 +23,7 @@ import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -103,9 +104,42 @@ def _kea_servers_with_helper_status():
                 "helper_known": bool(st),
                 "helper_checked": st.get("checked", ""),
                 "legacy_grant": st.get("legacy_grant"),  # True, False, or None (never checked)
+                # v5.29.0 (Q29) — the https option of "Set up direct socket"
+                # needs the v4 helper (install-tls); same fail-closed rule
+                # as kea_host.tls_supported, computed from this one read.
+                "tls_supported": isinstance(st.get("version"), int)
+                and st.get("version") >= kea_host.TLS_HELPER_MIN_VERSION,
             }
         )
     return rows
+
+
+def _kea_ca_summary() -> dict:
+    """v5.29.0 (Q29) — what the Control Plane card says about the
+    Jen-managed Kea CA: present or not, its subject and days left, whether
+    Jen's client certificate is signed by it, and every server certificate
+    Jen issued (from the kea-servers/ copies — never SSHes)."""
+    from jen.services import kea_tls
+
+    present = kea_tls.ca_present()
+    ca_crt, _ca_key = kea_tls.ca_paths()
+    out = {
+        "present": present,
+        "ca_path": ca_crt,
+        "subject": kea_tls._cn(ca_crt) if present else "",
+        "days_left": kea_tls.days_left(ca_crt) if present else None,
+        "client_ok": kea_tls.client_cert_ok() if present else False,
+        "issued": [],
+        # a [kea] api_ca that isn't Jen's = the operator brought their own CA
+        "external_ca": bool(extensions.KEA_API_CA) and ca_crt != extensions.KEA_API_CA,
+    }
+    if present:
+        for copy in kea_tls.issued_server_copies():
+            sid = int(copy["server_id"]) if str(copy["server_id"]).isdigit() else None
+            server = _server_by_id(sid) if sid is not None else None
+            name = (server or {}).get("name") or f"server {copy['server_id']}"
+            out["issued"].append((name, copy["service"], copy["days_left"]))
+    return out
 
 
 @bp.route("/settings/kea")
@@ -137,6 +171,8 @@ def settings_kea():
         except Exception:
             pass
     # Load extra servers — gap-tolerant (see _kea_server_section_ids).
+    helper_rows = _kea_servers_with_helper_status()
+    tls_ok_by_id = {r["id"]: r["tls_supported"] for r in helper_rows}
     extra_servers = []
     for n in _kea_server_section_ids(extensions.cfg):
         sec = f"kea_server_{n}"
@@ -157,6 +193,7 @@ def settings_kea():
                 # v5.29.0 (Q29) — the "Set up direct socket" form's bind
                 # address default: the SSH host when it's an IP literal.
                 "bind_default": _bind_default(extensions.cfg.get(sec, "ssh_host", fallback="")),
+                "tls_supported": tls_ok_by_id.get(n, False),
             }
         )
 
@@ -222,6 +259,7 @@ def settings_kea():
         "d2_api_user": extensions.cfg.get("d2", "api_user", fallback=""),
         # v5.29.0 (Q29) — see bind_default on the extra servers above.
         "bind_default": _bind_default(extensions.cfg.get("kea_ssh", "host", fallback="")),
+        "tls_supported": tls_ok_by_id.get(1, False),
     }
     restart_pending = __user.get_global_setting("restart_pending", "false") == "true"
     # v5.29.0 (Q29) — per-daemon control sockets exist from Kea 2.7.2; hide
@@ -242,10 +280,11 @@ def settings_kea():
         ca_removed=ca_removed,
         direct_port_warnings=direct_port_warnings,
         direct_socket_supported=direct_socket_supported,
+        kea_ca=_kea_ca_summary(),
         # v5.10.3 — id + name only; the real server dicts carry passwords.
         # v5.11.0 — plus ssh_host + the persisted jen-kea-helper status
         # (never SSHes to render — see jen/services/kea_host.py).
-        kea_servers=_kea_servers_with_helper_status(),
+        kea_servers=helper_rows,
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,
@@ -517,10 +556,15 @@ def save_infra_d2():
     return redirect(url_for("settings.settings_kea"))
 
 
-def _probe_once(url, user, pwd, omit_service, service="dhcp4"):
+def _probe_once(url, user, pwd, omit_service, service="dhcp4", verify=None, cert=None):
     """One version-get against a candidate endpoint, independent of the
     globally-configured connection mode. Returns (version_text, error):
-    exactly one is non-empty."""
+    exactly one is non-empty.
+
+    v5.29.0 (Q29) — `verify` / `cert` override the configured TLS
+    material: the https setup flow probes a socket with a CA and client
+    certificate Jen has NOT adopted yet (it only writes them into its
+    config once the socket answers)."""
     payload = {"command": "version-get"}
     if not omit_service:
         payload["service"] = [service]
@@ -530,8 +574,8 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4"):
             json=payload,
             auth=(user, pwd),
             timeout=8,
-            verify=extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY,
-            cert=__kea._tls_client_cert(),
+            verify=verify if verify is not None else (extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY),
+            cert=cert if cert is not None else __kea._tls_client_cert(),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -544,7 +588,7 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4"):
         return "", str(e)
 
 
-def _identify_daemon(url, user, pwd, service):
+def _identify_daemon(url, user, pwd, service, verify=None, cert=None):
     """v5.28.1 (Q26, D2) — best-effort direct-style config-get against a
     URL that has already answered version-get, to see WHICH daemon
     actually answered: a Control Agent left listening on :8000 (because
@@ -554,15 +598,15 @@ def _identify_daemon(url, user, pwd, service):
     Returns the reply's single top-level config key ("Dhcp4",
     "Control-agent", ...), or None on any failure — advisory only, this
     never raises and never changes whether the probe as a whole
-    succeeded."""
+    succeeded. `verify`/`cert` as in _probe_once (v5.29.0)."""
     try:
         resp = __kea.http.post(
             url,
             json={"command": "config-get"},
             auth=(user, pwd),
             timeout=8,
-            verify=extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY,
-            cert=__kea._tls_client_cert(),
+            verify=verify if verify is not None else (extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY),
+            cert=cert if cert is not None else __kea._tls_client_cert(),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -814,18 +858,36 @@ def _daemon_creds(server: dict, service: str) -> tuple[str, str]:
     return server.get("api_user", ""), server.get("api_pass", "")
 
 
-def _write_direct_socket_config(server: dict, service: str, url: str, user: str, password: str) -> str:
+def _write_direct_socket_config(
+    server: dict, service: str, url: str, user: str, password: str, tls: bool = False
+) -> str:
     """Point Jen at the daemon socket that just answered. dhcp4 also
     flips `[kea] connection_mode` to direct (the mode is global — see
     the flash the caller adds when other servers aren't there yet);
     dhcp6/D2 only write their own per-daemon URL, since a dhcp4 socket
-    is what the mode switch actually needs. Returns a short phrase for
-    the flash saying what was written."""
+    is what the mode switch actually needs. `tls` (https via Jen's CA)
+    also writes the GLOBAL trust anchor + client certificate — one CA,
+    one Jen identity, for every server — and pins `api_tls_verify` on
+    (this flow never sets it off). Returns a short phrase for the flash
+    saying what was written."""
     sid = server.get("id")
     primary = sid == 1
     changed: list[str] = []
 
     def _apply(cfg):
+        if tls:
+            from jen.services import kea_tls as __tls
+
+            ca_crt, _ca_key = __tls.ca_paths()
+            client_pem, client_key = __tls.client_paths()
+            if not cfg.has_section("kea"):
+                cfg.add_section("kea")
+            if cfg.get("kea", "api_ca", fallback="") != ca_crt:
+                cfg.set("kea", "api_ca", ca_crt)
+                cfg.set("kea", "api_client_cert", client_pem)
+                cfg.set("kea", "api_client_key", client_key)
+                changed.append("[kea] api_ca/api_client_cert/api_client_key (Jen's CA and client certificate)")
+            cfg.set("kea", "api_tls_verify", "true")
         if primary:
             sec, url_key, user_key, pass_key = {
                 "dhcp4": ("kea", "api_url", "api_user", "api_pass"),
@@ -939,12 +1001,8 @@ def setup_direct_socket(server_id, service):
         return back
 
     scheme = request.form.get("scheme", "http").strip().lower()
-    if scheme != "http":
-        flash(
-            "Only an http socket can be set up here for now — for https, add the socket by hand per the admin "
-            'guide\'s "Direct control sockets" section and fill in the TLS fields above.',
-            "error",
-        )
+    if scheme not in ("http", "https"):
+        flash("The scheme must be http or https.", "error")
         return back
     address = request.form.get("address", "").strip()
     if not _is_ip_literal(address):
@@ -1010,7 +1068,61 @@ def setup_direct_socket(server_id, service):
             )
             return back
 
-    entry = build_control_socket(scheme, address, port, user, password)
+    # ── https (v5.29.0, Q29 C3): Jen's private CA issues the material and
+    # the helper's install-tls op lands it on the host BEFORE the config
+    # references it; the apply then carries the three paths as tls_paths.
+    tls_paths = ()
+    probe_verify, probe_cert = None, None
+    if scheme == "https":
+        from jen.services import kea_host as __host
+        from jen.services import kea_tls as __tls
+
+        if not __host.tls_supported(server_id):
+            flash(f"{name}: {__host._TLS_NEEDS_HELPER}", "error")
+            return back
+        jen_ca, _jen_ca_key = __tls.ca_paths()
+        jen_client_cert, jen_client_key = __tls.client_paths()
+        if extensions.KEA_API_CA and jen_ca != extensions.KEA_API_CA:
+            flash(
+                f"The CA bundle above points at {extensions.KEA_API_CA}, not Jen's own CA — Jen manages one trust "
+                "anchor for every Kea server. Clear the CA bundle field (and the client certificate fields) to use "
+                "Jen's CA, or set up https by hand with your own CA per the admin guide.",
+                "error",
+            )
+            return back
+        if extensions.KEA_API_CLIENT_CERT and jen_client_cert != extensions.KEA_API_CLIENT_CERT:
+            flash(
+                f"The client certificate above is {extensions.KEA_API_CLIENT_CERT}, not the one Jen's CA issues — "
+                "clear the client certificate fields to use Jen's CA, or set up https by hand.",
+                "error",
+            )
+            return back
+        try:
+            __tls.ensure_ca()
+            __tls.issue_client_cert()
+            files = __tls.issue_server_cert(server, service, address)
+        except Exception as e:
+            logger.error(f"kea_tls: could not issue material for {name}/{service}: {e}")
+            flash("Jen could not issue the certificates — see the server log. Nothing was changed.", "error")
+            return back
+        tls_err = __kea.validate_client_tls_material(jen_client_cert, jen_client_key, jen_ca)
+        if tls_err:
+            flash(f"Jen's own client certificate is unusable ({tls_err}) — nothing was pushed to {name}.", "error")
+            return back
+        pushed = __host.install_tls(server, service, files)
+        if not pushed.get("ok"):
+            flash(
+                f"❌ {name}: {pushed.get('detail', 'the helper refused the TLS material')} — nothing was changed.",
+                "error",
+            )
+            return back
+        remote = __tls.remote_tls_paths(service)
+        tls_paths = [(remote["trust_anchor"], "file"), (remote["cert_file"], "file"), (remote["key_file"], "file")]
+        probe_verify, probe_cert = jen_ca, (jen_client_cert, jen_client_key)
+        entry = build_control_socket(scheme, address, port, user, password, tls=remote)
+    else:
+        entry = build_control_socket(scheme, address, port, user, password)
+
     result = __changeset.apply_change(
         service,
         lambda cfg: __edit.set_control_socket(cfg, service, entry),
@@ -1023,6 +1135,7 @@ def setup_direct_socket(server_id, service):
             "nochange": f"{daemon} already has exactly this socket in {conf} — checking that it answers",
         },
         daemon_label=daemon,
+        tls_paths=tls_paths,
     )
     if result.status == "noservers":
         flash(f"{name} has no SSH host configured.", "error")
@@ -1042,8 +1155,14 @@ def setup_direct_socket(server_id, service):
         )
         return back
 
-    version_text, probe_err = _probe_once(new_url, user, password, omit_service=True, service=service)
-    identified = _identify_daemon(new_url, user, password, service) if version_text else None
+    version_text, probe_err = _probe_once(
+        new_url, user, password, omit_service=True, service=service, verify=probe_verify, cert=probe_cert
+    )
+    identified = (
+        _identify_daemon(new_url, user, password, service, verify=probe_verify, cert=probe_cert)
+        if version_text
+        else None
+    )
     if not version_text or identified != _DAEMON_KEY[service]:
         if not version_text:
             reason = f"didn't answer a version-get ({probe_err})"
@@ -1061,7 +1180,7 @@ def setup_direct_socket(server_id, service):
         return back
 
     was_ca = extensions.KEA_CONNECTION_MODE == "ca"
-    written = _write_direct_socket_config(server, service, new_url, user, password)
+    written = _write_direct_socket_config(server, service, new_url, user, password, tls=(scheme == "https"))
     __user.set_global_setting("restart_pending", "true")
     flash(f"✅ {daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
     if service != "dhcp4" and extensions.KEA_CONNECTION_MODE == "ca":
@@ -1080,6 +1199,158 @@ def setup_direct_socket(server_id, service):
                 "warning",
             )
     __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} user={user}")
+    return back
+
+
+def _service_url(server: dict, service: str) -> str:
+    """The URL Jen dials for `service` on `server` (its per-daemon
+    override, else the v4 URL in ca mode), or "" when it has none."""
+    ep = __kea._endpoint_for(server, service)
+    return ep[0] if isinstance(ep, tuple) else ""
+
+
+@bp.route("/settings/infrastructure/kea-ca/rotate", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def rotate_kea_ca():
+    """v5.29.0 (Q29, C4) — a new Jen Kea CA and client certificate, and a
+    new server certificate pushed to every (server, daemon) Jen ever
+    issued one for. Staged so Jen never trusts a CA that isn't fully
+    deployed: the new material is generated beside the live files
+    (`.next`), every server is pushed, restarted and probed with the
+    STAGED CA and client cert, and only when all of them answer is the
+    staging promoted to live. A failure part-way re-issues the already-
+    pushed servers from the OLD CA — still live, still the one Jen
+    trusts — restarts them, and discards the staging. The one
+    destructive action in this subsystem, hence superadmin + step-up
+    reauth (Q6) and a confirm naming every server."""
+    from jen.services import kea_host as __host
+    from jen.services import kea_tls as __tls
+
+    back = redirect(url_for("settings.settings_kea"))
+    if not __tls.ca_present():
+        flash(
+            "No Jen-managed Kea CA exists yet — Jen creates it the first time you set up an https socket. "
+            "Nothing to rotate.",
+            "info",
+        )
+        return back
+
+    targets = []  # (server, service, bind address)
+    blocked = []
+    for copy in __tls.issued_server_copies():
+        sid = int(copy["server_id"]) if str(copy["server_id"]).isdigit() else None
+        server = _server_by_id(sid) if sid is not None else None
+        if server is None:
+            continue  # a server since removed from Jen's config — its copy is just stale
+        label = f"{server.get('name') or f'Kea Server {sid}'} kea-{copy['service']}"
+        url = _service_url(server, copy["service"])
+        if not url.startswith("https://"):
+            blocked.append(
+                f"{label} (its URL is {url or 'unset'}, not an https socket — remove the stale copy at {copy['path']} if it's no longer on Jen's CA)"
+            )
+            continue
+        if not server.get("ssh_host"):
+            blocked.append(f"{label} (no SSH host)")
+            continue
+        if not __host.tls_supported(sid):
+            blocked.append(f"{label} (helper below v4)")
+            continue
+        targets.append((server, copy["service"], urlparse(url).hostname or ""))
+    if blocked:
+        flash(
+            "Rotate refused — every server on Jen's CA must be reachable for a new certificate, or it would be cut "
+            "off by the new CA: " + "; ".join(blocked),
+            "error",
+        )
+        return back
+
+    staged = __tls.stage_rotation()
+    done: list[tuple[dict, str, str]] = []
+    failure = ""
+    for server, service, bind in targets:
+        sname = server.get("name") or f"Kea Server {server.get('id')}"
+        daemon = _DAEMON_NAME[service]
+        try:
+            files = __tls.issue_server_cert(server, service, bind, ca=(staged["ca_cert"], staged["ca_key"]))
+        except Exception as e:
+            logger.error(f"kea_tls: staged issue failed for {sname}/{service}: {e}")
+            failure = f"{sname} {daemon}: could not issue its certificate (see the server log)"
+            break
+        pushed = __host.install_tls(server, service, files)
+        if not pushed.get("ok"):
+            failure = f"{sname} {daemon}: {pushed.get('detail', 'the helper refused the TLS material')}"
+            break
+        restarted = __host.service_action(server, service, "restart")
+        if not restarted.get("ok"):
+            failure = f"{sname}: {daemon} did NOT restart ({restarted.get('detail')})"
+            break
+        url = _service_url(server, service)
+        user, pwd = _daemon_creds(server, service)
+        version_text, probe_err = _probe_once(
+            url,
+            user,
+            pwd,
+            omit_service=True,
+            service=service,
+            verify=staged["ca_cert"],
+            cert=(staged["client_cert"], staged["client_key"]),
+        )
+        if not version_text:
+            failure = f"{sname} {daemon}: {url} did not answer with the new certificates ({probe_err})"
+            break
+        done.append((server, service, bind))
+
+    if failure:
+        rolled, rollback_failed = [], []
+        for server, service, bind in done:
+            sname = server.get("name") or f"Kea Server {server.get('id')}"
+            label = f"{sname} {_DAEMON_NAME[service]}"
+            try:
+                files = __tls.issue_server_cert(server, service, bind)  # the OLD CA — still live
+                r1 = __host.install_tls(server, service, files)
+                r2 = __host.service_action(server, service, "restart") if r1.get("ok") else {"ok": False}
+            except Exception as e:
+                logger.error(f"kea_tls: rollback issue failed for {label}: {e}")
+                r1, r2 = {"ok": False}, {"ok": False}
+            (rolled if r1.get("ok") and r2.get("ok") else rollback_failed).append(label)
+        __tls.discard_rotation(staged)
+        msg = f"❌ Rotate stopped at {failure}. Jen still trusts the previous CA; nothing in Jen's settings changed."
+        if rolled:
+            msg += f" Rolled back to the previous CA: {', '.join(rolled)}."
+        flash(msg, "error")
+        if rollback_failed:
+            flash(
+                f"🛑 ROLLBACK FAILED on {', '.join(rollback_failed)} — they hold certificates from a CA Jen never "
+                "adopted and won't answer Jen until fixed: run Set up direct socket (https) again for each.",
+                "error",
+            )
+        __user.audit("ROTATE_KEA_CA", "kea_api", f"failed: {failure}; rolled_back={len(rolled)}")
+        return back
+
+    __tls.commit_rotation(staged)
+    ca_crt, _k = __tls.ca_paths()
+    client_pem, client_key = __tls.client_paths()
+    if targets:
+        __config.app_config.write_values(
+            [
+                ("kea", "api_ca", ca_crt),
+                ("kea", "api_client_cert", client_pem),
+                ("kea", "api_client_key", client_key),
+                ("kea", "api_tls_verify", "true"),
+            ]
+        )
+    names = ", ".join(
+        f"{s.get('name') or 'Kea Server ' + str(s.get('id'))} {_DAEMON_NAME[svc]}" for s, svc, _b in targets
+    )
+    flash(
+        "✅ Kea CA rotated — new CA and client certificate issued"
+        + (f"; new server certificates pushed to {names}, each daemon restarted and answering." if targets else ".")
+        + " The previous CA is kept beside the new one as kea-ca.crt.prev.",
+        "success",
+    )
+    __user.audit("ROTATE_KEA_CA", "kea_api", f"ok: {len(targets)} server certificate(s) re-issued")
     return back
 
 

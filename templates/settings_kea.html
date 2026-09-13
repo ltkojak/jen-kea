@@ -5,7 +5,7 @@
 {#- v5.29.0 (Q29) — "Set up direct socket": one inline form per (server, daemon).
     Jen adds the http entry to the daemon's control-sockets over SSH, restarts,
     probes, and only then points itself at it. Plain <details>, no script. -#}
-{% macro direct_socket_setup(server_id, service, daemon, conf, ssh_host, bind_default, api_user, default_port, current_url, ssh_hint) %}
+{% macro direct_socket_setup(server_id, service, daemon, conf, ssh_host, bind_default, api_user, default_port, current_url, ssh_hint, tls_ok=False) %}
 {% if current_user.role == 'superadmin' and direct_socket_supported %}
 <details class="direct-socket-setup" style="margin-top:10px;">
     <summary class="btn btn-sm btn-secondary" style="display:inline-block;cursor:pointer;list-style:none;">⚡ Set up direct socket for {{ daemon }}…</summary>
@@ -15,9 +15,16 @@
     <div style="margin-top:8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;">
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}" data-confirm="Edit {{ conf }} on {{ ssh_host }}, restart {{ daemon }}, and probe the new socket? Jen only switches over if the socket answers as {{ daemon }}.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="scheme" value="http">
-            <div class="form-hint" style="margin-bottom:10px;">Jen adds an <code>http</code> entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
+            <div class="form-hint" style="margin-bottom:10px;">Jen adds the socket entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
             <div class="form-row">
+                <div class="form-group">
+                    <label>Scheme</label>
+                    <select name="scheme">
+                        <option value="https" {% if not tls_ok %}disabled{% endif %}>https — mutual TLS with Jen's CA (recommended){% if not tls_ok %} — needs jen-kea-helper v4{% endif %}</option>
+                        <option value="http" {% if not tls_ok %}selected{% endif %}>http — plain, basic-auth only</option>
+                    </select>
+                    <div class="form-hint">{% if tls_ok %}https: Jen's own CA issues a server certificate, pushes it to <code>/etc/kea/tls/{{ service }}/</code> on the host, and presents its client certificate — the daemon accepts nothing else.{% else %}https needs the v4 host helper — bring this server's helper up to date from the SSH card, then come back.{% endif %}</div>
+                </div>
                 <div class="form-group">
                     <label>Bind address</label>
                     <input type="text" name="address" value="{{ bind_default }}" placeholder="management IP of this host">
@@ -37,7 +44,7 @@
                     <input type="password" name="password" placeholder="(the password Jen already uses here)">
                 </div>
             </div>
-            <div class="form-hint" style="margin-bottom:10px;">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep this socket on a management network reachable only from the Jen host. For <code>https</code>, add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
+            <div class="form-hint" style="margin-bottom:10px;">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep such a socket on a management network reachable only from the Jen host. Your own CA instead of Jen's: add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
             <button type="submit" class="btn btn-sm btn-primary">Add socket, restart {{ daemon }} and probe</button>
         </form>
         {% if infra.kea_connection_mode == 'direct' and (service == 'dhcp4' or current_url) %}
@@ -148,8 +155,22 @@
                style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
         <div id="probe-kea-results" style="margin-top:12px;font-size:13px;"></div>
     </form>
-    {{ direct_socket_setup(1, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', infra.ssh_host, infra.bind_default, infra.kea_api_user, 8004, infra.kea_api_url, 'SSH to the Kea host (below)') }}
+    {{ direct_socket_setup(1, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', infra.ssh_host, infra.bind_default, infra.kea_api_user, 8004, infra.kea_api_url, 'SSH to the Kea host (below)', infra.tls_supported) }}
     {% if current_user.role == 'superadmin' %}
+    <!-- v5.29.0 (Q29) — the Jen-managed Kea CA behind the https option above -->
+    <div id="kea-ca" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <div class="stat-label" style="margin-bottom:4px;">Jen-managed Kea CA (for https sockets)</div>
+        {% if kea_ca.present %}
+        <div class="form-hint" style="margin-bottom:8px;"><code>{{ kea_ca.subject }}</code> — expires in {{ kea_ca.days_left }} day(s). Jen's client certificate: {% if kea_ca.client_ok %}<span style="color:var(--success);">valid, signed by this CA</span>{% else %}<span style="color:var(--warning);">missing or not signed by this CA</span>{% endif %}. Server certificates issued: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({{ d }} d){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.</div>
+        <form method="POST" action="/settings/infrastructure/kea-ca/rotate" style="display:inline;" data-confirm="Rotate the Kea CA? Jen issues a new CA and client certificate and pushes a new server certificate to: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }}{% if not loop.last %}, {% endif %}{% else %}(no servers yet){% endfor %}. Each daemon restarts. If any push fails, everything is rolled back to the current CA.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-warning">🔄 Rotate Kea CA</button>
+        </form>
+        <span class="form-hint" style="margin-left:8px;">Re-issues everything — 10-year CA, 5-year certificates. Asks for your password again if it has been a while.</span>
+        {% else %}
+        <div class="form-hint">Not created yet — Jen creates it (EC P-256, 10 years, key at <code>/etc/jen/ssl/kea-ca.key</code>) the first time you set up an https socket.{% if kea_ca.external_ca %} The CA bundle above points at your own CA; clear it to use Jen's.{% endif %}</div>
+        {% endif %}
+    </div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
         <a href="/settings/infrastructure/author-kea/dhcp4" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp4.conf</a>
         <span class="form-hint" style="display:block;margin-top:4px;">For a fresh Kea install with no config yet — not for editing an existing one (use Network → Subnets → Edit for that).</span>
@@ -329,9 +350,9 @@
                     <input type="text" name="extra_kea_conf[]" value="{{ srv.kea_conf }}" placeholder="/etc/kea/kea-dhcp4.conf">
                 </div>
             </div>
-            {{ direct_socket_setup(srv.id, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', srv.ssh_host, srv.bind_default, srv.api_user, 8004, srv.api_url, 'SSH Host (above, then Save Additional Servers)') }}
+            {{ direct_socket_setup(srv.id, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', srv.ssh_host, srv.bind_default, srv.api_user, 8004, srv.api_url, 'SSH Host (above, then Save Additional Servers)', srv.tls_supported) }}
             {% if ipv6_enabled %}
-            {{ direct_socket_setup(srv.id, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', srv.ssh_host, srv.bind_default, srv.api6_user or srv.api_user, 8006, srv.api6_url, 'SSH Host (above, then Save Additional Servers)') }}
+            {{ direct_socket_setup(srv.id, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', srv.ssh_host, srv.bind_default, srv.api6_user or srv.api_user, 8006, srv.api6_url, 'SSH Host (above, then Save Additional Servers)', srv.tls_supported) }}
             {% endif %}
         </div>
         {% endfor %}
@@ -437,7 +458,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save Kea6 API</button>
     </form>
-    {{ direct_socket_setup(1, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', infra.ssh_host, infra.bind_default, infra.kea6_api_user or infra.kea_api_user, 8006, infra.kea6_api_url, 'SSH to the Kea host (above)') }}
+    {{ direct_socket_setup(1, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', infra.ssh_host, infra.bind_default, infra.kea6_api_user or infra.kea_api_user, 8006, infra.kea6_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
         <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp6.conf</a>
         <span class="form-hint" style="display:block;margin-top:4px;">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
@@ -483,7 +504,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save D2 API</button>
     </form>
-    {{ direct_socket_setup(1, 'd2', 'kea-dhcp-ddns', 'kea-dhcp-ddns.conf', infra.ssh_host, infra.bind_default, infra.d2_api_user or infra.kea_api_user, 53001, infra.d2_api_url, 'SSH to the Kea host (above)') }}
+    {{ direct_socket_setup(1, 'd2', 'kea-dhcp-ddns', 'kea-dhcp-ddns.conf', infra.ssh_host, infra.bind_default, infra.d2_api_user or infra.kea_api_user, 53001, infra.d2_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
 </div>
 
 <!-- Kea package install status (v5.1.2) -->

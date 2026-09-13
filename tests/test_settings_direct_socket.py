@@ -16,6 +16,7 @@ path.
 """
 
 import configparser
+import pathlib
 
 import pytest
 
@@ -517,3 +518,298 @@ class TestProbeWordingPointsAtTheButton:
         res = kea_svc.kea_command("config-get", "dhcp4")
         assert res["result"] == 1
         assert "Set up direct socket" in res["text"]
+
+
+# ── https (v5.29.0, Q29 C3/C4) ──────────────────────────────────────────────
+
+
+class _FakeHTTPV(_FakeHTTP):
+    """_FakeHTTP plus the `verify` kwarg on each recorded call — the
+    https flow must probe with the CA it hasn't adopted yet."""
+
+    def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
+        try:
+            return super().post(url, json=json, auth=auth, timeout=timeout, verify=verify, cert=cert)
+        finally:
+            self.calls[-1]["verify"] = verify
+
+
+@pytest.fixture
+def httpv(monkeypatch):
+    def _install(replies, config_replies=None):
+        fk = _FakeHTTPV(replies, config_replies)
+        monkeypatch.setattr(kea_svc, "http", fk)
+        return fk
+
+    return _install
+
+
+@pytest.fixture
+def tls_env(tmp_path, monkeypatch, fake):
+    """A throwaway /etc/jen/ssl, both hosts on helper v4, install-tls ok."""
+    from jen.services import kea_tls
+
+    monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path / "ssl"))
+    monkeypatch.setattr(kea_tls, "_hostname", lambda: "jenhost")
+    monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 4}, "2": {"version": 4}})
+    fake.responses["install-tls"] = lambda server, op, payload: {
+        "ok": True,
+        "paths": {n: f"/etc/kea/tls/{payload['service']}/{n}" for n in ("ca.crt", "server.crt", "server.key")},
+        "owner": "root:_kea",
+        "helper_version": 4,
+    }
+    return kea_tls
+
+
+TLS_PATHS = [
+    ["/etc/kea/tls/dhcp4/ca.crt", "file"],
+    ["/etc/kea/tls/dhcp4/server.crt", "file"],
+    ["/etc/kea/tls/dhcp4/server.key", "file"],
+]
+
+
+class TestHttpsFlow:
+    def test_install_tls_then_apply_with_tls_paths_then_probe_with_jens_material(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env
+    ):
+        import os
+
+        fk = httpv(
+            {"1.2.3.4:8000": _ok("3.0.4"), "10.0.0.5:8004": _ok("3.0.4")}, config_replies={"10.0.0.5:8004": DHCP4_OK}
+        )
+        r = _setup(logged_in_client, scheme="https")
+        assert r.status_code == 200
+
+        # Order is the whole point: material on the host BEFORE the config references it.
+        assert [op for op in fake.ops() if op != "read-config"] == [
+            "install-tls",
+            "test-config",
+            "apply-config",
+            "service",
+        ]
+        inst = fake.payload_for("install-tls")
+        assert inst["service"] == "dhcp4"
+        assert set(inst["files"]) == {"ca.crt", "server.crt", "server.key"}
+        ca_crt, _ = tls_env.ca_paths()
+        assert inst["files"]["ca.crt"] == pathlib.Path(ca_crt).read_text(encoding="utf-8")
+        assert fake.payload_for("test-config")["tls_paths"] == TLS_PATHS
+        applied = fake.payload_for("apply-config")
+        assert applied["tls_paths"] == TLS_PATHS
+        entry = applied["config"]["Dhcp4"]["control-sockets"][1]
+        assert entry["socket-type"] == "https"
+        assert entry["trust-anchor"] == "/etc/kea/tls/dhcp4/ca.crt"
+        assert entry["cert-file"] == "/etc/kea/tls/dhcp4/server.crt"
+        assert entry["key-file"] == "/etc/kea/tls/dhcp4/server.key"
+        assert entry["cert-required"] is True
+
+        # The probe used Jen's CA and client cert — which Jen had NOT adopted yet.
+        probe = next(c for c in fk.calls if "10.0.0.5:8004" in c["url"])
+        assert probe["url"].startswith("https://")
+        assert probe["verify"] == ca_crt
+        assert probe["cert"] == tls_env.client_paths()
+
+        on_disk = _on_disk(isolated_config)
+        assert on_disk.get("kea", "api_url") == "https://10.0.0.5:8004"
+        assert on_disk.get("kea", "connection_mode") == "direct"
+        assert on_disk.get("kea", "api_ca") == ca_crt
+        assert on_disk.get("kea", "api_client_cert"), on_disk.get("kea", "api_client_key") == tls_env.client_paths()
+        assert on_disk.get("kea", "api_tls_verify") == "true"
+        assert os.path.isfile(tls_env.server_copy_path(1, "dhcp4"))
+        assert tls_env.client_cert_ok()
+        assert b"answers directly at https://10.0.0.5:8004" in r.data
+
+    def test_helper_below_v4_is_refused_before_anything(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env, monkeypatch
+    ):
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 3}})
+        httpv({"1.2.3.4:8000": _ok("3.0.4")})
+        r = _setup(logged_in_client, scheme="https")
+        assert b"needs jen-kea-helper v4" in r.data
+        assert fake.calls == []
+        assert not tls_env.ca_present()  # no CA was even created
+        assert _on_disk(isolated_config).get("kea", "api_url") == CA_URL
+
+    def test_install_tls_failure_stops_before_the_config_edit(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env
+    ):
+        fake.responses["install-tls"] = {
+            "ok": False,
+            "error": "write-failed",
+            "path": "/etc/kea/tls/dhcp4/server.key",
+            "detail": "disk full",
+        }
+        httpv({"1.2.3.4:8000": _ok("3.0.4")})
+        r = _setup(logged_in_client, scheme="https")
+        assert [op for op in fake.ops() if op != "read-config"] == ["install-tls"]
+        assert b"disk full" in r.data and b"nothing was changed" in r.data
+        on_disk = _on_disk(isolated_config)
+        assert on_disk.get("kea", "api_url") == CA_URL
+        assert not on_disk.has_option("kea", "api_ca")
+
+    def test_a_probe_failure_never_writes_the_tls_settings(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env
+    ):
+        httpv({"1.2.3.4:8000": _ok("3.0.4")})  # nothing answers at the new socket
+        r = _setup(logged_in_client, scheme="https")
+        assert b"none of its settings were changed" in r.data
+        on_disk = _on_disk(isolated_config)
+        assert not on_disk.has_option("kea", "api_ca") and not on_disk.has_option("kea", "api_client_cert")
+        assert on_disk.get("kea", "api_tls_verify", fallback="") == ""
+
+    def test_an_operators_own_ca_is_never_overwritten(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env
+    ):
+        app_config.write_values([("kea", "api_ca", "/srv/own-ca.pem")])
+        httpv({"1.2.3.4:8000": _ok("3.0.4")})
+        r = _setup(logged_in_client, scheme="https")
+        assert b"clear the CA bundle field" in r.data
+        assert fake.calls == []
+        assert _on_disk(isolated_config).get("kea", "api_ca") == "/srv/own-ca.pem"
+
+    def test_second_daemon_reuses_the_ca_and_client_cert(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env
+    ):
+        httpv(
+            {"1.2.3.4:8000": _ok("3.0.4"), "10.0.0.5:8004": _ok("3.0.4"), "10.0.0.5:53001": _ok("3.0.4")},
+            config_replies={
+                "10.0.0.5:8004": DHCP4_OK,
+                "10.0.0.5:53001": [{"result": 0, "arguments": {"DhcpDdns": {}}}],
+            },
+        )
+        _setup(logged_in_client, scheme="https")
+        ca_serial = tls_env.load_cert(tls_env.ca_paths()[0]).serial_number
+        client_serial = tls_env.load_cert(tls_env.client_paths()[0]).serial_number
+        _setup(logged_in_client, scheme="https", service="d2", port="53001")
+        assert tls_env.load_cert(tls_env.ca_paths()[0]).serial_number == ca_serial
+        assert tls_env.load_cert(tls_env.client_paths()[0]).serial_number == client_serial
+        assert [c["service"] for c in tls_env.issued_server_copies()] == ["d2", "dhcp4"]
+        assert _on_disk(isolated_config).get("d2", "api_url") == "https://10.0.0.5:53001"
+
+    def test_https_option_is_gated_per_server_on_the_page(
+        self, logged_in_client, db, isolated_config, mock_kea, tls_env, monkeypatch
+    ):
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 4}, "2": {"version": 3}})
+        body = logged_in_client.get("/settings/kea").data
+        # server 1: dhcp4 + dhcp6 + d2 forms enabled; server 2: its dhcp4 form disabled
+        assert body.count(b'<option value="https" disabled') == 1
+        assert body.count(b'<option value="https"') == 4
+        assert b"needs jen-kea-helper v4" in body
+
+    def test_ca_block_before_and_after(self, logged_in_client, db, isolated_config, mock_kea, tls_env):
+        body = logged_in_client.get("/settings/kea").data
+        assert b"Not created yet" in body and b"Rotate Kea CA" not in body
+        tls_env.ensure_ca()
+        tls_env.issue_client_cert()
+        tls_env.issue_server_cert(extensions.KEA_SERVERS[1], "dhcp4", "10.0.0.6")
+        body = logged_in_client.get("/settings/kea").data
+        assert b"Jen Kea CA jenhost" in body
+        assert b"Rotate Kea CA" in body
+        assert b"standby kea-dhcp4" in body
+        assert b"valid, signed by this CA" in body
+
+
+class TestRotateKeaCa:
+    @pytest.fixture
+    def rotated_env(self, isolated_config, fake, httpv, tls_env):
+        tls_env.ensure_ca()
+        tls_env.issue_client_cert()
+        ca_crt, _ = tls_env.ca_paths()
+        pem, key = tls_env.client_paths()
+        app_config.write_values(
+            [
+                ("kea", "connection_mode", "direct"),
+                ("kea", "api_url", "https://10.0.0.5:8004"),
+                ("kea_server_2", "api_url", "https://10.0.0.6:8004"),
+                ("kea", "api_ca", ca_crt),
+                ("kea", "api_client_cert", pem),
+                ("kea", "api_client_key", key),
+                ("kea", "api_tls_verify", "true"),
+            ]
+        )
+        tls_env.issue_server_cert(extensions.KEA_SERVERS[0], "dhcp4", "10.0.0.5")
+        tls_env.issue_server_cert(extensions.KEA_SERVERS[1], "dhcp4", "10.0.0.6")
+        fk = httpv(
+            {"10.0.0.5:8004": _ok("3.0.4"), "10.0.0.6:8004": _ok("3.0.4")},
+            config_replies={"10.0.0.5:8004": DHCP4_OK, "10.0.0.6:8004": DHCP4_OK},
+        )
+        return tls_env, fk
+
+    def test_rotates_every_server_then_promotes(self, logged_in_client, db, rotated_env, fake):
+        import os
+
+        tls, fk = rotated_env
+        ca_crt, _ = tls.ca_paths()
+        old_serial = tls.load_cert(ca_crt).serial_number
+        r = logged_in_client.post("/settings/infrastructure/kea-ca/rotate", follow_redirects=True)
+        assert r.status_code == 200
+        ops = [(sid, op) for (sid, op, _p) in fake.calls if op != "read-config"]
+        assert ops == [(1, "install-tls"), (1, "service"), (2, "install-tls"), (2, "service")]
+        new_pem = pathlib.Path(ca_crt).read_text(encoding="utf-8")
+        assert tls.load_cert(ca_crt).serial_number != old_serial
+        for _sid, op, payload in fake.calls:
+            if op == "install-tls":
+                assert payload["files"]["ca.crt"] == new_pem  # issued from the STAGED (now live) CA
+        # probed with the staged material, before promotion
+        probes = [c for c in fk.calls if c["json"]["command"] == "version-get"]
+        assert len(probes) >= 2
+        assert all(c["verify"].endswith("kea-ca.crt.next") for c in probes[:2])
+        assert all(c["cert"][0].endswith("jen-kea-client.pem.next") for c in probes[:2])
+        assert os.path.isfile(ca_crt + ".prev") and not os.path.exists(ca_crt + ".next")
+        assert tls.client_cert_ok()
+        assert b"Kea CA rotated" in r.data
+        assert b"standby kea-dhcp4" in r.data
+
+    def test_failure_on_the_second_server_rolls_the_first_back_to_the_old_ca(
+        self, logged_in_client, db, rotated_env, fake
+    ):
+        import os
+
+        tls, _fk = rotated_env
+        ca_crt, _ = tls.ca_paths()
+        old_pem = pathlib.Path(ca_crt).read_text(encoding="utf-8")
+        old_serial = tls.load_cert(ca_crt).serial_number
+        good = fake.responses["install-tls"]
+        fake.responses["install-tls"] = lambda server, op, payload: (
+            good(server, op, payload)
+            if server["id"] == 1
+            else {"ok": False, "error": "write-failed", "detail": "read-only fs"}
+        )
+        r = logged_in_client.post("/settings/infrastructure/kea-ca/rotate", follow_redirects=True)
+        ops = [(sid, op) for (sid, op, _p) in fake.calls if op != "read-config"]
+        assert ops == [(1, "install-tls"), (1, "service"), (2, "install-tls"), (1, "install-tls"), (1, "service")]
+        install_payloads = [p for (_sid, op, p) in fake.calls if op == "install-tls"]
+        assert install_payloads[0]["files"]["ca.crt"] != old_pem  # the staged CA went out first
+        assert install_payloads[2]["files"]["ca.crt"] == old_pem  # …and the rollback re-issued from the old one
+        assert tls.load_cert(ca_crt).serial_number == old_serial
+        assert not os.path.exists(ca_crt + ".next")
+        assert b"Rotate stopped at standby kea-dhcp-ddns" not in r.data
+        assert b"Rotate stopped at standby kea-dhcp4" in r.data
+        assert b"read-only fs" in r.data
+        assert b"Rolled back to the previous CA: Kea Server 1 kea-dhcp4" in r.data
+        assert tls.client_cert_ok()  # still the old pair, still consistent
+
+    def test_refuses_when_a_server_on_the_ca_cannot_be_repushed(
+        self, logged_in_client, db, rotated_env, fake, monkeypatch
+    ):
+        tls, _fk = rotated_env
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 4}, "2": {"version": 3}})
+        old_serial = tls.load_cert(tls.ca_paths()[0]).serial_number
+        r = logged_in_client.post("/settings/infrastructure/kea-ca/rotate", follow_redirects=True)
+        assert b"Rotate refused" in r.data and b"standby kea-dhcp4 (helper below v4)" in r.data
+        assert fake.calls == []
+        assert tls.load_cert(tls.ca_paths()[0]).serial_number == old_serial
+
+    def test_requires_recent_auth(self, logged_in_client, db, rotated_env, fake):
+        from datetime import datetime, timedelta, timezone
+
+        with logged_in_client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        r = logged_in_client.post("/settings/infrastructure/kea-ca/rotate")
+        assert r.status_code == 302 and "reauth" in r.headers["Location"]
+        assert fake.calls == []
+
+    def test_no_ca_yet_is_a_noop(self, logged_in_client, db, isolated_config, fake, httpv, tls_env):
+        httpv({})
+        r = logged_in_client.post("/settings/infrastructure/kea-ca/rotate", follow_redirects=True)
+        assert b"No Jen-managed Kea CA exists yet" in r.data
+        assert fake.calls == []

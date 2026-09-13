@@ -282,3 +282,36 @@ class TestApplyChangeExceptionHandling:
         result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A])
         assert result.status == "aborted"
         assert any("connection refused" in text for _t, text in result.lines)
+
+
+class TestApplyChangeTlsPaths:
+    """v5.29.0 (Q29) — `tls_paths` reaches both the preflight and the
+    commit, so a missing https file on the host is a `tlsmissing`
+    preflight abort (nothing written, nothing restarted), never a daemon
+    restarted into a config it can't load."""
+
+    TLS = [("/etc/kea/tls/dhcp4/ca.crt", "file"), ("/etc/kea/tls/dhcp4/server.crt", "file")]
+
+    def test_paths_are_sent_with_test_and_apply(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 4}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "https socket", servers=[SERVER_A], tls_paths=self.TLS)
+        assert result.status == "ok"
+        expected = [list(p) for p in self.TLS]
+        assert fake.payload_for("test-config")["tls_paths"] == expected
+        assert fake.payload_for("apply-config")["tls_paths"] == expected
+
+    def test_default_is_no_paths(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 4}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "plain", servers=[SERVER_A])
+        assert fake.payload_for("test-config")["tls_paths"] == []
+
+    def test_tlsmissing_at_preflight_aborts_before_any_write(self, fake):
+        fake.responses["test-config"] = {"ok": False, "error": "tlsmissing", "path": "/etc/kea/tls/dhcp4/server.key"}
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "https socket", servers=[SERVER_A], tls_paths=self.TLS)
+        assert result.status == "aborted"
+        assert "apply-config" not in fake.ops() and "service" not in fake.ops()
+        assert any("/etc/kea/tls/dhcp4/server.key" in text for _t, text in result.lines)

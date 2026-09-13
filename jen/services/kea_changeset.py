@@ -95,6 +95,7 @@ def apply_change(
     code_messages: dict[str, str] | None = None,
     conflict_phrase=None,
     daemon_label: str = "Kea",
+    tls_paths=(),
 ) -> ChangeSetResult:
     """Push one config mutation to every SSH-configured Kea server for
     `service` ("dhcp4" | "dhcp6" | "d2"), preflighting all of them
@@ -130,6 +131,13 @@ def apply_change(
     wording for a `code == "conflict"` result (`_conflict_flash()` and
     its ddns.py equivalents live in the routes layer, not here); it
     defaults to a generic phrase.
+
+    `tls_paths` (v5.29.0, Q29) — `[(remote_path, "file"), ...]` the
+    mutated config references (an https control socket's trust-anchor,
+    cert-file, key-file); passed through to both the preflight and the
+    commit so the helper refuses with `tlsmissing` BEFORE the daemon is
+    restarted into a config it can't load. The rollback re-applies the
+    pre-change config, which referenced none of them.
 
     Never raises — a per-server exception during planning aborts the
     whole change set with that exception's text as the line, matching
@@ -185,7 +193,7 @@ def apply_change(
     # ── Phase 2: preflight every target before touching anything ─────
     preflight_failed = False
     for t in targets:
-        res = _host.test_config(t.server, service, t.after_cfg)
+        res = _host.test_config(t.server, service, t.after_cfg, tls_paths=tls_paths)
         if not res.get("ok"):
             preflight_failed = True
             if res.get("code") == "conflict":
@@ -199,7 +207,9 @@ def apply_change(
     # ── Phase 3: commit sequentially, revert on the first failure ────
     committed: list[Target] = []
     for t in targets:
-        res = _host.apply_config(t.server, service, t.after_cfg, expect_sha256=t.before_sha, summary=summary)
+        res = _host.apply_config(
+            t.server, service, t.after_cfg, tls_paths=tls_paths, expect_sha256=t.before_sha, summary=summary
+        )
         if res.get("ok"):
             t.applied_sha = res.get("sha256")
             committed.append(t)

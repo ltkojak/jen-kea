@@ -8,6 +8,7 @@ extensions, validity), never string-matching PEM.
 """
 
 import os
+import pathlib
 import stat
 import sys
 from datetime import datetime, timedelta, timezone
@@ -213,3 +214,48 @@ class TestExpiryHelpers:
         r = kea_tls.ensure_ca()
         assert 3640 <= kea_tls.days_left(r["cert"]) <= 3650
         assert kea_tls.ca_present()
+
+
+class TestStagedRotation:
+    """v5.29.0 (Q29, C4) — the Rotate flow's "all servers or nothing":
+    new material is staged beside the live files, used to issue and
+    probe, and only then promoted."""
+
+    def test_stage_writes_next_files_and_leaves_live_alone(self, ssl_dir):
+        live = kea_tls.load_cert(kea_tls.ensure_ca()["cert"]).serial_number
+        staged = kea_tls.stage_rotation()
+        assert set(staged) == {"ca_cert", "ca_key", "client_cert", "client_key"}
+        assert all(p.endswith(".next") and os.path.isfile(p) for p in staged.values())
+        assert kea_tls.load_cert(kea_tls.ca_paths()[0]).serial_number == live
+        staged_ca = kea_tls.load_cert(staged["ca_cert"])
+        kea_tls.load_cert(staged["client_cert"]).verify_directly_issued_by(staged_ca)
+
+    def test_issue_from_the_staged_ca(self, ssl_dir):
+        kea_tls.ensure_ca()
+        staged = kea_tls.stage_rotation()
+        files = kea_tls.issue_server_cert(SERVER, "dhcp4", "10.0.0.6", ca=(staged["ca_cert"], staged["ca_key"]))
+        cert = x509.load_pem_x509_certificate(files["server.crt"].encode())
+        cert.verify_directly_issued_by(kea_tls.load_cert(staged["ca_cert"]))
+        assert files["ca.crt"] == pathlib.Path(staged["ca_cert"]).read_text(encoding="utf-8")
+        with pytest.raises((InvalidSignature, ValueError)):
+            cert.verify_directly_issued_by(kea_tls.load_cert(kea_tls.ca_paths()[0]))
+
+    def test_commit_promotes_and_keeps_prev(self, ssl_dir):
+        old = kea_tls.load_cert(kea_tls.ensure_ca()["cert"]).serial_number
+        kea_tls.issue_client_cert()
+        staged = kea_tls.stage_rotation()
+        staged_serial = kea_tls.load_cert(staged["ca_cert"]).serial_number
+        kea_tls.commit_rotation(staged)
+        assert kea_tls.load_cert(kea_tls.ca_paths()[0]).serial_number == staged_serial != old
+        assert not any(os.path.exists(p) for p in staged.values())
+        assert os.path.isfile(kea_tls.ca_paths()[0] + ".prev")
+        assert kea_tls.load_cert(kea_tls.ca_paths()[0] + ".prev").serial_number == old
+        assert kea_tls.client_cert_ok()  # the promoted client cert chains to the promoted CA
+
+    def test_discard_removes_staging_and_leaves_live_alone(self, ssl_dir):
+        old = kea_tls.load_cert(kea_tls.ensure_ca()["cert"]).serial_number
+        staged = kea_tls.stage_rotation()
+        kea_tls.discard_rotation(staged)
+        assert not any(os.path.exists(p) for p in staged.values())
+        assert kea_tls.load_cert(kea_tls.ca_paths()[0]).serial_number == old
+        kea_tls.discard_rotation(staged)  # idempotent
