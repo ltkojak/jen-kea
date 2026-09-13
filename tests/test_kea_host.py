@@ -142,16 +142,67 @@ class TestLegacyFallback:
             res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"subnet4": []}})
         assert res["ok"] is True and res["code"] == "ok" and res["via"] == "legacy"
 
-    def test_service_action_legacy_done_token(self, monkeypatch, app):
-        _connect_seq(
-            monkeypatch,
-            [("", "sudo: a password is required")],
-            [("done", "")],
-        )
+    def test_service_action_legacy_uses_exit_status_not_stdout_text(self, monkeypatch, app):
+        """v5.28.0 (Q24, B1) — the real bug this replaces:
+        `service_action()`'s legacy command used to append an
+        unconditional trailing marker after `cmd1 || cmd2`, which
+        printed even when BOTH systemctl attempts failed — Jen could
+        report "restarted successfully" on a host where Kea never
+        actually restarted. Success is now the compound command's own
+        real exit status."""
+        _connect_seq(monkeypatch, [("", "sudo: a password is required")], [("", "", 0)])
         monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
         with app.test_request_context("/"):
             res = kea_host.service_action(SERVER, "dhcp4", "restart")
         assert res["ok"] is True and res["via"] == "legacy"
+
+    def test_service_action_legacy_nonzero_exit_is_not_ok(self, monkeypatch, app):
+        _connect_seq(
+            monkeypatch, [("", "sudo: a password is required")], [("", "Failed to restart kea-dhcp4-server.service", 1)]
+        )
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.service_action(SERVER, "dhcp4", "restart")
+        assert res["ok"] is False
+        assert "Failed to restart" in res["detail"]
+
+    def test_service_action_legacy_old_done_token_no_longer_counts(self, monkeypatch, app):
+        """The old success token, printed with a nonzero real exit
+        status, must NOT be believed — this is the exact shape of the
+        original bug."""
+        _connect_seq(monkeypatch, [("", "sudo: a password is required")], [("done", "", 1)])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.service_action(SERVER, "dhcp4", "restart")
+        assert res["ok"] is False
+
+    def test_install_package_legacy_uses_exit_status_not_text_sniffing(self, monkeypatch, app):
+        """v5.28.0 (Q24, B1) — "E:" in apt's own normal chatter no
+        longer looks like a failure; only a nonzero exit status does."""
+        _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required")],
+            [("Reading package lists...\nE: this line looks scary but the command still succeeded", "", 0)],
+        )
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.install_package(SERVER, "dhcp4")
+        assert res["ok"] is True
+
+    def test_install_package_legacy_nonzero_exit_is_not_ok(self, monkeypatch, app):
+        _connect_seq(monkeypatch, [("", "sudo: a password is required")], [("some output", "", 100)])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.install_package(SERVER, "dhcp4")
+        assert res["ok"] is False
+
+    def test_no_unconditional_trailing_marker_survives_in_the_module(self):
+        """Source guard for the exact bug fixed above: the old
+        `; echo done` trick (or any equivalent unconditional trailing
+        marker after a `||`-joined systemctl pair) must never come
+        back."""
+        src = pathlib.Path("jen/services/kea_host.py").read_text(encoding="utf-8")
+        assert "echo done" not in src
 
 
 class TestD2NeedsHelper:
@@ -466,10 +517,28 @@ class TestReadConfigVersioned:
         cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
         assert cfg == {"Dhcp4": {}} and sha == "abc"
 
-    def test_sha_is_none_on_a_v1_helper(self, monkeypatch, quiet_status):
+    def test_returns_a_canonical_sentinel_on_a_v1_helper(self, monkeypatch, quiet_status):
+        """v5.28.0 (Q24, B2) — a v1 helper gives no raw sha; this used
+        to return None, disabling the concurrency guard entirely until
+        apply_config()'s own (dangerously late) fallback kicked in. It
+        now returns a canonical sentinel so every caller always has
+        something to guard a write with."""
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {}}}), "")])
         cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
-        assert cfg == {"Dhcp4": {}} and sha is None
+        assert cfg == {"Dhcp4": {}}
+        assert sha == kea_host._canonical_sentinel({"Dhcp4": {}})
+
+    def test_returns_a_canonical_sentinel_on_the_legacy_path(self, monkeypatch, app, quiet_status):
+        _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required")],
+            [(json.dumps({"Dhcp4": {"n": 1}}), "")],
+        )
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4")
+        assert cfg == {"Dhcp4": {"n": 1}}
+        assert sha == kea_host._canonical_sentinel({"Dhcp4": {"n": 1}})
 
     # ── v5.20.0: baseline + hash_kind ────────────────────────────────────
     def test_first_v2_read_records_a_raw_baseline(self, monkeypatch, quiet_status):
@@ -568,32 +637,94 @@ class TestApplyGuarded:
         assert res["code"] == "conflict" and res["sha256"] == "current" and res["via"] == "helper"
 
     def test_v1_helper_jen_side_compare_proceeds_when_unchanged(self, monkeypatch, app, quiet_status):
+        """v5.28.0 (Q24, B2) — the check now runs BEFORE the write: the
+        first queued response is `_jen_side_conflict()`'s own re-read
+        (which finds the live config unchanged), and only then does a
+        SECOND connection make the actual apply-config call — the
+        opposite order from before this fix, when apply-config ran
+        first and the (v1-only) jen-side check ran after."""
         _connect_seq(
             monkeypatch,
-            [(json.dumps({"ok": True}), "")],  # apply (v1: no helper_version)
-            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 1}}}), "")],  # re-read for the jen-side check
-        )
-        monkeypatch.setattr(
-            "jen.services.config_revisions.latest", lambda *a: {"config": '{\n  "Dhcp4": {\n    "a": 1\n  }\n}'}
+            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 1}}}), "")],  # pre-write re-read: unchanged
+            [(json.dumps({"ok": True, "helper_version": 1}), "")],  # apply-config itself
         )
         monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})
         with app.test_request_context("/"):
-            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256="anything")
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
         assert res["ok"] is True
 
     def test_v1_helper_jen_side_compare_conflicts_when_changed(self, monkeypatch, app, quiet_status):
         _connect_seq(
             monkeypatch,
-            [(json.dumps({"ok": True}), "")],  # apply (v1)
-            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 999}}}), "")],  # re-read: different
+            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 999}}}), "")],  # pre-write re-read: different
         )
-        monkeypatch.setattr(
-            "jen.services.config_revisions.latest", lambda *a: {"config": '{\n  "Dhcp4": {\n    "a": 1\n  }\n}'}
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})  # what the caller originally read
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
+        assert res["ok"] is False and res["code"] == "conflict" and res["via"] == "jen"
+
+    def test_v1_sentinel_conflict_is_detected_before_any_apply_call(self, monkeypatch, app, quiet_status):
+        """The regression ChatGPT's review asked for: on a conflict, the
+        write must never have been attempted at all — not one SSH
+        connection beyond the pre-write re-read."""
+        made = _connect_seq(
+            monkeypatch,
+            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 999}}}), "")],
+        )
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
+        assert res["code"] == "conflict"
+        assert len(made) == 1, "apply-config must never be reached once a conflict is detected"
+
+    def test_v1_sentinel_is_never_sent_to_the_helper(self, monkeypatch, app, quiet_status):
+        """The other regression ChatGPT's review asked for: the
+        apply-config payload must carry no expect_sha256 key at all
+        once the pre-write check has already passed — a v2+ helper
+        would otherwise reject the sentinel string as a raw-sha
+        mismatch."""
+        made = _connect_seq(
+            monkeypatch,
+            [(json.dumps({"ok": True, "config": {"Dhcp4": {"a": 1}}}), "")],  # pre-write re-read: unchanged
+            [(json.dumps({"ok": True, "helper_version": 1}), "")],  # apply-config itself
         )
         monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})
         with app.test_request_context("/"):
-            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256="anything")
-        assert res["ok"] is False and res["code"] == "conflict" and res["via"] == "jen"
+            kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
+        assert "expect_sha256" not in json.loads(made[1].stdin_writes[0])
+
+    def test_legacy_sentinel_conflict_is_detected_before_any_write(self, monkeypatch, app, quiet_status):
+        """Same regression, over the legacy (no helper at all) path:
+        conflict detection must happen before render_author_config_script
+        ever runs, so no `sudo python3` connection is opened."""
+        made = _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required")],  # helper probe for the pre-write re-read -> missing
+            [(json.dumps({"Dhcp4": {"a": 999}}), "")],  # legacy cat: live config differs
+        )
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
+        assert res["code"] == "conflict"
+        assert len(made) == 2, "no third connection (the sudo python3 write) should ever open"
+
+    def test_legacy_sentinel_proceeds_to_write_when_unchanged(self, monkeypatch, app, quiet_status):
+        made = _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required")],  # pre-write re-read: helper probe -> missing
+            [(json.dumps({"Dhcp4": {"a": 1}}), "")],  # legacy cat: unchanged
+            [("", "sudo: a password is required")],  # apply-config: helper probe -> missing
+            [("ok", "", 0)],  # the actual write
+        )
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
+        assert res["ok"] is True
+        assert len(made) == 4
 
     def test_success_records_a_revision(self, monkeypatch, quiet_status):
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "sha256": "s1", "helper_version": 2}), "")])

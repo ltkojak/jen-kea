@@ -205,34 +205,61 @@ def _legacy_suffix(result: dict) -> dict:
 # ── legacy engine ─────────────────────────────────────────────────────────
 
 
-def _legacy_python3(server: dict, script: str, timeout: int = 30) -> tuple[str, str]:
-    """`echo <b64> | base64 -d | sudo python3` — the pre-5.11.0 path."""
+def _legacy_python3(server: dict, script: str, timeout: int = 30) -> tuple[str, str, int]:
+    """`echo <b64> | base64 -d | sudo python3` — the pre-5.11.0 path.
+
+    v5.28.0 (Q24, B1) — returns the remote command's real exit status
+    too, read AFTER stdout/stderr (paramiko's `recv_exit_status()`
+    blocks until the channel actually closes). Every caller used to
+    trust the script's own stdout token unconditionally — a remote
+    command that died before ever running the script (a dropped
+    connection mid-command, `sudo` itself failing) could still leave
+    old, stale output sitting in a buffer that read as success."""
     import base64
 
     ssh = __kea6._connect_ssh(server)
     try:
         enc = base64.b64encode(script.encode()).decode()
         _stdin, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3", timeout=timeout)
-        return stdout.read().decode("utf-8", "replace").strip(), stderr.read().decode("utf-8", "replace").strip()
+        out = stdout.read().decode("utf-8", "replace").strip()
+        err = stderr.read().decode("utf-8", "replace").strip()
+        return out, err, stdout.channel.recv_exit_status()
     finally:
         with contextlib.suppress(Exception):
             ssh.close()
 
 
-def _legacy_ssh(server: dict, command: str, timeout: int = 30) -> tuple[str, str]:
+def _legacy_ssh(server: dict, command: str, timeout: int = 30) -> tuple[str, str, int]:
+    """v5.28.0 (Q24, B1) — see _legacy_python3's docstring; same fix."""
     ssh = __kea6._connect_ssh(server)
     try:
         _stdin, stdout, stderr = ssh.exec_command(command, timeout=timeout)
-        return stdout.read().decode("utf-8", "replace").strip(), stderr.read().decode("utf-8", "replace").strip()
+        out = stdout.read().decode("utf-8", "replace").strip()
+        err = stderr.read().decode("utf-8", "replace").strip()
+        return out, err, stdout.channel.recv_exit_status()
     finally:
         with contextlib.suppress(Exception):
             ssh.close()
 
 
-def _parse_legacy_script_out(out: str, err: str, via: str) -> dict:
-    """Map the old script's stdout tokens onto a HostResult."""
+def _parse_legacy_script_out(out: str, err: str, via: str, rc: int = 0) -> dict:
+    """Map the old script's stdout tokens onto a HostResult.
+
+    v5.28.0 (Q24, B1) — an "ok"/"preview-ok" token is only trusted when
+    the remote command's own exit status was actually 0. Before this,
+    a real bug: `service_action()`'s legacy path appended an
+    unconditional trailing marker token after `cmd1 || cmd2`, which
+    printed regardless of whether BOTH systemctl attempts failed, so
+    Jen could report "Kea restarted successfully" when it did not.
+    Every other token (exists, missingbinary, testerror, tlsmissing,
+    the generic fallback) already
+    carried enough information in its own text and is unaffected by
+    rc — those are the script's own considered refusal, not a
+    connection/sudo failure masquerading as one."""
     if out in ("ok", "preview-ok"):
-        return {"ok": True, "code": out, "via": via}
+        if rc == 0:
+            return {"ok": True, "code": out, "via": via}
+        return {"ok": False, "code": "error", "detail": err or f"exited {rc}", "via": via}
     if out == "exists":
         return {"ok": False, "code": "exists", "detail": "config already exists", "via": via}
     if out.startswith("missingbinary:"):
@@ -286,10 +313,35 @@ def _conf_path(server, service):
     return __authoring.conf_path_for(server, service)
 
 
+_CANONICAL_SENTINEL_PREFIX = "canonical:"
+
+
+def _canonical_sentinel(cfg: dict) -> str:
+    """v5.28.0 (Q24, B2) — a synthetic sha-like string standing in for
+    "no raw hash available" (a v1 helper or the legacy path never
+    return one), computed from the same canonical-JSON form
+    config_revisions.py already uses for diffing. This is deliberately
+    NOT sent to a v2 helper's `apply-config` — it isn't a real sha256
+    of the raw file and the helper would (correctly) reject it as a
+    mismatch — `apply_config()` recognizes the prefix and routes it to
+    `_jen_side_conflict()` instead of the payload."""
+    from jen.services import config_revisions as _rev
+
+    return _CANONICAL_SENTINEL_PREFIX + hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
+
+
 def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str | None]:
-    """(parsed config, sha256-of-raw-bytes). The SHA is None on a v1
-    helper or the legacy path — Jen then falls back to a canonical-JSON
-    compare for the concurrency guard.
+    """(parsed config, sha256-of-raw-bytes or a canonical sentinel).
+
+    v5.28.0 (Q24, B2) — a v1 helper or the legacy path returns no raw
+    sha; this used to return `None` for it, which meant a caller's
+    `expect_sha256=None` disabled the concurrency guard entirely until
+    `apply_config()` fell back to a best-effort check — one that, for a
+    v1 helper, ran AFTER the write had already happened. It now
+    returns `_canonical_sentinel(cfg)` instead: every caller's
+    `expect_sha256=` argument always has something to guard a write
+    with, and `apply_config()` checks it BEFORE writing regardless of
+    helper version. A genuine read failure still returns (None, None).
 
     v5.16.0 — when the SHA is known and differs from the newest recorded
     revision's, the on-host file was hand-edited since Jen last wrote it:
@@ -322,8 +374,14 @@ def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str 
         logger.warning(f"read-config helper error on {server.get('name')}: {e}")
         return None, None
 
-    if cfg is not None:
-        _capture_baseline_or_external_change(server.get("id"), service, cfg, sha)
+    if cfg is None:
+        return None, None
+
+    # _capture_baseline_or_external_change must see the RAW sha (None
+    # on v1/legacy) — it branches on that, not on the sentinel below.
+    _capture_baseline_or_external_change(server.get("id"), service, cfg, sha)
+    if not sha:
+        sha = _canonical_sentinel(cfg)
     return cfg, sha
 
 
@@ -417,30 +475,40 @@ def test_config(server: dict, service: str, cfg: dict, tls_paths=()) -> dict:
         script = __authoring.render_author_config_script(
             service, path, cfg, allow_overwrite=True, dry_run=True, tls_paths=list(tls_paths or [])
         )
-        out, err = _legacy_python3(server, script)
-        return _legacy_suffix(_parse_legacy_script_out(out, err, "legacy"))
+        out, err, rc = _legacy_python3(server, script)
+        return _legacy_suffix(_parse_legacy_script_out(out, err, "legacy", rc))
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 
 
-def _jen_side_conflict(server: dict, service: str, cfg: dict) -> dict | None:
-    """Best-effort concurrency check for a v1 / legacy host, which gives
-    no SHA. Re-read the live file and compare its canonical JSON against
-    the newest recorded revision; a mismatch means someone else changed
-    it. Returns a conflict HostResult (and flashes once) or None to
-    proceed. `cfg` is the config Jen is about to write (unused for the
-    compare — the reference is the last *recorded* config, not the
-    incoming one)."""
-    from jen.services import config_revisions as _rev
+def _jen_side_conflict(server: dict, service: str, expected: str) -> dict | None:
+    """Pre-write concurrency check for a v1 / legacy host, which gives
+    no raw sha. Re-reads the live config and computes the SAME
+    canonical sentinel `_canonical_sentinel()` computes on a read —
+    never trusting whatever `read_config_versioned()` itself happens to
+    return this time, since the live host could have gained a real raw
+    sha between the original read and this call (a mid-flight helper
+    upgrade) and a format mismatch there must never look like a
+    conflict. A mismatch against `expected` (the sentinel the caller
+    read earlier) means someone else changed the config since then —
+    "is what I read still what's there", the same semantics a v2
+    helper's raw-sha check gives, just computed here instead of
+    atomically under the helper's own file lock. Returns a conflict
+    HostResult (and flashes once) or None to proceed.
 
+    v5.28.0 (Q24, B2) — this is now called BEFORE any write, for every
+    helper version and the legacy path alike (previously: a v1 helper
+    was checked only AFTER `apply-config` had already overwritten the
+    file; the legacy path already checked first). It also no longer
+    special-cases "no revision recorded yet" as automatically safe —
+    `expected` is always something the caller genuinely read, not a
+    possibly-absent history entry, so there's always something real to
+    compare against."""
     _flash_no_atomic_guard(server)
-    last = _rev.latest(server.get("id"), service)
-    if last is None:
-        return None  # nothing to compare against — first write for this server/service
     current, _sha = read_config_versioned(server, service)
     if current is None:
         return None  # can't read it back — let the write proceed and be validated by -t
-    if _rev.canonical(current) != _rev.canonical(json.loads(last["config"])):
+    if _canonical_sentinel(current) != expected:
         name = server.get("name") or server.get("ssh_host") or "?"
         return {
             "ok": False,
@@ -474,13 +542,32 @@ def apply_config(
     summary: str | None = None,
     source: str = "jen",
 ) -> dict:
-    """Write `cfg` to the host. `expect_sha256` (a SHA from an earlier
-    read, or "" for "must not exist") makes the write conditional — the
-    v2 helper enforces it atomically under a file lock; a v1 / legacy
-    host gets a best-effort canonical-JSON compare instead. On success
-    (any path) the applied config is recorded as a revision with
-    `summary` and `source` (`source="restore"` when re-applying a prior
-    revision from the history page)."""
+    """Write `cfg` to the host. `expect_sha256` is a value from an
+    earlier `read_config_versioned()` call — a raw sha (v2 helper), a
+    canonical sentinel (v1 helper or legacy — see `_canonical_sentinel`),
+    or "" for "must not exist" — or None to skip the guard entirely. On
+    success (any path) the applied config is recorded as a revision
+    with `summary` and `source` (`source="restore"` when re-applying a
+    prior revision from the history page).
+
+    v5.28.0 (Q24, B2) — a canonical sentinel is checked HERE, before
+    ANY write (helper or legacy), via `_jen_side_conflict()`. This
+    replaces two separate checks that both ran only for a subset of
+    hosts, one of them dangerously late: a v1 helper's check used to
+    run only AFTER `apply-config` had already overwritten the file
+    (the helper ignores `expect_sha256` it doesn't understand and just
+    reports success — Jen's own conflict check then ran too late to
+    prevent the overwrite it was supposed to guard against). The
+    legacy path's check already ran first; it's unchanged in spirit,
+    just moved up to sit beside the helper case. A raw sha (v2 helper)
+    is unaffected — it still goes straight into the payload and the
+    helper enforces it atomically under its own file lock."""
+    if expect_sha256 is not None and expect_sha256.startswith(_CANONICAL_SENTINEL_PREFIX):
+        conflict = _jen_side_conflict(server, service, expect_sha256)
+        if conflict is not None:
+            return conflict
+        expect_sha256 = None  # a sentinel is never real — never sent to the helper
+
     path = _conf_path(server, service)
     payload = {
         "service": service,
@@ -496,15 +583,6 @@ def apply_config(
     try:
         resp = helper_call(server, "apply-config", payload)
         _record_from_resp(server.get("id"), resp)
-        # A v1 helper ignores expect_sha256 → fall back to the Jen-side check.
-        if (
-            expect_sha256 is not None
-            and (resp.get("helper_version") or JEN_HELPER_MIN_VERSION) < JEN_HELPER_WANT_VERSION
-            and resp.get("error") != "conflict"
-        ):
-            conflict = _jen_side_conflict(server, service, cfg)
-            if conflict is not None:
-                return conflict
         if service == "d2" and not resp.get("ok") and resp.get("error") == "not-allowed":
             return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "helper"}
         result = _from_helper_test(resp, "ok")
@@ -516,15 +594,11 @@ def apply_config(
         # config.
         if service == "d2":
             return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "legacy"}
-        if expect_sha256 is not None:
-            conflict = _jen_side_conflict(server, service, cfg)
-            if conflict is not None:
-                return conflict
         script = __authoring.render_author_config_script(
             service, path, cfg, allow_overwrite=allow_overwrite, dry_run=False, tls_paths=list(tls_paths or [])
         )
-        out, err = _legacy_python3(server, script)
-        result = _legacy_suffix(_parse_legacy_script_out(out, err, "legacy"))
+        out, err, rc = _legacy_python3(server, script)
+        result = _legacy_suffix(_parse_legacy_script_out(out, err, "legacy", rc))
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 
@@ -593,17 +667,24 @@ def service_action(server: dict, service: str, action: str) -> dict:
         # restart kea-dhcp6-server instead of D2's own unit.
         if service == "d2":
             return {"ok": False, "code": "error", "detail": _D2_NEEDS_HELPER, "via": "legacy"}
+        # v5.28.0 (Q24, B1) — the real bug this fixes: the trailing
+        # marker token this used to append ran UNCONDITIONALLY, even
+        # when both systemctl attempts failed, so this used to report
+        # "restarted successfully" on a host where Kea never actually
+        # restarted. Success is now the compound command's own exit
+        # status — `cmd1 || cmd2` exits 0 iff at least one of the two
+        # systemctl attempts succeeded.
         fam = _SERVICE_UNIT_FAM.get(service, service)
         act = "enable --now" if action == "enable" else "disable --now" if action == "disable" else action
-        out, err = _legacy_ssh(
+        out, err, rc = _legacy_ssh(
             server,
             f"sudo systemctl {act} kea-{fam}-server 2>/dev/null || "
-            f"sudo systemctl {act} isc-kea-{fam}-server 2>/dev/null; echo done",
+            f"sudo systemctl {act} isc-kea-{fam}-server 2>/dev/null",
         )
-        if out.endswith("done"):
+        if rc == 0:
             return {"ok": True, "code": "ok", "unit": "", "state": "", "via": "legacy"}
         return _legacy_suffix(
-            {"ok": False, "code": "error", "detail": err or out or "systemctl failed", "via": "legacy"}
+            {"ok": False, "code": "error", "detail": err or out or f"systemctl exited {rc}", "via": "legacy"}
         )
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
@@ -620,11 +701,15 @@ def tail_log(server: dict, path: str, lines: int = 200) -> dict:
         return {"ok": False, "code": "error", "detail": resp.get("detail") or resp.get("error") or "", "via": "helper"}
     except HelperMissing:
         _flag_legacy(server)
-        out, err = _legacy_ssh(server, f"sudo tail -{int(lines)} {shlex.quote(path)}")
-        if "No such file" in err or "No such file" in out:
-            return {"ok": False, "code": "missing", "detail": "log file not found", "via": "legacy"}
-        if err and not out:
-            return _legacy_suffix({"ok": False, "code": "error", "detail": err, "via": "legacy"})
+        # v5.28.0 (Q24, B1) — rc replaces the old "err and not out"
+        # stdout/stderr-shape guess.
+        out, err, rc = _legacy_ssh(server, f"sudo tail -{int(lines)} {shlex.quote(path)}")
+        if rc != 0:
+            if "No such file" in err or "No such file" in out:
+                return {"ok": False, "code": "missing", "detail": "log file not found", "via": "legacy"}
+            return _legacy_suffix(
+                {"ok": False, "code": "error", "detail": err or out or f"tail exited {rc}", "via": "legacy"}
+            )
         return {"ok": True, "code": "ok", "lines": out.splitlines(), "via": "legacy"}
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
@@ -644,14 +729,17 @@ def install_package(server: dict, service: str) -> dict:
     except HelperMissing:
         _flag_legacy(server)
         package = f"kea-{service}-server" if service in ("dhcp4", "dhcp6") else "kea-dhcp4-server"
-        out, err = _legacy_ssh(
+        out, err, rc = _legacy_ssh(
             server,
             f"sudo apt-get update -qq 2>&1 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y {package} 2>&1",
             timeout=300,
         )
         combined = (out + "\n" + err).strip()
         tail = "\n".join(combined.splitlines()[-15:])
-        ok = "E:" not in combined and "Unable to locate" not in combined
+        # v5.28.0 (Q24, B1) — rc replaces the old "E:"/"Unable to
+        # locate" text sniffing (apt's own real exit status, not a
+        # guess at what its output looks like when it fails).
+        ok = rc == 0
         return {"ok": ok, "code": "ok" if ok else "error", "detail": tail, "output": tail, "via": "legacy"}
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "output": str(e), "via": "helper"}
@@ -681,10 +769,14 @@ def check_helper(server: dict) -> dict:
 
 def legacy_grant_present(server: dict) -> bool:
     """Is the old `NOPASSWD: /usr/bin/python3` grant still there? Used to
-    decide whether the in-app 'Install helper' button can work."""
+    decide whether the in-app 'Install helper' button can work.
+
+    v5.28.0 (Q24, B1) — rc replaces the old `out.strip() == "1"` text
+    check (the command's `2>&1` means a sudo failure's error text lands
+    in `out` too, but its exit status is still the real signal)."""
     try:
-        out, _err = _legacy_ssh(server, "sudo -n /usr/bin/python3 -c 'print(1)' 2>&1", timeout=15)
-        return out.strip() == "1"
+        _out, _err, rc = _legacy_ssh(server, "sudo -n /usr/bin/python3 -c 'print(1)' 2>&1", timeout=15)
+        return rc == 0
     except Exception:
         return False
 
@@ -739,7 +831,11 @@ def install_helper(server: dict) -> dict:
 
     ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
     script = __authoring.render_install_helper_script(source, ssh_user, JEN_HELPER_WANT_VERSION)
-    out, err = _legacy_python3(server, script, timeout=60)
+    # v5.28.0 (Q24, B1) — _legacy_python3 now returns a 3-tuple; this
+    # function's own success signal is unaffected (it already
+    # independently re-verifies via a fresh check_helper() call below
+    # rather than trusting this script's stdout alone).
+    out, err, _rc = _legacy_python3(server, script, timeout=60)
     if out.startswith("ok:"):
         recheck = check_helper(server)
         real = recheck.get("version")
