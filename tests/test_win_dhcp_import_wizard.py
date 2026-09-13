@@ -232,10 +232,14 @@ class TestWinDhcpImportWizard:
 
         assert "service" in fake.ops()
 
-        # LAN has 1 importable reservation (the "Both" and non-MAC rows are skipped)
-        assert len(self._reservation_calls) == 1
-        assert self._reservation_calls[0]["ip-address"] == "10.0.1.5"
-        assert self._reservation_calls[0]["hw-address"] == "00:11:22:33:44:55"
+        # LAN has 2 importable reservations (v5.28.0, Q24, F4 — Type
+        # "Both" is imported like a plain DHCP reservation now; only
+        # the non-MAC row is skipped).
+        assert len(self._reservation_calls) == 2
+        printer = next(r for r in self._reservation_calls if r["ip-address"] == "10.0.1.5")
+        assert printer["hw-address"] == "00:11:22:33:44:55"
+        nas = next(r for r in self._reservation_calls if r["ip-address"] == "10.0.1.6")
+        assert nas["hw-address"] == "aa:bb:cc:dd:ee:ff"
 
         assert 50 in self._written or 52 in self._written
 
@@ -298,7 +302,9 @@ class TestWinDhcpImportWizard:
 
         r2 = logged_in_client.post("/subnets/import-windows/apply-reservations", follow_redirects=True)
         assert r2.status_code == 200
-        assert len(self._reservation_calls) == 1
+        # LAN has 2 importable reservations (v5.28.0, Q24, F4 — Type
+        # "Both" is imported like a plain DHCP reservation now).
+        assert len(self._reservation_calls) == 2
         assert 50 in self._written or 52 in self._written
         assert token not in subnets_mod._WIN_IMPORT_PLANS  # now finished and popped
 
