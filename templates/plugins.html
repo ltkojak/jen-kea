@@ -63,12 +63,26 @@
                 {% else %}
                 <span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>
                 {% endif %}
+                {% if is_systemd_host and not p.bundled %}
+                {% if p.root_owned %}
+                <div style="margin-top:4px;font-size:10px;color:var(--success);">🔒 root-owned</div>
+                {% else %}
+                <div style="margin-top:4px;font-size:10px;color:var(--warning);">writable — reinstall to harden</div>
+                {% endif %}
+                {% endif %}
+                <div class="plugin-install-result" data-plugin-id="{{ p.id }}" style="margin-top:4px;font-size:11px;"></div>
             </td>
             <td>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     {% if p.update_available %}
                     <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary">⬆ Update</button>
+                    </form>
+                    {% endif %}
+                    {% if is_systemd_host and not p.bundled and not p.root_owned %}
+                    <form method="POST" action="/settings/plugins/install/{{ p.id }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-secondary" title="Reinstall as a root-owned copy">Reinstall</button>
                     </form>
                     {% endif %}
                     {% if p.enabled %}
@@ -187,8 +201,63 @@
 <div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
     <div style="font-weight:600;margin-bottom:8px;color:var(--text);">About Plugins</div>
     <p style="margin-bottom:6px;">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. Your data is preserved when a plugin is uninstalled — only the plugin files are removed.</p>
-    <p style="margin-bottom:6px;">Installed plugins live in <code>/opt/jen/plugins/</code>. Enable/disable changes take effect after restarting Jen.</p>
+    <p style="margin-bottom:6px;">
+    {% if is_systemd_host %}
+    A newly installed plugin is fetched and verified by a dedicated root-privileged service and lands read-only under <code>/opt/jen/plugins-installed/</code> — the running Jen process itself can never write there. A plugin marked "writable" was installed before this existed; use Reinstall to move it there.
+    {% else %}
+    Installed plugins live in <code>/opt/jen/plugins/</code>.
+    {% endif %}
+    Enable/disable changes take effect after restarting Jen.</p>
     <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" style="color:var(--primary);">plugin developer guide on GitHub</a>.</p>
 </div>
 
+{% if is_systemd_host %}
+<script nonce="{{ csp_nonce }}">
+(function() {
+    var params = new URLSearchParams(window.location.search);
+    var pluginId = params.get('plugin_install');
+    if (!pluginId) return;
+
+    window.history.replaceState({}, '', window.location.pathname);
+
+    var box = document.querySelector('.plugin-install-result[data-plugin-id="' + pluginId + '"]');
+    if (!box) return;
+    box.textContent = 'Working…';
+    box.style.color = 'var(--text-muted)';
+
+    var attempts = 0;
+    var poll = setInterval(function() {
+        attempts++;
+        fetch('/settings/plugins/install-status/' + encodeURIComponent(pluginId), { cache: 'no-store' })
+            .then(function(r) { return r.ok ? r.json() : {}; })
+            .catch(function() { return {}; })
+            .then(function(s) {
+                if (s && s.result) {
+                    clearInterval(poll);
+                    if (s.result === 'ok') {
+                        box.style.color = 'var(--success)';
+                        box.textContent = '✓ Done — reloading…';
+                        setTimeout(function() { window.location.reload(); }, 800);
+                    } else {
+                        box.style.color = 'var(--danger)';
+                        box.textContent = '✗ ' + s.result;
+                    }
+                    return;
+                }
+                if (s && s.active_state === 'failed') {
+                    clearInterval(poll);
+                    box.style.color = 'var(--danger)';
+                    box.textContent = '✗ The install service exited with an error.';
+                    return;
+                }
+                if (attempts > 30) {
+                    clearInterval(poll);
+                    box.style.color = 'var(--text-muted)';
+                    box.textContent = 'Still working — refresh in a moment to check.';
+                }
+            });
+    }, 2000);
+})();
+</script>
+{% endif %}
 {% endblock %}

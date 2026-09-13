@@ -202,6 +202,10 @@ CONTENT_BACKUP_DIR = os.path.join(CONTENT_DIR, "backups")
 CONTENT_PLUGIN_DIR = os.path.join(CONTENT_DIR, "plugins")
 CONTENT_PLUGINS_ENABLED_DIR = os.path.join(CONTENT_DIR, "plugins-enabled")
 CONTENT_KEYS_DIR = os.path.join(CONTENT_DIR, "keys")
+# v5.27.0 (Q23) — the www-data side of a root-owned plugin install: an
+# empty <id>.install/<id>.remove marker goes here; jen-update-root.py
+# --plugins (running as root) picks it up and writes <id>.result back.
+CONTENT_PLUGIN_REQUESTS_DIR = os.path.join(CONTENT_DIR, "plugin-requests")
 
 # The shipped default favicon (release-owned, always present); an uploaded
 # override lands at FAVICON_PATH under CONTENT_DIR. The /favicon.ico route
@@ -221,6 +225,13 @@ NAV_LOGO_PATH = os.path.join(CONTENT_BRANDING_DIR, "nav_logo")
 # ── Plugin system ───────────────────────────────────────────────────────────
 PLUGIN_DIR = CONTENT_PLUGIN_DIR  # registry-installed plugins (writable)
 PLUGIN_DIR_BUNDLED = os.path.join(JEN_ROOT, "plugins")  # shipped, read-only
+# v5.27.0 (Q23) — root-owned registry installs, landed by
+# jen-update-root.py --plugins. Fixed, NOT relative to JEN_ROOT/CONTENT_DIR
+# — this is only ever meaningful on a real systemd host (Docker/dev
+# checkouts never populate it, and discover_plugins() below just finds
+# it empty there, same as it already does for PLUGIN_DIR_BUNDLED on a
+# checkout with no bundled plugins).
+PLUGIN_DIR_ROOT = "/opt/jen/plugins-installed"
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 SSH_KEY_PATH = "/etc/jen/ssh/jen_rsa"
 SSH_KNOWN_HOSTS = "/etc/jen/ssh/known_hosts"

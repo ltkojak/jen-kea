@@ -53,11 +53,13 @@ table only prevents re-running an already-applied migration, it doesn't
 make a non-idempotent statement safe to write in the first place.
 """
 
+import contextlib
 import importlib.util
 import json
 import logging
 import os
 import re
+import subprocess
 import sys
 
 import requests
@@ -110,16 +112,25 @@ def jen_version_meets(required: str) -> bool:
 
 def discover_plugins() -> list[dict]:
     """
-    Scan the shipped plugin tree (extensions.PLUGIN_DIR_BUNDLED) then the
-    writable one (extensions.PLUGIN_DIR, under CONTENT_DIR) for installed
-    plugins. A plugin present in both — an updated copy of a shipped one —
-    is taken from the writable tree.
+    Scan the shipped plugin tree (extensions.PLUGIN_DIR_BUNDLED), then the
+    root-owned registry-installed tree (extensions.PLUGIN_DIR_ROOT, v5.27.0
+    Q23), then the legacy writable one (extensions.PLUGIN_DIR, under
+    CONTENT_DIR). A plugin present in more than one is taken from
+    whichever base was scanned LAST — so a writable copy still shadows a
+    root-owned one if both happen to exist (the request processor
+    removes the writable copy once a root install lands; see
+    jen-update-root.py::_install_one_plugin), and either shadows bundled.
 
     Returns manifest dicts with added 'path' / 'enabled' / 'version_ok' /
-    'bundled' keys.
+    'bundled' / 'root_owned' keys.
     """
     by_id: dict[str, dict] = {}
-    for base, bundled in ((extensions.PLUGIN_DIR_BUNDLED, True), (extensions.PLUGIN_DIR, False)):
+    bases = (
+        (extensions.PLUGIN_DIR_BUNDLED, True, False),
+        (extensions.PLUGIN_DIR_ROOT, False, True),
+        (extensions.PLUGIN_DIR, False, False),
+    )
+    for base, bundled, root_owned in bases:
         if not os.path.isdir(base):
             continue
         for name in sorted(os.listdir(base)):
@@ -132,9 +143,10 @@ def discover_plugins() -> list[dict]:
                     manifest = json.load(f)
                 manifest["path"] = path
                 manifest["bundled"] = bundled
+                manifest["root_owned"] = root_owned
                 manifest["enabled"] = _is_enabled(manifest["id"])
                 manifest["version_ok"] = jen_version_meets(manifest.get("requires_jen", "0.0.0"))
-                by_id[manifest["id"]] = manifest  # writable tree comes second → wins
+                by_id[manifest["id"]] = manifest  # later base in `bases` wins
             except Exception as e:
                 logger.warning(f"Could not load plugin manifest from {path}: {e}")
     return [by_id[k] for k in sorted(by_id)]
@@ -274,6 +286,106 @@ def _safe_extract(zf, dest_dir: str) -> None:
     zf.extractall(dest_dir_real)
 
 
+# ── Root-owned installs (v5.27.0, Q23) ──────────────────────────────────────
+# install_plugin()/uninstall_plugin() below become REQUESTERS on a real
+# systemd host: they write an empty marker and trigger
+# jen-plugin-install.service, which runs jen-update-root.py --plugins as
+# root and re-derives everything from the registry itself — the same
+# request/execute split the self-updater already uses, for the same
+# reason (a compromised www-data must never be able to extract arbitrary
+# code into a directory Jen imports from). Docker and dev checkouts have
+# no systemd unit to trigger and keep the pre-5.27.0 in-process path.
+
+
+def is_systemd_host() -> bool:
+    """Same detection jen/__init__.py's venv-migration check already
+    uses. On a systemd host, install/uninstall become root-privileged
+    requests; everywhere else — Docker, a dev/CI checkout — they still
+    run in-process, unchanged."""
+    return not os.path.exists("/.dockerenv") and "JEN_ROOT" not in os.environ
+
+
+def _write_plugin_request(plugin_id: str, action: str) -> None:
+    """action in {"install", "remove"}. An empty marker file — the
+    root-run request processor re-derives everything else from the
+    registry itself; nothing here is trusted beyond the plugin_id
+    (already validated by the caller) and which of the two actions was
+    requested."""
+    os.makedirs(extensions.CONTENT_PLUGIN_REQUESTS_DIR, exist_ok=True)
+    marker = os.path.join(extensions.CONTENT_PLUGIN_REQUESTS_DIR, f"{plugin_id}.{action}")
+    with open(marker, "w"):
+        pass
+
+
+def _start_plugin_install_unit() -> None:
+    """Fixed, zero-parameter command — the exact string jen-sudoers
+    authorizes. --no-block matters here for the same reason it matters
+    for jen-update.service: this call must not block waiting on a unit
+    whose own work has nothing to do with restarting THIS process, and
+    blocking here would tie up a request-handling thread/worker for no
+    reason."""
+    try:
+        subprocess.run(
+            ["/usr/bin/sudo", "/usr/bin/systemctl", "start", "--no-block", "jen-plugin-install.service"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to trigger jen-plugin-install.service: {e}")
+
+
+def _parse_systemctl_show(text: str) -> dict:
+    """`systemctl show -p A -p B` prints `Key=Value` lines. Pure.
+    Duplicated from jen/routes/settings/updates.py's identical helper
+    rather than imported — a route module importing from another route
+    module the wrong direction would be worse than six lines twice."""
+    props = {}
+    for line in text.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            props[k.strip()] = v.strip()
+    return props
+
+
+def plugin_install_unit_status() -> dict:
+    """Read-only `systemctl show` query — no sudo needed (rule 8 only
+    applies to a command that CHANGES something), same as
+    settings/updates.py::update_status()'s identical query against
+    jen-update.service."""
+    try:
+        result = subprocess.run(
+            ["/usr/bin/systemctl", "show", "jen-plugin-install.service", "-p", "ActiveState", "-p", "SubState"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        props = _parse_systemctl_show(result.stdout)
+    except Exception as e:
+        logger.error(f"plugin_install_unit_status: could not query jen-plugin-install.service: {e}")
+        props = {}
+    return {"active_state": props.get("ActiveState", "unknown"), "sub_state": props.get("SubState", "")}
+
+
+def read_plugin_request_result(plugin_id: str) -> str | None:
+    """The one-line result jen-update-root.py --plugins wrote for this
+    plugin_id ("ok" or "error: <reason>"), or None if it hasn't
+    (finished) yet. Deleted once read — the UI shows it exactly once."""
+    if not valid_plugin_id(plugin_id):
+        return None
+    path = os.path.join(extensions.CONTENT_PLUGIN_REQUESTS_DIR, f"{plugin_id}.result")
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path) as f:
+            content = f.read().strip()
+    except OSError:
+        return None
+    with contextlib.suppress(OSError):
+        os.remove(path)
+    return content or None
+
+
 def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     """
     Download and install a plugin from its registry entry.
@@ -301,6 +413,19 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     no longer a legitimate transition state; it means the registry
     entry is malformed or was tampered with, and install refuses
     outright, the same as a mismatch.
+
+    v5.27.0 (Q23) — on a real systemd host, this no longer does any of
+    the above itself. It writes an empty request marker and triggers
+    jen-plugin-install.service, which re-derives everything from
+    registry.json fresh as root and lands the plugin at
+    extensions.PLUGIN_DIR_ROOT instead of the www-data-writable
+    extensions.PLUGIN_DIR — closing the one remaining persistence
+    foothold for a compromised web process (swap plugin.py, Jen runs it
+    on the next restart). `registry_entry` is intentionally NOT passed
+    through beyond the id: the root process fetches its own copy of the
+    registry, so nothing this route read moments earlier is trusted
+    into the privileged path. Docker and dev checkouts (no systemd unit
+    to trigger) keep the pre-5.27.0 in-process path below, unchanged.
     """
     import hashlib
     import io
@@ -309,6 +434,11 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 
     if not valid_plugin_id(plugin_id):
         return False, "Invalid plugin ID."
+
+    if is_systemd_host():
+        _write_plugin_request(plugin_id, "install")
+        _start_plugin_install_unit()
+        return True, "Install requested — Jen will pick the plugin up within a few seconds."
 
     download_url = registry_entry.get("download_url", "").rstrip("/")
     if not download_url:
@@ -392,14 +522,29 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 
 
 def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
-    """Remove a registry-installed plugin's directory (under CONTENT_DIR).
-    A shipped plugin (ipam / network-discovery) can't be removed — the tree
-    is read-only — so uninstalling one just disables it. DB tables are left
-    alone either way (data preservation)."""
+    """Remove a registry-installed plugin's directory. A shipped plugin
+    (ipam / network-discovery) can't be removed — the tree is read-only
+    — so uninstalling one just disables it. DB tables are left alone
+    either way (data preservation).
+
+    v5.27.0 (Q23) — a ROOT-owned copy (extensions.PLUGIN_DIR_ROOT) can
+    only be removed the same way it was installed: a request, handled
+    by jen-plugin-install.service as root. A legacy writable copy
+    (extensions.PLUGIN_DIR, under CONTENT_DIR) is still removed
+    in-process exactly as before — www-data already owns that directory
+    outright, so there's no privilege boundary to cross for it.
+    """
     import shutil
 
     if not valid_plugin_id(plugin_id):
         return False, "Invalid plugin ID."
+
+    root_path = os.path.join(extensions.PLUGIN_DIR_ROOT, plugin_id)
+    if os.path.isdir(root_path) and is_systemd_host():
+        _write_plugin_request(plugin_id, "remove")
+        _start_plugin_install_unit()
+        return True, "Removal requested — Jen will pick this up within a few seconds."
+
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
     if not os.path.isdir(path):
         bundled = os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)

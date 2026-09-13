@@ -27,6 +27,7 @@ import pathlib
 import re
 from unittest.mock import MagicMock, patch
 
+from jen import extensions
 from jen.services import plugins as plugins_svc
 
 
@@ -163,3 +164,161 @@ class TestRealRegistryEntriesAreFullyPinned:
     def test_every_entry_download_url_is_https(self):
         for entry in self._entries():
             assert entry.get("download_url", "").startswith("https://")
+
+
+class TestInstallPluginOnSystemdHost:
+    """v5.27.0 (Q23) — on a real systemd host, install_plugin() becomes a
+    requester: it writes an empty marker and triggers
+    jen-plugin-install.service instead of doing any download/verify/
+    extract work itself (that now happens root-side, in
+    jen-update-root.py --plugins). CI sets JEN_ROOT, which is why every
+    other test in this file exercises the pre-5.27.0 in-process path
+    unmodified — is_systemd_host() is False there."""
+
+    def test_writes_install_marker_and_triggers_unit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "plugin-requests"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit") as trigger:
+            ok, msg = plugins_svc.install_plugin(
+                "ipam", {"download_url": "https://example.com/ipam", "sha256": "a" * 64}
+            )
+        assert ok is True
+        assert "requested" in msg.lower()
+        trigger.assert_called_once()
+        assert (tmp_path / "plugin-requests" / "ipam.install").exists()
+
+    def test_invalid_plugin_id_never_reaches_the_systemd_host_path(self, monkeypatch):
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit") as trigger:
+            ok, msg = plugins_svc.install_plugin("../evil", {})
+        assert ok is False
+        trigger.assert_not_called()
+
+
+class TestUninstallPluginOnSystemdHost:
+    def test_root_owned_plugin_requests_removal_instead_of_deleting_it(self, tmp_path, monkeypatch):
+        root_dir = tmp_path / "root-installed"
+        (root_dir / "sample").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root_dir))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "plugin-requests"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit") as trigger:
+            ok, msg = plugins_svc.uninstall_plugin("sample")
+        assert ok is True
+        assert "requested" in msg.lower()
+        trigger.assert_called_once()
+        assert (tmp_path / "plugin-requests" / "sample.remove").exists()
+        # Removal is root-side, later — this call must not touch the
+        # root-owned directory itself.
+        assert (root_dir / "sample").is_dir()
+
+    def test_legacy_writable_plugin_is_still_removed_in_process(self, tmp_path, monkeypatch):
+        content_dir = tmp_path / "content-plugins"
+        (content_dir / "myplug").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(content_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(tmp_path / "root-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        ok, msg = plugins_svc.uninstall_plugin("myplug")
+        assert ok is True
+        assert not (content_dir / "myplug").exists()
+
+
+class TestDiscoverPluginsRootOwnedPrecedence:
+    """v5.27.0 (Q23) adds a third tier between bundled and writable.
+    tests/test_content_layout.py::TestDiscoverPluginsMerge already
+    covers bundled-vs-writable; these cover the new tier."""
+
+    def _manifest(self, base, plugin_id="sample", version="1.0.0"):
+        d = base / plugin_id
+        d.mkdir(parents=True)
+        (d / "manifest.json").write_text(f'{{"id":"{plugin_id}","name":"Sample","version":"{version}"}}')
+
+    def test_root_owned_wins_over_bundled(self, tmp_path, monkeypatch):
+        bundled, root = tmp_path / "bundled", tmp_path / "root"
+        self._manifest(bundled, version="1.0.0")
+        self._manifest(root, version="2.0.0")
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(bundled))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        found = {p["id"]: p for p in plugins_svc.discover_plugins()}
+        assert found["sample"]["version"] == "2.0.0"
+        assert found["sample"]["root_owned"] is True
+        assert found["sample"]["bundled"] is False
+
+    def test_writable_still_wins_over_root_owned(self, tmp_path, monkeypatch):
+        root, writable = tmp_path / "root", tmp_path / "writable"
+        self._manifest(root, version="2.0.0")
+        self._manifest(writable, version="3.0.0")
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(writable))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        found = {p["id"]: p for p in plugins_svc.discover_plugins()}
+        assert found["sample"]["version"] == "3.0.0"
+        assert found["sample"]["root_owned"] is False
+
+
+class TestPluginInstallUnitStatus:
+    def test_parses_systemctl_show_output(self):
+        show = MagicMock(returncode=0, stdout="ActiveState=inactive\nSubState=dead\n", stderr="")
+        with patch.object(plugins_svc.subprocess, "run", return_value=show):
+            status = plugins_svc.plugin_install_unit_status()
+        assert status == {"active_state": "inactive", "sub_state": "dead"}
+
+    def test_query_failure_degrades_to_unknown(self):
+        with patch.object(plugins_svc.subprocess, "run", side_effect=OSError("no systemctl")):
+            status = plugins_svc.plugin_install_unit_status()
+        assert status == {"active_state": "unknown", "sub_state": ""}
+
+
+class TestReadPluginRequestResult:
+    def test_reads_and_deletes_the_result_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
+        (tmp_path / "ipam.result").write_text("ok\n")
+        assert plugins_svc.read_plugin_request_result("ipam") == "ok"
+        assert not (tmp_path / "ipam.result").exists()
+
+    def test_missing_result_file_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
+        assert plugins_svc.read_plugin_request_result("ipam") is None
+
+    def test_invalid_plugin_id_returns_none_without_touching_disk(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
+        assert plugins_svc.read_plugin_request_result("../evil") is None
+
+
+class TestPluginsPageShowsOwnershipChips:
+    """v5.27.0 (Q23) — the plugins page marks each installed plugin
+    root-owned or writable-needs-reinstall once is_systemd_host() is
+    true; a Docker/dev checkout (is_systemd_host() False, the actual
+    case under pytest) shows neither, unchanged from before this
+    feature existed."""
+
+    def _install_sample(self, tmp_path, monkeypatch, base_attr):
+        base = tmp_path / base_attr
+        (base / "sample").mkdir(parents=True)
+        (base / "sample" / "manifest.json").write_text(
+            '{"id":"sample","name":"Sample Plugin","version":"1.0.0","description":"x"}'
+        )
+        for attr in ("PLUGIN_DIR_ROOT", "PLUGIN_DIR_BUNDLED", "PLUGIN_DIR"):
+            monkeypatch.setattr(extensions, attr, str(tmp_path / "absent" / attr))
+        monkeypatch.setattr(extensions, base_attr, str(base))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        monkeypatch.setattr(plugins_svc, "fetch_registry", lambda: ([], None))
+
+    def test_root_owned_chip_shown(self, logged_in_client, tmp_path, monkeypatch):
+        self._install_sample(tmp_path, monkeypatch, "PLUGIN_DIR_ROOT")
+        r = logged_in_client.get("/settings/plugins")
+        assert r.status_code == 200
+        assert b"root-owned" in r.data
+        assert b"Reinstall" not in r.data
+
+    def test_writable_chip_and_reinstall_button_shown(self, logged_in_client, tmp_path, monkeypatch):
+        self._install_sample(tmp_path, monkeypatch, "PLUGIN_DIR")
+        r = logged_in_client.get("/settings/plugins")
+        assert r.status_code == 200
+        assert b"reinstall to harden" in r.data
+        assert b"Reinstall" in r.data

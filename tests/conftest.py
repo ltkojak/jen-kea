@@ -224,12 +224,16 @@ def _patch_extensions():
     extensions.CONTENT_BACKUP_DIR = os.path.join(_content, "backups")
     extensions.CONTENT_PLUGIN_DIR = os.path.join(_content, "plugins")
     extensions.CONTENT_PLUGINS_ENABLED_DIR = os.path.join(_content, "plugins-enabled")
+    extensions.CONTENT_PLUGIN_REQUESTS_DIR = os.path.join(_content, "plugin-requests")
     extensions.CONTENT_KEYS_DIR = os.path.join(_content, "keys")
     extensions.ICONS_CUSTOM_DIR = extensions.CONTENT_ICONS_DIR
     extensions.NAV_LOGO_PATH = os.path.join(extensions.CONTENT_BRANDING_DIR, "nav_logo")
     extensions.FAVICON_PATH = os.path.join(extensions.CONTENT_BRANDING_DIR, "favicon.ico")
     extensions.PLUGIN_DIR = extensions.CONTENT_PLUGIN_DIR
     extensions.PLUGIN_DIR_BUNDLED = "/tmp/jen_test_plugins_bundled_absent"
+    # v5.27.0 (Q23) — the root-owned tree is real production infra
+    # (/opt/jen/plugins-installed); tests must never read/write it.
+    extensions.PLUGIN_DIR_ROOT = "/tmp/jen_test_plugins_root_absent"
     try:
         import jen.services.dbexport as _dbe
 

@@ -60,7 +60,13 @@ def plugins_page():
         )
         entry["version_ok"] = __plugins.jen_version_meets(entry.get("requires_jen", "0.0.0"))
 
-    return render_template("plugins.html", installed=installed, registry=registry, fetch_error=fetch_error)
+    return render_template(
+        "plugins.html",
+        installed=installed,
+        registry=registry,
+        fetch_error=fetch_error,
+        is_systemd_host=__plugins.is_systemd_host(),
+    )
 
 
 # ── Install ───────────────────────────────────────────────────────────────────
@@ -92,6 +98,8 @@ def install_plugin(plugin_id):
         __user.set_global_setting("restart_pending", "true")
         __user.audit("PLUGIN_INSTALL", plugin_id, f"Installed {entry.get('name')} v{entry.get('version')}")
         flash(msg, "success")
+        if __plugins.is_systemd_host():
+            return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
     else:
         flash(msg, "error")
     return redirect(url_for("plugins.plugins_page"))
@@ -173,9 +181,31 @@ def uninstall_plugin(plugin_id):
         _remove_plugin_record(plugin_id)
         __user.audit("PLUGIN_UNINSTALL", plugin_id, "Plugin uninstalled")
         flash(msg, "success")
+        if __plugins.is_systemd_host():
+            return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
     else:
         flash(msg, "error")
     return redirect(url_for("plugins.plugins_page"))
+
+
+# ── Install status polling (v5.27.0, Q23) ──────────────────────────────────────
+
+
+@bp.route("/settings/plugins/install-status/<plugin_id>")
+@login_required
+@_superadmin_required
+def install_status(plugin_id):
+    """Polled by the plugins page after a root-owned install/remove is
+    requested — jen-plugin-install.service's own ActiveState/SubState
+    plus this plugin's one-line result, if the unit has already
+    finished processing it. Mirrors settings/updates.py's
+    update_status() route: a read-only systemctl query needs no sudo
+    (rule 8 only applies to a command that changes something)."""
+    if not __plugins.valid_plugin_id(plugin_id):
+        return jsonify({"error": "invalid plugin id"}), 400
+    status = __plugins.plugin_install_unit_status()
+    status["result"] = __plugins.read_plugin_request_result(plugin_id)
+    return jsonify(status)
 
 
 # ── Registry refresh (AJAX) ───────────────────────────────────────────────────

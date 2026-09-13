@@ -34,7 +34,13 @@ import pathlib
 
 # Every module under the settings package that can shell out to sudo.
 # (Was a single jen/routes/settings.py before the v5.6.1 package split.)
-SETTINGS_SOURCE_FILES = sorted(glob.glob("jen/routes/settings/*.py"))
+# v5.27.0 (Q23) — jen/services/plugins.py joined this list: install_plugin()/
+# uninstall_plugin() trigger jen-plugin-install.service the same way
+# settings/updates.py triggers jen-update.service, but plugins.py isn't
+# under jen/routes/settings/ at all (it's a service module, and its own
+# route layer is jen/routes/plugins.py), so the glob below wouldn't have
+# found it otherwise.
+SETTINGS_SOURCE_FILES = sorted(glob.glob("jen/routes/settings/*.py") + ["jen/services/plugins.py"])
 
 
 def _parse_sudoers_authorized_commands(path="jen-sudoers"):
@@ -134,6 +140,28 @@ class TestEverySudoInvocationMatchesAnAuthorizedCommand:
             f"expected exactly one jen-update.service sudoers rule, found {len(update_rules)}"
         )
         assert "--no-block" in update_rules[0]
+
+    def test_jen_plugin_install_service_trigger_includes_no_block(self):
+        """v5.27.0 (Q23) — the second unit, same reasoning as the
+        jen-update.service check above: confirms --no-block appears in
+        both the invocation and the authorization, and that it's
+        genuinely the jen-plugin-install.service call (not accidentally
+        matching the jen-update.service one)."""
+        invocations = _find_sudo_invocations()
+        plugin_calls = [
+            argv for argv in invocations if "jen-plugin-install.service" in argv and "jen-update.service" not in argv
+        ]
+        assert len(plugin_calls) == 1, (
+            f"expected exactly one jen-plugin-install.service sudo call, found {len(plugin_calls)}"
+        )
+        assert "--no-block" in plugin_calls[0]
+
+        authorized = _parse_sudoers_authorized_commands()
+        plugin_rules = [cmd for cmd in authorized if "jen-plugin-install.service" in cmd]
+        assert len(plugin_rules) == 1, (
+            f"expected exactly one jen-plugin-install.service sudoers rule, found {len(plugin_rules)}"
+        )
+        assert "--no-block" in plugin_rules[0]
 
     def test_no_sudoers_rule_uses_a_wildcard(self):
         """A wildcard in a NOPASSWD sudoers rule would let www-data's
