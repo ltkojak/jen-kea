@@ -411,6 +411,13 @@ class TestRecordAndRemovePluginRow:
             assert row is not None
             assert row["name"] == "Q24 Test"
             assert row["enabled"] == 1
+            # record_plugin_row()/remove_plugin_row() write through a
+            # DIFFERENT (jen_db()-pooled) connection than this fixture's
+            # own `db`. Without committing here, `db`'s still-open
+            # REPEATABLE-READ transaction (opened by the SELECT above)
+            # keeps its original snapshot and the next SELECT below
+            # would still see the row even after it's deleted elsewhere.
+            db.commit()
 
             plugins_svc.remove_plugin_row(info["id"])
             with db.cursor() as cur:
