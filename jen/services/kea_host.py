@@ -160,6 +160,24 @@ def d2_supported(server_id) -> bool:
 
 _D2_NEEDS_HELPER = "D2 needs jen-kea-helper v3+ on this host — install or update it from Settings → Kea → SSH."
 
+# v5.29.0 (Q29) — the version `install-tls` (https control-socket
+# material) needs. Same reasoning as D2_HELPER_MIN_VERSION: only the
+# https setup path needs it, so it gates that path (tls_supported)
+# rather than nagging every host through JEN_HELPER_WANT_VERSION.
+TLS_HELPER_MIN_VERSION = 4
+_TLS_NEEDS_HELPER = (
+    "https setup needs jen-kea-helper v4+ on this host — update it from Settings → Kea → SSH "
+    "(the http option works with any helper version)."
+)
+
+
+def tls_supported(server_id) -> bool:
+    """True iff the last-recorded helper version for this server is known
+    to be >= TLS_HELPER_MIN_VERSION; False when unknown (fail closed,
+    like d2_supported)."""
+    v = _known_version(server_id)
+    return isinstance(v, int) and v >= TLS_HELPER_MIN_VERSION
+
 
 def _record_from_resp(server_id, resp: dict) -> None:
     """v5.16.0 — learn the real helper version from any op's response
@@ -710,6 +728,52 @@ def service_action(server: dict, service: str, action: str) -> dict:
         return _legacy_suffix(
             {"ok": False, "code": "error", "detail": err or out or f"systemctl exited {rc}", "via": "legacy"}
         )
+    except HelperError as e:
+        return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
+
+
+def install_tls(server: dict, service: str, files: dict) -> dict:
+    """v5.29.0 (Q29, C2) — push one daemon's https material to the Kea
+    host: `files` is exactly {"ca.crt", "server.crt", "server.key"} →
+    PEM str (what kea_tls.issue_server_cert() returns); the helper
+    writes them under /etc/kea/tls/<service>/ and nowhere else. Helper
+    only — there is deliberately NO legacy fallback: this op exists so
+    key material never rides a generated root script, and a host
+    without a v4 helper gets {"code": "helper-required"} with the
+    message the https option shows. Returns a HostResult with
+    `paths` (the three remote paths) on success."""
+    try:
+        resp = helper_call(server, "install-tls", {"service": service, "files": files})
+        _record_from_resp(server.get("id"), resp)
+        if resp.get("ok"):
+            return {
+                "ok": True,
+                "code": "ok",
+                "paths": resp.get("paths", {}),
+                "owner": resp.get("owner", ""),
+                "via": "helper",
+            }
+        err = resp.get("error")
+        if err == "unknown-op":  # a v1–v3 helper: the op doesn't exist there
+            return {"ok": False, "code": "helper-required", "detail": _TLS_NEEDS_HELPER, "via": "helper"}
+        if err == "symlink":
+            return {
+                "ok": False,
+                "code": "error",
+                "detail": f"{resp.get('path')} on the Kea host is a symlink — the helper refuses to write through it",
+                "via": "helper",
+            }
+        if err == "bad-pem":
+            return {
+                "ok": False,
+                "code": "error",
+                "detail": f"the helper rejected {resp.get('file')} as not PEM",
+                "via": "helper",
+            }
+        return {"ok": False, "code": "error", "detail": resp.get("detail") or err or "helper refused", "via": "helper"}
+    except HelperMissing:
+        _flag_legacy(server)
+        return {"ok": False, "code": "helper-required", "detail": _TLS_NEEDS_HELPER, "via": "legacy"}
     except HelperError as e:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 

@@ -4,7 +4,6 @@ jen/routes/settings/security.py
 Session timeout, login rate limiting, SSL certificate upload.
 """
 
-import contextlib
 import logging
 import os
 import subprocess
@@ -139,17 +138,11 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
 
 
 def _write_atomically(path: str, data: str, mode: int) -> None:
-    """Write next to the target then os.replace() it in — a reader (or a
-    restart) never sees a half-written PEM. The previous file, if any, is
-    kept beside it as `<name>.prev` for a manual recovery."""
-    if os.path.exists(path):
-        with contextlib.suppress(OSError):
-            os.replace(path, path + ".prev")
-    tmp = path + ".new"
-    with open(tmp, "w") as f:
-        f.write(data)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    """v5.29.0 (Q29) — the writer now lives in jen/services/certs.py
+    (shared with the Kea CA); this name stays for the call sites below."""
+    from jen.services.certs import write_atomically
+
+    write_atomically(path, data, mode)
 
 
 @bp.route("/settings/upload-cert", methods=["POST"])

@@ -782,6 +782,22 @@ it is itself the residual risk. Remove
 `/etc/sudoers.d/jen-kea` once every host you administer that way shows
 `helper v2` (or later) to clear both.
 
+**v5.29.0 ships helper v4 — one new op, `install-tls`.** It exists for
+the https option of Settings → Kea → "Set up direct socket": Jen's own
+private CA (see "Direct control sockets") issues a server certificate
+for the daemon, and this op writes it — exactly three files, `ca.crt`,
+`server.crt` and `server.key`, under `/etc/kea/tls/<service>/` and
+nowhere else (the payload never carries a path). The key is written
+`root:<daemon group>` mode `0640` so the daemon can read it and nothing
+else can; the helper refuses to write through a symlink and refuses
+anything that isn't PEM-shaped. Only the https setup needs v4 — the
+http option, and everything else Jen does, works with any helper
+version, so Settings → Kea → SSH does **not** show "upgrade available"
+for a v3 host; the https option itself says "needs jen-kea-helper v4"
+until you press **Update helper**. There is no legacy-path equivalent
+for this op, on purpose: certificate keys never travel in a generated
+root script.
+
 ### Kea config history (v5.16.0+)
 
 Every Kea config Jen writes to a host is saved in Jen's database as a
@@ -848,7 +864,10 @@ narrow anything. Jen shows an admin banner for every host still on this
 path.
 
 Keep this **only until every Kea host shows `helper v1`** in Settings →
-Kea → SSH, then remove `/etc/sudoers.d/jen-kea`.
+Kea → SSH, then remove `/etc/sudoers.d/jen-kea`. Two things never use
+this path at all, whatever the host has: D2 (kea-dhcp-ddns) operations
+(v5.23.0) and the https "Set up direct socket" material push (v5.29.0's
+`install-tls`) — both need the helper, at v3 and v4 respectively.
 
 ```bash
 sudo tee /etc/sudoers.d/jen-kea >/dev/null <<'EOF'

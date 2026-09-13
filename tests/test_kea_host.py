@@ -805,3 +805,78 @@ class TestApplyGuarded:
         from jen.services import config_revisions as rev_mod
 
         assert sha == hashlib.sha256(rev_mod.canonical({"Dhcp4": {"a": 1}}).encode()).hexdigest()
+
+
+class TestInstallTls:
+    """v5.29.0 (Q29, C2) — kea_host.install_tls: helper-only, never the
+    legacy engine (key material must never ride a generated root
+    script); a pre-v4 helper answers unknown-op → "helper-required"."""
+
+    FILES = {
+        "ca.crt": "-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n",
+        "server.crt": "c",
+        "server.key": "k",
+    }
+
+    def test_ok_sends_service_and_files_and_returns_paths(self, monkeypatch, quiet_status):
+        paths = {
+            "ca.crt": "/etc/kea/tls/dhcp4/ca.crt",
+            "server.crt": "/etc/kea/tls/dhcp4/server.crt",
+            "server.key": "/etc/kea/tls/dhcp4/server.key",
+        }
+        made = _connect_seq(
+            monkeypatch, [(json.dumps({"ok": True, "paths": paths, "owner": "root:_kea", "helper_version": 4}), "")]
+        )
+        res = kea_host.install_tls(SERVER, "dhcp4", self.FILES)
+        assert res == {"ok": True, "code": "ok", "paths": paths, "owner": "root:_kea", "via": "helper"}
+        assert made[0].calls == ["sudo -n /usr/local/sbin/jen-kea-helper install-tls"]
+        assert json.loads(made[0].stdin_writes[0]) == {"service": "dhcp4", "files": self.FILES}
+
+    def test_old_helper_unknown_op_is_helper_required(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "unknown-op", "helper_version": 3}), "")])
+        res = kea_host.install_tls(SERVER, "dhcp4", self.FILES)
+        assert res["ok"] is False and res["code"] == "helper-required"
+        assert "v4" in res["detail"]
+
+    def test_missing_helper_is_helper_required_and_never_legacy(self, monkeypatch, app):
+        made = _connect_seq(monkeypatch, [("", "sudo: a password is required")])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        with app.test_request_context("/"):
+            res = kea_host.install_tls(SERVER, "dhcp4", self.FILES)
+        assert res["ok"] is False and res["code"] == "helper-required" and res["via"] == "legacy"
+        assert len(made) == 1  # no second connection for a legacy python3 run
+        assert not any("python3" in c for c in made[0].calls)
+
+    def test_symlink_and_bad_pem_refusals_are_named(self, monkeypatch, quiet_status):
+        _connect_seq(
+            monkeypatch, [(json.dumps({"ok": False, "error": "symlink", "path": "/etc/kea/tls/dhcp4/server.key"}), "")]
+        )
+        res = kea_host.install_tls(SERVER, "dhcp4", self.FILES)
+        assert res["code"] == "error" and "symlink" in res["detail"] and "server.key" in res["detail"]
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "bad-pem", "file": "ca.crt"}), "")])
+        res = kea_host.install_tls(SERVER, "dhcp4", self.FILES)
+        assert res["code"] == "error" and "ca.crt" in res["detail"]
+
+    def test_garbage_is_an_error_not_an_exception(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [("not json", "kaboom")])
+        res = kea_host.install_tls(SERVER, "dhcp4", self.FILES)
+        assert res["ok"] is False and res["code"] == "error"
+
+
+class TestTlsSupported:
+    def test_false_when_unknown(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        assert kea_host.tls_supported(1) is False
+
+    def test_false_when_below_min(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 3}})
+        assert kea_host.tls_supported(1) is False
+
+    def test_true_when_at_or_above_min(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 4}})
+        assert kea_host.tls_supported(1) is True
+
+    def test_want_version_is_not_bumped_for_tls(self):
+        """Same call as D2: only the https path needs v4, so the general
+        "upgrade available" hint must not nag every host."""
+        assert kea_host.JEN_HELPER_WANT_VERSION < kea_host.TLS_HELPER_MIN_VERSION == 4

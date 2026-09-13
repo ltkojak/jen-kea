@@ -9,11 +9,33 @@ Center (jen/services/health.py) and the cert-expiry alert can read
 thin wrapper around `cert_info(installed_cert_path())`.
 """
 
+import contextlib
 import logging
 import os
 import subprocess
 
 logger = logging.getLogger(__name__)
+
+
+def write_atomically(path: str, data, mode: int) -> None:
+    """Write next to the target then os.replace() it in — a reader (or a
+    restart) never sees a half-written PEM. The previous file, if any, is
+    kept beside it as `<name>.prev` for a manual recovery. `data` may be
+    str or bytes. v5.29.0 (Q29) — moved here from routes/settings/security.py
+    so the Kea CA (jen/services/kea_tls.py) and the SSL upload share one
+    writer."""
+    if os.path.exists(path):
+        with contextlib.suppress(OSError):
+            os.replace(path, path + ".prev")
+    tmp = path + ".new"
+    if isinstance(data, bytes):
+        with open(tmp, "wb") as f:
+            f.write(data)
+    else:
+        with open(tmp, "w") as f:
+            f.write(data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
 
 
 def installed_cert_path() -> str:

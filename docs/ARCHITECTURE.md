@@ -314,6 +314,34 @@ engine's binary/unit-name logic treats "anything that isn't dhcp4" as
 dhcp6, so a d2 call reaching it would have silently run `kea-dhcp6`
 commands against D2's own config file.
 
+**Helper protocol v4 (v5.29.0 — `install-tls`).** One new op, for the
+https half of "Set up direct socket" (Settings → Kea): it writes the TLS
+material a daemon's `https` control socket references — exactly three
+files, `ca.crt`, `server.crt`, `server.key`, under the **fixed**
+directory `/etc/kea/tls/<service>/`. The payload names the service and
+carries the three PEM bodies; it never carries a path, so the op's whole
+path wall is "these three basenames under this one directory" — the
+same shape as the config-file wall, with nothing for a caller to steer.
+The directory is created `root:root 0755`; each file is written tmp +
+`os.replace`, owned `root:<daemon group>` (the unit's `User=`, else
+`_kea`, else root — ISC's own packages run the daemons as root), `0640`
+for the key and `0644` for the certificates; a pre-planted symlink at
+the root, the service directory, or any target is refused. Content is
+guarded only by PEM block markers and a 64 KiB cap: the helper is pure
+stdlib and cannot parse PEM, so Jen validates the material it generated
+(`jen/services/kea_tls.py`, with `cryptography`) before sending it, and
+the helper only makes sure it's writing a PEM-shaped file and not, say,
+a shell script into a root-owned directory. Ordering is what makes the
+op safe to use: `install-tls` runs **before** `apply-config`, and the
+apply carries the three paths as `tls_paths`, so a half-done push is
+caught as `tlsmissing` by the config test rather than as a daemon that
+won't start. Like D2, this is gated per host by
+`kea_host.tls_supported(server_id)` (recorded version ≥ 4), not by
+`JEN_HELPER_WANT_VERSION` — only the https path needs it — and a v1–v3
+helper's `unknown-op` reply becomes a plain "needs helper v4" message.
+There is deliberately **no legacy fallback** for this op: key material
+never rides a generated root script.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →
   apply is not a single atomic step on the Kea host, but since v5.16.0

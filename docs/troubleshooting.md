@@ -181,9 +181,13 @@ Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` co
 
 Every Kea-side action Jen performs goes through `jen-kea-helper` at
 `/usr/local/sbin/jen-kea-helper`, behind one sudoers line. **Settings →
-Kea → SSH** shows `v1` or `v2` for each host that has it (v5.16.0 ships
-`v2`; a `v1` host works but shows an "upgrade available" hint — press
-**Install helper** to update it).
+Kea → SSH** shows the version for each host that has it — `v1` through
+`v4` (v5.16.0 shipped `v2`, v5.23.0 `v3` for D2, v5.29.0 `v4` for the
+https "Set up direct socket" push). A `v1` host works but shows an
+"upgrade available" hint; a `v3` host works for everything except the
+https socket setup, which says **"https setup needs jen-kea-helper
+v4+"** until you press **Update helper**. Either way the fix is the
+same button.
 
 Two failure signatures, both meaning "Jen fell back to the legacy root
 `python3` path for that host":

@@ -141,7 +141,7 @@ class TestProtocolMisuse:
         stdout, stderr = io.StringIO(), io.StringIO()
         code = helper.main(argv=["jen-kea-helper", "version"], stdin=stdin, stdout=stdout, stderr=stderr)
         assert code == 2
-        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 3}
+        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 4}
 
     def test_stdout_is_exactly_one_json_document(self, helper):
         _, _, _ = _run(helper, "version", {})
@@ -165,7 +165,7 @@ class TestVersion:
         code, out, err = _run(helper, "version", {}, keep_version=True)
         assert code == 0
         assert out["ok"] is True
-        assert out["helper_version"] == helper.HELPER_VERSION == 3
+        assert out["helper_version"] == helper.HELPER_VERSION == 4
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -173,7 +173,8 @@ class TestVersion:
 class TestHelperVersionEnvelope:
     """v2 (v5.16.0) — every response, including protocol-error responses,
     carries helper_version so Jen learns the real number from any op.
-    Bumped to 3 in v5.23.0 (Q19, d2 support)."""
+    Bumped to 3 in v5.23.0 (Q19, d2 support), to 4 in v5.29.0 (Q29,
+    install-tls)."""
 
     @pytest.mark.parametrize(
         "op,payload",
@@ -182,11 +183,12 @@ class TestHelperVersionEnvelope:
             ("read-config", {"service": "dhcp4", "path": "/tmp/evil.conf"}),
             ("nonsense-op", {}),
             ("tail-log", {"path": "/etc/passwd"}),
+            ("install-tls", {"service": "dhcp4", "files": {}}),
         ],
     )
     def test_every_response_carries_helper_version(self, helper, op, payload):
         _code, out, _err = _run(helper, op, payload, keep_version=True)
-        assert out["helper_version"] == 3
+        assert out["helper_version"] == 4
 
 
 class TestPathWalls:
@@ -596,3 +598,180 @@ class TestInstallPackage:
         monkeypatch.setattr(helper.subprocess, "run", lambda *a, **k: Proc())
         code, out, _ = _run(helper, "install-package", {"service": "dhcp4"})
         assert out["ok"] is False and "Unable to locate" in out["output"]
+
+
+# ── v4 (v5.29.0, Q29): install-tls ──────────────────────────────────────────
+
+_CERT_PEM = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\nZm9v\n-----END CERTIFICATE-----\n"
+_KEY_PEM = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49\n-----END PRIVATE KEY-----\n"
+
+
+def _tls_files(**over):
+    files = {"ca.crt": _CERT_PEM, "server.crt": _CERT_PEM, "server.key": _KEY_PEM}
+    files.update(over)
+    return files
+
+
+class TestInstallTls:
+    """The op's whole path wall is "these three basenames under
+    /etc/kea/tls/<service>/": the payload never carries a path, and the
+    content guard is markers + size only (the helper can't parse PEM)."""
+
+    @pytest.fixture
+    def tls_root(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_daemon_group", lambda service: ("root", 0))
+        return root
+
+    def test_is_registered_and_is_not_an_update_op(self, helper):
+        assert "install-tls" in helper._OPS
+        assert "update" not in "install-tls"
+
+    def test_writes_exactly_the_three_files_under_the_service_dir(self, helper, tls_root):
+        code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert code == 0 and out["ok"] is True, out
+        d = tls_root / "dhcp4"
+        assert sorted(os.listdir(d)) == ["ca.crt", "server.crt", "server.key"]
+        assert (d / "server.key").read_text() == _KEY_PEM
+        assert (d / "ca.crt").read_text() == _CERT_PEM
+        assert out["paths"] == {name: str(d / name) for name in ("ca.crt", "server.crt", "server.key")}
+        assert out["owner"] == "root:root"
+        assert not any(n.endswith(".jen_tmp") for n in os.listdir(d))
+
+    def test_each_service_gets_its_own_directory(self, helper, tls_root):
+        for svc in ("dhcp4", "dhcp6", "d2"):
+            _code, out, _ = _run(helper, "install-tls", {"service": svc, "files": _tls_files()})
+            assert out["ok"] is True
+        assert sorted(os.listdir(tls_root)) == ["d2", "dhcp4", "dhcp6"]
+
+    @win
+    def test_modes_key_0640_certs_0644_dir_0755(self, helper, tls_root):
+        _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        d = tls_root / "dhcp4"
+        assert stat.S_IMODE(os.stat(d).st_mode) == 0o755
+        assert stat.S_IMODE(os.stat(d / "server.key").st_mode) == 0o640
+        assert stat.S_IMODE(os.stat(d / "server.crt").st_mode) == 0o644
+        assert stat.S_IMODE(os.stat(d / "ca.crt").st_mode) == 0o644
+
+    def test_overwrite_replaces_atomically(self, helper, tls_root):
+        _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        new_key = _KEY_PEM.replace("MIGHAgEAMBMGByqGSM49", "QUJDREVGR0hJSktMTU5P")
+        _code, out, _ = _run(
+            helper, "install-tls", {"service": "dhcp4", "files": _tls_files(**{"server.key": new_key})}
+        )
+        assert out["ok"] is True
+        assert (tls_root / "dhcp4" / "server.key").read_text() == new_key
+
+    @pytest.mark.parametrize("service", ["dhcp9", "", None, "ca"])
+    def test_bad_service_is_not_allowed(self, helper, tls_root, service):
+        _code, out, _ = _run(helper, "install-tls", {"service": service, "files": _tls_files()})
+        assert out == {"ok": False, "error": "not-allowed"}
+        assert not tls_root.exists()
+
+    @pytest.mark.parametrize(
+        "files",
+        [
+            {},
+            {"ca.crt": _CERT_PEM},  # missing two
+            {"ca.crt": _CERT_PEM, "server.crt": _CERT_PEM, "server.key": _KEY_PEM, "extra.crt": _CERT_PEM},
+            {"../ca.crt": _CERT_PEM, "server.crt": _CERT_PEM, "server.key": _KEY_PEM},
+            {"/etc/passwd": _CERT_PEM, "server.crt": _CERT_PEM, "server.key": _KEY_PEM},
+            "not a dict",
+        ],
+    )
+    def test_file_set_must_be_exactly_the_three_names(self, helper, tls_root, files):
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": files})
+        assert out == {"ok": False, "error": "not-allowed"}
+        assert not tls_root.exists()
+
+    def test_a_path_in_the_payload_is_ignored_entirely(self, helper, tls_root, tmp_path):
+        """No `path`/`dir` key is read — the destination is fixed."""
+        elsewhere = tmp_path / "elsewhere"
+        _code, out, _ = _run(
+            helper,
+            "install-tls",
+            {"service": "dhcp4", "files": _tls_files(), "path": str(elsewhere), "dir": str(elsewhere)},
+        )
+        assert out["ok"] is True
+        assert not elsewhere.exists()
+        assert (tls_root / "dhcp4" / "ca.crt").exists()
+
+    @pytest.mark.parametrize(
+        "name,body",
+        [
+            pytest.param("server.key", _CERT_PEM, id="cert-where-key-goes"),
+            pytest.param("ca.crt", _KEY_PEM, id="key-where-cert-goes"),
+            pytest.param("server.crt", "not pem at all", id="not-pem"),
+            pytest.param("server.crt", "", id="empty"),
+            pytest.param("server.crt", 12345, id="not-a-string"),
+            pytest.param("server.key", _KEY_PEM + _CERT_PEM, id="key-plus-cert"),
+            pytest.param(
+                "ca.crt",
+                "-----BEGIN CERTIFICATE-----\n" + ("A" * (64 * 1024)) + "\n-----END CERTIFICATE-----\n",
+                id="oversize",
+            ),
+            pytest.param(
+                "server.crt", "-----BEGIN CERTIFICATE-----\n#!/bin/sh\n-----END CERTIFICATE-----\n", id="script"
+            ),
+        ],
+    )
+    def test_bad_pem_is_refused_and_nothing_written(self, helper, tls_root, name, body):
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files(**{name: body})})
+        assert out == {"ok": False, "error": "bad-pem", "file": name}
+        assert not tls_root.exists()
+
+    def test_a_chain_of_certificates_is_accepted_for_ca_crt(self, helper, tls_root):
+        _code, out, _ = _run(
+            helper, "install-tls", {"service": "dhcp4", "files": _tls_files(**{"ca.crt": _CERT_PEM * 2})}
+        )
+        assert out["ok"] is True
+
+    @win
+    def test_refuses_a_symlinked_target(self, helper, tls_root, tmp_path):
+        d = tls_root / "dhcp4"
+        d.mkdir(parents=True)
+        victim = tmp_path / "victim"
+        victim.write_text("keep me")
+        os.symlink(victim, d / "server.key")
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "symlink"
+        assert victim.read_text() == "keep me"
+
+    @win
+    def test_refuses_a_symlinked_service_dir(self, helper, tls_root, tmp_path):
+        tls_root.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        os.symlink(elsewhere, tls_root / "dhcp4", target_is_directory=True)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "symlink"
+        assert os.listdir(elsewhere) == []
+
+    def test_daemon_group_falls_back_to_root_when_nothing_resolves(self, helper, monkeypatch):
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: None)
+        try:
+            import pwd  # noqa: F401
+        except ImportError:
+            assert helper._daemon_group("dhcp4") == ("root", 0)
+            return
+        monkeypatch.setattr("pwd.getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
+        assert helper._daemon_group("dhcp4") == ("root", 0)
+
+    def test_daemon_group_prefers_the_units_user(self, helper, monkeypatch):
+        pytest.importorskip("pwd")
+        import pwd
+
+        class Proc:
+            returncode, stdout, stderr = 0, "keauser\n", ""
+
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
+        monkeypatch.setattr(helper.subprocess, "run", lambda *a, **k: Proc())
+
+        class PW:
+            pw_gid = 4242
+
+        monkeypatch.setattr(
+            pwd, "getpwnam", lambda name: PW() if name == "keauser" else (_ for _ in ()).throw(KeyError(name))
+        )
+        assert helper._daemon_group("dhcp4") == ("keauser", 4242)

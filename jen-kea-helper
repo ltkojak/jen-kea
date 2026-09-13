@@ -75,6 +75,20 @@ identical behavior for dhcp4/dhcp6; a v2 helper simply refuses `"d2"`
 as `not-allowed`, since `_valid_service` on that host doesn't know it
 yet, which is why this is a version bump and not silently backward
 compatible for the new capability.
+
+v4 (v5.29.0) — `install-tls`: writes the TLS material for one daemon's
+https control socket — exactly three files, `ca.crt`, `server.crt`,
+`server.key`, under the FIXED directory `/etc/kea/tls/<service>/`. The
+payload names the service and carries the three PEM bodies; it never
+carries a path. The directory is created `root:root 0755`; the files are
+written tmp + `os.replace`, owned `root:<daemon group>` (the unit's
+`User=`, else `_kea`, else root), mode `0640` for the key and `0644` for
+the certificates; a pre-planted symlink at the root, the directory, or
+any target is refused. Content is guarded only by PEM block markers and
+a 64 KiB cap — the helper is pure stdlib and cannot parse PEM; Jen
+validates the material it generated before sending it. A v3 helper
+answers `unknown-op`, which Jen turns into "needs helper v4"; the op is
+never routed through the legacy `sudo python3` engine.
 """
 
 from __future__ import annotations
@@ -88,9 +102,22 @@ import shutil
 import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
 import sys
 
-HELPER_VERSION = 3
+HELPER_VERSION = 4
 
 MAX_STDIN = 4 * 1024 * 1024  # 4 MiB
+
+# v4 — where `install-tls` writes, and the only names it writes. Fixed
+# here, never taken from the payload: the op's whole path wall is "these
+# three basenames under this one directory per service".
+_TLS_ROOT = "/etc/kea/tls"
+_TLS_FILES = ("ca.crt", "server.crt", "server.key")
+_PEM_MAX = 64 * 1024
+_PEM_CERTS_RE = re.compile(
+    r"\A(?:-----BEGIN CERTIFICATE-----\r?\n[A-Za-z0-9+/=\r\n]+-----END CERTIFICATE-----\r?\n?)+\Z"
+)
+_PEM_KEY_RE = re.compile(
+    r"\A-----BEGIN (?:EC |RSA )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END (?:EC |RSA )?PRIVATE KEY-----\r?\n?\Z"
+)
 
 # Directories a Kea config file may live in. Anything else is refused,
 # independent of whatever path Jen sent — Jen validates its own copy,
@@ -423,6 +450,99 @@ def op_install_package(payload):
     return {"ok": ok, "output": tail}, package
 
 
+def _pem_ok(name, body):
+    """Marker-and-size guard only (see the v4 note in the module doc)."""
+    if not isinstance(body, str) or not body or len(body) > _PEM_MAX:
+        return False
+    if name == "server.key":
+        return bool(_PEM_KEY_RE.match(body)) and "CERTIFICATE" not in body
+    return bool(_PEM_CERTS_RE.match(body)) and "PRIVATE KEY" not in body
+
+
+def _daemon_group(service):
+    """(name, gid) the daemon's key must be readable by: the unit's
+    `User=` (its primary group), else `_kea` (Ubuntu/Debian packages),
+    else root (ISC's own packages run the daemons as root)."""
+    user = ""
+    unit = _resolve_unit(service, "status")
+    if unit:
+        try:
+            proc = subprocess.run(  # nosec B603 B607
+                ["systemctl", "show", "-p", "User", "--value", unit], capture_output=True, text=True
+            )
+            user = (proc.stdout or "").strip()
+        except OSError:
+            user = ""
+    try:
+        import pwd
+    except ImportError:  # not a POSIX host (only ever the test harness)
+        return "root", 0
+    for cand in (user, "_kea"):
+        if not cand:
+            continue
+        try:
+            return cand, pwd.getpwnam(cand).pw_gid
+        except KeyError:
+            continue
+    return "root", 0
+
+
+def _chown(path, uid, gid):
+    try:
+        os.chown(path, uid, gid)
+    except (OSError, AttributeError):
+        pass
+
+
+def op_install_tls(payload):
+    service = payload.get("service")
+    files = payload.get("files")
+    if not _valid_service(service) or not isinstance(files, dict):
+        return {"ok": False, "error": "not-allowed"}, None
+    if set(files) != set(_TLS_FILES):
+        return {"ok": False, "error": "not-allowed"}, None
+    for name in _TLS_FILES:
+        if not _pem_ok(name, files[name]):
+            return {"ok": False, "error": "bad-pem", "file": name}, None
+
+    target_dir = os.path.join(_TLS_ROOT, service)  # a real fs path (remote = Linux), not a validated one
+    for p in (_TLS_ROOT, target_dir):
+        if os.path.islink(p):
+            return {"ok": False, "error": "symlink", "path": p}, p
+    os.makedirs(target_dir, mode=0o755, exist_ok=True)
+    _chown(_TLS_ROOT, 0, 0)
+    _chown(target_dir, 0, 0)
+    try:
+        os.chmod(_TLS_ROOT, 0o755)
+        os.chmod(target_dir, 0o755)
+    except OSError:
+        pass
+
+    group, gid = _daemon_group(service)
+    written = {}
+    for name in _TLS_FILES:
+        target = os.path.join(target_dir, name)
+        if os.path.islink(target):
+            return {"ok": False, "error": "symlink", "path": target}, target
+        tmp = target + ".jen_tmp"
+        try:
+            with open(tmp, "w") as f:
+                f.write(files[name])
+            _chown(tmp, 0, gid)
+            os.chmod(tmp, 0o640 if name == "server.key" else 0o644)
+            os.replace(tmp, target)
+        except OSError as e:
+            return {"ok": False, "error": "write-failed", "path": target, "detail": str(e)}, target
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+        written[name] = target
+    return {"ok": True, "paths": written, "owner": f"root:{group}"}, target_dir
+
+
 _OPS = {
     "version": op_version,
     "read-config": op_read_config,
@@ -431,6 +551,7 @@ _OPS = {
     "service": op_service,
     "tail-log": op_tail_log,
     "install-package": op_install_package,
+    "install-tls": op_install_tls,
 }
 
 
