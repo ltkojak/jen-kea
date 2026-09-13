@@ -493,8 +493,8 @@ def _jen_side_conflict(server: dict, service: str, expected: str) -> dict | None
     read earlier) means someone else changed the config since then —
     "is what I read still what's there", the same semantics a v2
     helper's raw-sha check gives, just computed here instead of
-    atomically under the helper's own file lock. Returns a conflict
-    HostResult (and flashes once) or None to proceed.
+    atomically under the helper's own file lock. Returns a conflict or
+    error HostResult (and flashes once), or None to proceed.
 
     v5.28.0 (Q24, B2) — this is now called BEFORE any write, for every
     helper version and the legacy path alike (previously: a v1 helper
@@ -503,11 +503,25 @@ def _jen_side_conflict(server: dict, service: str, expected: str) -> dict | None
     special-cases "no revision recorded yet" as automatically safe —
     `expected` is always something the caller genuinely read, not a
     possibly-absent history entry, so there's always something real to
-    compare against."""
+    compare against.
+
+    v5.28.1 (Q26, A2) — a failed reread now fails CLOSED. This used to
+    return None ("can't verify — let the write proceed, -t will catch
+    anything wrong") but `-t` only validates the CANDIDATE's syntax; it
+    has no way to know whether the live file changed since Jen's
+    original read, which is the one thing this whole guard exists to
+    check. An unreachable host here means the guard simply can't run —
+    refusing is the only honest answer."""
     _flash_no_atomic_guard(server)
     current, _sha = read_config_versioned(server, service)
     if current is None:
-        return None  # can't read it back — let the write proceed and be validated by -t
+        name = server.get("name") or server.get("ssh_host") or "?"
+        return {
+            "ok": False,
+            "code": "error",
+            "detail": f"Could not verify the current configuration on {name} — no changes were written.",
+            "via": "jen",
+        }
     if _canonical_sentinel(current) != expected:
         name = server.get("name") or server.get("ssh_host") or "?"
         return {
@@ -604,6 +618,16 @@ def apply_config(
 
     if result.get("ok"):
         _record_revision_after_apply(server, service, cfg, result.get("sha256"), summary, source)
+        # v5.28.1 (Q26, A3) — a v1/legacy write reports no raw sha, so a
+        # caller (kea_changeset's rollback) that stores this "applied
+        # sha" to guard a LATER write against would otherwise guard it
+        # with None — no guard at all. Give it the same canonical
+        # sentinel a read would produce, computed AFTER this write (the
+        # revision recorded just above still gets the real None, since
+        # `_record_revision_after_apply` branches on `if sha:` to pick
+        # hash_kind — this only touches the RETURNED result).
+        if not result.get("sha256"):
+            result["sha256"] = _canonical_sentinel(cfg)
     return result
 
 

@@ -17,8 +17,11 @@ before the first real write, and reverting on a later failure, closes
 that gap. This module never touches Jen's own metadata (SUBNET_MAP,
 audit log) — callers do that unless `ChangeSetResult.status` is
 "aborted" or "rollback_failed" (see kea_changeset's callers in
-subnets.py/ddns.py); "ok", "nothing" and "noservers" all mean nothing
-was left half-written, so a metadata write is safe in each case.
+subnets.py/ddns.py); "ok", "restart_failed", "nothing" and "noservers"
+all mean nothing was left half-written (a "restart_failed" config is
+still live and valid — only the service didn't come back — so a
+metadata write is still safe there too), so a metadata write is safe
+in each of those cases.
 
 Pure orchestration over `kea_host` — no Flask imports. Callers build
 the flash lines from `ChangeSetResult.lines` themselves; this module
@@ -54,10 +57,10 @@ class Target:
 
 @dataclass
 class ChangeSetResult:
-    status: str  # "ok" | "nothing" | "noservers" | "aborted" | "rollback_failed"
+    status: str  # "ok" | "restart_failed" | "nothing" | "noservers" | "aborted" | "rollback_failed"
     last_code: str  # the last mutate code seen — callers map it to their own message
-    lines: list[tuple[str, str]] = field(default_factory=list)  # ("success"|"error", text), in display order
-    restart_failures: list[str] = field(default_factory=list)  # server names whose restart failed (status stays "ok")
+    lines: list[tuple[str, str]] = field(default_factory=list)  # ("success"|"warning"|"error", text), in order
+    restart_failures: list[str] = field(default_factory=list)  # server names whose restart failed
 
 
 def _default_conflict_phrase(name: str) -> str:
@@ -222,16 +225,32 @@ def apply_change(
                 revert_failed.append(done.name)
                 continue
             if restart:
-                _host.service_action(done.server, service, "restart")
+                rres_restart = _host.service_action(done.server, service, "restart")
+                if not rres_restart.get("ok"):
+                    lines.append(
+                        (
+                            "warning",
+                            f"⚠️ {done.name}: rolled back, but {daemon_label} did not restart "
+                            f"({rres_restart.get('detail')})",
+                        )
+                    )
 
         if revert_failed:
-            new_names = ", ".join(d.name for d in committed if d.name not in revert_failed)
-            old_names = ", ".join(revert_failed)
+            # v5.28.1 (Q26, A1) — name all three groups correctly.
+            # `revert_failed` holds targets whose REVERT call itself
+            # failed, meaning THEY still carry the new config — the
+            # previous wording had this exactly backwards, telling an
+            # operator reading it for recovery instructions the
+            # opposite of reality.
+            still_new = revert_failed
+            rolled_back = [d.name for d in committed if d.name not in revert_failed]
+            untouched = t.name
             lines.append(
                 (
                     "error",
-                    f"🛑 ROLLBACK FAILED — {new_names or '(none)'} now have the new config, "
-                    f"{old_names} the old one. Fix by hand: Servers → Config history → restore.",
+                    f"🛑 ROLLBACK FAILED — {', '.join(still_new)} still have the NEW config (their rollback "
+                    f"failed); {', '.join(rolled_back) or '(none)'} were rolled back to the old config; "
+                    f"{untouched} was never changed. Fix by hand: Servers → Config history → restore.",
                 )
             )
             return ChangeSetResult("rollback_failed", res.get("code", "error"), lines)
@@ -249,12 +268,22 @@ def apply_change(
             if rres.get("ok"):
                 lines.append(("success", f"✅ {t.name}: {summary}, {daemon_label} restarted"))
             else:
+                # v5.28.1 (Q26, A4) — a warning line, not a ✅ "success"
+                # one: the config IS live and valid (it passed preflight
+                # and the write succeeded), but a restart failure is a
+                # real operational problem that needs the operator's
+                # attention, not a line that visually reads as "done".
                 lines.append(
-                    ("success", f"✅ {t.name}: {summary} — restart {daemon_label} manually ({rres.get('detail')})")
+                    (
+                        "warning",
+                        f"⚠️ {t.name}: {summary} — {daemon_label} did NOT restart ({rres.get('detail')}); "
+                        f"restart it by hand",
+                    )
                 )
                 restart_failures.append(t.name)
     else:
         for t in targets:
             lines.append(("success", f"✅ {t.name}: {summary}"))
 
-    return ChangeSetResult("ok", "ok", lines, restart_failures)
+    status = "restart_failed" if restart_failures else "ok"
+    return ChangeSetResult(status, "ok", lines, restart_failures)

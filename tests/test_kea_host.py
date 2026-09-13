@@ -726,6 +726,57 @@ class TestApplyGuarded:
         assert res["ok"] is True
         assert len(made) == 4
 
+    def test_jen_side_conflict_fails_closed_when_the_reread_itself_fails(self, monkeypatch, app, quiet_status):
+        """v5.28.1 (Q26, A2) — a failed reread used to return None
+        ("can't verify — let the write proceed, -t will catch anything
+        wrong"), silently disabling the guard exactly when it matters
+        most (an unreachable host). `-t` only validates the
+        CANDIDATE's syntax; it has no way to know whether the live
+        file changed since Jen's original read."""
+        monkeypatch.setattr(kea_host, "read_config_versioned", lambda server, service: (None, None))
+        sentinel = kea_host._canonical_sentinel({"Dhcp4": {"a": 1}})
+        with app.test_request_context("/"):
+            res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 2}}, expect_sha256=sentinel)
+        assert res["ok"] is False
+        assert res["code"] == "error"
+        assert "no changes were written" in res["detail"]
+
+    def test_v1_success_returns_a_canonical_sentinel_but_records_hash_kind_canonical(self, monkeypatch, quiet_status):
+        """v5.28.1 (Q26, A3) — the RETURNED result now carries a
+        sentinel sha (so kea_changeset's rollback has something real
+        to guard a revert with — before this it was None, i.e. no
+        guard at all), but the RECORDED revision must still get
+        hash_kind "canonical" computed from the real None (record()
+        branches on `if sha:`, and the helper genuinely returned none)
+        — the sentinel is added to the result AFTER that call, never
+        fed into it."""
+        _connect_seq(monkeypatch, [(json.dumps({"ok": True, "helper_version": 1}), "")])
+        recorded = []
+        monkeypatch.setattr(
+            "jen.services.config_revisions.record",
+            lambda sid, svc, cfg, sha, summary, *, hash_kind, source="jen": recorded.append((sha, hash_kind)),
+        )
+        res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 1}})
+        assert res["ok"] is True
+        assert res["sha256"].startswith("canonical:")
+        assert recorded[0][1] == "canonical"
+        assert res["sha256"] == f"canonical:{recorded[0][0]}"
+
+    def test_legacy_success_also_returns_a_canonical_sentinel(self, monkeypatch, quiet_status):
+        made = _connect_seq(monkeypatch, [("", "sudo: a password is required")], [("ok", "", 0)])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        recorded = []
+        monkeypatch.setattr(
+            "jen.services.config_revisions.record",
+            lambda sid, svc, cfg, sha, summary, *, hash_kind, source="jen": recorded.append((sha, hash_kind)),
+        )
+        res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {"a": 1}})
+        assert res["ok"] is True
+        assert res["sha256"].startswith("canonical:")
+        assert recorded[0][1] == "canonical"
+        assert res["sha256"] == f"canonical:{recorded[0][0]}"
+        assert len(made) == 2
+
     def test_success_records_a_revision(self, monkeypatch, quiet_status):
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "sha256": "s1", "helper_version": 2}), "")])
         recorded = []

@@ -99,9 +99,14 @@ def _reword_edit_restart_lines(lines, summary, daemon_label="Kea"):
     test_successful_apply_restarts_kea6) that doesn't match
     kea_changeset's generic "{summary}, {daemon_label} restarted" success
     line. Rewrite just those two known shapes back to the original text
-    rather than teaching the shared module a per-caller template."""
+    rather than teaching the shared module a per-caller template.
+    v5.28.1 (Q26, A4) — kea_changeset's own manual-restart-needed line
+    changed shape (now "did NOT restart", a warning, not a ✅
+    "success" line reading "restart … manually") — `manual_old` tracks
+    that; `style` is left alone, so a manual-restart line correctly
+    stays a warning here too."""
     ok_old = f"{summary}, {daemon_label} restarted"
-    manual_old = f"{summary} — restart {daemon_label} manually"
+    manual_old = f"{summary} — {daemon_label} did NOT restart"
     manual_new = f"config updated — restart {daemon_label} manually"
     out = []
     for style, text in lines:
@@ -792,10 +797,16 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
     """v5.15.0 — read → mutate → apply → restart against every SSH-capable
     Kea server. `mutate_fn(cfg) -> (cfg, code)`; `code_messages` maps a
     non-"ok" code to its flash text. Flashes per-server results; returns
-    the last mutate/apply code so the caller can pick a redirect/audit.
+    the ChangeSetResult so the caller can pick a redirect/audit off
+    `result.last_code` and note a partial restart failure via
+    `_restart_failure_suffix(result)`.
     v5.28.0 (Q24, C2) — a thin wrapper over kea_changeset.apply_change(),
     which owns the actual plan/preflight/commit-with-revert/restart logic
-    shared with subnets.py's direct callers and ddns.py."""
+    shared with subnets.py's direct callers and ddns.py.
+    v5.28.1 (Q26, A4) — returns the whole ChangeSetResult, not just
+    `last_code`: a restart failure is a real operational problem
+    (`status == "restart_failed"`) that the config-still-applied audit
+    line should say, not silently swallow."""
     result = __changeset.apply_change(
         "dhcp4",
         mutate_fn,
@@ -805,7 +816,18 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
     )
     for style, text in result.lines:
         flash(text, style)
-    return result.last_code
+    return result
+
+
+def _restart_failure_suffix(result) -> str:
+    """v5.28.1 (Q26, A4) — "" normally, else a fragment naming which
+    server(s) didn't restart, joined into an audit detail with
+    `", ".join(filter(None, [existing_detail, _restart_failure_suffix(result)]))`
+    so a restart failure that still applied cleanly shows up in the
+    audit log, not only in a flash the operator might not have seen."""
+    if result.status != "restart_failed":
+        return ""
+    return f"restart failed on {', '.join(result.restart_failures)}"
 
 
 @bp.route("/subnets/shared-networks/add", methods=["POST"])
@@ -824,13 +846,16 @@ def add_shared_network():
         flash("Invalid interface name.", "error")
         return redirect(url_for("subnets.subnets"))
 
-    code = _apply_dhcp4_change(
+    result = _apply_dhcp4_change(
         lambda cfg: __edit.create_shared_network4(cfg, name, interface),
         f'shared network "{name}" created',
         {"exists": f'a shared network named "{name}" already exists'},
     )
-    if code == "ok":
-        __user.audit("ADD_SHARED_NETWORK", name, f"interface={interface}" if interface else "")
+    if result.last_code == "ok":
+        detail = ", ".join(
+            filter(None, [f"interface={interface}" if interface else "", _restart_failure_suffix(result)])
+        )
+        __user.audit("ADD_SHARED_NETWORK", name, detail)
     return redirect(url_for("subnets.subnets"))
 
 
@@ -846,7 +871,7 @@ def delete_shared_network():
         flash("Invalid shared network name.", "error")
         return redirect(url_for("subnets.subnets"))
 
-    code = _apply_dhcp4_change(
+    result = _apply_dhcp4_change(
         lambda cfg: __edit.delete_shared_network4(cfg, name),
         f'shared network "{name}" deleted',
         {
@@ -854,8 +879,8 @@ def delete_shared_network():
             "notempty": f'"{name}" still has subnets — move them out first',
         },
     )
-    if code == "ok":
-        __user.audit("DELETE_SHARED_NETWORK", name, "")
+    if result.last_code == "ok":
+        __user.audit("DELETE_SHARED_NETWORK", name, _restart_failure_suffix(result))
     return redirect(url_for("subnets.subnets"))
 
 
@@ -875,7 +900,7 @@ def move_subnet(subnet_id):
         return redirect(url_for("subnets.subnets"))
 
     where = f'to "{target}"' if target else "to the top level"
-    code = _apply_dhcp4_change(
+    result = _apply_dhcp4_change(
         lambda cfg: __edit.move_subnet4(cfg, subnet_id, target),
         f"subnet {subnet_id} moved {where}",
         {
@@ -884,8 +909,9 @@ def move_subnet(subnet_id):
             "nochange": f"subnet {subnet_id} is already there",
         },
     )
-    if code == "ok":
-        __user.audit("MOVE_SUBNET", str(subnet_id), f"network={target or '(top level)'}")
+    if result.last_code == "ok":
+        detail = ", ".join(filter(None, [f"network={target or '(top level)'}", _restart_failure_suffix(result)]))
+        __user.audit("MOVE_SUBNET", str(subnet_id), detail)
     return redirect(url_for("subnets.subnets"))
 
 
@@ -1067,7 +1093,7 @@ def dhcp_options_set():
         return _dhcp_options_redirect(level_raw, key_raw)
     data = __opts.normalize(opt_type, data_raw)
 
-    result_code = _apply_dhcp4_change(
+    apply_result = _apply_dhcp4_change(
         lambda cfg: __edit.set_option4(cfg, level, key, code, name, data, csv_format=csv_format),
         f'option "{name}" (code {code}) set at {level_raw}',
         {
@@ -1076,8 +1102,11 @@ def dhcp_options_set():
         },
         summary=f"set option {name} ({code}) at {level_raw}",
     )
-    if result_code == "ok":
-        __user.audit("SET_DHCP_OPTION", name, f"level={level_raw} key={key_raw} code={code}")
+    if apply_result.last_code == "ok":
+        detail = ", ".join(
+            filter(None, [f"level={level_raw} key={key_raw} code={code}", _restart_failure_suffix(apply_result)])
+        )
+        __user.audit("SET_DHCP_OPTION", name, detail)
     return _dhcp_options_redirect(level_raw, key_raw)
 
 
@@ -1102,7 +1131,7 @@ def dhcp_options_remove():
         return _dhcp_options_redirect(level_raw, key_raw)
     name = __opts.V4_OPTIONS.get(code, {}).get("name", f"code {code}")
 
-    result_code = _apply_dhcp4_change(
+    apply_result = _apply_dhcp4_change(
         lambda cfg: __edit.remove_option4(cfg, level, key, code),
         f'option "{name}" (code {code}) removed from {level_raw}',
         {
@@ -1111,8 +1140,11 @@ def dhcp_options_remove():
         },
         summary=f"remove option {name} ({code}) at {level_raw}",
     )
-    if result_code == "ok":
-        __user.audit("REMOVE_DHCP_OPTION", name, f"level={level_raw} key={key_raw} code={code}")
+    if apply_result.last_code == "ok":
+        detail = ", ".join(
+            filter(None, [f"level={level_raw} key={key_raw} code={code}", _restart_failure_suffix(apply_result)])
+        )
+        __user.audit("REMOVE_DHCP_OPTION", name, detail)
     return _dhcp_options_redirect(level_raw, key_raw)
 
 
@@ -1463,9 +1495,10 @@ def dhcp_class_save():
     # the attachment state a save is checking against doesn't change
     # during the save itself.
     pre_push_cfg = _live_dhcp4_cfg()
-    code = _apply_dhcp4_change(_mutate, f'class "{name}" saved', {}, summary=f'save class "{name}"')
-    if code == "ok":
-        __user.audit("SAVE_DHCP_CLASS", name, "new" if is_new else "edit")
+    result = _apply_dhcp4_change(_mutate, f'class "{name}" saved', {}, summary=f'save class "{name}"')
+    if result.last_code == "ok":
+        detail = ", ".join(filter(None, ["new" if is_new else "edit", _restart_failure_suffix(result)]))
+        __user.audit("SAVE_DHCP_CLASS", name, detail)
         if only_additional and not __classes.attached_as_additional(pre_push_cfg, name):
             flash(_only_additional_warning(name), "warning")
     return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
@@ -1482,7 +1515,7 @@ def dhcp_class_delete():
     refs = __classes.references(_live_dhcp4_cfg(), name)
     ref_msg = f'"{name}" is still referenced by: {", ".join(refs)} — detach it first.'
 
-    code = _apply_dhcp4_change(
+    result = _apply_dhcp4_change(
         lambda cfg: __edit.delete_class4(cfg, name),
         f'class "{name}" deleted',
         {
@@ -1492,8 +1525,8 @@ def dhcp_class_delete():
         },
         summary=f'delete class "{name}"',
     )
-    if code == "ok":
-        __user.audit("DELETE_DHCP_CLASS", name, "")
+    if result.last_code == "ok":
+        __user.audit("DELETE_DHCP_CLASS", name, _restart_failure_suffix(result))
     return redirect(url_for("subnets.dhcp_classes_page"))
 
 
@@ -1510,7 +1543,7 @@ def dhcp_class_reorder():
         flash("Invalid reorder direction.", "error")
         return redirect(url_for("subnets.dhcp_classes_page"))
 
-    code = _apply_dhcp4_change(
+    result = _apply_dhcp4_change(
         lambda cfg: __edit.reorder_class4(cfg, name, direction),
         f'class "{name}" moved {direction}',
         {
@@ -1519,8 +1552,9 @@ def dhcp_class_reorder():
         },
         summary=f'reorder class "{name}" {direction}',
     )
-    if code == "ok":
-        __user.audit("REORDER_DHCP_CLASS", name, direction)
+    if result.last_code == "ok":
+        detail = ", ".join(filter(None, [direction, _restart_failure_suffix(result)]))
+        __user.audit("REORDER_DHCP_CLASS", name, detail)
     return redirect(url_for("subnets.dhcp_classes_page"))
 
 
@@ -1553,14 +1587,20 @@ def dhcp_class_attach():
     version = _kea_version()
     verb = "attached to" if attach else "detached from"
     scope_display = _option_key_display(scope_level, scope_key)
-    code = _apply_dhcp4_change(
+    result = _apply_dhcp4_change(
         lambda cfg: __edit.attach_class4(cfg, name, scope_level, scope_key, mode=mode, attach=attach, version=version),
         f'class "{name}" {verb} {scope_level} {scope_display}',
         {"notfound": f"{scope_level} {scope_display} not found in the live Kea config"},
         summary=f'{verb} class "{name}" {scope_level} {scope_display}',
     )
-    if code == "ok":
-        __user.audit("ATTACH_DHCP_CLASS", name, f"{scope_level}={scope_display} mode={mode} attach={attach}")
+    if result.last_code == "ok":
+        detail = ", ".join(
+            filter(
+                None,
+                [f"{scope_level}={scope_display} mode={mode} attach={attach}", _restart_failure_suffix(result)],
+            )
+        )
+        __user.audit("ATTACH_DHCP_CLASS", name, detail)
     return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
 
 

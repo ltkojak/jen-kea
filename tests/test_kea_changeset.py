@@ -97,7 +97,78 @@ class TestApplyChangeRevert:
         result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
 
         assert result.status == "rollback_failed"
-        assert any("ROLLBACK FAILED" in text for _t, text in result.lines)
+        # v5.28.1 (Q26, A1) — the message must name all three groups
+        # CORRECTLY: kea-a's own REVERT failed, so it still has the NEW
+        # config (not "the old one", which the pre-A1 wording said);
+        # nothing was successfully rolled back ("(none)"); kea-b's own
+        # apply failed first, so it was never touched at all. Getting
+        # this backwards is exactly the bug an operator would follow
+        # into restoring the wrong servers.
+        (rollback_line,) = [text for _t, text in result.lines if "ROLLBACK FAILED" in text]
+        assert "kea-a still have the NEW config" in rollback_line
+        assert "(none) were rolled back" in rollback_line
+        assert "kea-b was never changed" in rollback_line
+
+    def test_revert_that_succeeds_but_whose_restart_fails_is_a_warning_line(self, fake):
+        """v5.28.1 (Q26, A1) — a revert's own service_action(restart)
+        result used to be silently ignored."""
+        fake.responses["test-config"] = {"ok": True}
+
+        def apply_resp(server, op, payload):
+            if server["id"] == 1:
+                return {"ok": True, "sha256": "new-a", "helper_version": 2}
+            return {"ok": False, "error": "conflict", "helper_version": 2}
+
+        fake.responses["apply-config"] = apply_resp
+        fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+
+        assert result.status == "aborted"  # the revert itself succeeded — no ROLLBACK FAILED
+        warning_lines = [text for t, text in result.lines if t == "warning"]
+        assert len(warning_lines) == 1
+        assert warning_lines[0].startswith("⚠️ kea-a: rolled back, but Kea did not restart")
+
+
+class TestApplyChangeV1SentinelRevert:
+    def test_v1_hosts_revert_call_is_sentinel_guarded(self, fake):
+        """v5.28.1 (Q26, A3) — a v1/legacy host's COMMIT apply now
+        returns a canonical sentinel instead of no sha at all, so when
+        a LATER server forces a revert, that revert's own apply_config
+        call has something real to guard against ("is what I'm about
+        to overwrite still what I just wrote") instead of an
+        unguarded write. Uses an identity mutate (before_cfg ==
+        after_cfg) so FakeHelper's static `configs` — which never
+        actually changes when "apply-config" is called — still matches
+        the sentinel on every reread, letting the guard genuinely pass
+        and the revert's real apply-config call happen (this test's
+        whole point)."""
+        fake.helper_version = 1
+        fake.shas.clear()  # no raw sha at all — read_config_versioned falls back to the sentinel
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+
+        def mutate_noop(cfg):
+            return cfg, "ok"
+
+        def apply_resp(server, op, payload):
+            if server["id"] == 1:
+                return {"ok": True, "helper_version": 1}  # v1 — no raw sha in the reply
+            return {"ok": False, "error": "conflict", "helper_version": 1}
+
+        fake.responses["apply-config"] = apply_resp
+
+        result = cs.apply_change("dhcp4", mutate_noop, "test change", servers=[SERVER_A, SERVER_B])
+
+        assert result.status == "aborted"  # A's revert succeeded — not rollback_failed
+        read_calls_a = [p for (sid, op, p) in fake.calls if sid == 1 and op == "read-config"]
+        apply_calls_a = [p for (sid, op, p) in fake.calls if sid == 1 and op == "apply-config"]
+        # Plan's own read, the commit's pre-write sentinel guard, and
+        # the revert's pre-write sentinel guard — three reads for one
+        # server, each one the sentinel mechanism actually running.
+        assert len(read_calls_a) == 3
+        assert len(apply_calls_a) == 2  # the real commit, then the revert
+        assert "expect_sha256" not in apply_calls_a[1], "a sentinel must never reach the real helper payload"
 
 
 class TestApplyChangeSuccess:
@@ -112,21 +183,32 @@ class TestApplyChangeSuccess:
         assert fake.ops().count("service") == 2
         assert result.restart_failures == []
 
-    def test_one_restart_failure_still_reports_ok(self, fake):
+    def test_one_restart_failure_is_its_own_status_and_a_warning_line(self, fake):
+        """v5.28.1 (Q26, A4) — a restart failure is a real operational
+        problem, not a ✅ "success" line that reads as "done". The
+        config DID apply cleanly (last_code stays "ok"), so callers
+        still write Jen's own metadata — only the status distinguishes
+        it from a fully clean run."""
         fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "sha256": "new", "helper_version": 2}
 
         def service_resp(server, op, payload):
             if server["id"] == 1:
                 return {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
-            return {"ok": False, "error": "systemctl failed"}
+            return {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
 
         fake.responses["service"] = service_resp
 
         result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
 
-        assert result.status == "ok"
+        assert result.status == "restart_failed"
+        assert result.last_code == "ok"
         assert result.restart_failures == ["kea-b"]
+        warning_lines = [text for t, text in result.lines if t == "warning"]
+        assert len(warning_lines) == 1
+        assert warning_lines[0].startswith("⚠️ kea-b:")
+        assert "✅" not in warning_lines[0]
+        assert not any(t == "success" and "kea-b" in text for t, text in result.lines)
 
 
 class TestApplyChangeSkipAndNoServers:
