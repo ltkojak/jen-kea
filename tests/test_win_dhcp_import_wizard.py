@@ -226,3 +226,57 @@ class TestWinDhcpImportWizard:
         r = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
         assert r.status_code == 200
         assert b"upload the export again" in r.data
+
+    def test_apply_pushes_exactly_the_previewed_config(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.0 (Q24, C4) — apply must never re-run to_kea(); the
+        applied payload has to be byte-identical to what preview already
+        ran test_config() against."""
+        fake = self._wire(monkeypatch)
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert fake.payload_for("test-config")["config"] == fake.payload_for("apply-config")["config"]
+
+    def test_apply_refused_when_the_preview_config_test_failed(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch)
+        fake.responses["test-config"] = {"ok": False, "error": "testerror", "detail": "bad config"}
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        r = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Preview the import" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_apply_refused_when_the_config_changed_since_preview(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch)
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        # The live config moved underneath the preview (a different admin
+        # edit, say) — apply must refuse rather than push a config that
+        # was never actually tested against what's live now.
+        fake.configs[(1, "dhcp4")] = {"Dhcp4": {**self._EMPTY_DHCP4["Dhcp4"], "valid-lifetime": 9999}}
+        r = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"changed since you previewed" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_restart_failure_defers_reservations_until_the_retry_route(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch)
+        fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        r = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"did not restart cleanly" in r.data
+        assert self._reservation_calls == []  # deferred, not attempted against a stale-config Kea
+        assert self._written == {}
+
+        from jen.routes import subnets as subnets_mod
+
+        assert any(subnets_mod._WIN_IMPORT_PLANS.values())  # the plan is kept, not popped
+
+        r2 = logged_in_client.post("/subnets/import-windows/apply-reservations", follow_redirects=True)
+        assert r2.status_code == 200
+        assert len(self._reservation_calls) == 1
+        assert 50 in self._written or 52 in self._written
+        assert not subnets_mod._WIN_IMPORT_PLANS  # now finished and popped

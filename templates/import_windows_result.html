@@ -15,5 +15,11 @@
     </ul>
 </div>
 
+{% if restart_failed %}
+<form method="post" action="{{ url_for('subnets.import_windows_apply_reservations') }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-primary">Add the reservations now</button>
+</form>
+{% endif %}
 <a href="{{ url_for('subnets.subnets') }}" class="btn btn-primary">← Back to Subnets</a>
 {% endblock %}

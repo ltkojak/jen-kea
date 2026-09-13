@@ -241,6 +241,7 @@ class TestDdnsNamingTab:
         fake = FakeHelper()
         fake.configs[(1, "dhcp4")] = {"Dhcp4": dhcp4}
         fake.shas[(1, "dhcp4")] = "abc123"
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "backup": None, "sha256": "def456"}
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -342,6 +343,7 @@ class TestDdnsD2ConfigTab:
         fake = FakeHelper()
         fake.configs[(1, "d2")] = {"DhcpDdns": d2cfg}
         fake.shas[(1, "d2")] = "d2sha1"
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "backup": None, "sha256": "d2sha2"}
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp-ddns-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)

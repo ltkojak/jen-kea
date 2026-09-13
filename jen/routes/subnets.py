@@ -20,6 +20,7 @@ import jen.services.auth as __auth
 import jen.services.dhcp_options as __opts
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.kea_changeset as __changeset
 import jen.services.kea_classes as __classes
 import jen.services.kea_config_edit as __edit
 import jen.services.kea_config_view as __view
@@ -89,6 +90,24 @@ def _conflict_flash(server_name):
         f"The Kea config on {server_name} changed since you opened this form — "
         "your edit was NOT applied. Reload and try again."
     )
+
+
+def _reword_edit_restart_lines(lines, summary, daemon_label="Kea"):
+    """edit_subnet_post/edit_subnet6_post predate kea_changeset.py and have
+    their own long-tested restart wording ("config validated, updated and
+    restarted" — see tests/test_kea6_subnets.py::
+    test_successful_apply_restarts_kea6) that doesn't match
+    kea_changeset's generic "{summary}, {daemon_label} restarted" success
+    line. Rewrite just those two known shapes back to the original text
+    rather than teaching the shared module a per-caller template."""
+    ok_old = f"{summary}, {daemon_label} restarted"
+    manual_old = f"{summary} — restart {daemon_label} manually"
+    manual_new = f"config updated — restart {daemon_label} manually"
+    out = []
+    for style, text in lines:
+        text = text.replace(ok_old, "config validated, updated and restarted").replace(manual_old, manual_new)
+        out.append((style, text))
+    return out
 
 
 @bp.route("/subnets")
@@ -420,54 +439,20 @@ def add_subnet_post():
     if rebind:
         new_subnet_block["rebind-timer"] = int(rebind)
 
-    errors, results = [], []
-
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        name = server.get("name", server["ssh_host"])
-        try:
-            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
-                continue
-            cfg, code = __edit.add_subnet4(cfg, new_subnet_block, shared_network=shared_network or None)
-            if code == "idexists":
-                errors.append(f"❌ {name}: subnet ID {new_id} already exists on this server")
-                continue
-            if code == "nonetwork":
-                errors.append(f'❌ {name}: no shared network named "{shared_network}" on this server')
-                continue
-            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=_sha, summary=f"add subnet {new_id}")
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: {_conflict_flash(name)}")
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "dhcp4", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: subnet {new_id} created and Kea restarted")
-                else:
-                    results.append(f"✅ {name}: subnet {new_id} created — restart Kea manually ({restart['detail']})")
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
-
-    if errors and not results:
-        for e in errors:
-            flash(e, "error")
+    result = __changeset.apply_change(
+        "dhcp4",
+        lambda cfg: __edit.add_subnet4(cfg, new_subnet_block, shared_network=shared_network or None),
+        f"subnet {new_id} created",
+        code_messages={
+            "idexists": f"subnet ID {new_id} already exists on this server",
+            "nonetwork": f'no shared network named "{shared_network}" on this server',
+        },
+        conflict_phrase=_conflict_flash,
+    )
+    for style, text in result.lines:
+        flash(text, style)
+    if result.status in ("aborted", "rollback_failed"):
         return redirect(url_for("subnets.add_subnet"))
-
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
 
     # Register the new subnet with Jen only after Kea accepted it
     new_map = dict(extensions.SUBNET_MAP)
@@ -518,50 +503,16 @@ def delete_subnet(subnet_id):
         )
         return redirect(url_for("subnets.subnets"))
 
-    errors, results = [], []
-
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        name = server.get("name", server["ssh_host"])
-        try:
-            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
-                continue
-            cfg, code = __edit.delete_subnet4(cfg, subnet_id)
-            if code == "notfound":
-                results.append(f"ℹ️ {name}: subnet {subnet_id} was not in Kea's config")
-                continue
-            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=_sha, summary=f"delete subnet {subnet_id}")
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: {_conflict_flash(name)}")
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "dhcp4", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: subnet {subnet_id} removed and Kea restarted")
-                else:
-                    results.append(
-                        f"✅ {name}: subnet {subnet_id} removed — restart Kea manually ({restart['detail']})"
-                    )
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
-
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
-
-    if errors and not results:
+    result = __changeset.apply_change(
+        "dhcp4",
+        lambda cfg: __edit.delete_subnet4(cfg, subnet_id),
+        f"subnet {subnet_id} removed",
+        code_messages={"notfound": f"subnet {subnet_id} was not in Kea's config"},
+        conflict_phrase=_conflict_flash,
+    )
+    for style, text in result.lines:
+        flash(text, style)
+    if result.status in ("aborted", "rollback_failed"):
         return redirect(url_for("subnets.subnets"))
 
     # Remove from Jen's own subnet map now that Kea no longer has it
@@ -798,51 +749,23 @@ def edit_subnet_post(subnet_id):
     new_routers = fields["new_routers"]
     new_dns = fields["new_dns"]
 
-    errors = []
-    results = []
+    def _mutate(cfg):
+        new_cfg, changed = __edit.patch_subnet4(
+            cfg, subnet_id, new_pool, extra_pools, new_lifetime, new_renew, new_rebind, new_routers, new_dns
+        )
+        return new_cfg, "ok" if changed else "nochange"
 
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        name = server.get("name", server["ssh_host"])
-        try:
-            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
-                continue
-            cfg, changed = __edit.patch_subnet4(
-                cfg, subnet_id, new_pool, extra_pools, new_lifetime, new_renew, new_rebind, new_routers, new_dns
-            )
-            if not changed:
-                results.append(f"ℹ️ {name}: nothing to change")
-                continue
-            res = __host.apply_config(
-                server, "dhcp4", cfg, expect_sha256=_form_base_sha(server), summary=f"edit subnet {subnet_id}"
-            )
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: {_conflict_flash(name)}")
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "dhcp4", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: config validated, updated and restarted")
-                else:
-                    results.append(f"✅ {name}: config updated — restart Kea manually ({restart['detail']})")
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
-
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
+    summary = f"subnet {subnet_id} updated"
+    result = __changeset.apply_change(
+        "dhcp4",
+        _mutate,
+        summary,
+        code_messages={"nochange": "nothing to change"},
+        expected_sha_for=_form_base_sha,
+        conflict_phrase=_conflict_flash,
+    )
+    for style, text in _reword_edit_restart_lines(result.lines, summary):
+        flash(text, style)
 
     changes = []
     if new_pool:
@@ -867,56 +790,22 @@ def edit_subnet_post(subnet_id):
 
 def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
     """v5.15.0 — read → mutate → apply → restart against every SSH-capable
-    Kea server, mirroring edit_subnet_post. `mutate_fn(cfg) -> (cfg, code)`;
-    `code_messages` maps a non-"ok" code to the flash text (error, nothing
-    pushed). Flashes per-server results; returns the last mutate code so
-    the caller can pick a redirect. "noservers" when nothing is
-    SSH-reachable. v5.16.0 — passes the SHA read at the top of this request
-    to apply_config as the concurrency guard, and records the revision
-    under `summary`."""
-    errors, results = [], []
-    last_code = "noservers"
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        name = server.get("name", server["ssh_host"])
-        try:
-            cfg, _sha = __host.read_config_versioned(server, "dhcp4")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
-                continue
-            cfg, code = mutate_fn(cfg)
-            last_code = code
-            if code != "ok":
-                errors.append(f"❌ {name}: {code_messages.get(code, code)}")
-                continue
-            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=_sha, summary=summary or done_phrase)
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: {_conflict_flash(name)}")
-                last_code = "conflict"
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "dhcp4", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: {done_phrase}, Kea restarted")
-                else:
-                    results.append(f"✅ {name}: {done_phrase} — restart Kea manually ({restart['detail']})")
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
-
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
-    return last_code
+    Kea server. `mutate_fn(cfg) -> (cfg, code)`; `code_messages` maps a
+    non-"ok" code to its flash text. Flashes per-server results; returns
+    the last mutate/apply code so the caller can pick a redirect/audit.
+    v5.28.0 (Q24, C2) — a thin wrapper over kea_changeset.apply_change(),
+    which owns the actual plan/preflight/commit-with-revert/restart logic
+    shared with subnets.py's direct callers and ddns.py."""
+    result = __changeset.apply_change(
+        "dhcp4",
+        mutate_fn,
+        summary or done_phrase,
+        code_messages=code_messages,
+        conflict_phrase=_conflict_flash,
+    )
+    for style, text in result.lines:
+        flash(text, style)
+    return result.last_code
 
 
 @bp.route("/subnets/shared-networks/add", methods=["POST"])
@@ -1893,57 +1782,31 @@ def edit_subnet6_post(subnet_id):
         flash(error, "error")
         return redirect(url_for("subnets.edit_subnet6", subnet_id=subnet_id))
 
-    errors, results = [], []
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        name = server.get("name", server["ssh_host"])
-        try:
-            cfg, _sha = __host.read_config_versioned(server, "dhcp6")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp6.conf not found on this server")
-                continue
-            cfg, changed = __edit.patch_subnet6(
-                cfg,
-                subnet_id,
-                fields["new_pool"],
-                fields["extra_pools"],
-                fields["new_preferred"],
-                fields["new_valid"],
-                fields["new_renew"],
-                fields["new_rebind"],
-                fields["new_dns"],
-            )
-            if not changed:
-                results.append(f"ℹ️ {name}: nothing to change")
-                continue
-            res = __host.apply_config(
-                server, "dhcp6", cfg, expect_sha256=_form_base_sha(server), summary=f"edit subnet {subnet_id}"
-            )
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: {_conflict_flash(name)}")
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "dhcp6", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: config validated, updated and restarted")
-                else:
-                    results.append(f"✅ {name}: config updated — restart Kea manually ({restart['detail']})")
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
+    def _mutate(cfg):
+        new_cfg, changed = __edit.patch_subnet6(
+            cfg,
+            subnet_id,
+            fields["new_pool"],
+            fields["extra_pools"],
+            fields["new_preferred"],
+            fields["new_valid"],
+            fields["new_renew"],
+            fields["new_rebind"],
+            fields["new_dns"],
+        )
+        return new_cfg, "ok" if changed else "nochange"
 
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
+    summary = f"subnet {subnet_id} updated"
+    result = __changeset.apply_change(
+        "dhcp6",
+        _mutate,
+        summary,
+        code_messages={"nochange": "nothing to change"},
+        expected_sha_for=_form_base_sha,
+        conflict_phrase=_conflict_flash,
+    )
+    for style, text in _reword_edit_restart_lines(result.lines, summary):
+        flash(text, style)
 
     changes = []
     if fields["new_pool"]:
@@ -2190,6 +2053,17 @@ def import_windows_preview():
     new_cfg, reservations, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
     test_result = __host.test_config(primary, "dhcp4", new_cfg)
 
+    # v5.28.0 (Q24, C4) — preview==apply: Apply pushes exactly this
+    # candidate config (never a fresh to_kea() call) and refuses unless
+    # it was actually test_config()-clean and the live config hasn't
+    # moved since this sha was read.
+    entry["preview_sha"] = _sha
+    entry["candidate_cfg"] = new_cfg
+    entry["reservation_rows"] = reservations
+    entry["subnets_to_declare"] = subnets_to_declare
+    entry["report"] = report
+    entry["preview_ok"] = bool(test_result.get("ok"))
+
     from jen.services import config_revisions as _rev
 
     config_diff = _rev.diff(_rev.canonical(existing_cfg), _rev.canonical(new_cfg), "current", "after import")
@@ -2204,43 +2078,15 @@ def import_windows_preview():
     )
 
 
-@bp.route("/subnets/import-windows/apply", methods=["POST"])
-@login_required
-@_superadmin_required
-def import_windows_apply():
-    token, entry = _get_win_import_plan()
-    if entry is None or entry.get("selections") is None:
-        flash("Your Windows DHCP import expired — upload the export again.", "error")
-        return redirect(url_for("subnets.import_windows"))
-    plan = entry["plan"]
-    subnet_names = entry["subnet_names"]
-    selections = entry["selections"]
-
-    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
-    if primary is None or not primary.get("ssh_host"):
-        flash("The primary Kea server needs SSH configured before you can apply an import.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
-
-    existing_cfg, sha = __host.read_config_versioned(primary, "dhcp4")
-    if existing_cfg is None:
-        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
-
-    new_cfg, reservation_rows, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
-
-    apply_result = __host.apply_config(primary, "dhcp4", new_cfg, expect_sha256=sha, summary="Windows DHCP import")
-    if apply_result["code"] == "conflict":
-        flash(_conflict_flash(primary.get("name", "the primary server")), "error")
-        return redirect(url_for("subnets.import_windows_review"))
-    if apply_result["code"] != "ok":
-        flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
-        return redirect(url_for("subnets.import_windows_review"))
-
-    restart = __host.service_action(primary, "dhcp4", "restart")
-    if restart["ok"]:
-        report.append("✅ Kea restarted on the primary server.")
-    else:
-        report.append(f"⚠️ Config applied, but Kea did not restart cleanly: {restart['detail']}")
+def _finish_windows_import(token, entry):
+    """The reservation-add + Jen SUBNET_MAP write + audit tail shared by
+    import_windows_apply's happy path and import_windows_apply_reservations
+    (v5.28.0, Q24, C4) — split out so a restart failure can defer this
+    half instead of adding reservations against a Kea that may still be
+    serving the OLD config."""
+    reservation_rows = entry["reservation_rows"]
+    subnets_to_declare = entry["subnets_to_declare"]
+    report = entry["report"]
 
     reservation_results = {"added": 0, "errors": []}
     for res in reservation_rows:
@@ -2267,4 +2113,80 @@ def import_windows_apply():
         "apply",
         f"{len(subnets_to_declare)} subnet(s), {reservation_results['added']} reservation(s)",
     )
+    return report
+
+
+@bp.route("/subnets/import-windows/apply", methods=["POST"])
+@login_required
+@_superadmin_required
+def import_windows_apply():
+    token, entry = _get_win_import_plan()
+    if entry is None or entry.get("selections") is None:
+        flash("Your Windows DHCP import expired — upload the export again.", "error")
+        return redirect(url_for("subnets.import_windows"))
+    # v5.28.0 (Q24, C4) — preview==apply: apply pushes exactly the config
+    # import_windows_preview already ran test_config() against, and
+    # refuses if either that test failed or the live config has moved
+    # since — never a fresh, unvalidated to_kea() call.
+    if not entry.get("preview_ok"):
+        flash("Preview the import — with a passing config test — before applying it.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
+    if primary is None or not primary.get("ssh_host"):
+        flash("The primary Kea server needs SSH configured before you can apply an import.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
+    if live_cfg is None:
+        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+    if live_sha != entry["preview_sha"]:
+        flash(
+            "The Kea config on the primary server changed since you previewed this import — preview it again.", "error"
+        )
+        return redirect(url_for("subnets.import_windows_review"))
+
+    apply_result = __host.apply_config(
+        primary, "dhcp4", entry["candidate_cfg"], expect_sha256=entry["preview_sha"], summary="Windows DHCP import"
+    )
+    if apply_result["code"] == "conflict":
+        flash(_conflict_flash(primary.get("name", "the primary server")), "error")
+        return redirect(url_for("subnets.import_windows_review"))
+    if apply_result["code"] != "ok":
+        flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    report = entry["report"]
+    restart = __host.service_action(primary, "dhcp4", "restart")
+    if not restart["ok"]:
+        # Config is live on disk but Kea hasn't picked it up — don't add
+        # reservations against a server that may still be serving the OLD
+        # subnets, and keep the plan around so the operator can retry
+        # once Kea is actually restarted.
+        report.append(f"⚠️ Config applied, but Kea did not restart cleanly: {restart['detail']}")
+        flash(
+            "The config was applied but Kea did not restart cleanly. Fix that on the server, then come back "
+            "here to add the reservations.",
+            "error",
+        )
+        return render_template("import_windows_result.html", report=report, restart_failed=True)
+    report.append("✅ Kea restarted on the primary server.")
+
+    report = _finish_windows_import(token, entry)
+    return render_template("import_windows_result.html", report=report)
+
+
+@bp.route("/subnets/import-windows/apply-reservations", methods=["POST"])
+@login_required
+@_superadmin_required
+def import_windows_apply_reservations():
+    """v5.28.0 (Q24, C4) — the retry path after apply's restart failed:
+    the config is already live, this just finishes the reservation-add +
+    Jen SUBNET_MAP write + audit that apply deferred."""
+    token, entry = _get_win_import_plan()
+    if entry is None or entry.get("reservation_rows") is None:
+        flash("Your Windows DHCP import expired — upload the export again.", "error")
+        return redirect(url_for("subnets.import_windows"))
+    report = _finish_windows_import(token, entry)
     return render_template("import_windows_result.html", report=report)

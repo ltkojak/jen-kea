@@ -320,6 +320,7 @@ class TestEditSubnet6PostRoute:
         )
         fake = FakeHelper()
         fake.configs[(1, "dhcp6")] = {"Dhcp6": {"subnet6": subnet6 if subnet6 is not None else [{"id": 1}]}}
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "backup": None}
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp6-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -431,6 +432,7 @@ class TestEditSubnet6FormBaseSha:
                 return {"ok": False, "error": "conflict", "sha256": live, "helper_version": 2}
             return {"ok": True, "sha256": live, "helper_version": 2}
 
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = _apply
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp6-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -460,7 +462,12 @@ class TestEditSubnet6FormBaseSha:
         assert b"changed since you opened this form" not in r.data
         assert fake.ops().count("service") == 2
 
-    def test_stale_sha_on_one_server_conflicts_only_there(self, logged_in_client, monkeypatch):
+    def test_stale_sha_on_one_server_conflicts_and_reverts_the_other(self, logged_in_client, monkeypatch):
+        """v5.28.0 (Q24, C1) — a conflict on Kea B during commit now
+        reverts Kea A's already-applied change too (kea_changeset's
+        preflight/commit/revert), rather than leaving the pair with two
+        different configs the way the old per-server-independent loop
+        did."""
         fake = self._wire(monkeypatch, servers=self._two_servers(), shas={1: "A", 2: "B"})
         r = logged_in_client.post(
             "/subnets/edit6/1",
@@ -469,4 +476,8 @@ class TestEditSubnet6FormBaseSha:
         )
         assert r.status_code == 200
         assert r.data.count(b"changed since you opened this form") == 1
-        assert fake.ops().count("service") == 1
+        assert b"reverted 1 server" in r.data
+        apply_calls_a = [p for (sid, op, p) in fake.calls if op == "apply-config" and sid == 1]
+        assert len(apply_calls_a) == 2  # Kea A's real apply, then its revert
+        assert apply_calls_a[1]["config"] == fake.configs[(1, "dhcp6")]  # reverted to the pre-edit config
+        assert fake.ops().count("service") == 1  # Kea A restarted once, back onto its original config

@@ -53,6 +53,7 @@ class TestDhcpOptionsRoutes:
         )
         fake = FakeHelper()
         fake.configs[(1, "dhcp4")] = {"Dhcp4": dhcp4["Dhcp4"]}
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "backup": None}
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)

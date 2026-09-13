@@ -396,6 +396,7 @@ class TestSubnetApplyViaHostClient:
         monkeypatch.setattr("jen.config.write_subnets_config", lambda m: None)
         fake = FakeHelper()
         fake.configs[(1, "dhcp4")] = {"Dhcp4": {"subnet4": subnet4 if subnet4 is not None else []}}
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "backup": None}
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -416,6 +417,27 @@ class TestSubnetApplyViaHostClient:
         assert [s["id"] for s in applied] == [42]
         assert fake.payload_for("service") == {"service": "dhcp4", "action": "restart"}
 
+    def test_add_subnet_preflight_failure_does_not_write_subnets_config(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.0 (Q24, C1/C2) — a failed test-config aborts the whole
+        change set before any write, so add_subnet_post must never
+        register the subnet in Jen's own SUBNET_MAP either."""
+        from jen import extensions
+
+        fake = self._wire(monkeypatch)
+        fake.responses["test-config"] = {"ok": False, "error": "testerror", "detail": "bad pool range"}
+        monkeypatch.setattr("jen.routes.subnets._get_kea_subnet_ids", lambda: set())
+        write_calls = []
+        monkeypatch.setattr("jen.config.write_subnets_config", lambda m: write_calls.append(m))
+        r = logged_in_client.post(
+            "/subnets/add",
+            data={"subnet_id": "42", "name": "New", "cidr": "10.9.42.0/24", "pool": "10.9.42.10-10.9.42.200"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert write_calls == []
+        assert "apply-config" not in fake.ops()
+        assert 42 not in extensions.SUBNET_MAP
+
     def test_delete_subnet_removes_block_and_restarts(self, logged_in_client, monkeypatch, mock_kea, db):
         fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
         # delete_subnet refuses if the subnet still has active leases /
@@ -428,6 +450,25 @@ class TestSubnetApplyViaHostClient:
         assert r.status_code == 200
         assert fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"] == []
         assert "service" in fake.ops()
+
+    def test_delete_subnet_notfound_everywhere_still_removes_from_map(
+        self, logged_in_client, monkeypatch, mock_kea, db
+    ):
+        """v5.28.0 (Q24, C1/C2) — "notfound" is a skip code (informational,
+        continues), not an abort — a subnet already gone from every Kea
+        server's live config is still safe to drop from Jen's own map."""
+        from jen import extensions
+
+        fake = self._wire(monkeypatch, subnet4=[])  # already absent from the live config
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id=1")
+        db.commit()
+        r = logged_in_client.post("/subnets/delete/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"was not in Kea" in r.data
+        assert "apply-config" not in fake.ops()
+        assert 1 not in extensions.SUBNET_MAP
 
     def test_edit_subnet_post_no_change_does_not_apply(self, logged_in_client, monkeypatch, mock_kea):
         fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
@@ -451,6 +492,7 @@ class TestSubnetApplyViaHostClient:
 
         seq = [
             FakeSSHClient([('{"Dhcp4": {"subnet4": [{"id": 1}]}}', "")]),  # legacy `cat`
+            FakeSSHClient([("preview-ok", "")]),  # v5.28.0 (Q24, C1) legacy dry-run preflight
             FakeSSHClient([("ok", "")]),  # legacy apply
             FakeSSHClient([("done", "")]),  # legacy restart
         ]
@@ -487,6 +529,7 @@ class TestSharedNetworks:
         )
         fake = FakeHelper()
         fake.configs[(1, "dhcp4")] = {"Dhcp4": dhcp4["Dhcp4"]}
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "backup": None}
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -696,6 +739,7 @@ class TestEditFormBaseSha:
                 return {"ok": False, "error": "conflict", "sha256": live, "helper_version": 2}
             return {"ok": True, "sha256": live, "helper_version": 2}
 
+        fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = _apply
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -757,7 +801,12 @@ class TestEditFormBaseSha:
         assert b"changed since you opened this form" not in r.data
         assert fake.ops().count("service") == 2
 
-    def test_stale_sha_on_one_server_conflicts_only_there(self, logged_in_client, monkeypatch, mock_kea):
+    def test_stale_sha_on_one_server_conflicts_and_reverts_the_other(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.0 (Q24, C1) — a conflict on Kea B during commit now
+        reverts Kea A's already-applied change too (kea_changeset's
+        preflight/commit/revert), rather than leaving the pair with two
+        different configs the way the old per-server-independent loop
+        did."""
         fake = self._wire(
             monkeypatch,
             servers=self._two_servers(),
@@ -770,6 +819,10 @@ class TestEditFormBaseSha:
             follow_redirects=True,
         )
         assert r.status_code == 200
-        assert b"changed since you opened this form" in r.data
         assert r.data.count(b"changed since you opened this form") == 1
+        assert b"reverted 1 server" in r.data
+        apply_calls_a = [p for (sid, op, p) in fake.calls if op == "apply-config" and sid == 1]
+        assert len(apply_calls_a) == 2  # Kea A's real apply, then its revert
+        assert apply_calls_a[1]["config"] == fake.configs[(1, "dhcp4")]  # reverted to the pre-edit config
+        assert fake.ops().count("service") == 1  # Kea A restarted once, back onto its original config
         assert fake.ops().count("service") == 1

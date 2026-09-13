@@ -22,6 +22,7 @@ from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
 import jen.services.kea as __kea
+import jen.services.kea_changeset as __changeset
 import jen.services.kea_config_edit as __edit
 import jen.services.kea_ddns as __d2
 import jen.services.kea_host as __host
@@ -322,46 +323,19 @@ def _save_ddns4(values: dict):
     front — the Naming tab reflects one representative server, but a
     save touches all of them — so each server's own guard is what
     actually protects it, not a value read from a possibly-different
-    server's form."""
-    results, errors = [], []
-    saw_any = False
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        saw_any = True
-        name = server.get("name") or server.get("ssh_host")
-        try:
-            cfg, sha = __host.read_config_versioned(server, "dhcp4")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp4.conf not found on this server")
-                continue
-            cfg, _status = __edit.set_ddns4(cfg, values)
-            res = __host.apply_config(server, "dhcp4", cfg, expect_sha256=sha, summary="DDNS naming updated")
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: the config on this server changed since you opened the form")
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "dhcp4", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: DDNS naming updated, Kea restarted")
-                else:
-                    results.append(f"✅ {name}: DDNS naming updated — restart Kea manually ({restart['detail']})")
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — Kea NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
-    if not saw_any:
-        errors.append("No Kea server has SSH configured.")
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
+    server's form. v5.28.0 (Q24, C2) — a thin wrapper over
+    kea_changeset.apply_change()."""
+    result = __changeset.apply_change(
+        "dhcp4",
+        lambda cfg: __edit.set_ddns4(cfg, values),
+        "DDNS naming updated",
+        conflict_phrase=lambda name: "the config on this server changed since you opened the form",
+    )
+    if result.status == "noservers":
+        flash("No Kea server has SSH configured.", "error")
+        return
+    for style, text in result.lines:
+        flash(text, style)
 
 
 @bp.route("/ddns")
@@ -471,52 +445,26 @@ def _apply_d2_change(mutate_fn, done_phrase: str):
     """Push a D2 config mutation to every SSH-configured Kea server,
     each guarded by its OWN freshly-read sha (Q11) — same shape as
     _save_ddns4 above, targeting kea-dhcp-ddns.conf instead of
-    kea-dhcp4.conf. mutate_fn(cfg) -> (cfg, "ok"|"notfound"|"referenced")."""
-    results, errors = [], []
-    saw_any = False
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
-        saw_any = True
-        name = server.get("name") or server.get("ssh_host")
-        try:
-            cfg, sha = __host.read_config_versioned(server, "d2")
-            if cfg is None:
-                errors.append(f"❌ {name}: kea-dhcp-ddns.conf not found on this server")
-                continue
-            cfg, status = mutate_fn(cfg)
-            if status == "referenced":
-                errors.append(f"❌ {name}: still referenced by a domain — remove that first")
-                continue
-            if status == "notfound":
-                errors.append(f"❌ {name}: not found")
-                continue
-            res = __host.apply_config(server, "d2", cfg, expect_sha256=sha, summary=done_phrase)
-            if res["code"] == "conflict":
-                errors.append(f"❌ {name}: the D2 config on this server changed since you opened the form")
-            elif res["code"] == "ok":
-                restart = __host.service_action(server, "d2", "restart")
-                if restart["ok"]:
-                    results.append(f"✅ {name}: {done_phrase}, D2 restarted")
-                else:
-                    results.append(f"✅ {name}: {done_phrase} — restart D2 manually ({restart['detail']})")
-            elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
-            elif res["code"] == "testerror":
-                errors.append(
-                    f"❌ {name}: config validation failed — D2 NOT restarted, original config preserved. "
-                    f"Error: {res['detail']}"
-                )
-            else:
-                errors.append(f"❌ {name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"❌ {name}: {e}")
-    if not saw_any:
-        errors.append("No Kea server has SSH configured.")
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
+    kea-dhcp4.conf. mutate_fn(cfg) -> (cfg, "ok"|"notfound"|"referenced").
+    v5.28.0 (Q24, C2) — a thin wrapper over kea_changeset.apply_change().
+    "notfound"/"referenced" are both genuinely per-server, informational,
+    skip-and-continue outcomes here (unlike subnets.py's callers, where a
+    non-"ok" code aborts the whole change set) — so both are passed as
+    skip_codes, overriding the default ("notfound", "nochange")."""
+    result = __changeset.apply_change(
+        "d2",
+        mutate_fn,
+        done_phrase,
+        skip_codes=("notfound", "referenced"),
+        code_messages={"referenced": "still referenced by a domain — remove that first", "notfound": "not found"},
+        conflict_phrase=lambda name: "the D2 config on this server changed since you opened the form",
+        daemon_label="D2",
+    )
+    if result.status == "noservers":
+        flash("No Kea server has SSH configured.", "error")
+        return
+    for style, text in result.lines:
+        flash(text, style)
 
 
 @bp.route("/ddns/d2config/domain/add", methods=["POST"])
