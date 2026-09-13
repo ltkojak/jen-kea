@@ -457,9 +457,9 @@ class TestSubnetApplyViaHostClient:
         """v5.28.0 (Q24, C1/C2) — "notfound" is a skip code (informational,
         continues), not an abort — a subnet already gone from every Kea
         server's live config is still safe to drop from Jen's own map."""
-        from jen import extensions
-
         fake = self._wire(monkeypatch, subnet4=[])  # already absent from the live config
+        write_calls = []
+        monkeypatch.setattr("jen.config.write_subnets_config", lambda m: write_calls.append(m))
         with db.cursor() as cur:
             cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
             cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id=1")
@@ -468,7 +468,8 @@ class TestSubnetApplyViaHostClient:
         assert r.status_code == 200
         assert b"was not in Kea" in r.data
         assert "apply-config" not in fake.ops()
-        assert 1 not in extensions.SUBNET_MAP
+        assert len(write_calls) == 1
+        assert 1 not in write_calls[0]
 
     def test_edit_subnet_post_no_change_does_not_apply(self, logged_in_client, monkeypatch, mock_kea):
         fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])

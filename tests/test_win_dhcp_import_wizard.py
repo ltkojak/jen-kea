@@ -261,6 +261,8 @@ class TestWinDhcpImportWizard:
         assert "apply-config" not in fake.ops()
 
     def test_restart_failure_defers_reservations_until_the_retry_route(self, logged_in_client, monkeypatch, mock_kea):
+        from jen.routes import subnets as subnets_mod
+
         fake = self._wire(monkeypatch)
         fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
         self._upload(logged_in_client)
@@ -271,12 +273,12 @@ class TestWinDhcpImportWizard:
         assert self._reservation_calls == []  # deferred, not attempted against a stale-config Kea
         assert self._written == {}
 
-        from jen.routes import subnets as subnets_mod
-
-        assert any(subnets_mod._WIN_IMPORT_PLANS.values())  # the plan is kept, not popped
+        with logged_in_client.session_transaction() as sess:
+            token = sess["win_import_token"]
+        assert token in subnets_mod._WIN_IMPORT_PLANS  # the plan is kept, not popped
 
         r2 = logged_in_client.post("/subnets/import-windows/apply-reservations", follow_redirects=True)
         assert r2.status_code == 200
         assert len(self._reservation_calls) == 1
         assert 50 in self._written or 52 in self._written
-        assert not subnets_mod._WIN_IMPORT_PLANS  # now finished and popped
+        assert token not in subnets_mod._WIN_IMPORT_PLANS  # now finished and popped
