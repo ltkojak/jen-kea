@@ -2,7 +2,7 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.0.3",
+    "version": "1.0.5",
     "description": "Scan your subnets for devices not in the Kea lease table. Finds every live host on an attached subnet (with MAC), flags devices Kea doesn't know, and alerts on new unknowns. Requires nmap on the Jen host.",
     "author": "Matthew Thibodeau",
     "requires_jen": "3.6.0",
@@ -20,21 +20,29 @@
       }
     ],
     "db_migrations": [
-      "CREATE TABLE IF NOT EXISTS nd_scan_jobs (id INT AUTO_INCREMENT PRIMARY KEY, subnet_id INT NOT NULL, started_at DATETIME DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME DEFAULT NULL, status VARCHAR(20) DEFAULT 'running', hosts_found INT DEFAULT 0, rogue_count INT DEFAULT 0)",
-      "CREATE TABLE IF NOT EXISTS nd_scan_results (id INT AUTO_INCREMENT PRIMARY KEY, job_id INT NOT NULL, ip VARCHAR(15) NOT NULL, mac VARCHAR(17), hostname VARCHAR(255), in_kea TINYINT(1) DEFAULT 0, rogue TINYINT(1) DEFAULT 0, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+      {
+        "version": 1,
+        "description": "nd_scan_jobs table",
+        "sql": "CREATE TABLE IF NOT EXISTS nd_scan_jobs (id INT AUTO_INCREMENT PRIMARY KEY, subnet_id INT NOT NULL, started_at DATETIME DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME DEFAULT NULL, status VARCHAR(20) DEFAULT 'running', hosts_found INT DEFAULT 0, rogue_count INT DEFAULT 0)"
+      },
+      {
+        "version": 2,
+        "description": "nd_scan_results table",
+        "sql": "CREATE TABLE IF NOT EXISTS nd_scan_results (id INT AUTO_INCREMENT PRIMARY KEY, job_id INT NOT NULL, ip VARCHAR(15) NOT NULL, mac VARCHAR(17), hostname VARCHAR(255), in_kea TINYINT(1) DEFAULT 0, rogue TINYINT(1) DEFAULT 0, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+      }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.3",
-    "sha256": "778e0b3329d496e6fdf830c4d42a50c0ab263bc184f62129ce4ed8622674e276",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.5",
+    "sha256": "2295040d4ff45ce4f1b3da2a961c247324f6bbd31cb42862b0ff5cc705691c7e",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery"
   },
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.4.3",
+    "version": "1.4.5",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet — available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "3.6.0",
+    "requires_jen": "5.28.2",
     "tags": [
       "ipam",
       "addresses",
@@ -49,22 +57,74 @@
       }
     ],
     "db_migrations": [
-      "CREATE TABLE IF NOT EXISTS ipam_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
-      "CREATE TABLE IF NOT EXISTS ipam_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))",
-      "CREATE TABLE IF NOT EXISTS ipam_subnets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, cidr VARCHAR(18) NOT NULL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
-      "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip",
-      "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS hostname VARCHAR(255) NULL AFTER notes",
-      "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS mac VARCHAR(17) NULL AFTER hostname",
-      "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS is_static TINYINT(1) NOT NULL DEFAULT 1 AFTER mac",
-      "ALTER TABLE ipam_static_entries DROP INDEX IF EXISTS ip",
-      "ALTER TABLE ipam_static_entries ADD UNIQUE KEY IF NOT EXISTS uniq_ip_kind_subnet (ip, subnet_kind, subnet_id)",
-      "ALTER TABLE ipam_static_entries ADD INDEX IF NOT EXISTS idx_kind_subnet (subnet_kind, subnet_id)",
-      "ALTER TABLE ipam_assignment_history ADD COLUMN IF NOT EXISTS subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip",
-      "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS entry_status VARCHAR(20) NULL AFTER is_static",
-      "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
+      {
+        "version": 1,
+        "description": "ipam_static_entries table",
+        "sql": "CREATE TABLE IF NOT EXISTS ipam_static_entries (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), notes TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
+      },
+      {
+        "version": 2,
+        "description": "ipam_assignment_history table",
+        "sql": "CREATE TABLE IF NOT EXISTS ipam_assignment_history (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_id INT NOT NULL, label VARCHAR(100), owner VARCHAR(100), action VARCHAR(20), acted_at DATETIME DEFAULT CURRENT_TIMESTAMP, acted_by VARCHAR(100))"
+      },
+      {
+        "version": 3,
+        "description": "ipam_subnets table (unmanaged subnets, v1.3.0)",
+        "sql": "CREATE TABLE IF NOT EXISTS ipam_subnets (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, cidr VARCHAR(18) NOT NULL, description TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
+      },
+      {
+        "version": 4,
+        "description": "entries: subnet_kind (kea vs unmanaged)",
+        "sql": "ALTER TABLE ipam_static_entries ADD COLUMN subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip"
+      },
+      {
+        "version": 5,
+        "description": "entries: manual hostname for unmanaged subnets",
+        "sql": "ALTER TABLE ipam_static_entries ADD COLUMN hostname VARCHAR(255) NULL AFTER notes"
+      },
+      {
+        "version": 6,
+        "description": "entries: manual MAC for unmanaged subnets",
+        "sql": "ALTER TABLE ipam_static_entries ADD COLUMN mac VARCHAR(17) NULL AFTER hostname"
+      },
+      {
+        "version": 7,
+        "description": "entries: is_static flag",
+        "sql": "ALTER TABLE ipam_static_entries ADD COLUMN is_static TINYINT(1) NOT NULL DEFAULT 1 AFTER mac"
+      },
+      {
+        "version": 8,
+        "description": "entries: drop the v1.1.0 UNIQUE(ip) — an IP can now exist per subnet kind",
+        "sql": "ALTER TABLE ipam_static_entries DROP INDEX ip"
+      },
+      {
+        "version": 9,
+        "description": "entries: unique (ip, subnet_kind, subnet_id)",
+        "sql": "ALTER TABLE ipam_static_entries ADD UNIQUE KEY uniq_ip_kind_subnet (ip, subnet_kind, subnet_id)"
+      },
+      {
+        "version": 10,
+        "description": "entries: index (subnet_kind, subnet_id)",
+        "sql": "ALTER TABLE ipam_static_entries ADD INDEX idx_kind_subnet (subnet_kind, subnet_id)"
+      },
+      {
+        "version": 11,
+        "description": "history: subnet_kind",
+        "sql": "ALTER TABLE ipam_assignment_history ADD COLUMN subnet_kind ENUM('kea','ipam') NOT NULL DEFAULT 'kea' AFTER ip"
+      },
+      {
+        "version": 12,
+        "description": "entries: entry_status (available/static/planned, v1.4.0)",
+        "sql": "ALTER TABLE ipam_static_entries ADD COLUMN entry_status VARCHAR(20) NULL AFTER is_static"
+      },
+      {
+        "version": 13,
+        "description": "entries: backfill entry_status from is_static",
+        "sql": "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
+      }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.3",
-    "sha256": "a7cd774e4e1abc1f984878a54abbcb08b50bd4e317e888f3107456e9f7269bcc",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.5",
+    "sha256": "2d5f6b9cccad00ce58053b7ad622325ce051646429179e839d01818382fe11bd",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam"
   }

@@ -46,11 +46,15 @@ manually-copied plugin or a manifest that gains a new migration in a
 later release both catch up automatically. A failing migration stops
 that plugin's remaining migrations and is surfaced back to the
 install/update caller — it no longer just logs an error and reports
-success anyway. As with core migrations, every migration's SQL must
-still be idempotent (CREATE TABLE IF NOT EXISTS, guarded ALTERs) since
-MySQL/MariaDB DDL auto-commits and can't be rolled back — the tracking
-table only prevents re-running an already-applied migration, it doesn't
-make a non-idempotent statement safe to write in the first place.
+success anyway. MySQL/MariaDB DDL auto-commits and can't be rolled
+back, so the tracking table is what prevents re-running an
+already-applied migration. Write plain, portable DDL: CREATE TABLE IF
+NOT EXISTS works everywhere, and for ALTERs (v5.28.2) the runner
+records "duplicate column", "duplicate key name" and "can't DROP —
+doesn't exist" as already applied rather than failing, so a plugin
+never needs MariaDB-only `ADD COLUMN IF NOT EXISTS` / `DROP INDEX IF
+EXISTS` (MySQL 8 has neither) to be safe on a re-run or a fresh
+database — see _DDL_ALREADY_IN_EFFECT.
 """
 
 import contextlib
@@ -821,6 +825,26 @@ def _plugin_applied_versions(plugin_id: str) -> set:
         return {r["version"] for r in cur.fetchall()}
 
 
+# v5.28.2 — MySQL/MariaDB error codes that mean "this DDL's effect is
+# already present": duplicate column (ADD COLUMN), duplicate key name
+# (ADD INDEX/UNIQUE), can't DROP because it doesn't exist (DROP INDEX/
+# COLUMN). Plugin migrations are plain SQL strings, and the only way to
+# write an idempotent ALTER was MariaDB's `IF [NOT] EXISTS` — which
+# MySQL 8 doesn't have, so a plugin was either MariaDB-only or
+# non-idempotent. Treating these three as success (and recording the
+# migration as applied) gives plain, portable ALTERs the same safety
+# the tracking table already gives CREATE TABLE IF NOT EXISTS: a
+# re-run, or a fresh database that never had the index a migration
+# drops, is not an error. A genuinely wrong statement still fails —
+# syntax errors, unknown tables and columns, type errors are none of
+# these codes.
+_DDL_ALREADY_IN_EFFECT = {
+    1060: "duplicate column name",
+    1061: "duplicate key name",
+    1091: "can't DROP — column or key doesn't exist",
+}
+
+
 def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
     """
     Apply any pending DB migrations from a plugin's manifest, in version
@@ -921,6 +945,26 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
             count += 1
             logger.info(f"Plugin '{plugin_id}' migration {version} applied: {description}")
         except Exception as e:
+            code = e.args[0] if e.args and isinstance(e.args[0], int) else None
+            if code in _DDL_ALREADY_IN_EFFECT:
+                # v5.28.2 — the schema is already in the state this
+                # migration produces. Record it and move on; see
+                # _DDL_ALREADY_IN_EFFECT for why this is the portable
+                # idempotency plugin authors need.
+                try:
+                    with jen_db() as db, db.cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO plugin_schema_migrations (plugin_id, version, description) VALUES (%s, %s, %s)",
+                            (plugin_id, version, description),
+                        )
+                    count += 1
+                    logger.info(
+                        f"Plugin '{plugin_id}' migration {version} already in effect "
+                        f"({_DDL_ALREADY_IN_EFFECT[code]}) — recorded as applied: {description}"
+                    )
+                    continue
+                except Exception as e2:
+                    e = e2
             msg = f"Plugin '{plugin_id}' migration {version} failed: {e}"
             logger.error(msg)
             return False, msg, count

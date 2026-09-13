@@ -524,6 +524,32 @@ source of truth again, updated by hand in the same commit that pins a
 new tag and its checksum — see `plugins/README.md` for the release
 checklist.
 
+**The bundled copy is the same code the registry pins (v5.28.2).** The
+trees under `plugins/` are what a fresh install sees before it ever
+fetches the registry, and what CI's real-manifest migration tests run
+against both MariaDB and MySQL 8 — and they had drifted from the
+plugin repos for a year in both directions (bundled IPAM a year old;
+bundled Network Discovery carrying a scan-breaking bug the repo had
+fixed). They're now resynced from the tagged releases the registry
+pins, and `tests/test_plugin_registry.py::TestBundledCopiesMatchRegistry`
+fails CI if a registry entry and its bundled manifest ever disagree on
+version, `requires_jen`, `db_migrations`, or nav. Each plugin repo's
+own CI (`tools/verify.py`) enforces the other half: the published
+`plugin.zip` is a byte-for-byte rebuild of the tagged tree.
+
+**Plugin migrations are plain SQL, so idempotency comes from the
+runner, not the dialect (v5.28.2).** The only way to write a
+re-runnable `ALTER TABLE` in plain SQL was MariaDB's `IF [NOT] EXISTS`,
+which MySQL 8 lacks — so a plugin was either MariaDB-only (IPAM was,
+silently, since its v1.3.0) or non-idempotent. `run_plugin_migrations()`
+now records a migration whose only error is duplicate column (1060),
+duplicate key name (1061), or can't-DROP-doesn't-exist (1091) as
+already applied and continues; these three mean exactly "the schema
+is already where this migration puts it," and nothing else (a syntax
+error, an unknown table or column) is caught. Together with the
+tracking table this gives a plain `ALTER` the same safety `CREATE
+TABLE IF NOT EXISTS` always had, on both databases.
+
 The registry record and its `sha256` share the same GitHub trust root
 as §3.9's release signing — the checksum binds the downloaded package
 to what `registry.json` says it should be, not to an authority

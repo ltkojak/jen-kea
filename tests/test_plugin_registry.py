@@ -978,3 +978,41 @@ class TestPluginsPageShowsOwnershipChips:
         assert r.status_code == 200
         assert b"reinstall to harden" in r.data
         assert b'title="Reinstall as a root-owned copy"' in r.data
+
+
+class TestBundledCopiesMatchRegistry:
+    """v5.28.2 — the bundled plugin trees under plugins/ and the registry
+    entries that point at the plugins' own repos drifted for a year
+    (bundled ipam sat at 1.2.3 while the registry pinned 1.4.1, and the
+    bundled network-discovery carried a scan-breaking bug the repo had
+    already fixed). The bundled copy is now resynced from the tagged
+    release the registry pins, and this keeps it that way: a registry
+    re-pin without a resync (or vice versa) fails here."""
+
+    def _pairs(self):
+        registry = {e["id"]: e for e in json.loads(pathlib.Path("plugins/registry.json").read_text(encoding="utf-8"))}
+        for plugin_id in sorted(registry):
+            bundled = json.loads(pathlib.Path(f"plugins/{plugin_id}/manifest.json").read_text(encoding="utf-8"))
+            yield plugin_id, registry[plugin_id], bundled
+
+    def test_every_registry_plugin_is_bundled_at_the_same_version(self):
+        for plugin_id, reg, bundled in self._pairs():
+            assert bundled["version"] == reg["version"], (
+                f"{plugin_id}: bundled {bundled['version']} != registry {reg['version']}"
+            )
+            assert reg["download_url"].endswith(f"/raw/v{reg['version']}"), plugin_id
+
+    def test_registry_metadata_mirrors_the_bundled_manifest(self):
+        for plugin_id, reg, bundled in self._pairs():
+            for key in ("name", "description", "requires_jen", "db_migrations", "nav", "changelog_url"):
+                assert reg.get(key) == bundled.get(key), (
+                    f"{plugin_id}: registry '{key}' differs from the bundled manifest"
+                )
+
+    def test_bundled_trees_carry_no_release_artifacts(self):
+        """plugin.zip is what the plugin's own repo publishes at a tag;
+        .enabled is a pre-v5.13.0 marker Jen no longer reads. Neither
+        belongs in the bundled tree."""
+        for plugin_id, _reg, _bundled in self._pairs():
+            assert not pathlib.Path(f"plugins/{plugin_id}/plugin.zip").exists(), plugin_id
+            assert not pathlib.Path(f"plugins/{plugin_id}/.enabled").exists(), plugin_id

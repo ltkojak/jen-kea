@@ -2,6 +2,72 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.28.2] - 2026-09-13
+
+Plugin cleanup, prompted by finally bringing the two plugin repos
+(`jen-plugin-ipam`, `jen-plugin-network-discovery`) back in sync with
+Jen. Both had drifted from the copies bundled here for a year in both
+directions; reviewing them turned up real bugs on both sides.
+
+### Plugin migrations were MariaDB-only
+
+A plugin's `db_migrations` are plain SQL strings, and the only way to
+write an idempotent `ALTER TABLE` in plain SQL was MariaDB's
+`ADD COLUMN IF NOT EXISTS` / `DROP INDEX IF EXISTS` — which MySQL 8
+does not have. The IPAM plugin used those forms for every schema
+change since its v1.3.0, so on a Jen running against MySQL its first
+`ALTER` was a syntax error and (since v5.28.1 gates activation on
+migrations) the plugin never enabled. Jen supports both databases;
+the shipped plugin only ever worked on one, and nothing noticed
+because the bundled copy CI tests was the older v1.2.3, which had no
+`ALTER`s yet.
+
+`run_plugin_migrations()` now treats three specific errors — duplicate
+column (1060), duplicate key name (1061), can't `DROP` because it
+doesn't exist (1091) — as "the schema is already where this migration
+puts it": it records the migration as applied and continues. That
+gives plain, portable `ALTER`s the same safety the tracking table
+already gave `CREATE TABLE IF NOT EXISTS` — a re-run, or a fresh
+database that never had the index a migration drops, is not a
+failure — while a genuinely wrong statement (syntax error, unknown
+table or column) still fails exactly as before. IPAM v1.4.4 relies on
+this and requires Jen 5.28.2; its manifest is now plain DDL in the
+explicit `{version, description, sql}` form, with versions 1–13
+mapping one-to-one onto the old positions so an existing install runs
+nothing new.
+
+### Bundled plugin copies resynced, and kept in sync by CI
+
+The copies under `plugins/` are what a fresh install sees before the
+registry is ever fetched, and what CI tests against. Bundled IPAM was
+v1.2.3 (registry pinned v1.4.1); bundled Network Discovery still had
+a post-scan prune whose `LIMIT` inside an `IN` subquery MySQL and
+MariaDB both reject — so every scan that found hosts was recorded as
+`error` — a bug the repo copy fixed today in v1.0.2. Both bundled
+trees are now byte-identical to the tagged releases the registry pins
+(IPAM v1.4.5, Network Discovery v1.0.5 — both repos also adopted Jen's
+own ruff configuration and pinned ruff version, so a resync can never
+fail Jen's lint), the never-used bundled
+`plugin.zip` files and the pre-v5.13.0 `.enabled` marker are gone, and
+a new test fails CI if a registry re-pin ever lands without a resync
+(or vice versa): bundled manifest version, description, `requires_jen`,
+`db_migrations` and nav must equal the registry entry's. Each plugin
+repo also gained its own CI (`tools/verify.py`) that rejects a
+release whose `plugin.zip` isn't a byte-for-byte rebuild of the tree,
+any inline event handler or un-nonce'd `<script>` (both dead under
+Jen's CSP since v5.22.0), and a manifest version that doesn't match
+the top changelog entry.
+
+Highlights of what the plugin releases themselves fixed, for anyone
+updating them from Settings → Plugins: IPAM's unmanaged subnets now
+honor Jen's subnet restrictions (a subnet-restricted viewer could
+previously read and edit all of them); Network Discovery now reads the
+kernel neighbour table after its unprivileged nmap sweep, so every
+live host on an attached subnet is found with its MAC and the Kea
+cross-reference works by MAC rather than IP alone, alerts fire only
+for unknowns the previous scan hadn't seen, and a scan orphaned by a
+Jen restart no longer shows "Scanning…" forever.
+
 ## [5.28.1] - 2026-09-13
 
 Review follow-ups: a maintainer-reported dashboard bug plus ChatGPT's

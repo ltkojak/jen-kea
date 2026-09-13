@@ -190,11 +190,18 @@ class TestRealShippedManifests:
             manifest = json.load(f)
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True, f"ipam manifest failed: {msg}"
-        assert count == 2
+        # v5.28.2 — the bundled copy is the real v1.4.4 manifest: 13
+        # explicit, portable migrations. 8 (`DROP INDEX ip`) has nothing
+        # to drop on a fresh table and is recorded via the runner's
+        # already-in-effect tolerance — on MySQL 8 as well as MariaDB.
+        assert count == 13
+        assert _plugin_applied_versions("ipam") == set(range(1, 14))
         with db.cursor() as cur:
-            for tbl in ("ipam_static_entries", "ipam_assignment_history"):
+            for tbl in ("ipam_static_entries", "ipam_assignment_history", "ipam_subnets"):
                 cur.execute(f"SHOW TABLES LIKE '{tbl}'")
                 assert cur.fetchone() is not None, f"{tbl} was not created"
+            cur.execute("SHOW COLUMNS FROM ipam_static_entries LIKE 'entry_status'")
+            assert cur.fetchone() is not None, "migration 12 (entry_status) must have applied after 8's tolerated DROP"
 
     def test_network_discovery_manifest_applies_correctly(self, db):
         with open("plugins/network-discovery/manifest.json") as f:
@@ -437,3 +444,69 @@ class TestLoadPluginsMigrationGate:
             assert get_global_setting(f"plugin_migration_failed:{plugin_id}") == ""
         finally:
             self._cleanup(db, plugin_id)
+
+
+class TestAlreadyInEffectDdlIsRecordedAsApplied:
+    """v5.28.2 — plugin migrations are plain SQL, and the only idempotent
+    ALTER was MariaDB's `IF [NOT] EXISTS` form, which MySQL 8 lacks: the
+    shipped ipam plugin was MariaDB-only for a year without anyone
+    noticing. The runner now treats "duplicate column" (1060),
+    "duplicate key name" (1061) and "can't DROP; doesn't exist" (1091)
+    as the schema already being where the migration puts it, records
+    the migration, and continues — on both databases CI runs."""
+
+    def test_duplicate_column_key_and_missing_index_are_recorded(self, db):
+        run_plugin_migrations(
+            {
+                "id": "tol_base",
+                "db_migrations": [
+                    {
+                        "version": 1,
+                        "description": "t",
+                        "sql": "CREATE TABLE IF NOT EXISTS tol_t (id INT PRIMARY KEY, a INT)",
+                    },
+                    {"version": 2, "description": "idx", "sql": "ALTER TABLE tol_t ADD INDEX idx_a (a)"},
+                ],
+            }
+        )
+        manifest = {
+            "id": "tol_again",
+            "db_migrations": [
+                {"version": 1, "description": "dup column", "sql": "ALTER TABLE tol_t ADD COLUMN a INT"},
+                {"version": 2, "description": "dup key", "sql": "ALTER TABLE tol_t ADD INDEX idx_a (a)"},
+                {"version": 3, "description": "drop missing", "sql": "ALTER TABLE tol_t DROP INDEX never_existed"},
+                {"version": 4, "description": "real change after", "sql": "ALTER TABLE tol_t ADD COLUMN b INT"},
+            ],
+        }
+        ok, msg, count = run_plugin_migrations(manifest)
+        assert ok is True, msg
+        assert count == 4
+        assert _plugin_applied_versions("tol_again") == {1, 2, 3, 4}
+        with db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM tol_t LIKE 'b'")
+            assert cur.fetchone() is not None, "the migration after the tolerated ones must still run"
+
+    def test_a_genuinely_wrong_statement_still_fails(self, db):
+        manifest = {
+            "id": "tol_wrong",
+            "db_migrations": [
+                {"version": 1, "description": "no such table", "sql": "ALTER TABLE tol_no_such_table ADD COLUMN a INT"},
+            ],
+        }
+        ok, msg, count = run_plugin_migrations(manifest)
+        assert ok is False
+        assert count == 0
+        assert _plugin_applied_versions("tol_wrong") == set()
+
+    def test_shipped_ipam_manifest_is_portable_and_explicitly_versioned(self):
+        """The ALTERs must be plain (no MariaDB-only IF [NOT] EXISTS) and
+        every entry an explicit {version, sql} — the positional flat-list
+        form is what let a re-ordered edit silently renumber history."""
+        with open("plugins/ipam/manifest.json") as f:
+            migrations = json.load(f)["db_migrations"]
+        assert all(isinstance(m, dict) and {"version", "sql"} <= m.keys() for m in migrations)
+        assert [m["version"] for m in migrations] == list(range(1, len(migrations) + 1))
+        for m in migrations:
+            assert "IF EXISTS" not in m["sql"].upper().replace("IF NOT EXISTS", ""), m["sql"]
+            if not m["sql"].upper().startswith("CREATE TABLE"):
+                assert "IF NOT EXISTS" not in m["sql"].upper(), m["sql"]
