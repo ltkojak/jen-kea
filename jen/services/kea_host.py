@@ -165,6 +165,14 @@ _D2_NEEDS_HELPER = "D2 needs jen-kea-helper v3+ on this host — install or upda
 # https setup path needs it, so it gates that path (tls_supported)
 # rather than nagging every host through JEN_HELPER_WANT_VERSION.
 TLS_HELPER_MIN_VERSION = 4
+# v5.29.1 — the HELPER_VERSION of the jen-kea-helper file this install
+# ships (tests/test_kea_host.py pins it to the file). Distinct from
+# JEN_HELPER_WANT_VERSION on purpose: WANT drives the amber "upgrade
+# available" nag (kept at 2 — D2 and https are optional), SHIPPED drives
+# whether the Settings → Kea → SSH table OFFERS the Update helper button
+# at all. v5.29.0 gated the https socket option on v4 but the button only
+# appeared below WANT, so a v3 host had no way to get there from the UI.
+JEN_HELPER_SHIPPED_VERSION = 4
 _TLS_NEEDS_HELPER = (
     "https setup needs jen-kea-helper v4+ on this host — update it from Settings → Kea → SSH "
     "(the http option works with any helper version)."

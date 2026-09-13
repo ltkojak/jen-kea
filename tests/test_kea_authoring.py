@@ -1354,7 +1354,15 @@ class TestKeaHelperTableUpgradeHint:
         assert b"upgrade available" in r.data
         assert b"Update helper" in r.data
 
-    def test_row_at_want_shows_neither_hint_nor_button(self, logged_in_client, monkeypatch, db, mock_kea):
+    def test_row_at_want_but_below_shipped_offers_the_button_without_the_nag(
+        self, logged_in_client, monkeypatch, db, mock_kea
+    ):
+        """v5.29.1 — WANT (2) drives the amber nag, SHIPPED (the file's
+        version) drives whether the button is offered: a v2/v3 host is
+        fine for everything except https sockets, so it gets a neutral
+        "v4 available" note and the button, never "upgrade available".
+        (v5.29.0 gated https on v4 while hiding the button above WANT —
+        a v3 host had no way to get there from the UI.)"""
         import json
 
         from jen.models.user import set_global_setting
@@ -1368,6 +1376,25 @@ class TestKeaHelperTableUpgradeHint:
         r = logged_in_client.get("/settings/kea")
         assert r.status_code == 200
         assert b"upgrade available" not in r.data
+        assert f"v{kea_host.JEN_HELPER_SHIPPED_VERSION} available (needed for https sockets)".encode() in r.data
+        assert b"Update helper" in r.data
+        assert b"Install helper" not in r.data
+
+    def test_row_at_shipped_shows_neither_hint_nor_button(self, logged_in_client, monkeypatch, db, mock_kea):
+        import json
+
+        from jen.models.user import set_global_setting
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4"}])
+        set_global_setting(
+            "kea_helper_status",
+            json.dumps({"1": {"version": kea_host.JEN_HELPER_SHIPPED_VERSION, "checked": "2026-01-01"}}),
+        )
+        r = logged_in_client.get("/settings/kea")
+        assert r.status_code == 200
+        assert b"upgrade available" not in r.data
+        assert b"available (needed for https sockets)" not in r.data
         assert b"Update helper" not in r.data
         assert b"Install helper" not in r.data
 

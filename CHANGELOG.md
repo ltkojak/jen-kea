@@ -2,6 +2,23 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.29.1] - 2026-09-13
+
+### Fix: no way to update the host helper to v4 from the UI
+
+v5.29.0's https socket option needs the v4 host helper and says so —
+but the **Update helper** button in Settings → Kea → SSH only appeared
+for a host below `JEN_HELPER_WANT_VERSION`, which is still 2 (the
+v5.23.0 decision not to nag every operator about a helper version only
+an optional feature needs). A host on v3 therefore showed a green
+`v3`, no button, and an https option that pointed at a button that
+wasn't there — the maintainer hit exactly this on the first try. The
+table now offers **Update helper** whenever a host is below the helper
+version this install ships (a new `JEN_HELPER_SHIPPED_VERSION`, pinned
+to the file by a test), with a neutral *"v4 available (needed for
+https sockets)"* note; the amber "upgrade available" nag is unchanged
+and still keyed to the want version. No change on the Kea host.
+
 ## [5.29.0] - 2026-09-13
 
 One of Jen's goals from the start has been that an operator should

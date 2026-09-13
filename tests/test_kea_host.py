@@ -880,3 +880,16 @@ class TestTlsSupported:
         """Same call as D2: only the https path needs v4, so the general
         "upgrade available" hint must not nag every host."""
         assert kea_host.JEN_HELPER_WANT_VERSION < kea_host.TLS_HELPER_MIN_VERSION == 4
+
+    def test_shipped_version_is_the_helper_files_version(self):
+        """v5.29.1 — the Update helper button is offered below SHIPPED,
+        so SHIPPED must track the file (a bump to one without the other
+        would hide the button for the new version again) and cover the
+        https gate."""
+        import re
+
+        src = (_JEN.parent / "jen-kea-helper").read_text(encoding="utf-8")
+        file_version = int(re.search(r"^HELPER_VERSION = (\d+)$", src, re.M).group(1))
+        assert file_version == kea_host.JEN_HELPER_SHIPPED_VERSION
+        assert kea_host.JEN_HELPER_SHIPPED_VERSION >= kea_host.TLS_HELPER_MIN_VERSION
+        assert kea_host.JEN_HELPER_SHIPPED_VERSION >= kea_host.JEN_HELPER_WANT_VERSION

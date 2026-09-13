@@ -863,9 +863,12 @@ nowhere else (the payload never carries a path). The key is written
 else can; the helper refuses to write through a symlink and refuses
 anything that isn't PEM-shaped. Only the https setup needs v4 — the
 http option, and everything else Jen does, works with any helper
-version, so Settings → Kea → SSH does **not** show "upgrade available"
-for a v3 host; the https option itself says "needs jen-kea-helper v4"
-until you press **Update helper**. There is no legacy-path equivalent
+version, so Settings → Kea → SSH does **not** show the amber "upgrade
+available" for a v3 host — it shows a neutral *"v4 available (needed
+for https sockets)"* next to the version, with the **Update helper**
+button (v5.29.1; in v5.29.0 the button was missing for hosts already
+at v2/v3), and the https option itself says "needs jen-kea-helper v4"
+until you press it. There is no legacy-path equivalent
 for this op, on purpose: certificate keys never travel in a generated
 root script.
 

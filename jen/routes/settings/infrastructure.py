@@ -101,6 +101,9 @@ def _kea_servers_with_helper_status():
                 "ssh_host": s.get("ssh_host", ""),
                 "helper_version": st.get("version"),  # int, None, or missing key
                 "helper_want": kea_host.JEN_HELPER_WANT_VERSION,
+                # v5.29.1 — the Update helper button is offered below this
+                # (the shipped file's version), not just below WANT.
+                "helper_shipped": kea_host.JEN_HELPER_SHIPPED_VERSION,
                 "helper_known": bool(st),
                 "helper_checked": st.get("checked", ""),
                 "legacy_grant": st.get("legacy_grant"),  # True, False, or None (never checked)
