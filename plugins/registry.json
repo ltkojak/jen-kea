@@ -31,7 +31,7 @@
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.4.1",
+    "version": "1.4.2",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet — available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
     "requires_jen": "3.6.0",
@@ -63,9 +63,9 @@
       "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS entry_status VARCHAR(20) NULL AFTER is_static",
       "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.1",
-    "sha256": "ab51bd938ca4931c29fb9b66f9921adf2390dbd7c632d36e9c618154988da9bf",
-    "changelog_url": "https://github.com/ltkojak/jen-kea/blob/main/plugins/ipam/CHANGELOG.md",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.2",
+    "sha256": "8ec3dbad93f818f8e109ff87696ae7362feef7bc05dabc5f098bd31653f4ec2c",
+    "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam"
   }
 ]
