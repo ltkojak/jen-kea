@@ -391,15 +391,36 @@ class TestHelperDeployment:
         assert "/usr/local/sbin/jen-kea-helper" in res["detail"]
 
     def test_install_helper_already_installed_short_circuits(self, monkeypatch, quiet_status):
-        # v5.19.1 — "already" now means "at or above JEN_HELPER_WANT_VERSION",
-        # not just JEN_HELPER_MIN_VERSION — a v1 host is the "no-path"/
-        # "stale" territory above, never "already".
-        monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
+        # v5.19.1 — "already" means "at or above the version being
+        # installed" — a v1 host is the "no-path"/"stale" territory above,
+        # never "already". v5.29.2 — that target is the HELPER_VERSION of
+        # the file being copied, not JEN_HELPER_WANT_VERSION.
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 2})
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 2, "code": "already", "detail": ""}
+
+    def test_install_helper_upgrades_a_host_above_want_but_below_shipped(self, monkeypatch, quiet_status):
+        """v5.29.2 — the maintainer's report: a v3 host pressed Update
+        helper (offered since v5.29.1 because the shipped file is v4) and
+        got "v3 is already installed" back, because the copy was gated on
+        WANT (2). The target is the shipped file's version."""
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 4\n# body\n")
+        calls = iter([{"ok": True, "version": 3}, {"ok": True, "version": 4}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        scripts = []
         monkeypatch.setattr(
-            kea_host, "check_helper", lambda s: {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION}
+            kea_host, "_legacy_python3", lambda s, script, timeout=60: (scripts.append(script), ("ok:4", "", 0))[1]
         )
         res = kea_host.install_helper(SERVER)
-        assert res == {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION, "code": "already", "detail": ""}
+        assert res == {"ok": True, "version": 4, "code": "upgraded", "detail": ""}
+        assert "HELPER_VERSION = 4" in scripts[0]
+
+    def test_install_helper_target_falls_back_to_shipped_when_unparseable(self, monkeypatch, quiet_status):
+        assert kea_host._source_version("HELPER_VERSION = 7\n") == 7
+        assert kea_host._source_version("x") == kea_host.JEN_HELPER_SHIPPED_VERSION
+        assert kea_host._source_version(kea_host._helper_source()) == kea_host.JEN_HELPER_SHIPPED_VERSION
 
     def test_install_helper_sudoerror(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")

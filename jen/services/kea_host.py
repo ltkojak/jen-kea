@@ -888,6 +888,13 @@ def _helper_source():
         return f.read()
 
 
+def _source_version(source: str) -> int:
+    """HELPER_VERSION as declared by the helper text about to be copied —
+    the only honest "what will the host report afterwards" number."""
+    m = re.search(r"^HELPER_VERSION = (\d+)$", source, re.M)
+    return int(m.group(1)) if m else JEN_HELPER_SHIPPED_VERSION
+
+
 def install_helper(server: dict) -> dict:
     """Deploy (or upgrade) jen-kea-helper onto `server` — the one place
     the legacy `sudo python3` path is still used deliberately. Returns
@@ -908,10 +915,15 @@ def install_helper(server: dict) -> dict:
         source = _helper_source()
     except OSError as e:
         return {"ok": False, "version": None, "code": "no-source", "detail": str(e)}
+    # v5.29.2 — the target is the version of the file being copied, not
+    # WANT: WANT (2) is the "upgrade available" nag threshold, and gating
+    # the copy on it meant a v3 host got "already installed" back from the
+    # Update helper button that v5.29.1 had just put in front of it.
+    target = _source_version(source)
 
     chk = check_helper(server)
     current = chk.get("version")
-    if isinstance(current, int) and current >= JEN_HELPER_WANT_VERSION:
+    if isinstance(current, int) and current >= target:
         return {"ok": True, "version": current, "code": "already", "detail": ""}
 
     if not legacy_grant_present(server):
@@ -919,14 +931,14 @@ def install_helper(server: dict) -> dict:
             detail = "no legacy python3 grant to install through"
         else:
             detail = (
-                f"helper v{current} is installed but v{JEN_HELPER_WANT_VERSION} needs the legacy python3 grant "
+                f"helper v{current} is installed but v{target} needs the legacy python3 grant "
                 "to be re-added for one run, or copy it by hand: sudo install -o root -g root -m 0755 "
                 "./jen-kea-helper /usr/local/sbin/jen-kea-helper"
             )
         return {"ok": False, "version": current, "code": "no-path", "detail": detail}
 
     ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
-    script = __authoring.render_install_helper_script(source, ssh_user, JEN_HELPER_WANT_VERSION)
+    script = __authoring.render_install_helper_script(source, ssh_user, target)
     # v5.28.0 (Q24, B1) — _legacy_python3 now returns a 3-tuple; this
     # function's own success signal is unaffected (it already
     # independently re-verifies via a fresh check_helper() call below
@@ -935,7 +947,7 @@ def install_helper(server: dict) -> dict:
     if out.startswith("ok:"):
         recheck = check_helper(server)
         real = recheck.get("version")
-        if isinstance(real, int) and real >= JEN_HELPER_WANT_VERSION:
+        if isinstance(real, int) and real >= target:
             code = "upgraded" if current is not None else "installed"
             return {"ok": True, "version": real, "code": code, "detail": ""}
         return {
@@ -944,7 +956,7 @@ def install_helper(server: dict) -> dict:
             "code": "stale",
             "detail": (
                 f"the copy did not take — the host still reports helper v{real if real is not None else '?'}, "
-                f"expected v{JEN_HELPER_WANT_VERSION}"
+                f"expected v{target}"
             ),
         }
     if out.startswith("sudoerror:"):

@@ -2,6 +2,21 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.29.2] - 2026-09-13
+
+### Fix: "Update helper" answered "v3 is already installed"
+
+v5.29.1 put the **Update helper** button back in front of a v3 host,
+but pressing it came back with *"jen-kea-helper v3 is already
+installed"*: `install_helper()` still decided "already" against the
+same want version (2) the button used to be gated on. It now targets
+the `HELPER_VERSION` declared by the helper file it is about to copy —
+the only honest "what will the host report afterwards" number — for
+the already-installed short-circuit, the manual-copy hint, and the
+post-copy re-check alike. A v3 host on a v4 install now upgrades; a
+v4 host still gets "already installed". Second same-day patch for the
+same gate; the test now covers the exact case.
+
 ## [5.29.1] - 2026-09-13
 
 ### Fix: no way to update the host helper to v4 from the UI
