@@ -336,11 +336,11 @@ class TestHttpFlowRefusesToMisconfigureJen:
         assert fake.calls == []
         assert b"own address on Kea Server 1" in r.data
 
-    def test_https_is_not_offered_yet(self, logged_in_client, db, isolated_config, fake, http):
+    def test_an_unknown_scheme_is_refused(self, logged_in_client, db, isolated_config, fake, http):
         http({"1.2.3.4:8000": _ok("3.0.4")})
-        r = _setup(logged_in_client, scheme="https")
+        r = _setup(logged_in_client, scheme="ftp")
         assert fake.calls == []
-        assert b"Only an http socket" in r.data
+        assert b"must be http or https" in r.data
 
     def test_server_without_ssh_host_is_refused(self, logged_in_client, db, isolated_config, fake, http, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(extensions.KEA_SERVERS[0], ssh_host="")])
@@ -662,7 +662,7 @@ class TestHttpsFlow:
         app_config.write_values([("kea", "api_ca", "/srv/own-ca.pem")])
         httpv({"1.2.3.4:8000": _ok("3.0.4")})
         r = _setup(logged_in_client, scheme="https")
-        assert b"clear the CA bundle field" in r.data
+        assert b"Clear the CA bundle field" in r.data
         assert fake.calls == []
         assert _on_disk(isolated_config).get("kea", "api_ca") == "/srv/own-ca.pem"
 

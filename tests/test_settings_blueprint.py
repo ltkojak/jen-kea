@@ -31,6 +31,7 @@ EXPECTED_ENDPOINTS = {
     "settings.probe_kea",
     "settings.setup_direct_socket",  # v5.29.0 (Q29)
     "settings.remove_direct_socket",  # v5.29.0 (Q29)
+    "settings.rotate_kea_ca",  # v5.29.0 (Q29)
     "settings.toggle_ipv6",
     "settings.author_kea_config",
     "settings.author_kea_config_preview",
