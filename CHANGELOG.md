@@ -2,6 +2,128 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.28.1] - 2026-09-13
+
+Review follow-ups: a maintainer-reported dashboard bug plus ChatGPT's
+independent review of v5.28.0, all confirmed against the code before
+being fixed.
+
+### A rollback failure message that read backwards
+
+`kea_changeset.py`'s multi-server rollback, when a revert itself
+failed, reported the affected server as simply "revert failed" — with
+no indication of which config that server was actually left on. Read
+naively, that phrasing suggests the server is back on its old config
+and something separate went wrong; the truth is the opposite: a
+"failed" revert means the server's own revert call didn't go through,
+so it **still has the NEW config** — the one the whole change set was
+being rolled back away from. An operator following the old message's
+apparent meaning would restore the wrong servers. The message now
+names three groups explicitly: which servers still have the new
+config (the ones whose own revert failed), which were successfully
+rolled back, and which were never touched at all (the one whose
+original commit failed first and triggered the revert). A revert that
+succeeds but whose own service restart then fails is now its own
+warning line too, rather than folding into either "success" or
+"failure."
+
+### Two fail-closed gaps in the write path
+
+A v1-helper or legacy-engine host's optimistic-concurrency check —
+Jen's own best-effort re-read-and-compare, used where a v2 helper's
+atomic `expect_sha256` guard isn't available — used to let a write
+proceed when the re-read itself failed (host unreachable, SSH error),
+on the reasoning that a transport failure isn't evidence of a real
+conflict. In practice, the one host Jen couldn't verify was exactly
+the one it wrote to regardless: an unreachable host now refuses the
+write outright. Separately, a v1/legacy `apply_config()` success used
+to return no `sha256` at all; `kea_changeset`'s own rollback stores
+that value to guard its *later* revert call, so with nothing to store
+that later write was completely unguarded. It now backfills the same
+canonical sentinel a read would produce, computed from what was just
+written.
+
+### Restart failures no longer look like success
+
+A restart failure in a multi-server change used to append a line
+reading "✅ … restart Kea manually" — a checkmark next to a problem —
+while the change set's own `status` stayed `"ok"`, identical to a
+clean run. It's now a warning line with no checkmark ("… did NOT
+restart"), and `restart_failed` is its own status distinct from `ok`,
+even though it's just as safe for Jen's own bookkeeping (the config
+did apply). Nine call sites across `routes/subnets.py` that used to
+compare a bare status string now check the full result and append a
+"restart failed on …" suffix to their own audit detail.
+
+### Plugin lifecycle: retry-safe, restore instead of discard, and migrations that actually gate
+
+Three related gaps in the plugin request/install path, all found by
+tracing what a crash or exception at each specific point would lose:
+
+- `consume_plugin_results()` used to delete a root-run result file
+  *before* applying it — a crash or exception in between lost the only
+  authoritative record of what the privileged side actually did. It
+  now applies first and deletes only once that succeeds, retrying on
+  the next call if it doesn't (safe, since every state change it makes
+  is idempotent).
+- `jen-update-root.py`'s startup sweep for stale `.staging-`/`.old-`
+  plugin directories (v5.28.0) had the same shape of gap one step
+  earlier: a crash in the exact window between the crash-safe swap's
+  two renames — live moved aside to `.old-<ts>`, staging not yet moved
+  into place — left no live directory at all, and the old sweep simply
+  deleted the `.old-<ts>` right along with the never-verified-complete
+  staging copy, discarding the one intact copy that existed. It now
+  restores the newest `.old-<ts>` back to live when that happens,
+  rather than just deleting it.
+- A plugin's own database migrations now actually gate whether it
+  activates. Through v5.28.0, a failing migration only ever logged
+  loudly (the v4.4.19 fix) or, on the root-owned install path, was
+  reported back but the plugin was enabled anyway. A fresh install
+  (in-process or root-owned) whose migration fails is now left
+  disabled with a red "migration failed — not enabled" chip on the
+  Plugins page; on Jen restart, a plugin whose migration fails is
+  skipped entirely **unless this exact version already migrated
+  cleanly once before** — the original v4.4.19 case (a manifest-format
+  or unrelated-table quirk on an already-working install), which still
+  loads exactly as it always has.
+
+### The Windows DHCP import wizard's plan gains an explicit state
+
+The import wizard's in-memory plan now tracks which step it's actually
+at (uploaded → previewed → config-applied-but-restart-failed →
+complete) instead of inferring it from which fields happen to be set.
+Apply refuses unless the plan is genuinely in "previewed" — catching
+both a call made too early and a second Apply after the config already
+went live — and the reservation-retry route (for a restart failure)
+refuses unless Apply's own restart genuinely failed, re-reading the
+primary's live config and comparing it against what was actually
+applied before adding anything. The retry window is now a fresh 30
+minutes from the moment the restart failed, not the original upload,
+and the result page is explicit that re-importing the export is *not*
+a way to recover a missed window — the importer skips any scope whose
+CIDR already exists in Kea before it ever reaches that scope's
+reservations, so a second import would add none of them back.
+
+### A dashboard bug reported by a maintainer, traced to direct-mode identity
+
+A maintainer reported the dashboard rendering blank in `direct` mode.
+Traced live against a real host: `connection_mode = direct` was set,
+but only the daemon's `unix` control socket had ever been configured —
+`api_url` was still reaching the Control Agent on `:8000`. Direct mode
+sends no `service` field, so the Control Agent answered `version-get`
+identically to a real per-daemon socket (same version string, hence
+"Connected"), but `config-get` came back as the Control Agent's own
+config with no `Dhcp4` key — every page reading live Kea data went
+quietly blank with no error anywhere. Three fixes: `kea_command()` now
+treats a direct-mode `config-get` that answers as the wrong daemon as
+an error naming which daemon actually answered; the Kea probe
+identifies the same mismatch before recommending direct mode as
+"working" (a warning below Kea 3.2, where the Control Agent is still
+usable while the sockets get added; a hard error at 3.2+, where it's
+removed outright); and the Dashboard and Subnets pages both show a
+plain banner instead of silently leaving gateway/DNS/pool fields
+blank.
+
 ## [5.28.0] - 2026-09-13
 
 Audit rollup 3 — the stabilization pass before a feature freeze. Source:

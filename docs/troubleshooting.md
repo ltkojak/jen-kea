@@ -400,21 +400,55 @@ Kea → SSH** — the button reads *Update helper* once a version is
 already recorded, *Install helper* otherwise) to get the atomic guard
 and out-of-band change tracking.
 
-### "🛑 ROLLBACK FAILED" after a multi-server change (v5.28.0)
+### "🛑 ROLLBACK FAILED" after a multi-server change (v5.28.0, wording fixed v5.28.1)
 
 A change to more than one Kea server (a subnet, shared network, DHCP
 option, client class, or DDNS/D2 edit) committed successfully to at
 least one server, then a later server refused it — and the attempt to
 put the earlier server(s) back the way they were **also** failed (the
 host went unreachable mid-operation, most commonly). The flash names
-which server(s) now have the new config and which still have the old
-one. This needs hand intervention: open **Servers → Config history**
-for each named server and use **Restore** to bring it to whichever
-version you want every server to agree on, then confirm with a normal
-edit that they match. This is different from the ordinary "changed
-since you opened this form" conflict below — that one is refused
-before anything is written anywhere; this one means a write already
-happened and its own undo didn't complete.
+three groups explicitly: which server(s) **still have the NEW
+config** (their own revert call is the one that failed — despite the
+word "failed" here, this is the server with the config you did NOT
+want), which were **successfully rolled back** (unaffected, already
+back on the old config), and which server was **never changed at all**
+(the one whose original commit failed first, triggering the whole
+revert). **v5.28.0 shipped this message backwards** — it labeled the
+still-new-config group as simply "failed" with no indication which
+config they were actually left on; if you're troubleshooting a v5.28.0
+box, treat "revert failed" as "this server still has the NEW config,"
+not the old one. Either way this needs hand intervention: open
+**Servers → Config history** for each named server and use **Restore**
+to bring it to whichever version you want every server to agree on,
+then confirm with a normal edit that they match. This is different
+from the ordinary "changed since you opened this form" conflict below
+— that one is refused before anything is written anywhere; this one
+means a write already happened and its own undo didn't complete.
+
+### "⚠️ … did NOT restart" instead of a rollback (v5.28.1)
+
+A multi-server change committed and (if it needed one) reverted
+cleanly, but a server's Kea service didn't come back up afterward. This
+is reported as its own outcome, `restart_failed` — the config on disk
+is valid and Jen's own bookkeeping (subnet list, audit log) is written
+normally, exactly as a full success would be — only the *service*
+needs a manual restart on that host. This replaced a v5.28.0-and-earlier
+line that read "✅ … restart Kea manually", which looked like a
+success line despite naming a problem; it's a warning now, with no
+checkmark.
+
+### "Could not verify the current configuration on \<host\> — no changes were written" (v5.28.1)
+
+A write to a v1-helper or legacy-engine host was refused because Jen
+couldn't re-read that host's current config to check for a conflict
+first (the host was unreachable, or the read itself errored) — a
+different failure than an actual detected conflict. Through v5.28.0
+this situation let the write proceed anyway, on the reasoning that a
+transport failure isn't evidence of a real conflict; in practice that
+meant the one host Jen couldn't verify was exactly the one it wrote to
+regardless. Fix whatever is stopping Jen from reaching the host over
+SSH (see "SSH connection failures" above) and try the edit again — it
+was never applied.
 
 ### "The Kea config on the primary server changed since you previewed this import" (v5.28.0)
 
@@ -425,6 +459,39 @@ the live config on the primary server has moved since (another admin's
 edit, a hand change). Go back to **Review** and preview again; Apply
 will push the freshly-previewed config once you confirm it looks
 right.
+
+### "… answered config-get as the Control Agent, not kea-dhcp4" (v5.28.1)
+
+`connection_mode = direct` is set, but the URL Jen is talking to is
+still the Control Agent (`kea-ctrl-agent`), not a real per-daemon
+control socket — most often because only the daemon's `unix`
+control-socket entry was ever configured, never an `http`/`https` one.
+In direct mode Jen sends no `service` field, so the Control Agent
+happily answers `version-get` for itself (looking identical to a real
+daemon socket — same version string), but `config-get` comes back as
+*its own* config with no `Dhcp4`/`Dhcp6`/`DhcpDdns` key, which used to
+render every page reading live Kea data as quietly empty. Add a real
+`http`/`https` `control-sockets` entry to the daemon (see "Direct
+control sockets" in the admin guide) and point `api_url` at that port
+instead — Settings → Kea → Probe now identifies this exact mismatch
+before you switch modes, so use it to confirm the fix.
+
+### A red "migration failed — not enabled" / "not loaded" chip on the Plugins page (v5.28.1)
+
+One of a plugin's own `db_migrations` failed to apply — a schema
+conflict from a manual database change, or a genuinely broken
+migration in a plugin release. The plugin is deliberately **not**
+enabled (a fresh install) or **not loaded** (an existing one, on the
+next Jen restart) with a bad schema underneath it; the chip shows the
+underlying SQL error. Fix whatever it names directly against the
+database, then reinstall the plugin (fresh install) or restart Jen
+(existing install) to retry — the migration tracking table only
+prevents re-running an already-applied migration, so a fix followed by
+a retry is always safe. If the chip is showing for a plugin that was
+working fine before a Jen upgrade and you're confident the schema
+itself is fine, this is NOT the v4.4.19 "load anyway" carve-out — that
+only ever applies automatically to a version that has already migrated
+cleanly once before; it can't be forced from the UI, by design.
 
 ### "Could not start the plugin install service" / a plugin install/remove flashes an error after being queued (v5.28.0/v5.27.0)
 

@@ -131,6 +131,25 @@ Always **keep the existing `unix` entry** in `control-sockets` alongside
 the new one (`kea-shell` and some hooks use it), and **firewall the
 HTTP(S) port to the Jen host** regardless of which option below you pick.
 
+**Don't just point `direct` mode at the Control Agent's port (`:8000`).**
+Switching `connection_mode` to `direct` without actually adding an
+`http`/`https` entry to each daemon's own `control-sockets` list means
+`api_url` is still reaching the Control Agent (if it's still running) —
+and in direct mode Jen sends no `service` field, so the Control Agent
+answers for *itself*, not for `kea-dhcp4`. `version-get` looks
+identical either way (Kea reports the same version string), but
+`config-get` comes back as the Control Agent's own config — no
+`Dhcp4` key at all — so every page that reads live subnet data
+(Dashboard, Subnets, drift detection, Health) goes quietly blank with
+no error. **v5.28.1** made this loud instead of silent: a `config-get`
+that answers as the wrong daemon in direct mode now returns a real
+error naming which daemon actually answered, shown as a banner on the
+Dashboard and Subnets pages; Settings → Kea → Probe identifies the
+same mismatch before you even switch modes. If you hit this, add a
+real `http`/`https` `control-sockets` entry as shown below (or use
+Settings → Kea → "Author a starting kea-dhcp4.conf" to generate one),
+not just a different port number.
+
 #### Recommended — HTTPS on a management address, mutual TLS
 
 Bind the control API to a management IP (not `0.0.0.0`), use HTTPS, and
@@ -863,6 +882,8 @@ Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your upl
 
 **v5.27.0 changes how a new plugin install lands.** Installing or reinstalling a plugin from Settings → Plugins no longer writes its files directly — Jen asks a dedicated root-privileged service to fetch, verify, and place them, and the result lands read-only under `/opt/jen/plugins-installed/`, the same way a Jen release itself is root-owned. A plugin installed before v5.27.0 still works from its old, Jen-writable location (`/var/lib/jen/plugins/`); the Plugins page marks it "writable — reinstall to harden" with a one-click Reinstall button that moves it to the new location. Nothing about enabling, disabling, or a plugin's own database tables changes.
 
+**v5.28.1 gates activation on a plugin's own database migrations.** If a plugin declares `db_migrations` in its manifest and one fails to apply, the plugin is no longer enabled anyway — the Plugins page shows a red "migration failed — not enabled" chip with the underlying error, and Jen keeps running with the plugin's previous state (if any) untouched. Fix whatever the error names (usually a schema conflict from a manual DB change, or a genuinely broken migration in a newer plugin release) and reinstall or restart Jen to retry. The one exception: a version that has already migrated cleanly once before is still loaded even if a later attempt logs an error — that's an old, deliberate carve-out (v4.4.19) for a manifest-format quirk on an otherwise-working install, not a reason to make its existing functionality disappear.
+
 **v5.28.0 makes the page wait for the root side to actually finish.** A root-owned install/remove used to record success (and, for an install, offer Enable) the moment the request was queued — a request that then failed root-side still looked done everywhere except a result file nobody read. The page now only shows an install as recorded, and only offers Enable, once the root service's own result file confirms it; a failure flashes the real reason (e.g. a version requirement the running Jen doesn't meet) instead of silently doing nothing.
 
 **v5.14.0 introduces the versioned layout.** The first upgrade to 5.14.0 must be run with `sudo ./install.sh` — the in-app update button cannot make the jump (the box has no `current` symlink yet, so the new unit can't start, and the in-app attempt rolls back cleanly to your current version). Every in-app update from 5.14.0 onward is the atomic-symlink path. The 5.14.0 install also removes the now-unused flat `/opt/jen/{jen,run.py,templates,static,plugins,venv}` once the versioned layout is live.
@@ -1315,6 +1336,18 @@ and registers the new subnets with Jen.
 an HA pair, sync the change to the standby the way you already do for any
 other config change — the wizard doesn't know about your HA relationship
 and won't push to a partner on its own.
+
+**If Kea applies the config but doesn't restart cleanly,** the page
+gives you a button to add the queued reservations once you've fixed
+whatever kept the service from restarting — you have **30 minutes**
+from that moment to do it, checked against the primary's live config
+each time so reservations are never added against a config that
+changed again in the meantime. **Re-importing the export is not a way
+to recover a missed window:** the importer skips any scope whose CIDR
+already exists in Kea before it ever reaches that scope's
+reservations, so a second import adds none of them back. Add the
+missed reservations by hand (Subnets → the subnet → Reservations) if
+you miss the window.
 
 **Validated against a real `Export-DhcpServer` file** (two scopes, 57
 reservations, per-reservation options). Exclusions, superscopes,

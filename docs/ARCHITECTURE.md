@@ -339,7 +339,12 @@ commands against D2's own config file.
   with `code="conflict"` before anything is sent to the helper; the
   sentinel itself is stripped back to `None` before the real
   `apply-config` payload goes out, so a v2 helper never mistakes it for
-  a raw-sha comparison.
+  a raw-sha comparison. **v5.28.1** — a v1/legacy `apply_config()`
+  success now also returns this same sentinel as `result["sha256"]`
+  (computed from the config just written) instead of nothing at all, so
+  a caller that stores "the sha we just wrote" to guard a *later*
+  operation — `kea_changeset`'s revert, below — is never left guarding
+  it with `None`.
 
 **A hash always says what it hashes (v5.20.0 — `hash_kind`).**
 `kea_config_revisions.sha256` has always held one of two genuinely
@@ -702,6 +707,49 @@ pass-until-stable loop instead of processing one batch and exiting, so
 a request written while the run is already in flight is still picked
 up in the same invocation.
 
+**Apply before delete, restore instead of discard (v5.28.1).**
+`consume_plugin_results()` used to delete the `.result` file and only
+*then* apply it to Jen's own state — a crash or exception in that gap
+lost the only authoritative record of what the root side actually did.
+It now applies first and deletes only once that succeeds; an exception
+leaves the file in place, logged, and retried on the next call (safe,
+since every state change it makes — the DB row, the enable marker,
+`restart_pending` — is idempotent). `_sweep_stale_plugin_dirs()`
+(`jen-update-root.py`) had the same gap one step earlier: a crash in
+the exact window between the swap's two renames — the live directory
+already moved aside to `<id>.old-<ts>`, staging not yet moved into
+place — left no live directory at all, and the sweep simply deleted
+the `.old-<ts>` right along with the never-verified-complete
+`.staging-<ts>`, discarding the one intact copy that existed. It now
+groups leftovers by plugin id first: a live directory already present
+means the swap finished and every leftover for that id is stale
+(unchanged); a missing live directory with at least one `.old-<ts>`
+restores the newest one back to live before deleting the rest
+(including any staging copy, never a restore candidate); only staging
+leftovers means an interrupted first-ever install, with nothing to
+restore.
+
+**A plugin's own DB migrations now gate whether it activates
+(v5.28.1).** Through v5.28.0, a failing migration only logged loudly
+(the v4.4.19 fix, `load_plugins()`) or, on the root path, was reported
+back but still enabled the plugin. Now: the in-process installer
+(Docker/dev) runs migrations against the manifest in the *staging*
+copy before the crash-safe swap, so a failure leaves an existing
+install completely untouched; the root path's `_apply_plugin_result()`
+runs migrations itself (Jen has DB access there, the root-run request
+processor never did) and refuses to enable a plugin whose migration
+failed, recording `plugin_migration_failed:<id>` for a red "migration
+failed — not enabled" chip on the Plugins page; and `load_plugins()`
+only keeps the original v4.4.19 "load anyway" property for a version
+that has *already* migrated cleanly once before
+(`plugin_migrated_ok:<id>` matches the manifest's `version`) — the
+case that fix actually targeted, an unrelated/format quirk on an
+already-working install. A version that has never migrated cleanly, or
+a newer version whose migration just failed for the first time, is not
+loaded at all: running new code against a schema its own migration
+never reached is worse than the plugin disappearing from the nav until
+it's fixed.
+
 `discover_plugins()` gained a third scan tier between the bundled tree
 and the legacy writable one (§6.1) for this: `extensions.PLUGIN_DIR_ROOT`.
 A plugin can transiently exist in both the legacy writable location and
@@ -745,14 +793,29 @@ place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
    since a sha check is inherently a write-time guarantee, not
    something preflight can prove in advance), every already-committed
    target is reverted, in reverse order, back to what `read_config_versioned()`
-   saw for it in the Plan phase. A revert that itself fails is reported
-   as `rollback_failed` — a mixed state needing hand intervention
+   saw for it in the Plan phase. `apply_config()`'s own commit call
+   backfills `result["sha256"]` with a canonical sentinel when a
+   v1/legacy write reports none (§3.3) specifically so this revert has
+   a real value to guard its own `expect_sha256` with, instead of `None`
+   — no guard at all. A revert that itself fails is reported as
+   `rollback_failed` — a mixed state needing hand intervention
    (Servers → Config history → restore) — rather than silently retried
-   or hidden.
+   or hidden. **v5.28.1** — the failure message now names three groups
+   explicitly instead of one ambiguous "revert failed" line that read
+   backwards: `still_new` (targets whose OWN revert call failed — they
+   still have the NEW config, not the old one, despite the word
+   "failed"), `rolled_back` (committed targets NOT in that set),
+   `untouched` (the one target whose commit itself failed first,
+   triggering the revert, and so was never written to at all).
 4. **Restart** — attempted for every committed target regardless of
    whether another target's restart already failed; a failed restart
-   is reported per-server, never silently retried, and never reverts
-   the (already-valid, already-committed) config.
+   is reported per-server as a warning line (never a ✅, since Kea
+   hasn't picked up the config yet), never silently retried, and never
+   reverts the (already-valid, already-committed) config. **v5.28.1** —
+   this is its own status, `restart_failed`, distinct from `ok`: the
+   outcome is genuinely different from a clean run (a server needs a
+   manual restart), even though it's just as safe for Jen's own
+   bookkeeping below, since the write itself succeeded.
 
 **What this does NOT cover.** `jen/services/settings/authoring.py`'s
 author-from-blank loops (a different flow: generating a brand-new
@@ -767,11 +830,22 @@ the *service* didn't restart would throw away a good config over an
 unrelated systemd/service problem the operator needs to fix directly,
 not a reason to distrust the config itself. Jen's own bookkeeping
 (`SUBNET_MAP`, the audit log) is written only when nothing was left
-half-applied — `status` is `"ok"`, `"nothing"` (every target was a
-no-op skip), or `"noservers"` (nothing SSH-reachable to push to); an
-`"aborted"` or `"rollback_failed"` status leaves Jen's own metadata
-untouched, matching whatever actually ended up on the Kea servers
-themselves.
+half-applied — `status` is `"ok"`, `"restart_failed"` (the config
+applied; a target's service just didn't restart), `"nothing"` (every
+target was a no-op skip), or `"noservers"` (nothing SSH-reachable to
+push to); an `"aborted"` or `"rollback_failed"` status leaves Jen's own
+metadata untouched, matching whatever actually ended up on the Kea
+servers themselves.
+
+**Fail closed when a v1/legacy host can't be reread (v5.28.1).**
+`_jen_side_conflict()`'s best-effort compare (§3.3) used to return
+`None` — "no conflict, proceed" — when the reread itself failed (host
+unreachable, SSH error), on the reasoning that a transport failure
+isn't evidence of a real conflict. In practice that meant the one host
+Jen can't verify is exactly the one it wrote to anyway: an unreachable
+server now refuses the write outright, with a plain "could not verify
+the current configuration — no changes were written" rather than
+guessing that nothing changed underneath it.
 
 ## 4. CI/CD verification
 
