@@ -141,26 +141,34 @@ decisions, not accidental regressions.
 
 ### 3.1 The self-update sudoers grant
 
-`jen-sudoers` grants `www-data` (the user Jen runs as) exactly two
+`jen-sudoers` grants `www-data` (the user Jen runs as) exactly three
 passwordless commands, matched by `sudo` byte-for-byte:
 
 ```
 /usr/bin/systemctl restart jen
 /usr/bin/systemctl start --no-block jen-update.service
+/usr/bin/systemctl start --no-block jen-plugin-install.service
 ```
 
-Neither takes any input from Jen. `jen-update.service` is a root
-`oneshot` that runs `/usr/local/sbin/jen-update-root.py` — owned
-`root:root`, mode `0700`, **outside** every directory `www-data` can
-write — which re-derives "the current latest release" from the pinned
-`ltkojak/jen-kea` GitHub repo on its own, verifies the tarball's SHA-256
-against the published `SHA256SUMS`, and only then installs (see §6 for
-the staged/rollback flow).
+None of the three takes any input from Jen. `jen-update.service` and
+`jen-plugin-install.service` are both root `oneshot` units that run
+`/usr/local/sbin/jen-update-root.py` — owned `root:root`, mode `0700`,
+**outside** every directory `www-data` can write — the first with no
+arguments (re-derives "the current latest release" from the pinned
+`ltkojak/jen-kea` GitHub repo, verifies the tarball's SHA-256 against
+the published `SHA256SUMS`, and only then installs — see §6 for the
+staged/rollback flow), the second with exactly one fixed flag,
+`--plugins` (re-derives a requested plugin install/removal from
+`plugins/registry.json` the same way — see §3.10).
 
 **Why this is the boundary:** even a fully-compromised `www-data` can
-only trigger "install whatever GitHub currently publishes as latest". It
-cannot pass a version, a URL, or file content into the privileged step,
-because nothing it controls reaches that script as input.
+only trigger "install whatever GitHub currently publishes as latest"
+or "(re-)install/remove the plugin whose id is in this marker's
+filename, whatever `plugins/registry.json` currently says about it". It
+cannot pass a version, a URL, a checksum, or any file content into
+either privileged step, because nothing it controls reaches that
+script as trusted input — see §3.10 for exactly what a plugin-install
+marker is (and isn't) trusted for.
 
 **History — why it looks this way (v5.2.6):** the previous design had
 `www-data` write `/tmp/jen_update_install.sh` and `sudo` it. Since
@@ -168,25 +176,35 @@ because nothing it controls reaches that script as input.
 write that exact path, any code execution as `www-data` was root — the
 sudoers rule couldn't tell "content the update flow verified" from
 "content something else wrote". Moving the whole pipeline into a
-root-owned script that takes no caller input closed that.
+root-owned script that takes no trusted caller input closed that; the
+same request/execute split was applied again in v5.27.0 (§3.10) for
+plugin installs, the one place that gap still existed.
 
 **What this means for any future change:** rule 8 in `CLAUDE.md` — a
 changed `sudo` command string is a changed sudoers line in the same
 commit, and this section is updated with it. Never add a parameter to
-either command. `jen-update-root.py` must never read `sys.argv` or any
-file `www-data` can write (`tests/test_jen_update_root.py` pins the
-first; the second is a review checklist item).
+any of the three commands. `jen-update-root.py` must never derive a
+decision from `sys.argv` beyond the fixed `--plugins` dispatch it
+already refuses to extend (`tests/test_jen_update_root.py` pins this),
+nor from the *content* of any file `www-data` can write — a plugin
+marker's filename (which plugin id, which action) is the only thing
+read from it, never its bytes.
 
 **systemd sandboxing (v5.17.0 / Q6 6E).** `jen.service` runs with
 `ProtectSystem=strict` (only `/etc/jen` and `/var/lib/jen` writable —
 `/opt/jen` is read-only since v5.13.0), `PrivateTmp`, `PrivateDevices`
 and the `Protect*` / `Restrict*` family. It deliberately does **not**
 set `NoNewPrivileges`, `CapabilityBoundingSet` or `ProtectProc`: Jen's
-only privileged action is `sudo` (the two commands above, and the
+only privileged action is `sudo` (the three commands above, and the
 banner-warned legacy `python3` path on un-migrated Kea hosts), which
 needs the setuid transition. `jen-update.service` — the root updater —
 is intentionally left un-sandboxed; it writes `/opt/jen` and
 `/usr/local/sbin`. `tests/test_service_hardening.py` pins both.
+`jen-plugin-install.service` (§3.10) is the same shape for the same
+reason — it also writes under `/opt/jen` as root — but isn't itself
+covered by that test, since it's a plain `ExecStart` of the same
+already-hardened script with a different flag, not a second
+independently-configured unit.
 
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
@@ -581,6 +599,66 @@ secret is switched to the new private key, then removing the old line
 one release after that, so there's always at least one release where
 both the old and new key verify.
 
+### 3.10 Root-owned plugin installs (v5.27.0)
+
+§3.7 covers what's verified about a plugin package — a tag-pinned
+`download_url` and a checksum that must match. Through v5.26.x that
+verification still ran as `www-data`, and the verified files still
+landed in a directory `www-data` owns: `/var/lib/jen/plugins/<id>`,
+the same tree `discover_plugins()` imports `plugin.py` from and runs as
+part of the running process. A `www-data` process that could get a
+malicious file into that directory by any *other* means — a bug
+elsewhere, a dependency vulnerability, anything short of a full root
+compromise — could plant a `plugin.py` that Jen itself would load and
+execute on the next restart, surviving that restart indefinitely. This
+was an accepted-for-now gap recorded in earlier drafts of §6.1: bundled
+plugins were already root-owned and read-only; registry-installed ones
+were not.
+
+v5.27.0 closes it with the same request/execute split §3.1 already
+uses for Jen's own updates. `install_plugin()` / `uninstall_plugin()`
+(`jen/services/plugins.py`) no longer download, verify, extract, or
+delete anything themselves on a real systemd host (Docker and dev
+checkouts have no unit to trigger and keep the pre-5.27.0 in-process
+behavior, unchanged). Instead:
+
+1. `www-data` writes an empty `<plugin_id>.install` or
+   `<plugin_id>.remove` marker into
+   `extensions.CONTENT_PLUGIN_REQUESTS_DIR`
+   (`/var/lib/jen/plugin-requests/`) and triggers
+   `jen-plugin-install.service` (§3.1) — the marker's *filename* is the
+   only thing the privileged side reads from it; the file itself is
+   empty.
+2. `jen-update-root.py --plugins`, running as root, re-derives
+   everything from `plugins/registry.json` fresh — the exact same
+   fetch, tag-pinning check, and checksum verification §3.7 describes,
+   duplicated into this standalone script rather than imported, since
+   it can't import the `jen` package — then lands the verified files at
+   `/opt/jen/plugins-installed/<id>`, `root:root`, mode `a+rX,go-w`:
+   readable and executable by `www-data`, writable by nothing but root.
+3. It writes a one-line `<plugin_id>.result` (`ok` or `error: <reason>`)
+   back into the same request directory for the page to show, and
+   deletes the marker. It never touches the database either way, same
+   as the in-process path it replaces.
+
+`discover_plugins()` gained a third scan tier between the bundled tree
+and the legacy writable one (§6.1) for this: `extensions.PLUGIN_DIR_ROOT`.
+A plugin can transiently exist in both the legacy writable location and
+the new root-owned one (mid-migration, or a box that installed before
+v5.27.0) — the writable copy still wins in that case, and the root
+install's own final step deletes the writable copy once it lands,
+so steady state converges on exactly one copy per plugin.
+
+**Why not fold this into `jen-update.service` itself:** that unit's
+entire contract is "no arguments, re-derive the Jen release to install."
+Overloading it with a second, unrelated responsibility (which plugin,
+which action) would mean either adding real arguments — reopening the
+"nothing attacker-controlled reaches this script" property §3.1 depends
+on — or inventing some other side channel for the same information,
+which is just this marker-file design with extra steps. A second
+fixed-argv unit keeps each privileged entry point doing exactly one
+thing.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:
@@ -901,8 +979,9 @@ added the versioned release directories.
 | `/opt/jen/releases/<X.Y.Z>/venv/` | That release's virtualenv, built for its own `requirements.txt` | `root:root` | Built fresh per release — the rollback is a true point-in-time revert of dependencies too. |
 | `/opt/jen/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |
 | `/opt/jen/` (flat, pre-5.14) | `jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `venv/` | `root:root`, `a+rX` | Removed by the migration run / `install.sh` once the versioned layout is live. Docker stays flat. |
+| `/opt/jen/plugins-installed/` (v5.27.0, §3.10) | Registry-installed plugins landed by `jen-plugin-install.service` | `root:root`, `a+rX,go-w` — read-and-execute only for `www-data` | Written only by `jen-update-root.py --plugins`, one plugin id at a time, via a staged-directory `os.rename()`. Untouched by a Jen release upgrade. |
 | `/etc/jen/` | `jen.config`, its backups, TLS certs (`ssl/`), SSH keys (`ssh/`) | `www-data` | Never touched. |
-| `/var/lib/jen/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (registry-installed), `plugins-enabled/` (enable markers), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `/opt/jen`. |
+| `/var/lib/jen/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (legacy registry-installed, pre-5.27.0 — see §3.10), `plugins-enabled/` (enable markers), `plugin-requests/` (v5.27.0 install/remove markers + results), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `/opt/jen`. |
 | `/tmp` | Scratch only (`PrivateTmp=yes`) | per-service namespace | n/a |
 
 `extensions.JEN_ROOT` reads `/opt/jen/current/app` when it exists, else
@@ -923,10 +1002,16 @@ dedicated blueprint (`/content/icons/<name>.svg`,
 `/content/branding/<file>`); the old `/static/icons/custom/…` and
 `/static/nav_logo.*` URLs are gone.
 
-Bundled and registry-installed plugins can now both exist for the same
-id (a box that installed `ipam` from the registry, then upgraded). The
-`/var/lib/jen/plugins` copy wins; uninstalling a bundled plugin disables
-it rather than deleting release-owned files.
+Bundled, root-owned, and legacy-writable copies of a plugin can all
+exist for the same id at once (a box that installed `ipam` from the
+registry, then upgraded, then reinstalled it under v5.27.0's split —
+see §3.10). `discover_plugins()` scans bundled, then
+`/opt/jen/plugins-installed` (root-owned), then `/var/lib/jen/plugins`
+(legacy writable) — whichever of the three was scanned last for a
+given id wins, so a legacy writable copy still shadows a root-owned one
+until the root install's own final step removes it. Uninstalling a
+bundled-only plugin disables it rather than deleting release-owned
+files.
 
 ## 7. Known gaps (as of this writing)
 

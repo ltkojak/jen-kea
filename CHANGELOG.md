@@ -2,6 +2,52 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.27.0] - 2026-09-13
+
+Root-owned plugin installs: a registry-installed plugin's files are no
+longer writable by the running Jen process, closing the one remaining
+persistence foothold a compromised web process would otherwise have.
+
+### Root-owned plugin installs
+
+Through v5.26.x, a registry-installed plugin was downloaded, checksum-
+verified, and extracted by Jen itself, landing in `/var/lib/jen/plugins/<id>`
+— a directory the running `www-data` process also imports code from on
+every restart. A bundled plugin (`ipam`, `network-discovery`) was
+already root-owned and read-only as part of the versioned release tree
+(v5.14.0); a registry-installed one was not. A `www-data` process that
+could get a malicious file into that directory by any means short of a
+full root compromise — a bug elsewhere, a vulnerable dependency — had a
+way to plant code Jen would load and re-execute indefinitely across
+restarts.
+
+`install_plugin()` / `uninstall_plugin()` (`jen/services/plugins.py`)
+now use the same request/execute split the self-updater has used since
+v5.2.6: on a real systemd host, they write an empty install/remove
+marker and trigger a new `jen-plugin-install.service` unit — a second,
+zero-argument-beyond-one-fixed-flag root `oneshot` running the same
+already-hardened `jen-update-root.py`. That script re-derives the
+plugin's tag-pinned download URL and checksum from `plugins/registry.json`
+fresh, as root, the same verification `install_plugin()` always did,
+and lands the verified files at `/opt/jen/plugins-installed/<id>`,
+`root:root`, read-and-execute only for `www-data`. Nothing the web
+process reads or writes reaches the privileged step as trusted input —
+not even the registry entry it fetched moments earlier. Docker and dev
+checkouts have no systemd unit to trigger this with and keep installing
+plugins in-process, unchanged.
+
+`discover_plugins()` gained a third scan tier for this between the
+bundled tree and the legacy writable one; a plugin can exist in more
+than one at once during the transition, and whichever was scanned last
+wins, so an existing writable install keeps working exactly as before
+until it's reinstalled. Settings → Plugins now marks each installed
+plugin root-owned or "writable — reinstall to harden," with a one-click
+Reinstall button that requests the move; the page polls a new
+`GET /settings/plugins/install-status/<id>` route to show the result.
+No enable/disable/uninstall workflow changed, and a plugin's own
+database tables are never touched by any of this, matching the
+existing "uninstall preserves data" behavior.
+
 ## [5.26.0] - 2026-09-12
 
 Signed releases: from this version on, every Jen release is

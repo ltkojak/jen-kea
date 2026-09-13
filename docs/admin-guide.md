@@ -849,6 +849,8 @@ Select **Keep existing config** when prompted. The installer builds the new rele
 
 Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`), are never modified during an upgrade. Each release's application tree and its own virtualenv are root-owned and read-only to the service account.
 
+**v5.27.0 changes how a new plugin install lands.** Installing or reinstalling a plugin from Settings → Plugins no longer writes its files directly — Jen asks a dedicated root-privileged service to fetch, verify, and place them, and the result lands read-only under `/opt/jen/plugins-installed/`, the same way a Jen release itself is root-owned. A plugin installed before v5.27.0 still works from its old, Jen-writable location (`/var/lib/jen/plugins/`); the Plugins page marks it "writable — reinstall to harden" with a one-click Reinstall button that moves it to the new location. Nothing about enabling, disabling, or a plugin's own database tables changes.
+
 **v5.14.0 introduces the versioned layout.** The first upgrade to 5.14.0 must be run with `sudo ./install.sh` — the in-app update button cannot make the jump (the box has no `current` symlink yet, so the new unit can't start, and the in-app attempt rolls back cleanly to your current version). Every in-app update from 5.14.0 onward is the atomic-symlink path. The 5.14.0 install also removes the now-unused flat `/opt/jen/{jen,run.py,templates,static,plugins,venv}` once the versioned layout is live.
 
 ### Rolling back by hand
@@ -979,7 +981,9 @@ resets when you install a renewed one.
 | `/var/lib/jen/icons/` | User-uploaded custom brand icons (v5.13.0) |
 | `/var/lib/jen/branding/` | Uploaded favicon and nav logo (v5.13.0) |
 | `/var/lib/jen/backups/` | Database backups (v5.13.0) |
-| `/var/lib/jen/plugins/`, `/var/lib/jen/plugins-enabled/` | Registry-installed plugins and enable markers (v5.13.0) |
+| `/opt/jen/plugins-installed/` | Registry-installed plugins, root-owned and read-only to Jen (v5.27.0 — see above) |
+| `/var/lib/jen/plugins/`, `/var/lib/jen/plugins-enabled/` | Legacy (pre-5.27.0) registry-installed plugins, and enable markers (v5.13.0) |
+| `/var/lib/jen/plugin-requests/` | Install/remove request markers and results for the flow above (v5.27.0) |
 | `/var/lib/jen/keys/` | `.secret_key` / `.mfa_key` fallbacks when `/etc/jen` copies are absent (v5.13.0) |
 | `/etc/jen/jen.config` | Configuration — credentials and settings |
 | `/etc/jen/secret_key`, `/etc/jen/mfa_key` | Flask session secret + MFA encryption key (auto-generated) |

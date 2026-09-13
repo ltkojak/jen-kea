@@ -137,6 +137,16 @@ you can drop the `jen-icons` line from your compose file and
 `network-discovery` plugin from the registry, both the bundled copy and
 the migrated copy now exist — the `/var/lib/jen` copy wins.
 
+**v5.27.0 root-owned plugin installs don't apply here.** On a real
+systemd host, installing a registry plugin now asks a separate
+root-privileged service to fetch and verify it into a directory the
+Jen process can't write to — closing off a plugin install as a
+persistence path for a compromised web process. A container has no
+systemd unit to trigger that with, so Jen keeps installing plugins the
+same way it always has in Docker: in-process, into `jen-content`. The
+Plugins page never shows the "reinstall to harden" prompt here, since
+there's nothing to harden into.
+
 `/etc/jen/jen.config` lives in the `jen-config` volume. To change
 configuration, edit `.env` and re-run `docker compose ... up -d` — on the
 next start `run.py` only regenerates the config if it's missing or has no
