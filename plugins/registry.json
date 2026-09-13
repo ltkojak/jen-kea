@@ -2,8 +2,8 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.0.2",
-    "description": "Scan your subnets for devices not in the Kea lease table. Detects rogue devices, shows discovered hostnames, and alerts on new unknowns. Requires nmap on the Jen host.",
+    "version": "1.0.3",
+    "description": "Scan your subnets for devices not in the Kea lease table. Finds every live host on an attached subnet (with MAC), flags devices Kea doesn't know, and alerts on new unknowns. Requires nmap on the Jen host.",
     "author": "Matthew Thibodeau",
     "requires_jen": "3.6.0",
     "tags": [
@@ -23,15 +23,15 @@
       "CREATE TABLE IF NOT EXISTS nd_scan_jobs (id INT AUTO_INCREMENT PRIMARY KEY, subnet_id INT NOT NULL, started_at DATETIME DEFAULT CURRENT_TIMESTAMP, finished_at DATETIME DEFAULT NULL, status VARCHAR(20) DEFAULT 'running', hosts_found INT DEFAULT 0, rogue_count INT DEFAULT 0)",
       "CREATE TABLE IF NOT EXISTS nd_scan_results (id INT AUTO_INCREMENT PRIMARY KEY, job_id INT NOT NULL, ip VARCHAR(15) NOT NULL, mac VARCHAR(17), hostname VARCHAR(255), in_kea TINYINT(1) DEFAULT 0, rogue TINYINT(1) DEFAULT 0, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.2",
-    "sha256": "83ca68fb74e0fdfb5ee0cfe02e92bd7cec92a4148777700f6180a6bf2bd6d043",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.3",
+    "sha256": "778e0b3329d496e6fdf830c4d42a50c0ab263bc184f62129ce4ed8622674e276",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery"
   },
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.4.2",
+    "version": "1.4.3",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet — available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
     "requires_jen": "3.6.0",
@@ -63,8 +63,8 @@
       "ALTER TABLE ipam_static_entries ADD COLUMN IF NOT EXISTS entry_status VARCHAR(20) NULL AFTER is_static",
       "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.2",
-    "sha256": "8ec3dbad93f818f8e109ff87696ae7362feef7bc05dabc5f098bd31653f4ec2c",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.3",
+    "sha256": "a7cd774e4e1abc1f984878a54abbcb08b50bd4e317e888f3107456e9f7269bcc",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam"
   }
