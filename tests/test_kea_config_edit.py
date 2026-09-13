@@ -686,3 +686,106 @@ class TestSetDdns4:
         cfg, code = edit.set_ddns4({"Dhcp4": {}}, {"not-a-real-field": "x"})
         assert code == "ok"
         assert cfg["Dhcp4"] == {}
+
+
+def _sock(scheme="http", port=8004, **tls):
+    from jen.services.kea_authoring import build_control_socket
+
+    return build_control_socket(scheme, "10.0.0.5", port, "kea-api", "pw", tls=tls or None)
+
+
+class TestControlSocket:
+    """v5.29.0 (Q29) — Jen adds the daemon's own http/https API socket to
+    an EXISTING config (the author-from-blank flow already wrote one into
+    a NEW config; both now share kea_authoring.build_control_socket)."""
+
+    def test_singular_control_socket_becomes_a_list_keeping_the_unix_entry_in_place(self):
+        existing = {
+            "Dhcp4": {
+                "interfaces-config": {"interfaces": ["eth0"]},
+                "control-socket": {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
+                "lease-database": {"type": "mysql"},
+            }
+        }
+        cfg, code = edit.set_control_socket(existing, "dhcp4", _sock())
+        assert code == "ok"
+        section = cfg["Dhcp4"]
+        assert "control-socket" not in section
+        # same position in the daemon block — not moved to the end
+        assert list(section) == ["interfaces-config", "control-sockets", "lease-database"]
+        assert section["control-sockets"][0] == {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"}
+        assert section["control-sockets"][1] == _sock()
+
+    def test_existing_api_socket_is_replaced_not_duplicated(self):
+        existing = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/s"}, _sock(port=9000)]}}
+        cfg, code = edit.set_control_socket(existing, "dhcp4", _sock(port=8004))
+        assert code == "ok"
+        socks = cfg["Dhcp4"]["control-sockets"]
+        assert [s["socket-type"] for s in socks] == ["unix", "http"]
+        assert socks[1]["socket-port"] == 8004
+
+    def test_https_replaces_http_in_place(self):
+        existing = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/s"}, _sock()]}}
+        https = _sock(
+            "https", trust_anchor="/etc/kea/tls/dhcp4/ca.crt", cert_file="/c", key_file="/k", cert_required=True
+        )
+        cfg, code = edit.set_control_socket(existing, "dhcp4", https)
+        assert code == "ok"
+        assert cfg["Dhcp4"]["control-sockets"][1] == https
+        assert cfg["Dhcp4"]["control-sockets"][1]["cert-required"] is True
+
+    def test_identical_entry_is_nochange(self):
+        existing = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/s"}, _sock()]}}
+        cfg, code = edit.set_control_socket(existing, "dhcp4", _sock())
+        assert code == "nochange"
+        assert cfg == existing
+
+    def test_no_sockets_at_all_appends_a_list(self):
+        cfg, code = edit.set_control_socket({"Dhcp4": {"valid-lifetime": 3600}}, "dhcp4", _sock())
+        assert code == "ok"
+        assert cfg["Dhcp4"]["control-sockets"] == [_sock()]
+
+    def test_missing_daemon_block_is_unsupported(self):
+        cfg, code = edit.set_control_socket({"Dhcp6": {}}, "dhcp4", _sock())
+        assert code == "unsupported"
+        assert cfg == {"Dhcp6": {}}
+
+    def test_control_agent_style_map_is_unsupported(self):
+        """A Control Agent's `control-sockets` is a MAP keyed by service —
+        the wrong daemon's config must never be edited as if it were a
+        list (the exact file the 2026-09-13 dashboard bug pointed at)."""
+        ca = {"Dhcp4": {"control-sockets": {"dhcp4": {"socket-type": "unix", "socket-name": "/s"}}}}
+        cfg, code = edit.set_control_socket(ca, "dhcp4", _sock())
+        assert code == "unsupported"
+        assert cfg == ca
+
+    def test_dhcp6_and_d2_use_their_own_daemon_keys(self):
+        cfg6, code6 = edit.set_control_socket({"Dhcp6": {}}, "dhcp6", _sock(port=8006))
+        cfgd, coded = edit.set_control_socket({"DhcpDdns": {}}, "d2", _sock(port=53001))
+        assert code6 == "ok" and cfg6["Dhcp6"]["control-sockets"][0]["socket-port"] == 8006
+        assert coded == "ok" and cfgd["DhcpDdns"]["control-sockets"][0]["socket-port"] == 53001
+
+    def test_unknown_service_is_unsupported(self):
+        assert edit.set_control_socket({"Dhcp4": {}}, "ca", _sock())[1] == "unsupported"
+
+    def test_does_not_mutate_the_caller_dict(self):
+        original = {"Dhcp4": {"control-socket": {"socket-type": "unix", "socket-name": "/s"}}}
+        snapshot = copy.deepcopy(original)
+        edit.set_control_socket(original, "dhcp4", _sock())
+        assert original == snapshot
+
+    def test_remove_drops_only_the_api_socket_and_keeps_the_list_form(self):
+        existing = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/s"}, _sock()]}}
+        cfg, code = edit.remove_control_socket(existing, "dhcp4")
+        assert code == "ok"
+        assert cfg["Dhcp4"]["control-sockets"] == [{"socket-type": "unix", "socket-name": "/s"}]
+
+    def test_remove_with_nothing_to_remove_is_nochange(self):
+        singular = {"Dhcp4": {"control-socket": {"socket-type": "unix", "socket-name": "/s"}}}
+        assert edit.remove_control_socket(singular, "dhcp4")[1] == "nochange"
+        unix_only = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/s"}]}}
+        assert edit.remove_control_socket(unix_only, "dhcp4")[1] == "nochange"
+
+    def test_remove_unsupported_shapes(self):
+        assert edit.remove_control_socket({"Dhcp6": {}}, "dhcp4")[1] == "unsupported"
+        assert edit.remove_control_socket({"Dhcp4": {"control-sockets": {"dhcp4": {}}}}, "dhcp4")[1] == "unsupported"

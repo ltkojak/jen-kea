@@ -1578,3 +1578,57 @@ class TestAuthorKeaConfigPostRoute:
         assert resp.status_code == 200
         assert b"config test failed, nothing written" in resp.data
         assert b"bad interface" in resp.data
+
+
+class TestBuildControlSocket:
+    """v5.29.0 (Q29) — the socket entry the author-from-blank flow writes
+    is now built by one shared function, also used to add a socket to an
+    existing config. The authored output must be identical to what
+    v5.10.2–v5.28.x emitted, key order included (it's revision-recorded
+    and diffed verbatim)."""
+
+    def test_authored_http_socket_is_exactly_the_builder_output(self):
+        from jen.services.kea_authoring import build_control_socket, build_new_kea_config
+
+        lease_db = {"host": "h", "user": "u", "password": "p", "name": "kea"}
+        sock = {"scheme": "http", "address": "10.0.0.5", "port": "8004", "user": "kea-api", "password": "s3cret"}
+        cfg = build_new_kea_config("dhcp4", ["eth0"], lease_db, "/run/kea/kea4.sock", {}, api_socket=sock)
+        assert cfg["Dhcp4"]["control-sockets"][1] == build_control_socket(
+            "http", "10.0.0.5", "8004", "kea-api", "s3cret"
+        )
+        assert list(cfg["Dhcp4"]["control-sockets"][1]) == [
+            "socket-type",
+            "socket-address",
+            "socket-port",
+            "authentication",
+        ]
+
+    def test_https_key_order_matches_the_pre_refactor_shape(self):
+        from jen.services.kea_authoring import build_control_socket
+
+        tls = {"trust_anchor": "/etc/kea/tls/dhcp4/ca.crt", "cert_file": "/c", "key_file": "/k", "cert_required": 1}
+        entry = build_control_socket("https", "10.0.0.5", 8004, "u", "p", tls=tls)
+        assert list(entry) == [
+            "socket-type",
+            "socket-address",
+            "socket-port",
+            "authentication",
+            "trust-anchor",
+            "cert-file",
+            "key-file",
+            "cert-required",
+        ]
+        assert entry["cert-required"] is True  # normalised to a real bool, as before
+        assert entry["socket-port"] == 8004
+
+    def test_http_never_carries_tls_keys_even_if_given(self):
+        from jen.services.kea_authoring import build_control_socket
+
+        entry = build_control_socket("http", "10.0.0.5", 8004, "u", "p", tls={"trust_anchor": "x"})
+        assert "trust-anchor" not in entry and "cert-required" not in entry
+
+    def test_default_ports_per_daemon(self):
+        from jen.services.kea_authoring import DIRECT_SOCKET_DEFAULT_PORTS
+
+        assert DIRECT_SOCKET_DEFAULT_PORTS == {"dhcp4": 8004, "dhcp6": 8006, "d2": 53001}
+        assert 8000 not in DIRECT_SOCKET_DEFAULT_PORTS.values()  # the Control Agent's port, never a daemon default

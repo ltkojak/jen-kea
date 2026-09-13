@@ -514,3 +514,91 @@ def set_ddns4(cfg, values: dict):
         if k in values:
             dhcp4[k] = values[k]
     return cfg, "ok"
+
+
+# ── Direct control sockets (v5.29.0, Q29) ────────────────────────────────────
+
+_DAEMON_KEY = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6", "d2": "DhcpDdns"}
+_API_SOCKET_TYPES = ("http", "https")
+
+
+def _replace_key_in_place(section: dict, old: str, new: str, value) -> None:
+    """Swap `old` for `new` at the same position — a converted
+    `control-socket` → `control-sockets` shouldn't move to the end of the
+    daemon block and show up as a whole-file reorder in the revision diff."""
+    items = list(section.items())
+    section.clear()
+    for k, v in items:
+        if k == old:
+            section[new] = value
+        else:
+            section[k] = v
+
+
+def _control_sockets(section: dict) -> list | None:
+    """The daemon's `control-sockets` LIST, converting the singular
+    pre-2.7.2 `control-socket` map into a one-element list in place if
+    that's what the config has (Kea 2.7.2+ accepts the list form, and the
+    unix entry it held is kept verbatim). None when the shape is
+    something this code doesn't understand — e.g. a Control Agent's
+    `control-sockets`, which is a MAP keyed by service, not a list."""
+    if "control-sockets" in section:
+        lst = section["control-sockets"]
+        return lst if isinstance(lst, list) else None
+    if "control-socket" in section:
+        single = section["control-socket"]
+        if not isinstance(single, dict):
+            return None
+        _replace_key_in_place(section, "control-socket", "control-sockets", [single])
+        return section["control-sockets"]
+    section["control-sockets"] = []
+    return section["control-sockets"]
+
+
+def set_control_socket(cfg: dict, service: str, socket: dict):
+    """Add or replace the daemon's http/https API socket — `socket` is
+    what kea_authoring.build_control_socket() returns. The unix entry is
+    never touched (kea-shell and some hooks use it). A daemon has at most
+    one API socket, so an existing http/https entry is replaced in place
+    rather than appended beside. Returns (cfg, code): "ok", "nochange"
+    (identical entry already there), or "unsupported" (no `Dhcp4`/
+    `Dhcp6`/`DhcpDdns` block for `service`, or a `control-sockets` that
+    isn't the daemon list form)."""
+    cfg = copy.deepcopy(cfg)
+    key = _DAEMON_KEY.get(service)
+    section = cfg.get(key) if key else None
+    if not isinstance(section, dict):
+        return cfg, "unsupported"
+    sockets = _control_sockets(section)
+    if sockets is None:
+        return cfg, "unsupported"
+    for i, existing in enumerate(sockets):
+        if isinstance(existing, dict) and existing.get("socket-type") in _API_SOCKET_TYPES:
+            if existing == socket:
+                return cfg, "nochange"
+            sockets[i] = socket
+            return cfg, "ok"
+    sockets.append(socket)
+    return cfg, "ok"
+
+
+def remove_control_socket(cfg: dict, service: str):
+    """Drop the daemon's http/https API socket (the "switch back to the
+    Control Agent" path), keeping the unix entry and the list form.
+    Returns (cfg, code): "ok", "nochange" (there wasn't one), or
+    "unsupported" as set_control_socket."""
+    cfg = copy.deepcopy(cfg)
+    key = _DAEMON_KEY.get(service)
+    section = cfg.get(key) if key else None
+    if not isinstance(section, dict):
+        return cfg, "unsupported"
+    sockets = section.get("control-sockets")
+    if sockets is None:
+        return cfg, "nochange"
+    if not isinstance(sockets, list):
+        return cfg, "unsupported"
+    kept = [s for s in sockets if not (isinstance(s, dict) and s.get("socket-type") in _API_SOCKET_TYPES)]
+    if len(kept) == len(sockets):
+        return cfg, "nochange"
+    section["control-sockets"] = kept
+    return cfg, "ok"

@@ -277,6 +277,51 @@ def socket_port_from_url(url: str):
         return None
 
 
+# v5.29.0 (Q29) — the conventional per-daemon http control-socket ports:
+# ISC's own example uses 8004 for kea-dhcp4; Jen's docs use 8006 for
+# kea-dhcp6 and 53001 for kea-dhcp-ddns (the CA's own default is 8000,
+# which is exactly what a daemon socket must NOT collide with).
+DIRECT_SOCKET_DEFAULT_PORTS = {"dhcp4": 8004, "dhcp6": 8006, "d2": 53001}
+
+
+def build_control_socket(scheme: str, address: str, port, user: str, password: str, tls: dict | None = None) -> dict:
+    """The http/https entry of a daemon's `control-sockets` list — the ONE
+    shape Jen ever writes for it (v5.29.0, Q29: shared between the
+    author-from-blank flow below and kea_config_edit.set_control_socket,
+    which adds the same entry to an existing config). Key order is part
+    of the contract: the authored output is diffed and revision-recorded
+    verbatim, so it must not shift between the two callers.
+
+      scheme    "http" | "https"
+      address   IP literal the daemon binds (never 0.0.0.0 — the caller
+                refuses that; never a hostname — Kea binds an address)
+      port      int, or a string the caller already validated as one
+      user / password   the basic-auth client Jen will present
+      tls       https only: {trust_anchor, cert_file, key_file,
+                cert_required} — paths on the KEA host
+    """
+    entry = {
+        "socket-type": scheme,
+        "socket-address": address,
+        "socket-port": int(port),
+        "authentication": {
+            "type": "basic",
+            "realm": "kea",
+            "clients": [{"user": user, "password": password}],
+        },
+    }
+    if scheme == "https":
+        entry.update(
+            {
+                "trust-anchor": tls["trust_anchor"],
+                "cert-file": tls["cert_file"],
+                "key-file": tls["key_file"],
+                "cert-required": bool(tls["cert_required"]),
+            }
+        )
+    return entry
+
+
 def build_new_kea_config(
     service: str,
     interfaces: list,
@@ -333,30 +378,18 @@ def build_new_kea_config(
             )
 
     if api_socket:
-        entry = {
-            "socket-type": api_socket["scheme"],  # "http" | "https"
-            # socket-address is an operator-chosen IP (the bind-address
-            # picker in the authoring form, never a Jen-side default) —
-            # written into the Kea daemon's OWN config, not a bind Jen
-            # performs. See the authoring route + the form's warnings.
-            "socket-address": api_socket["address"],
-            "socket-port": int(api_socket["port"]),
-            "authentication": {
-                "type": "basic",
-                "realm": "kea",
-                "clients": [{"user": api_socket["user"], "password": api_socket["password"]}],
-            },
-        }
-        if api_socket["scheme"] == "https":
-            t = api_socket["tls"]
-            entry.update(
-                {
-                    "trust-anchor": t["trust_anchor"],
-                    "cert-file": t["cert_file"],
-                    "key-file": t["key_file"],
-                    "cert-required": bool(t["cert_required"]),
-                }
-            )
+        # socket-address is an operator-chosen IP (the bind-address
+        # picker in the authoring form, never a Jen-side default) —
+        # written into the Kea daemon's OWN config, not a bind Jen
+        # performs. See the authoring route + the form's warnings.
+        entry = build_control_socket(
+            api_socket["scheme"],
+            api_socket["address"],
+            api_socket["port"],
+            api_socket["user"],
+            api_socket["password"],
+            tls=api_socket["tls"] if api_socket["scheme"] == "https" else None,
+        )
         control = {
             "control-sockets": [
                 {"socket-type": "unix", "socket-name": control_socket_path},
