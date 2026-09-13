@@ -2,7 +2,7 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "description": "Scan your subnets for devices not in the Kea lease table. Finds every live host on an attached subnet (with MAC), flags devices Kea doesn't know, and alerts on new unknowns. Requires nmap on the Jen host.",
     "author": "Matthew Thibodeau",
     "requires_jen": "3.6.0",
@@ -31,15 +31,15 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_scan_results (id INT AUTO_INCREMENT PRIMARY KEY, job_id INT NOT NULL, ip VARCHAR(15) NOT NULL, mac VARCHAR(17), hostname VARCHAR(255), in_kea TINYINT(1) DEFAULT 0, rogue TINYINT(1) DEFAULT 0, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.5",
-    "sha256": "2295040d4ff45ce4f1b3da2a961c247324f6bbd31cb42862b0ff5cc705691c7e",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.6",
+    "sha256": "158ed4efc1c483b02a819f3ed0a3c57b82ffdf4a318278d2139c6ec689474759",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery"
   },
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.4.5",
+    "version": "1.4.6",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets. See every IP in each subnet — available, dynamic, reserved, planned, or statically noted. Track non-DHCP backend networks that Kea doesn't manage, with manual hostname/MAC per address. Add labels, owners, and notes to any address. Import from a Jen export, Netbox, or other CSV sources with a review step before anything is saved. Export to CSV. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.28.2",
@@ -123,8 +123,8 @@
         "sql": "UPDATE ipam_static_entries SET entry_status = CASE WHEN is_static=1 THEN 'static' ELSE 'available' END WHERE entry_status IS NULL"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.5",
-    "sha256": "2d5f6b9cccad00ce58053b7ad622325ce051646429179e839d01818382fe11bd",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.4.6",
+    "sha256": "14efde74e29a107ebeaa2c086297c5143af1043787aec10a6995d79a6476cce7",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam"
   }
