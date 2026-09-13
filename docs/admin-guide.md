@@ -120,12 +120,85 @@ All of these are optional and backward-compatible — an existing
 ISC **deprecated the Control Agent (`kea-ctrl-agent`) in Kea 3.0** and
 **removed it entirely in Kea 3.2**. Since Kea 2.7.2 each daemon
 (`kea-dhcp4`, `kea-dhcp6`, `kea-dhcp-ddns`) exposes its own HTTP/HTTPS
-command API through a `control-sockets` list. Set `connection_mode =
-direct` and point `api_url` at each daemon's socket — dhcp4 under `[kea]`,
-dhcp6 under `[kea6]` for the primary and `api6_url` per additional server
-(there is **no** fallback from v6 to the v4 URL in direct mode; a
-kea-dhcp4 daemon cannot answer DHCPv6 commands). ISC's example uses port
-**8004** for dhcp4; Jen's docs use **8006** for dhcp6.
+command API through a `control-sockets` list, and `connection_mode =
+direct` makes Jen talk to those sockets instead — dhcp4 under `[kea]`,
+dhcp6 under `[kea6]` for the primary and `api6_url` per additional
+server, D2 under `[d2]` / `api_d2_url` (there is **no** fallback from
+v6 or D2 to the v4 URL in direct mode; a kea-dhcp4 daemon cannot answer
+DHCPv6 commands). ISC's example uses port **8004** for dhcp4; Jen's
+docs use **8006** for dhcp6 and **53001** for D2.
+
+Two ways to get there. The first is the one to use.
+
+#### Let Jen do it — Settings → Kea → "Set up direct socket" (v5.29.0)
+
+Each daemon on each server has a **Set up direct socket** button: in
+the Control Plane card (kea-dhcp4 on server 1), the Kea6 card
+(kea-dhcp6), the D2 card (kea-dhcp-ddns), and under each additional
+server's row (its kea-dhcp4, and kea-dhcp6 when IPv6 is on). Fill in
+the form — it needs almost nothing:
+
+| Field | Default | Notes |
+|---|---|---|
+| Scheme | `https` when the host's helper is v4+, else `http` | https = mutual TLS with Jen's own CA, below. http = basic-auth in the clear; management network only. |
+| Bind address | the server's SSH host, when it's an IP | The IP the daemon listens on. Never `0.0.0.0`. Firewall the port to the Jen host. |
+| Port | 8004 / 8006 / 53001 | Never the Control Agent's `:8000`. |
+| API username / password | the pair Jen already uses for that server | Editable; blank keeps the defaults. |
+
+Jen then, on that one server: adds the entry to `control-sockets` in
+the daemon's config (the existing `unix` entry stays), validates the
+file with `kea-dhcpX -t`, writes it, restarts the daemon, **probes the
+new socket** — a `version-get`, then a `config-get` that must answer
+*as that daemon* (a Control Agent left listening on the same host
+answers `version-get` identically, which is exactly the trap this
+avoids) — and only then writes its own settings: the daemon's URL and
+credentials, `connection_mode = direct` for kea-dhcp4, and for https
+the CA and client certificate paths. If anything before the probe
+fails, the change set is reverted; if the probe fails, the socket stays
+in the Kea config (it's valid and harmless) and **nothing in Jen
+changes** — the message says exactly what didn't answer, and running
+the form again just re-probes. It needs an SSH host for the server and
+the Kea host helper (any version for http, **v4** for https), and Kea
+2.7.2 or newer.
+
+**https, and the Jen-managed Kea CA.** Choosing https makes Jen its
+own certificate authority for the Kea link: a private CA at
+`/etc/jen/ssl/kea-ca.crt` / `kea-ca.key` (EC P-256, 10 years, created
+the first time it's needed), a server certificate per daemon (5 years;
+SAN = the bind address and the SSH host) pushed to
+`/etc/kea/tls/<service>/{ca.crt,server.crt,server.key}` on the Kea
+host by the helper's `install-tls` op (owned `root:<daemon group>`,
+key mode `0640`), and one client certificate for Jen at
+`/etc/jen/ssl/jen-kea-client.pem` / `.key`. The socket is written with
+`cert-required: true` — the daemon accepts *only* Jen's certificate,
+which is the actual security here, not just an encrypted password. One
+CA serves every server; Health Center watches every certificate's
+expiry (warn at 90 days, fail at 14); **Rotate Kea CA** on the Control
+Plane card re-issues everything and re-pushes every server, all or
+nothing (it asks for your password again, and a push that fails part-
+way rolls the already-pushed servers back to the current CA). If you
+already run your own CA, Jen won't overwrite it — the `api_ca` field
+above stays yours and https is a by-hand setup (next section).
+
+**Several servers / HA.** Run the form per server. The connection
+mode is global, so after the first kea-dhcp4 switches Jen to direct
+mode the Dashboard cards of servers still on the Control Agent show
+the "answered as the Control Agent" error until you set theirs up
+too — Jen names them when it switches. Never point a socket at an HA
+peer port (see the notes below). **Switch back** (per daemon, shown in
+direct mode) removes the http/https entry, restarts the daemon,
+restores the remembered Control Agent URL for kea-dhcp4 and returns
+Jen to `ca` mode only once no server is still answering on its own
+socket.
+
+**Why not Let's Encrypt?** The Kea link needs *client* certificates
+(ACME issues server certificates only), and homelab management
+addresses are RFC 1918 IPs with no public name. A CA Jen owns issues
+both halves and can rotate them wholesale. See
+`docs/ARCHITECTURE.md` §3.12 for the tradeoff of the CA key living on
+the Jen host.
+
+#### By hand
 
 Always **keep the existing `unix` entry** in `control-sockets` alongside
 the new one (`kea-shell` and some hooks use it), and **firewall the
@@ -146,14 +219,12 @@ that answers as the wrong daemon in direct mode now returns a real
 error naming which daemon actually answered, shown as a banner on the
 Dashboard and Subnets pages; Settings → Kea → Probe identifies the
 same mismatch before you even switch modes. If you hit this, add a
-real `http`/`https` `control-sockets` entry as shown below (or use
-Settings → Kea → "Author a starting kea-dhcp4.conf" to generate one),
-not just a different port number.
+real `http`/`https` `control-sockets` entry as shown below — or let
+"Set up direct socket" do it — not just a different port number.
 
-#### Recommended — HTTPS on a management address, mutual TLS
-
-Bind the control API to a management IP (not `0.0.0.0`), use HTTPS, and
-require a client certificate. In `kea-dhcp4.conf`:
+**Recommended — HTTPS on a management address, mutual TLS.** Bind the
+control API to a management IP (not `0.0.0.0`), use HTTPS, and require
+a client certificate. In `kea-dhcp4.conf`:
 
 ```json
 "control-sockets": [
@@ -188,15 +259,14 @@ api_client_cert = /etc/jen/ssl/jen-kea-client.pem
 api_client_key  = /etc/jen/ssl/jen-kea-client.key
 ```
 
-#### Without a client certificate
+**Without a client certificate.** If you can't deploy a client cert to
+the Jen host, set `"cert-required": false` on the Kea socket —
+otherwise Kea demands a client certificate Jen can't present and the
+TLS handshake fails. Jen side: `api_ca` only (no `api_client_cert` /
+`api_client_key`). The connection is still encrypted and still
+firewalled to the Jen host; it just isn't mutual.
 
-If you can't deploy a client cert to the Jen host, set `"cert-required":
-false` on the Kea socket — otherwise Kea demands a client certificate
-Jen can't present and the TLS handshake fails. Jen side: `api_ca` only
-(no `api_client_cert` / `api_client_key`). The connection is still
-encrypted and still firewalled to the Jen host; it just isn't mutual.
-
-#### Plain HTTP
+**Plain HTTP.**
 
 > ⚠️ Basic-auth credentials are sent **in the clear** over an `http`
 > socket (ISC's own guidance). Bind to a management IP, **never
@@ -217,10 +287,9 @@ encrypted and still firewalled to the Jen host; it just isn't mutual.
 ]
 ```
 
-#### Making the certificates
-
-A minimal private CA — one CA, a server cert per Kea host (SAN = the
-management IP), one client cert for Jen:
+**Making the certificates yourself.** A minimal private CA — one CA, a
+server cert per Kea host (SAN = the management IP), one client cert for
+Jen:
 
 ```bash
 # CA
@@ -254,7 +323,9 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
   and whether `ca` or `direct` answered, with a recommendation. Pick the
   server and `dhcp4`/`dhcp6` to test with **that** server's own URL and
   credentials, or paste a specific URL into the box next to it to test a
-  candidate direct socket.
+  candidate direct socket. When it finds the Control Agent answering
+  where a daemon socket should be, its recommendation names the file
+  and key involved and points at "Set up direct socket".
 - For a **brand-new** Kea with no config yet, "Author a starting
   kea-dhcpX.conf" (Settings → Kea, superadmin) writes the `control-sockets`
   list for you when `connection_mode = direct`: it respects the endpoint

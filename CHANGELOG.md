@@ -2,6 +2,114 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.29.0] - 2026-09-13
+
+One of Jen's goals from the start has been that an operator should
+have to edit as few `.conf` files as possible — fill in the options,
+let the app fix the files. The one place that promise was still broken
+was the move off Kea's Control Agent: ISC deprecated it in 3.0 and
+removes it in 3.2, and switching to per-daemon control sockets meant
+hand-editing `control-sockets` in three config files, restarting three
+daemons, and — as the maintainer found on 2026-09-13 — a Probe
+recommendation that said *what* to add but not *where*. This release
+makes Jen do it, and gives the http-vs-https choice a real answer
+instead of a warning.
+
+### Jen sets up direct control sockets itself
+
+Settings → Kea gains a **Set up direct socket** button for each daemon
+on each server — kea-dhcp4 on the Control Plane card, kea-dhcp6 on the
+Kea6 card, kea-dhcp-ddns on the D2 card, and each additional server's
+own row. The form needs almost nothing (a bind address that defaults to
+the server's SSH host, a port that defaults to 8004/8006/53001, the
+credentials Jen already uses), and Jen does the rest on that one
+server: adds the entry to the daemon's `control-sockets` (the `unix`
+entry stays), validates with `-t`, writes, restarts, then **probes the
+new socket** — a `version-get` and then a `config-get` that must answer
+*as that daemon* — and only then writes its own settings: the URL,
+`connection_mode = direct` for kea-dhcp4, and for https the trust
+anchor and client certificate. A failed probe changes nothing in Jen
+and says exactly what didn't answer; running the form again just
+re-probes. The Control Agent answering on the same host, `0.0.0.0`, a
+hostname where an IP is needed, the agent's own port, and a Kea older
+than 2.7.2 are all refused before anything is touched. The whole
+change goes through the same multi-server change-set machinery every
+subnet edit uses (v5.28.0), so a `-t` failure reverts cleanly. A
+**Switch back** button per daemon reverses it: the entry is removed,
+the daemon restarted, the remembered Control Agent URL restored, and
+Jen returns to `ca` mode once no server is still on its own socket.
+
+The Probe recommendation the maintainer hit ("add an http control
+socket … conventionally :8004" — but where?) now names the file and
+the key — an `http` entry in the `control-sockets` list of
+`/etc/kea/kea-dhcp4.conf`, keeping the unix entry — and points at the
+button; the Dashboard's "answered as the Control Agent" error does the
+same.
+
+### https with a Jen-managed private CA — mutual TLS, not the appearance of it
+
+The security question behind "http vs https" for the Kea link is not
+encryption alone: a control socket that accepts any client holding the
+basic-auth password is exactly as strong as that password crossing the
+wire, and ISC's own guidance is that over `http` it crosses in the
+clear. Choosing **https** in the new form makes Jen a certificate
+authority for that link. A private CA is created on the Jen host the
+first time it's needed (`/etc/jen/ssl/kea-ca.crt` / `.key`, EC P-256,
+10 years); a 5-year server certificate is issued per daemon (SAN = the
+bind address and the SSH host) and pushed to
+`/etc/kea/tls/<service>/{ca.crt,server.crt,server.key}` on the Kea host
+through a new host-helper op, `install-tls` (helper protocol **v4** —
+the op writes exactly those three basenames under that fixed
+directory, owned `root:<daemon group>` with the key `0640`, refuses
+symlinks and anything not PEM-shaped, and has deliberately no
+legacy-path equivalent: certificate keys never travel in a generated
+root script); Jen's own client certificate goes to
+`/etc/jen/ssl/jen-kea-client.pem` / `.key`; and the socket is written
+with `cert-required: true`, so the daemon accepts *only* Jen. The
+material is pushed before the config that references it is applied,
+and the apply names the three files, so a missing one is a `tlsmissing`
+refusal rather than a daemon restarted into a config it can't load.
+One CA serves every server. Health Center gains a **Kea mTLS
+certificates** check (warn at 90 days, fail at 14 or expired, and fail
+outright if Jen's client certificate isn't signed by the current CA),
+and the Control Plane card shows the CA, its expiry, and every
+certificate issued, with a **Rotate Kea CA** button: superadmin, asks
+for your password again, and all-or-nothing — the new CA and client
+certificate are staged beside the live ones, every server is pushed,
+restarted and probed with the staged material, and only when all of
+them answer is the new CA adopted; a failure part-way re-issues the
+already-pushed servers from the still-current CA. The https option
+needs the v4 helper on that host (the SSH card's Update helper) and
+says so; http works with any helper version. An operator who already
+runs their own CA keeps it — Jen refuses to overwrite a CA bundle that
+isn't its own, and the by-hand https setup is unchanged.
+
+Why a private CA rather than Let's Encrypt, and the tradeoff of the CA
+key living on the Jen host (readable by the service user that already
+holds the SSH key pushing root-level config to every Kea host — no new
+capability, only persistence, which Rotate revokes), are recorded in
+`docs/ARCHITECTURE.md` §3.12.
+
+### Under the hood
+
+The control-socket entry the author-from-blank flow has written since
+v5.10.2 is now built by one shared function, `build_control_socket()`,
+used by both that flow and the new `set_control_socket()` /
+`remove_control_socket()` config mutations — one shape, key order
+included, verified byte-identical against the pre-refactor output. A
+singular pre-2.7.2 `control-socket` map is converted to the list form
+in place (same position in the daemon block; the unix entry kept
+verbatim), and a Control Agent's own `control-sockets` *map* is refused
+so the wrong daemon's file can never be edited as a list.
+`kea_changeset.apply_change()` accepts `tls_paths` and passes them to
+both the preflight and the commit. The atomic tmp+replace PEM writer
+the SSL upload used moved to `jen/services/certs.py` so the CA shares
+it. New tests: `test_settings_direct_socket.py` (the http flow, every
+refusal, switch-back, the https flow's ordering and material,
+Rotate's staging/promotion/rollback, the page's per-server gating),
+`test_kea_tls.py`, `test_kea_helper.py::TestInstallTls`,
+`test_kea_host.py::TestInstallTls`, and the Health check's bands.
+
 ## [5.28.2] - 2026-09-13
 
 Plugin cleanup, prompted by finally bringing the two plugin repos

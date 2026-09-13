@@ -480,6 +480,54 @@ control sockets" in the admin guide) and point `api_url` at that port
 instead — Settings → Kea → Probe now identifies this exact mismatch
 before you switch modes, so use it to confirm the fix.
 
+### "Set up direct socket": "… restarted with the new socket, but http://… didn't answer" / "answered as the Control Agent, not kea-dhcp4" (v5.29.0)
+
+The Kea side worked — the entry is in the daemon's config, `-t` passed,
+the daemon restarted — but the probe from the Jen host didn't get the
+daemon on the new socket, so Jen deliberately changed **none** of its
+own settings. "Didn't answer" almost always means the port isn't
+reachable *from the Jen host*: a firewall on the Kea host, or a bind
+address on a network the Jen host isn't on (the form's default is the
+SSH host, which is usually right). Check `ss -ltnp | grep 8004` on the
+Kea host and the daemon's log for `HTTP server … listening`, then run
+the form again — the socket is already there, so it only re-probes.
+"Answered as the Control Agent" means the address:port you chose is
+the agent's own listener (`:8000`), not a daemon socket; pick the
+daemon's port (8004 / 8006 / 53001).
+
+### "tlsmissing" / "config validation failed … /etc/kea/tls/…" during an https setup (v5.29.0)
+
+The apply carries the three TLS paths the socket references, and the
+helper refuses to even test a config whose files aren't on the host —
+so this means the `install-tls` push didn't land where the config
+points. Jen runs the push first and stops if it fails, so seeing this
+means something removed or moved `/etc/kea/tls/<service>/` between the
+two steps (or a hand-made socket points somewhere else). Re-run the
+form; the push is repeated every time.
+
+### "https setup needs jen-kea-helper v4+" (v5.29.0)
+
+The https option pushes certificate material through the helper's
+`install-tls` op, which arrived in v4 — a v3 host can still do
+everything else, including the http option. **Settings → Kea → SSH →
+Update helper** (the legacy `python3` grant must be present for that
+one run, as for every helper install), then the option enables itself.
+
+### "Rotate stopped at …" / "ROLLBACK FAILED on …" after Rotate Kea CA (v5.29.0)
+
+Rotate is all-or-nothing: the new CA is staged beside the live one,
+every server is pushed, restarted and probed with the new material,
+and only then does Jen switch to it. "Rotate stopped at *server*" means
+that server's push, restart or probe failed and the servers done
+before it were re-issued from the **current** CA and restarted — Jen
+still trusts the CA it did before, nothing else changed; fix the named
+server (usually the same reachability checks as above) and rotate
+again. "ROLLBACK FAILED on *server*" is the one mixed state: that
+server's re-issue itself failed, so it now holds a certificate from a
+CA Jen never adopted and won't answer Jen. Run **Set up direct socket**
+(https) for that daemon again — it re-issues from the current CA and
+re-pushes — and the server is back.
+
 ### A red "migration failed — not enabled" / "not loaded" chip on the Plugins page (v5.28.1)
 
 One of a plugin's own `db_migrations` failed to apply — a schema

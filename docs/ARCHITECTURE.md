@@ -901,6 +901,67 @@ server now refuses the write outright, with a plain "could not verify
 the current configuration — no changes were written" rather than
 guessing that nothing changed underneath it.
 
+### 3.12 The Jen-managed Kea CA: a CA private key on the Jen host (v5.29.0)
+
+Settings → Kea → "Set up direct socket" (https) makes Jen a certificate
+authority for the Kea control link: `jen/services/kea_tls.py` keeps a
+private CA at `/etc/jen/ssl/kea-ca.key` (EC P-256, 10 years), issues a
+5-year server certificate per (server, daemon) that the helper's
+`install-tls` op (§3.3, protocol v4) lands under `/etc/kea/tls/<service>/`,
+issues Jen's own client certificate, and writes the daemon's socket
+with `cert-required: true`. The daemon then accepts no client but Jen.
+That is the point: a control socket that accepts any client with the
+basic-auth password is exactly as strong as that password crossing
+the wire, and ISC's own guidance for `http` sockets is "in the clear".
+
+**The tradeoff (maintainer decision, 2026-09-13):** the CA's private
+key lives on the Jen host, readable by the Jen service user (written
+mode `0600` by that user; the key never leaves the host). A
+compromised service user can therefore mint a client certificate that
+every Kea daemon on Jen's CA accepts. Accepted because that same
+service user already holds the SSH key that pushes root-level
+configuration to every Kea host (§3.3) and the Kea API credentials
+themselves — minting a certificate adds no capability it doesn't
+have, only *persistence* beyond a credential change. The mitigation
+for persistence is **Rotate Kea CA**: a new CA and client certificate,
+new server certificates pushed to every host, after which nothing
+signed by the old CA is trusted anywhere. The alternative considered
+— a CSR flow where each Kea host generates its own key and Jen only
+signs — was rejected: the server key would ride the same SSH channel
+the whole config already does, so it gains nothing, while making a
+one-click setup a four-step one. Moving the *signing* behind the
+existing root request/execute split (§3.1's pattern) so the CA key is
+root-only and the service user can only request a certificate is the
+noted future hardening; it is not built.
+
+**Two rules the flow makes true.** (1) *Probe, then commit.* Jen writes
+its own configuration (URL, mode, trust anchor, client certificate)
+only after the new socket has answered a `version-get` **and** a
+`config-get` that identifies as the intended daemon — a Control Agent
+still listening on the same host answers `version-get` identically,
+which is the 2026-09-13 dashboard-blank trap (§3.11's D1) that this
+path cannot reproduce. The probe uses the CA and client certificate
+Jen has *not* adopted yet (explicit `verify`/`cert` overrides on the
+probe), so a failed probe leaves Jen's settings exactly as they were.
+(2) *Material before reference.* `install-tls` runs before the config
+that references the files is applied, and the apply carries the three
+paths as `tls_paths`, so a missing file is a `tlsmissing` preflight
+refusal, never a daemon restarted into a config it can't load. Rotate
+is staged the same way: new CA and client certificate written beside
+the live ones as `.next`, every server pushed, restarted and probed
+with the staged material, promotion only when all of them answer; a
+failure part-way re-issues the already-pushed servers from the still-
+live old CA. Jen never sets `api_tls_verify = false` through this
+path, and never overwrites an `api_ca` that isn't its own — an
+operator who brought their own CA keeps it and configures https by
+hand, as before.
+
+**Why not Let's Encrypt.** ACME issues server certificates for names
+it can validate; the Kea link needs *client* certificates, and homelab
+management addresses are RFC 1918 IPs with no public name. Let's
+Encrypt for Jen's own web UI is a separate, legitimate feature and
+unrelated to this.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:
