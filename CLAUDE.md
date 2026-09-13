@@ -185,6 +185,11 @@ warning and recording a null status. Config mutation is pure (`jen/services/kea_
   (`valid_remote_path()`, `valid_ssh_target()`, `valid_unix_username()` in
   `jen/services/auth.py`) **and** `shlex.quote`d at the call site. Local `subprocess`
   calls are always list-args.
+- **Pushing one config edit to every SSH-configured Kea server goes through
+  `jen/services/kea_changeset.py::apply_change()`** (v5.28.0) — plan/preflight every
+  target before the first write, commit sequentially, revert already-committed targets
+  if a later one fails. Do not write a new per-route read/mutate/apply/restart loop;
+  every subnet/shared-network/option/class/DDNS/D2 route already goes through it.
 
 ### Access control
 
@@ -217,7 +222,11 @@ attacker-influenced (URL path segment) — always run it through `valid_plugin_i
 before building a filesystem path. Plugin schema changes use `db_migrations` in the
 manifest, tracked per-plugin in `plugin_schema_migrations`, same append-only discipline
 as core migrations. Bundled: `plugins/ipam`, `plugins/network-discovery` (both IPv4-only
-by design).
+by design). On a systemd host, install/remove is a request/confirm split (v5.28.0):
+the route only queues a marker for a root-privileged service to act on, and
+`consume_plugin_results()` is what actually applies the DB row/audit/`restart_pending`
+state — called from both the page render and the status poller — once that service's
+own result file confirms the root side finished.
 
 ### Frontend
 

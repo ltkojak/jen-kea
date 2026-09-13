@@ -6,7 +6,7 @@
 
 A full-featured web-based management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built with Python and Flask. Jen provides a comprehensive UI for managing DHCP leases, reservations, subnets, and infrastructure — accessible from any browser including mobile and iPad.
 
-[![Version](https://img.shields.io/badge/Version-5.27.0-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
+[![Version](https://img.shields.io/badge/Version-5.28.0-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
@@ -53,7 +53,9 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 ### Subnet Management
 - Edit pool ranges, lease times, gateway, and DNS directly from the UI
 - Changes applied via SSH to Kea with config validation before restart
-- Auto-backup before every change with rollback on failure
+- Every change is validated (`kea-dhcp4 -t`) and backed up on the host
+  before it's written; a multi-server change is pre-flighted on every
+  server before the first write and reverted if a later server refuses it
 - Gateway and DNS visible on subnet cards
 - Shared networks: subnets grouped by network, create/delete a network,
   move a subnet in or out (v5.15.0)
@@ -146,9 +148,13 @@ process reaches out to each Kea box over three channels:
 | **Kea database (MySQL/MariaDB)** | Lease and reservation data, written only through the same tables/commands Kea's own tooling uses (mostly the `host_cmds` hook, never raw schema changes) | Jen ↔ Kea DB |
 | **SSH** | Applying subnet/pool edits to `kea-dhcp*.conf`, validating the new config, restarting the service, reading logs | Jen → Kea host |
 
-Every config change is validated against Kea before the service is
-restarted, with an automatic backup and rollback on failure. Jen never
-modifies Kea's database schema — only its data.
+Every config change is validated against Kea before it is written,
+backed up on the host, and recorded in Jen's config history (Servers →
+Config history) so any change can be restored. A multi-server change
+is pre-flighted everywhere before the first write and reverted if a
+later server refuses it; a service that won't restart is reported, not
+silently retried. Jen never modifies Kea's database schema — only its
+data.
 
 The tradeoff: this is deliberately built for a homelab-to-small-business
 operator running a handful of servers, not a fleet. See
@@ -173,7 +179,7 @@ threat model.
 ### Guided Installer (recommended)
 
 ```bash
-tar xzf jen-v5.27.0.tar.gz
+tar xzf jen-v5.28.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -226,7 +232,7 @@ Open `http://your-server:5050` and sign in as **`admin`**.
 ## Upgrading
 
 ```bash
-tar xzf jen-v5.27.0.tar.gz
+tar xzf jen-v5.28.0.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -258,7 +264,7 @@ opposite directions.
 |---|---|---|
 | Architecture | Agentless — one process connects out to each server | Agent (`stork-agent`) on every managed server |
 | Primary focus | Day-to-day **management**: edit subnets/pools/reservations, manage leases and devices | **Monitoring** and metrics, with configuration editing added more recently |
-| Config changes | Validated SSH push to `kea-dhcp*.conf`, backup + rollback | Kea config-management API |
+| Config changes | Validated SSH push to `kea-dhcp*.conf`, host-side backup, pre-flight across servers, config-history restore | Kea config-management API |
 | Scale target | Homelab to small business, a handful of servers | Small to large fleets |
 | Access control | Three roles + per-subnet scoping, built-in MFA (TOTP) | RBAC; auth via LDAP or local |
 | Database | MySQL / MariaDB | PostgreSQL |

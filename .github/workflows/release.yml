@@ -13,6 +13,8 @@ on:
 jobs:
   test:
     uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
 
   release:
     needs: test

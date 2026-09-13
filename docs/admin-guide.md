@@ -545,6 +545,18 @@ On the **Subnets** page (admin, SSH configured):
 Renaming a network isn't supported (Kea has none either) — delete the
 empty network and create it under the new name.
 
+**What happens when one of several Kea servers refuses a change
+(v5.28.0).** Adding, deleting, or editing a subnet pushes to every
+SSH-configured Kea server. Every server is validated (`kea-dhcp4 -t`)
+before any of them is actually written; if one refuses (a stale
+concurrency check, a config-test failure), nothing is written to
+*any* server, and if a later server fails after an earlier one already
+committed, that earlier write is reverted back to what it was —
+never "server A has the new subnet, server B doesn't." A restart
+failure after a successful write is reported per-server instead
+("restart Kea manually") since the config on disk is already valid at
+that point.
+
 ---
 
 ## DHCP Options (v5.18.0)
@@ -850,6 +862,8 @@ Select **Keep existing config** when prompted. The installer builds the new rele
 Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`), are never modified during an upgrade. Each release's application tree and its own virtualenv are root-owned and read-only to the service account.
 
 **v5.27.0 changes how a new plugin install lands.** Installing or reinstalling a plugin from Settings → Plugins no longer writes its files directly — Jen asks a dedicated root-privileged service to fetch, verify, and place them, and the result lands read-only under `/opt/jen/plugins-installed/`, the same way a Jen release itself is root-owned. A plugin installed before v5.27.0 still works from its old, Jen-writable location (`/var/lib/jen/plugins/`); the Plugins page marks it "writable — reinstall to harden" with a one-click Reinstall button that moves it to the new location. Nothing about enabling, disabling, or a plugin's own database tables changes.
+
+**v5.28.0 makes the page wait for the root side to actually finish.** A root-owned install/remove used to record success (and, for an install, offer Enable) the moment the request was queued — a request that then failed root-side still looked done everywhere except a result file nobody read. The page now only shows an install as recorded, and only offers Enable, once the root service's own result file confirms it; a failure flashes the real reason (e.g. a version requirement the running Jen doesn't meet) instead of silently doing nothing.
 
 **v5.14.0 introduces the versioned layout.** The first upgrade to 5.14.0 must be run with `sudo ./install.sh` — the in-app update button cannot make the jump (the box has no `current` symlink yet, so the new unit can't start, and the in-app attempt rolls back cleanly to your current version). Every in-app update from 5.14.0 onward is the atomic-symlink path. The 5.14.0 install also removes the now-unused flat `/opt/jen/{jen,run.py,templates,static,plugins,venv}` once the versioned layout is live.
 
@@ -1206,7 +1220,7 @@ zone "0.0.10.in-addr.arpa" {
 In Jen's D2 Configuration tab:
 
 1. **TSIG Keys** → Add: name `d2-key`, algorithm `hmac-sha256` (must match what `tsig-keygen` used), paste the same base64 secret. The secret is write-only — Jen never re-displays it after saving, the same way an API key or database password never is.
-2. **Forward Domains** → Add: zone `lan.example.com.` (note the trailing dot — Kea's own convention, and Jen requires it), key `d2-key`, DNS servers `10.0.0.1:53` (one `ip[:port]` per line — port defaults to 53 if omitted).
+2. **Forward Domains** → Add: zone `lan.example.com.` (note the trailing dot — Kea's own convention, and Jen requires it), key `d2-key`, DNS servers `10.0.0.1:53` (one `ip[:port]` per line — port defaults to 53 if omitted; an IPv6 server needs brackets around the address, `[2001:db8::53]:53`, since a bare IPv6 address can itself end in a colon plus digits — Jen never guesses which trailing digits are a port).
 3. **Reverse Domains** → Add: zone `0.0.10.in-addr.arpa.`. Jen suggests this name next to the field for any subnet whose CIDR is a classful `/8`, `/16`, or `/24` — a classless `/25`–`/30` subnet needs its own RFC 2317 delegated zone name, which Jen can't safely guess and doesn't attempt to.
 
 Each Add/Remove pushes to every SSH-configured server, guarded by that server's own current config hash (a stale read elsewhere can't silently overwrite a change made in between), tests the result with `kea-dhcp-ddns -t` before writing, and restarts D2 — exactly the same lifecycle as every other Kea config edit in Jen.
@@ -1302,12 +1316,10 @@ an HA pair, sync the change to the standby the way you already do for any
 other config change — the wizard doesn't know about your HA relationship
 and won't push to a partner on its own.
 
-**Try it against a lab Kea instance first.** The parser's option-value
-decoding (in particular the classless static route bytes, which Windows
-encodes per RFC 3442) has been verified against a hand-built synthetic
-export, not a real `Export-DhcpServer` run — a scope using an option Jen
-hasn't seen before is the likeliest place for a mismatch. Reviewing the
-diff before you apply is exactly for catching that.
+**Validated against a real `Export-DhcpServer` file** (two scopes, 57
+reservations, per-reservation options). Exclusions, superscopes,
+policies and options 121/249 are still only exercised by a
+hand-authored fixture — read the preview diff before you apply.
 
 ---
 
@@ -1405,6 +1417,16 @@ stays Jen-managed either way; nothing about SSO touches it.
   users; Jen's MFA enrollment page shows "managed by your identity
   provider" instead of offering to enroll a factor Jen would never
   actually check.
+- **Confirming your identity for sensitive actions (v5.28.0).** A
+  handful of routes (MFA management, a masked config-history download)
+  require a "recent" login and bounce you to a confirmation step
+  otherwise. For a local account that's a password (and TOTP/backup
+  code, if enrolled) re-entry; an SSO-managed account has no usable
+  local password to enter, so it's sent through a fresh sign-on round
+  trip with your IdP instead (`prompt=login`, so the IdP can't just
+  silently re-assert an existing session) — confirming the SAME
+  identity is still behind the keyboard without ever re-running role
+  mapping or creating a new session.
 - **Deleting** an SSO-managed account works the same as any other.
 
 ### The local login form

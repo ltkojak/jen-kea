@@ -277,6 +277,14 @@ Real second-newest entry.
         assert "<script>alert(1)</script>" not in html_out
         assert "&lt;script&gt;" in html_out
 
+    def test_real_changelog_has_a_5_23_0_entry(self):
+        """v5.28.0 (Q24, E2) — regression guard: 5.23.0's own text used
+        to start mid-paragraph inside the 5.24.0 section with no
+        `## [5.23.0]` heading of its own, so parse_changelog() silently
+        dropped it as a release entry entirely."""
+        releases = parse_changelog(limit=10)
+        assert "5.23.0" in [r["version"] for r in releases]
+
 
 class TestAboutPageChangelogSection:
     """No existing test coverage exercised /about at all before this

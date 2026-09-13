@@ -325,6 +325,21 @@ commands against D2's own config file.
   the next read — is also recorded in `kea_config_revisions` (jen_db,
   migration 20, extended by migration 21) as a diffable, restorable
   revision; see the admin guide.
+- **The v1/legacy compare now runs BEFORE the write, not after
+  (v5.28.0).** Through v5.27.x, `read_config_versioned()` returned
+  `sha=None` for a v1/legacy host, so every caller's `expect_sha256`
+  guard was silently a no-op — and on the rare caller that *did* wire
+  up its own compare, the check ran against the helper's response
+  **after** `apply-config` had already overwritten the file. Every
+  caller now goes through one `_jen_side_conflict()` guard that runs
+  first: it re-reads the live config and compares
+  `"canonical:" + sha256(canonical(cfg))` — a sentinel standing in for
+  "no raw sha available" — against the same sentinel computed when the
+  config was first read for this request. A mismatch refuses the write
+  with `code="conflict"` before anything is sent to the helper; the
+  sentinel itself is stripped back to `None` before the real
+  `apply-config` payload goes out, so a v2 helper never mistakes it for
+  a raw-sha comparison.
 
 **A hash always says what it hashes (v5.20.0 — `hash_kind`).**
 `kea_config_revisions.sha256` has always held one of two genuinely
@@ -360,8 +375,14 @@ pipes it over SSH into `sudo python3`, and runs it as root. That
 requires the old `NOPASSWD: /usr/bin/python3` grant — which **is root,
 full stop**: a compromised `www-data` on the Jen host is root on every
 such Kea box. Jen shows an admin banner naming every server still on
-this path, and flashes a warning on each use. The fallback is kept for
-compatibility and **is not removed anywhere in the 5.x line** —
+this path, and flashes a warning on each use. **Success is now read
+from the remote command's real exit status (v5.28.0), not sniffed from
+stdout text** — `paramiko`'s `recv_exit_status()` is read after stdout/
+stderr, since it blocks until the channel closes; before this, e.g.
+`service_action`'s legacy path ran `systemctl restart ... || systemctl
+restart ...; echo done` and treated the unconditional trailing token as
+proof of success even when both attempts had failed. The fallback is
+kept for compatibility and **is not removed anywhere in the 5.x line** —
 removing it would break a clean upgrade for anyone still relying on it,
 which is the MAJOR trigger. `CLAUDE.md` rule 9 still applies: any new
 Kea-side capability is a new helper op **and** a documented change to
@@ -498,6 +519,11 @@ source of truth again, updated by hand in the same commit that pins a
 new tag and its checksum — see `plugins/README.md` for the release
 checklist.
 
+The registry record and its `sha256` share the same GitHub trust root
+as §3.9's release signing — the checksum binds the downloaded package
+to what `registry.json` says it should be, not to an authority
+independent of this repository.
+
 ### 3.8 Content-Security-Policy: nonce-based script-src, `style-src` keeps `'unsafe-inline'` (v5.22.0)
 
 Through v5.21.x, `Content-Security-Policy` allowed `'unsafe-inline'` for
@@ -599,6 +625,17 @@ secret is switched to the new private key, then removing the old line
 one release after that, so there's always at least one release where
 both the old and new key verify.
 
+**What this does and doesn't protect against.** The signing key is a
+GitHub Actions secret, so the trust root is "this repository's Actions
+environment", not an offline key: it defeats anyone who can replace
+release assets or `SHA256SUMS` WITHOUT that secret (a leaked PAT, a
+hijacked asset upload) and does not defeat a compromise of the
+workflow/signing environment itself (a malicious `release.yml` change
+on `main` followed by a tag, or GitHub's own Actions infrastructure).
+Independent/offline signing, HSM-backed keys, GitHub Environment
+approval on the release job, and separately signed plugin manifests are
+roadmap, not shipped.
+
 ### 3.10 Root-owned plugin installs (v5.27.0)
 
 §3.7 covers what's verified about a plugin package — a tag-pinned
@@ -636,10 +673,34 @@ behavior, unchanged). Instead:
    it can't import the `jen` package — then lands the verified files at
    `/opt/jen/plugins-installed/<id>`, `root:root`, mode `a+rX,go-w`:
    readable and executable by `www-data`, writable by nothing but root.
-3. It writes a one-line `<plugin_id>.result` (`ok` or `error: <reason>`)
-   back into the same request directory for the page to show, and
-   deletes the marker. It never touches the database either way, same
-   as the in-process path it replaces.
+3. It writes a one-line `<plugin_id>.<action>.result` (`ok` or
+   `error: <reason>`) back into the same request directory for the page
+   to show, and deletes the marker. It never touches the database
+   either way, same as the in-process path it replaces.
+
+**QUEUED → CONFIRMED, not "queued counts as done" (v5.28.0).** Through
+v5.27.0, `install_plugin()`/`uninstall_plugin()` wrote the `plugins`
+table row, set `restart_pending`, and audited the action **before**
+the root side had actually run — a request that failed root-side still
+looked like a success everywhere except the (never-shown) result file.
+`consume_plugin_results()` (`jen/services/plugins.py`) is now the only
+thing that applies that state, and only once a `.result` file proves
+the root side finished: it's called both from `plugins_page()`'s own
+render and from the `install_status` poll route, so a result is picked
+up on the very next page load even if the operator closed the tab
+before the poller ever ran. `jen-update-root.py`'s own request loop is
+symlink-safe end to end (the actual finding this rollup exists for): a
+`www-data`-writable request directory being swapped for a symlink, or
+one request being pre-created as a symlink to an arbitrary file, is
+refused/unlinked-not-followed rather than giving root a path to
+truncate or overwrite; a plugin swap renames the old live directory
+aside before renaming staging into place, so a crash mid-swap leaves
+either the old or the new copy fully intact, never a half-deleted
+directory; and because a oneshot unit ignores a second `systemctl
+start` while already running, the request loop drains markers in a
+pass-until-stable loop instead of processing one batch and exiting, so
+a request written while the run is already in flight is still picked
+up in the same invocation.
 
 `discover_plugins()` gained a third scan tier between the bundled tree
 and the legacy writable one (§6.1) for this: `extensions.PLUGIN_DIR_ROOT`.
@@ -647,7 +708,9 @@ A plugin can transiently exist in both the legacy writable location and
 the new root-owned one (mid-migration, or a box that installed before
 v5.27.0) — the writable copy still wins in that case, and the root
 install's own final step deletes the writable copy once it lands,
-so steady state converges on exactly one copy per plugin.
+so steady state converges on exactly one copy per plugin. `_plugin_dir()`
+now searches the root-owned tree too (v5.28.0 fix — it didn't, so
+Enable/Disable was a silent no-op for any plugin installed this way).
 
 **Why not fold this into `jen-update.service` itself:** that unit's
 entire contract is "no arguments, re-derive the Jen release to install."
@@ -658,6 +721,57 @@ on — or inventing some other side channel for the same information,
 which is just this marker-file design with extra steps. A second
 fixed-argv unit keeps each privileged entry point doing exactly one
 thing.
+
+### 3.11 Multi-server change sets (v5.28.0)
+
+Every route that pushes one config edit to more than one Kea server
+(add/delete/edit a subnet, a shared network, DHCP options, client
+classes, DDNS naming, D2 domains/keys) used to run the same
+read → mutate → apply → restart loop independently per server, with no
+knowledge of whether an earlier server in the loop had already
+committed. A validation failure on server B left server A's write in
+place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
+`apply_change()` is now the one place this logic lives, in four phases:
+
+1. **Plan** — read and mutate every SSH-configured server's config in
+   memory. A "skip" outcome (e.g. "already applied there") is recorded
+   as informational and that server drops out; any other non-"ok"
+   outcome aborts the whole change set here, before anything is
+   written anywhere.
+2. **Preflight** — `test_config()` every remaining target. Any failure
+   aborts the whole set, still before any real write.
+3. **Commit** — `apply_config()` each target in order. If one fails
+   (most commonly a concurrency conflict caught only at write time,
+   since a sha check is inherently a write-time guarantee, not
+   something preflight can prove in advance), every already-committed
+   target is reverted, in reverse order, back to what `read_config_versioned()`
+   saw for it in the Plan phase. A revert that itself fails is reported
+   as `rollback_failed` — a mixed state needing hand intervention
+   (Servers → Config history → restore) — rather than silently retried
+   or hidden.
+4. **Restart** — attempted for every committed target regardless of
+   whether another target's restart already failed; a failed restart
+   is reported per-server, never silently retried, and never reverts
+   the (already-valid, already-committed) config.
+
+**What this does NOT cover.** `jen/services/settings/authoring.py`'s
+author-from-blank loops (a different flow: generating a brand-new
+config per server, not editing an existing one), `install_kea_binary`/
+`check_kea_binaries`, HA actions, and the Windows import wizard (which
+has its own single-primary-server preview==apply guarantee — see the
+wizard's own code) are unchanged by this module.
+
+**Why a restart failure doesn't revert.** The config on disk is valid
+(it passed preflight and the write succeeded) — reverting it because
+the *service* didn't restart would throw away a good config over an
+unrelated systemd/service problem the operator needs to fix directly,
+not a reason to distrust the config itself. Jen's own bookkeeping
+(`SUBNET_MAP`, the audit log) is written only when nothing was left
+half-applied — `status` is `"ok"`, `"nothing"` (every target was a
+no-op skip), or `"noservers"` (nothing SSH-reachable to push to); an
+`"aborted"` or `"rollback_failed"` status leaves Jen's own metadata
+untouched, matching whatever actually ended up on the Kea servers
+themselves.
 
 ## 4. CI/CD verification
 

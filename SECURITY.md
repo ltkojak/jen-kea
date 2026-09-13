@@ -66,6 +66,16 @@ Out of scope:
 - Findings from automated scanners without a demonstrated, concrete
   impact — see the note below
 
+### Release and plugin integrity
+
+Releases are signed and plugin packages are checksum-verified (see
+`docs/ARCHITECTURE.md` §3.9 and §3.7), but the trust root for both is
+this repository's own GitHub Actions environment — a leaked deploy
+credential or a hijacked asset upload is defeated, a compromise of the
+signing workflow or GitHub's own infrastructure is not. Report the
+latter as a vulnerability in Jen; it's the boundary we'd want to know
+about.
+
 ## A note on how this project is actually audited
 
 Jen doesn't have a professional external pentest the way a funded

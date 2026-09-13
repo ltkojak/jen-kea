@@ -33,8 +33,8 @@
 </div>
 
 <div class="alert alert-warning">
-    ⚠️ The option-value decoding here (especially classless static routes, option 121) has been verified
-    against Microsoft's documented export format, not against a real <code>Export-DhcpServer</code> run.
-    Run this against a lab Kea instance first, and read the preview diff carefully before you apply.
+    ⚠️ Validated against a real <code>Export-DhcpServer</code> file (two scopes, 57 reservations,
+    per-reservation options). Exclusions, superscopes, policies and options 121/249 are still only
+    exercised by a hand-authored fixture — read the preview diff before you apply.
 </div>
 {% endblock %}

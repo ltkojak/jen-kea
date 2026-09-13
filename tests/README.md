@@ -29,7 +29,8 @@ python3 -m pytest tests/test_auth.py::TestLogin::test_login_success -v
 
 **Local dev on Windows:** the DB-backed suite and the Docker build only
 run on CI. Locally you get `ruff check/format`, `py_compile`, and the
-handful of no-DB source-scanning tests. See `PENDING.md` for the gotchas.
+handful of no-DB source-scanning tests. See the *Local verification
+(Windows dev box)* section of `CLAUDE.md` for the gotchas.
 
 ## How it works
 

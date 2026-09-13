@@ -2,6 +2,146 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.28.0] - 2026-09-13
+
+Audit rollup 3 — the stabilization pass before a feature freeze. Source:
+ChatGPT's independent review of v5.27.0 plus one finding of our own that
+turned out to be the most serious item here.
+
+### A root-owned request writing its own result file, as root, by path
+
+`jen-update-root.py`'s plugin-request processor (v5.27.0) wrote its
+`<id>.result` file as root into `/var/lib/jen/plugin-requests/` — a
+directory `www-data` owns. A compromised web process could pre-create
+that result path as a symlink to anywhere on the box, or replace the
+whole requests directory with one, and have root follow it on the next
+plugin install/remove — truncating or overwriting an arbitrary file.
+Fixed with `os.lstat`/`stat.S_ISDIR`/`stat.S_ISREG` checks before
+trusting any path in that directory, and `O_CREAT | O_EXCL | O_NOFOLLOW`
+for the result write itself, so root never follows a symlink planted
+there. A directory named like a marker is left alone rather than
+processed or deleted; a symlinked marker is unlinked, never followed.
+
+### Plugin lifecycle: "queued" no longer means "done"
+
+Installing or removing a plugin used to record the database row, set
+`restart_pending`, and audit the action the moment the request was
+*queued* — before the root-privileged service had actually run it. A
+request that then failed root-side still looked like a success
+everywhere except a result file nobody read, and — worse — a plugin
+installed through the v5.27.0 root path could never actually be
+enabled, because `_plugin_dir()` never looked in the root-owned
+directory `enable_plugin()` needed to find it in. Both are fixed:
+`consume_plugin_results()` is now the only thing that applies install/
+remove state, called from both the page render and the status poller,
+and only once a `.result` file (renamed `<id>.<action>.result`, so
+install and remove can't collide) confirms the root side finished. The
+plugin-install trigger's own failure is now checked and surfaced
+("Could not start the plugin install service — run `sudo ./install.sh`
+to repair jen-sudoers and jen-plugin-install.service") instead of
+silently assumed to have worked. A plugin's own `requires_jen` version
+requirement is now enforced on the root side too, and the plugin
+directory swap during an install is crash-safe (rename-old-aside,
+rename-staging-in, delete-old — never delete-then-create), with a
+startup sweep for `.staging-`/`.old-` leftovers from an earlier crash.
+
+### The legacy Kea-host engine trusted stdout, not the exit code
+
+A host still on the pre-5.11.0 `sudo python3` fallback determined
+success or failure by pattern-matching the remote script's stdout — and
+`service_action`'s restart path appended an unconditional trailing
+token after `cmd1 || cmd2`, so it printed "done" whether or not systemd
+actually restarted Kea. Every legacy call site now reads the real SSH
+exit status (read after stdout/stderr, since `paramiko` blocks on it
+until the channel closes) and trusts stdout only when that status is 0.
+Separately, a v1/legacy host's optimistic-concurrency check ran, when
+it ran at all, **after** the write had already gone out — a stale-config
+guard that closed the barn door after the horse left. Every caller now
+goes through one pre-write `_jen_side_conflict()` check that compares a
+canonical-hash sentinel before anything is sent to the helper.
+
+### Multi-server config pushes are now all-or-nothing
+
+Every route that edits a subnet, shared network, DHCP option, client
+class, or DDNS/D2 setting used to push to each SSH-configured Kea
+server independently — read, mutate, apply, restart, one server at a
+time, with no idea whether an earlier server in the same request had
+already committed. A validation failure or concurrency conflict on
+server B left server A's write in place, sometimes with Jen's own
+`SUBNET_MAP` recording a change that didn't actually land everywhere.
+`jen/services/kea_changeset.py` is now the one place this logic lives:
+every target is preflighted (`kea-dhcp4 -t`) before the first real
+write, targets are committed in order, and if one fails, every
+already-committed target is reverted back to what it was — a revert
+that itself fails is reported as "🛑 ROLLBACK FAILED" rather than
+hidden. A restart failure is reported per-server and never reverts an
+already-valid config. The Windows DHCP import wizard's Apply step now
+reuses this same discipline in miniature: it pushes exactly the config
+Preview already tested, and refuses if the live config moved since or
+Preview never actually passed.
+
+### The Windows DHCP importer, against a real export
+
+The v5.24.0 importer was validated only against a hand-authored fixture
+built from Microsoft's documented export shape — every field as an XML
+*attribute*. A real `Export-DhcpServer` file puts every field in a
+*child element* instead, so the shipped parser read nothing from one:
+zero scopes, every reservation skipped, an empty preview, and a 500 on
+the review page. A maintainer-supplied real export (sanitized into
+`tests/fixtures/windows-dhcp-export-real.xml`) exposed all of this, plus
+several real-world shapes the synthetic fixture never exercised:
+reservation `Type="Both"` (Windows' own default, "DHCP and BOOTP" — Kea
+only speaks DHCP, so it's just a reservation) was being silently
+skipped; a reservation's own per-reservation DNS-server override wasn't
+read at all; options 51/58/59 (lease/renewal/rebind timers) were being
+written as plain `option-data` instead of the subnet's actual lease
+timers; option 81 (client FQDN flags) isn't option-data at all — it's
+DDNS behavior; and a vendor/user-class-scoped option value needs a Kea
+client class, not a plain value. All fixed, plus a broken/incomplete
+scope (a missing required field) is now dropped with a warning instead
+of reaching the pool math and raising `AddressValueError`, and the
+review page catches any per-scope mapping exception instead of ever
+500ing. Validated end to end against the real file: two scopes, 57
+reservations (53 importable), per-reservation options. Exclusions,
+superscopes, policies, and options 121/249 aren't present in the real
+export we have, so those paths are still exercised only by the
+synthetic fixture — read the preview diff before you apply.
+
+### OIDC step-up, proper HTTP error pages, and DDNS IPv6 addresses
+
+An OIDC-managed account has no usable local password — `find_or_create_user`
+sets one to a discarded random value — so a route requiring a "recent"
+login (MFA management, an unmasked config-history download) used to
+send that account into a password form it could never fill in. It now
+goes through a fresh sign-on round trip with the identity provider
+instead (`prompt=login`, so the IdP can't silently re-assert an
+existing session), confirming the same identity is still behind the
+keyboard without creating a new session or re-running role mapping.
+
+Separately, every `abort()`-raised HTTP error (400, 401, 403, 405, ...)
+used to be caught by the same catch-all handler as an unhandled
+exception, always rendering the generic 500 page regardless of the
+real status — a 405 read as "Internal Server Error" and lost its
+`Allow` header, a 401 lost `WWW-Authenticate`. A dedicated handler now
+keeps the real status and headers for everything except a genuine 5xx.
+
+And the D2 domain-server form now accepts a bracketed IPv6 address
+(`[2001:db8::53]:53`) — a bare one was never parseable safely, since a
+real IPv6 address can itself end in a colon plus digits, making a
+trailing ":port" ambiguous without brackets. The DDNS naming form's
+server address/port are now validated before being pushed anywhere; a
+non-numeric port used to reach a bare `int()` and 500.
+
+### What this release does not do
+
+The external `jen-plugin-ipam`/`jen-plugin-network-discovery` registry
+plugins still carry the Q18-era inline-handler CSP limitation — that
+depends on those repositories' own next release, tracked separately.
+The Windows importer's real-export validation covers what a real
+export actually contains; exclusions, superscopes, policies, and
+options 121/249 remain validated only against a hand-authored fixture,
+not genuine `Export-DhcpServer` output.
+
 ## [5.27.0] - 2026-09-13
 
 Root-owned plugin installs: a registry-installed plugin's files are no
@@ -220,6 +360,8 @@ genuine `Export-DhcpServer` output. Run it against a lab Kea instance
 before trusting it with production scopes, and treat the preview diff
 as the real safety net it's designed to be — this is called out on the
 wizard's own page too, not just here.
+
+## [5.23.0] - 2026-09-12
 
 DDNS becomes a first-class D2 subsystem: Jen can now configure and
 monitor Kea's own `kea-dhcp-ddns` daemon, not just the external DNS

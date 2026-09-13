@@ -400,6 +400,46 @@ Kea → SSH** — the button reads *Update helper* once a version is
 already recorded, *Install helper* otherwise) to get the atomic guard
 and out-of-band change tracking.
 
+### "🛑 ROLLBACK FAILED" after a multi-server change (v5.28.0)
+
+A change to more than one Kea server (a subnet, shared network, DHCP
+option, client class, or DDNS/D2 edit) committed successfully to at
+least one server, then a later server refused it — and the attempt to
+put the earlier server(s) back the way they were **also** failed (the
+host went unreachable mid-operation, most commonly). The flash names
+which server(s) now have the new config and which still have the old
+one. This needs hand intervention: open **Servers → Config history**
+for each named server and use **Restore** to bring it to whichever
+version you want every server to agree on, then confirm with a normal
+edit that they match. This is different from the ordinary "changed
+since you opened this form" conflict below — that one is refused
+before anything is written anywhere; this one means a write already
+happened and its own undo didn't complete.
+
+### "The Kea config on the primary server changed since you previewed this import" (v5.28.0)
+
+The Windows DHCP import wizard's **Apply** step refuses to push a
+config it never actually tested — it reuses exactly what **Preview**
+ran `kea-dhcp4 -t` against, and refuses if either that test failed or
+the live config on the primary server has moved since (another admin's
+edit, a hand change). Go back to **Review** and preview again; Apply
+will push the freshly-previewed config once you confirm it looks
+right.
+
+### "Could not start the plugin install service" / a plugin install/remove flashes an error after being queued (v5.28.0/v5.27.0)
+
+Installing or removing a plugin on a systemd host is a two-step
+hand-off: the page queues a request and a root-privileged service
+carries it out, and the page only shows success once that service's
+own result confirms it. If the flash names a reason (a `requires_jen`
+version mismatch, a checksum failure, a missing tag) act on that
+directly. "Could not start the plugin install service" means the
+trigger itself didn't fire — run `sudo ./install.sh` to repair
+`jen-sudoers` and the `jen-plugin-install.service` unit, then try
+again. If a request seems to hang with no result at all, check
+`sudo systemctl status jen-plugin-install.service` and
+`sudo journalctl -u jen-plugin-install.service` on the Jen host.
+
 ### A "baseline" revision appears after upgrading a host's helper (v5.20.0)
 
 This is expected, not a hand edit Jen noticed. The very first config Jen
