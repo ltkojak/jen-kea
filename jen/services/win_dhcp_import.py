@@ -72,7 +72,7 @@ class Scope:
     lease_seconds: int
     exclusions: list[tuple[str, str]] = field(default_factory=list)
     options: dict[int, str] = field(default_factory=dict)
-    reservations: list[tuple[str, str, str]] = field(default_factory=list)  # (mac, ip, name)
+    reservations: list[Reservation] = field(default_factory=list)
     policies: list[Policy] = field(default_factory=list)
     superscope_name: str | None = None
 
@@ -124,8 +124,26 @@ def _text(elem) -> str:
     return (elem.text or "").strip() if elem is not None else ""
 
 
-def _bool_attr(elem, name: str, default: bool = True) -> bool:
-    v = _attr(elem, name, "").strip().lower()
+def _field(elem, name: str, default: str = "") -> str:
+    """v5.28.0 (Q24, F1) — the attribute if present (same case/namespace
+    tolerance as `_attr`), else the text of the first child element of
+    that local name, else `default`. A real `Export-DhcpServer` file
+    puts every field in a CHILD ELEMENT (`<Scope><ScopeId>10.10.10.0
+    </ScopeId>…`); the hand-authored synthetic fixture used attributes
+    (`<Scope ScopeId="…">`) — this reads either shape."""
+    if elem is None:
+        return default
+    attr_val = _attr(elem, name, "")
+    if attr_val:
+        return attr_val
+    child = _child(elem, name)
+    if child is not None:
+        return _text(child)
+    return default
+
+
+def _bool_field(elem, name: str, default: bool = True) -> bool:
+    v = _field(elem, name, "").strip().lower()
     if v in ("true", "1", "yes"):
         return True
     if v in ("false", "0", "no"):
@@ -133,9 +151,9 @@ def _bool_attr(elem, name: str, default: bool = True) -> bool:
     return default
 
 
-def _int_attr(elem, name: str, default: int = 0) -> int:
+def _int_field(elem, name: str, default: int = 0) -> int:
     try:
-        return int(_attr(elem, name, str(default)))
+        return int(_field(elem, name, str(default)))
     except (TypeError, ValueError):
         return default
 
@@ -207,25 +225,47 @@ def _parse_option_values(elem, context: str) -> tuple[dict[int, str], list[str]]
     -> {code: raw joined text}. Multiple <Value> children join with
     ", " (Windows' shape for a multi-valued option); 121/249 are
     collapsed to a single <Value> hex string and decoded separately
-    below, once the option's actual type is known."""
+    below, once the option's actual type is known. v5.28.0 (Q24, F6) —
+    an OptionValue scoped to a vendor or user class (a non-empty
+    <VendorClass>/<UserClass>) is skipped: Kea models that as a client
+    class's own option-data, not a plain per-subnet/global value, and
+    silently writing it as one would apply it to every client."""
     out: dict[int, str] = {}
     warnings: list[str] = []
     for ov in _children(elem, "OptionValue"):
         try:
-            code = int(_attr(ov, "OptionId"))
+            code = int(_field(ov, "OptionId"))
         except ValueError:
             warnings.append(f"{context}: OptionValue with a non-numeric OptionId — skipped")
+            continue
+        if _field(ov, "VendorClass") or _field(ov, "UserClass"):
+            warnings.append(
+                f"{context}: vendor/user-class-scoped option {code} not imported (Kea models these as client classes)"
+            )
             continue
         values = [_text(v) for v in _children(ov, "Value")]
         out[code] = ", ".join(v for v in values if v)
     return out, warnings
 
 
-def _options_to_kea(raw_options: dict[int, str], context: str) -> tuple[list[dict], list[str]]:
-    """Raw Windows option values -> Kea option-data entries, via Q12's
-    catalog. 249 (Microsoft's own classless-static-route code) is
-    folded into 121. Unknown codes and values that fail Q12's own
-    validate() are skipped with a warning, never written unvalidated."""
+_OPTION_81_WARNING = "option 81 (client FQDN flags) is DDNS behaviour, not option-data — configure it on the DDNS page"
+
+# v5.28.0 (Q24, F6) — codes _options_to_kea handles itself, before the
+# catalog lookup: 51/58/59 become lease timers (scope_to_subnet merges
+# them into the subnet block), 81 is dropped outright (DDNS behavior,
+# not an option). Never reach the generic per-code catalog/validate path.
+_TIMER_CODES = {51: "valid-lifetime", 58: "renew-timer", 59: "rebind-timer"}
+
+
+def _options_to_kea(raw_options: dict[int, str], context: str) -> tuple[list[dict], dict[str, str], list[str]]:
+    """Raw Windows option values -> (Kea option-data entries, lease
+    timers, warnings), via Q12's catalog. 249 (Microsoft's own
+    classless-static-route code) is folded into 121. Unknown codes and
+    values that fail Q12's own validate() are skipped with a warning,
+    never written unvalidated. `timers` is a subset of {"valid-lifetime",
+    "renew-timer", "rebind-timer"} — callers that don't have a lease
+    duration to compare against (policies, server/global options,
+    reservations) simply ignore it."""
     warnings: list[str] = []
     merged: dict[int, str] = {}
     for code, raw in raw_options.items():
@@ -241,8 +281,16 @@ def _options_to_kea(raw_options: dict[int, str], context: str) -> tuple[list[dic
             continue
         merged[real_code] = raw
 
+    timers: dict[str, str] = {}
     entries = []
     for code, raw in merged.items():
+        if code == 81:
+            if _OPTION_81_WARNING not in warnings:
+                warnings.append(_OPTION_81_WARNING)
+            continue
+        if code in _TIMER_CODES:
+            timers[_TIMER_CODES[code]] = raw
+            continue
         opt_type = _opts.type_for(code)
         if opt_type is None:
             warnings.append(f"{context}: skipped option {code} (not in Jen's catalog)")
@@ -267,7 +315,7 @@ def _options_to_kea(raw_options: dict[int, str], context: str) -> tuple[list[dic
                 "data": _opts.normalize(opt_type, data),
             }
         )
-    return entries, warnings
+    return entries, timers, warnings
 
 
 # ── reservations ─────────────────────────────────────────────────────────────
@@ -275,28 +323,62 @@ def _options_to_kea(raw_options: dict[int, str], context: str) -> tuple[list[dic
 _CLIENT_ID_RE = re.compile(r"^[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5}$")
 
 
-def _parse_reservations(elem, context: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+@dataclass
+class Reservation:
+    mac: str
+    ip: str
+    hostname: str
+    options: dict[int, str] = field(default_factory=dict)  # v5.28.0 (Q24, F5)
+
+
+def _sanitize_hostname(name: str) -> str:
+    """v5.28.0 (Q24, F4) — a Windows reservation name is free text
+    ("Smart Plug 7", with a domain suffix or not); turn it into
+    something `valid_hostname` can accept before ever calling it,
+    rather than only trying the raw text and giving up."""
+    sanitized = re.sub(r"[^A-Za-z0-9.-]+", "-", name)
+    sanitized = re.sub(r"-{2,}", "-", sanitized)
+    return sanitized.strip("-.")
+
+
+def _parse_reservations(elem, context: str) -> tuple[list[Reservation], list[str]]:
+    """`Type` `Dhcp` AND `Both` are imported (v5.28.0, Q24, F4) — `Both`
+    is "DHCP and BOOTP", Windows' own default, and Kea only speaks
+    DHCP, so it's just a reservation to us. Only `Bootp` is skipped."""
     out = []
     warnings = []
     for r in _children(elem, "Reservation"):
-        rtype = _attr(r, "Type", "Dhcp")
-        if rtype.lower() not in ("dhcp",):
-            warnings.append(f"{context}: reservation type {rtype!r} not imported (Both/Bootp are out of scope)")
+        rtype = _field(r, "Type", "Dhcp")
+        ip = _field(r, "IPAddress")
+        client_id = _field(r, "ClientId")
+        name = _field(r, "Name")
+        if rtype.lower() == "bootp":
+            warnings.append(f"{context}: reservation {ip or '?'}: BOOTP-only — not imported")
             continue
-        ip = _attr(r, "IPAddress")
-        client_id = _attr(r, "ClientId")
-        name = _attr(r, "Name")
         if not _CLIENT_ID_RE.match(client_id or ""):
-            warnings.append(f"{context}: reservation {ip or '?'} has a non-MAC ClientId {client_id!r} — skipped")
+            n_bytes = len(re.split(r"[:-]", client_id)) if client_id else 0
+            warnings.append(
+                f"{context}: reservation {name or ip or '?'} ({ip or '?'}) uses a {n_bytes}-byte client "
+                "identifier, not a MAC — Kea needs a `client-id` reservation for it; add it by hand after "
+                "the import"
+            )
             continue
         mac = client_id.replace("-", ":").lower()
         if not _auth.valid_ip(ip):
             warnings.append(f"{context}: reservation for {mac} has an invalid IP {ip!r} — skipped")
             continue
-        if name and not _auth.valid_hostname(name):
-            warnings.append(f"{context}: reservation {ip} hostname {name!r} failed validation — imported without it")
-            name = ""
-        out.append((mac, ip, name))
+        if name:
+            sanitized = _sanitize_hostname(name)
+            if _auth.valid_hostname(sanitized):
+                name = sanitized
+            else:
+                warnings.append(
+                    f"{context}: reservation {ip} hostname {name!r} failed validation — imported without it"
+                )
+                name = ""
+        options, opt_warnings = _parse_option_values(_child(r, "OptionValues"), f"{context} reservation {ip}")
+        warnings.extend(opt_warnings)
+        out.append(Reservation(mac=mac, ip=ip, hostname=name, options=options))
     return out, warnings
 
 
@@ -307,27 +389,27 @@ def _parse_policies(elem, context: str) -> tuple[list[Policy], list[str]]:
     out = []
     warnings = []
     for p in _children(elem, "Policy"):
-        name = _attr(p, "Name")
+        name = _field(p, "Name")
         conditions = []
         for c in _children(_child(p, "Conditions"), "Condition"):
             conditions.append(
                 {
-                    "type": _attr(c, "Type"),
-                    "operator": _attr(c, "Operator", "Equals"),
-                    "value": _attr(c, "Value"),
+                    "type": _field(c, "Type"),
+                    "operator": _field(c, "Operator", "Equals"),
+                    "value": _field(c, "Value"),
                 }
             )
         ip_ranges = []
         for r in _children(_child(p, "IPRanges"), "IPRange"):
-            ip_ranges.append((_attr(r, "StartRange"), _attr(r, "EndRange")))
+            ip_ranges.append((_field(r, "StartRange"), _field(r, "EndRange")))
         options, opt_warnings = _parse_option_values(_child(p, "OptionValues"), f"{context} policy {name}")
         warnings.extend(opt_warnings)
         out.append(
             Policy(
                 name=name,
-                enabled=_bool_attr(p, "Enabled", True),
-                processing_order=_int_attr(p, "ProcessingOrder", 0),
-                condition=_attr(p, "Condition", "AND").upper(),
+                enabled=_bool_field(p, "Enabled", True),
+                processing_order=_int_field(p, "ProcessingOrder", 0),
+                condition=_field(p, "Condition", "AND").upper(),
                 conditions=conditions,
                 ip_ranges=ip_ranges,
                 options=options,
@@ -339,18 +421,35 @@ def _parse_policies(elem, context: str) -> tuple[list[Policy], list[str]]:
 # ── scopes ───────────────────────────────────────────────────────────────────
 
 
-def _parse_scope(elem) -> tuple[Scope, list[str]]:
-    scope_id = _attr(elem, "ScopeId")
-    name = _attr(elem, "Name") or scope_id
+def _parse_scope(elem) -> tuple[Scope | None, list[str]]:
+    scope_id = _field(elem, "ScopeId")
+    name = _field(elem, "Name") or scope_id
     context = f"scope {name} ({scope_id})"
     warnings: list[str] = []
 
-    lease_seconds, dur_warnings = _parse_duration(_attr(elem, "LeaseDuration"), context)
+    # v5.28.0 (Q24, F3) — never let a scope with a missing/invalid
+    # required field reach the pool math (scope_to_subnet's IP
+    # arithmetic on an empty string raises AddressValueError, which
+    # used to 500 the review page).
+    subnet_mask = _field(elem, "SubnetMask")
+    start_range = _field(elem, "StartRange")
+    end_range = _field(elem, "EndRange")
+    for field_name, value, valid in (
+        ("ScopeId", scope_id, _auth.valid_ip(scope_id)),
+        ("SubnetMask", subnet_mask, _auth.valid_ip(subnet_mask)),
+        ("StartRange", start_range, _auth.valid_ip(start_range)),
+        ("EndRange", end_range, _auth.valid_ip(end_range)),
+    ):
+        if not value or not valid:
+            warnings.append(f"scope {name}: missing/invalid {field_name} — skipped")
+            return None, warnings
+
+    lease_seconds, dur_warnings = _parse_duration(_field(elem, "LeaseDuration"), context)
     warnings.extend(dur_warnings)
 
     exclusions = []
     for r in _children(_child(elem, "ExclusionRanges"), "IPRange"):
-        exclusions.append((_attr(r, "StartRange"), _attr(r, "EndRange")))
+        exclusions.append((_field(r, "StartRange"), _field(r, "EndRange")))
 
     reservations, res_warnings = _parse_reservations(_child(elem, "Reservations"), context)
     warnings.extend(res_warnings)
@@ -363,17 +462,17 @@ def _parse_scope(elem) -> tuple[Scope, list[str]]:
 
     scope = Scope(
         scope_id=scope_id,
-        subnet_mask=_attr(elem, "SubnetMask"),
+        subnet_mask=subnet_mask,
         name=name,
-        state=_attr(elem, "State", "Active"),
-        start_range=_attr(elem, "StartRange"),
-        end_range=_attr(elem, "EndRange"),
+        state=_field(elem, "State", "Active"),
+        start_range=start_range,
+        end_range=end_range,
         lease_seconds=lease_seconds,
         exclusions=exclusions,
         options=options,
         reservations=reservations,
         policies=policies,
-        superscope_name=_attr(elem, "SuperscopeName") or None,
+        superscope_name=_field(elem, "SuperscopeName") or None,
     )
     if scope.state.lower() != "active":
         warnings.append(f"{context}: scope is Inactive in Windows — imported, unticked by default")
@@ -383,7 +482,7 @@ def _parse_scope(elem) -> tuple[Scope, list[str]]:
 def _parse_superscopes(elem) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for sc in _children(elem, "Superscope"):
-        name = _attr(sc, "Name")
+        name = _field(sc, "Name")
         ids = [_text(s) for s in _children(sc, "ScopeId") if _text(s)]
         if name:
             out[name] = ids
@@ -393,7 +492,7 @@ def _parse_superscopes(elem) -> dict[str, list[str]]:
 def _parse_classes(elem) -> list[dict]:
     out = []
     for c in _children(elem, "Class"):
-        out.append({"name": _attr(c, "Name"), "type": _attr(c, "Type")})
+        out.append({"name": _field(c, "Name"), "type": _field(c, "Type")})
     return out
 
 
@@ -425,14 +524,44 @@ def parse_export(data: bytes) -> Plan:
     scopes_elem = _child(ipv4, "Scopes")
     for scope_elem in _children(scopes_elem, "Scope"):
         scope, scope_warnings = _parse_scope(scope_elem)
-        plan.scopes.append(scope)
         plan.warnings.extend(scope_warnings)
+        if scope is not None:
+            plan.scopes.append(scope)
 
     plan.superscopes = _parse_superscopes(_child(ipv4, "Superscopes"))
+    # v5.28.0 (Q24, F2) — the real export carries superscope membership
+    # on the SCOPE itself (<SuperScopeName>), not (only) in a top-level
+    # <Superscopes> list — keep reading that too, a different server
+    # version may still emit it.
+    for scope in plan.scopes:
+        if scope.superscope_name:
+            members = plan.superscopes.setdefault(scope.superscope_name, [])
+            if scope.scope_id not in members:
+                members.append(scope.scope_id)
     plan.classes = _parse_classes(_child(ipv4, "Classes"))
 
     if not plan.scopes:
         plan.warnings.append("No scopes found in the export.")
+
+    # v5.28.0 (Q24, F7) — cheap honesty lines for things the real export
+    # exposed that this importer has never claimed to handle.
+    filters = _child(ipv4, "Filters")
+    if filters is not None and (_bool_field(filters, "Allow", False) or _bool_field(filters, "Deny", False)):
+        filter_entries = _children(filters, "Filter")
+        allow_count = sum(1 for f in filter_entries if _field(f, "List", "").lower() == "allow")
+        deny_count = sum(1 for f in filter_entries if _field(f, "List", "").lower() == "deny")
+        plan.warnings.append(
+            f"MAC allow/deny filtering is enabled in Windows ({allow_count} allow / {deny_count} deny entries) "
+            "— not imported; Kea's equivalent is a client class"
+        )
+
+    ipv6 = None
+    for child in root:
+        if _local(child.tag).lower() == "ipv6":
+            ipv6 = child
+            break
+    if ipv6 is not None and _children(_child(ipv6, "Scopes"), "Scope"):
+        plan.warnings.append("IPv6 scopes are not imported (IPv4 only)")
 
     return plan
 
@@ -571,7 +700,7 @@ def policy_to_class(policy: Policy, context: str) -> tuple[dict | None, list[str
 
     class_dict = {"name": name, "test": expr}
     if policy.options:
-        option_entries, opt_warnings = _options_to_kea(policy.options, label)
+        option_entries, _timers, opt_warnings = _options_to_kea(policy.options, label)
         warnings.extend(opt_warnings)
         if option_entries:
             class_dict["option-data"] = option_entries
@@ -653,16 +782,44 @@ def scope_to_subnet(scope: Scope, jen_id: int) -> MappedScope:
 
     pools = [{"pool": f"{_int2ip(s)} - {_int2ip(e)}"} for s, e in segments + carved_pools]
 
-    option_entries, opt_warnings = _options_to_kea(scope.options, context)
+    option_entries, timers, opt_warnings = _options_to_kea(scope.options, context)
     warnings.extend(opt_warnings)
+
+    # v5.28.0 (Q24, F6) — 51/58/59 are lease timers, not option-data.
+    # Windows enforces option 51 (Lease) as the client-facing lease
+    # time even when it disagrees with the scope's own LeaseDuration —
+    # so when they differ, 51 wins here too, with a warning explaining
+    # why the imported subnet's valid-lifetime isn't what LeaseDuration
+    # alone would suggest.
+    valid_lifetime = scope.lease_seconds
+    opt51 = timers.get("valid-lifetime")
+    if opt51 is not None:
+        try:
+            opt51_seconds = int(opt51)
+        except ValueError:
+            opt51_seconds = None
+        if opt51_seconds is not None and opt51_seconds != scope.lease_seconds:
+            warnings.append(
+                f"{context}: option 51 ({opt51_seconds}s) differs from LeaseDuration "
+                f"({scope.lease_seconds}s) — option 51 wins, matching what Windows actually handed clients"
+            )
+            valid_lifetime = opt51_seconds
 
     subnet = {
         "id": jen_id,
         "subnet": f"{scope.scope_id}/{_prefix_len(scope.subnet_mask)}",
         "pools": pools,
-        "valid-lifetime": scope.lease_seconds,
+        "valid-lifetime": valid_lifetime,
         "option-data": option_entries,
     }
+    for timer_key in ("renew-timer", "rebind-timer"):
+        if timer_key in timers:
+            try:
+                subnet[timer_key] = int(timers[timer_key])
+            except ValueError:
+                warnings.append(
+                    f"{context}: option {58 if timer_key == 'renew-timer' else 59} value isn't a number — skipped"
+                )
     return MappedScope(
         subnet=subnet, classes=classes, pool_guards=pool_guards, subnet_guards=subnet_guards, warnings=warnings
     )
@@ -704,7 +861,7 @@ def to_kea(plan: Plan, existing_dhcp4_cfg: dict | None, subnet_names: dict, sele
     included_scopes = [s for s in plan.scopes if scope_selections.get(s.scope_id, s.state.lower() == "active")]
 
     if selections.get("server_options") and plan.server_options:
-        entries, warnings = _options_to_kea(plan.server_options, "server")
+        entries, _timers, warnings = _options_to_kea(plan.server_options, "server")
         report.extend(warnings)
         existing = cfg["Dhcp4"].setdefault("option-data", [])
         existing_codes = {e.get("code") for e in existing if isinstance(e, dict)}
@@ -766,8 +923,17 @@ def to_kea(plan: Plan, existing_dhcp4_cfg: dict | None, subnet_names: dict, sele
 
         subnets_to_declare[jen_id] = {"name": friendly_name, "cidr": mapped.subnet["subnet"]}
 
-        for mac, ip, hostname in scope.reservations:
-            reservations.append({"subnet-id": jen_id, "hw-address": mac, "ip-address": ip, "hostname": hostname})
+        for res in scope.reservations:
+            # v5.28.0 (Q24, F5) — a reservation's own option overrides,
+            # mapped the same way scope-level options are; timers (51/
+            # 58/59) don't apply to a single reservation, so ignored
+            # here same as the policy/server callers.
+            option_entries, _timers, opt_warnings = _options_to_kea(res.options, f"reservation {res.ip}")
+            report.extend(opt_warnings)
+            row = {"subnet-id": jen_id, "hw-address": res.mac, "ip-address": res.ip, "hostname": res.hostname}
+            if option_entries:
+                row["option-data"] = option_entries
+            reservations.append(row)
 
         report.append(
             f"scope {scope.name}: mapped to subnet {jen_id} ({mapped.subnet['subnet']}), "
@@ -775,4 +941,17 @@ def to_kea(plan: Plan, existing_dhcp4_cfg: dict | None, subnet_names: dict, sele
             f"{len(scope.reservations)} reservation(s)"
         )
 
-    return cfg, reservations, subnets_to_declare, report
+    # v5.28.0 (Q24, F6) — option 81 is dropped independently by every
+    # scope/reservation/server _options_to_kea() call that sees it;
+    # keep only the first of what's otherwise the exact same line
+    # repeated once per occurrence.
+    seen_81 = False
+    deduped_report = []
+    for line in report:
+        if line == _OPTION_81_WARNING:
+            if seen_81:
+                continue
+            seen_81 = True
+        deduped_report.append(line)
+
+    return cfg, reservations, subnets_to_declare, deduped_report

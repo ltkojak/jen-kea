@@ -18,6 +18,7 @@ import io
 from tests.conftest import restricted_client as _restricted_client
 
 _FIXTURE_PATH = "tests/fixtures/windows-dhcp-export.xml"
+_REAL_FIXTURE_PATH = "tests/fixtures/windows-dhcp-export-real.xml"
 _BILLION_LAUGHS_PATH = "tests/fixtures/billion-laughs.xml"
 
 
@@ -102,6 +103,24 @@ class TestWinDhcpImportWizard:
         assert b"LAN" in r2.data
         assert b"Guest WiFi" in r2.data
         assert b"Solo Subnet" in r2.data
+
+    def test_review_never_500s_on_a_scope_mapping_exception(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.0 (Q24, F3) — the actual bug: the real export's fields
+        used to parse as empty strings and scope_to_subnet's IP
+        arithmetic raised AddressValueError, 500ing this page. Any
+        mapping exception now flashes and skips that row instead."""
+        from jen.services import win_dhcp_import as win_import_mod
+
+        self._wire(monkeypatch)
+        self._upload(logged_in_client)
+        monkeypatch.setattr(
+            win_import_mod,
+            "scope_to_subnet",
+            lambda scope, jen_id: (_ for _ in ()).throw(ValueError("boom")),
+        )
+        r = logged_in_client.get("/subnets/import-windows/review", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"could not be mapped" in r.data
 
     def test_upload_rejects_oversized_file(self, logged_in_client, monkeypatch, mock_kea):
         self._wire(monkeypatch)
@@ -282,3 +301,90 @@ class TestWinDhcpImportWizard:
         assert len(self._reservation_calls) == 1
         assert 50 in self._written or 52 in self._written
         assert token not in subnets_mod._WIN_IMPORT_PLANS  # now finished and popped
+
+
+class TestWinDhcpImportWizardRealFixture:
+    """v5.28.0 (Q24, F8) — the same upload->review->preview->apply flow
+    as TestWinDhcpImportWizard, driven through the sanitized REAL
+    Export-DhcpServer export instead of the hand-authored synthetic one
+    (two scopes, 57 reservations, 53 importable — see
+    win_dhcp_import.py's own module docstring and
+    tests/test_win_dhcp_import.py::TestRealExportFixture for the exact
+    numbers, computed by running the parser). A standalone class, not a
+    subclass of TestWinDhcpImportWizard — its other test methods assume
+    the synthetic fixture's scope names/ids and would break under
+    this one's overridden _upload/_review_form."""
+
+    _EMPTY_DHCP4 = {"Dhcp4": {"subnet4": [], "client-classes": [], "shared-networks": []}}
+
+    def _wire(self, monkeypatch, dhcp4=None):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        from jen.services import kea_host
+        from tests._kea_host_fakes import FakeHelper
+
+        dhcp4 = dhcp4 if dhcp4 is not None else self._EMPTY_DHCP4
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea A", "ssh_host": "10.0.0.5", "ssh_user": "kea"}]
+        )
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        monkeypatch.setattr("jen.config.write_subnets_config", lambda m: self._written.update(m))
+
+        reservation_calls = []
+
+        def _fake_kea_command(command, *a, **kw):
+            if command == "version-get":
+                return {"result": 0, "arguments": {"extended": "3.0.0"}}
+            if command == "config-get":
+                return {"result": 0, "arguments": dhcp4}
+            if command == "reservation-add":
+                reservation_calls.append(kw.get("arguments", {}).get("reservation"))
+                return {"result": 0, "text": "added"}
+            return {"result": 0, "arguments": dhcp4}
+
+        monkeypatch.setattr(kea_svc, "kea_command", _fake_kea_command)
+        monkeypatch.setattr(
+            kea_svc,
+            "get_active_kea_server",
+            lambda: {"id": 1, "name": "Kea A", "api_url": "http://x", "api_user": "u", "api_pass": "p"},
+        )
+        fake = FakeHelper()
+        fake.configs[(1, "dhcp4")] = dhcp4
+        fake.responses["apply-config"] = {"ok": True, "backup": None}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        fake.responses["test-config"] = {"ok": True}
+        monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
+        self._written = {}
+        self._reservation_calls = reservation_calls
+        return fake
+
+    def _upload(self, client):
+        with open(_REAL_FIXTURE_PATH, "rb") as f:
+            data = f.read()
+        return client.post(
+            "/subnets/import-windows",
+            data={"xml_file": (io.BytesIO(data), "export.xml")},
+            content_type="multipart/form-data",
+        )
+
+    def _review_form(self, include=("10.10.10.0", "10.10.30.0")):
+        form = {"id_10.10.10.0": "50", "name_10.10.10.0": "LAN", "id_10.10.30.0": "51", "name_10.10.30.0": "IoT"}
+        for sid in include:
+            form[f"include_{sid}"] = "1"
+        return form
+
+    def test_apply_creates_two_subnets_and_53_reservations(self, logged_in_client, monkeypatch, mock_kea):
+        fake = self._wire(monkeypatch)
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        r = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert r.status_code == 200
+
+        applied_cfg = fake.payload_for("apply-config")["config"]
+        applied_subnets = {s["subnet"] for s in applied_cfg["Dhcp4"]["subnet4"]}
+        assert applied_subnets == {"10.10.10.0/23", "10.10.30.0/24"}
+
+        assert len(self._reservation_calls) == 53
+
+        row53 = next(r for r in self._reservation_calls if r["ip-address"] == "10.10.10.53")
+        assert "option-data" in row53

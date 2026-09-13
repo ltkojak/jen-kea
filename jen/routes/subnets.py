@@ -1975,7 +1975,12 @@ def import_windows_review():
     suggested = _suggested_subnet_names(plan)
     rows = []
     for scope in plan.scopes:
-        mapped = __win.scope_to_subnet(scope, suggested[scope.scope_id]["id"])
+        try:
+            mapped = __win.scope_to_subnet(scope, suggested[scope.scope_id]["id"])
+        except Exception as e:
+            logger.warning(f"Windows import: scope {scope.name!r} could not be mapped: {e}")
+            flash(f"scope {scope.name} could not be mapped — see the server log", "error")
+            continue
         rows.append(
             {
                 "scope": scope,

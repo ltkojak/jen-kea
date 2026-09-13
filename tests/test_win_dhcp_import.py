@@ -303,57 +303,76 @@ class TestPolicyToClass:
 
 class TestOptionsToKea:
     def test_known_option_maps_through_the_catalog(self):
-        entries, warnings = w._options_to_kea({3: "10.0.0.1"}, "ctx")
+        entries, timers, warnings = w._options_to_kea({3: "10.0.0.1"}, "ctx")
         assert warnings == []
+        assert timers == {}
         assert entries == [{"name": "routers", "code": 3, "space": "dhcp4", "csv-format": True, "data": "10.0.0.1"}]
 
     def test_unknown_code_is_skipped_with_a_warning(self):
-        entries, warnings = w._options_to_kea({250: "whatever"}, "ctx")
+        entries, _timers, warnings = w._options_to_kea({250: "whatever"}, "ctx")
         assert entries == []
         assert any("250" in msg and "catalog" in msg for msg in warnings)
 
     def test_249_converts_to_121_with_a_warning(self):
-        entries, warnings = w._options_to_kea({249: "18c0a80a0a000001"}, "ctx")
+        entries, _timers, warnings = w._options_to_kea({249: "18c0a80a0a000001"}, "ctx")
         assert entries[0]["code"] == 121
         assert entries[0]["data"] == "192.168.10.0/24 - 10.0.0.1"
         assert any("249" in msg for msg in warnings)
 
     def test_249_ignored_when_121_also_present(self):
-        entries, warnings = w._options_to_kea({121: "18c0a80a0a000001", 249: "ff"}, "ctx")
+        entries, _timers, warnings = w._options_to_kea({121: "18c0a80a0a000001", 249: "ff"}, "ctx")
         assert len(entries) == 1 and entries[0]["code"] == 121
         assert any("249" in msg and "ignored" in msg for msg in warnings)
 
     def test_invalid_value_is_skipped_with_a_warning(self):
-        entries, warnings = w._options_to_kea({3: "not-an-ip"}, "ctx")
+        entries, _timers, warnings = w._options_to_kea({3: "not-an-ip"}, "ctx")
         assert entries == []
         assert warnings
+
+    def test_51_58_59_are_returned_as_timers_not_entries(self):
+        """v5.28.0 (Q24, F6) — lease-related codes never reach the
+        catalog/option-data path; scope_to_subnet is what merges them
+        into the subnet block."""
+        entries, timers, warnings = w._options_to_kea({51: "3600", 58: "1800", 59: "3150"}, "ctx")
+        assert entries == []
+        assert warnings == []
+        assert timers == {"valid-lifetime": "3600", "renew-timer": "1800", "rebind-timer": "3150"}
+
+    def test_81_is_dropped_with_one_ddns_line(self):
+        entries, timers, warnings = w._options_to_kea({81: "23"}, "ctx")
+        assert entries == []
+        assert timers == {}
+        assert warnings == [w._OPTION_81_WARNING]
 
 
 # ── reservations ─────────────────────────────────────────────────────────────
 
 
 class TestParseReservationsViaScope:
-    def test_mac_normalization_and_type_dhcp_only(self):
+    def test_mac_normalization_and_type_dhcp_imported(self):
         data = _read("windows-dhcp-export.xml")
         plan = w.parse_export(data)
         lan = next(s for s in plan.scopes if s.name == "LAN")
-        assert lan.reservations == [("00:11:22:33:44:55", "10.0.1.5", "printer.lan")]
+        dhcp_res = next(r for r in lan.reservations if r.ip == "10.0.1.5")
+        assert dhcp_res.mac == "00:11:22:33:44:55"
+        assert dhcp_res.hostname == "printer.lan"
 
     def test_non_mac_client_id_is_warned_and_skipped(self):
         data = _read("windows-dhcp-export.xml")
         plan = w.parse_export(data)
         lan = next(s for s in plan.scopes if s.name == "LAN")
-        assert any("not-a-mac-address" in msg for msg in plan.warnings) or any(
-            "non-MAC" in msg for msg in plan.warnings
-        )
-        assert len(lan.reservations) == 1
+        assert any("not a MAC" in msg or "not-a-mac-address" in msg for msg in plan.warnings)
+        assert "10.0.1.7" not in [r.ip for r in lan.reservations]
 
-    def test_type_both_is_skipped(self):
+    def test_type_both_is_imported(self):
+        """v5.28.0 (Q24, F4) — `Both` ("DHCP and BOOTP") is Windows'
+        own default and Kea only speaks DHCP, so it's just a plain
+        reservation to us; only `Bootp` is skipped."""
         data = _read("windows-dhcp-export.xml")
         plan = w.parse_export(data)
         lan = next(s for s in plan.scopes if s.name == "LAN")
-        ips = [ip for _mac, ip, _name in lan.reservations]
-        assert "10.0.1.6" not in ips  # the Type="Both" reservation
+        both_res = next(r for r in lan.reservations if r.ip == "10.0.1.6")
+        assert both_res.mac == "aa:bb:cc:dd:ee:ff"
 
 
 # ── full parser on the fixture(s) ────────────────────────────────────────────
@@ -377,6 +396,46 @@ class TestParseExportFixture:
     def test_billion_laughs_is_refused_not_silently_empty(self):
         with pytest.raises(defusedxml.common.EntitiesForbidden):
             w.parse_export(_read("billion-laughs.xml"))
+
+    def test_superscope_membership_read_from_the_scope_itself(self):
+        """v5.28.0 (Q24, F2) — the real export carries membership on
+        <SuperScopeName> on each scope, not (only) a top-level
+        <Superscopes> list."""
+        xml = b"""<?xml version="1.0"?>
+        <DHCPServer xmlns="http://schemas.microsoft.com/windows/DHCPServer">
+          <IPv4 xmlns="">
+            <Scopes>
+              <Scope><ScopeId>10.1.1.0</ScopeId><Name>A</Name><SubnetMask>255.255.255.0</SubnetMask>
+                <StartRange>10.1.1.10</StartRange><EndRange>10.1.1.100</EndRange>
+                <LeaseDuration>1.00:00:00</LeaseDuration><State>Active</State>
+                <SuperScopeName>HQ</SuperScopeName></Scope>
+              <Scope><ScopeId>10.1.2.0</ScopeId><Name>B</Name><SubnetMask>255.255.255.0</SubnetMask>
+                <StartRange>10.1.2.10</StartRange><EndRange>10.1.2.100</EndRange>
+                <LeaseDuration>1.00:00:00</LeaseDuration><State>Active</State>
+                <SuperScopeName>HQ</SuperScopeName></Scope>
+            </Scopes>
+          </IPv4>
+        </DHCPServer>"""
+        plan = w.parse_export(xml)
+        assert plan.superscopes == {"HQ": ["10.1.1.0", "10.1.2.0"]}
+
+    def test_broken_scope_is_skipped_not_crashed_on(self):
+        """v5.28.0 (Q24, F3) — a scope missing a required field (here
+        an empty StartRange) never reaches the pool math; it's dropped
+        with a warning instead of raising AddressValueError later."""
+        xml = b"""<?xml version="1.0"?>
+        <DHCPServer xmlns="http://schemas.microsoft.com/windows/DHCPServer">
+          <IPv4 xmlns="">
+            <Scopes>
+              <Scope><ScopeId>10.2.1.0</ScopeId><Name>Broken</Name><SubnetMask>255.255.255.0</SubnetMask>
+                <StartRange></StartRange><EndRange>10.2.1.100</EndRange>
+                <LeaseDuration>1.00:00:00</LeaseDuration><State>Active</State></Scope>
+            </Scopes>
+          </IPv4>
+        </DHCPServer>"""
+        plan = w.parse_export(xml)
+        assert plan.scopes == []
+        assert any("missing/invalid StartRange" in msg for msg in plan.warnings)
 
 
 # ── to_kea, end to end against the fixture ──────────────────────────────────
@@ -434,9 +493,13 @@ class TestToKea:
     def test_reservations_carry_the_right_subnet_id(self):
         plan = self._plan()
         cfg, reservations, _declared, _report = w.to_kea(plan, None, self.SUBNET_NAMES, self.ALL_SELECTED)
-        assert reservations == [
-            {"subnet-id": 10, "hw-address": "00:11:22:33:44:55", "ip-address": "10.0.1.5", "hostname": "printer.lan"}
-        ]
+        printer = next(r for r in reservations if r["ip-address"] == "10.0.1.5")
+        assert printer == {
+            "subnet-id": 10,
+            "hw-address": "00:11:22:33:44:55",
+            "ip-address": "10.0.1.5",
+            "hostname": "printer.lan",
+        }
 
     def test_classless_route_121_lands_on_the_lan_subnet(self):
         plan = self._plan()
@@ -487,3 +550,117 @@ class TestToKea:
         cfg, _res, declared, report = w.to_kea(plan, None, names, self.ALL_SELECTED)
         assert 12 not in declared
         assert any("no subnet id chosen" in msg for msg in report)
+
+
+# ── the real Export-DhcpServer fixture (v5.28.0, Q24, F8) ───────────────────
+#
+# tests/fixtures/windows-dhcp-export-real.xml is sanitized from a real
+# Windows Server 2019/2022 export (see its own header comment) — every
+# number asserted below was computed by actually running the parser
+# against it (the scratchpad importlib harness — this file's own
+# session-scoped DB fixture blocks a plain `pytest` invocation, see
+# CLAUDE.md's "Local verification" section), not inferred from the
+# export's contents by reading the XML.
+
+
+class TestRealExportFixture:
+    _NAMES = {"10.10.10.0": {"id": 1, "name": "LAN"}, "10.10.30.0": {"id": 2, "name": "IoT"}}
+    _SELECTED = {"scopes": {"10.10.10.0": True, "10.10.30.0": True}, "server_options": True}
+
+    def _plan(self):
+        return w.parse_export(_read("windows-dhcp-export-real.xml"))
+
+    def _to_kea(self, plan):
+        return w.to_kea(plan, None, self._NAMES, self._SELECTED)
+
+    def test_two_scopes_parsed_with_real_element_shaped_fields(self):
+        """The v5.24.0 parser read every field via _attr() and got
+        nothing from this file (ChatGPT #11) — F1's _field() reads the
+        real format's child-element shape too."""
+        plan = self._plan()
+        assert len(plan.scopes) == 2
+        assert {s.scope_id for s in plan.scopes} == {"10.10.10.0", "10.10.30.0"}
+
+    def test_subnets_have_the_real_cidrs_pools_and_lifetimes(self):
+        plan = self._plan()
+        cfg, _res, _declared, _report = self._to_kea(plan)
+        subnets = {s["id"]: s for s in cfg["Dhcp4"]["subnet4"]}
+        assert subnets[1]["subnet"] == "10.10.10.0/23"
+        assert subnets[1]["pools"] == [{"pool": "10.10.10.50 - 10.10.10.250"}]
+        assert subnets[1]["valid-lifetime"] == 86400
+        assert {o["code"] for o in subnets[1]["option-data"]} == {3, 6}  # routers, dns — no domain-name
+
+        assert subnets[2]["subnet"] == "10.10.30.0/24"
+        assert subnets[2]["pools"] == [{"pool": "10.10.30.1 - 10.10.30.240"}]
+        assert subnets[2]["valid-lifetime"] == 1209600
+        assert {o["code"] for o in subnets[2]["option-data"]} == {3, 6, 15}  # + domain-name
+
+    def test_53_reservations_imported_4_non_mac_skipped(self):
+        plan = self._plan()
+        non_mac = [msg for msg in plan.warnings if "not a MAC" in msg]
+        assert len(non_mac) == 4
+        _cfg, reservations, _declared, _report = self._to_kea(plan)
+        assert len(reservations) == 53
+
+    def test_option_81_dropped_everywhere_with_exactly_one_report_line(self):
+        """v5.28.0 (Q24, F6). `plan.server_options` still carries the raw
+        parsed value right after parse_export() — the drop happens at
+        _options_to_kea()'s MAPPING time, in to_kea() — so this checks
+        the real, end-to-end guarantee: nothing from option 81 survives
+        into the pushed config, and the many places that see it
+        (server/scope/reservation) collapse to one report line."""
+        plan = self._plan()
+        assert plan.server_options == {81: "23"}
+        cfg, _res, _declared, report = self._to_kea(plan)
+        assert cfg["Dhcp4"].get("option-data", []) == []
+        assert report.count(w._OPTION_81_WARNING) == 1
+
+    def test_reservation_10_10_10_53_carries_its_own_dns_override(self):
+        plan = self._plan()
+        _cfg, reservations, _declared, _report = self._to_kea(plan)
+        row = next(r for r in reservations if r["ip-address"] == "10.10.10.53")
+        assert row["option-data"] == [
+            {
+                "name": "domain-name-servers",
+                "code": 6,
+                "space": "dhcp4",
+                "csv-format": True,
+                "data": "10.10.11.199, 10.10.11.201",
+            }
+        ]
+
+    def test_review_page_mapping_never_raises(self):
+        """The real bug this whole step exists to fix: scope_to_subnet
+        raised AddressValueError on the empty strings _attr() produced
+        from this file, 500ing the review page."""
+        plan = self._plan()
+        for scope in plan.scopes:
+            mapped = w.scope_to_subnet(scope, 1)
+            assert mapped.subnet["subnet"]
+
+
+class TestRealExportHonestyLines:
+    """F7 — the unmodified real fixture has MAC filtering disabled
+    (Allow=false/Deny=false) and no IPv6 scopes, so neither honesty
+    line fires from it as-is; string-edit a copy to exercise each."""
+
+    def test_unmodified_fixture_has_neither_line(self):
+        plan = w.parse_export(_read("windows-dhcp-export-real.xml"))
+        assert not any("filtering is enabled" in msg for msg in plan.warnings)
+        assert not any("IPv6 scopes" in msg for msg in plan.warnings)
+
+    def test_filters_enabled_produces_the_allow_deny_line(self):
+        data = _read("windows-dhcp-export-real.xml").replace(b"<Allow>false</Allow>", b"<Allow>true</Allow>", 1)
+        plan = w.parse_export(data)
+        assert any(
+            "MAC allow/deny filtering is enabled in Windows (1 allow / 0 deny entries)" in m for m in plan.warnings
+        )
+
+    def test_ipv6_scopes_produce_the_ipv6_line(self):
+        data = _read("windows-dhcp-export-real.xml").replace(
+            b"<StatelessStore>",
+            b"<Scopes><Scope><ScopeId>fd00::</ScopeId></Scope></Scopes><StatelessStore>",
+            1,
+        )
+        plan = w.parse_export(data)
+        assert any("IPv6 scopes are not imported (IPv4 only)" in m for m in plan.warnings)
