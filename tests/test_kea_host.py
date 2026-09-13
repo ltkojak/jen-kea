@@ -344,7 +344,7 @@ class TestHelperDeployment:
         calls = iter([{"ok": False, "version": None}, {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
         monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
-        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", ""))
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res == {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION, "code": "installed", "detail": ""}
 
@@ -353,7 +353,7 @@ class TestHelperDeployment:
         calls = iter([{"ok": True, "version": 1}, {"ok": True, "version": 2}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
         monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
-        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", ""))
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res == {"ok": True, "version": 2, "code": "upgraded", "detail": ""}
 
@@ -364,7 +364,7 @@ class TestHelperDeployment:
         calls = iter([{"ok": True, "version": 1}, {"ok": True, "version": 1}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
         monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
-        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", ""))
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False
         assert res["code"] == "stale"
@@ -405,7 +405,7 @@ class TestHelperDeployment:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
         monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
-        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("sudoerror:bad line 2", ""))
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("sudoerror:bad line 2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res["code"] == "sudoerror" and res["detail"] == "bad line 2"
 
