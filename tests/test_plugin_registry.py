@@ -314,11 +314,14 @@ class TestPluginsPageShowsOwnershipChips:
         r = logged_in_client.get("/settings/plugins")
         assert r.status_code == 200
         assert b"root-owned" in r.data
-        assert b"Reinstall" not in r.data
+        # The "About Plugins" card mentions the word "Reinstall" in prose
+        # on any systemd host regardless of which plugins are installed
+        # — the per-plugin button itself is the thing that must be absent.
+        assert b'title="Reinstall as a root-owned copy"' not in r.data
 
     def test_writable_chip_and_reinstall_button_shown(self, logged_in_client, tmp_path, monkeypatch):
         self._install_sample(tmp_path, monkeypatch, "PLUGIN_DIR")
         r = logged_in_client.get("/settings/plugins")
         assert r.status_code == 200
         assert b"reinstall to harden" in r.data
-        assert b"Reinstall" in r.data
+        assert b'title="Reinstall as a root-owned copy"' in r.data
