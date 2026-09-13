@@ -23,6 +23,7 @@ checksum or a tag-pinned download_url fails CI immediately.
 
 import hashlib
 import json
+import os
 import pathlib
 import re
 from unittest.mock import MagicMock, patch
@@ -259,6 +260,25 @@ class TestDiscoverPluginsRootOwnedPrecedence:
         assert found["sample"]["version"] == "3.0.0"
         assert found["sample"]["root_owned"] is False
 
+    def test_a_crash_leftover_old_directory_is_ignored(self, tmp_path, monkeypatch):
+        """v5.28.0 (Q24, A4) — jen-update-root.py's crash-safe swap can
+        leave `<id>.old-<ts>` sitting next to the live `<id>` directory.
+        Its manifest.json still claims `id: <id>` and it sorts AFTER the
+        real directory — without skipping invalid directory NAMES (dots
+        aren't a valid plugin id), "later wins" would let the leftover
+        shadow the live copy."""
+        root = tmp_path / "root"
+        self._manifest(root, plugin_id="ipam", version="2.0.0")
+        leftover = root / "ipam.old-1000000000"
+        leftover.mkdir(parents=True)
+        (leftover / "manifest.json").write_text('{"id":"ipam","name":"Sample","version":"1.0.0"}')
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        found = {p["id"]: p for p in plugins_svc.discover_plugins()}
+        assert found["ipam"]["version"] == "2.0.0", "the leftover .old- directory must never shadow the live copy"
+
 
 class TestPluginInstallUnitStatus:
     def test_parses_systemctl_show_output(self):
@@ -273,20 +293,415 @@ class TestPluginInstallUnitStatus:
         assert status == {"active_state": "unknown", "sub_state": ""}
 
 
-class TestReadPluginRequestResult:
-    def test_reads_and_deletes_the_result_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
-        (tmp_path / "ipam.result").write_text("ok\n")
-        assert plugins_svc.read_plugin_request_result("ipam") == "ok"
-        assert not (tmp_path / "ipam.result").exists()
+class TestPluginIdRegexMatchesRootScript:
+    """v5.28.0 (Q24, A5) — www-data (this module's _PLUGIN_ID_RE) and the
+    root-run request processor (jen-update-root.py's own) must agree on
+    exactly which ids can ever exist; they used to differ (this module
+    allowed a leading '-', the root script never did)."""
 
-    def test_missing_result_file_returns_none(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
-        assert plugins_svc.read_plugin_request_result("ipam") is None
+    def test_patterns_are_identical(self):
+        root_src = pathlib.Path("jen-update-root.py").read_text(encoding="utf-8")
+        m = re.search(r'^_PLUGIN_ID_RE = re\.compile\(r"([^"]+)"\)', root_src, re.MULTILINE)
+        assert m, "could not find _PLUGIN_ID_RE in jen-update-root.py"
+        assert plugins_svc._PLUGIN_ID_RE.pattern == m.group(1)
 
-    def test_invalid_plugin_id_returns_none_without_touching_disk(self, tmp_path, monkeypatch):
+
+class TestPluginDirIncludesRootOwned:
+    """v5.28.0 (Q24, A7) — _plugin_dir() used to search only
+    (PLUGIN_DIR, PLUGIN_DIR_BUNDLED), which made enable_plugin() and
+    disable_plugin() silent no-ops for a root-owned plugin: the enable
+    marker was never written because _plugin_dir() always returned None
+    for it."""
+
+    def test_finds_a_root_owned_plugin(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        (root / "sample").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        assert plugins_svc._plugin_dir("sample") == str(root / "sample")
+
+    def test_enable_plugin_creates_the_marker_for_a_root_owned_plugin(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        (root / "sample").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        plugins_svc.enable_plugin("sample")
+        assert plugins_svc._is_enabled("sample"), "enable_plugin() must work for a root-owned plugin"
+
+    def test_disable_plugin_removes_the_marker_for_a_root_owned_plugin(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        (root / "sample").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        plugins_svc.enable_plugin("sample")
+        assert plugins_svc._is_enabled("sample")
+        plugins_svc.disable_plugin("sample")
+        assert not plugins_svc._is_enabled("sample")
+
+
+class TestStartPluginInstallUnitReportsFailure:
+    """v5.28.0 (Q24, A8) — the trigger used to be called for its side
+    effect only; a sudoers misconfiguration or a missing unit file left
+    the caller reporting "Install requested" for a request that would
+    never be picked up."""
+
+    def test_nonzero_exit_returns_false(self):
+        bad = MagicMock(returncode=1, stderr=b"sudo: a password is required")
+        with patch.object(plugins_svc.subprocess, "run", return_value=bad):
+            assert plugins_svc._start_plugin_install_unit() is False
+
+    def test_exception_returns_false(self):
+        with patch.object(plugins_svc.subprocess, "run", side_effect=OSError("no systemctl")):
+            assert plugins_svc._start_plugin_install_unit() is False
+
+    def test_zero_exit_returns_true(self):
+        ok = MagicMock(returncode=0, stderr=b"")
+        with patch.object(plugins_svc.subprocess, "run", return_value=ok):
+            assert plugins_svc._start_plugin_install_unit() is True
+
+    def test_install_plugin_removes_its_marker_and_fails_when_trigger_fails(self, tmp_path, monkeypatch):
         monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
-        assert plugins_svc.read_plugin_request_result("../evil") is None
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=False):
+            ok, msg = plugins_svc.install_plugin(
+                "ipam", {"download_url": "https://example.com/ipam", "sha256": "a" * 64}
+            )
+        assert ok is False
+        assert "install.sh" in msg
+        assert not (tmp_path / "ipam.install").exists(), "the marker must be removed when the trigger fails"
+
+    def test_uninstall_plugin_removes_its_marker_and_fails_when_trigger_fails(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        (root / "sample").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "requests"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=False):
+            ok, msg = plugins_svc.uninstall_plugin("sample")
+        assert ok is False
+        assert "install.sh" in msg
+        assert not (tmp_path / "requests" / "sample.remove").exists()
+        assert (root / "sample").is_dir(), "the root-owned copy must be untouched"
+
+
+class TestRecordAndRemovePluginRow:
+    """v5.28.0 (Q24, A9) — moved out of jen/routes/plugins.py so both the
+    in-process install path and consume_plugin_results() below share
+    one implementation."""
+
+    def test_record_then_remove(self, db):
+        info = {
+            "id": "q24-test-plugin",
+            "name": "Q24 Test",
+            "version": "1.0.0",
+            "description": "desc",
+            "author": "someone",
+            "requires_jen": "5.0.0",
+        }
+        try:
+            plugins_svc.record_plugin_row(info)
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM plugins WHERE id=%s", (info["id"],))
+                row = cur.fetchone()
+            assert row is not None
+            assert row["name"] == "Q24 Test"
+            assert row["enabled"] == 1
+
+            plugins_svc.remove_plugin_row(info["id"])
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM plugins WHERE id=%s", (info["id"],))
+                assert cur.fetchone() is None
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", (info["id"],))
+            db.commit()
+
+    def test_record_is_an_upsert(self, db):
+        info = {
+            "id": "q24-upsert-plugin",
+            "name": "V1",
+            "version": "1.0.0",
+            "description": "",
+            "author": "",
+            "requires_jen": "",
+        }
+        try:
+            plugins_svc.record_plugin_row(info)
+            info["name"] = "V2"
+            info["version"] = "2.0.0"
+            plugins_svc.record_plugin_row(info)
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM plugins WHERE id=%s", (info["id"],))
+                rows = cur.fetchall()
+            assert len(rows) == 1
+            assert rows[0]["name"] == "V2"
+            assert rows[0]["version"] == "2.0.0"
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", (info["id"],))
+            db.commit()
+
+
+class TestConsumePluginResults:
+    """v5.28.0 (Q24, A9) — the QUEUED -> CONFIRMED half of the split
+    v5.27.0 started: applying a root-run <id>.<action>.result to Jen's
+    own state (DB row, enable marker, restart_pending, audit log)."""
+
+    def _last_audit(self, db, action, entity):
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM audit_log WHERE action=%s AND entity=%s ORDER BY id DESC LIMIT 1", (action, entity)
+            )
+            return cur.fetchone()
+
+    def test_install_ok_records_row_enables_and_audits(self, tmp_path, monkeypatch, db):
+        requests_dir = tmp_path / "requests"
+        root = tmp_path / "root"
+        requests_dir.mkdir()
+        plugin_dir = root / "q24-consume-a"
+        plugin_dir.mkdir(parents=True)
+        manifest = {
+            "id": "q24-consume-a",
+            "name": "Consume A",
+            "version": "1.2.3",
+            "description": "",
+            "author": "",
+            "requires_jen": "",
+        }
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (requests_dir / "q24-consume-a.install.result").write_text("ok\n")
+
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        try:
+            results = plugins_svc.consume_plugin_results()
+            assert results == [{"id": "q24-consume-a", "action": "install", "ok": True, "detail": "installed v1.2.3"}]
+            assert not (requests_dir / "q24-consume-a.install.result").exists()
+            assert plugins_svc._is_enabled("q24-consume-a")
+
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM plugins WHERE id=%s", ("q24-consume-a",))
+                row = cur.fetchone()
+            assert row is not None and row["version"] == "1.2.3"
+
+            with db.cursor() as cur:
+                cur.execute("SELECT setting_value FROM settings WHERE setting_key='restart_pending'")
+                setting = cur.fetchone()
+            assert setting is not None and setting["setting_value"] == "true"
+
+            assert self._last_audit(db, "PLUGIN_INSTALL", "q24-consume-a") is not None
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", ("q24-consume-a",))
+            db.commit()
+
+    def test_remove_ok_without_bundled_copy_disables_and_removes_row(self, tmp_path, monkeypatch, db):
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        (requests_dir / "q24-consume-b.remove.result").write_text("ok\n")
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        plugins_svc.record_plugin_row(
+            {
+                "id": "q24-consume-b",
+                "name": "B",
+                "version": "1.0.0",
+                "description": "",
+                "author": "",
+                "requires_jen": "",
+            }
+        )
+        # Pretend it was enabled before removal.
+        os.makedirs(str(tmp_path / "en"), exist_ok=True)
+        open(str(tmp_path / "en" / "q24-consume-b"), "w").close()
+
+        try:
+            results = plugins_svc.consume_plugin_results()
+            assert results == [{"id": "q24-consume-b", "action": "remove", "ok": True, "detail": "removed"}]
+            assert not plugins_svc._is_enabled("q24-consume-b")
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM plugins WHERE id=%s", ("q24-consume-b",))
+                assert cur.fetchone() is None
+            assert self._last_audit(db, "PLUGIN_UNINSTALL", "q24-consume-b") is not None
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", ("q24-consume-b",))
+            db.commit()
+
+    def test_remove_ok_with_a_bundled_copy_keeps_the_enable_marker(self, tmp_path, monkeypatch, db):
+        requests_dir = tmp_path / "requests"
+        bundled = tmp_path / "bundled"
+        requests_dir.mkdir()
+        (bundled / "q24-consume-c").mkdir(parents=True)
+        (requests_dir / "q24-consume-c.remove.result").write_text("ok\n")
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(bundled))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        os.makedirs(str(tmp_path / "en"), exist_ok=True)
+        open(str(tmp_path / "en" / "q24-consume-c"), "w").close()
+
+        results = plugins_svc.consume_plugin_results()
+        assert results == [
+            {
+                "id": "q24-consume-c",
+                "action": "remove",
+                "ok": True,
+                "detail": "the built-in copy of 'q24-consume-c' is active again",
+            }
+        ]
+        assert plugins_svc._is_enabled("q24-consume-c"), "the enable marker must survive for the bundled fallback"
+
+    def test_error_result_changes_no_state_but_audits_failure(self, tmp_path, monkeypatch, db):
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        (requests_dir / "q24-consume-d.install.result").write_text("error: checksum verification failed\n")
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(tmp_path / "root-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        results = plugins_svc.consume_plugin_results()
+        assert results == [
+            {"id": "q24-consume-d", "action": "install", "ok": False, "detail": "error: checksum verification failed"}
+        ]
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM plugins WHERE id=%s", ("q24-consume-d",))
+            assert cur.fetchone() is None
+        assert self._last_audit(db, "PLUGIN_INSTALL_FAILED", "q24-consume-d") is not None
+
+    def test_stale_pre_5_28_result_filename_is_deleted_without_being_applied(self, tmp_path, monkeypatch):
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        (requests_dir / "ipam.result").write_text("ok\n")
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+
+        results = plugins_svc.consume_plugin_results()
+        assert results == []
+        assert not (requests_dir / "ipam.result").exists()
+
+    def test_no_requests_dir_returns_empty_list(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "does-not-exist"))
+        assert plugins_svc.consume_plugin_results() == []
+
+
+class TestPluginsPageConsumesResultsFirst:
+    """v5.28.0 (Q24, A9) — plugins_page() must apply any waiting result
+    before rendering, so a result that landed while nobody had the
+    poller running still shows up correctly on the next visit."""
+
+    def test_a_waiting_result_is_flashed_and_applied_on_page_render(self, logged_in_client, tmp_path, monkeypatch, db):
+        requests_dir = tmp_path / "requests"
+        root = tmp_path / "root"
+        requests_dir.mkdir()
+        plugin_dir = root / "q24-page-consume"
+        plugin_dir.mkdir(parents=True)
+        manifest = {
+            "id": "q24-page-consume",
+            "name": "Page Consume",
+            "version": "1.0.0",
+            "description": "",
+            "author": "",
+            "requires_jen": "",
+        }
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (requests_dir / "q24-page-consume.install.result").write_text("ok\n")
+
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        monkeypatch.setattr(plugins_svc, "fetch_registry", lambda: ([], None))
+
+        try:
+            r = logged_in_client.get("/settings/plugins")
+            assert r.status_code == 200
+            assert b"installed v1.0.0" in r.data
+            assert not (requests_dir / "q24-page-consume.install.result").exists()
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", ("q24-page-consume",))
+            db.commit()
+
+
+class TestPluginRoutesDeferredState:
+    """v5.28.0 (Q24, A9) — install_plugin()/update_plugin()/
+    uninstall_plugin() decide "deferred" from request_is_pending(), and
+    must NOT touch the plugins DB row or the completion audit for a
+    deferred request — only for one that actually finished in-process."""
+
+    def test_install_route_does_not_insert_a_row_when_deferred(self, logged_in_client, tmp_path, monkeypatch, db):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        monkeypatch.setattr(
+            plugins_svc,
+            "fetch_registry",
+            lambda: (
+                [{"id": "q24-route-a", "name": "Route A", "version": "1.0.0", "download_url": "x", "sha256": "a" * 64}],
+                None,
+            ),
+        )
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=True):
+            r = logged_in_client.post("/settings/plugins/install/q24-route-a", follow_redirects=True)
+        assert r.status_code == 200
+
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM plugins WHERE id=%s", ("q24-route-a",))
+            assert cur.fetchone() is None, "a deferred install must not insert a plugins row yet"
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM audit_log WHERE action='PLUGIN_INSTALL_REQUESTED' AND entity='q24-route-a'")
+            assert cur.fetchone() is not None
+        with db.cursor() as cur:
+            cur.execute("SELECT * FROM audit_log WHERE action='PLUGIN_INSTALL' AND entity='q24-route-a'")
+            assert cur.fetchone() is None, "the completion audit must wait for consume_plugin_results()"
+
+    def test_update_route_redirects_with_plugin_install_when_deferred(self, logged_in_client, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        monkeypatch.setattr(
+            plugins_svc,
+            "fetch_registry",
+            lambda: (
+                [{"id": "q24-route-b", "name": "Route B", "version": "2.0.0", "download_url": "x", "sha256": "a" * 64}],
+                None,
+            ),
+        )
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=True):
+            r = logged_in_client.post("/settings/plugins/update/q24-route-b", follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert "plugin_install=q24-route-b" in r.headers["Location"]
+
+    def test_install_status_returns_the_result_once_then_none(self, logged_in_client, tmp_path, monkeypatch):
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        (requests_dir / "q24-route-c.install.result").write_text("ok\n")
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(tmp_path / "root-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        monkeypatch.setattr(
+            plugins_svc, "plugin_install_unit_status", lambda: {"active_state": "inactive", "sub_state": "dead"}
+        )
+
+        first = logged_in_client.get("/settings/plugins/install-status/q24-route-c").get_json()
+        assert first["result"] == "ok"
+
+        second = logged_in_client.get("/settings/plugins/install-status/q24-route-c").get_json()
+        assert second["result"] is None
 
 
 class TestPluginsPageShowsOwnershipChips:

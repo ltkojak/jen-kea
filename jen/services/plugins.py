@@ -82,7 +82,14 @@ SHIPPED_PLUGIN_IDS = frozenset({"ipam", "network-discovery"})
 # os.remove()/shutil.rmtree() against os.path.join(PLUGIN_DIR, plugin_id).
 # install_plugin()/update_plugin() already had this check at the route
 # layer; enable/disable/uninstall didn't (v4.4.4).
-_PLUGIN_ID_RE = re.compile(r"^[a-z0-9\-]{1,64}$")
+#
+# v5.28.0 (Q24, A5) — unified with jen-update-root.py's own
+# _PLUGIN_ID_RE, which requires the first character to be alnum
+# (rejecting a leading '-', which this pattern used to accept on its
+# own); www-data and the root-run request processor now agree on
+# exactly which ids can ever exist. tests/test_plugin_registry.py
+# asserts the two `.pattern` strings stay identical.
+_PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
 def valid_plugin_id(plugin_id: str) -> bool:
@@ -134,6 +141,15 @@ def discover_plugins() -> list[dict]:
         if not os.path.isdir(base):
             continue
         for name in sorted(os.listdir(base)):
+            # v5.28.0 (Q24, A4) — a crash-safe swap in
+            # jen-update-root.py::_install_one_plugin can leave a
+            # `<id>.old-<ts>` directory sitting next to `<id>` between
+            # the swap and the next --plugins run's sweep. Its
+            # manifest.json still claims `id: <id>`, and it sorts AFTER
+            # the real `<id>` directory — without this, "later wins"
+            # would let a leftover shadow the live copy.
+            if not valid_plugin_id(name):
+                continue
             path = os.path.join(base, name)
             manifest_path = os.path.join(path, "manifest.json")
             if not os.path.isdir(path) or not os.path.isfile(manifest_path):
@@ -237,8 +253,14 @@ def _enabled_file(plugin_id: str) -> str:
 
 def _plugin_dir(plugin_id: str) -> str | None:
     """The on-disk directory for a plugin — the writable copy if there is
-    one, else the shipped copy, else None."""
-    for base in (extensions.PLUGIN_DIR, extensions.PLUGIN_DIR_BUNDLED):
+    one, else the root-owned copy, else the shipped copy, else None.
+
+    v5.28.0 (Q24, A7) — PLUGIN_DIR_ROOT was missing here entirely, which
+    made enable_plugin()/disable_plugin() silent no-ops for a
+    root-owned plugin (installed via v5.27.0's root path): the enable
+    marker was never written because this always returned None for it.
+    Order matches discover_plugins()'s own precedence."""
+    for base in (extensions.PLUGIN_DIR, extensions.PLUGIN_DIR_ROOT, extensions.PLUGIN_DIR_BUNDLED):
         path = os.path.join(base, plugin_id)
         if os.path.isdir(path):
             return path
@@ -305,6 +327,10 @@ def is_systemd_host() -> bool:
     return not os.path.exists("/.dockerenv") and "JEN_ROOT" not in os.environ
 
 
+def _request_marker_path(plugin_id: str, action: str) -> str:
+    return os.path.join(extensions.CONTENT_PLUGIN_REQUESTS_DIR, f"{plugin_id}.{action}")
+
+
 def _write_plugin_request(plugin_id: str, action: str) -> None:
     """action in {"install", "remove"}. An empty marker file — the
     root-run request processor re-derives everything else from the
@@ -312,20 +338,33 @@ def _write_plugin_request(plugin_id: str, action: str) -> None:
     (already validated by the caller) and which of the two actions was
     requested."""
     os.makedirs(extensions.CONTENT_PLUGIN_REQUESTS_DIR, exist_ok=True)
-    marker = os.path.join(extensions.CONTENT_PLUGIN_REQUESTS_DIR, f"{plugin_id}.{action}")
-    with open(marker, "w"):
+    with open(_request_marker_path(plugin_id, action), "w"):
         pass
 
 
-def _start_plugin_install_unit() -> None:
+def request_is_pending(plugin_id: str, action: str) -> bool:
+    """True while `<plugin_id>.<action>` marker still exists — i.e. the
+    root side hasn't picked it up (or finished it) yet. v5.28.0 (Q24,
+    A9) — the route layer uses this, not response message text, to
+    decide whether an install/uninstall was deferred to the root
+    process or handled in-process."""
+    return os.path.isfile(_request_marker_path(plugin_id, action))
+
+
+def _start_plugin_install_unit() -> bool:
     """Fixed, zero-parameter command — the exact string jen-sudoers
     authorizes. --no-block matters here for the same reason it matters
     for jen-update.service: this call must not block waiting on a unit
     whose own work has nothing to do with restarting THIS process, and
     blocking here would tie up a request-handling thread/worker for no
-    reason."""
+    reason.
+
+    v5.28.0 (Q24, A8) — returns whether the trigger actually succeeded.
+    It used to be called for its side effect only, so a sudoers
+    misconfiguration or a missing unit file left the caller reporting
+    "Install requested" for a request that would never be picked up."""
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["/usr/bin/sudo", "/usr/bin/systemctl", "start", "--no-block", "jen-plugin-install.service"],
             capture_output=True,
             timeout=15,
@@ -333,6 +372,14 @@ def _start_plugin_install_unit() -> None:
         )
     except Exception as e:
         logger.error(f"Failed to trigger jen-plugin-install.service: {e}")
+        return False
+    if result.returncode != 0:
+        logger.error(
+            f"jen-plugin-install.service failed to start (exit {result.returncode}): "
+            f"{result.stderr.decode('utf-8', 'replace').strip()}"
+        )
+        return False
+    return True
 
 
 def _parse_systemctl_show(text: str) -> dict:
@@ -367,23 +414,131 @@ def plugin_install_unit_status() -> dict:
     return {"active_state": props.get("ActiveState", "unknown"), "sub_state": props.get("SubState", "")}
 
 
-def read_plugin_request_result(plugin_id: str) -> str | None:
-    """The one-line result jen-update-root.py --plugins wrote for this
-    plugin_id ("ok" or "error: <reason>"), or None if it hasn't
-    (finished) yet. Deleted once read — the UI shows it exactly once."""
-    if not valid_plugin_id(plugin_id):
-        return None
-    path = os.path.join(extensions.CONTENT_PLUGIN_REQUESTS_DIR, f"{plugin_id}.result")
-    if not os.path.isfile(path):
-        return None
+_RESULT_RE = re.compile(r"^(?P<id>[a-z0-9][a-z0-9-]{0,63})\.(?P<action>install|remove)\.result$")
+
+
+def record_plugin_row(info: dict) -> None:
+    """Upsert this plugin into Jen's own `plugins` bookkeeping table —
+    write-only bookkeeping the app never reads back from (moved here
+    from jen/routes/plugins.py, v5.28.0 Q24 A9, so both the in-process
+    path and consume_plugin_results() below share one implementation).
+    `info` needs id/name/version/description/author/requires_jen — a
+    registry entry and a plugin manifest dict both have all of them."""
+    from jen.models import db as _db
+
     try:
-        with open(path) as f:
-            content = f.read().strip()
-    except OSError:
-        return None
-    with contextlib.suppress(OSError):
-        os.remove(path)
-    return content or None
+        with _db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled)
+                VALUES (%s, %s, %s, %s, %s, %s, 1)
+                ON DUPLICATE KEY UPDATE
+                    name=VALUES(name), version=VALUES(version),
+                    description=VALUES(description), enabled=1
+            """,
+                (
+                    info.get("id"),
+                    info.get("name"),
+                    info.get("version"),
+                    info.get("description"),
+                    info.get("author"),
+                    info.get("requires_jen"),
+                ),
+            )
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to record plugin in DB: {e}")
+
+
+def remove_plugin_row(plugin_id: str) -> None:
+    from jen.models import db as _db
+
+    try:
+        with _db.jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM plugins WHERE id=%s", (plugin_id,))
+            db.commit()
+    except Exception as e:
+        logger.error(f"Failed to remove plugin record from DB: {e}")
+
+
+def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str) -> str:
+    """Apply one confirmed root-side outcome to Jen's own state (DB row,
+    enable marker, restart_pending, audit log) and return the detail
+    string a caller should display for it. Only ever called once per
+    result, by consume_plugin_results() right after it deletes the
+    `.result` file — never re-derives anything from a marker, since by
+    this point the marker is long gone."""
+    from jen.models.user import audit, set_global_setting
+
+    if not ok:
+        audit("PLUGIN_INSTALL_FAILED" if action == "install" else "PLUGIN_UNINSTALL_FAILED", plugin_id, raw_detail)
+        return raw_detail
+
+    if action == "install":
+        manifest = next((p for p in discover_plugins() if p["id"] == plugin_id), None)
+        if manifest:
+            record_plugin_row(manifest)
+        enable_plugin(plugin_id)
+        set_global_setting("restart_pending", "true")
+        version = manifest.get("version", "?") if manifest else "?"
+        detail = f"installed v{version}" if manifest else "install completed"
+        audit("PLUGIN_INSTALL", plugin_id, f"root-owned install completed v{version}")
+        return detail
+
+    remove_plugin_row(plugin_id)
+    if os.path.isdir(os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)):
+        detail = f"the built-in copy of '{plugin_id}' is active again"
+    else:
+        disable_plugin(plugin_id)
+        detail = "removed"
+    set_global_setting("restart_pending", "true")
+    audit("PLUGIN_UNINSTALL", plugin_id, detail)
+    return detail
+
+
+def consume_plugin_results() -> list[dict]:
+    """Read and apply every root-run `<id>.<action>.result` the request
+    processor has written since the last call — the QUEUED -> CONFIRMED
+    half of the split v5.27.0 started (v5.28.0, Q24, A9). Each result
+    is deleted as it's read, so this is safe to call repeatedly and
+    from more than one place: plugins_page() calls it on every render
+    (so a result that lands after the browser tab was closed still
+    gets applied the next time anyone opens the page, not only via the
+    poller) and the install-status route calls it too. Never raises.
+
+    Returns a list of {"id", "action", "ok", "detail"} — one entry per
+    result consumed this call (usually 0 or 1).
+
+    A stale `<id>.result` (the pre-5.28.0 filename, with no action —
+    left over from a box that installed a plugin under 5.27.0) is
+    deleted on sight without being applied: there is no way to know
+    which action it belonged to, and no code writes that filename
+    anymore."""
+    results = []
+    d = extensions.CONTENT_PLUGIN_REQUESTS_DIR
+    if not os.path.isdir(d):
+        return results
+    for name in sorted(os.listdir(d)):
+        if not name.endswith(".result"):
+            continue
+        path = os.path.join(d, name)
+        m = _RESULT_RE.match(name)
+        if not m:
+            with contextlib.suppress(OSError):
+                os.remove(path)
+            continue
+        plugin_id, action = m.group("id"), m.group("action")
+        try:
+            with open(path) as f:
+                raw_detail = f.read().strip()
+        except OSError:
+            continue
+        with contextlib.suppress(OSError):
+            os.remove(path)
+        ok = raw_detail == "ok"
+        detail = _apply_plugin_result(plugin_id, action, ok, raw_detail)
+        results.append({"id": plugin_id, "action": action, "ok": ok, "detail": detail})
+    return results
 
 
 def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
@@ -437,7 +592,13 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 
     if is_systemd_host():
         _write_plugin_request(plugin_id, "install")
-        _start_plugin_install_unit()
+        if not _start_plugin_install_unit():
+            with contextlib.suppress(OSError):
+                os.remove(_request_marker_path(plugin_id, "install"))
+            return False, (
+                "Could not start the plugin install service — run `sudo ./install.sh` to repair "
+                "jen-sudoers and jen-plugin-install.service, then try again."
+            )
         return True, "Install requested — Jen will pick the plugin up within a few seconds."
 
     download_url = registry_entry.get("download_url", "").rstrip("/")
@@ -542,7 +703,13 @@ def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
     root_path = os.path.join(extensions.PLUGIN_DIR_ROOT, plugin_id)
     if os.path.isdir(root_path) and is_systemd_host():
         _write_plugin_request(plugin_id, "remove")
-        _start_plugin_install_unit()
+        if not _start_plugin_install_unit():
+            with contextlib.suppress(OSError):
+                os.remove(_request_marker_path(plugin_id, "remove"))
+            return False, (
+                "Could not start the plugin install service — run `sudo ./install.sh` to repair "
+                "jen-sudoers and jen-plugin-install.service, then try again."
+            )
         return True, "Removal requested — Jen will pick this up within a few seconds."
 
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)

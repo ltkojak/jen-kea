@@ -9,6 +9,11 @@
     <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen. Jen's own updates are on <a href="/settings/system#sys-updates">System → Jen Updates</a>.</p>
 </div>
 
+<!-- v5.28.0 (Q24, A10) — fallback target for the poller below when a fresh
+     install's plugin id has no row in the Installed table yet (it hasn't
+     appeared in discover_plugins() output until the root side lands it). -->
+<div id="plugin-request-status" hidden style="margin:8px 0;font-size:13px;"></div>
+
 {{ subtabs(nav.subtabs['system'], 'plugins') }}
 
 <!-- Installed plugins -->
@@ -220,8 +225,14 @@
 
     window.history.replaceState({}, '', window.location.pathname);
 
-    var box = document.querySelector('.plugin-install-result[data-plugin-id="' + pluginId + '"]');
-    if (!box) return;
+    // v5.28.0 (Q24, A10) — a fresh install's plugin id has no row (and
+    // no .plugin-install-result box) in the Installed table until the
+    // root side actually lands it, so there was previously nowhere to
+    // show progress at all for that case. Fall back to the page-level
+    // status div instead of giving up.
+    var box = document.querySelector('.plugin-install-result[data-plugin-id="' + pluginId + '"]')
+        || document.getElementById('plugin-request-status');
+    box.hidden = false;
     box.textContent = 'Working…';
     box.style.color = 'var(--text-muted)';
 

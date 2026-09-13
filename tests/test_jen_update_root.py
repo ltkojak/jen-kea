@@ -1258,7 +1258,10 @@ class TestProcessPluginRequests:
     no mocked network I/O, matching this file's own established
     convention (see TestServiceHealthy above). ROOT_PLUGIN_DIR and
     PLUGIN_REQUESTS_DIR are always injected as tmp_path subdirectories;
-    this never touches the real /opt/jen/plugins-installed."""
+    this never touches the real /opt/jen/plugins-installed.
+
+    v5.28.0 (Q24, A2) — result filenames are now `<id>.<action>.result`
+    (was `<id>.result`); every assertion below was updated to match."""
 
     def test_happy_path_lands_root_owned_and_writes_ok(self, jen_update_root, tmp_path):
         zip_bytes = _make_plugin_zip("test-plugin")
@@ -1277,7 +1280,7 @@ class TestProcessPluginRequests:
             )
             assert rc == 0
             assert not (requests_dir / "test-plugin.install").exists()
-            assert (requests_dir / "test-plugin.result").read_text().strip() == "ok"
+            assert (requests_dir / "test-plugin.install.result").read_text().strip() == "ok"
             manifest = root_dir / "test-plugin" / "manifest.json"
             assert manifest.is_file()
             assert json.loads(manifest.read_text())["id"] == "test-plugin"
@@ -1306,7 +1309,7 @@ class TestProcessPluginRequests:
             jen_update_root.process_plugin_requests(
                 str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
             )
-            result = (requests_dir / "bad-plugin.result").read_text().strip()
+            result = (requests_dir / "bad-plugin.install.result").read_text().strip()
             assert result.startswith("error:")
             assert "checksum" in result.lower()
             assert not (root_dir / "bad-plugin").exists()
@@ -1326,7 +1329,7 @@ class TestProcessPluginRequests:
             jen_update_root.process_plugin_requests(
                 str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
             )
-            result = (requests_dir / "nosha-plugin.result").read_text().strip()
+            result = (requests_dir / "nosha-plugin.install.result").read_text().strip()
             assert result.startswith("error:")
             assert "checksum" in result.lower()
         finally:
@@ -1347,7 +1350,7 @@ class TestProcessPluginRequests:
             jen_update_root.process_plugin_requests(
                 str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
             )
-            result = (requests_dir / "main-plugin.result").read_text().strip()
+            result = (requests_dir / "main-plugin.install.result").read_text().strip()
             assert result.startswith("error:")
             assert "tag" in result.lower()
         finally:
@@ -1368,7 +1371,7 @@ class TestProcessPluginRequests:
             jen_update_root.process_plugin_requests(
                 str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
             )
-            result = (requests_dir / "slip-plugin.result").read_text().strip()
+            result = (requests_dir / "slip-plugin.install.result").read_text().strip()
             assert result.startswith("error:")
             assert not (root_dir / "slip-plugin").exists()
             assert not (tmp_path.parent / "escaped").exists()
@@ -1393,7 +1396,7 @@ class TestProcessPluginRequests:
             jen_update_root.process_plugin_requests(
                 str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
             )
-            result = (requests_dir / "claimed-id.result").read_text().strip()
+            result = (requests_dir / "claimed-id.install.result").read_text().strip()
             assert result.startswith("error:")
             assert "mismatch" in result.lower()
         finally:
@@ -1407,7 +1410,7 @@ class TestProcessPluginRequests:
 
         jen_update_root.process_plugin_requests(str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json")
         assert not (requests_dir / "-bad-id-.install").exists()
-        assert not (requests_dir / "-bad-id-.result").exists()
+        assert not (requests_dir / "-bad-id-.install.result").exists()
 
     def test_not_found_in_registry_is_refused(self, jen_update_root, tmp_path):
         entries = []
@@ -1420,7 +1423,7 @@ class TestProcessPluginRequests:
             jen_update_root.process_plugin_requests(
                 str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
             )
-            result = (requests_dir / "ghost-plugin.result").read_text().strip()
+            result = (requests_dir / "ghost-plugin.install.result").read_text().strip()
             assert result.startswith("error:")
             assert "not found" in result.lower()
         finally:
@@ -1437,7 +1440,7 @@ class TestProcessPluginRequests:
 
         jen_update_root.process_plugin_requests(str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json")
         assert not plugin_dir.exists()
-        assert (requests_dir / "old-plugin.result").read_text().strip() == "ok"
+        assert (requests_dir / "old-plugin.remove.result").read_text().strip() == "ok"
 
     def test_no_requests_dir_is_a_quiet_no_op(self, jen_update_root, tmp_path):
         missing = tmp_path / "does-not-exist"
@@ -1472,6 +1475,253 @@ class TestProcessPluginRequests:
             assert not writable_copy.exists(), "stale writable copy must be removed once root copy lands"
         finally:
             stop()
+
+    def test_requires_jen_is_enforced_root_side(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A3) — the in-process installer already refused a
+        plugin whose requires_jen exceeds the running version; the root
+        path skipped this entirely until now."""
+        zip_bytes = _make_plugin_zip("needs-future-jen")
+        # _make_plugin_zip doesn't take requires_jen — build the manifest
+        # directly so it can carry one.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(
+                "manifest.json",
+                json.dumps({"id": "needs-future-jen", "name": "Test", "version": "1.0.0", "requires_jen": "99.0.0"}),
+            )
+            zf.writestr("needs-future-jen/__init__.py", "# plugin\n")
+        zip_bytes = buf.getvalue()
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "needs-future-jen", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            root_dir = tmp_path / "root"
+            with patch.object(jen_update_root, "_installed_version", return_value="5.0.0"):
+                result = jen_update_root._install_one_plugin(
+                    "needs-future-jen", str(root_dir), f"http://127.0.0.1:{port}/registry.json", str(tmp_path)
+                )
+            assert result == "error: plugin requires Jen 99.0.0 (running 5.0.0)"
+            assert not (root_dir / "needs-future-jen").exists()
+        finally:
+            stop()
+
+    def test_requires_jen_check_is_skipped_when_installed_version_is_unknown(self, jen_update_root, tmp_path):
+        """`_installed_version()` returns "?" when it can't find
+        jen/__init__.py at all — a worse, unrelated problem than this
+        plugin's compatibility. Must not block the install on a false
+        "?" < anything comparison."""
+        zip_bytes = _make_plugin_zip("needs-future-jen-2")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "needs-future-jen-2", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            root_dir = tmp_path / "root"
+            with patch.object(jen_update_root, "_installed_version", return_value="?"):
+                result = jen_update_root._install_one_plugin(
+                    "needs-future-jen-2", str(root_dir), f"http://127.0.0.1:{port}/registry.json", str(tmp_path)
+                )
+            assert result == "ok"
+            assert (root_dir / "needs-future-jen-2" / "manifest.json").is_file()
+        finally:
+            stop()
+
+    def test_crash_safe_swap_replaces_an_existing_install(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A4) — the old copy is renamed aside, not
+        deleted, before the new one is renamed in; the old copy is
+        removed only after the swap succeeds."""
+        root_dir = tmp_path / "root"
+        existing = root_dir / "swap-me"
+        existing.mkdir(parents=True)
+        (existing / "manifest.json").write_text(json.dumps({"id": "swap-me", "version": "0.9.0"}))
+        zip_bytes = _make_plugin_zip("swap-me")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "swap-me", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            result = jen_update_root._install_one_plugin(
+                "swap-me", str(root_dir), f"http://127.0.0.1:{port}/registry.json", str(tmp_path)
+            )
+            assert result == "ok"
+            manifest = json.loads((root_dir / "swap-me" / "manifest.json").read_text())
+            assert manifest["id"] == "swap-me"
+            leftovers = [p.name for p in root_dir.iterdir() if ".old-" in p.name]
+            assert leftovers == [], f"the renamed-aside old copy must be cleaned up on success: {leftovers}"
+        finally:
+            stop()
+
+    def test_sweep_removes_stale_staging_and_old_directories(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A4) — a crash between the two os.rename() calls
+        in _install_one_plugin can leave a `<id>.staging-<ts>` or
+        `<id>.old-<ts>` directory sitting next to the live one; the next
+        --plugins run sweeps them before processing any marker."""
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        stale_staging = root_dir / "crashed.staging-1000000000"
+        stale_old = root_dir / "crashed.old-1000000001"
+        stale_staging.mkdir(parents=True)
+        stale_old.mkdir(parents=True)
+        (stale_old / "manifest.json").write_text("{}")
+
+        jen_update_root.process_plugin_requests(str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json")
+
+        assert not stale_staging.exists()
+        assert not stale_old.exists()
+
+    def test_sweep_leaves_a_real_plugin_directory_alone(self, jen_update_root, tmp_path):
+        """The sweep's name pattern must only match the exact
+        `.staging-<digits>` / `.old-<digits>` suffix shape — a plugin id
+        that happens to contain "old" or "staging" as a substring (not
+        as that exact suffix) must never be mistaken for a leftover."""
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        real_plugin = root_dir / "my-old-plugin"
+        real_plugin.mkdir(parents=True)
+        (real_plugin / "manifest.json").write_text(json.dumps({"id": "my-old-plugin"}))
+
+        jen_update_root._sweep_stale_plugin_dirs(str(root_dir))
+
+        assert real_plugin.exists(), "a real plugin dir must never be swept just for containing 'old'"
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks need elevated privileges on Windows")
+    def test_a_symlinked_result_path_is_never_followed(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A1) — the security finding: this runs as root
+        inside a directory www-data owns. A symlink pre-planted at the
+        exact result path must never be followed, or root would
+        truncate/overwrite whatever it points at."""
+        zip_bytes = _make_plugin_zip("sym-plugin")
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+        entries = [{"id": "sym-plugin", "download_url": "http://PLACEHOLDER/raw/v1.0.0", "sha256": sha}]
+        port, stop = _serve_registry(entries, {"v1.0.0": zip_bytes})
+        try:
+            entries[0]["download_url"] = f"http://127.0.0.1:{port}/raw/v1.0.0"
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            victim = tmp_path / "victim.txt"
+            victim.write_text("PRECIOUS DATA")
+            (requests_dir / "sym-plugin.install").touch()
+            os.symlink(str(victim), str(requests_dir / "sym-plugin.install.result"))
+
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+            )
+
+            assert victim.read_text() == "PRECIOUS DATA", "root must never write through the planted symlink"
+        finally:
+            stop()
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks need elevated privileges on Windows")
+    def test_requests_dir_itself_being_a_symlink_is_refused(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A1) — requests_dir is lstat'd, not stat'd: a
+        symlink there (parent /var/lib/jen is www-data-owned) fails the
+        S_ISDIR check and the whole run refuses rather than following it
+        into an attacker-chosen real directory."""
+        real_dir = tmp_path / "real_requests"
+        real_dir.mkdir()
+        (real_dir / "ghost.install").touch()
+        linked = tmp_path / "requests_link"
+        os.symlink(str(real_dir), str(linked))
+        root_dir = tmp_path / "root"
+
+        rc = jen_update_root.process_plugin_requests(str(linked), str(root_dir), "http://127.0.0.1:1/registry.json")
+
+        assert rc == 0
+        assert (real_dir / "ghost.install").exists(), "nothing inside the symlinked dir should have been touched"
+
+    @pytest.mark.skipif(os.name == "nt", reason="symlinks need elevated privileges on Windows")
+    def test_a_symlinked_marker_is_unlinked_not_followed(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A1) — a marker path itself, not just the result
+        path, must be lstat'd: a symlink named `<id>.install` pointing
+        anywhere is unlinked (removing the symlink, never its target)
+        rather than treated as a genuine marker."""
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        victim = tmp_path / "victim-marker-target"
+        victim.mkdir()
+        (victim / "manifest.json").write_text("{}")
+        os.symlink(str(victim), str(requests_dir / "linked-plugin.install"))
+
+        jen_update_root.process_plugin_requests(str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json")
+
+        assert not (requests_dir / "linked-plugin.install").exists(), "the symlink itself should be removed"
+        assert victim.exists(), "the symlink's TARGET must never be touched"
+        assert not (root_dir / "linked-plugin").exists()
+
+    def test_a_directory_named_like_a_marker_is_left_alone(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A1) — only a regular file is ever a marker; a
+        directory shaped like one is inert, not a security concern, but
+        must never be processed or deleted."""
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        (requests_dir / "dir-marker.install").mkdir()
+
+        rc = jen_update_root.process_plugin_requests(
+            str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json"
+        )
+
+        assert rc == 0
+        assert (requests_dir / "dir-marker.install").is_dir()
+
+    def test_drain_loop_picks_up_a_marker_dropped_mid_run(self, jen_update_root, tmp_path):
+        """v5.28.0 (Q24, A6) — jen-plugin-install.service is a oneshot; a
+        `systemctl start` on an already-active oneshot is a no-op, so a
+        request written while this run is already processing an earlier
+        one must be picked up within the SAME invocation, not left
+        queued until the next external trigger."""
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        (requests_dir / "first-plugin.install").touch()
+
+        calls = []
+
+        def fake_install(plugin_id, root_plugin_dir, registry_url, content_dir=jen_update_root.CONTENT_DIR):
+            calls.append(plugin_id)
+            if plugin_id == "first-plugin":
+                (requests_dir / "second-plugin.install").touch()
+            return "ok"
+
+        with patch.object(jen_update_root, "_install_one_plugin", side_effect=fake_install):
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json"
+            )
+
+        assert calls == ["first-plugin", "second-plugin"]
+        assert (requests_dir / "second-plugin.install.result").read_text().strip() == "ok"
+
+    def test_drain_loop_stops_early_when_nothing_can_be_resolved(self, jen_update_root, tmp_path):
+        """A marker that can never be resolved on its own (a directory
+        shaped like one) must not make the loop spin through every one
+        of its passes — it should detect "no progress" and stop after
+        one repeat, not max_passes."""
+        requests_dir = tmp_path / "requests"
+        root_dir = tmp_path / "root"
+        requests_dir.mkdir()
+        (requests_dir / "stuck.install").mkdir()
+
+        listdir_calls = []
+        real_listdir = os.listdir
+
+        def counting_listdir(path):
+            if str(path) == str(requests_dir):
+                listdir_calls.append(1)
+            return real_listdir(path)
+
+        with patch.object(jen_update_root.os, "listdir", side_effect=counting_listdir):
+            jen_update_root.process_plugin_requests(
+                str(requests_dir), str(root_dir), "http://127.0.0.1:1/registry.json"
+            )
+
+        assert len(listdir_calls) <= 3, (
+            f"drain loop should stop quickly on a stuck marker, made {len(listdir_calls)} passes"
+        )
 
 
 class TestPluginInstallServiceUnitAndSudoers:

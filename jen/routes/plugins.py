@@ -10,17 +10,13 @@ a much bigger blast radius than a subnet-restricted admin was ever meant
 to have, so this follows the same rule as database.py.
 """
 
-import logging
-
 from flask import Blueprint, flash, jsonify, redirect, render_template, url_for
 from flask_login import login_required
 
-from jen.models import db as __db
 from jen.models import user as __user
 from jen.services import plugins as __plugins
 from jen.services.access import superadmin_required as _superadmin_required
 
-logger = logging.getLogger(__name__)
 bp = Blueprint("plugins", __name__)
 
 
@@ -31,6 +27,15 @@ bp = Blueprint("plugins", __name__)
 @login_required
 @_superadmin_required
 def plugins_page():
+    # v5.28.0 (Q24, A9) — apply any root-run install/remove result that
+    # landed since the last time anyone looked, BEFORE discover_plugins()
+    # renders the current on-disk state, so this page never shows a
+    # plugin as installed-but-not-enabled or removed-but-still-listed
+    # just because nobody happened to have the poller running when the
+    # result came in.
+    for entry in __plugins.consume_plugin_results():
+        flash(entry["detail"], "success" if entry["ok"] else "error")
+
     installed = __plugins.discover_plugins()
     installed_map = {p["id"]: p for p in installed}
 
@@ -92,16 +97,26 @@ def install_plugin(plugin_id):
         return redirect(url_for("plugins.plugins_page"))
 
     ok, msg = __plugins.install_plugin(plugin_id, entry)
-    if ok:
-        # Record in plugins DB table
-        _record_plugin(entry)
-        __user.set_global_setting("restart_pending", "true")
-        __user.audit("PLUGIN_INSTALL", plugin_id, f"Installed {entry.get('name')} v{entry.get('version')}")
-        flash(msg, "success")
-        if __plugins.is_systemd_host():
-            return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
-    else:
+    if not ok:
         flash(msg, "error")
+        return redirect(url_for("plugins.plugins_page"))
+
+    # v5.28.0 (Q24, A9) — a "deferred" install (systemd host, marker
+    # still pending) hasn't actually happened yet: don't touch the DB
+    # row, restart_pending, or the completion audit until
+    # consume_plugin_results() confirms it. Docker/dev (and the rare
+    # case where the root side finished between install_plugin()
+    # returning and this check) fall through to the old in-process
+    # behavior below.
+    if __plugins.is_systemd_host() and __plugins.request_is_pending(plugin_id, "install"):
+        __user.audit("PLUGIN_INSTALL_REQUESTED", plugin_id, f"Requested {entry.get('name')} v{entry.get('version')}")
+        flash(msg, "success")
+        return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
+
+    __plugins.record_plugin_row(entry)
+    __user.set_global_setting("restart_pending", "true")
+    __user.audit("PLUGIN_INSTALL", plugin_id, f"Installed {entry.get('name')} v{entry.get('version')}")
+    flash(msg, "success")
     return redirect(url_for("plugins.plugins_page"))
 
 
@@ -125,13 +140,19 @@ def update_plugin(plugin_id):
         return redirect(url_for("plugins.plugins_page"))
 
     ok, msg = __plugins.install_plugin(plugin_id, entry)
-    if ok:
-        _record_plugin(entry)
-        __user.set_global_setting("restart_pending", "true")
-        __user.audit("PLUGIN_UPDATE", plugin_id, f"Updated {entry.get('name')} to v{entry.get('version')}")
-        flash(msg, "success")
-    else:
+    if not ok:
         flash(msg, "error")
+        return redirect(url_for("plugins.plugins_page"))
+
+    if __plugins.is_systemd_host() and __plugins.request_is_pending(plugin_id, "install"):
+        __user.audit("PLUGIN_UPDATE_REQUESTED", plugin_id, f"Requested {entry.get('name')} v{entry.get('version')}")
+        flash(msg, "success")
+        return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
+
+    __plugins.record_plugin_row(entry)
+    __user.set_global_setting("restart_pending", "true")
+    __user.audit("PLUGIN_UPDATE", plugin_id, f"Updated {entry.get('name')} to v{entry.get('version')}")
+    flash(msg, "success")
     return redirect(url_for("plugins.plugins_page"))
 
 
@@ -177,14 +198,23 @@ def uninstall_plugin(plugin_id):
         flash("Invalid plugin ID.", "error")
         return redirect(url_for("plugins.plugins_page"))
     ok, msg = __plugins.uninstall_plugin(plugin_id)
-    if ok:
-        _remove_plugin_record(plugin_id)
-        __user.audit("PLUGIN_UNINSTALL", plugin_id, "Plugin uninstalled")
-        flash(msg, "success")
-        if __plugins.is_systemd_host():
-            return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
-    else:
+    if not ok:
         flash(msg, "error")
+        return redirect(url_for("plugins.plugins_page"))
+
+    # v5.28.0 (Q24, A9) — a deferred removal (root-owned plugin, marker
+    # still pending) hasn't actually removed anything yet; the DB row
+    # and completion audit wait for consume_plugin_results() to confirm
+    # it. A legacy writable uninstall (or Docker/dev) removes in-process
+    # and is confirmed immediately, same as before.
+    if __plugins.is_systemd_host() and __plugins.request_is_pending(plugin_id, "remove"):
+        __user.audit("PLUGIN_UNINSTALL_REQUESTED", plugin_id, "Removal requested")
+        flash(msg, "success")
+        return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
+
+    __plugins.remove_plugin_row(plugin_id)
+    __user.audit("PLUGIN_UNINSTALL", plugin_id, "Plugin uninstalled")
+    flash(msg, "success")
     return redirect(url_for("plugins.plugins_page"))
 
 
@@ -200,11 +230,24 @@ def install_status(plugin_id):
     plus this plugin's one-line result, if the unit has already
     finished processing it. Mirrors settings/updates.py's
     update_status() route: a read-only systemctl query needs no sudo
-    (rule 8 only applies to a command that changes something)."""
+    (rule 8 only applies to a command that changes something).
+
+    v5.28.0 (Q24, A9) — "result" calls consume_plugin_results(), which
+    both reads it and applies it to Jen's own state (DB row, enable
+    marker, restart_pending, audit) — a GET with side effects, but a
+    superadmin-only, idempotent one that plugins_page() would apply
+    anyway on the next render. `result` is "ok" or the raw error
+    string, matching the exact shape the page's poller already checks
+    (`s.result === 'ok'`); the friendlier detail text is what
+    plugins_page() flashes, not what this route returns. A call for
+    plugin B's id can consume and apply a DIFFERENT plugin A's result
+    that happened to be sitting there too — harmless, since applying it
+    is idempotent and A's own page render would have done the same."""
     if not __plugins.valid_plugin_id(plugin_id):
         return jsonify({"error": "invalid plugin id"}), 400
     status = __plugins.plugin_install_unit_status()
-    status["result"] = __plugins.read_plugin_request_result(plugin_id)
+    entry = next((r for r in __plugins.consume_plugin_results() if r["id"] == plugin_id), None)
+    status["result"] = ("ok" if entry["ok"] else entry["detail"]) if entry else None
     return jsonify(status)
 
 
@@ -221,42 +264,3 @@ def api_registry():
         e["installed"] = e["id"] in installed_ids
         e["version_ok"] = __plugins.jen_version_meets(e.get("requires_jen", "0.0.0"))
     return jsonify({"plugins": entries, "error": err})
-
-
-# ── DB helpers ────────────────────────────────────────────────────────────────
-
-
-def _record_plugin(entry: dict):
-    try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled)
-                    VALUES (%s, %s, %s, %s, %s, %s, 1)
-                    ON DUPLICATE KEY UPDATE
-                        name=VALUES(name), version=VALUES(version),
-                        description=VALUES(description), enabled=1
-                """,
-                    (
-                        entry.get("id"),
-                        entry.get("name"),
-                        entry.get("version"),
-                        entry.get("description"),
-                        entry.get("author"),
-                        entry.get("requires_jen"),
-                    ),
-                )
-            db.commit()
-    except Exception as e:
-        logger.error(f"Failed to record plugin in DB: {e}")
-
-
-def _remove_plugin_record(plugin_id: str):
-    try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("DELETE FROM plugins WHERE id=%s", (plugin_id,))
-            db.commit()
-    except Exception as e:
-        logger.error(f"Failed to remove plugin record from DB: {e}")

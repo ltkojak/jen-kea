@@ -146,6 +146,7 @@ import os
 import re
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
@@ -958,6 +959,18 @@ def _looks_tag_pinned(download_url):
     return bool(_TAG_PINNED_RE.search(download_url))
 
 
+def _parse_version(v):
+    """'X.Y.Z' -> (X, Y, Z) tuple for comparison. Mirrors
+    jen/services/plugins.py::_parse_version exactly — duplicated, not
+    imported, since this script can't import the jen package. An
+    unparsable string (including "?", `_installed_version`'s own
+    give-up value) sorts as (0, 0, 0), the lowest possible version."""
+    try:
+        return tuple(int(x) for x in str(v).strip().split(".")[:3])
+    except Exception:
+        return (0, 0, 0)
+
+
 def _install_one_plugin(
     plugin_id, root_plugin_dir=ROOT_PLUGIN_DIR, registry_url=PLUGIN_REGISTRY_URL, content_dir=CONTENT_DIR
 ):
@@ -1023,23 +1036,147 @@ def _install_one_plugin(
         shutil.rmtree(staging, ignore_errors=True)
         return f"error: plugin id mismatch (expected {plugin_id!r}, got {manifest.get('id')!r})"
 
+    # v5.28.0 (Q24, A3) — the in-process installer (jen/services/plugins.py)
+    # already refuses a plugin whose requires_jen exceeds the running Jen
+    # version; the root path skipped that check entirely. installed == "?"
+    # means _installed_version() couldn't find jen/__init__.py at all — an
+    # unrelated, worse problem than this plugin's compatibility, so don't
+    # let a false "?" < anything comparison block the install: skip and log.
+    required = str(manifest.get("requires_jen") or "0.0.0")
+    installed = _installed_version()
+    if installed == "?":
+        log(f"WARNING: could not determine the installed Jen version — skipping requires_jen check for '{plugin_id}'.")
+    elif _parse_version(installed) < _parse_version(required):
+        shutil.rmtree(staging, ignore_errors=True)
+        return f"error: plugin requires Jen {required} (running {installed})"
+
     _chown_recursive_root(staging)
     _chmod_recursive_a_rX_go_w(staging)
 
+    # v5.28.0 (Q24, A4) — crash-safe swap: rename the old copy aside first
+    # (never delete-then-create) so a crash between the two os.rename()
+    # calls leaves either the old copy or the new one fully intact under
+    # root_plugin_dir/<id>, never a half-deleted directory. The old copy is
+    # removed only after the new one is already live.
     live_dir = os.path.join(root_plugin_dir, plugin_id)
+    old_dir = None
     if os.path.isdir(live_dir):
-        shutil.rmtree(live_dir)
+        old_dir = os.path.join(root_plugin_dir, f"{plugin_id}.old-{int(time.time())}")
+        os.rename(live_dir, old_dir)
     os.makedirs(root_plugin_dir, exist_ok=True)
     os.rename(staging, live_dir)
+    if old_dir is not None:
+        shutil.rmtree(old_dir, ignore_errors=True)
 
     # A stale writable copy would otherwise still win over the fresh
     # root-owned one — discover_plugins() checks the writable tree last.
+    # v5.28.0 (Q24, A1) — never follow a symlink here: a compromised
+    # www-data could swap the writable plugin dir for a symlink to
+    # anywhere, and this runs as root.
     writable_dir = os.path.join(content_dir, "plugins", plugin_id)
-    if os.path.isdir(writable_dir):
+    if os.path.islink(writable_dir):
+        log(f"WARNING: '{writable_dir}' is a symlink, not a directory — refusing to remove it.")
+    elif os.path.isdir(writable_dir):
         shutil.rmtree(writable_dir, ignore_errors=True)
         log(f"Removed the now-superseded writable copy of '{plugin_id}'.")
 
     return "ok"
+
+
+# v5.28.0 (Q24, A1) — os.O_NOFOLLOW doesn't exist on Windows; this script
+# stays py_compile-checkable and importlib-loadable there (see the
+# importlib harness in tests/test_jen_update_root.py), so guard with
+# getattr rather than a bare AttributeError on import.
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
+_STALE_PLUGIN_DIR_RE = re.compile(r"\.(staging|old)-\d+$")
+
+
+def _sweep_stale_plugin_dirs(root_plugin_dir):
+    """v5.28.0 (Q24, A4) — remove any `<id>.staging-<ts>` or
+    `<id>.old-<ts>` directory directly under root_plugin_dir left behind
+    by a crash between the two os.rename() calls in _install_one_plugin.
+    Run once at the start of every --plugins invocation, before any
+    marker is processed. Never follows a symlink."""
+    if not os.path.isdir(root_plugin_dir):
+        return
+    for name in os.listdir(root_plugin_dir):
+        if not _STALE_PLUGIN_DIR_RE.search(name):
+            continue
+        path = os.path.join(root_plugin_dir, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+            log(f"Swept stale plugin-install leftover: {name}")
+
+
+def _write_plugin_result(requests_dir, plugin_id, action, result):
+    """v5.28.0 (Q24, A1/A2) — <id>.<action>.result (was <id>.result —
+    renamed since a stray file from an install marker and a remove
+    marker for the same id could otherwise collide), written
+    symlink-safely: this runs as root inside a directory www-data owns
+    (750, per docs/ARCHITECTURE.md §6.1), so a pre-planted symlink at
+    this exact path must never be followed — without O_NOFOLLOW, root
+    would silently truncate/overwrite whatever it points at. Any
+    existing entry at the path (file or symlink) is unlinked first
+    (os.unlink never follows a symlink itself); O_EXCL then refuses to
+    write through anything recreated at that path in the gap between
+    the unlink and the open. Any failure here is logged and swallowed —
+    the caller has already removed the marker either way."""
+    result_path = os.path.join(requests_dir, f"{plugin_id}.{action}.result")
+    with contextlib.suppress(OSError):
+        os.unlink(result_path)
+    try:
+        fd = os.open(result_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o644)
+    except OSError as e:
+        log(f"ERROR: could not write result for '{plugin_id}': {e}")
+        return
+    with os.fdopen(fd, "w") as f:
+        f.write(result + "\n")
+
+
+def _process_one_plugin_request(name, requests_dir, root_plugin_dir, registry_url):
+    """One `<id>.install` / `<id>.remove` marker. Never raises."""
+    if name.endswith(".install"):
+        plugin_id, action = name[: -len(".install")], "install"
+    else:
+        plugin_id, action = name[: -len(".remove")], "remove"
+
+    marker_path = os.path.join(requests_dir, name)
+
+    # v5.28.0 (Q24, A1) — only a REGULAR FILE is ever a marker. A
+    # directory or symlink named "<id>.install" is never processed —
+    # left alone if it's a directory (nothing safe to do with it), the
+    # symlink itself unlinked (not whatever it points at) if it's one.
+    try:
+        mst = os.lstat(marker_path)
+    except OSError:
+        return
+    if not stat.S_ISREG(mst.st_mode):
+        log(f"ERROR: ignoring non-regular-file plugin request marker: {name!r}")
+        if stat.S_ISLNK(mst.st_mode):
+            with contextlib.suppress(OSError):
+                os.unlink(marker_path)
+        return
+
+    if not _PLUGIN_ID_RE.match(plugin_id):
+        log(f"ERROR: ignoring plugin request with an invalid id: {name!r}")
+        with contextlib.suppress(OSError):
+            os.remove(marker_path)
+        return
+
+    log(f"Processing plugin {action} request for '{plugin_id}'…")
+    if action == "install":
+        result = _install_one_plugin(plugin_id, root_plugin_dir, registry_url)
+    else:
+        live_dir = os.path.join(root_plugin_dir, plugin_id)
+        shutil.rmtree(live_dir, ignore_errors=True)
+        result = "ok"
+
+    with contextlib.suppress(OSError):
+        os.remove(marker_path)
+
+    _write_plugin_result(requests_dir, plugin_id, action, result)
+    log(f"Plugin {action} for '{plugin_id}': {result}")
 
 
 def process_plugin_requests(
@@ -1052,47 +1189,55 @@ def process_plugin_requests(
     from the same trust root the self-update flow already uses; nothing
     here trusts anything www-data wrote beyond the marker's existence
     and its filename. Always deletes the marker and writes a one-line
-    result to <requests_dir>/<id>.result, success or failure, so the UI
-    has something to show either way. Never touches the DB — plugin
-    migrations still run in-app, in load_plugins(), the existing path.
+    result to <requests_dir>/<id>.<action>.result, success or failure,
+    so the UI has something to show either way. Never touches the DB —
+    plugin migrations still run in-app, in load_plugins(), the existing
+    path.
+
+    v5.28.0 (Q24) — hardened after an internal review of the v5.27.0
+    design: (A1) requests_dir itself, and every marker/result path
+    inside it, is only ever accessed via lstat/O_NOFOLLOW so a symlink
+    planted by a compromised www-data is never followed by this
+    root-run script; (A2) the result filename includes the action;
+    (A4) a crash-leftover staging/old directory is swept before any
+    marker runs; (A6) markers are drained in a loop — a request written
+    while this pass is already running (jen-plugin-install.service is a
+    oneshot; a second `systemctl start` while it's active is a no-op,
+    so that request would otherwise sit until the NEXT trigger) is
+    picked up again within the same invocation instead.
     """
-    if not os.path.isdir(requests_dir):
+    try:
+        st = os.lstat(requests_dir)
+    except OSError:
         return 0
-    for name in sorted(os.listdir(requests_dir)):
-        if name.endswith(".install"):
-            plugin_id, action = name[: -len(".install")], "install"
-        elif name.endswith(".remove"):
-            plugin_id, action = name[: -len(".remove")], "remove"
-        else:
-            continue
+    if not stat.S_ISDIR(st.st_mode):
+        log(f"ERROR: {requests_dir} is not a real directory — refusing to process plugin requests.")
+        return 0
 
-        marker_path = os.path.join(requests_dir, name)
-        if not _PLUGIN_ID_RE.match(plugin_id):
-            log(f"ERROR: ignoring plugin request with an invalid id: {name!r}")
-            with contextlib.suppress(OSError):
-                os.remove(marker_path)
-            continue
+    _sweep_stale_plugin_dirs(root_plugin_dir)
 
-        log(f"Processing plugin {action} request for '{plugin_id}'…")
-        if action == "install":
-            result = _install_one_plugin(plugin_id, root_plugin_dir, registry_url)
-        else:
-            live_dir = os.path.join(root_plugin_dir, plugin_id)
-            shutil.rmtree(live_dir, ignore_errors=True)
-            result = "ok"
-
-        with contextlib.suppress(OSError):
-            os.remove(marker_path)
-
-        result_path = os.path.join(requests_dir, f"{plugin_id}.result")
+    max_passes = 20
+    previous_markers = None
+    for _pass in range(max_passes):
         try:
-            with open(result_path, "w") as f:
-                f.write(result + "\n")
-            os.chmod(result_path, 0o644)
-        except OSError as e:
-            log(f"ERROR: could not write result for '{plugin_id}': {e}")
-
-        log(f"Plugin {action} for '{plugin_id}': {result}")
+            markers = sorted(n for n in os.listdir(requests_dir) if n.endswith((".install", ".remove")))
+        except OSError:
+            return 0
+        if not markers:
+            break
+        if markers == previous_markers:
+            # Nothing was resolved by the previous pass (every remaining
+            # entry is something _process_one_plugin_request leaves in
+            # place, e.g. a directory shaped like a marker) — stop
+            # instead of spinning through the remaining passes on marker
+            # names that will never go away on their own.
+            log(f"WARNING: {len(markers)} plugin request marker(s) could not be resolved: {markers}")
+            break
+        for name in markers:
+            _process_one_plugin_request(name, requests_dir, root_plugin_dir, registry_url)
+        previous_markers = markers
+    else:
+        log(f"WARNING: process_plugin_requests hit its {max_passes}-pass cap — a request may still be queued.")
     return 0
 
 
