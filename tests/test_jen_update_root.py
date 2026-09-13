@@ -979,6 +979,7 @@ class TestMainSourceShape:
             patch.object(jen_update_root, "_installed_version", return_value="9.9.9"),
             patch.object(jen_update_root, "_prune_old_releases"),
             patch.object(jen_update_root, "fetch_bytes_with_sha256") as download,
+            patch.object(jen_update_root.sys, "argv", ["jen-update-root.py"]),
         ):
             assert jen_update_root.main() == 0
         download.assert_not_called()
