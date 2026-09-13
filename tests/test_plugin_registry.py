@@ -603,6 +603,237 @@ class TestConsumePluginResults:
         monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "does-not-exist"))
         assert plugins_svc.consume_plugin_results() == []
 
+    def test_transient_remove_failure_is_retried_without_duplicate_row_errors(self, tmp_path, monkeypatch, db):
+        """v5.28.1 (Q26, C1) — apply-then-delete-then-audit: if os.remove()
+        fails after a successful apply, the result file must survive so
+        the next call retries it. record_plugin_row/enable_plugin are
+        idempotent, so re-applying the same result is harmless."""
+        requests_dir = tmp_path / "requests"
+        root = tmp_path / "root"
+        requests_dir.mkdir()
+        plugin_dir = root / "q26-retry-plugin"
+        plugin_dir.mkdir(parents=True)
+        manifest = {
+            "id": "q26-retry-plugin",
+            "name": "Retry Plugin",
+            "version": "1.0.0",
+            "description": "",
+            "author": "",
+            "requires_jen": "",
+        }
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        result_path = requests_dir / "q26-retry-plugin.install.result"
+        result_path.write_text("ok\n")
+
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        real_remove = os.remove
+        calls = {"n": 0}
+
+        def flaky_remove(path):
+            calls["n"] += 1
+            if calls["n"] == 1 and str(path) == str(result_path):
+                raise OSError("simulated transient failure")
+            real_remove(path)
+
+        try:
+            with patch("os.remove", flaky_remove):
+                r1 = plugins_svc.consume_plugin_results()
+            assert r1 == [{"id": "q26-retry-plugin", "action": "install", "ok": True, "detail": "installed v1.0.0"}]
+            assert result_path.exists(), "the result file must survive a failed os.remove()"
+
+            r2 = plugins_svc.consume_plugin_results()
+            assert r2 == [{"id": "q26-retry-plugin", "action": "install", "ok": True, "detail": "installed v1.0.0"}]
+            assert not result_path.exists()
+
+            with db.cursor() as cur:
+                cur.execute("SELECT * FROM plugins WHERE id=%s", ("q26-retry-plugin",))
+                rows = cur.fetchall()
+            assert len(rows) == 1, "record_plugin_row's upsert must not create a duplicate row on retry"
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM plugins WHERE id=%s", ("q26-retry-plugin",))
+            db.commit()
+
+    def test_an_exception_applying_a_result_leaves_the_file_for_the_next_call(self, tmp_path, monkeypatch):
+        """v5.28.1 (Q26, C1) — the old order deleted the result file
+        BEFORE applying it, so a crash/exception mid-apply lost the only
+        authoritative record. Now the file is only removed once
+        _apply_plugin_result() returns successfully."""
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        result_path = requests_dir / "q26-raises-plugin.install.result"
+        result_path.write_text("ok\n")
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(
+            plugins_svc, "_apply_plugin_result", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+
+        results = plugins_svc.consume_plugin_results()
+        assert results == []
+        assert result_path.exists()
+
+
+class TestRootPathPluginMigrationGate:
+    """v5.28.1 (Q26, C3-ii) — a root-owned install's manifest migrations
+    now run inside _apply_plugin_result(), since Jen has DB access and
+    the root-run request processor never did. A failing migration must
+    leave the plugin un-enabled and record a Plugins-page-visible flag;
+    a clean one clears that flag and stamps plugin_migrated_ok."""
+
+    def _cleanup(self, db, plugin_id):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM plugins WHERE id=%s", (plugin_id,))
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key IN (%s, %s)",
+                (f"plugin_migrated_ok:{plugin_id}", f"plugin_migration_failed:{plugin_id}"),
+            )
+        db.commit()
+
+    def test_failing_migration_leaves_plugin_not_enabled_and_flags_it(self, tmp_path, monkeypatch, db):
+        plugin_id = "q26-root-migration-fail"
+        self._cleanup(db, plugin_id)
+        requests_dir = tmp_path / "requests"
+        root = tmp_path / "root"
+        requests_dir.mkdir()
+        plugin_dir = root / plugin_id
+        plugin_dir.mkdir(parents=True)
+        manifest = {
+            "id": plugin_id,
+            "name": "Root Migration Fail",
+            "version": "1.0.0",
+            "description": "",
+            "author": "",
+            "requires_jen": "",
+            "db_migrations": [{"version": 1, "description": "broken", "sql": "NOT VALID SQL AT ALL"}],
+        }
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (requests_dir / f"{plugin_id}.install.result").write_text("ok\n")
+
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        try:
+            results = plugins_svc.consume_plugin_results()
+            assert len(results) == 1
+            entry = results[0]
+            assert entry["ok"] is True  # the root side's OWN action succeeded — the migration is a separate gate
+            assert "not enabled" in entry["detail"]
+            assert not plugins_svc._is_enabled(plugin_id)
+
+            from jen.models.user import get_global_setting
+
+            assert get_global_setting(f"plugin_migration_failed:{plugin_id}")
+            assert get_global_setting(f"plugin_migrated_ok:{plugin_id}") is None
+
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT * FROM audit_log WHERE action=%s AND entity=%s ORDER BY id DESC LIMIT 1",
+                    ("PLUGIN_INSTALL_MIGRATION_FAILED", plugin_id),
+                )
+                assert cur.fetchone() is not None
+        finally:
+            self._cleanup(db, plugin_id)
+
+    def test_clean_migration_enables_and_stamps_migrated_ok(self, tmp_path, monkeypatch, db):
+        plugin_id = "q26-root-migration-ok"
+        self._cleanup(db, plugin_id)
+        requests_dir = tmp_path / "requests"
+        root = tmp_path / "root"
+        requests_dir.mkdir()
+        plugin_dir = root / plugin_id
+        plugin_dir.mkdir(parents=True)
+        manifest = {
+            "id": plugin_id,
+            "name": "Root Migration OK",
+            "version": "1.0.0",
+            "description": "",
+            "author": "",
+            "requires_jen": "",
+        }
+        (plugin_dir / "manifest.json").write_text(json.dumps(manifest))
+        (requests_dir / f"{plugin_id}.install.result").write_text("ok\n")
+
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "writable-absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "bundled-absent"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+
+        try:
+            results = plugins_svc.consume_plugin_results()
+            assert results == [{"id": plugin_id, "action": "install", "ok": True, "detail": "installed v1.0.0"}]
+            assert plugins_svc._is_enabled(plugin_id)
+
+            from jen.models.user import get_global_setting
+
+            assert get_global_setting(f"plugin_migrated_ok:{plugin_id}") == "1.0.0"
+            assert get_global_setting(f"plugin_migration_failed:{plugin_id}") == ""
+        finally:
+            self._cleanup(db, plugin_id)
+
+
+class TestInProcessInstallMigrationGate:
+    """v5.28.1 (Q26, C3-i) — the in-process install_plugin() path (dev/
+    Docker) runs migrations against the manifest read from tmp_dest
+    BEFORE anything touches the live directory, so a failing migration
+    leaves an existing install completely untouched."""
+
+    def test_failing_migration_leaves_an_existing_install_byte_identical(self, tmp_path, monkeypatch):
+        import io
+        import zipfile
+
+        plugin_dir_root = tmp_path / "plugins"
+        plugin_dir_root.mkdir()
+        dest = plugin_dir_root / "q26-inprocess-fail"
+        dest.mkdir()
+        (dest / "manifest.json").write_text(json.dumps({"id": "q26-inprocess-fail", "name": "Old", "version": "1.0.0"}))
+        (dest / "sentinel.txt").write_text("original bytes, must survive")
+        before_listing = sorted(p.name for p in dest.iterdir())
+        before_sentinel = (dest / "sentinel.txt").read_text()
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "id": "q26-inprocess-fail",
+                        "name": "New",
+                        "version": "2.0.0",
+                        "requires_jen": "0.0.0",
+                        "db_migrations": [{"version": 1, "description": "broken", "sql": "NOT VALID SQL AT ALL"}],
+                    }
+                ),
+            )
+            zf.writestr("plugin.py", "# new version\n")
+        zip_bytes = buf.getvalue()
+        sha = hashlib.sha256(zip_bytes).hexdigest()
+
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(plugin_dir_root))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: False)
+        monkeypatch.setattr(plugins_svc, "run_plugin_migrations", lambda m: (False, "duplicate column", 0))
+        monkeypatch.setattr(plugins_svc.requests, "get", lambda *a, **k: _mock_response(200, content=zip_bytes))
+
+        ok, msg = plugins_svc.install_plugin(
+            "q26-inprocess-fail", {"download_url": "https://example.com/x", "sha256": sha}
+        )
+
+        assert ok is False
+        assert "nothing was installed" in msg
+        assert dest.is_dir()
+        assert sorted(p.name for p in dest.iterdir()) == before_listing
+        assert (dest / "sentinel.txt").read_text() == before_sentinel
+        leftovers = [p.name for p in plugin_dir_root.iterdir() if p.name != "q26-inprocess-fail"]
+        assert leftovers == []
+
 
 class TestPluginsPageConsumesResultsFirst:
     """v5.28.0 (Q24, A9) — plugins_page() must apply any waiting result

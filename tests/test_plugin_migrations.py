@@ -307,24 +307,92 @@ class TestBackwardCompatWithOldFlatFormat:
                 assert cur.fetchone() is not None, f"{tbl} was not created"
 
 
-class TestLoadPluginsDoesNotSkipOnMigrationFailure:
-    """The second half of the v4.4.19 fix: even a genuine migration
-    failure (not just an old-format manifest) must not prevent
-    load_plugins() from still attempting to load the plugin's blueprint
-    and nav entry."""
+class TestLoadPluginsMigrationGate:
+    """v5.28.1 (Q26, C3-iii) narrows the v4.4.19 fix: a migration
+    failure only loads the plugin anyway when THIS EXACT VERSION has
+    already migrated cleanly once before (`plugin_migrated_ok:<id>`
+    matches `plugin["version"]`) — that's the original v4.4.19 case
+    (an unrelated/format quirk on an already-working install). A
+    version that has never migrated cleanly, or a newer version whose
+    migration just failed for the first time, is not loaded — running
+    new code against a schema its own migration never reached is worse
+    than the plugin vanishing from the nav until it's fixed."""
 
-    def test_migration_failure_does_not_prevent_plugin_load(self, db, monkeypatch, app):
-        from jen.services import plugins as plugins_mod
-
-        fake_manifest = {
-            "id": "broken_migration_plugin",
-            "path": "/tmp/nonexistent_broken_migration_plugin",
+    def _fake_manifest(self, plugin_id, version):
+        return {
+            "id": plugin_id,
+            "path": f"/tmp/nonexistent_{plugin_id}",
             "enabled": True,
             "version_ok": True,
+            "version": version,
             "db_migrations": [
                 {"version": 1, "description": "broken", "sql": "NOT VALID SQL AT ALL"},
             ],
         }
+
+    def _cleanup(self, db, plugin_id):
+        with db.cursor() as cur:
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key IN (%s, %s)",
+                (f"plugin_migrated_ok:{plugin_id}", f"plugin_migration_failed:{plugin_id}"),
+            )
+        db.commit()
+
+    def test_never_migrated_cleanly_is_skipped(self, db, monkeypatch, app):
+        from jen.models.user import get_global_setting
+        from jen.services import plugins as plugins_mod
+
+        plugin_id = "q26_never_migrated_plugin"
+        self._cleanup(db, plugin_id)
+        fake_manifest = self._fake_manifest(plugin_id, "1.0.0")
+        monkeypatch.setattr(plugins_mod, "discover_plugins", lambda: [fake_manifest])
+
+        load_attempted = {}
+        monkeypatch.setattr(
+            plugins_mod, "_load_plugin", lambda app_arg, manifest: load_attempted.setdefault("called", True)
+        )
+
+        try:
+            plugins_mod.load_plugins(app)
+            assert "called" not in load_attempted, (
+                "a version that has never migrated cleanly must not be loaded — its "
+                "migration failure is set as plugin_migration_failed for the Plugins page"
+            )
+            stored = get_global_setting(f"plugin_migration_failed:{plugin_id}")
+            assert stored and "failed" in stored
+        finally:
+            self._cleanup(db, plugin_id)
+
+    def test_newer_version_whose_migration_just_failed_is_skipped(self, db, monkeypatch, app):
+        from jen.models.user import get_global_setting, set_global_setting
+        from jen.services import plugins as plugins_mod
+
+        plugin_id = "q26_newer_version_plugin"
+        self._cleanup(db, plugin_id)
+        set_global_setting(f"plugin_migrated_ok:{plugin_id}", "1.0.0")
+        fake_manifest = self._fake_manifest(plugin_id, "2.0.0")
+        monkeypatch.setattr(plugins_mod, "discover_plugins", lambda: [fake_manifest])
+
+        load_attempted = {}
+        monkeypatch.setattr(
+            plugins_mod, "_load_plugin", lambda app_arg, manifest: load_attempted.setdefault("called", True)
+        )
+
+        try:
+            plugins_mod.load_plugins(app)
+            assert "called" not in load_attempted
+            assert get_global_setting(f"plugin_migration_failed:{plugin_id}")
+        finally:
+            self._cleanup(db, plugin_id)
+
+    def test_this_exact_version_already_migrated_cleanly_loads_anyway(self, db, monkeypatch, app):
+        from jen.models.user import set_global_setting
+        from jen.services import plugins as plugins_mod
+
+        plugin_id = "q26_already_clean_plugin"
+        self._cleanup(db, plugin_id)
+        set_global_setting(f"plugin_migrated_ok:{plugin_id}", "1.0.0")
+        fake_manifest = self._fake_manifest(plugin_id, "1.0.0")
         monkeypatch.setattr(plugins_mod, "discover_plugins", lambda: [fake_manifest])
 
         load_attempted = {}
@@ -332,16 +400,40 @@ class TestLoadPluginsDoesNotSkipOnMigrationFailure:
         def fake_load_plugin(app_arg, manifest):
             load_attempted["called"] = True
             load_attempted["plugin_id"] = manifest["id"]
-            return True
 
         monkeypatch.setattr(plugins_mod, "_load_plugin", fake_load_plugin)
 
-        plugins_mod.load_plugins(app)
+        try:
+            plugins_mod.load_plugins(app)
+            assert load_attempted.get("called") is True, (
+                "this exact version already migrated cleanly once before — the v4.4.19 "
+                "case — so today's failure is an unrelated/format quirk, not a broken "
+                "migration for the code that's about to run"
+            )
+            assert load_attempted.get("plugin_id") == plugin_id
+        finally:
+            self._cleanup(db, plugin_id)
 
-        assert load_attempted.get("called") is True, (
-            "load_plugins() must still attempt to load a plugin even when "
-            "its migrations fail — this is exactly the v4.4.19 regression: "
-            "a migration problem used to skip the whole plugin, hiding an "
-            "otherwise-working plugin's UI over an unrelated schema issue."
-        )
-        assert load_attempted.get("plugin_id") == "broken_migration_plugin"
+    def test_clean_migration_stamps_migrated_ok_and_clears_failed_key(self, db, monkeypatch, app):
+        from jen.models.user import get_global_setting, set_global_setting
+        from jen.services import plugins as plugins_mod
+
+        plugin_id = "q26_clean_migration_plugin"
+        self._cleanup(db, plugin_id)
+        set_global_setting(f"plugin_migration_failed:{plugin_id}", "a stale earlier failure")
+        fake_manifest = {
+            "id": plugin_id,
+            "path": f"/tmp/nonexistent_{plugin_id}",
+            "enabled": True,
+            "version_ok": True,
+            "version": "1.0.0",
+        }
+        monkeypatch.setattr(plugins_mod, "discover_plugins", lambda: [fake_manifest])
+        monkeypatch.setattr(plugins_mod, "_load_plugin", lambda app_arg, manifest: True)
+
+        try:
+            plugins_mod.load_plugins(app)
+            assert get_global_setting(f"plugin_migrated_ok:{plugin_id}") == "1.0.0"
+            assert get_global_setting(f"plugin_migration_failed:{plugin_id}") == ""
+        finally:
+            self._cleanup(db, plugin_id)

@@ -55,6 +55,10 @@ def plugins_page():
             p["registry_version"] and _parse_version(p["registry_version"]) > _parse_version(p["version"])
         )
         p["changelog_url"] = reg.get("changelog_url", "")
+        # v5.28.1 (Q26, C3) — set by _apply_plugin_result()/load_plugins()
+        # when this plugin's own manifest migration failed and it was
+        # never confirmed clean at this version — see plugins.py.
+        p["migration_failed"] = __user.get_global_setting(f"plugin_migration_failed:{p['id']}") or ""
 
     # Annotate registry entries with install/update status
     for entry in registry:

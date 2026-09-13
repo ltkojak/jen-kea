@@ -68,6 +68,9 @@
                 {% else %}
                 <span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>
                 {% endif %}
+                {% if p.migration_failed %}
+                <div style="margin-top:4px;font-size:10px;color:var(--danger);">migration failed — not enabled: {{ p.migration_failed[:120] }}</div>
+                {% endif %}
                 {% if is_systemd_host and not p.bundled %}
                 {% if p.root_owned %}
                 <div style="margin-top:4px;font-size:10px;color:var(--success);">🔒 root-owned</div>

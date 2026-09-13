@@ -1089,7 +1089,7 @@ def _install_one_plugin(
 # getattr rather than a bare AttributeError on import.
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
-_STALE_PLUGIN_DIR_RE = re.compile(r"\.(staging|old)-\d+$")
+_STALE_PLUGIN_DIR_RE = re.compile(r"^(?P<id>.+)\.(?P<kind>staging|old)-(?P<ts>\d+)$")
 
 
 def _sweep_stale_plugin_dirs(root_plugin_dir):
@@ -1097,16 +1097,50 @@ def _sweep_stale_plugin_dirs(root_plugin_dir):
     `<id>.old-<ts>` directory directly under root_plugin_dir left behind
     by a crash between the two os.rename() calls in _install_one_plugin.
     Run once at the start of every --plugins invocation, before any
-    marker is processed. Never follows a symlink."""
+    marker is processed. Never follows a symlink.
+
+    v5.28.1 (Q26, C2) — a crash in the exact window between the two
+    renames (live renamed aside to `.old-<ts>`, but staging not yet
+    renamed into place) used to lose BOTH recovery copies here: there
+    is no live directory at that point, and the old sweep just deleted
+    the `.old-<ts>` right along with the never-verified-complete
+    `.staging-<ts>`. Now leftovers are grouped by plugin id first: if a
+    live copy already exists, every leftover for that id is deleted
+    (the swap finished; both are simply stale, today's behavior
+    unchanged). If it does NOT exist and at least one `.old-<ts>` does,
+    the newest one is restored as the live copy — the swap crashed
+    right after moving it aside — before everything else for that id
+    (including any staging copy, which was never verified complete and
+    so is never a restore candidate) is deleted. If only staging
+    leftovers exist for an id, there is nothing to restore: that was
+    an interrupted FIRST install, which never had a prior live copy."""
     if not os.path.isdir(root_plugin_dir):
         return
+    by_id: dict[str, list[tuple[int, str, str]]] = {}  # id -> [(ts, kind, path), ...]
     for name in os.listdir(root_plugin_dir):
-        if not _STALE_PLUGIN_DIR_RE.search(name):
+        m = _STALE_PLUGIN_DIR_RE.match(name)
+        if not m:
             continue
         path = os.path.join(root_plugin_dir, name)
-        if os.path.isdir(path) and not os.path.islink(path):
+        if not os.path.isdir(path) or os.path.islink(path):
+            continue
+        by_id.setdefault(m.group("id"), []).append((int(m.group("ts")), m.group("kind"), path))
+
+    for plugin_id, entries in by_id.items():
+        live_dir = os.path.join(root_plugin_dir, plugin_id)
+        if not os.path.isdir(live_dir):
+            olds = sorted((e for e in entries if e[1] == "old"), key=lambda e: e[0], reverse=True)
+            if olds:
+                newest_ts, _kind, newest_path = olds[0]
+                os.rename(newest_path, live_dir)
+                log(
+                    f"RESTORED plugin '{plugin_id}' from a leftover old copy "
+                    f"(ts={newest_ts}) after an interrupted install."
+                )
+                entries = [e for e in entries if e[2] != newest_path]
+        for _ts, _kind, path in entries:
             shutil.rmtree(path, ignore_errors=True)
-            log(f"Swept stale plugin-install leftover: {name}")
+            log(f"Swept stale plugin-install leftover: {os.path.basename(path)}")
 
 
 def _write_plugin_result(requests_dir, plugin_id, action, result):

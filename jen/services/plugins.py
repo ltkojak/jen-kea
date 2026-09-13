@@ -182,7 +182,23 @@ def load_plugins(app) -> None:
     manifest gained a new migration in a later release should apply it
     the next time Jen restarts, not only if someone happens to click
     "Update" again.
+
+    v5.28.1 (Q26, C3-iii) — a migration failure only loads the plugin
+    anyway (the v4.4.19 property below) when THIS EXACT VERSION has
+    already migrated cleanly once before (`plugin_migrated_ok:<id>`
+    matches `plugin["version"]`) — today's failure is then a
+    format/unrelated-table quirk, not a broken migration for the code
+    that's about to run. A version that has never migrated cleanly, or
+    a newer version whose migration just failed for the first time, is
+    not loaded at all: running new code against a schema its own
+    migration never reached is worse than the plugin vanishing from the
+    nav until it's fixed. A clean migration (or nothing pending) always
+    (re)stamps `plugin_migrated_ok` and clears `plugin_migration_failed`
+    for the version that's about to load — bundled plugins go through
+    this too, harmlessly, since they have no failing migrations.
     """
+    from jen.models.user import get_global_setting, set_global_setting
+
     for plugin in discover_plugins():
         if not plugin.get("enabled"):
             continue
@@ -191,22 +207,30 @@ def load_plugins(app) -> None:
                 f"Plugin '{plugin['id']}' requires Jen {plugin.get('requires_jen')} — skipping (version mismatch)"
             )
             continue
+        plugin_id = plugin["id"]
+        version = plugin.get("version")
         mig_ok, mig_msg, mig_count = run_plugin_migrations(plugin)
         if not mig_ok:
-            # v4.4.19: log loudly, but load the plugin anyway. A migration
-            # problem — a manifest-format mismatch, a genuinely broken new
-            # migration — used to also skip the plugin's blueprint and nav
-            # entry entirely, which is a much worse outcome than the
-            # migration issue itself: it makes an already-working plugin's
-            # existing functionality vanish from the UI over a schema
-            # change for a DIFFERENT, possibly-unrelated table. Found this
-            # the hard way — a real installed plugin on the old manifest
-            # format disappeared from the nav after updating Jen, even
-            # though its tables and data were completely fine.
-            logger.error(
-                f"Plugin '{plugin['id']}' has a migration problem (loading "
-                f"anyway — existing functionality may still work): {mig_msg}"
-            )
+            ok_version = get_global_setting(f"plugin_migrated_ok:{plugin_id}")
+            if ok_version == version:
+                # v4.4.19: log loudly, but load the plugin anyway — this
+                # exact version already migrated cleanly once before, so
+                # today's failure is a format/unrelated-table quirk, not
+                # a broken migration for the code about to run.
+                logger.error(
+                    f"Plugin '{plugin_id}' has a migration problem (loading anyway — "
+                    f"v{version} already migrated cleanly before): {mig_msg}"
+                )
+            else:
+                logger.error(
+                    f"Plugin '{plugin_id}' v{version} migration failed and was never "
+                    f"confirmed clean at this version — not loading: {mig_msg}"
+                )
+                set_global_setting(f"plugin_migration_failed:{plugin_id}", mig_msg)
+                continue
+        else:
+            set_global_setting(f"plugin_migrated_ok:{plugin_id}", version)
+            set_global_setting(f"plugin_migration_failed:{plugin_id}", "")
         _load_plugin(app, plugin)
 
 
@@ -461,29 +485,53 @@ def remove_plugin_row(plugin_id: str) -> None:
         logger.error(f"Failed to remove plugin record from DB: {e}")
 
 
-def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str) -> str:
+def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str) -> tuple[str, str, str]:
     """Apply one confirmed root-side outcome to Jen's own state (DB row,
-    enable marker, restart_pending, audit log) and return the detail
-    string a caller should display for it. Only ever called once per
-    result, by consume_plugin_results() right after it deletes the
-    `.result` file — never re-derives anything from a marker, since by
-    this point the marker is long gone."""
-    from jen.models.user import audit, set_global_setting
+    enable marker, restart_pending) and return (detail, audit_action,
+    audit_detail) for the caller to display/record. Only ever called
+    once per result, by consume_plugin_results() BEFORE it deletes the
+    `.result` file (v5.28.1, Q26, C1) — never re-derives anything from
+    a marker, since by this point the marker is long gone. Does NOT
+    audit itself: consume_plugin_results() does that only after the
+    result file is actually gone, so a crash/exception here can never
+    lose the one authoritative record of what happened — the file stays
+    in place and the next call retries this same apply.
+
+    v5.28.1 (Q26, C3-ii) — an install's manifest migrations run HERE,
+    against the manifest discover_plugins() finds at
+    PLUGIN_DIR_ROOT/<id> (Jen has DB access; the root-run request
+    processor never did). A failing migration leaves the plugin NOT
+    enabled and records `plugin_migration_failed:<id>` for the Plugins
+    page to show; a clean one (or nothing pending) clears that key and
+    stamps `plugin_migrated_ok:<id>` with the version that just passed,
+    the same bookkeeping load_plugins() relies on for its own v4.4.19
+    fallback."""
+    from jen.models.user import set_global_setting
 
     if not ok:
-        audit("PLUGIN_INSTALL_FAILED" if action == "install" else "PLUGIN_UNINSTALL_FAILED", plugin_id, raw_detail)
-        return raw_detail
+        action_name = "PLUGIN_INSTALL_FAILED" if action == "install" else "PLUGIN_UNINSTALL_FAILED"
+        return raw_detail, action_name, raw_detail
 
     if action == "install":
         manifest = next((p for p in discover_plugins() if p["id"] == plugin_id), None)
-        if manifest:
-            record_plugin_row(manifest)
+        if not manifest:
+            enable_plugin(plugin_id)
+            set_global_setting("restart_pending", "true")
+            return "install completed", "PLUGIN_INSTALL", "root-owned install completed v?"
+
+        version = manifest.get("version", "?")
+        record_plugin_row(manifest)
+        mig_ok, mig_msg, _mig_count = run_plugin_migrations(manifest)
+        if not mig_ok:
+            set_global_setting(f"plugin_migration_failed:{plugin_id}", mig_msg)
+            detail = f"installed v{version}, but its DB migration failed: {mig_msg} — not enabled"
+            return detail, "PLUGIN_INSTALL_MIGRATION_FAILED", detail
+
+        set_global_setting(f"plugin_migration_failed:{plugin_id}", "")
+        set_global_setting(f"plugin_migrated_ok:{plugin_id}", version)
         enable_plugin(plugin_id)
         set_global_setting("restart_pending", "true")
-        version = manifest.get("version", "?") if manifest else "?"
-        detail = f"installed v{version}" if manifest else "install completed"
-        audit("PLUGIN_INSTALL", plugin_id, f"root-owned install completed v{version}")
-        return detail
+        return f"installed v{version}", "PLUGIN_INSTALL", f"root-owned install completed v{version}"
 
     remove_plugin_row(plugin_id)
     if os.path.isdir(os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)):
@@ -492,19 +540,18 @@ def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str)
         disable_plugin(plugin_id)
         detail = "removed"
     set_global_setting("restart_pending", "true")
-    audit("PLUGIN_UNINSTALL", plugin_id, detail)
-    return detail
+    return detail, "PLUGIN_UNINSTALL", detail
 
 
 def consume_plugin_results() -> list[dict]:
     """Read and apply every root-run `<id>.<action>.result` the request
     processor has written since the last call — the QUEUED -> CONFIRMED
-    half of the split v5.27.0 started (v5.28.0, Q24, A9). Each result
-    is deleted as it's read, so this is safe to call repeatedly and
-    from more than one place: plugins_page() calls it on every render
-    (so a result that lands after the browser tab was closed still
-    gets applied the next time anyone opens the page, not only via the
-    poller) and the install-status route calls it too. Never raises.
+    half of the split v5.27.0 started (v5.28.0, Q24, A9). Safe to call
+    repeatedly and from more than one place: plugins_page() calls it on
+    every render (so a result that lands after the browser tab was
+    closed still gets applied the next time anyone opens the page, not
+    only via the poller) and the install-status route calls it too.
+    Never raises.
 
     Returns a list of {"id", "action", "ok", "detail"} — one entry per
     result consumed this call (usually 0 or 1).
@@ -513,7 +560,20 @@ def consume_plugin_results() -> list[dict]:
     left over from a box that installed a plugin under 5.27.0) is
     deleted on sight without being applied: there is no way to know
     which action it belonged to, and no code writes that filename
-    anymore."""
+    anymore.
+
+    v5.28.1 (Q26, C1) — apply-then-delete-then-audit, not
+    delete-then-apply: the old order deleted the `.result` file BEFORE
+    calling `_apply_plugin_result`, so a crash or exception in between
+    lost the only authoritative record of what the root side actually
+    did. Now the file is only removed once `_apply_plugin_result` has
+    returned successfully; if it raises, the file is left in place and
+    logged at ERROR, so the next call (the next page render, or the
+    next poll) retries the same result — safe because
+    record_plugin_row/enable_plugin/disable_plugin/set_global_setting
+    are all idempotent."""
+    from jen.models.user import audit
+
     results = []
     d = extensions.CONTENT_PLUGIN_REQUESTS_DIR
     if not os.path.isdir(d):
@@ -533,10 +593,15 @@ def consume_plugin_results() -> list[dict]:
                 raw_detail = f.read().strip()
         except OSError:
             continue
+        ok = raw_detail == "ok"
+        try:
+            detail, audit_action, audit_detail = _apply_plugin_result(plugin_id, action, ok, raw_detail)
+        except Exception as e:
+            logger.error(f"Failed to apply plugin result for '{plugin_id}' ({action}): {e} — will retry next time.")
+            continue
         with contextlib.suppress(OSError):
             os.remove(path)
-        ok = raw_detail == "ok"
-        detail = _apply_plugin_result(plugin_id, action, ok, raw_detail)
+        audit(audit_action, plugin_id, audit_detail)
         results.append({"id": plugin_id, "action": action, "ok": ok, "detail": detail})
     return results
 
@@ -585,6 +650,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     import hashlib
     import io
     import shutil
+    import time
     import zipfile
 
     if not valid_plugin_id(plugin_id):
@@ -657,17 +723,28 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
 
             return False, f"Plugin requires Jen {required} (running {JEN_VERSION})."
 
-        # Replace existing install if present
-        if os.path.isdir(dest):
-            shutil.rmtree(dest)
-        os.rename(tmp_dest, dest)
-
-        # Run DB migrations — surface a real failure to the caller
-        # (previously this just logged an error and pretended the
-        # install succeeded regardless).
+        # v5.28.1 (Q26, C3-i) — migrations run against the manifest read
+        # from tmp_dest BEFORE anything touches the live directory, so a
+        # failing migration leaves the existing install (if any)
+        # completely untouched instead of swapping in new files and only
+        # then discovering the schema doesn't work.
         mig_ok, mig_msg, mig_count = run_plugin_migrations(manifest)
         if not mig_ok:
-            return False, f"Plugin files installed, but a DB migration failed: {mig_msg}"
+            shutil.rmtree(tmp_dest)
+            return False, f"DB migration failed — nothing was installed: {mig_msg}"
+
+        # v5.28.1 (Q26, C3-i) — crash-safe swap, same shape as the root
+        # path's own _install_one_plugin (A4): rename the old copy aside
+        # first (never delete-then-create), so a crash between the two
+        # os.rename() calls leaves either the old or the new copy fully
+        # intact under `dest`, never a half-deleted directory.
+        old_dest = None
+        if os.path.isdir(dest):
+            old_dest = f"{dest}.old-{int(time.time())}"
+            os.rename(dest, old_dest)
+        os.rename(tmp_dest, dest)
+        if old_dest is not None:
+            shutil.rmtree(old_dest, ignore_errors=True)
 
         # Enable by default on fresh install
         enable_plugin(plugin_id)

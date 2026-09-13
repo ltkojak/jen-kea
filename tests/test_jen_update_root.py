@@ -1587,6 +1587,84 @@ class TestProcessPluginRequests:
 
         assert real_plugin.exists(), "a real plugin dir must never be swept just for containing 'old'"
 
+    def test_sweep_restores_the_newest_old_copy_when_live_is_missing(self, jen_update_root, tmp_path):
+        """v5.28.1 (Q26, C2) — a crash in the exact window between the
+        two os.rename() calls (live moved aside to `.old-<ts>`, staging
+        never renamed into place) used to lose BOTH recovery copies:
+        there is no live directory at that point, and the old sweep just
+        deleted the `.old-<ts>` right along with the never-verified
+        `.staging-<ts>`. Now the newest `.old-<ts>` is restored as live,
+        and only the (never-verified-complete) staging copy is deleted."""
+        root_dir = tmp_path / "root"
+        root_dir.mkdir()
+        old_dir = root_dir / "ipam.old-1"
+        staging_dir = root_dir / "ipam.staging-2"
+        old_dir.mkdir()
+        staging_dir.mkdir()
+        (old_dir / "manifest.json").write_text(json.dumps({"id": "ipam", "version": "1.2.3"}))
+
+        jen_update_root._sweep_stale_plugin_dirs(str(root_dir))
+
+        assert not old_dir.exists()
+        assert not staging_dir.exists()
+        live_dir = root_dir / "ipam"
+        assert live_dir.is_dir(), "the newest .old-<ts> must be restored as the live copy"
+        assert json.loads((live_dir / "manifest.json").read_text())["version"] == "1.2.3"
+
+    def test_sweep_deletes_both_leftovers_when_live_already_exists(self, jen_update_root, tmp_path):
+        """Unchanged behavior: once the live copy exists, the swap
+        already finished — every leftover for that id is simply stale."""
+        root_dir = tmp_path / "root"
+        root_dir.mkdir()
+        live_dir = root_dir / "ipam"
+        live_dir.mkdir()
+        (live_dir / "manifest.json").write_text(json.dumps({"id": "ipam", "version": "2.0.0"}))
+        old_dir = root_dir / "ipam.old-1"
+        staging_dir = root_dir / "ipam.staging-2"
+        old_dir.mkdir()
+        staging_dir.mkdir()
+
+        jen_update_root._sweep_stale_plugin_dirs(str(root_dir))
+
+        assert not old_dir.exists()
+        assert not staging_dir.exists()
+        assert live_dir.is_dir()
+        assert json.loads((live_dir / "manifest.json").read_text())["version"] == "2.0.0"
+
+    def test_sweep_deletes_only_staging_leftovers_when_nothing_to_restore(self, jen_update_root, tmp_path):
+        """Only a staging leftover (no old, no live) means an interrupted
+        FIRST-ever install — there is nothing to restore, so it's simply
+        deleted."""
+        root_dir = tmp_path / "root"
+        root_dir.mkdir()
+        staging_dir = root_dir / "ipam.staging-2"
+        staging_dir.mkdir()
+
+        jen_update_root._sweep_stale_plugin_dirs(str(root_dir))
+
+        assert not staging_dir.exists()
+        assert not (root_dir / "ipam").exists()
+
+    def test_sweep_restores_the_newest_of_two_old_copies_by_integer_timestamp(self, jen_update_root, tmp_path):
+        """Timestamps must be compared as integers, not strings — sort by
+        the parsed int so e.g. ts=9 doesn't outrank ts=10 lexically."""
+        root_dir = tmp_path / "root"
+        root_dir.mkdir()
+        older = root_dir / "ipam.old-9"
+        newer = root_dir / "ipam.old-10"
+        older.mkdir()
+        newer.mkdir()
+        (older / "manifest.json").write_text(json.dumps({"id": "ipam", "version": "older"}))
+        (newer / "manifest.json").write_text(json.dumps({"id": "ipam", "version": "newer"}))
+
+        jen_update_root._sweep_stale_plugin_dirs(str(root_dir))
+
+        assert not older.exists()
+        assert not newer.exists()
+        live_dir = root_dir / "ipam"
+        assert live_dir.is_dir()
+        assert json.loads((live_dir / "manifest.json").read_text())["version"] == "newer"
+
     @pytest.mark.skipif(os.name == "nt", reason="symlinks need elevated privileges on Windows")
     def test_a_symlinked_result_path_is_never_followed(self, jen_update_root, tmp_path):
         """v5.28.0 (Q24, A1) — the security finding: this runs as root
