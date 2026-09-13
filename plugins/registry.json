@@ -2,7 +2,7 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "description": "Scan your subnets for devices not in the Kea lease table. Finds every live host on an attached subnet (with MAC), flags devices Kea doesn't know, and alerts on new unknowns. Requires nmap on the Jen host.",
     "author": "Matthew Thibodeau",
     "requires_jen": "3.6.0",
@@ -31,8 +31,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_scan_results (id INT AUTO_INCREMENT PRIMARY KEY, job_id INT NOT NULL, ip VARCHAR(15) NOT NULL, mac VARCHAR(17), hostname VARCHAR(255), in_kea TINYINT(1) DEFAULT 0, rogue TINYINT(1) DEFAULT 0, discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.6",
-    "sha256": "158ed4efc1c483b02a819f3ed0a3c57b82ffdf4a318278d2139c6ec689474759",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.0.7",
+    "sha256": "c0ad106da37185e0208ac7fbe1c8a0a103f50067954e485c7a0fdfdcb9b50762",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery"
   },

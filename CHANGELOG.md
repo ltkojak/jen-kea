@@ -45,7 +45,7 @@ a post-scan prune whose `LIMIT` inside an `IN` subquery MySQL and
 MariaDB both reject — so every scan that found hosts was recorded as
 `error` — a bug the repo copy fixed today in v1.0.2. Both bundled
 trees are now byte-identical to the tagged releases the registry pins
-(IPAM v1.4.6, Network Discovery v1.0.6 — both repos also adopted Jen's
+(IPAM v1.4.6, Network Discovery v1.0.7 — both repos also adopted Jen's
 own ruff configuration and pinned ruff version, so a resync can never
 fail Jen's lint), the never-used bundled
 `plugin.zip` files and the pre-v5.13.0 `.enabled` marker are gone, and
