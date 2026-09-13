@@ -41,7 +41,13 @@ class TestHttpExceptionHandler:
 
     def test_5xx_shows_the_generic_page_without_leaking_the_description(self, app):
         with app.test_request_context():
-            resp = app.handle_http_exception(InternalServerError("some sensitive internal detail"))
+            # The 5xx branch returns a (body, status) tuple, same shape
+            # as the existing 404/500 handlers — Flask's normal request
+            # pipeline runs this through make_response() itself; calling
+            # handle_http_exception() directly, as this test does,
+            # skips that step, so do it explicitly here too.
+            raw = app.handle_http_exception(InternalServerError("some sensitive internal detail"))
+            resp = app.make_response(raw)
             assert resp.status_code == 500
             assert b"some sensitive internal detail" not in resp.data
             assert b"Internal server error" in resp.data
