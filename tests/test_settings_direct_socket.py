@@ -148,9 +148,11 @@ class TestHttpFlowSuccess:
         }
         assert fake.payload_for("service")["action"] == "restart"
 
-        # Probe: version-get with no service field, then config-get, both at the NEW url.
+        # Probe: version-get with no service field, then config-get, both at
+        # the NEW url. (Later calls at that url are the settings page
+        # rendering after the redirect, now in direct mode — kea_is_up.)
         probe_calls = [c for c in fk.calls if "10.0.0.5:8004" in c["url"]]
-        assert [c["json"]["command"] for c in probe_calls] == ["version-get", "config-get"]
+        assert [c["json"]["command"] for c in probe_calls[:2]] == ["version-get", "config-get"]
         assert all("service" not in c["json"] for c in probe_calls)
         assert probe_calls[0]["auth"] == ("kea-api", "s3cret")
 
@@ -450,8 +452,9 @@ class TestSettingsPage:
         # the standby's row carries its own form with its own id
         assert b'action="/settings/infrastructure/direct-socket/2/dhcp4"' in body
         assert b'name="address" value="10.0.0.6"' in body
-        # no inline handlers anywhere near it (CSP) — a plain <details>
-        assert b"onclick=" not in body
+        # a plain <details>, no script of its own (tests/test_csp.py covers
+        # the inline-handler rule page-wide)
+        assert b'<details class="direct-socket-setup"' in body
 
     def test_switch_back_only_in_direct_mode(self, logged_in_client, db, isolated_config, mock_kea):
         body = logged_in_client.get("/settings/kea").data
