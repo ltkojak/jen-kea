@@ -365,10 +365,26 @@ def ddns():
 @login_required
 @_admin_required
 def ddns_naming_save():
+    # v5.28.0 (Q24, D3) — server-ip/server-port used to reach Kea
+    # unvalidated: a non-numeric server-port raised ValueError (a raw
+    # 500), and any string at all was accepted as server-ip.
+    server_ip = request.form.get("server-ip", "").strip() or "127.0.0.1"
+    if not __auth.valid_ip(server_ip):
+        flash("DDNS server address must be an IPv4 or IPv6 address.", "error")
+        return redirect(url_for("ddns.ddns", tab="naming"))
+    server_port_raw = request.form.get("server-port", "").strip() or "53001"
+    try:
+        server_port = int(server_port_raw)
+    except ValueError:
+        server_port = None
+    if server_port is None or not (1 <= server_port <= 65535):
+        flash("DDNS server port must be 1-65535.", "error")
+        return redirect(url_for("ddns.ddns", tab="naming"))
+
     values = {
         "enable-updates": request.form.get("enable-updates") == "1",
-        "server-ip": request.form.get("server-ip", "").strip() or "127.0.0.1",
-        "server-port": int(request.form.get("server-port") or 53001),
+        "server-ip": server_ip,
+        "server-port": server_port,
         "ncr-protocol": request.form.get("ncr-protocol", "UDP"),
         "ncr-format": request.form.get("ncr-format", "JSON"),
         "ddns-send-updates": request.form.get("ddns-send-updates") == "1",
@@ -419,22 +435,49 @@ def _d2config_tab_context():
 def _parse_dns_servers(raw: str):
     """One "ip[:port]" per line (or comma-separated) → [(ip, port), ...].
     Port defaults to 53. Returns (servers, error) — error is a message
-    string on the first bad entry, else None."""
+    string on the first bad entry, else None.
+
+    v5.28.0 (Q24, D3) — an IPv6 address is only ever accepted bracketed
+    (`[addr]` or `[addr]:port`) or bare with no port at all; a bare v6
+    address can itself end in a colon plus digits, so a trailing
+    `:NNN` can never be safely split off as "the port" without
+    brackets — that's ambiguous, not parseable, and gets its own
+    actionable message rather than a generic "not a valid IP"."""
     servers = []
     for chunk in raw.replace(",", "\n").splitlines():
         chunk = chunk.strip()
         if not chunk:
             continue
-        ip, _, port_s = chunk.partition(":")
-        ip = ip.strip()
-        if not __auth.valid_ip(ip):
-            return [], f"'{ip}' is not a valid IP address."
+        if chunk.startswith("["):
+            end = chunk.find("]")
+            if end == -1:
+                return [], f"'{chunk}' is not a valid IP address."
+            ip = chunk[1:end].strip()
+            rest = chunk[end + 1 :]
+            port_s = rest[1:] if rest.startswith(":") else ""
+            if not __auth.valid_ip(ip):
+                return [], f"'{ip}' is not a valid IP address."
+        elif chunk.count(":") >= 2:
+            if __auth.valid_ip(chunk):
+                ip, port_s = chunk, ""
+            else:
+                maybe_ip, _, maybe_port = chunk.rpartition(":")
+                if __auth.valid_ip(maybe_ip) and maybe_port.isdigit():
+                    return [], f"'{chunk}' looks like an IPv6 address with a port — use [addr]:port for IPv6."
+                return [], f"'{chunk}' is not a valid IP address."
+        else:
+            ip, _, port_s = chunk.partition(":")
+            ip = ip.strip()
+            if not __auth.valid_ip(ip):
+                return [], f"'{ip}' is not a valid IP address."
         port = 53
         if port_s:
             try:
                 port = int(port_s)
             except ValueError:
-                return [], f"'{port_s}' is not a valid port."
+                return [], f"'{port_s}' is not a valid port (1-65535)."
+            if not (1 <= port <= 65535):
+                return [], f"'{port}' is not a valid port (1-65535)."
         servers.append((ip, port))
     if not servers:
         return [], "At least one DNS server is required."

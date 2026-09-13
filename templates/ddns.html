@@ -157,7 +157,7 @@
         <tr>
             <td class="mono">{{ d.name }}</td>
             <td class="mono">{{ d.get('key-name', '—') }}</td>
-            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{{ s.get('ip-address') }}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td>
                 <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove forward zone {{ d.name }}?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -190,7 +190,7 @@
         </div>
         <div class="form-group">
             <label>DNS servers</label>
-            <textarea name="servers" rows="2" placeholder="10.0.0.53:53" required></textarea>
+            <textarea name="servers" rows="2" placeholder="10.0.0.53:53 or [2001:db8::53]:53" required></textarea>
             <div class="form-hint">One <span class="mono">ip[:port]</span> per line — port defaults to 53.</div>
         </div>
         <button type="submit" class="btn btn-primary btn-sm">Add Forward Domain</button>
@@ -206,7 +206,7 @@
         <tr>
             <td class="mono">{{ d.name }}</td>
             <td class="mono">{{ d.get('key-name', '—') }}</td>
-            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{{ s.get('ip-address') }}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td>
                 <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove reverse zone {{ d.name }}?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -242,7 +242,7 @@
         </div>
         <div class="form-group">
             <label>DNS servers</label>
-            <textarea name="servers" rows="2" placeholder="10.0.0.53:53" required></textarea>
+            <textarea name="servers" rows="2" placeholder="10.0.0.53:53 or [2001:db8::53]:53" required></textarea>
             <div class="form-hint">One <span class="mono">ip[:port]</span> per line — port defaults to 53.</div>
         </div>
         <button type="submit" class="btn btn-primary btn-sm">Add Reverse Domain</button>

@@ -259,6 +259,24 @@ def login_oidc_callback():
         except Exception as e:
             logger.warning(f"OIDC userinfo fetch failed: {e}")
 
+    # v5.28.0 (Q24, D1) — a step-up reauth (auth.reauth_oidc), not a
+    # fresh login: never call find_or_create_user/establish_session or
+    # touch the role here — this only confirms the SAME identity that's
+    # already signed in still controls the IdP session.
+    if session.pop("oidc_reauth_pending", False) and current_user.is_authenticated:
+        sub = str(claims.get("sub") or "")
+        if sub and sub == __oidc.external_id_for(current_user.id):
+            session["auth_at"] = _now_iso()
+            __auth.clear_login_attempts(ip, "oidc")
+            __user.audit("REAUTH", "auth", f"{current_user.username} re-confirmed identity via SSO")
+            next_url = session.pop("reauth_next", "") or url_for("mfa_routes.mfa_enroll")
+            if not next_url.startswith("/") or next_url.startswith("//"):
+                next_url = url_for("mfa_routes.mfa_enroll")
+            return redirect(next_url)
+        __auth.record_login_attempt(ip, "oidc")
+        flash("That sign-on doesn't match the account you're signed in as.", "error")
+        return redirect(url_for("dashboard.dashboard"))
+
     row, reason = __oidc.find_or_create_user(claims)
     if row is None:
         __auth.record_login_attempt(ip, "oidc")
@@ -303,6 +321,9 @@ def reauth():
     """v5.17.0 (Q6 6A) — password (and MFA, if enrolled) confirmation for
     a route guarded by `recent_auth_required`. On success it stamps a
     fresh `session["auth_at"]` and returns to `session["reauth_next"]`."""
+    if __oidc.is_oidc_user(current_user.id):
+        return redirect(url_for("auth.reauth_oidc"))
+
     next_url = session.get("reauth_next") or url_for("mfa_routes.mfa_enroll")
     if not next_url.startswith("/") or next_url.startswith("//"):
         next_url = url_for("mfa_routes.mfa_enroll")
@@ -350,6 +371,28 @@ def reauth():
     session.pop("reauth_next", None)
     __user.audit("REAUTH", "auth", f"{username} re-confirmed identity")
     return redirect(next_url)
+
+
+@bp.route("/auth/reauth/oidc")
+@login_required
+def reauth_oidc():
+    """v5.28.0 (Q24, D1) — the step-up path for an OIDC-managed account:
+    `reauth()`'s password/MFA form doesn't apply to them (their local
+    password is a discarded random value — find_or_create_user). Kicks
+    off a fresh authorization redirect with `prompt=login` so the IdP
+    can't just silently re-assert an existing SSO session; the callback
+    compares the returned `sub` against this account's own before
+    treating it as a successful step-up."""
+    client = __oidc.oidc_client()
+    if client is None:
+        flash("Single sign-on is not configured.", "error")
+        return redirect(url_for("dashboard.dashboard"))
+
+    from jen import extensions
+
+    session["oidc_reauth_pending"] = True
+    redirect_uri = extensions.OIDC_REDIRECT_URI or url_for("auth.login_oidc_callback", _external=True)
+    return client.authorize_redirect(redirect_uri, prompt="login")
 
 
 @bp.route("/force-password-change", methods=["GET", "POST"])

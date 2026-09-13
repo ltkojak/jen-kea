@@ -119,6 +119,95 @@ class TestReauth:
         assert logged_in_client.get("/mfa/enroll").status_code == 200
 
 
+class TestOidcStepUp:
+    """v5.28.0 (Q24, D1) — an OIDC-managed account has no usable local
+    password (find_or_create_user sets a discarded random one), so
+    recent_auth_required must send it through a fresh SSO round trip
+    (auth.reauth_oidc) instead of reauth()'s password/MFA form."""
+
+    def _claims_token(self, **claims):
+        base = {"sub": "idp-subject-stepup1", "preferred_username": "ssostepup1", "groups": ["jen-admin"]}
+        base.update(claims)
+        return {"userinfo": base}
+
+    def _login_via_oidc(self, client, monkeypatch, **claims):
+        from jen.services import oidc
+        from tests.test_oidc import _StubOidcClient
+
+        stub = _StubOidcClient(token=self._claims_token(**claims))
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+        return stub
+
+    def test_stale_session_redirects_to_reauth_oidc_not_the_password_form(self, client, db, monkeypatch):
+        self._login_via_oidc(client, monkeypatch)
+        _stale(client)
+        r = client.get("/mfa/trusted-devices", follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert "/auth/reauth/oidc" in r.headers["Location"]
+
+        r2 = client.get("/auth/reauth", follow_redirects=False)
+        assert r2.status_code in (301, 302)
+        assert "/auth/reauth/oidc" in r2.headers["Location"]
+
+    def test_reauth_oidc_kicks_off_a_fresh_authorize_redirect_with_prompt_login(self, client, db, monkeypatch):
+        stub = self._login_via_oidc(client, monkeypatch)
+        _stale(client)
+        client.get("/mfa/trusted-devices")  # sets reauth_next
+        r = client.get("/auth/reauth/oidc", follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert stub.authorize_redirect_kwargs[-1].get("prompt") == "login"
+        with client.session_transaction() as sess:
+            assert sess.get("oidc_reauth_pending") is True
+
+    def test_matching_sub_confirms_identity_and_returns_to_reauth_next(self, client, db, monkeypatch):
+        stub = self._login_via_oidc(client, monkeypatch)
+        _stale(client)
+        client.get("/mfa/trusted-devices")
+        client.get("/auth/reauth/oidc")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM users WHERE username='ssostepup1'")
+            before = cur.fetchone()["c"]
+
+        stub.token = self._claims_token()  # same sub as the original login
+        r = client.get("/login/oidc/callback", follow_redirects=False)
+        assert r.status_code in (301, 302)
+        assert r.headers["Location"].endswith("/mfa/trusted-devices")
+
+        with client.session_transaction() as sess:
+            assert "oidc_reauth_pending" not in sess
+        assert client.get("/mfa/trusted-devices").status_code == 200  # no longer bounced
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM users WHERE username='ssostepup1'")
+            assert cur.fetchone()["c"] == before  # no new row created
+            cur.execute("SELECT role FROM users WHERE username='ssostepup1'")
+            assert cur.fetchone()["role"] == "admin"  # unchanged
+
+    def test_mismatched_sub_is_refused_and_recorded(self, client, db, monkeypatch):
+        stub = self._login_via_oidc(client, monkeypatch)
+        _stale(client)
+        client.get("/mfa/trusted-devices")
+        client.get("/auth/reauth/oidc")
+
+        with client.session_transaction() as sess:
+            stale_auth_at = sess["auth_at"]
+
+        stub.token = self._claims_token(sub="a-different-subject")
+        r = client.get("/login/oidc/callback", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"match the account" in r.data
+
+        with client.session_transaction() as sess:
+            assert sess["auth_at"] == stale_auth_at  # not refreshed
+        assert "/auth/reauth" in client.get("/mfa/trusted-devices", follow_redirects=False).headers["Location"]
+
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM login_attempts WHERE username='oidc'")
+            assert cur.fetchone()["c"] >= 1
+
+
 class TestForcedEnrollmentUnaffected:
     """A user in the password-verified-but-not-a-session forced-enrollment
     state must still reach /mfa/enroll — recent_auth_required is a no-op

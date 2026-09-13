@@ -230,12 +230,14 @@ class _StubOidcClient:
     def __init__(self, token=None):
         self.token = token or {"userinfo": {}}
         self.authorize_redirect_calls = []
+        self.authorize_redirect_kwargs = []  # v5.28.0 (Q24, D1) — records e.g. prompt="login"
         self.userinfo_called = False
 
-    def authorize_redirect(self, redirect_uri):
+    def authorize_redirect(self, redirect_uri, **kwargs):
         from flask import redirect as flask_redirect
 
         self.authorize_redirect_calls.append(redirect_uri)
+        self.authorize_redirect_kwargs.append(kwargs)
         return flask_redirect("https://idp.example.com/authorize")
 
     def authorize_access_token(self):

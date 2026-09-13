@@ -104,6 +104,18 @@ def map_role(claims: dict) -> str | None:
     return None if default == "none" else default
 
 
+def external_id_for(user_id: int) -> str | None:
+    """v5.28.0 (Q24, D1) — the `sub` this account was created/linked
+    against, for the step-up reauth callback to compare a fresh token's
+    `sub` against. None for a local account or a nonexistent id."""
+    from jen.models.db import jen_db
+
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT external_id FROM users WHERE id=%s AND auth_provider='oidc'", (user_id,))
+        row = cur.fetchone()
+    return row["external_id"] if row else None
+
+
 def is_oidc_user(user_id: int) -> bool:
     """True if this account is IdP-managed. `User` (jen/models/user.py)
     doesn't carry auth_provider as an attribute — the handful of call

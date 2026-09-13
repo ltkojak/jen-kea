@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from flask import Flask, flash, redirect, request, session, url_for
 from flask_login import LoginManager, current_user, logout_user
+from werkzeug.exceptions import HTTPException
 
 from jen import extensions
 from jen.config import app_config, ssl_configured
@@ -533,9 +534,36 @@ def create_app() -> Flask:
 
         return render_template("error.html", code=500, message="Internal server error."), 500
 
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(e):
+        # v5.28.0 (Q24, D2) — before this, the catch-all Exception
+        # handler below caught every abort(400/401/403/405/...) too
+        # (Flask/werkzeug's HTTPException IS an Exception), always
+        # rendering the generic 500 page regardless of the real status
+        # — a 405 read as "Internal Server Error" and lost its `Allow`
+        # header, a 401 lost `WWW-Authenticate`. The 404 handler above
+        # stays (more specific, and Flask already prefers it over this
+        # one for that code).
+        from flask import render_template
+
+        if e.code and e.code >= 500:
+            logger.error(f"HTTP {e.code}: {e.description}")
+            return render_template("error.html", code=e.code, message="Internal server error."), e.code
+        resp = e.get_response()  # keeps status + Allow / WWW-Authenticate / Retry-After
+        resp.data = render_template("error.html", code=e.code, message=e.description)
+        resp.content_type = "text/html; charset=utf-8"
+        return resp
+
     @app.errorhandler(Exception)
     def handle_exception(e):
         from flask import render_template
+
+        # Belt and braces — Flask already prefers the more specific
+        # HTTPException handler above, so this should never actually
+        # see one, but never re-derive a raw exception's message as a
+        # generic 500 if it somehow does.
+        if isinstance(e, HTTPException):
+            return e
 
         # v5.3.3 fix — this previously interpolated the raw exception
         # into the user-facing message (f"An error occurred: {e}"),

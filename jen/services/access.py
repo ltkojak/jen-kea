@@ -142,6 +142,11 @@ def recent_auth_required(minutes: int = 10):
             if auth_is_recent(minutes):
                 return f(*args, **kwargs)
             session["reauth_next"] = _reauth_return_target()
+            from jen.services import oidc as _oidc
+
+            if _oidc.is_oidc_user(current_user.id):
+                flash("Confirm your identity with your sign-on provider to continue.", "warning")
+                return redirect(url_for("auth.reauth_oidc"))
             flash("Confirm your password to continue.", "warning")
             return redirect(url_for("auth.reauth"))
 

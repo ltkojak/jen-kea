@@ -320,6 +320,92 @@ class TestDdnsNamingTab:
         assert r.status_code == 200
         assert b"No Kea server has SSH configured" in r.data
 
+    def test_non_numeric_server_port_flashes_not_500(self, logged_in_client, monkeypatch):
+        """v5.28.0 (Q24, D3) — server-port used to reach a bare int()
+        with no try/except, a raw 500 on any non-numeric input."""
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post("/ddns/naming/save", data={"server-port": "abc"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"DDNS server port must be 1-65535" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_out_of_range_server_port_is_rejected(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post("/ddns/naming/save", data={"server-port": "99999"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"DDNS server port must be 1-65535" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_invalid_server_ip_is_rejected(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post("/ddns/naming/save", data={"server-ip": "not-an-ip"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"DDNS server address must be an IPv4 or IPv6 address" in r.data
+        assert "apply-config" not in fake.ops()
+
+    def test_ipv6_server_ip_is_accepted(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post("/ddns/naming/save", data={"server-ip": "2001:db8::53"}, follow_redirects=True)
+        assert r.status_code == 200
+        applied = fake.payload_for("apply-config")["config"]["Dhcp4"]
+        assert applied["dhcp-ddns"]["server-ip"] == "2001:db8::53"
+
+
+class TestParseDnsServers:
+    """v5.28.0 (Q24, D3) — jen/routes/ddns.py::_parse_dns_servers, the
+    D2 domain forms' "ip[:port]" parser."""
+
+    def _parse(self, raw):
+        from jen.routes.ddns import _parse_dns_servers
+
+        return _parse_dns_servers(raw)
+
+    def test_v4_no_port_defaults_to_53(self):
+        assert self._parse("10.0.0.53") == ([("10.0.0.53", 53)], None)
+
+    def test_v4_with_port(self):
+        assert self._parse("10.0.0.53:5353") == ([("10.0.0.53", 5353)], None)
+
+    def test_bare_v6_no_port_defaults_to_53(self):
+        assert self._parse("2001:db8::53") == ([("2001:db8::53", 53)], None)
+
+    def test_bracketed_v6_no_port(self):
+        assert self._parse("[2001:db8::53]") == ([("2001:db8::53", 53)], None)
+
+    def test_bracketed_v6_with_port(self):
+        assert self._parse("[2001:db8::53]:5353") == ([("2001:db8::53", 5353)], None)
+
+    def test_bad_address_gives_a_generic_message(self):
+        servers, err = self._parse("not-an-ip")
+        assert servers == []
+        assert "not a valid IP address" in err
+
+    def test_non_numeric_port_gives_a_range_message(self):
+        servers, err = self._parse("10.0.0.53:abc")
+        assert servers == []
+        assert "1-65535" in err
+
+    def test_out_of_range_port_is_rejected(self):
+        servers, err = self._parse("10.0.0.53:0")
+        assert servers == []
+        assert "1-65535" in err
+        servers, err = self._parse("10.0.0.53:70000")
+        assert servers == []
+        assert "1-65535" in err
+
+    def test_unbracketed_v6_plus_port_that_cannot_stand_alone_is_actionable(self):
+        """A fully-expanded 8-group v6 address with a trailing ":NNN" —
+        invalid as one address, but valid with that last segment
+        dropped — is the realistic "forgot the brackets" typo."""
+        servers, err = self._parse("2001:db8:0:0:0:0:0:1:53")
+        assert servers == []
+        assert "[addr]:port" in err
+
+    def test_ambiguous_bare_v6_with_a_trailing_number_group_is_accepted_whole(self):
+        """A bare v6 address is never split — this is itself a
+        perfectly valid (if unusual) IPv6 address, not "v6 plus port"."""
+        assert self._parse("2001:db8::53:53") == ([("2001:db8::53:53", 53)], None)
+
 
 class TestDdnsD2ConfigTab:
     """v5.23.0 (Q19) — D2's own config (kea-dhcp-ddns.conf), read from
@@ -370,6 +456,24 @@ class TestDdnsD2ConfigTab:
         assert b"hmac-sha256" in r.data
         assert b"s3cr3t" not in r.data  # write-only, never re-displayed
 
+    def test_ipv6_dns_server_renders_bracketed_in_the_table(self, logged_in_client, monkeypatch):
+        """v5.28.0 (Q24, D3) — an unbracketed v6:port in the domain
+        table would itself be ambiguous/unparseable if ever re-typed
+        into the add form."""
+        self._wire(
+            monkeypatch,
+            {
+                "forward-ddns": {
+                    "ddns-domains": [
+                        {"name": "example.com.", "dns-servers": [{"ip-address": "2001:db8::53", "port": 53}]}
+                    ]
+                },
+            },
+        )
+        r = logged_in_client.get("/ddns?tab=d2config")
+        assert r.status_code == 200
+        assert b"[2001:db8::53]:53" in r.data
+
     def test_domain_add_rejects_a_bad_zone_name(self, logged_in_client, monkeypatch):
         fake = self._wire(monkeypatch)
         r = logged_in_client.post(
@@ -407,6 +511,17 @@ class TestDdnsD2ConfigTab:
             {"ip-address": "10.0.0.54", "port": 53},
         ]
         assert "service" in fake.ops()
+
+    def test_domain_add_accepts_a_bracketed_ipv6_server(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch)
+        r = logged_in_client.post(
+            "/ddns/d2config/domain/add",
+            data={"direction": "forward", "name": "example.com.", "servers": "[2001:db8::53]:53"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        applied = fake.payload_for("apply-config")["config"]["DhcpDdns"]["forward-ddns"]["ddns-domains"][0]
+        assert applied["dns-servers"] == [{"ip-address": "2001:db8::53", "port": 53}]
 
     def test_domain_remove(self, logged_in_client, monkeypatch):
         fake = self._wire(monkeypatch, {"forward-ddns": {"ddns-domains": [{"name": "example.com."}]}})
