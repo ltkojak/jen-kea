@@ -2,6 +2,55 @@
 {% block title %}Kea Settings{% endblock %}
 {% block content %}
 {% from '_icons.html' import icon_trash %}
+{#- v5.29.0 (Q29) — "Set up direct socket": one inline form per (server, daemon).
+    Jen adds the http entry to the daemon's control-sockets over SSH, restarts,
+    probes, and only then points itself at it. Plain <details>, no script. -#}
+{% macro direct_socket_setup(server_id, service, daemon, conf, ssh_host, bind_default, api_user, default_port, current_url, ssh_hint) %}
+{% if current_user.role == 'superadmin' and direct_socket_supported %}
+<details class="direct-socket-setup" style="margin-top:10px;">
+    <summary class="btn btn-sm btn-secondary" style="display:inline-block;cursor:pointer;list-style:none;">⚡ Set up direct socket for {{ daemon }}…</summary>
+    {% if not ssh_host %}
+    <div class="form-hint" style="margin-top:6px;">Needs an SSH host for this server — Jen edits <code>{{ conf }}</code> over SSH. Set it under {{ ssh_hint }} first, then come back here.</div>
+    {% else %}
+    <div style="margin-top:8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;">
+        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}" data-confirm="Edit {{ conf }} on {{ ssh_host }}, restart {{ daemon }}, and probe the new socket? Jen only switches over if the socket answers as {{ daemon }}.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="scheme" value="http">
+            <div class="form-hint" style="margin-bottom:10px;">Jen adds an <code>http</code> entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Bind address</label>
+                    <input type="text" name="address" value="{{ bind_default }}" placeholder="management IP of this host">
+                    <div class="form-hint">The IP {{ daemon }} listens on — its management address, never 0.0.0.0. Firewall this port to the Jen host.</div>
+                </div>
+                <div class="form-group">
+                    <label>Port</label>
+                    <input type="text" name="port" value="{{ default_port }}">
+                    <div class="form-hint">Never the Control Agent's :8000.</div>
+                </div>
+                <div class="form-group">
+                    <label>API username</label>
+                    <input type="text" name="user" value="{{ api_user }}">
+                </div>
+                <div class="form-group">
+                    <label>API password</label>
+                    <input type="password" name="password" placeholder="(the password Jen already uses here)">
+                </div>
+            </div>
+            <div class="form-hint" style="margin-bottom:10px;">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep this socket on a management network reachable only from the Jen host. For <code>https</code>, add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
+            <button type="submit" class="btn btn-sm btn-primary">Add socket, restart {{ daemon }} and probe</button>
+        </form>
+        {% if infra.kea_connection_mode == 'direct' and (service == 'dhcp4' or current_url) %}
+        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" style="display:inline;margin-left:8px;" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-secondary">↩ Switch back to the Control Agent</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+</details>
+{% endif %}
+{% endmacro %}
 <div class="page-header">
     <h1>🔌 Kea</h1>
     <p>How Jen reaches your Kea servers — the Control Agent API, SSH for config pushes, extra servers and HA.</p>
@@ -99,6 +148,7 @@
                style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
         <div id="probe-kea-results" style="margin-top:12px;font-size:13px;"></div>
     </form>
+    {{ direct_socket_setup(1, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', infra.ssh_host, infra.bind_default, infra.kea_api_user, 8004, infra.kea_api_url, 'SSH to the Kea host (below)') }}
     {% if current_user.role == 'superadmin' %}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
         <a href="/settings/infrastructure/author-kea/dhcp4" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp4.conf</a>
@@ -279,6 +329,10 @@
                     <input type="text" name="extra_kea_conf[]" value="{{ srv.kea_conf }}" placeholder="/etc/kea/kea-dhcp4.conf">
                 </div>
             </div>
+            {{ direct_socket_setup(srv.id, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', srv.ssh_host, srv.bind_default, srv.api_user, 8004, srv.api_url, 'SSH Host (above, then Save Additional Servers)') }}
+            {% if ipv6_enabled %}
+            {{ direct_socket_setup(srv.id, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', srv.ssh_host, srv.bind_default, srv.api6_user or srv.api_user, 8006, srv.api6_url, 'SSH Host (above, then Save Additional Servers)') }}
+            {% endif %}
         </div>
         {% endfor %}
         </div>
@@ -383,6 +437,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save Kea6 API</button>
     </form>
+    {{ direct_socket_setup(1, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', infra.ssh_host, infra.bind_default, infra.kea6_api_user or infra.kea_api_user, 8006, infra.kea6_api_url, 'SSH to the Kea host (above)') }}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
         <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp6.conf</a>
         <span class="form-hint" style="display:block;margin-top:4px;">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
@@ -428,6 +483,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save D2 API</button>
     </form>
+    {{ direct_socket_setup(1, 'd2', 'kea-dhcp-ddns', 'kea-dhcp-ddns.conf', infra.ssh_host, infra.bind_default, infra.d2_api_user or infra.kea_api_user, 53001, infra.d2_api_url, 'SSH to the Kea host (above)') }}
 </div>
 
 <!-- Kea package install status (v5.1.2) -->

@@ -234,7 +234,8 @@ def kea_command(
                     "text": (
                         f"{url} answered config-get as {found or 'an unknown daemon'}, not kea-{service} — "
                         "direct mode needs each daemon's own http control socket (conventionally :8004 for "
-                        "dhcp4, :8006 for dhcp6), not the Control Agent (:8000). Settings → Kea → Probe."
+                        "dhcp4, :8006 for dhcp6), not the Control Agent (:8000). Settings → Kea → Probe, "
+                        'or let Jen add the socket: Settings → Kea → "Set up direct socket".'
                     ),
                 }
         return reply

@@ -4,11 +4,13 @@ jen/routes/settings/infrastructure.py
 Kea / database / SSH / DDNS / HA / ports / metrics settings.
 """
 
+import ipaddress
 import logging
 import os
 import re
 import subprocess
 import threading
+from urllib.parse import urlparse
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -68,6 +70,13 @@ def settings_infrastructure():
     """v5.9.0 — the Infrastructure tab became the Kea page. Old bookmarks
     and the post-update overlay redirect land here; send them on."""
     return redirect(url_for("settings.settings_kea"), code=301)
+
+
+def _bind_default(ssh_host: str) -> str:
+    """v5.29.0 (Q29) — the bind address a "Set up direct socket" form
+    starts with: the server's SSH host when it's an IP literal (the
+    daemon binds an address, so a hostname is no default at all)."""
+    return ssh_host.strip() if _is_ip_literal(ssh_host) else ""
 
 
 def _kea_servers_with_helper_status():
@@ -145,6 +154,9 @@ def settings_kea():
                 "ssh_user": extensions.cfg.get(sec, "ssh_user", fallback=""),
                 "kea_conf": extensions.cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                 "role": extensions.cfg.get(sec, "role", fallback="standby"),
+                # v5.29.0 (Q29) — the "Set up direct socket" form's bind
+                # address default: the SSH host when it's an IP literal.
+                "bind_default": _bind_default(extensions.cfg.get(sec, "ssh_host", fallback="")),
             }
         )
 
@@ -208,8 +220,14 @@ def settings_kea():
         # as kea6_api_url above.
         "d2_api_url": extensions.cfg.get("d2", "api_url", fallback=""),
         "d2_api_user": extensions.cfg.get("d2", "api_user", fallback=""),
+        # v5.29.0 (Q29) — see bind_default on the extra servers above.
+        "bind_default": _bind_default(extensions.cfg.get("kea_ssh", "host", fallback="")),
     }
     restart_pending = __user.get_global_setting("restart_pending", "false") == "true"
+    # v5.29.0 (Q29) — per-daemon control sockets exist from Kea 2.7.2; hide
+    # the "Set up direct socket" forms when the primary is KNOWN to be
+    # older (unknown = show them; the route re-checks before writing).
+    direct_socket_supported = kea_version_tuple is None or kea_version_tuple >= (2, 7, 2)
     ipv6_enabled = __kea6.is_ipv6_enabled()
     return render_template(
         "settings_kea.html",
@@ -223,6 +241,7 @@ def settings_kea():
         ca_deprecation_warning=ca_deprecation_warning,
         ca_removed=ca_removed,
         direct_port_warnings=direct_port_warnings,
+        direct_socket_supported=direct_socket_supported,
         # v5.10.3 — id + name only; the real server dicts carry passwords.
         # v5.11.0 — plus ssh_host + the persisted jen-kea-helper status
         # (never SSHes to render — see jen/services/kea_host.py).
@@ -666,10 +685,18 @@ def probe_kea():
             # supports the Control Agent at this version, so this is a
             # config gap to fix, not a dead end: stay on ca mode until
             # the daemon sockets exist.
+            # v5.29.0 (Q28/Q29) — the maintainer hit this on 2026-09-13
+            # and reported "it's not apparent where this goes": name
+            # the file and key, and point at the button that now does
+            # it (Set up direct socket, on this page).
             rec = (
                 f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — Kea {version} "
-                f"still supports the Control Agent, so stay on Control Agent mode until you've added an http "
-                f"control socket to kea-{service} (conventionally :{daemon_port}), then switch to direct.",
+                f"still supports the Control Agent, so stay on Control Agent mode until kea-{service} has an "
+                f"http control socket of its own (an http entry in the control-sockets list of "
+                f"/etc/kea/kea-{_CONF_STEM[service]}.conf on that host, keeping the unix entry, conventionally "
+                f':{daemon_port}). Let Jen add it: "Set up direct socket" on this page edits the file, restarts '
+                f"kea-{service}, probes the socket and switches Jen over only once it answers — or add it by "
+                'hand per the admin guide\'s "Direct control sockets" section.',
                 "warn",
             )
         else:
@@ -680,9 +707,10 @@ def probe_kea():
             rec = (
                 f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — direct mode "
                 f"needs the daemon's http socket (conventionally :{daemon_port}). Either switch back to "
-                f"Control Agent mode, or add an http control socket to kea-{service} and point this at it — "
-                'see the admin guide\'s "Direct control sockets" section, or use Settings → Kea → '
-                '"Author a starting kea-dhcp4.conf" to generate one.',
+                f'Control Agent mode, or give kea-{service} its own http control socket: "Set up direct '
+                f"socket\" on this page adds it to /etc/kea/kea-{_CONF_STEM[service]}.conf's control-sockets "
+                f"list, restarts kea-{service} and points Jen at it once it answers — or add it by hand per "
+                'the admin guide\'s "Direct control sockets" section.',
                 "bad",
             )
     elif candidate:
@@ -740,6 +768,422 @@ def probe_kea():
             "recommendation": {"text": rec[0], "level": rec[1]},
         }
     )
+
+
+# ── Direct control sockets, set up by Jen (v5.29.0, Q29) ────────────────────
+
+_DIRECT_SERVICES = ("dhcp4", "dhcp6", "d2")
+_DAEMON_NAME = {"dhcp4": "kea-dhcp4", "dhcp6": "kea-dhcp6", "d2": "kea-dhcp-ddns"}
+_CONF_STEM = {"dhcp4": "dhcp4", "dhcp6": "dhcp6", "d2": "dhcp-ddns"}
+_DAEMON_KEY = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6", "d2": "DhcpDdns"}
+# The [kea]/[kea_server_N] key that remembers the Control Agent URL a
+# dhcp4 socket replaced, so "Switch back" can restore it. Not a form
+# field: _rewrite_extra_servers copies it forward with the other
+# unmanaged keys (it's not in _EXTRA_SERVER_FORM_KEYS).
+_PREV_URL_KEY = "direct_prev_api_url"
+
+
+def _server_by_id(server_id):
+    return next((s for s in extensions.KEA_SERVERS if s.get("id") == server_id), None)
+
+
+def _is_ip_literal(value: str) -> bool:
+    try:
+        ipaddress.ip_address((value or "").strip())
+    except ValueError:
+        return False
+    return True
+
+
+def _socket_url(scheme: str, address: str, port: int) -> str:
+    host = f"[{address}]" if ":" in address else address
+    return f"{scheme}://{host}:{port}"
+
+
+def _daemon_creds(server: dict, service: str) -> tuple[str, str]:
+    """The basic-auth pair Jen already presents to this daemon on this
+    server — the form's defaults, so an operator who keeps one API user
+    per host types nothing. Falls back to the server's v4 pair when the
+    per-daemon endpoint is unresolvable (direct mode, no v6/D2 URL yet —
+    exactly the state this flow exists to fix)."""
+    endpoint = __kea._endpoint_for(server, service)
+    if isinstance(endpoint, tuple):
+        _url, user, pwd = endpoint
+        if user or pwd:
+            return user, pwd
+    return server.get("api_user", ""), server.get("api_pass", "")
+
+
+def _write_direct_socket_config(server: dict, service: str, url: str, user: str, password: str) -> str:
+    """Point Jen at the daemon socket that just answered. dhcp4 also
+    flips `[kea] connection_mode` to direct (the mode is global — see
+    the flash the caller adds when other servers aren't there yet);
+    dhcp6/D2 only write their own per-daemon URL, since a dhcp4 socket
+    is what the mode switch actually needs. Returns a short phrase for
+    the flash saying what was written."""
+    sid = server.get("id")
+    primary = sid == 1
+    changed: list[str] = []
+
+    def _apply(cfg):
+        if primary:
+            sec, url_key, user_key, pass_key = {
+                "dhcp4": ("kea", "api_url", "api_user", "api_pass"),
+                "dhcp6": ("kea6", "api_url", "api_user", "api_pass"),
+                "d2": ("d2", "api_url", "api_user", "api_pass"),
+            }[service]
+        else:
+            sec = f"kea_server_{sid}"
+            url_key, user_key, pass_key = {
+                "dhcp4": ("api_url", "api_user", "api_pass"),
+                "dhcp6": ("api6_url", "api6_user", "api6_pass"),
+                "d2": ("api_d2_url", "api_d2_user", "api_d2_pass"),
+            }[service]
+        if not cfg.has_section(sec):
+            cfg.add_section(sec)
+        old_url = cfg.get(sec, url_key, fallback="")
+        if service == "dhcp4" and old_url and old_url != url and not cfg.has_option(sec, _PREV_URL_KEY):
+            # First time this server's v4 URL moves off the Control
+            # Agent: remember where it was, for "Switch back".
+            cfg.set(sec, _PREV_URL_KEY, old_url)
+        cfg.set(sec, url_key, url)
+        changed.append(f"[{sec}] {url_key}")
+        # Per-daemon credentials: only written when they differ from the
+        # pair the daemon would inherit anyway (the server's v4 pair) —
+        # a [kea6]/[d2] override that merely repeats [kea]'s values is
+        # noise the "Inherit" checkboxes then have to undo.
+        base_user, base_pass = server.get("api_user", ""), server.get("api_pass", "")
+        if service == "dhcp4" or (user, password) != (base_user, base_pass):
+            cfg.set(sec, user_key, user)
+            cfg.set(sec, pass_key, password)
+            if service != "dhcp4":
+                changed.append(f"[{sec}] {user_key}/{pass_key}")
+        elif service != "dhcp4":
+            for k in (user_key, pass_key):
+                if cfg.has_option(sec, k):
+                    cfg.remove_option(sec, k)
+        if service == "dhcp4" and cfg.get("kea", "connection_mode", fallback="ca") != "direct":
+            if not cfg.has_section("kea"):
+                cfg.add_section("kea")
+            cfg.set("kea", "connection_mode", "direct")
+            changed.append("Jen switched to direct mode")
+
+    __config.app_config.mutate(_apply)
+    return ", ".join(changed)
+
+
+def _servers_not_on_direct_sockets(except_id) -> list[str]:
+    """Names of the OTHER servers whose v4 URL doesn't answer a
+    direct-style config-get as kea-dhcp4 — i.e. the ones that will show
+    the Control Agent error on the Dashboard now that the (global) mode
+    is direct. One config-get per server; only called right after the
+    mode flipped, never on a page render."""
+    names = []
+    for s in extensions.KEA_SERVERS:
+        if s.get("id") == except_id or not s.get("api_url"):
+            continue
+        if _identify_daemon(s["api_url"], s.get("api_user", ""), s.get("api_pass", ""), "dhcp4") != "Dhcp4":
+            names.append(f"{s.get('name', 'Kea Server')} ({s['api_url']})")
+    return names
+
+
+@bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>", methods=["POST"])
+@login_required
+@_superadmin_required
+def setup_direct_socket(server_id, service):
+    """v5.29.0 (Q29, B1) — give one daemon on one server its own http
+    control socket, the way an operator would by hand, but with the
+    probe-then-commit order that makes the 2026-09-13 trap (direct mode
+    pointed at a socket that isn't the daemon) impossible through this
+    path:
+
+      1. validate the bind address (an IP literal on the Kea host, never
+         0.0.0.0), port, credentials; refuse the Control Agent's own
+         address; refuse Kea < 2.7.2 when the current endpoint answers
+         a version-get;
+      2. kea_changeset.apply_change() on THAT server only: read the
+         daemon's config, set_control_socket(), preflight with -t,
+         write, restart — the same plan/preflight/commit/revert path
+         every subnet edit takes;
+      3. probe the NEW socket (version-get, then a config-get that must
+         identify as this daemon — a Control Agent still listening on
+         the same host answers version-get identically);
+      4. only then write Jen's own config: the per-daemon URL (+ creds),
+         and for dhcp4 `connection_mode = direct`.
+
+    A failed probe leaves the socket in the Kea config (it's valid and
+    harmless — the daemon is listening on it) and Jen's settings
+    untouched, with a flash naming exactly what didn't answer.
+    """
+    from jen.services import kea_changeset as __changeset
+    from jen.services import kea_config_edit as __edit
+    from jen.services.kea_authoring import DIRECT_SOCKET_DEFAULT_PORTS, build_control_socket
+
+    back = redirect(url_for("settings.settings_kea"))
+    if service not in _DIRECT_SERVICES:
+        flash("Unknown Kea service.", "error")
+        return back
+    server = _server_by_id(server_id)
+    if server is None:
+        flash("Unknown Kea server.", "error")
+        return back
+    name = server.get("name") or f"Kea Server {server_id}"
+    daemon = _DAEMON_NAME[service]
+    conf = f"kea-{_CONF_STEM[service]}.conf"
+    if not server.get("ssh_host"):
+        flash(
+            f"{name} has no SSH host configured — Jen edits {conf} over SSH. Set it under "
+            f"{'SSH to the Kea host' if server_id == 1 else 'Servers & HA'} first.",
+            "error",
+        )
+        return back
+
+    scheme = request.form.get("scheme", "http").strip().lower()
+    if scheme != "http":
+        flash(
+            "Only an http socket can be set up here for now — for https, add the socket by hand per the admin "
+            'guide\'s "Direct control sockets" section and fill in the TLS fields above.',
+            "error",
+        )
+        return back
+    address = request.form.get("address", "").strip()
+    if not _is_ip_literal(address):
+        flash(
+            f"The bind address must be an IP literal on the Kea host — {daemon} binds an address, not a name. "
+            f"Use the management IP Jen reaches {name} on.",
+            "error",
+        )
+        return back
+    if ipaddress.ip_address(address).is_unspecified:
+        flash(
+            "Refusing to bind 0.0.0.0 / :: — bind the management address Jen reaches this host on, "
+            "not every interface. A control socket on every interface is a credential-guessing target "
+            "on the client network too.",
+            "error",
+        )
+        return back
+    raw_port = request.form.get("port", "").strip() or str(DIRECT_SOCKET_DEFAULT_PORTS[service])
+    if not raw_port.isdigit() or not 1 <= int(raw_port) <= 65535:
+        flash("The port must be a number between 1 and 65535.", "error")
+        return back
+    port = int(raw_port)
+    default_user, default_pass = _daemon_creds(server, service)
+    user = request.form.get("user", "").strip() or default_user
+    password = request.form.get("password", "").strip() or default_pass
+    if not user or not password:
+        flash(
+            f"The socket needs a basic-auth username and password — Jen has none on record for {daemon} on "
+            f"{name}, so fill both in.",
+            "error",
+        )
+        return back
+    new_url = _socket_url(scheme, address, port)
+
+    # The daemon socket must not be the Control Agent's own address —
+    # that's the exact 2026-09-13 confusion, and Kea would fail to bind
+    # a port the agent already holds (a restart failure, not a clear
+    # message).
+    if extensions.KEA_CONNECTION_MODE == "ca":
+        ca = urlparse(server.get("api_url", ""))
+        if ca.hostname == address and ca.port == port:
+            flash(
+                f"{new_url} is the Control Agent's own address on {name} — {daemon}'s socket needs its own port "
+                f"(conventionally :{DIRECT_SOCKET_DEFAULT_PORTS[service]}).",
+                "error",
+            )
+            return back
+
+    # Kea version: per-daemon control sockets exist from 2.7.2. Only
+    # blocking when the CURRENT endpoint actually answers — a Kea 3.2 box
+    # with no Control Agent answers nothing in ca mode, and the config
+    # test (-t) below rejects an unknown `control-sockets` key on an old
+    # Kea anyway.
+    vr = __kea.kea_command("version-get", service, server=server)
+    if vr.get("result") == 0:
+        ver_text = (vr.get("arguments", {}).get("extended", "") or vr.get("text", "")).splitlines()[0].strip()
+        v = __kea.parse_kea_version(ver_text)
+        if v and v < (2, 7, 2):
+            flash(
+                f"Kea {'.'.join(str(n) for n in v)} on {name} predates per-daemon control sockets (2.7.2), so "
+                "the Control Agent is the only option there. Plan a Kea upgrade first — nothing was changed.",
+                "error",
+            )
+            return back
+
+    entry = build_control_socket(scheme, address, port, user, password)
+    result = __changeset.apply_change(
+        service,
+        lambda cfg: __edit.set_control_socket(cfg, service, entry),
+        f"added an {scheme} control socket on {address}:{port}",
+        servers=[server],
+        restart=True,
+        code_messages={
+            "unsupported": f"{conf} has no {_DAEMON_KEY[service]} block (or a control-sockets that isn't the "
+            "daemon's list form) — is this the right file? Nothing was changed.",
+            "nochange": f"{daemon} already has exactly this socket in {conf} — checking that it answers",
+        },
+        daemon_label=daemon,
+    )
+    if result.status == "noservers":
+        flash(f"{name} has no SSH host configured.", "error")
+        return back
+    for style, text in result.lines:
+        flash(text, style)
+    if result.status in ("aborted", "rollback_failed"):
+        flash("Jen's own settings were not changed.", "info")
+        return back
+    mode_now = "Control Agent" if extensions.KEA_CONNECTION_MODE == "ca" else "direct"
+    if result.status == "restart_failed":
+        flash(
+            f"The socket is in {conf} on {name} but {daemon} did NOT restart, so it isn't listening yet. "
+            f"Restart it by hand, then Probe {new_url} (candidate URL, above) and run this again — Jen stays "
+            f"in {mode_now} mode and none of its settings were changed.",
+            "warning",
+        )
+        return back
+
+    version_text, probe_err = _probe_once(new_url, user, password, omit_service=True, service=service)
+    identified = _identify_daemon(new_url, user, password, service) if version_text else None
+    if not version_text or identified != _DAEMON_KEY[service]:
+        if not version_text:
+            reason = f"didn't answer a version-get ({probe_err})"
+        else:
+            who = "the Control Agent" if identified == "Control-agent" else (identified or "an unknown daemon")
+            reason = f"answered as {who}, not {daemon}"
+        msg = (
+            f"{daemon} on {name} restarted with the new socket, but {new_url} {reason} from the Jen host — "
+            f"Jen stays in {mode_now} mode and none of its settings were changed. Check that {address}:{port} "
+            f"is reachable from here (firewall? management VLAN?) and that {daemon}'s log shows it listening, "
+            f"then run this again (the socket is already in {conf}, so it will just re-probe)."
+        )
+        flash(msg, "error")
+        __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} probe=failed")
+        return back
+
+    was_ca = extensions.KEA_CONNECTION_MODE == "ca"
+    written = _write_direct_socket_config(server, service, new_url, user, password)
+    __user.set_global_setting("restart_pending", "true")
+    flash(f"✅ {daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
+    if service != "dhcp4" and extensions.KEA_CONNECTION_MODE == "ca":
+        flash(
+            "Jen is still in Control Agent mode — set up kea-dhcp4's direct socket to switch it over; "
+            "until then this URL is only used in direct mode.",
+            "info",
+        )
+    if service == "dhcp4" and was_ca and extensions.KEA_CONNECTION_MODE == "direct":
+        others = _servers_not_on_direct_sockets(server_id)
+        if others:
+            flash(
+                "Jen is now in direct mode for every server, but these still point at something that isn't "
+                f"kea-dhcp4's own socket: {'; '.join(others)}. Set up their direct sockets next — until then "
+                "their Dashboard cards show the Control Agent error.",
+                "warning",
+            )
+    __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} user={user}")
+    return back
+
+
+@bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>/remove", methods=["POST"])
+@login_required
+@_superadmin_required
+def remove_direct_socket(server_id, service):
+    """v5.29.0 (Q29, B2) — the reverse of setup_direct_socket for ONE
+    daemon on ONE server: drop the http/https entry from the daemon's
+    control-sockets (the unix entry stays), restart, then undo Jen's
+    side — dhcp6/D2 lose their per-daemon URL override (ca mode inherits
+    the v4 URL again); dhcp4 gets its remembered pre-direct URL back and
+    `connection_mode` returns to `ca` only when no OTHER server still
+    answers as kea-dhcp4 on its v4 URL. Not a delete-everything button."""
+    from jen.services import kea_changeset as __changeset
+    from jen.services import kea_config_edit as __edit
+
+    back = redirect(url_for("settings.settings_kea"))
+    if service not in _DIRECT_SERVICES:
+        flash("Unknown Kea service.", "error")
+        return back
+    server = _server_by_id(server_id)
+    if server is None:
+        flash("Unknown Kea server.", "error")
+        return back
+    name = server.get("name") or f"Kea Server {server_id}"
+    daemon = _DAEMON_NAME[service]
+    conf = f"kea-{_CONF_STEM[service]}.conf"
+    if not server.get("ssh_host"):
+        flash(f"{name} has no SSH host configured — Jen edits {conf} over SSH.", "error")
+        return back
+
+    result = __changeset.apply_change(
+        service,
+        lambda cfg: __edit.remove_control_socket(cfg, service),
+        f"removed the {daemon} http control socket",
+        servers=[server],
+        restart=True,
+        code_messages={
+            "unsupported": f"{conf} has no {_DAEMON_KEY[service]} block — is this the right file? Nothing was changed.",
+            "nochange": f"{conf} has no http/https control socket to remove — only Jen's own settings change",
+        },
+        daemon_label=daemon,
+    )
+    if result.status == "noservers":
+        flash(f"{name} has no SSH host configured.", "error")
+        return back
+    for style, text in result.lines:
+        flash(text, style)
+    if result.status in ("aborted", "rollback_failed"):
+        flash("Jen's own settings were not changed.", "info")
+        return back
+
+    sid = server.get("id")
+    changed: list[str] = []
+    # Computed once, outside the mutate: does any OTHER server still
+    # answer as kea-dhcp4 on its v4 URL? Then the (global) mode stays
+    # direct for their sake.
+    keep_direct = False
+    others_still_direct: list[str] = []
+    if service == "dhcp4":
+        for s in extensions.KEA_SERVERS:
+            if s.get("id") == sid or not s.get("api_url"):
+                continue
+            if _identify_daemon(s["api_url"], s.get("api_user", ""), s.get("api_pass", ""), "dhcp4") == "Dhcp4":
+                others_still_direct.append(s.get("name", "Kea Server"))
+        keep_direct = bool(others_still_direct)
+
+    def _apply(cfg):
+        if sid == 1:
+            sec, url_key = {"dhcp4": ("kea", "api_url"), "dhcp6": ("kea6", "api_url"), "d2": ("d2", "api_url")}[service]
+        else:
+            sec = f"kea_server_{sid}"
+            url_key = {"dhcp4": "api_url", "dhcp6": "api6_url", "d2": "api_d2_url"}[service]
+        if service == "dhcp4":
+            prev = cfg.get(sec, _PREV_URL_KEY, fallback="") if cfg.has_section(sec) else ""
+            if prev:
+                cfg.set(sec, url_key, prev)
+                cfg.remove_option(sec, _PREV_URL_KEY)
+                changed.append(f"[{sec}] {url_key} restored to {prev}")
+            else:
+                changed.append(f"[{sec}] {url_key} left as-is (no Control Agent URL on record — set it above)")
+            if not keep_direct and cfg.get("kea", "connection_mode", fallback="ca") != "ca":
+                cfg.set("kea", "connection_mode", "ca")
+                changed.append("Jen switched back to Control Agent mode")
+        else:
+            if cfg.has_section(sec) and cfg.has_option(sec, url_key):
+                cfg.remove_option(sec, url_key)
+                changed.append(f"[{sec}] {url_key} cleared — inherits the v4 URL in Control Agent mode")
+            if sid == 1 and cfg.has_section(sec) and not cfg.options(sec):
+                cfg.remove_section(sec)
+
+    __config.app_config.mutate(_apply)
+    __user.set_global_setting("restart_pending", "true")
+    flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
+    if keep_direct:
+        flash(
+            f"Jen stays in direct mode — {', '.join(others_still_direct)} still answer on their own kea-dhcp4 "
+            f"sockets. {name} will show the Control Agent error until you switch those back too, or set its "
+            "socket up again.",
+            "warning",
+        )
+    __user.audit("REMOVE_DIRECT_SOCKET", "kea_api", f"server={name} service={service}")
+    return back
 
 
 @bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])
