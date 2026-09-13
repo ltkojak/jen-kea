@@ -184,6 +184,56 @@ class TestDirectMode:
         assert fake_http.calls == []
 
 
+class TestDirectModeDaemonIdentity:
+    """v5.28.1 (Q26, D1) — in direct mode, a "successful" config-get
+    that actually answered as the WRONG daemon (most often a Control
+    Agent still listening on :8000 because only its unix socket, never
+    an http one, was configured) used to pass straight through as an
+    empty-looking Dhcp4/Dhcp6/DhcpDdns to every silent caller. Only
+    config-get, only direct mode, only a reply with result 0."""
+
+    @pytest.fixture(autouse=True)
+    def _direct(self, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+
+    def test_control_agent_reply_in_direct_mode_is_an_error(self, fake_http):
+        fake_http.reply = [{"result": 0, "arguments": {"Control-agent": {}}}]
+        result = kea_svc.kea_command("config-get")
+        assert result["result"] == 1
+        assert "Control Agent" in result["text"]
+        assert "kea-dhcp4" in result["text"]
+        assert "8004" in result["text"]
+
+    def test_correctly_keyed_reply_in_direct_mode_passes_through(self, fake_http):
+        fake_http.reply = [{"result": 0, "arguments": {"Dhcp4": {"subnet4": []}}}]
+        result = kea_svc.kea_command("config-get")
+        assert result == {"result": 0, "arguments": {"Dhcp4": {"subnet4": []}}}
+
+    def test_dhcp6_service_checks_for_dhcp6_key(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA6_API_URL", "http://kea6:8006")
+        fake_http.reply = [{"result": 0, "arguments": {"Control-agent": {}}}]
+        result = kea_svc.kea_command("config-get", service="dhcp6")
+        assert result["result"] == 1
+        assert "kea-dhcp6" in result["text"]
+        assert "8006" in result["text"]
+
+    def test_the_identical_stub_in_ca_mode_passes_through_unchanged(self, fake_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        fake_http.reply = [{"result": 0, "arguments": {"Control-agent": {}}}]
+        result = kea_svc.kea_command("config-get")
+        assert result == {"result": 0, "arguments": {"Control-agent": {}}}
+
+    def test_other_commands_are_not_checked(self, fake_http):
+        fake_http.reply = [{"result": 0, "arguments": {"Control-agent": {}}}]
+        result = kea_svc.kea_command("version-get")
+        assert result == {"result": 0, "arguments": {"Control-agent": {}}}
+
+    def test_an_error_reply_is_not_checked(self, fake_http):
+        fake_http.reply = [{"result": 1, "text": "unrelated Kea-side error"}]
+        result = kea_svc.kea_command("config-get")
+        assert result == {"result": 1, "text": "unrelated Kea-side error"}
+
+
 class TestPerServerV6Precedence:
     """v5.10.3 — a server's dhcp6 endpoint is THAT server's. Before this,
     the chain hopped through the KEA6_* globals (the PRIMARY's [kea6], or

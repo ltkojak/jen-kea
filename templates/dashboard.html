@@ -40,6 +40,10 @@
     <button class="btn btn-primary btn-sm" id="save-dash-prefs-btn">💾 Save Layout</button>
 </div>
 
+{% if kea_config_error %}
+<div class="alert alert-warning">⚠️ Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
+{% endif %}
+
 <!-- Subnet statistics widget -->
 <div id="dash-widgets" style="display:flex;flex-direction:column;gap:16px;">
 

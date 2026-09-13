@@ -54,6 +54,46 @@ class TestDashboard:
         r = logged_in_client.get("/?hours=999")
         assert r.status_code == 200
 
+    def test_dashboard_shows_banner_when_kea_config_unavailable(self, logged_in_client, monkeypatch):
+        """v5.28.1 (Q26, D3) — a config-get error (e.g. D1's direct-mode
+        wrong-daemon detection) used to be swallowed silently, leaving
+        every subnet card's gateway/DNS fields just blank with no
+        explanation. The cards themselves must still render (Rule 7 —
+        this asserts the same "Test Network" string
+        test_dashboard_contains_subnet_cards does, alongside the new
+        banner)."""
+        from jen.services import kea as kea_svc
+
+        def fake_kea_command(command, *a, **kw):
+            if command == "config-get":
+                return {"result": 1, "text": "kea:8000 answered config-get as the Control Agent, not kea-dhcp4"}
+            return {"result": 0, "text": "mocked", "arguments": {"subnet4": [], "Dhcp4": {}, "hosts": []}}
+
+        monkeypatch.setattr(kea_svc, "kea_command", fake_kea_command)
+        monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: True)
+        monkeypatch.setattr(
+            kea_svc,
+            "get_active_kea_server",
+            lambda: {"id": 1, "name": "Test Kea", "api_url": "http://localhost:18000"},
+        )
+        monkeypatch.setattr(
+            kea_svc,
+            "get_all_server_status",
+            lambda: [
+                {
+                    "server": {"id": 1, "name": "Test Kea"},
+                    "up": True,
+                    "ha_state": None,
+                    "version": "",
+                    "role": "primary",
+                }
+            ],
+        )
+        r = logged_in_client.get("/")
+        assert r.status_code == 200
+        assert b"Kea config unavailable" in r.data
+        assert b"Test Network" in r.data
+
 
 class TestApiStats:
     """API stats endpoint — GET /api/stats"""

@@ -525,6 +525,36 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4"):
         return "", str(e)
 
 
+def _identify_daemon(url, user, pwd, service):
+    """v5.28.1 (Q26, D2) — best-effort direct-style config-get against a
+    URL that has already answered version-get, to see WHICH daemon
+    actually answered: a Control Agent left listening on :8000 (because
+    only its unix socket, never an http one, was ever configured on the
+    daemon side) answers version-get identically to a real per-daemon
+    control socket — the probe used to have no way to tell them apart.
+    Returns the reply's single top-level config key ("Dhcp4",
+    "Control-agent", ...), or None on any failure — advisory only, this
+    never raises and never changes whether the probe as a whole
+    succeeded."""
+    try:
+        resp = __kea.http.post(
+            url,
+            json={"command": "config-get"},
+            auth=(user, pwd),
+            timeout=8,
+            verify=extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY,
+            cert=__kea._tls_client_cert(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        d = data[0] if isinstance(data, list) else data
+        if d.get("result") != 0:
+            return None
+        return next(iter(d.get("arguments") or {}), None)
+    except Exception:
+        return None
+
+
 @bp.route("/settings/infrastructure/probe-kea", methods=["POST"])
 @login_required
 @_admin_required
@@ -619,8 +649,36 @@ def probe_kea():
 
     v = __kea.parse_kea_version(version_text)
     version = ".".join(str(n) for n in v) if v else ""
+
+    # v5.28.1 (Q26, D2) — identify WHICH daemon answered before trusting
+    # a "direct mode is working" recommendation. Only relevant when
+    # something actually answered in direct mode (configured or
+    # candidate) — kea_is_up() stays untouched (called per server on
+    # every dashboard render; this extra config-get is too heavy there).
+    identified_key = _identify_daemon(answered_url, user, pwd, service) if answered_mode == "direct" else None
+
     if v is None:
         rec = ("Reached Kea, but couldn't parse a version from its reply.", "warn")
+    elif identified_key == "Control-agent":
+        daemon_port = 8006 if service == "dhcp6" else 8004
+        if v < (3, 2, 0):
+            # Maintainer decision (2026-09-13, Q26 Q1) — Kea still
+            # supports the Control Agent at this version, so this is a
+            # config gap to fix, not a dead end: stay on ca mode until
+            # the daemon sockets exist.
+            rec = (
+                f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — Kea {version} "
+                f"still supports the Control Agent, so stay on Control Agent mode until you've added an http "
+                f"control socket to kea-{service} (conventionally :{daemon_port}), then switch to direct.",
+                "warn",
+            )
+        else:
+            rec = (
+                f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — direct mode "
+                f"needs the daemon's http socket (conventionally :{daemon_port}). Either switch back to "
+                f"Control Agent mode, or add an http control socket to kea-{service} and point this at it.",
+                "bad",
+            )
     elif candidate:
         rec = (
             f"Kea {version} answered on {answered_url} — set this as the API URL and switch to Direct mode.",

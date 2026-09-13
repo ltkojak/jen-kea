@@ -63,7 +63,18 @@ class TestWinDhcpImportWizard:
         )
         fake = FakeHelper()
         fake.configs[(1, "dhcp4")] = dhcp4
-        fake.responses["apply-config"] = {"ok": True, "backup": None}
+
+        # v5.28.1 (Q26, B1) - unlike FakeHelper's usual static configs
+        # (deliberately unmutated elsewhere, e.g. the kea_changeset
+        # tests), a REAL host's config file IS overwritten by a
+        # successful apply-config even when the daemon then fails to
+        # restart - the retry route's sha-drift check needs that to be
+        # true here too, or every retry would look like external drift.
+        def _apply_resp(server, op, payload):
+            fake.configs[(server.get("id"), payload.get("service"))] = payload.get("config")
+            return {"ok": True, "backup": None}
+
+        fake.responses["apply-config"] = _apply_resp
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
         fake.responses["test-config"] = {"ok": True}
         monkeypatch.setattr(kea_host, "helper_call", fake.helper_call)
@@ -307,6 +318,60 @@ class TestWinDhcpImportWizard:
         assert len(self._reservation_calls) == 2
         assert 50 in self._written or 52 in self._written
         assert token not in subnets_mod._WIN_IMPORT_PLANS  # now finished and popped
+
+    def test_apply_reservations_right_after_preview_is_refused(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.1 (Q26, B1) — the retry route only exists for the
+        restart-failure state; calling it straight after Preview (before
+        Apply has ever run) must refuse, not silently add reservations
+        against whatever the live config happens to be."""
+        self._wire(monkeypatch)
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        r = logged_in_client.post("/subnets/import-windows/apply-reservations", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"hasn&#39;t been applied yet" in r.data or b"hasn't been applied yet" in r.data
+        assert self._reservation_calls == []
+        assert self._written == {}
+
+    def test_apply_reservations_refused_when_config_changed_since_apply(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.1 (Q26, B1) — after a restart failure, the retry route
+        re-reads the live config before adding anything: if it moved
+        again in the meantime, adding reservations against it would be
+        guessing, not confirming."""
+        fake = self._wire(monkeypatch)
+        fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+
+        # Something changed the primary's config again after the apply.
+        fake.configs[(1, "dhcp4")] = {"Dhcp4": {**self._EMPTY_DHCP4["Dhcp4"], "valid-lifetime": 12345}}
+
+        r = logged_in_client.post("/subnets/import-windows/apply-reservations", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"changed since the import was applied" in r.data
+        assert self._reservation_calls == []
+        assert self._written == {}
+
+    def test_apply_twice_is_refused(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.28.1 (Q26, B1) — a second POST to Apply must be refused
+        once the plan has moved past "previewed". A successful apply
+        pops the plan immediately (nothing left to re-apply against —
+        covered by test_apply_without_preview_redirects_to_upload's
+        "expired" message for that case); this exercises the other
+        surviving state, restart-failure, where the plan is deliberately
+        kept around for the reservation retry, not for re-applying."""
+        fake = self._wire(monkeypatch)
+        fake.responses["service"] = {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+        self._upload(logged_in_client)
+        logged_in_client.post("/subnets/import-windows/preview", data=self._review_form())
+        logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        first_apply_calls = fake.ops().count("apply-config")
+
+        r2 = logged_in_client.post("/subnets/import-windows/apply", follow_redirects=True)
+        assert r2.status_code == 200
+        assert b"already been applied" in r2.data
+        assert fake.ops().count("apply-config") == first_apply_calls
 
 
 class TestWinDhcpImportWizardRealFixture:

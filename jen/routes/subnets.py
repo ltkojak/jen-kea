@@ -122,8 +122,15 @@ def subnets():
     # Fetch Kea config for lease times, timers, pools
     kea_subnets = {}
     shared_networks = []
+    kea_config_error = None
     try:
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
+        if result.get("result") != 0:
+            # v5.28.1 (Q26, D3) — this used to be swallowed silently, so
+            # e.g. a direct-mode host answering as the wrong daemon
+            # (D1) rendered an otherwise-normal-looking page with every
+            # subnet's lease-time/pool/gateway/DNS fields just blank.
+            kea_config_error = result.get("text")
         if result.get("result") == 0:
             cfg = result["arguments"]["Dhcp4"]
             shared_networks = __view.shared_networks4(cfg)
@@ -214,6 +221,7 @@ def subnets():
         subnets6=_get_subnets6_data(),
         shared_networks=shared_networks,
         can_manage_networks=current_user.all_subnets,
+        kea_config_error=kea_config_error,
     )
 
 
@@ -1978,6 +1986,12 @@ def import_windows():
         "expires": time.time() + _WIN_IMPORT_TTL_SECONDS,
         "subnet_names": None,
         "selections": None,
+        # v5.28.1 (Q26, B1) — an explicit plan state, so apply/retry can
+        # refuse a call that's out of sequence instead of only catching
+        # it indirectly (a stale sha mismatch, a missing reservation
+        # list). uploaded -> previewed -> config_applied_restart_failed
+        # -> complete; see import_windows_preview/apply/_finish_windows_import.
+        "state": "uploaded",
     }
     session["win_import_token"] = token
     __user.audit(
@@ -2108,6 +2122,10 @@ def import_windows_preview():
     entry["subnets_to_declare"] = subnets_to_declare
     entry["report"] = report
     entry["preview_ok"] = bool(test_result.get("ok"))
+    # v5.28.1 (Q26, B1) — set alongside preview_ok regardless of its
+    # value; apply() still checks preview_ok separately for a failed
+    # test, this only marks that a preview has actually been run.
+    entry["state"] = "previewed"
 
     from jen.services import config_revisions as _rev
 
@@ -2151,6 +2169,7 @@ def _finish_windows_import(token, entry):
         __config.write_subnets_config(new_map)
         report.append(f"{len(subnets_to_declare)} subnet(s) registered with Jen.")
 
+    entry["state"] = "complete"  # v5.28.1 (Q26, B1) — moot, the plan is popped next, but explicit
     _WIN_IMPORT_PLANS.pop(token, None)
     session.pop("win_import_token", None)
     __user.audit(
@@ -2173,6 +2192,16 @@ def import_windows_apply():
     # import_windows_preview already ran test_config() against, and
     # refuses if either that test failed or the live config has moved
     # since — never a fresh, unvalidated to_kea() call.
+    # v5.28.1 (Q26, B1) — a state check catches a SECOND Apply too: once
+    # the config already went live (restart failed or not), the plan
+    # stays around for the reservation retry, not for re-applying —
+    # a second Apply here has no valid target state to move from.
+    if entry.get("state") != "previewed":
+        flash(
+            "This import has already been applied — use the retry option to add reservations, or start a new import.",
+            "error",
+        )
+        return redirect(url_for("subnets.import_windows_review"))
     if not entry.get("preview_ok"):
         flash("Preview the import — with a passing config test — before applying it.", "error")
         return redirect(url_for("subnets.import_windows_review"))
@@ -2209,10 +2238,27 @@ def import_windows_apply():
         # reservations against a server that may still be serving the OLD
         # subnets, and keep the plan around so the operator can retry
         # once Kea is actually restarted.
+        # v5.28.1 (Q26, B1/B2) — an explicit state (so a second Apply is
+        # refused and the retry route can require it), the sha of what
+        # actually went live (so the retry can detect a further change
+        # before adding reservations against it), and a fresh 30-minute
+        # window measured from THIS moment, not from the original
+        # upload. Re-importing the export is NOT a recovery path for a
+        # missed window: to_kea() skips a scope whose CIDR already
+        # exists in Kea before it ever reaches that scope's reservation
+        # loop, so a second import would add none of them back.
+        entry["state"] = "config_applied_restart_failed"
+        entry["applied_sha"] = apply_result.get("sha256")
+        entry["expires"] = time.time() + _WIN_IMPORT_TTL_SECONDS
         report.append(f"⚠️ Config applied, but Kea did not restart cleanly: {restart['detail']}")
+        report.append(
+            "You have 30 minutes to add the reservations below. Re-importing the export after that is "
+            "not a recovery path — the subnet's CIDR would already exist in Kea, so its reservations "
+            "would be skipped too. Add them by hand if you miss the window."
+        )
         flash(
             "The config was applied but Kea did not restart cleanly. Fix that on the server, then come back "
-            "here to add the reservations.",
+            "here to add the reservations within 30 minutes.",
             "error",
         )
         return render_template("import_windows_result.html", report=report, restart_failed=True)
@@ -2228,10 +2274,38 @@ def import_windows_apply():
 def import_windows_apply_reservations():
     """v5.28.0 (Q24, C4) — the retry path after apply's restart failed:
     the config is already live, this just finishes the reservation-add +
-    Jen SUBNET_MAP write + audit that apply deferred."""
+    Jen SUBNET_MAP write + audit that apply deferred.
+
+    v5.28.1 (Q26, B1) — refuses outright unless apply() actually left the
+    plan in the one state this route exists for, and re-reads the live
+    config before touching anything: the whole point of deferring is
+    that Kea's daemon never restarted onto the new config, so someone
+    could have hand-edited or otherwise changed the file again in the
+    meantime — adding reservations against a config that isn't the one
+    that was just applied would be worse than not adding them yet."""
     token, entry = _get_win_import_plan()
     if entry is None or entry.get("reservation_rows") is None:
         flash("Your Windows DHCP import expired — upload the export again.", "error")
         return redirect(url_for("subnets.import_windows"))
+    if entry.get("state") != "config_applied_restart_failed":
+        flash("The imported config hasn't been applied yet — use Apply.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+
+    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
+    if primary is None or not primary.get("ssh_host"):
+        flash("The primary Kea server needs SSH configured before you can add reservations.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+    live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
+    if live_cfg is None:
+        flash("Could not read the primary server's kea-dhcp4.conf.", "error")
+        return redirect(url_for("subnets.import_windows_review"))
+    if live_sha != entry.get("applied_sha"):
+        flash(
+            "The Kea config on the primary server changed since the import was applied — check "
+            "Servers → Config history before adding reservations.",
+            "error",
+        )
+        return redirect(url_for("subnets.import_windows_review"))
+
     report = _finish_windows_import(token, entry)
     return render_template("import_windows_result.html", report=report)

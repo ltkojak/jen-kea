@@ -214,7 +214,30 @@ def kea_command(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data[0] if isinstance(data, list) else data
+        reply = data[0] if isinstance(data, list) else data
+        # v5.28.1 (Q26, D1) — in direct mode, a successful config-get that
+        # answers as the WRONG daemon (most often the Control Agent,
+        # still listening on :8000 because only its unix socket — not an
+        # http one — was ever configured) used to pass straight through
+        # as an empty-looking Dhcp4/Dhcp6/DhcpDdns to every silent
+        # caller (dashboard, subnets page, drift, Health). Only
+        # config-get, only direct mode, only a "successful" reply —
+        # ca mode and every other command are untouched.
+        if extensions.KEA_CONNECTION_MODE == "direct" and command == "config-get" and reply.get("result") == 0:
+            expected = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6", "d2": "DhcpDdns"}.get(service)
+            args = reply.get("arguments") or {}
+            if expected and expected not in args:
+                found_key = "Control-agent" if "Control-agent" in args else next(iter(args), None)
+                found = "the Control Agent" if found_key == "Control-agent" else found_key
+                return {
+                    "result": 1,
+                    "text": (
+                        f"{url} answered config-get as {found or 'an unknown daemon'}, not kea-{service} — "
+                        "direct mode needs each daemon's own http control socket (conventionally :8004 for "
+                        "dhcp4, :8006 for dhcp6), not the Control Agent (:8000). Settings → Kea → Probe."
+                    ),
+                }
+        return reply
     except http.exceptions.ConnectionError:
         return {"result": 1, "text": f"Cannot connect to Kea API at {url}"}
     except http.exceptions.Timeout:

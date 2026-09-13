@@ -48,18 +48,32 @@ class _Resp:
 
 class _FakeHTTP:
     """Answers version-get per-URL: `replies` maps a URL substring to the
-    JSON body to return; anything unmatched raises ConnectionError."""
+    JSON body to return; anything unmatched raises ConnectionError.
+
+    v5.28.1 (Q26, D2) — `config_replies` is the same shape, but only
+    consulted for a `config-get` command (the probe's own D2 identity
+    check); a URL with no entry there falls back to `replies` so every
+    existing test (none of which registers config_replies) is
+    unaffected — probe_kea() only calls config-get at all when
+    something already answered version-get in direct mode."""
 
     import requests as _r
 
     exceptions = _r.exceptions
 
-    def __init__(self, replies):
+    def __init__(self, replies, config_replies=None):
         self.replies = replies
+        self.config_replies = config_replies or {}
         self.calls = []
 
     def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
         self.calls.append({"url": url, "json": json, "cert": cert, "auth": auth})
+        table = self.config_replies if (json or {}).get("command") == "config-get" else {}
+        for frag, body in table.items():
+            if frag in url:
+                if isinstance(body, Exception):
+                    raise body
+                return _Resp(body)
         for frag, body in self.replies.items():
             if frag in url:
                 if isinstance(body, Exception):
@@ -70,8 +84,8 @@ class _FakeHTTP:
 
 @pytest.fixture
 def probe_http(monkeypatch):
-    def _install(replies):
-        fake = _FakeHTTP(replies)
+    def _install(replies, config_replies=None):
+        fake = _FakeHTTP(replies, config_replies)
         monkeypatch.setattr(kea_svc, "http", fake)
         return fake
 
@@ -282,3 +296,75 @@ class TestProbeServerAndService:
         data = logged_in_client.post("/settings/infrastructure/probe-kea", data={"server_id": bogus}).get_json()
         assert data["server"] == "Test Kea"
         assert fake.calls[0]["auth"] == ("u1", "p1")
+
+
+class TestProbeDirectModeDaemonIdentity:
+    """v5.28.1 (Q26, D2) — once something answers version-get in direct
+    mode (configured or candidate), the probe also sends a direct-style
+    config-get to that same URL to see WHICH daemon actually answered.
+    A Control Agent left listening on the same host (only its unix
+    socket, never an http one, ever configured) answers version-get
+    identically to a real per-daemon socket — this is what tells them
+    apart before recommending direct mode is "working"."""
+
+    def test_control_agent_identity_at_kea_32_is_bad(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        probe_http(
+            {"localhost:18000": _ok("3.2.0")},
+            config_replies={"localhost:18000": [{"result": 0, "arguments": {"Control-agent": {}}}]},
+        )
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        assert data["ok"] is True
+        assert data["recommendation"]["level"] == "bad"
+        assert "Control Agent" in data["recommendation"]["text"]
+        assert "8004" in data["recommendation"]["text"]
+
+    def test_control_agent_identity_at_kea_30_is_warn(self, logged_in_client, db, probe_http, monkeypatch):
+        """Maintainer decision (2026-09-13, Q26 Q1) — Kea 3.0.x still
+        supports the Control Agent, so staying on ca mode until the
+        daemon sockets exist is a config gap to fix, not a dead end —
+        unlike 3.2+, where the Control Agent is removed outright."""
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        probe_http(
+            {"localhost:18000": _ok("3.0.0")},
+            config_replies={"localhost:18000": [{"result": 0, "arguments": {"Control-agent": {}}}]},
+        )
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        assert data["ok"] is True
+        assert data["recommendation"]["level"] == "warn"
+        assert "Control Agent" in data["recommendation"]["text"]
+
+    def test_correctly_keyed_daemon_still_recommends_ok(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        probe_http(
+            {"localhost:18000": _ok("3.2.0")},
+            config_replies={"localhost:18000": [{"result": 0, "arguments": {"Dhcp4": {}}}]},
+        )
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        assert data["recommendation"]["level"] == "ok"
+
+    def test_ca_mode_is_never_identity_checked(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        fake = probe_http(
+            {"localhost:18000": _ok("3.0.0")},
+            config_replies={"localhost:18000": [{"result": 0, "arguments": {"Control-agent": {}}}]},
+        )
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        # ca mode never calls config-get for identity — its own
+        # version-keyed "deprecated" recommendation still applies.
+        assert data["recommendation"]["level"] == "warn"
+        assert "deprecated" in data["recommendation"]["text"].lower()
+        assert not any((c["json"] or {}).get("command") == "config-get" for c in fake.calls)
+
+    def test_candidate_url_answering_as_control_agent_is_flagged(self, logged_in_client, db, probe_http, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
+        probe_http(
+            {"kea-direct:8004": _ok("3.2.0")},
+            config_replies={"kea-direct:8004": [{"result": 0, "arguments": {"Control-agent": {}}}]},
+        )
+        data = logged_in_client.post(
+            "/settings/infrastructure/probe-kea", data={"candidate_url": "https://kea-direct:8004"}
+        ).get_json()
+        assert data["ok"] is True
+        assert data["recommendation"]["level"] == "bad"
+        assert "Control Agent" in data["recommendation"]["text"]

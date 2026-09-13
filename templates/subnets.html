@@ -64,6 +64,10 @@ document.addEventListener('click', function(e) {
 <div class="alert alert-warning">💡 Subnet editing requires SSH to be configured. Go to <a href="/settings/kea#kea-ssh">Settings → Kea → SSH Key Management</a> to set it up.</div>
 {% endif %}
 
+{% if kea_config_error %}
+<div class="alert alert-warning">⚠️ Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
+{% endif %}
+
 {% set grp = namespace(cur=false) %}
 {% for s in subnets %}
 {% if s.shared_network != grp.cur %}

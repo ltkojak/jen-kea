@@ -92,6 +92,7 @@ def dashboard():
     }
 
     # Enrich with routers + DNS from Kea config (static values, render server-side)
+    kea_config_error = None
     try:
         kea_cfg = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         kea_subnets = {}
@@ -106,6 +107,12 @@ def dashboard():
                     elif opt.get("name") == "domain-name-servers":
                         dns_servers = opt.get("data", "")
                 kea_subnets[sid] = {"routers": routers, "dns_servers": dns_servers}
+        elif isinstance(kea_cfg, dict):
+            # v5.28.1 (Q26, D3) — this used to be swallowed silently, so
+            # e.g. a direct-mode host answering as the wrong daemon (D1)
+            # rendered an otherwise-normal-looking page with every
+            # subnet's gateway/DNS fields just blank.
+            kea_config_error = kea_cfg.get("text")
         for sid in stats:
             if sid in kea_subnets:
                 stats[sid]["routers"] = kea_subnets[sid]["routers"]
@@ -179,6 +186,7 @@ def dashboard():
         "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
         "ipv6_summary": _get_ipv6_dashboard_summary(),
+        "kea_config_error": kea_config_error,
     }
     # HTMX time window change — return just the recent leases rows
     if request.headers.get("HX-Request") == "true":
@@ -295,6 +303,7 @@ def api_stats():
                     }
         # Get pool sizes from Kea config
         pool_sizes = {}
+        kea_config_error = None
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
             for s, _sn in __view.iter_subnet4(result["arguments"].get("Dhcp4", {})):
@@ -303,6 +312,11 @@ def api_stats():
                     if "-" in p:
                         start, end = [x.strip() for x in p.split("-")]
                         pool_sizes[str(s["id"])] = __ip_to_int(end) - __ip_to_int(start) + 1
+        else:
+            # v5.28.1 (Q26, D3) — surfaced to the frontend alongside the
+            # other stats rather than left for pool_sizes to just be
+            # empty with no explanation.
+            kea_config_error = result.get("text")
         # Get Kea version
         kea_version = ""
         ver_result = __kea.kea_command("version-get")
@@ -342,6 +356,7 @@ def api_stats():
                 "kea_up": any(s["up"] for s in server_statuses),
                 "kea_version": kea_version,
                 "servers": server_statuses,
+                "kea_config_error": kea_config_error,
             }
         )
     except Exception as e:

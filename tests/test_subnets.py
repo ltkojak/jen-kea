@@ -344,6 +344,34 @@ class TestGetSubnetKeaData:
         assert data["pool_str"] == "10.10.30.10 - 10.10.30.200"
 
 
+class TestSubnetsPageKeaConfigError:
+    """v5.28.1 (Q26, D3) — a config-get error (e.g. D1's direct-mode
+    wrong-daemon detection) used to be swallowed silently by the bare
+    `except Exception: pass` here, leaving every subnet card's
+    lease-time/pool/gateway/DNS fields just blank with no explanation."""
+
+    def test_banner_shown_and_cards_still_render(self, logged_in_client, monkeypatch):
+        from jen.services import kea as kea_svc
+
+        def fake_kea_command(command, *a, **kw):
+            if command == "config-get":
+                return {"result": 1, "text": "kea:8000 answered config-get as the Control Agent, not kea-dhcp4"}
+            return {"result": 0, "text": "mocked", "arguments": {"subnet4": [], "Dhcp4": {}, "hosts": []}}
+
+        monkeypatch.setattr(kea_svc, "kea_command", fake_kea_command)
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: {"id": 1, "name": "Test Kea"})
+
+        r = logged_in_client.get("/subnets")
+        assert r.status_code == 200
+        assert b"Kea config unavailable" in r.data
+        assert b"Test Network" in r.data  # the card still renders (Rule 7)
+
+    def test_no_banner_when_config_get_succeeds(self, logged_in_client, mock_kea):
+        r = logged_in_client.get("/subnets")
+        assert r.status_code == 200
+        assert b"Kea config unavailable" not in r.data
+
+
 class TestEditSubnetExtraPoolsPreserved:
     """Regression test for the v4.3.8 fix: submitting the edit-subnet form on
     a subnet with 2+ Kea pools must not silently drop every pool after the
