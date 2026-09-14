@@ -81,11 +81,109 @@
     </div>
 </div>
 
-<!-- Passkeys info -->
-<div class="card" style="border-style:dashed;opacity:0.7;">
-    <div class="card-header"><span class="card-title">🔑 Passkeys (Coming Soon)</span></div>
-    <p style="color:var(--text-muted);font-size:13px;">Passkey support using WebAuthn/FIDO2 is planned for a future update. Passkeys work with Keeper, 1Password, iCloud Keychain, Windows Hello, and hardware security keys like YubiKey.</p>
+<!-- Enroll a passkey (v5.31.0) -->
+<div class="card" id="passkey-card">
+    <div class="card-header"><span class="card-title">🔑 Add a Passkey</span></div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">A passkey is a second factor stored on this device or in your password manager — Windows Hello, Touch ID / iCloud Keychain, Android, 1Password, Bitwarden, Keeper, or a hardware key such as a YubiKey. You confirm it with a fingerprint, face, PIN, or touch instead of typing a code.</p>
+    <div id="passkey-unsupported" class="alert alert-warning" style="display:none;">
+        This browser can't create a passkey here. Passkeys need a browser with WebAuthn support <em>and</em> a secure page — https, or http on localhost. If you reached Jen over plain http on a LAN address, set up HTTPS under Settings → Security first.
+    </div>
+    <div id="passkey-form" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="form-group" style="margin:0;">
+            <label>Passkey name (optional)</label>
+            <input type="text" id="passkey-name" maxlength="100" placeholder="Work laptop, YubiKey 5C…" style="min-width:220px;">
+        </div>
+        <button type="button" id="passkey-add-btn" class="btn btn-primary">🔑 Add passkey</button>
+    </div>
+    <div id="passkey-status" style="font-size:13px;margin-top:10px;display:none;"></div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+    var CSRF = {{ csrf_token()|tojson }};
+    var card = document.getElementById('passkey-card');
+    var form = document.getElementById('passkey-form');
+    var unsupported = document.getElementById('passkey-unsupported');
+    var status = document.getElementById('passkey-status');
+    var btn = document.getElementById('passkey-add-btn');
+
+    function b64urlToBytes(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        var bin = atob(s), out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out.buffer;
+    }
+    function bytesToB64url(buf) {
+        var bytes = new Uint8Array(buf), bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function say(msg, isError) {
+        status.style.display = 'block';
+        status.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
+        status.textContent = msg;
+    }
+    async function postJson(url, body) {
+        var r = await fetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+            body: JSON.stringify(body || {}),
+            credentials: 'same-origin'
+        });
+        var ct = r.headers.get('content-type') || '';
+        if (ct.indexOf('application/json') === -1) {
+            throw new Error('Your session needs to be re-confirmed — reload this page and try again.');
+        }
+        var data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || ('request failed (' + r.status + ')'));
+        return data;
+    }
+
+    if (!window.PublicKeyCredential || !window.isSecureContext) {
+        form.style.display = 'none';
+        unsupported.style.display = 'block';
+        return;
+    }
+
+    btn.addEventListener('click', async function () {
+        btn.disabled = true;
+        say('Starting…');
+        try {
+            var begun = await postJson('/mfa/passkey/register/begin');
+            var options = JSON.parse(begun.options);
+            options.challenge = b64urlToBytes(options.challenge);
+            options.user.id = b64urlToBytes(options.user.id);
+            (options.excludeCredentials || []).forEach(function (c) { c.id = b64urlToBytes(c.id); });
+            say('Follow your browser\'s prompt…');
+            var cred = await navigator.credentials.create({publicKey: options});
+            var response = {
+                id: cred.id,
+                rawId: bytesToB64url(cred.rawId),
+                type: cred.type,
+                authenticatorAttachment: cred.authenticatorAttachment || null,
+                response: {
+                    clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+                    attestationObject: bytesToB64url(cred.response.attestationObject),
+                    transports: (cred.response.getTransports ? cred.response.getTransports() : [])
+                }
+            };
+            var done = await postJson('/mfa/passkey/register/finish', {
+                name: document.getElementById('passkey-name').value,
+                response: response
+            });
+            say('Passkey "' + done.name + '" enrolled.');
+            window.location = done.next;
+        } catch (e) {
+            var msg = (e && e.name === 'NotAllowedError') ? 'The passkey prompt was cancelled or timed out.'
+                    : (e && e.name === 'InvalidStateError') ? 'This authenticator is already enrolled.'
+                    : (e && e.message) ? e.message : 'Passkey enrolment failed.';
+            say(msg, true);
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
 {% endif %}
 
 {% endblock %}

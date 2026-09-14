@@ -676,6 +676,7 @@ def reset_user_mfa(user_id):
                     flash("User not found.", "error")
                     return redirect(url_for("users.users"))
                 cur.execute("UPDATE mfa_methods SET enabled=0 WHERE user_id=%s", (user_id,))
+                cur.execute("DELETE FROM webauthn_credentials WHERE user_id=%s", (user_id,))  # v5.31.0
                 cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
                 cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
             db.commit()
