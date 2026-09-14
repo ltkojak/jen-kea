@@ -307,7 +307,9 @@ Updates (`[updates] channel` in jen.config, default `stable`). There is ONE bran
 carries a byte-identical copy (a test enforces it). A beta of `X.Y.Z` satisfies a
 plugin's `requires_jen: X.Y.Z`.
 
-Every MINOR and every non-trivial PATCH ships beta-first:
+Q38 itself (v5.32.0) ships straight to stable: a pre-5.32 box asks only for the latest
+non-prerelease, so it is the bootstrap that lets a box choose beta at all. From the
+release after it, every MINOR and every non-trivial PATCH ships beta-first:
 
 1. Steps land on `main` as usual (CI green between commits).
 2. The release commit sets **all 8 version spots and the CHANGELOG heading** to
