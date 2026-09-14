@@ -27,6 +27,7 @@ import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
+from jen.services.csv_safe import safe_row as _safe_row
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reservations", __name__)
@@ -676,16 +677,20 @@ def export_reservations():
                         jcur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (row["host_id"],))
                         note = jcur.fetchone()
                     subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", "")
+                    # v5.30.0 (Q30, A3) — hostname/notes are operator- and
+                    # device-supplied text; never let a cell open as a formula.
                     writer.writerow(
-                        [
-                            row["ip"],
-                            mac,
-                            row["hostname"] or "",
-                            row["subnet_id"],
-                            subnet_name,
-                            dns,
-                            note["notes"] if note else "",
-                        ]
+                        _safe_row(
+                            [
+                                row["ip"],
+                                mac,
+                                row["hostname"] or "",
+                                row["subnet_id"],
+                                subnet_name,
+                                dns,
+                                note["notes"] if note else "",
+                            ]
+                        )
                     )
         output.seek(0)
         return Response(
@@ -876,15 +881,17 @@ def bulk_export_reservations():
                                 notes = note_row["notes"] if note_row else ""
                             subnet_name = extensions.SUBNET_MAP.get(row["dhcp4_subnet_id"], {}).get("name", "")
                             writer.writerow(
-                                [
-                                    row["ip"],
-                                    mac,
-                                    row["hostname"] or "",
-                                    row["dhcp4_subnet_id"],
-                                    subnet_name,
-                                    dns,
-                                    notes,
-                                ]
+                                _safe_row(
+                                    [
+                                        row["ip"],
+                                        mac,
+                                        row["hostname"] or "",
+                                        row["dhcp4_subnet_id"],
+                                        subnet_name,
+                                        dns,
+                                        notes,
+                                    ]
+                                )
                             )
                     except Exception:
                         pass

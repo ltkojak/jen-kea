@@ -1168,10 +1168,72 @@ def _write_plugin_result(requests_dir, plugin_id, action, result):
         f.write(result + "\n")
 
 
+# v5.30.0 (Q30, A1) — plugin OS-package dependencies. A `<id>.deps`
+# marker asks this script to apt-install the packages the plugin's
+# REGISTRY entry declares under `os_packages` (re-derived from the trust
+# root, never from anything www-data wrote — the marker is empty). The
+# allowlist below is the control, the same philosophy as jen-kea-helper's
+# op table: a registry entry (or a compromised one) can only ever ask for
+# a package this version of the script already agreed to install.
+_DEPS_ALLOWED_PACKAGES = frozenset({"nmap"})
+_PKG_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]{0,63}$")
+_PLUGIN_MARKER_SUFFIXES = (".install", ".remove", ".deps")
+
+
+def _apt_install_packages(pkgs):
+    """`apt-get install -y -qq <pkgs>`, retried once after `apt-get update`
+    on failure (stale indices on a box that has only ever used the in-app
+    updater — the same dance _build_venv_with_apt_recovery does).
+    Returns (ok, detail)."""
+    env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
+
+    def _run():
+        return subprocess.run(
+            ["/usr/bin/apt-get", "install", "-y", "-qq", *pkgs], capture_output=True, text=True, env=env
+        )
+
+    apt = _run()
+    if apt.returncode != 0:
+        log(f"  apt-get install failed ({(apt.stderr or apt.stdout).strip()}); refreshing indices and retrying…")
+        subprocess.run(["/usr/bin/apt-get", "update", "-qq"], capture_output=True, text=True, env=env)
+        apt = _run()
+    detail = (apt.stderr or apt.stdout or "").strip().splitlines()
+    return apt.returncode == 0, (detail[-1] if detail else f"exit {apt.returncode}")
+
+
+def _install_plugin_deps(plugin_id, registry_url=PLUGIN_REGISTRY_URL):
+    """The `.deps` action: fetch the registry fresh, take THIS plugin's
+    `os_packages`, refuse anything outside _DEPS_ALLOWED_PACKAGES, and
+    apt-install the rest. Returns "ok" or "error: <reason>"; never
+    raises."""
+    try:
+        registry = json.loads(fetch_text(registry_url))
+    except Exception as e:
+        return f"error: could not fetch registry: {e}"
+    if not isinstance(registry, list):
+        return "error: registry format invalid (expected a JSON array)"
+    entry = next((e for e in registry if isinstance(e, dict) and e.get("id") == plugin_id), None)
+    if entry is None:
+        return f"error: '{plugin_id}' not found in registry"
+    pkgs = entry.get("os_packages")
+    if not isinstance(pkgs, list) or not pkgs:
+        return "error: registry entry declares no os_packages"
+    for p in pkgs:
+        if not isinstance(p, str) or not _PKG_NAME_RE.match(p):
+            return "error: registry entry has an invalid package name"
+        if p not in _DEPS_ALLOWED_PACKAGES:
+            return f"error: package {p!r} is not in this Jen version's allowlist (allowed: {', '.join(sorted(_DEPS_ALLOWED_PACKAGES))})"
+    log(f"Installing OS package(s) for '{plugin_id}': {' '.join(pkgs)}")
+    ok, detail = _apt_install_packages(pkgs)
+    return "ok" if ok else f"error: apt-get install failed: {detail}"
+
+
 def _process_one_plugin_request(name, requests_dir, root_plugin_dir, registry_url):
-    """One `<id>.install` / `<id>.remove` marker. Never raises."""
+    """One `<id>.install` / `<id>.remove` / `<id>.deps` marker. Never raises."""
     if name.endswith(".install"):
         plugin_id, action = name[: -len(".install")], "install"
+    elif name.endswith(".deps"):
+        plugin_id, action = name[: -len(".deps")], "deps"
     else:
         plugin_id, action = name[: -len(".remove")], "remove"
 
@@ -1201,6 +1263,8 @@ def _process_one_plugin_request(name, requests_dir, root_plugin_dir, registry_ur
     log(f"Processing plugin {action} request for '{plugin_id}'…")
     if action == "install":
         result = _install_one_plugin(plugin_id, root_plugin_dir, registry_url)
+    elif action == "deps":
+        result = _install_plugin_deps(plugin_id, registry_url)
     else:
         live_dir = os.path.join(root_plugin_dir, plugin_id)
         shutil.rmtree(live_dir, ignore_errors=True)
@@ -1254,7 +1318,7 @@ def process_plugin_requests(
     previous_markers = None
     for _pass in range(max_passes):
         try:
-            markers = sorted(n for n in os.listdir(requests_dir) if n.endswith((".install", ".remove")))
+            markers = sorted(n for n in os.listdir(requests_dir) if n.endswith(_PLUGIN_MARKER_SUFFIXES))
         except OSError:
             return 0
         if not markers:

@@ -71,6 +71,9 @@
                 {% if p.migration_failed %}
                 <div style="margin-top:4px;font-size:10px;color:var(--danger);">migration failed — not enabled: {{ p.migration_failed[:120] }}</div>
                 {% endif %}
+                {% if p.missing_os_packages %}
+                <div style="margin-top:4px;font-size:10px;color:var(--warning);">needs on the Jen host: {{ p.missing_os_packages|join(', ') }}</div>
+                {% endif %}
                 {% if is_systemd_host and not p.bundled %}
                 {% if p.root_owned %}
                 <div style="margin-top:4px;font-size:10px;color:var(--success);">🔒 root-owned</div>
@@ -86,6 +89,15 @@
                     <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary">⬆ Update</button>
                     </form>
+                    {% endif %}
+                    {% if p.missing_os_packages %}
+                    {% if is_systemd_host %}
+                    <form method="POST" action="/settings/plugins/deps/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-primary" title="Installs {{ p.missing_os_packages|join(', ') }} on the Jen host through the root-run plugin service">⬇ Install {{ p.missing_os_packages|join(', ') }}</button>
+                    </form>
+                    {% else %}
+                    <code style="font-size:11px;">sudo apt install {{ p.missing_os_packages|join(' ') }}</code>
+                    {% endif %}
                     {% endif %}
                     {% if is_systemd_host and not p.bundled and not p.root_owned %}
                     <form method="POST" action="/settings/plugins/install/{{ p.id }}">

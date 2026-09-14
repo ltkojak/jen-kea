@@ -51,6 +51,50 @@ downloads and checksums from a pinned tag). What there is instead
 fails CI if a registry entry's version or manifest fields differ from
 the bundled copy's, so steps 3 and 4 can't land separately.
 
+## What a plugin can ask Jen for (v5.30.0)
+
+Three hooks exist beyond `register(app)`. Each is optional; a plugin
+that uses one should set `requires_jen` to `5.30.0` or later.
+
+### OS packages — `"os_packages": ["nmap"]`
+
+Debian/Ubuntu package names whose binary of the same name the plugin
+shells out to. Jen never runs `apt` from the web process: Settings →
+Plugins shows *"needs on the Jen host: nmap"* with an **Install**
+button on a systemd host (the root-run `jen-plugin-install.service`
+installs it — the same request/execute split as plugin installs, and
+only packages in the root script's built-in allowlist, currently
+`nmap`, are ever installed; ask for the list to be widened in a Jen
+release before declaring anything else) or the `apt install` command
+elsewhere. Put the same list in the plugin's registry entry — the root
+side reads the registry, not the marker. In code, check for the binary
+at call time (`shutil.which("nmap")`), never at import.
+
+### Periodic jobs — `register_periodic(plugin_id, name, fn, every_minutes)`
+
+`from jen.services.background import register_periodic`, called from
+`register(app)`. `create_app()` must not start background work, so a
+plugin never starts its own thread: it registers a callable and Jen's
+one periodic loop (started only by the real entrypoint, never in the
+test suite) runs it every `every_minutes` (minimum 5; the first run is
+one interval after startup). Each run is wrapped — an exception is
+logged and recorded on the job, never propagated — and a run still in
+progress when the next tick comes is skipped, not stacked.
+`periodic_jobs()` lists what's registered.
+
+### Subnet context — `subnet_context(subnet_id)`
+
+`from jen.services.subnet_context import subnet_context, classify_address, in_pool`.
+One dict with everything Jen already knows about a subnet: gateway(s)
+and DNS from the effective DHCP options (global → shared-network →
+subnet precedence), the pools, network and broadcast, the Kea servers'
+own addresses and the Jen host's, and the subnet's notes — plus
+`classify_address(ctx, ip)` (`gateway` / `dns` / `network` /
+`broadcast` / `kea-server` / `jen-host` / `None`) and `in_pool(ctx,
+ip)`. The Kea config behind it is one cached `config-get` (30 s), so
+calling it per page render adds nothing. Use it before calling an
+address "unknown" or "available".
+
 ## Writing migrations
 
 `db_migrations` entries are `{"version": N, "description": "…", "sql":

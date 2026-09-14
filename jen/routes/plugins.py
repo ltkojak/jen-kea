@@ -59,6 +59,10 @@ def plugins_page():
         # when this plugin's own manifest migration failed and it was
         # never confirmed clean at this version — see plugins.py.
         p["migration_failed"] = __user.get_global_setting(f"plugin_migration_failed:{p['id']}") or ""
+        # v5.30.0 (Q30, A1) — `os_packages` the manifest declares whose
+        # binary isn't on this host; the template offers Install (systemd)
+        # or the apt command (anything else).
+        p["missing_os_packages"] = __plugins.missing_os_packages(p)
 
     # Annotate registry entries with install/update status
     for entry in registry:
@@ -220,6 +224,37 @@ def uninstall_plugin(plugin_id):
     __user.audit("PLUGIN_UNINSTALL", plugin_id, "Plugin uninstalled")
     flash(msg, "success")
     return redirect(url_for("plugins.plugins_page"))
+
+
+# ── OS-package dependencies (v5.30.0, Q30, A1) ────────────────────────────────
+
+
+@bp.route("/settings/plugins/deps/<plugin_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+def install_plugin_deps(plugin_id):
+    """Ask the root-run plugin service to apt-install an installed
+    plugin's declared `os_packages` (e.g. nmap for Network Discovery).
+    The page's existing install poller follows the result the same way
+    it follows an install."""
+    if not __plugins.valid_plugin_id(plugin_id):
+        flash("Invalid plugin ID.", "error")
+        return redirect(url_for("plugins.plugins_page"))
+    manifest = next((p for p in __plugins.discover_plugins() if p["id"] == plugin_id), None)
+    if manifest is None:
+        flash(f"Plugin '{plugin_id}' is not installed.", "error")
+        return redirect(url_for("plugins.plugins_page"))
+    missing = __plugins.missing_os_packages(manifest)
+    if not missing:
+        flash(f"{manifest.get('name', plugin_id)}: every package it needs is already installed.", "info")
+        return redirect(url_for("plugins.plugins_page"))
+    ok, msg = __plugins.request_plugin_deps(plugin_id)
+    if not ok:
+        flash(f"{msg} (needed: sudo apt install {' '.join(missing)})", "error")
+        return redirect(url_for("plugins.plugins_page"))
+    __user.audit("PLUGIN_DEPS_REQUESTED", plugin_id, f"Requested OS packages: {' '.join(missing)}")
+    flash(msg, "success")
+    return redirect(url_for("plugins.plugins_page", plugin_install=plugin_id))
 
 
 # ── Install status polling (v5.27.0, Q23) ──────────────────────────────────────

@@ -824,6 +824,27 @@ which is just this marker-file design with extra steps. A second
 fixed-argv unit keeps each privileged entry point doing exactly one
 thing.
 
+**Plugin OS-package dependencies ride the same split (v5.30.0, Q30).**
+A plugin that shells out to a system binary (Network Discovery → nmap)
+declares it in its manifest and registry entry as `"os_packages":
+["nmap"]`. Jen's web process only ever *reports* what's missing
+(`shutil.which`) and, on a systemd host, writes a third marker,
+`<id>.deps`, and triggers the same zero-parameter
+`jen-plugin-install.service`. The root-run script re-derives the
+package list from the registry it fetches itself — the marker is empty,
+and even a marker with contents is ignored beyond its filename — and
+then applies its own **built-in allowlist** (`_DEPS_ALLOWED_PACKAGES`,
+just `nmap` today) before running `apt-get install -y -qq <pkgs>` (one
+retry after `apt-get update`). The allowlist is the control, the same
+philosophy as the Kea helper's op table (§3.3): a registry entry, or a
+compromised one, can only ever ask for a package this version of the
+script already agreed to install; widening it is a Jen release. The
+result lands as `<id>.deps.result` and is consumed like an install
+result (audit `PLUGIN_DEPS` / `PLUGIN_DEPS_FAILED`; no restart — the
+plugin checks for its binary at call time). Docker and non-systemd
+hosts see the `apt install` command instead, as before. Rule 8: the
+sudoers grant is unchanged — the unit and its argv are the same.
+
 ### 3.11 Multi-server change sets (v5.28.0)
 
 Every route that pushes one config edit to more than one Kea server

@@ -1881,3 +1881,122 @@ class TestArgvDispatch:
         with patch.object(jen_update_root.sys, "argv", ["jen-update-root.py", "--plugins", "extra"]):
             rc = jen_update_root.main()
         assert rc == 2
+
+
+class TestPluginDepsRequests:
+    """v5.30.0 (Q30, A1) — the `.deps` marker: apt-install the packages a
+    plugin's REGISTRY entry declares under os_packages, through the same
+    root-run request processor as install/remove. The allowlist is the
+    control: nothing a registry entry (or anything www-data can write)
+    says can make this script install a package it didn't already agree
+    to. apt itself is always patched here — no test ever runs it."""
+
+    def _run(self, jen_update_root, tmp_path, entries, marker="nd.deps"):
+        port, stop = _serve_registry(entries, {})
+        try:
+            requests_dir = tmp_path / "requests"
+            root_dir = tmp_path / "root"
+            requests_dir.mkdir()
+            (requests_dir / marker).touch()
+            calls = []
+
+            class Proc:
+                returncode, stdout, stderr = 0, "", ""
+
+            def fake_run(argv, **kw):
+                calls.append(list(argv))
+                return Proc()
+
+            with patch.object(jen_update_root.subprocess, "run", side_effect=fake_run):
+                rc = jen_update_root.process_plugin_requests(
+                    str(requests_dir), str(root_dir), f"http://127.0.0.1:{port}/registry.json"
+                )
+            return rc, requests_dir, calls
+        finally:
+            stop()
+
+    def test_happy_path_installs_the_declared_allowlisted_packages(self, jen_update_root, tmp_path):
+        entries = [{"id": "nd", "download_url": "http://x/raw/v1.0.0", "sha256": "a" * 64, "os_packages": ["nmap"]}]
+        rc, requests_dir, calls = self._run(jen_update_root, tmp_path, entries)
+        assert rc == 0
+        assert not (requests_dir / "nd.deps").exists()
+        assert (requests_dir / "nd.deps.result").read_text().strip() == "ok"
+        assert calls == [["/usr/bin/apt-get", "install", "-y", "-qq", "nmap"]]
+
+    def test_a_package_outside_the_allowlist_is_refused_before_apt(self, jen_update_root, tmp_path):
+        entries = [{"id": "nd", "os_packages": ["nmap", "curl"]}]
+        _rc, requests_dir, calls = self._run(jen_update_root, tmp_path, entries)
+        result = (requests_dir / "nd.deps.result").read_text()
+        assert result.startswith("error:") and "'curl'" in result and "allowlist" in result
+        assert calls == []
+
+    @pytest.mark.parametrize("bad", [["nmap; rm -rf /"], ["../x"], [42], ["-badflag"], ["Nmap"]])
+    def test_a_malformed_package_name_is_refused(self, jen_update_root, tmp_path, bad):
+        entries = [{"id": "nd", "os_packages": bad}]
+        _rc, requests_dir, calls = self._run(jen_update_root, tmp_path, entries)
+        assert (requests_dir / "nd.deps.result").read_text().startswith("error:")
+        assert calls == []
+
+    def test_no_os_packages_declared_is_an_error_not_an_install(self, jen_update_root, tmp_path):
+        entries = [{"id": "nd", "download_url": "http://x/raw/v1.0.0", "sha256": "a" * 64}]
+        _rc, requests_dir, calls = self._run(jen_update_root, tmp_path, entries)
+        assert "no os_packages" in (requests_dir / "nd.deps.result").read_text()
+        assert calls == []
+
+    def test_unknown_plugin_is_an_error(self, jen_update_root, tmp_path):
+        _rc, requests_dir, calls = self._run(jen_update_root, tmp_path, [{"id": "someone-else"}])
+        assert "not found in registry" in (requests_dir / "nd.deps.result").read_text()
+        assert calls == []
+
+    def test_apt_failure_retries_after_an_update_then_reports(self, jen_update_root, tmp_path):
+        entries = [{"id": "nd", "os_packages": ["nmap"]}]
+        port, stop = _serve_registry(entries, {})
+        try:
+            requests_dir = tmp_path / "requests"
+            requests_dir.mkdir()
+            (requests_dir / "nd.deps").touch()
+            calls = []
+
+            class Fail:
+                returncode, stdout, stderr = 100, "", "E: Unable to locate package nmap\n"
+
+            def fake_run(argv, **kw):
+                calls.append(list(argv))
+                return Fail()
+
+            with patch.object(jen_update_root.subprocess, "run", side_effect=fake_run):
+                jen_update_root.process_plugin_requests(
+                    str(requests_dir), str(tmp_path / "root"), f"http://127.0.0.1:{port}/registry.json"
+                )
+            assert [c[1] for c in calls] == ["install", "update", "install"]
+            result = (requests_dir / "nd.deps.result").read_text()
+            assert result.startswith("error: apt-get install failed") and "Unable to locate package" in result
+        finally:
+            stop()
+
+    def test_the_marker_never_carries_the_package_list(self, jen_update_root, tmp_path):
+        """A marker with contents is still just a marker — the packages
+        come from the registry, and what www-data wrote is ignored."""
+        entries = [{"id": "nd", "os_packages": ["nmap"]}]
+        port, stop = _serve_registry(entries, {})
+        try:
+            requests_dir = tmp_path / "requests"
+            requests_dir.mkdir()
+            (requests_dir / "nd.deps").write_text("curl\nnetcat\n")
+            calls = []
+
+            class Proc:
+                returncode, stdout, stderr = 0, "", ""
+
+            with patch.object(
+                jen_update_root.subprocess, "run", side_effect=lambda a, **k: (calls.append(list(a)), Proc())[1]
+            ):
+                jen_update_root.process_plugin_requests(
+                    str(requests_dir), str(tmp_path / "root"), f"http://127.0.0.1:{port}/registry.json"
+                )
+            assert calls == [["/usr/bin/apt-get", "install", "-y", "-qq", "nmap"]]
+        finally:
+            stop()
+
+    def test_allowlist_is_exactly_nmap_today(self, jen_update_root):
+        assert frozenset({"nmap"}) == jen_update_root._DEPS_ALLOWED_PACKAGES

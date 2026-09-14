@@ -360,7 +360,7 @@ def _request_marker_path(plugin_id: str, action: str) -> str:
 
 
 def _write_plugin_request(plugin_id: str, action: str) -> None:
-    """action in {"install", "remove"}. An empty marker file — the
+    """action in {"install", "remove", "deps"}. An empty marker file — the
     root-run request processor re-derives everything else from the
     registry itself; nothing here is trusted beyond the plugin_id
     (already validated by the caller) and which of the two actions was
@@ -442,7 +442,57 @@ def plugin_install_unit_status() -> dict:
     return {"active_state": props.get("ActiveState", "unknown"), "sub_state": props.get("SubState", "")}
 
 
-_RESULT_RE = re.compile(r"^(?P<id>[a-z0-9][a-z0-9-]{0,63})\.(?P<action>install|remove)\.result$")
+_RESULT_RE = re.compile(r"^(?P<id>[a-z0-9][a-z0-9-]{0,63})\.(?P<action>install|remove|deps)\.result$")
+
+# ── OS-package dependencies (v5.30.0, Q30, A1) ──────────────────────────────
+# A manifest may declare `"os_packages": ["nmap"]` — Debian/Ubuntu package
+# names whose binary of the same name the plugin shells out to. Jen only
+# ever REPORTS what's missing (shutil.which) and, on a systemd host, asks
+# the root-run request processor to install them; that script re-derives
+# the list from the registry and applies its own allowlist. Nothing here
+# runs apt.
+
+_PKG_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]{0,63}$")
+
+
+def os_packages_of(manifest: dict) -> list[str]:
+    """The manifest's valid `os_packages` names, in order (anything that
+    isn't a well-formed Debian package name is ignored, never raised on —
+    a manifest is data)."""
+    raw = manifest.get("os_packages") if isinstance(manifest, dict) else None
+    if not isinstance(raw, list):
+        return []
+    return [p for p in raw if isinstance(p, str) and _PKG_NAME_RE.match(p)]
+
+
+def missing_os_packages(manifest: dict) -> list[str]:
+    """The declared packages whose binary isn't on this host's PATH. The
+    binary is assumed to be named like the package (true for nmap — the
+    only package in the root script's allowlist today)."""
+    import shutil
+
+    return [p for p in os_packages_of(manifest) if shutil.which(p) is None]
+
+
+def request_plugin_deps(plugin_id: str) -> tuple[bool, str]:
+    """Ask the root-run plugin service to install a plugin's `os_packages`.
+    Same request/execute split as install: an empty `<id>.deps` marker
+    plus the fixed unit trigger; the root side does everything else from
+    the registry. Only meaningful on a systemd host — anywhere else the
+    operator installs the package themselves."""
+    if not valid_plugin_id(plugin_id):
+        return False, "Invalid plugin ID."
+    if not is_systemd_host():
+        return False, "This Jen isn't running under systemd — install the package on the Jen host yourself."
+    _write_plugin_request(plugin_id, "deps")
+    if not _start_plugin_install_unit():
+        with contextlib.suppress(OSError):
+            os.remove(_request_marker_path(plugin_id, "deps"))
+        return False, (
+            "Could not start the plugin install service — run `sudo ./install.sh` to repair "
+            "jen-sudoers and jen-plugin-install.service, then try again."
+        )
+    return True, "Package install requested — the plugin service is installing it; this page will update."
 
 
 def record_plugin_row(info: dict) -> None:
@@ -513,8 +563,18 @@ def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str)
     from jen.models.user import set_global_setting
 
     if not ok:
-        action_name = "PLUGIN_INSTALL_FAILED" if action == "install" else "PLUGIN_UNINSTALL_FAILED"
+        action_name = {
+            "install": "PLUGIN_INSTALL_FAILED",
+            "remove": "PLUGIN_UNINSTALL_FAILED",
+            "deps": "PLUGIN_DEPS_FAILED",
+        }.get(action, "PLUGIN_INSTALL_FAILED")
         return raw_detail, action_name, raw_detail
+
+    if action == "deps":
+        # v5.30.0 (Q30, A1) — nothing of Jen's own changes: the plugin
+        # checks for its binary at call time (shutil.which), so no restart
+        # and no DB row either.
+        return "OS package(s) installed", "PLUGIN_DEPS", "root-run OS package install completed"
 
     if action == "install":
         manifest = next((p for p in discover_plugins() if p["id"] == plugin_id), None)

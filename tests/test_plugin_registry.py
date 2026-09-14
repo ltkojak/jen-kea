@@ -1016,3 +1016,130 @@ class TestBundledCopiesMatchRegistry:
         for plugin_id, _reg, _bundled in self._pairs():
             assert not pathlib.Path(f"plugins/{plugin_id}/plugin.zip").exists(), plugin_id
             assert not pathlib.Path(f"plugins/{plugin_id}/.enabled").exists(), plugin_id
+
+
+class TestOsPackages:
+    """v5.30.0 (Q30, A1) — manifest `os_packages`: Jen reports what's
+    missing and, on a systemd host, asks the root-run service to install
+    it; it never runs apt itself."""
+
+    def test_os_packages_of_ignores_malformed_names(self):
+        m = {"os_packages": ["nmap", "bad name", 42, "../x", "arp-scan"]}
+        assert plugins_svc.os_packages_of(m) == ["nmap", "arp-scan"]
+        assert plugins_svc.os_packages_of({}) == []
+        assert plugins_svc.os_packages_of({"os_packages": "nmap"}) == []
+
+    def test_missing_os_packages_uses_which(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/nmap" if name == "nmap" else None)
+        assert plugins_svc.missing_os_packages({"os_packages": ["nmap", "arp-scan"]}) == ["arp-scan"]
+        assert plugins_svc.missing_os_packages({"os_packages": ["nmap"]}) == []
+
+    def test_request_writes_deps_marker_and_triggers_unit(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "plugin-requests"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=True) as trigger:
+            ok, msg = plugins_svc.request_plugin_deps("network-discovery")
+        assert ok is True and "requested" in msg.lower()
+        trigger.assert_called_once()
+        marker = tmp_path / "plugin-requests" / "network-discovery.deps"
+        assert marker.exists() and marker.read_text() == ""  # empty: the root side derives everything
+
+    def test_request_removes_the_marker_when_the_trigger_fails(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "plugin-requests"))
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=False):
+            ok, _msg = plugins_svc.request_plugin_deps("network-discovery")
+        assert ok is False
+        assert not (tmp_path / "plugin-requests" / "network-discovery.deps").exists()
+
+    def test_request_refused_off_systemd_and_for_a_bad_id(self, monkeypatch):
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: False)
+        ok, msg = plugins_svc.request_plugin_deps("network-discovery")
+        assert ok is False and "systemd" in msg
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit") as trigger:
+            ok, _ = plugins_svc.request_plugin_deps("../evil")
+        assert ok is False
+        trigger.assert_not_called()
+
+    def test_consume_deps_result_ok_and_failed(self, tmp_path, monkeypatch, db):
+        requests_dir = tmp_path / "requests"
+        requests_dir.mkdir()
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
+        (requests_dir / "network-discovery.deps.result").write_text("ok\n")
+        results = plugins_svc.consume_plugin_results()
+        assert results == [
+            {"id": "network-discovery", "action": "deps", "ok": True, "detail": "OS package(s) installed"}
+        ]
+        assert not (requests_dir / "network-discovery.deps.result").exists()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM audit_log WHERE action=%s AND entity=%s ORDER BY id DESC LIMIT 1",
+                ("PLUGIN_DEPS", "network-discovery"),
+            )
+            assert cur.fetchone() is not None
+
+        (requests_dir / "network-discovery.deps.result").write_text(
+            "error: package 'curl' is not in this Jen version's allowlist\n"
+        )
+        results = plugins_svc.consume_plugin_results()
+        assert results[0]["ok"] is False and "allowlist" in results[0]["detail"]
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM audit_log WHERE action=%s AND entity=%s ORDER BY id DESC LIMIT 1",
+                ("PLUGIN_DEPS_FAILED", "network-discovery"),
+            )
+            assert cur.fetchone() is not None
+
+
+class TestDepsRoute:
+    def _installed(self, monkeypatch, tmp_path, os_packages):
+        root = tmp_path / "root"
+        (root / "nd").mkdir(parents=True)
+        (root / "nd" / "manifest.json").write_text(
+            json.dumps({"id": "nd", "name": "ND", "version": "1.0.0", "os_packages": os_packages})
+        )
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "absent"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "absent2"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "requests"))
+
+    def test_route_requests_only_what_is_missing(self, logged_in_client, db, tmp_path, monkeypatch):
+        self._installed(monkeypatch, tmp_path, ["nmap"])
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        with patch.object(plugins_svc, "_start_plugin_install_unit", return_value=True):
+            r = logged_in_client.post("/settings/plugins/deps/nd")
+        assert r.status_code == 302 and "plugin_install=nd" in r.headers["Location"]
+        assert (tmp_path / "requests" / "nd.deps").exists()
+
+    def test_route_is_a_noop_when_nothing_is_missing(self, logged_in_client, db, tmp_path, monkeypatch):
+        self._installed(monkeypatch, tmp_path, ["nmap"])
+        monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/nmap")
+        with patch.object(plugins_svc, "_start_plugin_install_unit") as trigger:
+            r = logged_in_client.post("/settings/plugins/deps/nd", follow_redirects=True)
+        trigger.assert_not_called()
+        assert b"already installed" in r.data
+
+    def test_page_shows_the_chip_and_the_button_on_systemd(self, logged_in_client, db, tmp_path, monkeypatch):
+        self._installed(monkeypatch, tmp_path, ["nmap"])
+        monkeypatch.setattr("shutil.which", lambda name: None)
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: True)
+        monkeypatch.setattr(plugins_svc, "fetch_registry", lambda: ([], ""))
+        body = logged_in_client.get("/settings/plugins").data
+        assert b"needs on the Jen host: nmap" in body
+        assert b'action="/settings/plugins/deps/nd"' in body
+        monkeypatch.setattr(plugins_svc, "is_systemd_host", lambda: False)
+        body = logged_in_client.get("/settings/plugins").data
+        assert b"sudo apt install nmap" in body and b'action="/settings/plugins/deps/nd"' not in body
+
+    def test_route_is_superadmin_only(self, client, db, tmp_path, monkeypatch):
+        from tests.conftest import restricted_client
+
+        self._installed(monkeypatch, tmp_path, ["nmap"])
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        with patch.object(plugins_svc, "_start_plugin_install_unit") as trigger:
+            r = c.post("/settings/plugins/deps/nd")
+        assert r.status_code == 302
+        trigger.assert_not_called()
