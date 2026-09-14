@@ -40,6 +40,7 @@ from webauthn.helpers import base64url_to_bytes, bytes_to_base64url, options_to_
 from webauthn.helpers.exceptions import WebAuthnException
 from webauthn.helpers.structs import (
     AuthenticatorSelectionCriteria,
+    AuthenticatorTransport,
     PublicKeyCredentialDescriptor,
     ResidentKeyRequirement,
     UserVerificationRequirement,
@@ -159,15 +160,35 @@ def remove(user_id: int, cred_id: int) -> bool:
     return gone
 
 
-def _descriptors(rows: list[dict]) -> list[PublicKeyCredentialDescriptor]:
+def transports_from_stored(raw) -> list[AuthenticatorTransport] | None:
+    """The `transports` column (a JSON list of strings the browser
+    reported at enrolment) as the enum values py_webauthn's option
+    serialiser requires — it calls `.value` on each, so a bare string
+    crashes `options_to_json` (v5.31.2). Unknown or malformed entries
+    are dropped; nothing usable → None (the browser then tries every
+    transport it has)."""
+    try:
+        values = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(values, list):
+        return None
     out = []
-    for r in rows:
+    for v in values:
         try:
-            transports = json.loads(r.get("transports") or "null") or None
-        except (TypeError, ValueError):
-            transports = None
-        out.append(PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["credential_id"]), transports=transports))
-    return out
+            out.append(AuthenticatorTransport(str(v)))
+        except ValueError:
+            continue
+    return out or None
+
+
+def _descriptors(rows: list[dict]) -> list[PublicKeyCredentialDescriptor]:
+    return [
+        PublicKeyCredentialDescriptor(
+            id=base64url_to_bytes(r["credential_id"]), transports=transports_from_stored(r.get("transports"))
+        )
+        for r in rows
+    ]
 
 
 # ── Registration ─────────────────────────────────────────────────────────────

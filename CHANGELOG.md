@@ -2,6 +2,34 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.31.2] - 2026-09-14
+
+### "could not start the passkey check" on the first real passkey
+
+Reported by the maintainer minutes after 5.31.1: enrolling a passkey
+worked, but **Use passkey** on the step-up page (and the Passkey tab
+at login, same code) answered *could not start the passkey check —
+see the Jen log*. The log showed py_webauthn's option serialiser
+failing on `allowCredentials`.
+
+At enrolment the browser reports which transports the authenticator
+supports — Windows Hello says `["internal"]`, a phone via QR says
+`["hybrid"]`, a YubiKey `["usb", "nfc"]` — and 5.31.0 stored that list
+so later `get()` calls could hand it back and let the browser pick
+the right authenticator without prompting for every kind. Storing it
+was right; reading it back wasn't: the list came out of the database
+as plain strings, and py_webauthn requires its `AuthenticatorTransport`
+enum there (it calls `.value` on each entry while building the JSON).
+The test suite never hit it because every faked enrolment reported no
+transports at all.
+
+The stored list is now converted to the enum on read; unknown or
+malformed entries are dropped, and an unusable list becomes "no
+hint", which the browser handles by trying everything. The round-trip
+test now enrols with `["internal", "hybrid"]` and asserts the
+authentication options carry them back out — the exact call that
+failed.
+
 ## [5.31.1] - 2026-09-14
 
 ### The TOTP enrolment QR code was a broken image — since v4.4.5

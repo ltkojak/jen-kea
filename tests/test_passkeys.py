@@ -138,6 +138,45 @@ class TestCeremonyState:
             assert passkeys.state_problem(s, request, 1) is None
 
 
+class TestStoredTransports:
+    """v5.31.2 — the browser reports transports as strings and they are
+    stored as a JSON list; py_webauthn's option serialiser calls
+    `.value` on each entry, so they must come back as its enum. The
+    first real passkey (Windows Hello → ["internal"]) broke every
+    login/reauth `begin` with "could not start the passkey check"."""
+
+    def test_json_strings_become_enum_values(self):
+        from webauthn.helpers.structs import AuthenticatorTransport
+
+        out = passkeys.transports_from_stored('["internal", "hybrid"]')
+        assert out == [AuthenticatorTransport.INTERNAL, AuthenticatorTransport.HYBRID]
+
+    @pytest.mark.parametrize("raw", [None, "", "null", "[]", "not json", '{"a": 1}', '["made-up"]', 42])
+    def test_unusable_values_become_none(self, raw):
+        assert passkeys.transports_from_stored(raw) is None
+
+    def test_unknown_entries_are_dropped_not_fatal(self):
+        from webauthn.helpers.structs import AuthenticatorTransport
+
+        assert passkeys.transports_from_stored('["usb", "teleport"]') == [AuthenticatorTransport.USB]
+
+    def test_options_serialise_with_stored_transports(self):
+        """The exact call that failed on the real box: allowCredentials
+        built from a row with string transports, run through
+        options_to_json."""
+        import json as _json
+
+        import webauthn
+        from webauthn.helpers import options_to_json
+
+        rows = [{"credential_id": "YWJj", "transports": '["internal"]'}]
+        options = webauthn.generate_authentication_options(
+            rp_id="jen.lan", allow_credentials=passkeys._descriptors(rows)
+        )
+        parsed = _json.loads(options_to_json(options))
+        assert parsed["allowCredentials"][0]["transports"] == ["internal"]
+
+
 class TestCounter:
     @pytest.mark.parametrize(
         "stored,new,regressed",
@@ -292,7 +331,13 @@ class TestStorageRoundTrip:
         with app.test_request_context("/", base_url="https://jen.lan"):
             from flask import request
 
-            passkeys.finish_registration(1, {"id": "Y3JlZC0x", "response": {}}, state, request)
+            # Transports as a real browser reports them (Windows Hello →
+            # ["internal"]) — v5.31.2: begin_authentication must serialise
+            # them back out, which is exactly what broke on the first real
+            # passkey.
+            passkeys.finish_registration(
+                1, {"id": "Y3JlZC0x", "response": {"transports": ["internal", "hybrid"]}}, state, request
+            )
 
     def _assert(self, monkeypatch, new_sign_count, response=None, base_url="https://jen.lan"):
         monkeypatch.setattr(
@@ -314,6 +359,7 @@ class TestStorageRoundTrip:
         _ok, options = self._assert(monkeypatch, new_sign_count=1)
         assert options["rpId"] == "jen.lan"
         assert [c["id"] for c in options["allowCredentials"]] == ["Y3JlZC0x"]
+        assert options["allowCredentials"][0]["transports"] == ["internal", "hybrid"]
 
     def test_begin_authentication_without_a_passkey_raises(self, clean_passkeys):
         app = _req_app()
