@@ -1078,6 +1078,9 @@ class TestOsPackages:
                 ("PLUGIN_DEPS", "network-discovery"),
             )
             assert cur.fetchone() is not None
+        # audit() writes through a different pooled connection; end this
+        # connection's REPEATABLE-READ snapshot before the second cycle.
+        db.commit()
 
         (requests_dir / "network-discovery.deps.result").write_text(
             "error: package 'curl' is not in this Jen version's allowlist\n"
@@ -1097,7 +1100,17 @@ class TestDepsRoute:
         root = tmp_path / "root"
         (root / "nd").mkdir(parents=True)
         (root / "nd" / "manifest.json").write_text(
-            json.dumps({"id": "nd", "name": "ND", "version": "1.0.0", "os_packages": os_packages})
+            json.dumps(
+                {
+                    "id": "nd",
+                    "name": "ND",
+                    "version": "1.0.0",
+                    "description": "test plugin",
+                    "author": "",
+                    "requires_jen": "0.0.0",
+                    "os_packages": os_packages,
+                }
+            )
         )
         monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
         monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "absent"))
