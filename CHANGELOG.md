@@ -2,6 +2,95 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.30.0] - 2026-09-13
+
+The plugin release. IPAM Lite v1.5.0 and Network Discovery v1.1.0 both
+draw on things Jen already knows — the gateway and DNS servers, the
+DHCP pools, the devices table, the Kea and Jen hosts' own addresses —
+and on an OS package (nmap) that only root can install. Rather than
+each plugin re-deriving that, this release gives plugins three small,
+deliberate hooks, and ships a guard Jen's own exports needed too.
+Nothing here changes behaviour on an install that has no plugin asking
+for it; the plugins that do require this version.
+
+### Plugins can declare the OS packages they need — and Jen installs them
+
+A manifest may list `"os_packages": ["nmap"]`. Settings → Plugins then
+shows *needs on the Jen host: nmap* with an **Install** button on a
+systemd host, or the `apt install` command anywhere else. The web
+process never runs `apt`: the button writes an empty `<id>.deps`
+marker and triggers the same zero-parameter root-run service that
+installs plugins (v5.27.0); that script re-derives the package list
+from the registry it fetches itself, refuses anything outside a
+built-in allowlist (`nmap`, today — the allowlist is the control,
+exactly like the Kea helper's op table) or not shaped like a Debian
+package name, and reports back through the same result file the
+install flow uses. The sudoers grant is unchanged. Docker keeps the
+command.
+
+### Plugins can schedule work without owning a thread
+
+`create_app()` must not start background work — so a plugin that
+wants "scan this subnet every N hours" had no honest way to do it.
+`jen.services.background.register_periodic(plugin_id, name, fn,
+every_minutes)` registers a callable at `register(app)` time; the one
+periodic loop Jen starts (only in the real entrypoint, never in the
+factory or the test suite) runs each job on its interval in its own
+thread, records a failure on the job instead of propagating it, and
+skips a run that's still going rather than stacking another.
+
+### One call for everything Jen knows about a subnet
+
+`jen.services.subnet_context.subnet_context(subnet_id)` returns the
+gateway(s) and DNS servers from the effective DHCP options (global →
+shared-network → subnet), the pools, network and broadcast, the Kea
+servers' and the Jen host's own addresses inside the subnet, the
+subnet's notes, and an `infrastructure` map from address to what it
+is — behind one 30-second-cached `config-get`. IPAM Lite uses it to
+stop calling the gateway "available"; Network Discovery uses it to
+stop calling the gateway "rogue".
+
+### CSV exports can't smuggle a formula
+
+A spreadsheet opens a CSV cell that starts with `=`, `+`, `-` or `@`
+as a formula, and every export cell Jen writes is operator- or
+device-supplied text — a DHCP hostname of `=HYPERLINK(...)` would
+execute on the operator's machine when they opened the file. The
+reservation export (both variants) now quotes such cells, through a
+small shared helper both plugins' exports use as well.
+
+`plugins/README.md` documents all three hooks; `docs/ARCHITECTURE.md`
+§3.10 records the dependency path's trust boundary.
+
+### The plugins themselves: IPAM Lite v1.5.0, Network Discovery v1.1.0
+
+The registry pins both new releases and the bundled copies under
+`plugins/` are resynced byte-for-byte to the tagged zips (the
+lockstep test from v5.28.2 keeps it that way). Each plugin's own
+CHANGELOG has the detail; the short version:
+
+- **IPAM Lite v1.5.0** — the gateway, DNS servers, Kea and Jen hosts
+  and network/broadcast show as *infrastructure* instead of
+  *available*; a static or planned address that a DHCP client
+  currently holds is a *conflict*; the address list collapses long
+  runs of available space and offers "next free" (in or out of the
+  pools); every row shows Jen's device name and vendor; a range of
+  addresses can be designated at once; per-address history; a Netbox
+  CSV export; unmanaged subnets take an optional gateway. Migrations
+  14–15.
+- **Network Discovery v1.1.0** — a found host is no longer "in Kea or
+  rogue": it is a lease, a reservation (this subnet's or a global
+  one), infrastructure, an IPAM entry, a device Jen has seen, one you
+  marked known, or — only then — unknown. The gateway stops being
+  reported as rogue. Vendor from the OUI table, since-last-scan
+  changes, scheduled scans, an **Install nmap** button through the
+  new dependency path, MAC-keyed alerts so an IP hop doesn't re-alert,
+  subnets above a /20 refused with a reason and the failure reason
+  stored. Migrations 3–9.
+
+Both require this version, so an install on 5.29.x keeps the
+previously pinned 1.4.6 / 1.0.7 until it upgrades.
+
 ## [5.29.3] - 2026-09-13
 
 ### Fix: "Set up direct socket" probed before the daemon was listening

@@ -190,29 +190,36 @@ class TestRealShippedManifests:
             manifest = json.load(f)
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True, f"ipam manifest failed: {msg}"
-        # v5.28.2 — the bundled copy is the real v1.4.4 manifest: 13
-        # explicit, portable migrations. 8 (`DROP INDEX ip`) has nothing
-        # to drop on a fresh table and is recorded via the runner's
-        # already-in-effect tolerance — on MySQL 8 as well as MariaDB.
-        assert count == 13
-        assert _plugin_applied_versions("ipam") == set(range(1, 14))
+        # v5.28.2 — the bundled copy is the real manifest: explicit,
+        # portable migrations. 8 (`DROP INDEX ip`) has nothing to drop on
+        # a fresh table and is recorded via the runner's already-in-effect
+        # tolerance — on MySQL 8 as well as MariaDB. v5.30.0: IPAM Lite
+        # v1.5.0 adds 14 (history index) and 15 (ipam_subnets.gateway).
+        assert count == 15
+        assert _plugin_applied_versions("ipam") == set(range(1, 16))
         with db.cursor() as cur:
             for tbl in ("ipam_static_entries", "ipam_assignment_history", "ipam_subnets"):
                 cur.execute(f"SHOW TABLES LIKE '{tbl}'")
                 assert cur.fetchone() is not None, f"{tbl} was not created"
             cur.execute("SHOW COLUMNS FROM ipam_static_entries LIKE 'entry_status'")
             assert cur.fetchone() is not None, "migration 12 (entry_status) must have applied after 8's tolerated DROP"
+            cur.execute("SHOW COLUMNS FROM ipam_subnets LIKE 'gateway'")
+            assert cur.fetchone() is not None, "migration 15 (gateway) must have applied"
 
     def test_network_discovery_manifest_applies_correctly(self, db):
         with open("plugins/network-discovery/manifest.json") as f:
             manifest = json.load(f)
         ok, msg, count = run_plugin_migrations(manifest)
         assert ok is True, f"network-discovery manifest failed: {msg}"
-        assert count == 2
+        # v5.30.0: Network Discovery v1.1.0 adds 3–9 (status/label/vendor/
+        # device_type on results, error on jobs, nd_known_hosts, nd_settings).
+        assert count == 9
         with db.cursor() as cur:
-            for tbl in ("nd_scan_jobs", "nd_scan_results"):
+            for tbl in ("nd_scan_jobs", "nd_scan_results", "nd_known_hosts", "nd_settings"):
                 cur.execute(f"SHOW TABLES LIKE '{tbl}'")
                 assert cur.fetchone() is not None, f"{tbl} was not created"
+            cur.execute("SHOW COLUMNS FROM nd_scan_results LIKE 'status'")
+            assert cur.fetchone() is not None, "migration 3 (status) must have applied"
 
     def test_both_real_manifests_are_idempotent_on_second_run(self, db):
         for path in ("plugins/ipam/manifest.json", "plugins/network-discovery/manifest.json"):
