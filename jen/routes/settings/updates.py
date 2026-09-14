@@ -30,6 +30,7 @@ def check_update():
     import requests as _req
 
     from jen import JEN_VERSION
+    from jen.version import parse_version
 
     try:
         resp = _req.get(GITHUB_RELEASES_API, headers={"Accept": "application/vnd.github+json"}, timeout=8)
@@ -43,13 +44,7 @@ def check_update():
         release_url = data.get("html_url", "")
         published = data.get("published_at", "")[:10]
 
-        def _ver(v):
-            try:
-                return tuple(int(x) for x in v.split(".")[:3])
-            except Exception:
-                return (0, 0, 0)
-
-        if _ver(latest_tag) > _ver(JEN_VERSION):
+        if parse_version(latest_tag) > parse_version(JEN_VERSION):
             # Find the tarball asset
             asset_url = ""
             for asset in data.get("assets", []):

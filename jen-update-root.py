@@ -959,16 +959,68 @@ def _looks_tag_pinned(download_url):
     return bool(_TAG_PINNED_RE.search(download_url))
 
 
+# v5.32.0 (Q38) — Jen's version grammar and the channel-aware release
+# picker. This script can't import the jen package, so the block below is
+# a byte-identical copy of jen/version.py's marked block;
+# tests/test_version.py diffs the two. Edit jen/version.py, then paste.
+# ── BEGIN shared-with-root ─── copied verbatim into jen-update-root.py ──────
+# (`re` is imported at the top of both files; the block itself imports nothing.)
+_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:-(beta|rc)\.(\d+))?$")
+_PRE_RANK = {"beta": 0, "rc": 1}
+_FINAL_RANK = 2
+CHANNELS = ("stable", "beta")
+
+
+def parse_version(v):
+    """'X.Y.Z[-beta.N|-rc.N]' → (X, Y, Z, rank, N) where rank is 0 for
+    beta, 1 for rc, 2 for a final release (N = 0 then), so tuples order
+    the way semver does. Anything else → (0, 0, 0, 0, 0), the lowest
+    possible version — an unparsable tag is never "newer"."""
+    m = _VERSION_RE.match(str(v or "").strip())
+    if not m:
+        return (0, 0, 0, 0, 0)
+    x, y, z, kind, n = m.groups()
+    if kind is None:
+        return (int(x), int(y), int(z), _FINAL_RANK, 0)
+    return (int(x), int(y), int(z), _PRE_RANK[kind], int(n))
+
+
+def numeric(v):
+    """(X, Y, Z) only — for `requires_jen`-style minimums, where a
+    prerelease of X.Y.Z counts as X.Y.Z."""
+    return parse_version(v)[:3]
+
+
+def is_prerelease(v):
+    return parse_version(v)[3] != _FINAL_RANK and parse_version(v) != (0, 0, 0, 0, 0)
+
+
+def pick_release(releases, channel):
+    """The newest usable GitHub release for `channel` from a
+    /repos/{repo}/releases listing, or None. Drafts are never offered;
+    `stable` sees only non-prereleases; `beta` sees everything. Chosen by
+    parsed tag, never by list position — GitHub orders by creation."""
+    best, best_key = None, None
+    for rel in releases or []:
+        if not isinstance(rel, dict) or rel.get("draft"):
+            continue
+        if channel != "beta" and rel.get("prerelease"):
+            continue
+        key = parse_version(str(rel.get("tag_name", "")).lstrip("v"))
+        if key == (0, 0, 0, 0, 0):
+            continue
+        if best_key is None or key > best_key:
+            best, best_key = rel, key
+    return best
+
+
+# ── END shared-with-root ────────────────────────────────────────────────────
+
+
 def _parse_version(v):
-    """'X.Y.Z' -> (X, Y, Z) tuple for comparison. Mirrors
-    jen/services/plugins.py::_parse_version exactly — duplicated, not
-    imported, since this script can't import the jen package. An
-    unparsable string (including "?", `_installed_version`'s own
-    give-up value) sorts as (0, 0, 0), the lowest possible version."""
-    try:
-        return tuple(int(x) for x in str(v).strip().split(".")[:3])
-    except Exception:
-        return (0, 0, 0)
+    """Plugin `requires_jen` gating compares the numeric triple only — a
+    beta of X.Y.Z satisfies a plugin that needs X.Y.Z (see jen/version.py)."""
+    return numeric(v)
 
 
 def _install_one_plugin(

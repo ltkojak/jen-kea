@@ -104,11 +104,12 @@ def valid_plugin_id(plugin_id: str) -> bool:
 
 
 def _parse_version(v: str) -> tuple:
-    """Parse 'X.Y.Z' into (X, Y, Z) tuple for comparison."""
-    try:
-        return tuple(int(x) for x in str(v).strip().split(".")[:3])
-    except Exception:
-        return (0, 0, 0)
+    """(X, Y, Z) for comparison. v5.32.0 (Q38): delegates to
+    jen/version.py::numeric so a prerelease of X.Y.Z (5.32.0-beta.1)
+    satisfies a plugin's `requires_jen: 5.32.0`."""
+    from jen.version import numeric
+
+    return numeric(v)
 
 
 def jen_version_meets(required: str) -> bool:

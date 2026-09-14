@@ -107,23 +107,14 @@ def _render_body(lines: list) -> str:
 
 
 def _version_sort_key(version: str) -> tuple:
-    """
-    Convert a version string like "5.2.2" into a tuple of ints for
-    correct numeric sorting — plain string comparison gets this wrong
-    (e.g. "5.2.10" sorts before "5.2.9" lexically, since "1" < "9").
-    Falls back to (0,) for anything that doesn't parse as dot-separated
-    integers (a stray non-numeric suffix, or an entirely malformed
-    version string), so one bad entry can't crash sorting for the rest
-    of the changelog — it just sorts as the oldest/lowest-priority
-    entry instead.
-    """
-    parts = []
-    for piece in version.split("."):
-        digits = "".join(ch for ch in piece if ch.isdigit())
-        if not digits:
-            break
-        parts.append(int(digits))
-    return tuple(parts) if parts else (0,)
+    """Numeric sort key for a changelog heading's version — plain string
+    comparison gets "5.2.10" < "5.2.9" wrong. v5.32.0 (Q38): the one
+    parser in jen/version.py, so a beta heading (5.32.0-beta.1) sorts
+    below its final release and above the previous stable; anything
+    unparsable sorts lowest instead of crashing the listing."""
+    from jen.version import parse_version
+
+    return parse_version(version)
 
 
 def parse_changelog(path=None, limit=None) -> list:

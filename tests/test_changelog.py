@@ -73,7 +73,9 @@ class TestInlineMarkdown:
 
 class TestVersionSortKey:
     def test_simple_three_part_version(self):
-        assert _version_sort_key("5.2.2") == (5, 2, 2)
+        # v5.32.0 (Q38): jen/version.py's 5-tuple — (X, Y, Z, rank, N),
+        # rank 2 = final release.
+        assert _version_sort_key("5.2.2") == (5, 2, 2, 2, 0)
 
     def test_numeric_not_lexical_comparison(self):
         """The actual defect class plain string sorting has: "5.2.10"
@@ -84,11 +86,19 @@ class TestVersionSortKey:
         assert _version_sort_key("3.5.17") < _version_sort_key("5.2.2")
 
     def test_malformed_version_falls_back_to_lowest_priority_not_crash(self):
-        assert _version_sort_key("unreleased") == (0,)
-        assert _version_sort_key("") == (0,)
+        lowest = (0, 0, 0, 0, 0)
+        assert _version_sort_key("unreleased") == lowest
+        assert _version_sort_key("") == lowest
+        assert _version_sort_key("5.2.2") > lowest
 
-    def test_suffix_after_numeric_prefix_is_ignored_gracefully(self):
-        assert _version_sort_key("5.2.2-beta") == (5, 2, 2)
+    def test_prerelease_headings_sort_below_their_final_release(self):
+        # v5.32.0 (Q38): a beta heading is a real version now, ordered by
+        # semver — below its final, above the previous stable. A suffix
+        # outside the grammar ("-beta" without a number) is unparsable and
+        # sorts lowest rather than being silently truncated to 5.2.2.
+        assert _version_sort_key("5.2.1") < _version_sort_key("5.2.2-beta.1") < _version_sort_key("5.2.2")
+        assert _version_sort_key("5.2.2-beta.1") < _version_sort_key("5.2.2-beta.2")
+        assert _version_sort_key("5.2.2-beta") == (0, 0, 0, 0, 0)
 
 
 class TestParseChangelog:

@@ -81,32 +81,42 @@ class TestSingleSourceOfTruth:
 class TestVersionStringsInSync:
     """The Dockerfile LABEL and both docker-compose image tags sat stale
     at 5.3.3 through the entire 5.4.0 release. These strings must all
-    move together in one commit."""
+    move together in one commit. v5.32.0 (Q38): a prerelease carries its
+    suffix in every spot (`5.33.0-beta.1`) — the root updater reads the
+    on-disk string verbatim, so a beta box whose spots said `5.33.0`
+    would re-install itself forever."""
 
     def _jen_version(self):
         m = re.search(
-            r'JEN_VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"', (REPO / "jen" / "__init__.py").read_text(encoding="utf-8")
+            r'JEN_VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)"',
+            (REPO / "jen" / "__init__.py").read_text(encoding="utf-8"),
         )
         assert m
         return m.group(1)
 
     def test_install_sh_matches(self):
-        m = re.search(r'JEN_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"', (REPO / "install.sh").read_text(encoding="utf-8"))
+        m = re.search(
+            r'JEN_VERSION="([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)"',
+            (REPO / "install.sh").read_text(encoding="utf-8"),
+        )
         assert m and m.group(1) == self._jen_version()
 
     def test_dockerfile_label_matches(self):
-        m = re.search(r'LABEL version="([0-9]+\.[0-9]+\.[0-9]+)"', (REPO / "Dockerfile").read_text(encoding="utf-8"))
+        m = re.search(
+            r'LABEL version="([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)"',
+            (REPO / "Dockerfile").read_text(encoding="utf-8"),
+        )
         assert m and m.group(1) == self._jen_version()
 
     def test_docker_compose_image_tags_match(self):
         for name in ("docker-compose.yml", "docker-compose.mysql.yml"):
             text = (REPO / name).read_text(encoding="utf-8")
-            m = re.search(r"image:\s*jen-dhcp:([0-9]+\.[0-9]+\.[0-9]+)", text)
+            m = re.search(r"image:\s*jen-dhcp:([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)", text)
             assert m and m.group(1) == self._jen_version(), f"{name} jen-dhcp image tag out of sync"
 
     def test_readme_badge_matches(self):
         readme = (REPO / "README.md").read_text(encoding="utf-8")
-        m = re.search(r"Version-([0-9]+\.[0-9]+\.[0-9]+)-blue", readme)
+        m = re.search(r"Version-([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)-blue", readme)
         assert m and m.group(1) == self._jen_version()
 
     def test_changelog_has_an_entry_for_current_version(self):
