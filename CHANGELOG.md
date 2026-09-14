@@ -2,6 +2,23 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.29.3] - 2026-09-13
+
+### Fix: "Set up direct socket" probed before the daemon was listening
+
+The maintainer's first https setup did everything right on the Kea
+side — CA created, certificates pushed, `kea-dhcp4.conf` updated,
+daemon restarted — and then reported *"didn't answer a version-get
+(Connection refused)"*. `systemctl restart` returns as soon as the
+process is up, but kea-dhcp4 opens its HTTP listener *last*, after
+parsing the config and connecting to the lease database — a few
+seconds with MySQL — and Jen probed exactly once, immediately. The
+probe after a restart is now retried for about fifteen seconds (eight
+attempts, two seconds apart, stopping at the first answer), in the
+setup flow and in Rotate Kea CA alike; a socket that genuinely never
+answers says so with the attempt count. As before, a failed probe
+changes nothing in Jen and re-running the form only re-probes.
+
 ## [5.29.2] - 2026-09-13
 
 ### Fix: "Update helper" answered "v3 is already installed"

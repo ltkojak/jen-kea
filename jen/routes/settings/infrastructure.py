@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from urllib.parse import urlparse
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
@@ -591,6 +592,28 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4", verify=None, cert
         return "", str(e)
 
 
+# v5.29.3 — a daemon that was just restarted opens its HTTP listener LAST
+# (after the config is parsed and the lease backend is up — seconds, with
+# MySQL), so a probe fired straight after `systemctl restart` gets
+# "connection refused" and the maintainer's first https setup reported a
+# failure for a socket that was fine two seconds later.
+_PROBE_ATTEMPTS = 8
+_PROBE_DELAY_S = 2.0
+
+
+def _probe_after_restart(url, user, pwd, service, verify=None, cert=None):
+    """_probe_once, retried for ~15 s while the daemon comes up. Returns
+    (version_text, error) like _probe_once; `error` is the LAST failure."""
+    version_text, err = "", ""
+    for attempt in range(_PROBE_ATTEMPTS):
+        version_text, err = _probe_once(url, user, pwd, omit_service=True, service=service, verify=verify, cert=cert)
+        if version_text:
+            return version_text, ""
+        if attempt < _PROBE_ATTEMPTS - 1:
+            time.sleep(_PROBE_DELAY_S)
+    return "", f"{err} — after {_PROBE_ATTEMPTS} attempts over {int(_PROBE_ATTEMPTS * _PROBE_DELAY_S)} s"
+
+
 def _identify_daemon(url, user, pwd, service, verify=None, cert=None):
     """v5.28.1 (Q26, D2) — best-effort direct-style config-get against a
     URL that has already answered version-get, to see WHICH daemon
@@ -1158,8 +1181,8 @@ def setup_direct_socket(server_id, service):
         )
         return back
 
-    version_text, probe_err = _probe_once(
-        new_url, user, password, omit_service=True, service=service, verify=probe_verify, cert=probe_cert
+    version_text, probe_err = _probe_after_restart(
+        new_url, user, password, service, verify=probe_verify, cert=probe_cert
     )
     identified = (
         _identify_daemon(new_url, user, password, service, verify=probe_verify, cert=probe_cert)
@@ -1291,14 +1314,8 @@ def rotate_kea_ca():
             break
         url = _service_url(server, service)
         user, pwd = _daemon_creds(server, service)
-        version_text, probe_err = _probe_once(
-            url,
-            user,
-            pwd,
-            omit_service=True,
-            service=service,
-            verify=staged["ca_cert"],
-            cert=(staged["client_cert"], staged["client_key"]),
+        version_text, probe_err = _probe_after_restart(
+            url, user, pwd, service, verify=staged["ca_cert"], cert=(staged["client_cert"], staged["client_key"])
         )
         if not version_text:
             failure = f"{sname} {daemon}: {url} did not answer with the new certificates ({probe_err})"

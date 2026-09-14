@@ -71,6 +71,32 @@ def _on_disk(path):
     return p
 
 
+@pytest.fixture(autouse=True)
+def no_probe_sleep(monkeypatch):
+    """v5.29.3 — the post-restart probe retries with real sleeps; the
+    tests only care about the attempt sequence, never the wall clock."""
+    slept = []
+    monkeypatch.setattr("jen.routes.settings.infrastructure.time.sleep", lambda s: slept.append(s))
+    return slept
+
+
+class _RefusesThenAnswers(_FakeHTTP):
+    """A socket that isn't listening yet: ConnectionError for the first
+    `refuse` posts to `frag`, then normal answers — a daemon opening its
+    HTTP listener a few seconds after `systemctl restart`."""
+
+    def __init__(self, replies, config_replies=None, frag="10.0.0.5:8004", refuse=2):
+        super().__init__(replies, config_replies)
+        self.frag, self.refuse = frag, refuse
+
+    def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
+        if self.frag in url and self.refuse > 0:
+            self.refuse -= 1
+            self.calls.append({"url": url, "json": json, "cert": cert, "auth": auth})
+            raise self.exceptions.ConnectionError("[Errno 111] Connection refused")
+        return super().post(url, json=json, auth=auth, timeout=timeout, verify=verify, cert=cert)
+
+
 @pytest.fixture
 def fake(monkeypatch):
     f = FakeHelper()
@@ -166,6 +192,33 @@ class TestHttpFlowSuccess:
         assert on_disk.get("kea", "direct_prev_api_url") == CA_URL
         assert extensions.KEA_CONNECTION_MODE == "direct"
         assert b"answers directly at http://10.0.0.5:8004" in r.data
+
+    def test_probe_waits_for_a_daemon_that_is_still_starting(
+        self, logged_in_client, db, isolated_config, fake, monkeypatch, no_probe_sleep
+    ):
+        """v5.29.3 — the maintainer's first https setup: everything on the
+        Kea side succeeded, then the probe got "connection refused"
+        because kea-dhcp4 hadn't opened its listener yet. The probe now
+        retries for ~15 s; two refusals then an answer is a success."""
+        fk = _RefusesThenAnswers(
+            {"1.2.3.4:8000": _ok("3.0.4"), "10.0.0.5:8004": _ok("3.0.4")}, config_replies={"10.0.0.5:8004": DHCP4_OK}
+        )
+        monkeypatch.setattr(kea_svc, "http", fk)
+        r = _setup(logged_in_client)
+        socket_calls = [c for c in fk.calls if "10.0.0.5:8004" in c["url"]]
+        assert [c["json"]["command"] for c in socket_calls[:4]] == ["version-get"] * 3 + ["config-get"]
+        assert len(no_probe_sleep) == 2  # slept between the refused attempts only
+        assert _on_disk(isolated_config).get("kea", "connection_mode") == "direct"
+        assert b"answers directly at http://10.0.0.5:8004" in r.data
+
+    def test_a_socket_that_never_answers_reports_the_attempts(
+        self, logged_in_client, db, isolated_config, fake, http, no_probe_sleep
+    ):
+        http({"1.2.3.4:8000": _ok("3.0.4")})
+        r = _setup(logged_in_client)
+        assert b"after 8 attempts over 16 s" in r.data
+        assert len(no_probe_sleep) == 7
+        assert _on_disk(isolated_config).get("kea", "connection_mode", fallback="ca") == "ca"
 
     def test_blank_credentials_default_to_the_pair_jen_already_uses(
         self, logged_in_client, db, isolated_config, fake, http
