@@ -281,8 +281,11 @@ Real second-newest entry.
         """v5.28.0 (Q24, E2) — regression guard: 5.23.0's own text used
         to start mid-paragraph inside the 5.24.0 section with no
         `## [5.23.0]` heading of its own, so parse_changelog() silently
-        dropped it as a release entry entirely."""
-        releases = parse_changelog(limit=10)
+        dropped it as a release entry entirely. No `limit` — the guard is
+        about the heading existing, not about how many releases have
+        shipped since (v5.29.2: three same-day patches pushed it past a
+        10-entry window)."""
+        releases = parse_changelog()
         assert "5.23.0" in [r["version"] for r in releases]
 
 
