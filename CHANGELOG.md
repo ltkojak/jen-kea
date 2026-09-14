@@ -2,6 +2,38 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.31.3] - 2026-09-14
+
+### The MFA challenge page's script didn't run at all
+
+Reported by the maintainer on the next login after 5.31.2: on the
+verification page the Passkey / Authenticator / Backup Code tabs
+didn't switch, ticking *Remember this device* on the Passkey tab
+never showed the "for how long" choice, and **Use passkey →** did
+nothing.
+
+One cause: the passkey code added in 5.31.0 had an unescaped
+apostrophe inside a single-quoted JavaScript string (`'Follow your
+browser's prompt…'`). A syntax error anywhere in a `<script>` block
+means the browser runs none of it — and the tab switching and the
+remember-toggle handlers, which predate passkeys, live in that same
+block. The string is double-quoted now.
+
+The suite never saw it because every test read the HTML from Python
+and none executed the JavaScript. A new test renders the three MFA
+pages through the app (every factor combination of the challenge
+page) and hands each inline script to `node --check`; GitHub's
+runners ship node, and the check skips rather than passes where it's
+absent. The nonce-based CSP means Jen can't lean on the browser to
+report this either — a page that fails to parse fails silently.
+
+### A wider spread of "remember this device for"
+
+Every tab of the challenge page — Passkey, Authenticator, Backup
+Code — now offers the same choices: 24 hours, 7, 14, 30 (default),
+60, 90, 120 days, or forever. The server side already accepted any
+day count; only the three menus were narrow.
+
 ## [5.31.2] - 2026-09-14
 
 ### "could not start the passkey check" on the first real passkey
