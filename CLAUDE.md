@@ -298,6 +298,37 @@ Process:
   working branch.
 - Once a version has been described as deployed it is frozen; see rule 4 below.
 
+### Release channels (from Q38 / v5.32.0 onward)
+
+Two channels, `stable` and `beta`, selected per install under Settings → System →
+Updates (`[updates] channel` in jen.config, default `stable`). There is ONE branch,
+`main`; channels are tags. The version grammar is `X.Y.Z` or `X.Y.Z-beta.N` (also
+`-rc.N`); `jen/version.py::parse_version` is the only parser and the root updater
+carries a byte-identical copy (a test enforces it). A beta of `X.Y.Z` satisfies a
+plugin's `requires_jen: X.Y.Z`.
+
+Every MINOR and every non-trivial PATCH ships beta-first:
+
+1. Steps land on `main` as usual (CI green between commits).
+2. The release commit sets **all 8 version spots and the CHANGELOG heading** to
+   `X.Y.Z-beta.1`; push; CI green; tag `vX.Y.Z-beta.1`. The release workflow marks any
+   tag containing `-` as a GitHub **prerelease**: beta boxes are offered it, stable
+   boxes never see it.
+3. Fixes found in beta land on `main` and ship as `-beta.2`, `-beta.3`, … each with
+   its own CHANGELOG heading.
+4. **Promotion is the maintainer's call** ("promote"). The promotion commit changes
+   only version strings and the CHANGELOG (fold the beta headings into one
+   `## [X.Y.Z]` entry with a "Beta history" line); no code. Push, CI green, tag
+   `vX.Y.Z`. Both channels are offered it.
+5. A PATCH to a *stable* release while a later beta soaks is the one branch case:
+   `git checkout -b release/X.Y vX.Y.Z` → cherry-pick → bump → tag from that branch →
+   delete the branch. Trivial fixes to a beta itself skip the soak (`-beta.N+1`).
+
+Say which channel a tag is for in the commit message and in the final report
+("tagged v5.33.0-beta.1 (beta channel)"). Never tag a plain `vX.Y.Z` without the
+maintainer's promote; never tag a `-beta.N` on a commit whose 8 spots don't carry that
+exact suffix (the box would re-install itself forever).
+
 ## Release & Working Discipline
 
 1. **Never run `git push` or `git tag` without explicitly asking first and getting a
@@ -331,3 +362,8 @@ Process:
    a `sudo …` string straight to a route. The helper is behind ONE sudoers line
    (`/usr/local/sbin/jen-kea-helper`, bare command); the legacy `/usr/bin/python3` grant
    is the banner-warned fallback and is never removed in 5.x.
+10. **Beta first, promote on the maintainer's word (Q38 / v5.32.0+).** A release is
+   tagged `vX.Y.Z-beta.N` first (all 8 version spots carry the suffix); the plain
+   `vX.Y.Z` tag is a separate promotion commit that changes only version strings and
+   the CHANGELOG, made only when the maintainer says "promote". See "Release
+   channels" above for the full flow, including the stable-hotfix branch case.
