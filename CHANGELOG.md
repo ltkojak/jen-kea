@@ -2,6 +2,32 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.31.1] - 2026-09-14
+
+### The TOTP enrolment QR code was a broken image — since v4.4.5
+
+Reported by the maintainer on the first visit to Profile → Security
+after 5.31.0: the "Scan with your app" square rendered as a broken
+image. Not a 5.31.0 regression — it has looked like that since the
+HTTP security headers arrived in v4.4.5 (2026-08-07), and the manual
+secret next to it always worked, which is presumably why nobody said
+so.
+
+The cause is the Content-Security-Policy. The QR is a `data:image/png;
+base64,…` URL (so are uploaded avatars), and the policy had no
+`img-src` directive of its own, so images fell through to
+`default-src 'self'` — and `'self'` does not include the `data:`
+scheme. Every browser blocked the image and said so only in the
+console. The header now carries `img-src 'self' data:`. Only images
+get the scheme: a data: image can't execute anything under this
+policy, and scripts, styles and everything else keep `'self'`.
+
+Two tests keep it that way: the header must contain exactly that
+directive and no other directive may pick up `data:`, and the
+rendered enrolment page must embed a real base64 PNG (the `iVBOR`
+magic), so a change to the QR library shows up here rather than on
+someone's screen.
+
 ## [5.31.0] - 2026-09-14
 
 ### Passkeys as a second factor

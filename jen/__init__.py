@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.31.0"
+JEN_VERSION = "5.31.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -327,6 +327,12 @@ def create_app() -> Flask:
             "default-src 'self'; "
             f"script-src 'self' 'nonce-{nonce}'; "
             "style-src 'self' 'unsafe-inline'; "
+            # v5.31.1 — the TOTP enrolment QR and uploaded avatars are
+            # data: URLs; with no img-src of its own they fell through to
+            # default-src 'self' and the browser blocked them (broken
+            # since the header arrived in v4.4.5). A data: image can't
+            # run script under this policy; only images get the scheme.
+            "img-src 'self' data:; "
             "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
         )
         if _https_context():

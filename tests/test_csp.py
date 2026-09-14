@@ -186,6 +186,28 @@ class TestSecurityHeaders:
         assert csp is not None
         assert "style-src 'self' 'unsafe-inline'" in csp
 
+    def test_img_src_allows_data_urls(self, logged_in_client):
+        """v5.31.1 — the TOTP enrolment QR (`data:image/png;base64,…`) and
+        uploaded avatars are data: URLs. Without an img-src directive they
+        fell through to default-src 'self' and every browser blocked them
+        — the enrolment page showed a broken image from v4.4.5 (when the
+        header arrived) until this. Only images get the scheme; scripts,
+        styles and everything else keep 'self'."""
+        resp = logged_in_client.get("/")
+        csp = resp.headers.get("Content-Security-Policy")
+        assert "img-src 'self' data:" in csp
+        assert "default-src 'self';" in csp
+        # No other directive picked up data: along the way.
+        for directive in ("script-src", "style-src", "default-src"):
+            m = re.search(directive + r" ([^;]+)", csp)
+            assert m and "data:" not in m.group(1), directive
+
+    def test_mfa_enrolment_page_embeds_a_real_png_qr(self, logged_in_client):
+        """The image the policy now permits must actually be there: the
+        route renders a base64 PNG (iVBOR… is the PNG magic) inline."""
+        page = logged_in_client.get("/mfa/enroll").get_data(as_text=True)
+        assert 'src="data:image/png;base64,iVBOR' in page
+
     def test_two_requests_get_different_nonces(self, logged_in_client):
         first = logged_in_client.get("/").headers.get("Content-Security-Policy")
         second = logged_in_client.get("/").headers.get("Content-Security-Policy")

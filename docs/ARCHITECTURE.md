@@ -620,6 +620,14 @@ direct binding wouldn't survive the swap). `script-src` is now `'self'
 false` closes the eval-based escape hatch htmx otherwise keeps open for
 `hx-on` and `js:` expressions Jen doesn't use.
 
+`img-src 'self' data:` (v5.31.1) is the one directive that widens
+beyond `'self'`, and only for images: the TOTP enrolment QR and
+uploaded avatars are `data:` URLs, and without an `img-src` of its own
+they fell through to `default-src 'self'`, which does not include the
+`data:` scheme — the QR was a broken image from v4.4.5 (when the
+header arrived) until this. A `data:` image cannot execute anything
+under this policy; scripts, styles, frames and objects are unaffected.
+
 `style-src` keeps `'unsafe-inline'` deliberately. Templates carry over
 1,200 inline `style=""` attributes; hardening that would mean rewriting
 the presentation layer into stylesheets, not converting a fixed,
