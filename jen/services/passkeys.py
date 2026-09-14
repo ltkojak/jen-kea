@@ -53,6 +53,25 @@ RP_NAME = "Jen DHCP"
 STATE_TTL_SECONDS = 300
 MAX_NAME = 100
 DEFAULT_NAME = "Passkey"
+# /auth/reauth accepts a passkey assertion made this recently in place of
+# a TOTP/backup code (the assertion stamps session["reauth_passkey_at"]).
+REAUTH_WINDOW_SECONDS = 120
+
+
+def stamp_is_fresh(stamp_iso, window_seconds: int, now: datetime | None = None) -> bool:
+    """True when `stamp_iso` (an ISO-8601 UTC timestamp Jen wrote) is at
+    most `window_seconds` old. Unparseable / missing → False."""
+    if not stamp_iso:
+        return False
+    try:
+        then = datetime.fromisoformat(str(stamp_iso))
+    except ValueError:
+        return False
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    age = (now - then).total_seconds()
+    return 0 <= age <= window_seconds
 
 
 class PasskeyError(Exception):

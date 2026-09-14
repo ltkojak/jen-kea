@@ -511,6 +511,25 @@ code path that reads `mfa_methods.secret` must go through
 `crypto.decrypt_secret()` and must not treat a `SecretDecryptError` as
 "authenticated".
 
+**Passkeys (v5.31.0)** sit beside TOTP as a second factor
+(`jen/services/passkeys.py`, py_webauthn) and need none of this:
+`webauthn_credentials` holds the credential id, the *public* key, a
+signature counter and a name — nothing that verifies anything on its
+own. The trust boundary is different and lives in the ceremony, not at
+rest: the relying-party id and origin are derived from the request Jen
+is serving (`request.host` minus port; `request.host_url`, which the
+trusted-proxy middleware has already corrected), pinned into a
+single-use session state with a 5-minute expiry when the challenge is
+issued, and verified against on the response — the browser's own
+`clientDataJSON.origin` is checked against what Jen expected, never
+trusted alone. The state is popped before verification, so a failed
+attempt cannot be replayed. A non-advancing signature counter (when
+either side's is non-zero) is treated as a cloned authenticator and
+refused. The consequence operators must know: a passkey is bound to
+the hostname users type, so renaming or re-addressing Jen invalidates
+every enrolled passkey. Passwordless login is deliberately not offered;
+the password stays the first factor.
+
 ### 3.7 The plugin registry's trust root, and checksum-verified installs (v5.21.1)
 
 `plugins/registry.json` — the list Settings → Plugins shows and

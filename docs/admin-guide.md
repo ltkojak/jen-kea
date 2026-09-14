@@ -460,7 +460,7 @@ Go to **Settings → Access & Security → Session Timeout** to set the global d
 
 ## Multi-Factor Authentication (MFA)
 
-Jen supports TOTP-based MFA (Google Authenticator, Authy, 1Password, etc.).
+Jen supports two kinds of second factor, and a user may enroll either or both: TOTP authenticator apps (Google Authenticator, Authy, 1Password, etc.) and, from v5.31.0, passkeys (WebAuthn / FIDO2 — Windows Hello, Touch ID / iCloud Keychain, Android, 1Password, Bitwarden, Keeper, YubiKey and similar hardware keys). Both sit *behind* the password: passkeys are a second factor here, not a passwordless login.
 
 ### MFA Policy
 
@@ -476,6 +476,18 @@ Go to **Settings → Access & Security → MFA policy** to set the policy:
 ### Enrolling MFA
 
 Go to **Profile → Security → Enable MFA**. Scan the QR code with your authenticator app. Save your backup codes — they are shown only once.
+
+### Passkeys (v5.31.0)
+
+On the same **Profile → Security** page, **Add a Passkey** starts the browser's own passkey prompt; give it a name (which laptop, which key) so the list stays readable. A passkey can be a user's first factor (the forced-enrollment flow accepts one just like an authenticator app, and issues backup codes the same way) or an addition beside TOTP. At login the verification page opens on a **Passkey** tab when one is enrolled, with Authenticator and Backup Code still available; "remember this device" works the same for all three. Step-up confirmations (`/auth/reauth`) accept a passkey in place of a code.
+
+What an administrator needs to know:
+
+- **Passkeys are bound to the address users type.** The WebAuthn relying-party id is the hostname of the page (`jen.lan`, `10.0.0.5`, …), without the port. Renaming the host or moving Jen to a new address invalidates every enrolled passkey — users enroll again. Behind a reverse proxy, set `[server] trusted_proxies` so Jen sees the external scheme, and forward the original `Host` header.
+- **Browsers only create passkeys on a secure page** — https, or `http://localhost`. Over plain http on a LAN address the Add-a-Passkey card explains this and offers nothing; set up HTTPS (or terminate TLS at a trusted proxy) first.
+- **What Jen stores** is the credential's public key, its id, a signature counter, and the name — nothing secret, so nothing to encrypt (unlike TOTP secrets, ARCHITECTURE §3.6). An assertion whose counter did not advance is rejected as a cloned authenticator.
+- **Removing** the last factor is refused while MFA is required for that account, exactly as for TOTP. A superadmin's **Reset MFA** on the Users page clears passkeys along with everything else.
+- The lockout below applies to passkey attempts too.
 
 ### Trusted Devices
 

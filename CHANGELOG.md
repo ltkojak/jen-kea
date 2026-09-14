@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.31.0] - 2026-09-14
+
+### Passkeys as a second factor
+
+The enrollment page has said *Passkeys (Coming Soon)* and the README
+has said "planned" for long enough. Passkeys — WebAuthn / FIDO2:
+Windows Hello, Touch ID and iCloud Keychain, Android, password
+managers such as 1Password, Bitwarden and Keeper, and hardware keys
+such as a YubiKey — now sit beside TOTP as a second factor behind the
+password. Not passwordless login; the password stays the first factor
+and that is a deliberate scope line, not a gap.
+
+**What a user sees.** Profile → Security gains an **Add a Passkey**
+card: name it, follow the browser's prompt, done. A passkey can be the
+first factor (forced enrollment accepts one exactly like an
+authenticator app, and issues backup codes the same way) or an
+addition beside TOTP. The login verification page opens on a
+**Passkey** tab when one is enrolled, with Authenticator and Backup
+Code still there; "remember this device" works for all three.
+Step-up confirmations accept a passkey in place of a code. Removing
+the last factor is refused while MFA is required, and both admin
+"Reset MFA" routes clear passkeys with everything else.
+
+**What is under it.** `jen/services/passkeys.py` on py_webauthn 3.x.
+The relying-party id and origin are derived from the request Jen is
+serving — the hostname users type, without the port; the scheme the
+trusted-proxy middleware already corrected — pinned into a single-use
+session state with a five-minute expiry when the challenge is issued,
+and verified against on the response. The state is popped before
+verification, so a failed attempt can't be replayed. Only the public
+key, credential id, signature counter and name are stored (migration
+24 adds nullable `transports` and `aaguid` to the table the v4.2.0
+baseline already had); a counter that doesn't advance is refused as a
+cloned authenticator. Failed assertions count toward the existing
+10-attempt MFA lockout. Every `<script>` is nonce'd as the CSP
+requires; the page feature-detects WebAuthn and a secure context and
+says plainly when plain http is the reason nothing happens.
+
+**What an operator must know.** A passkey is bound to the address
+users type — rename or re-address Jen and every passkey has to be
+enrolled again. Browsers only create passkeys on https (or
+localhost). Both are in the admin guide's new "Passkeys" subsection
+and a troubleshooting entry.
+
+Housekeeping folded in: the two duplicated "second factor verified"
+blocks on `/mfa/verify` became one helper shared with the passkey
+path (the trusted-device cookie is set in one place now — the
+source-scanning test that counted four `set_cookie` calls counts two),
+and `mfa.user_factors()` reports TOTP and passkeys separately so a
+page only offers what the user actually has.
+
 ## [5.30.0] - 2026-09-13
 
 The plugin release. IPAM Lite v1.5.0 and Network Discovery v1.1.0 both

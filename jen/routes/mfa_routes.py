@@ -134,140 +134,120 @@ def mfa_verify():
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
         flash(f"Too many failed codes. Try again in {remaining} minute(s).", "error")
-        has_totp = __mfa.user_has_mfa(pending_id) if pending_id else False
-        return render_template("mfa_challenge.html", username=pending_username, has_totp=has_totp)
+        factors = __mfa.user_factors(pending_id)
+        return render_template(
+            "mfa_challenge.html",
+            username=pending_username,
+            has_totp=factors["totp"],
+            has_passkey=factors["passkey"],
+            locked=True,
+        )
     if request.method == "POST":
         code = request.form.get("code", "").strip().replace(" ", "")
         # Try a backup code first — verify_backup_code() canonicalises it
         # (with/without dash, any case) to the stored XXXXXXXX-XXXXXXXX form.
         if len(code) >= 16 and __mfa.verify_backup_code(pending_id, code):
-            user = _load_user(pending_id)
-            if user:
-                __auth.clear_mfa_attempts(pending_id)
-                remember = request.form.get("remember_device")
-                next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
-                # v5.17.0 (Q6 6B) — rotate the session now that both factors
-                # are verified; read mfa_next above first (clear() drops it).
-                session.clear()
-                login_user(user)
-                _now = datetime.now(timezone.utc).isoformat()
-                session["last_active"] = _now
-                session["auth_at"] = _now
-                if remember:
-                    days_raw = request.form.get("remember_days", "30")
-                    # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
-                    # the parsed .browser field, which is always None without a UA
-                    # parser plugged in — so the object is ALWAYS falsy. (v4.3.3)
-                    ua = request.headers.get("User-Agent", "")
-                    if not ua:
-                        logger.warning(
-                            f"Trust creation from {request.remote_addr} with no User-Agent header; "
-                            f"headers present: {sorted(k for k, _ in request.headers)}"
-                        )
-                    device_name = __fp.describe_client_device(request.remote_addr, ua)
-                    token = __mfa.create_trusted_device_token(
-                        pending_id, days_raw, device_name, ip_address=request.remote_addr, user_agent=ua
-                    )
-                    resp = redirect(next_url)
-                    # v5.2.12 security fix — this cookie is a long-lived
-                    # MFA bypass token (up to 10 years for "forever").
-                    # It was missing `secure`, unlike the main session
-                    # cookie (SESSION_COOKIE_SECURE, set conditionally on
-                    # SSL in jen/__init__.py) — meaning a browser could
-                    # send this specific token over plain HTTP even on an
-                    # instance with HTTPS configured, before any
-                    # HTTP→HTTPS redirect takes effect. Matches the same
-                    # ssl_configured() condition the session cookie uses.
-                    if days_raw == "forever":
-                        resp.set_cookie(
-                            "jen_trusted",
-                            token,
-                            max_age=10 * 365 * 86400,
-                            httponly=True,
-                            samesite="Lax",
-                            secure=__config.ssl_configured(),
-                        )
-                    else:
-                        days = int(days_raw)
-                        resp.set_cookie(
-                            "jen_trusted",
-                            token,
-                            max_age=days * 86400,
-                            httponly=True,
-                            samesite="Lax",
-                            secure=__config.ssl_configured(),
-                        )
-                    __user.audit("MFA_BACKUP_CODE", "auth", f"{pending_username} trusted={days_raw}")
-                    return resp
-                __user.audit("MFA_BACKUP_CODE", "auth", pending_username)
-                return redirect(next_url)
+            resp = _finish_second_factor(pending_id, pending_username, "MFA_BACKUP_CODE")
+            if resp is not None:
+                return resp
         # Try TOTP
         if __mfa.verify_totp(pending_id, code):
-            user = _load_user(pending_id)
-            if user:
-                __auth.clear_mfa_attempts(pending_id)
-                remember = request.form.get("remember_device")
-                next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
-                # v5.17.0 (Q6 6B) — rotate the session now that both factors
-                # are verified; read mfa_next above first (clear() drops it).
-                session.clear()
-                login_user(user)
-                _now = datetime.now(timezone.utc).isoformat()
-                session["last_active"] = _now
-                session["auth_at"] = _now
-                if remember:
-                    days_raw = request.form.get("remember_days", "30")
-                    # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
-                    # the parsed .browser field, which is always None without a UA
-                    # parser plugged in — so the object is ALWAYS falsy. (v4.3.3)
-                    ua = request.headers.get("User-Agent", "")
-                    if not ua:
-                        logger.warning(
-                            f"Trust creation from {request.remote_addr} with no User-Agent header; "
-                            f"headers present: {sorted(k for k, _ in request.headers)}"
-                        )
-                    device_name = __fp.describe_client_device(request.remote_addr, ua)
-                    token = __mfa.create_trusted_device_token(
-                        pending_id, days_raw, device_name, ip_address=request.remote_addr, user_agent=ua
-                    )
-                    resp = redirect(next_url)
-                    # v5.2.12 security fix — this cookie is a long-lived
-                    # MFA bypass token (up to 10 years for "forever").
-                    # It was missing `secure`, unlike the main session
-                    # cookie (SESSION_COOKIE_SECURE, set conditionally on
-                    # SSL in jen/__init__.py) — meaning a browser could
-                    # send this specific token over plain HTTP even on an
-                    # instance with HTTPS configured, before any
-                    # HTTP→HTTPS redirect takes effect. Matches the same
-                    # ssl_configured() condition the session cookie uses.
-                    if days_raw == "forever":
-                        resp.set_cookie(
-                            "jen_trusted",
-                            token,
-                            max_age=10 * 365 * 86400,
-                            httponly=True,
-                            samesite="Lax",
-                            secure=__config.ssl_configured(),
-                        )
-                    else:
-                        days = int(days_raw)
-                        resp.set_cookie(
-                            "jen_trusted",
-                            token,
-                            max_age=days * 86400,
-                            httponly=True,
-                            samesite="Lax",
-                            secure=__config.ssl_configured(),
-                        )
-                    __user.audit("MFA_VERIFY", "auth", f"{pending_username} trusted={days_raw}")
-                    return resp
-                __user.audit("MFA_VERIFY", "auth", pending_username)
-                return redirect(next_url)
+            resp = _finish_second_factor(pending_id, pending_username, "MFA_VERIFY")
+            if resp is not None:
+                return resp
         __auth.record_mfa_attempt(pending_id)
         flash("Invalid code. Please try again.", "error")
         __user.audit("MFA_FAILED", "auth", pending_username)
-    has_totp = __mfa.user_has_mfa(pending_id) if pending_id else False
-    return render_template("mfa_challenge.html", username=pending_username, has_totp=has_totp)
+    factors = __mfa.user_factors(pending_id)
+    return render_template(
+        "mfa_challenge.html",
+        username=pending_username,
+        has_totp=factors["totp"],
+        has_passkey=factors["passkey"],
+    )
+
+
+def _establish_second_factor_session(user):
+    """Both factors verified: rotate the session (v5.17.0, Q6 6B — Flask
+    sessions are signed cookies, so "rotate" == clear + rebuild) and
+    return where to send the user. mfa_next is read BEFORE clear()."""
+    next_url = session.pop("mfa_next", url_for("dashboard.dashboard"))
+    session.clear()
+    login_user(user)
+    _now = datetime.now(timezone.utc).isoformat()
+    session["last_active"] = _now
+    session["auth_at"] = _now
+    return next_url
+
+
+def _set_trusted_cookie(resp, user_id, days_raw):
+    """Attach a "remember this device" token to `resp`. One place for
+    the cookie flags (v5.2.12: `secure` conditioned on SSL exactly like
+    the session cookie — tests/test_small_hardening_fixes.py scans this
+    function's two set_cookie calls)."""
+    # Read the header directly: werkzeug 2.1+ UserAgent.__bool__ keys off
+    # the parsed .browser field, which is always None without a UA
+    # parser plugged in — so the object is ALWAYS falsy. (v4.3.3)
+    ua = request.headers.get("User-Agent", "")
+    if not ua:
+        logger.warning(
+            f"Trust creation from {request.remote_addr} with no User-Agent header; "
+            f"headers present: {sorted(k for k, _ in request.headers)}"
+        )
+    device_name = __fp.describe_client_device(request.remote_addr, ua)
+    token = __mfa.create_trusted_device_token(
+        user_id, days_raw, device_name, ip_address=request.remote_addr, user_agent=ua
+    )
+    # This cookie is a long-lived MFA bypass token (up to 10 years for
+    # "forever"): httponly, SameSite=Lax, and `secure` whenever the
+    # instance has HTTPS configured — the same condition the session
+    # cookie uses (SESSION_COOKIE_SECURE in jen/__init__.py).
+    if days_raw == "forever":
+        resp.set_cookie(
+            "jen_trusted",
+            token,
+            max_age=10 * 365 * 86400,
+            httponly=True,
+            samesite="Lax",
+            secure=__config.ssl_configured(),
+        )
+    else:
+        days = int(days_raw) if str(days_raw).isdigit() else 30
+        resp.set_cookie(
+            "jen_trusted",
+            token,
+            max_age=days * 86400,
+            httponly=True,
+            samesite="Lax",
+            secure=__config.ssl_configured(),
+        )
+    return resp
+
+
+def _finish_second_factor(pending_id, pending_username, audit_action, *, remember=None, days_raw=None, resp=None):
+    """The one success path for every second factor on /mfa/verify (and,
+    v5.31.0, the passkey JSON finish): clear the attempt counter, rotate
+    the session, honour "remember this device", audit. `remember` /
+    `days_raw` default to the posted form fields; `resp` defaults to a
+    redirect to the post-login page (the passkey path passes a callable
+    that builds its JSON response from that URL). None when the pending
+    user no longer exists."""
+    user = _load_user(pending_id)
+    if not user:
+        return None
+    __auth.clear_mfa_attempts(pending_id)
+    if remember is None:
+        remember = request.form.get("remember_device")
+    if days_raw is None:
+        days_raw = request.form.get("remember_days", "30")
+    next_url = _establish_second_factor_session(user)
+    resp = resp(next_url) if callable(resp) else redirect(next_url)
+    if remember:
+        _set_trusted_cookie(resp, pending_id, str(days_raw))
+        __user.audit(audit_action, "auth", f"{pending_username} trusted={days_raw}")
+    else:
+        __user.audit(audit_action, "auth", pending_username)
+    return resp
 
 
 @bp.route("/mfa/enroll", methods=["GET", "POST"])
@@ -497,6 +477,103 @@ def passkey_enrolled():
     if codes:
         return render_template("mfa_backup_codes.html", codes=codes)
     return redirect(url_for("mfa_routes.mfa_enroll"))
+
+
+# ── Passkeys — second factor at login ────────────────────────────────────────
+#
+# Same pre-login state as /mfa/verify (password done, `mfa_pending_user_id`
+# in the session, no Flask-Login session yet), same lockout counter, same
+# success path. The challenge is single-use and leaves the session before
+# verification.
+
+
+def _pending_for_passkey_login():
+    pending_id = session.get("mfa_pending_user_id")
+    if not pending_id or session.get("mfa_pending_enroll"):
+        return None, None
+    return pending_id, session.get("mfa_pending_username", "unknown")
+
+
+@bp.route("/mfa/passkey/login/begin", methods=["POST"])
+def passkey_login_begin():
+    pending_id, _username = _pending_for_passkey_login()
+    if not pending_id:
+        return _json_error("no sign-in in progress", 401)
+    locked, remaining = __auth.is_mfa_locked_out(pending_id)
+    if locked:
+        return _json_error(f"Too many failed codes. Try again in {remaining} minute(s).", 429)
+    try:
+        options_json, state = __passkeys.begin_authentication(pending_id, request)
+    except __passkeys.PasskeyError as e:
+        return _json_error(str(e), 400)
+    except Exception as e:
+        logger.error(f"passkey login begin failed for user {pending_id}: {e}")
+        return _json_error("could not start the passkey check — see the Jen log", 500)
+    session["passkey_auth"] = state
+    return jsonify({"ok": True, "options": options_json})
+
+
+@bp.route("/mfa/passkey/login/finish", methods=["POST"])
+def passkey_login_finish():
+    pending_id, pending_username = _pending_for_passkey_login()
+    if not pending_id:
+        return _json_error("no sign-in in progress", 401)
+    locked, remaining = __auth.is_mfa_locked_out(pending_id)
+    if locked:
+        return _json_error(f"Too many failed codes. Try again in {remaining} minute(s).", 429)
+    body = request.get_json(silent=True) or {}
+    state = session.pop("passkey_auth", None)
+    if not __passkeys.finish_authentication(pending_id, body.get("response"), state, request):
+        __auth.record_mfa_attempt(pending_id)
+        __user.audit("MFA_FAILED", "auth", f"{pending_username} method=passkey")
+        return _json_error("the passkey could not be verified — try again or use a code", 400)
+    out = _finish_second_factor(
+        pending_id,
+        pending_username,
+        "PASSKEY_VERIFY",
+        remember=body.get("remember_device"),
+        days_raw=str(body.get("remember_days") or "30"),
+        resp=lambda next_url: jsonify({"ok": True, "next": next_url}),
+    )
+    if out is None:
+        return _json_error("this account no longer exists", 401)
+    return out
+
+
+# ── Passkeys — step-up (recent-auth) confirmation ────────────────────────────
+#
+# /auth/reauth asks for the password plus a current code when the user
+# has a second factor. A passkey holder proves the factor here instead:
+# a successful assertion stamps `session["reauth_passkey_at"]`, which
+# auth.reauth accepts (once, within passkeys.REAUTH_WINDOW_SECONDS) in
+# place of a code.
+
+
+@bp.route("/mfa/passkey/reauth/begin", methods=["POST"])
+@login_required
+def passkey_reauth_begin():
+    try:
+        options_json, state = __passkeys.begin_authentication(current_user.id, request)
+    except __passkeys.PasskeyError as e:
+        return _json_error(str(e), 400)
+    except Exception as e:
+        logger.error(f"passkey reauth begin failed for {current_user.username}: {e}")
+        return _json_error("could not start the passkey check — see the Jen log", 500)
+    session["passkey_reauth"] = state
+    return jsonify({"ok": True, "options": options_json})
+
+
+@bp.route("/mfa/passkey/reauth/finish", methods=["POST"])
+@login_required
+def passkey_reauth_finish():
+    body = request.get_json(silent=True) or {}
+    state = session.pop("passkey_reauth", None)
+    if not __passkeys.finish_authentication(current_user.id, body.get("response"), state, request):
+        __auth.record_login_attempt(request.remote_addr, current_user.username)
+        __user.audit("MFA_FAILED", "auth", f"{current_user.username} method=passkey reauth")
+        return _json_error("the passkey could not be verified", 400)
+    session["reauth_passkey_at"] = datetime.now(timezone.utc).isoformat()
+    return jsonify({"ok": True})
 
 
 @bp.route("/mfa/regenerate-backup-codes", methods=["POST"])

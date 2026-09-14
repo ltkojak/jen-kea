@@ -15,10 +15,16 @@
         </div>
         {% if has_mfa %}
         <div class="form-group">
-            <label>Authenticator or backup code</label>
+            <label>Authenticator or backup code{% if has_passkey %} — or use your passkey below{% endif %}</label>
             <input type="text" name="code" inputmode="text" autocomplete="one-time-code"
                    placeholder="000000 or XXXXXXXX-XXXXXXXX">
         </div>
+        {% if has_passkey %}
+        <div class="form-group" id="reauth-passkey">
+            <button type="button" id="reauth-passkey-btn" class="btn btn-secondary">🔑 Use passkey</button>
+            <span id="reauth-passkey-status" style="font-size:13px;margin-left:8px;color:var(--text-muted);"></span>
+        </div>
+        {% endif %}
         {% endif %}
         <div style="display:flex;gap:8px;margin-top:8px;">
             <button type="submit" class="btn btn-primary">Confirm</button>
@@ -26,4 +32,66 @@
         </div>
     </form>
 </div>
+{% if has_passkey %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    var CSRF = {{ csrf_token()|tojson }};
+    var btn = document.getElementById('reauth-passkey-btn');
+    var status = document.getElementById('reauth-passkey-status');
+    var form = btn.closest('form');
+    function b64urlToBytes(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        var bin = atob(s), out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out.buffer;
+    }
+    function bytesToB64url(buf) {
+        var bytes = new Uint8Array(buf), bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    async function postJson(url, body) {
+        var r = await fetch(url, {method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF}, body: JSON.stringify(body || {})});
+        var data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || ('request failed (' + r.status + ')'));
+        return data;
+    }
+    if (!window.PublicKeyCredential || !window.isSecureContext) {
+        document.getElementById('reauth-passkey').style.display = 'none';
+        return;
+    }
+    btn.addEventListener('click', async function () {
+        var pw = form.querySelector('input[name=password]');
+        if (!pw.value) { status.textContent = 'Enter your password first.'; pw.focus(); return; }
+        btn.disabled = true;
+        status.textContent = 'Follow your browser\'s prompt…';
+        try {
+            var begun = await postJson('/mfa/passkey/reauth/begin');
+            var options = JSON.parse(begun.options);
+            options.challenge = b64urlToBytes(options.challenge);
+            (options.allowCredentials || []).forEach(function (c) { c.id = b64urlToBytes(c.id); });
+            var cred = await navigator.credentials.get({publicKey: options});
+            await postJson('/mfa/passkey/reauth/finish', {response: {
+                id: cred.id, rawId: bytesToB64url(cred.rawId), type: cred.type,
+                authenticatorAttachment: cred.authenticatorAttachment || null,
+                response: {
+                    clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+                    authenticatorData: bytesToB64url(cred.response.authenticatorData),
+                    signature: bytesToB64url(cred.response.signature),
+                    userHandle: cred.response.userHandle ? bytesToB64url(cred.response.userHandle) : null
+                }
+            }});
+            status.textContent = 'Passkey verified — confirming…';
+            form.submit();
+        } catch (e) {
+            status.textContent = (e && e.name === 'NotAllowedError') ? 'The passkey prompt was cancelled or timed out.'
+                               : (e && e.message) ? e.message : 'Passkey check failed.';
+            btn.disabled = false;
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

@@ -15,6 +15,7 @@ import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.mfa as __mfa
 import jen.services.oidc as __oidc
+import jen.services.passkeys as __passkeys
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("auth", __name__)
@@ -327,10 +328,12 @@ def reauth():
     next_url = session.get("reauth_next") or url_for("mfa_routes.mfa_enroll")
     if not next_url.startswith("/") or next_url.startswith("//"):
         next_url = url_for("mfa_routes.mfa_enroll")
-    has_mfa = __mfa.user_has_mfa(current_user.id)
+    factors = __mfa.user_factors(current_user.id)
+    has_mfa = factors["totp"] or factors["passkey"]
+    has_passkey = factors["passkey"]
 
     if request.method == "GET":
-        return render_template("reauth.html", has_mfa=has_mfa, next_url=next_url)
+        return render_template("reauth.html", has_mfa=has_mfa, has_passkey=has_passkey, next_url=next_url)
 
     ip = request.remote_addr
     username = current_user.username
@@ -341,10 +344,14 @@ def reauth():
             flash("Account is locked. Contact an administrator.", "error")
         else:
             flash(f"Too many failed attempts. Try again in {remaining} minute(s).", "error")
-        return render_template("reauth.html", has_mfa=has_mfa, next_url=next_url)
+        return render_template("reauth.html", has_mfa=has_mfa, has_passkey=has_passkey, next_url=next_url)
 
     password = request.form.get("password", "")
     code = request.form.get("code", "").strip().replace(" ", "")
+    # v5.31.0 (Q31) — a passkey assertion just made on this page
+    # (mfa_routes.passkey_reauth_finish) stands in for the code. Single
+    # use: popped on every attempt, fresh only inside the window.
+    passkey_ok = __passkeys.stamp_is_fresh(session.pop("reauth_passkey_at", None), __passkeys.REAUTH_WINDOW_SECONDS)
 
     ok = False
     try:
@@ -353,8 +360,10 @@ def reauth():
             row = cur.fetchone()
         if row and __user.verify_password(row["password"], password):
             if has_mfa:
-                ok = (len(code) >= 16 and __mfa.verify_backup_code(current_user.id, code)) or __mfa.verify_totp(
-                    current_user.id, code
+                ok = (
+                    passkey_ok
+                    or (len(code) >= 16 and __mfa.verify_backup_code(current_user.id, code))
+                    or (bool(code) and __mfa.verify_totp(current_user.id, code))
                 )
             else:
                 ok = True
@@ -364,7 +373,7 @@ def reauth():
     if not ok:
         __auth.record_login_attempt(ip, username)
         flash("Confirmation failed — check your password" + (" and code." if has_mfa else "."), "error")
-        return render_template("reauth.html", has_mfa=has_mfa, next_url=next_url)
+        return render_template("reauth.html", has_mfa=has_mfa, has_passkey=has_passkey, next_url=next_url)
 
     __auth.clear_login_attempts(ip, username)
     session["auth_at"] = _now_iso()

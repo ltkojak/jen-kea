@@ -267,6 +267,10 @@ Go to **Settings → API Docs** for full endpoint documentation with parameters,
 
 Go to **Profile → Security → Enable MFA**. Scan the QR code with an authenticator app (Google Authenticator, Authy, 1Password, etc.). Save your backup codes — they are shown only once and cannot be recovered.
 
+### Passkeys (v5.31.0)
+
+On the same page, **Add a Passkey** enrolls a passkey as your second factor — Windows Hello, Touch ID / iCloud Keychain, Android, a password manager such as 1Password, Bitwarden or Keeper, or a hardware key such as a YubiKey. Give it a name so you can tell them apart. At login you'll land on a **Passkey** tab and confirm with a fingerprint, face, PIN or touch instead of typing a code; the Authenticator and Backup Code tabs are still there. If the card says the browser can't create a passkey, the page isn't https — ask your administrator. Enrolling a passkey as your first factor also issues backup codes; keep them.
+
 ### Trusted Devices
 
 After a successful MFA login, you can check "Trust this device for 30 days". Trusted devices skip MFA on subsequent logins from that browser. Manage trusted devices under **Profile → Security → Trusted Devices**.

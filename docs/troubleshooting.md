@@ -340,6 +340,16 @@ A brand-new install generates its own `/etc/jen/mfa_key` on first run.
 
 ---
 
+## Passkeys: the prompt never appears, or "This browser can't create a passkey here" (v5.31.0)
+
+WebAuthn only runs on a *secure context*: an https page, or `http://localhost`. On plain http over a LAN address the browser refuses before Jen is even asked, so the Add-a-Passkey card hides its form and says so; the Passkey tab at login shows the same note. Fix: upload a certificate (Settings → Security) or terminate TLS at a reverse proxy listed in `[server] trusted_proxies`.
+
+**"The passkey could not be verified"** right after enrolling, or for every user at once, usually means the address changed: the relying-party id is the hostname of the page (`jen.lan`, not `jen.lan:8443`, not `10.0.0.5` if users type the name). Behind a proxy, the proxy must forward the original `Host` header. Passkeys enrolled under the old name are invalid under the new one — users enroll again (a superadmin's Reset MFA on the Users page clears the stale ones).
+
+**"The passkey challenge expired — start again"**: more than five minutes passed between the two halves of the ceremony, or the page was reloaded in between. Click the button again.
+
+**A user is locked out of passkeys**: failed assertions count toward the same 10-attempt / 15-minute MFA lockout as codes; wait it out, or use a backup code.
+
 ## Locked Out (Rate Limiting)
 
 If you've locked yourself out and can't log in:

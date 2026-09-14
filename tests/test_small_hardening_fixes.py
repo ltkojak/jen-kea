@@ -43,16 +43,18 @@ class TestTrustedDeviceCookieSecureFlag:
     def test_every_jen_trusted_cookie_call_includes_secure_flag(self):
         source = self._mfa_routes_source()
         calls = re.findall(r'set_cookie\(\s*"jen_trusted".*?\)', source, re.DOTALL)
-        assert len(calls) == 4, (
-            f"expected exactly 4 jen_trusted set_cookie() calls (two code "
-            f"paths — backup code and TOTP — each with a 'forever' and an "
-            f"'N days' branch), found {len(calls)}. If this count changed "
-            f"intentionally, update this test; if not, a call site may have "
-            f"been missed."
+        # v5.31.0 (Q31) — the four inline calls (two per success path)
+        # collapsed into mfa_routes._set_trusted_cookie(), shared by the
+        # backup-code, TOTP and passkey paths: two calls, forever / N days.
+        assert len(calls) == 2, (
+            f"expected exactly 2 jen_trusted set_cookie() calls (one helper, "
+            f"_set_trusted_cookie, with a 'forever' and an 'N days' branch), "
+            f"found {len(calls)}. If this count changed intentionally, update "
+            f"this test; if not, a call site may have been missed."
         )
         missing_secure = [c for c in calls if "secure=" not in c]
         assert not missing_secure, (
-            f"{len(missing_secure)} of 4 jen_trusted cookie calls are missing the secure= flag: {missing_secure}"
+            f"{len(missing_secure)} of 2 jen_trusted cookie calls are missing the secure= flag: {missing_secure}"
         )
 
     def test_secure_flag_is_conditioned_on_ssl_not_hardcoded(self):
