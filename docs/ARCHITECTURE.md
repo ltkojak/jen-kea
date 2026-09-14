@@ -206,6 +206,20 @@ covered by that test, since it's a plain `ExecStart` of the same
 already-hardened script with a different flag, not a second
 independently-configured unit.
 
+**Release channels (v5.32.0).** The root script decides *which* release
+to install from two inputs it reads itself: GitHub's release list and
+`[updates] channel` in `/etc/jen/jen.config` (`stable` or `beta`,
+anything else read as `stable`). The web process writes that key
+through `AppConfig` and offers the same release on the Updates page,
+but nothing the web process says reaches the root side — the channel
+lives in the INI precisely because the script reads the INI and never
+the database. A beta is filtered by GitHub's `prerelease` flag, which
+only the release workflow sets (any tag with a prerelease suffix); the
+signature and checksum verification below is identical for both
+channels. The version grammar and the picker are one block of code in
+`jen/version.py`, embedded byte-for-byte in the script and diffed by a
+test, so the two sides cannot drift on what "newer" means.
+
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
 Every outbound SSH connection Jen makes (`subnets.py`, `ddns.py`,

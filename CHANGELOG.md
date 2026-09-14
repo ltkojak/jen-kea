@@ -2,6 +2,65 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.32.0] - 2026-09-14
+
+### Release channels: beta first, stable on promotion
+
+5.31.0 needed three same-day patches, each found by the maintainer on
+the box minutes after installing. That is what a beta channel is for.
+From this release on, every feature release is published first as a
+**pre-release** — `5.33.0-beta.1`, then `-beta.2` if something needed
+fixing — and becomes the **stable** `5.33.0` only when it has been run
+for real and promoted. The stable release is the last beta with
+nothing but the version number changed.
+
+**What an install chooses.** Settings → System → Updates gains a
+release-channel selector (superadmin, password confirmation):
+`stable`, the default, is offered only stable releases; `beta` is
+offered the newest release of either kind. The choice is stored as
+`[updates] channel` in `jen.config` rather than the database because
+the root-privileged updater reads the INI file and never the database
+— both halves of the updater now read the same key, so they can never
+disagree about what to install. Switching back to stable never
+downgrades: the box keeps the beta it is running until a stable
+release is newer than it. A beta is the same signed tarball through
+the same checksum and signature verification, the same staged install,
+the same rollback; the difference is soak time, not safety.
+
+**One version parser.** Five places used to parse a version string
+independently, each assuming three plain integers; a suffixed version
+would have parsed as `0.0.0` in the update check, been refused by
+plugin `requires_jen` gating, and sorted wrongly on the About page.
+`jen/version.py` is now the single parser for the grammar `X.Y.Z`,
+`X.Y.Z-beta.N` and `X.Y.Z-rc.N`, ordered the way semver does
+(`5.31.3 < 5.32.0-beta.1 < 5.32.0-rc.1 < 5.32.0`), and it carries the
+channel-aware release picker, which chooses by parsed tag rather than
+by list position — GitHub lists releases by creation, not by version.
+The root updater cannot import the package, so it embeds a
+byte-identical copy of the marked block and a test diffs the two. A
+plugin that requires Jen `5.33.0` loads on `5.33.0-beta.1`: the
+comparison is on the numeric version, because the beta *is* that
+version, early.
+
+**Both discovery paths list releases now.** The Updates page check and
+the root updater used to ask GitHub for `/releases/latest`, which is
+GitHub's own definition of "newest non-prerelease" — correct for
+stable, blind to everything else. Both now fetch the release list and
+filter per channel. The release workflow marks any tag with a
+prerelease suffix as a GitHub pre-release and includes beta headings
+in the generated release notes.
+
+**Why this release is stable, not a beta.** An install older than
+5.32.0 only ever asks for the latest stable release, so a 5.32.0 beta
+would have been invisible to every box that exists. This one ships
+straight to stable to bootstrap the channel; the next release is the
+first to go through it.
+
+The admin guide's "Upgrading Jen" section documents the channels and
+the `[updates]` config section; `plugins/README.md` records the
+`requires_jen` rule; CONTRIBUTING.md and CLAUDE.md carry the
+maintainer's release flow.
+
 ## [5.31.3] - 2026-09-14
 
 ### The MFA challenge page's script didn't run at all

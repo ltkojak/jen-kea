@@ -56,6 +56,12 @@ the bundled copy's, so steps 3 and 4 can't land separately.
 Three hooks exist beyond `register(app)`. Each is optional; a plugin
 that uses one should set `requires_jen` to `5.30.0` or later.
 
+`requires_jen` is compared on the numeric version only (v5.32.0): a Jen
+running a pre-release of a version — `5.33.0-beta.1` — satisfies a plugin
+that requires `5.33.0`, because the beta *is* that version, early. A
+plugin cannot require a beta specifically; `requires_jen` is always a
+plain `X.Y.Z`.
+
 ### OS packages — `"os_packages": ["nmap"]`
 
 Debian/Ubuntu package names whose binary of the same name the plugin

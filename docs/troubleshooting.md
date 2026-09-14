@@ -350,6 +350,12 @@ WebAuthn only runs on a *secure context*: an https page, or `http://localhost`. 
 
 **A user is locked out of passkeys**: failed assertions count toward the same 10-attempt / 15-minute MFA lockout as codes; wait it out, or use a backup code.
 
+## "You are running the latest version" on the beta channel, but a newer stable exists (v5.32.0)
+
+Check the two version numbers. A box on `5.33.0-beta.2` that is told it's current when stable is `5.33.0` is *not* current — but a box on `5.34.0-beta.1` told the same thing while stable is `5.33.0` is: the beta it runs is already newer than any stable release, and switching the channel to stable never downgrades. It will be offered `5.34.0` when that is promoted. If you genuinely want back on a stable build that is older than the beta you're running, that's a manual reinstall of that release's tarball (Upgrading Jen → Rolling back by hand), not something the updater does.
+
+**"No usable release found for the beta channel"** in `journalctl -u jen-update.service` means every release GitHub listed was a draft or had a tag outside Jen's version grammar (`X.Y.Z`, `X.Y.Z-beta.N`, `X.Y.Z-rc.N`). A mistyped tag is ignored on purpose rather than installed.
+
 ## Locked Out (Rate Limiting)
 
 If you've locked yourself out and can't log in:

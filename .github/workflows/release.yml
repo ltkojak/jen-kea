@@ -104,7 +104,7 @@ jobs:
 
           # Find all entries for this major.minor series
           pattern = re.compile(
-              r'(## \[' + re.escape(major) + r'\.' + re.escape(minor) + r'\.\d+\].*?)(?=\n## \[|\Z)',
+              r'(## \[' + re.escape(major) + r'\.' + re.escape(minor) + r'\.\d+(?:-(?:beta|rc)\.\d+)?\].*?)(?=\n## \[|\Z)',
               re.DOTALL
           )
           entries = pattern.findall(content)
@@ -134,4 +134,7 @@ jobs:
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
           draft: false
-          prerelease: false
+          # v5.32.0 (Q38) — a tag with a prerelease suffix (v5.33.0-beta.1,
+          # v5.33.0-rc.1) is published as a GitHub pre-release: boxes on the
+          # beta channel are offered it, boxes on stable never see it.
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}

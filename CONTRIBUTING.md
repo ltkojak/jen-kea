@@ -102,6 +102,14 @@ fail on you:
 - **Don't bump the version.** `JEN_VERSION` and the other version strings
   move together at release time, not per-PR. Leave them alone; the
   maintainer bumps them with the `CHANGELOG.md` entry.
+- **Releases go out beta-first (v5.32.0).** The maintainer tags a feature
+  release as `vX.Y.Z-beta.N` (all version strings carry the suffix; the
+  release workflow publishes it as a GitHub pre-release for the beta
+  channel), then promotes it to `vX.Y.Z` with a version-only commit once
+  it has soaked. The version grammar is `X.Y.Z`, `X.Y.Z-beta.N`,
+  `X.Y.Z-rc.N` — `jen/version.py` is the only parser (the root updater
+  carries a byte-identical copy; a test diffs them). A tag outside that
+  grammar is ignored by every updater rather than installed.
 - **American spelling** in code, comments, log lines, UI text and docs
   (`color`, `behavior`, `initialize`, `utilization`).
 

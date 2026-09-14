@@ -390,6 +390,12 @@ reached the proxy over TLS. Jen itself can then serve plain HTTP on the
 loopback / private network between it and the proxy (no cert needed in
 `[server]`).
 
+### [updates] section (v5.32.0)
+
+| Key | Description | Default |
+|---|---|---|
+| `channel` | Release channel this install follows: `stable` or `beta` — see "Release channels" under Upgrading Jen. Set from Settings → System → Updates; anything else is read as `stable`. | `stable` |
+
 ### [kea_ssh] section
 
 | Key | Description | Example |
@@ -984,6 +990,26 @@ sudo ./install.sh
 Select **Keep existing config** when prompted. The installer builds the new release under `/opt/jen/releases/<X.Y.Z>/`, points `/opt/jen/current` at it with one atomic symlink flip, restarts the service, and flips back to the previous release if it fails to start.
 
 Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`), are never modified during an upgrade. Each release's application tree and its own virtualenv are root-owned and read-only to the service account.
+
+### Release channels (v5.32.0)
+
+Jen publishes two kinds of release. A **stable** release is a plain version (`5.33.0`). A **beta** is the same code published first as a pre-release (`5.33.0-beta.1`, then `-beta.2` if something needed fixing), so it can be run for real before it becomes stable. From 5.32.0 on, every feature release goes out as a beta first; the stable release is the last beta with only the version number changed.
+
+Each install follows one channel, chosen under **Settings → System → Updates** (superadmin, with a password confirmation) and stored as `[updates] channel` in `jen.config`:
+
+| Channel | What "Check for Updates" and the in-app updater offer |
+|---|---|
+| `stable` (default) | The newest stable release. Betas are never offered. |
+| `beta` | The newest release of either kind — a box on `5.33.0-beta.1` is offered `-beta.2`, then `5.33.0` when it's promoted. |
+
+Things to know before choosing beta:
+
+- A beta may carry bugs a stable release never sees. That's what it's for. Report them with the exact version from the About page.
+- It's the same signed tarball, the same checksum and signature verification, the same staged install and automatic rollback. Beta means less soak time, not less safety.
+- **Switching back to stable never downgrades.** The box keeps the beta it's running until the next stable release is newer than it; then it's offered that. Nothing is removed.
+- Every beta has its own changelog entry, and a plugin that requires Jen `5.33.0` loads on `5.33.0-beta.1` — the beta *is* that version, early.
+
+The in-app updater on a box that predates 5.32.0 only ever asks GitHub for the latest stable release, which is why 5.32.0 itself shipped straight to stable.
 
 **v5.27.0 changes how a new plugin install lands.** Installing or reinstalling a plugin from Settings → Plugins no longer writes its files directly — Jen asks a dedicated root-privileged service to fetch, verify, and place them, and the result lands read-only under `/opt/jen/plugins-installed/`, the same way a Jen release itself is root-owned. A plugin installed before v5.27.0 still works from its old, Jen-writable location (`/var/lib/jen/plugins/`); the Plugins page marks it "writable — reinstall to harden" with a one-click Reinstall button that moves it to the new location. Nothing about enabling, disabling, or a plugin's own database tables changes.
 
