@@ -31,4 +31,5 @@ pymysql>=1.2.0
 pyotp>=2.10.0
 qrcode[pil]>=8.2
 requests>=2.34.2
+webauthn>=3.0.0
 werkzeug>=3.1.8

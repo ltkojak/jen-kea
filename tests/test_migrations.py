@@ -402,3 +402,30 @@ class TestForeignKeys:
 
         with jen_db() as db:
             _m023_user_foreign_keys(db)  # must not raise when every FK already exists
+
+
+class TestMigration24WebauthnColumns:
+    """v5.31.0 (Q31) — passkeys as a second factor. The table itself is
+    from the v4.2.0 baseline; migration 24 adds the two optional columns
+    the enrolment flow records. Both must be nullable so the rows that
+    predate them (none in practice — the feature was never live) and a
+    downgrade stay valid."""
+
+    def test_migration_recorded(self):
+        assert 24 in applied_versions()
+
+    def test_columns_present_and_nullable(self):
+        with jen_db() as db, db.cursor() as cur:
+            for col, typ in (("transports", "varchar(100)"), ("aaguid", "varchar(36)")):
+                cur.execute("SHOW COLUMNS FROM webauthn_credentials LIKE %s", (col,))
+                row = cur.fetchone()
+                assert row is not None, f"webauthn_credentials.{col} missing"
+                assert row["Null"] == "YES", col
+                assert str(row["Type"]).lower() == typ, (col, row["Type"])
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m024_webauthn_transports_aaguid
+
+        with jen_db() as db:
+            _m024_webauthn_transports_aaguid(db)  # must not raise when both columns already exist
+            db.commit()

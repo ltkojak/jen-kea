@@ -47,16 +47,26 @@ def user_needs_mfa(user):
     return mode == "required_all"
 
 
-def user_has_mfa(user_id):
+def user_factors(user_id):
+    """v5.31.0 (Q31) — which second factors the user actually has:
+    {"totp": bool, "passkey": bool}. Fails CLOSED (both False) on a DB
+    error — the callers use it to decide what to OFFER, and offering a
+    factor the user doesn't have is the worse mistake."""
     try:
         with __jen_db_ctx() as db, db.cursor() as cur:
             cur.execute("SELECT COUNT(*) as cnt FROM mfa_methods WHERE user_id=%s AND enabled=1", (user_id,))
             totp = cur.fetchone()["cnt"]
             cur.execute("SELECT COUNT(*) as cnt FROM webauthn_credentials WHERE user_id=%s", (user_id,))
             passkeys = cur.fetchone()["cnt"]
-        return (totp + passkeys) > 0
+        return {"totp": totp > 0, "passkey": passkeys > 0}
     except Exception:
-        return False
+        return {"totp": False, "passkey": False}
+
+
+def user_has_mfa(user_id):
+    """Any enrolled second factor at all (TOTP or passkey)."""
+    factors = user_factors(user_id)
+    return factors["totp"] or factors["passkey"]
 
 
 def _canonical_backup_code(code):

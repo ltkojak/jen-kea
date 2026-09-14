@@ -951,6 +951,28 @@ def _m023_user_foreign_keys(db):
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 
+
+def _m024_webauthn_transports_aaguid(db):
+    """
+    v5.31.0 (Q31) — passkeys go live as a second factor. The
+    `webauthn_credentials` table has existed since the v4.2.0 baseline
+    (credential_id, public_key, sign_count, name); two optional columns
+    join it: `transports` (JSON list the browser reported at enrolment —
+    handed back in `allowCredentials` so the browser picks the right
+    authenticator without prompting for every kind) and `aaguid` (the
+    authenticator model id, informational). Both nullable, so every
+    existing row is untouched and the row shape stays valid for a
+    downgrade. Idempotent via SHOW COLUMNS guards.
+    """
+    with db.cursor() as cur:
+        if _column_missing(cur, "webauthn_credentials", "transports"):
+            cur.execute("ALTER TABLE webauthn_credentials ADD COLUMN transports VARCHAR(100) NULL")
+            logger.info("Migration 24: webauthn_credentials.transports column added")
+        if _column_missing(cur, "webauthn_credentials", "aaguid"):
+            cur.execute("ALTER TABLE webauthn_credentials ADD COLUMN aaguid VARCHAR(36) NULL")
+            logger.info("Migration 24: webauthn_credentials.aaguid column added")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -991,6 +1013,7 @@ MIGRATIONS = [
         "Foreign keys from mfa_*/webauthn_credentials/saved_searches/dashboard_prefs/api_keys to users (v5.25.0)",
         _m023_user_foreign_keys,
     ),
+    (24, "webauthn_credentials.transports + aaguid columns for passkeys (v5.31.0)", _m024_webauthn_transports_aaguid),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
