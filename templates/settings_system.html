@@ -16,10 +16,26 @@
 <div class="card" id="sys-updates">
     <div class="card-header">
         <span class="card-title">⬆ Jen Updates</span>
-        <span style="font-size:12px;color:var(--text-muted);">Running v{{ jen_version }}</span>
+        <span style="font-size:12px;color:var(--text-muted);">Running v{{ jen_version }} · {{ update_channel }} channel</span>
     </div>
     <div id="update-status" style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
-        Click "Check for Updates" to see if a newer version is available.
+        Click "Check for Updates" to see if a newer version is available on the {{ update_channel }} channel.
+    </div>
+    <div id="update-channel" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px;">
+        {% if current_user.role == 'superadmin' %}
+        <form method="POST" action="/settings/infrastructure/update-channel" style="display:flex;gap:8px;align-items:center;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label for="update-channel-select" style="margin:0;">Release channel</label>
+            <select name="channel" id="update-channel-select" style="width:auto;">
+                <option value="stable" {% if update_channel == 'stable' %}selected{% endif %}>Stable</option>
+                <option value="beta" {% if update_channel == 'beta' %}selected{% endif %}>Beta</option>
+            </select>
+            <button type="submit" class="btn btn-sm btn-secondary">Save</button>
+        </form>
+        {% else %}
+        <span>Release channel: <strong>{{ update_channel }}</strong></span>
+        {% endif %}
+        <span style="color:var(--text-muted);">Beta offers pre-release builds as they're published — they may carry bugs stable never sees. Same signed tarball, same install and rollback path. Switch back any time; the box keeps what it's running until the next stable release passes it.</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="check-btn">
@@ -211,15 +227,16 @@ function checkForUpdates() {
             btn.disabled = false;
             btn.textContent = '🔍 Check for Updates';
 
+            var channel = d.channel ? ' on the ' + d.channel + ' channel' : '';
             if (d.status === 'up_to_date') {
                 status.style.color = 'var(--success)';
-                status.textContent = '✓ You are running the latest version (v' + d.current + ').';
+                status.textContent = '✓ You are running the latest version' + channel + ' (v' + d.current + ').';
                 document.getElementById('update-form').style.display = 'none';
                 document.getElementById('release-notes-link').style.display = 'none';
 
             } else if (d.status === 'update_available') {
                 status.style.color = 'var(--warning)';
-                status.textContent = '⬆ Jen v' + d.latest + ' is available (published ' + d.published + '). You are running v' + d.current + '.';
+                status.textContent = '⬆ Jen v' + d.latest + (d.prerelease ? ' (pre-release)' : '') + ' is available' + channel + ' (published ' + d.published + '). You are running v' + d.current + '.';
                 var uv = document.getElementById('update-version');
                 if (uv) uv.value = d.latest;
                 document.getElementById('update-form').style.display = '';
@@ -229,7 +246,7 @@ function checkForUpdates() {
 
             } else if (d.status === 'no_releases') {
                 status.style.color = 'var(--text-muted)';
-                status.textContent = 'No releases published yet on GitHub.';
+                status.textContent = 'No releases published yet on GitHub' + channel + '.';
 
             } else {
                 status.style.color = 'var(--danger)';

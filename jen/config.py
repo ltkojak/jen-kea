@@ -37,6 +37,19 @@ from jen import extensions
 logger = logging.getLogger(__name__)
 
 
+def _parse_update_channel(raw: str) -> str:
+    """`[updates] channel` → "stable" | "beta". Unknown → "stable" with a
+    warning (v5.32.0, Q38)."""
+    from jen.version import CHANNELS
+
+    value = (raw or "").strip().lower()
+    if value in CHANNELS:
+        return value
+    if value:
+        logger.warning(f"[updates] channel: unknown value {raw!r} — using stable")
+    return "stable"
+
+
 def _parse_trusted_proxies(raw: str) -> list:
     """Parse `[server] trusted_proxies` (comma list of IPs / CIDRs) into a
     list of ip_network objects. A single host is accepted bare (`10.0.0.1`
@@ -147,6 +160,11 @@ class AppConfig:
         # X-Forwarded-Proto. A malformed entry is logged and skipped, not
         # fatal — a broken proxy line must not stop the app booting.
         extensions.TRUSTED_PROXIES = _parse_trusted_proxies(cfg.get("server", "trusted_proxies", fallback=""))
+
+        # v5.32.0 (Q38) — release channel. Optional; anything but the two
+        # known names is logged and treated as stable, never as beta — the
+        # conservative reading of a typo.
+        extensions.UPDATE_CHANNEL = _parse_update_channel(cfg.get("updates", "channel", fallback="stable"))
 
         extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host", fallback="")
         extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user", fallback="")

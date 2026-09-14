@@ -157,7 +157,9 @@ import urllib.request
 import zipfile
 
 GITHUB_REPO = "ltkojak/jen-kea"
-GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+# v5.32.0 (Q38) — the release LIST; pick_release() (below, shared with
+# jen/version.py) filters it per the channel in [updates] channel.
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=30"
 GITHUB_ASSET_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
 
 # v5.26.0 — the permanent trust root for signed releases (Q22). release.yml
@@ -719,6 +721,19 @@ def _server_cfg(key, fallback):
         return cfg.getint("server", key, fallback=fallback)
     except Exception:
         return fallback
+
+
+def _update_channel(config_file=None):
+    """`[updates] channel` from jen.config — "stable" (default) or "beta".
+    Same rule as jen/config.py::_parse_update_channel: anything else is
+    stable, never beta (v5.32.0, Q38)."""
+    try:
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(config_file or CONFIG_FILE)
+        value = cfg.get("updates", "channel", fallback="stable").strip().lower()
+    except Exception:
+        return "stable"
+    return value if value in CHANNELS else "stable"
 
 
 def _installed_version():
@@ -1596,8 +1611,12 @@ def main():
         return 2
 
     _prune_old_releases()
-    log("Checking GitHub for the latest release…")
-    data = fetch_json(GITHUB_RELEASES_API)
+    channel = _update_channel()
+    log(f"Checking GitHub for the latest release on the {channel} channel…")
+    data = pick_release(fetch_json(GITHUB_RELEASES_API), channel)
+    if data is None:
+        log(f"ERROR: no usable release found for the {channel} channel.")
+        return 1
     version = data.get("tag_name", "").lstrip("v")
     if not version:
         log("ERROR: could not determine latest version from GitHub API response.")

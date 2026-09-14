@@ -100,6 +100,12 @@ WORKER_THREADS: int = 8
 # XFF/XFP headers are ignored and TrustedProxyMiddleware isn't installed.
 TRUSTED_PROXIES: list = []
 
+# v5.32.0 (Q38) — release channel this install follows: "stable" (the
+# newest non-prerelease on GitHub, the default) or "beta" (prereleases
+# too). From [updates] channel in jen.config; the root updater reads the
+# same key from the same file, so both sides always agree.
+UPDATE_CHANNEL: str = "stable"
+
 KEA_SSH_HOST: str = ""
 KEA_SSH_USER: str = ""
 KEA_CONF: str = "/etc/kea/kea-dhcp4.conf"

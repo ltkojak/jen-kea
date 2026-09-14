@@ -14,12 +14,15 @@ from flask_login import login_required
 import jen.models.user as __user
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "ltkojak/jen-kea"
-GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+# v5.32.0 (Q38) — the release LIST, filtered per channel by jen.version.pick_release
+# (`/releases/latest` is GitHub's own "newest non-prerelease", i.e. stable only).
+GITHUB_RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=30"
 
 
 @bp.route("/settings/infrastructure/check-update")
@@ -29,17 +32,22 @@ def check_update():
     """Check GitHub releases API for a newer version of Jen."""
     import requests as _req
 
-    from jen import JEN_VERSION
-    from jen.version import parse_version
+    from jen import JEN_VERSION, extensions
+    from jen.version import parse_version, pick_release
 
+    channel = extensions.UPDATE_CHANNEL
     try:
         resp = _req.get(GITHUB_RELEASES_API, headers={"Accept": "application/vnd.github+json"}, timeout=8)
         if resp.status_code == 404:
-            return jsonify({"status": "no_releases", "current": JEN_VERSION})
+            return jsonify({"status": "no_releases", "current": JEN_VERSION, "channel": channel})
         if resp.status_code != 200:
-            return jsonify({"status": "error", "message": f"GitHub API returned {resp.status_code}"})
+            return jsonify(
+                {"status": "error", "message": f"GitHub API returned {resp.status_code}", "channel": channel}
+            )
 
-        data = resp.json()
+        data = pick_release(resp.json(), channel)
+        if data is None:
+            return jsonify({"status": "no_releases", "current": JEN_VERSION, "channel": channel})
         latest_tag = data.get("tag_name", "").lstrip("v")
         release_url = data.get("html_url", "")
         published = data.get("published_at", "")[:10]
@@ -59,6 +67,8 @@ def check_update():
                     "release_url": release_url,
                     "asset_url": asset_url,
                     "published": published,
+                    "channel": channel,
+                    "prerelease": bool(data.get("prerelease")),
                 }
             )
         return jsonify(
@@ -66,11 +76,48 @@ def check_update():
                 "status": "up_to_date",
                 "current": JEN_VERSION,
                 "latest": latest_tag,
+                "channel": channel,
             }
         )
     except Exception as e:
         logger.error(f"Error checking for updates: {e}")
         return jsonify({"status": "error", "message": "Could not check for updates. Check server logs for details."})
+
+
+@bp.route("/settings/infrastructure/update-channel", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required()
+def save_update_channel():
+    """v5.32.0 (Q38) — which release channel this install follows. Written
+    to jen.config ([updates] channel) because the root-privileged updater
+    reads the INI, never the database; both sides then agree. Superadmin
+    + step-up: it changes what root will install next."""
+    from jen import extensions
+    from jen.config import app_config
+    from jen.version import CHANNELS
+
+    channel = request.form.get("channel", "").strip().lower()
+    if channel not in CHANNELS:
+        flash("Pick stable or beta.", "error")
+        return redirect(url_for("settings.settings_system"))
+    previous = extensions.UPDATE_CHANNEL
+    try:
+        app_config.write_value("updates", "channel", channel)
+    except Exception as e:
+        logger.error(f"could not write [updates] channel: {e}")
+        flash("Could not save the channel — is /etc/jen/jen.config writable by Jen?", "error")
+        return redirect(url_for("settings.settings_system"))
+    __user.audit("UPDATE_CHANNEL", "settings", f"{previous} -> {channel}")
+    if channel == "beta":
+        flash(
+            "This install now follows the beta channel: pre-release builds are offered here as they're published. "
+            "Switching back never downgrades — the box keeps what it's running until the next stable release passes it.",
+            "success",
+        )
+    else:
+        flash("This install now follows the stable channel.", "success")
+    return redirect(url_for("settings.settings_system"))
 
 
 def _parse_systemctl_show(text: str) -> dict:

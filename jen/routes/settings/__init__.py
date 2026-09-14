@@ -179,6 +179,7 @@ def settings_system():
         https_port=extensions.HTTPS_PORT,
         worker_threads=extensions.WORKER_THREADS,
         restart_pending=__user.get_global_setting("restart_pending", "false") == "true",
+        update_channel=extensions.UPDATE_CHANNEL,
         audit_retention_days=audit_retention_days,
         audit_log_count=audit_log_count if audit_log_count is not None else "?",
         config_revision_keep=__user.get_global_setting("config_revision_keep", "50"),
