@@ -564,6 +564,45 @@ class TestProbeWordingPointsAtTheButton:
         assert "Set up direct socket" in text
         assert "Author a starting" not in text
 
+    def test_probe_reports_whether_the_jen_issued_https_socket_answers(
+        self, logged_in_client, db, isolated_config, fake, httpv, tls_env, monkeypatch
+    ):
+        """v5.29.3 — the maintainer's state after a setup that stopped at
+        the probe: Jen still points at the Control Agent, a certificate
+        has been issued for kea-dhcp4 on 10.0.0.5. Probe must say whether
+        https://10.0.0.5:8004 (from the cert's SAN) answers with Jen's
+        material — the one thing to know at that moment."""
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        tls_env.ensure_ca()
+        tls_env.issue_client_cert()
+        tls_env.issue_server_cert(extensions.KEA_SERVERS[0], "dhcp4", "10.0.0.5")
+        # listening: :8000 answers as the Control Agent, :8004 answers as Dhcp4
+        fk = httpv(
+            {"1.2.3.4:8000": _ok("3.0.4"), "10.0.0.5:8004": _ok("3.0.4")},
+            config_replies={"1.2.3.4:8000": AS_CA, "10.0.0.5:8004": DHCP4_OK},
+        )
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        assert data["jen_socket"] == {"url": "https://10.0.0.5:8004", "ok": True, "error": ""}
+        assert "answers as kea-dhcp4" in data["recommendation"]["text"]
+        jen_calls = [c for c in fk.calls if "10.0.0.5:8004" in c["url"]]
+        assert jen_calls[0]["verify"] == tls_env.ca_paths()[0] and jen_calls[0]["cert"] == tls_env.client_paths()
+        # not listening
+        httpv({"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": AS_CA})
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        assert data["jen_socket"]["ok"] is False and data["jen_socket"]["url"] == "https://10.0.0.5:8004"
+        assert "does not answer" in data["recommendation"]["text"]
+        assert "journalctl -u kea-dhcp4-server" in data["recommendation"]["text"]
+        assert any(a["mode"] == "direct (Jen's CA)" for a in data["attempts"])
+
+    def test_probe_without_a_jen_issued_cert_is_unchanged(
+        self, logged_in_client, db, isolated_config, httpv, tls_env, monkeypatch
+    ):
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        httpv({"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": AS_CA})
+        data = logged_in_client.post("/settings/infrastructure/probe-kea").get_json()
+        assert data["jen_socket"] is None
+        assert "The https socket Jen set up" not in data["recommendation"]["text"]
+
     def test_config_get_wrong_daemon_error_points_at_the_button(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
         fk = _FakeHTTP({}, {"localhost:18000": AS_CA})

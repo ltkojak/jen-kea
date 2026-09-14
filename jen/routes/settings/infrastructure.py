@@ -817,6 +817,29 @@ def probe_kea():
             "bad",
         )
 
+    # v5.29.3 — the Control Agent answered where a daemon socket should
+    # be, and Jen has issued an https certificate for this daemon on this
+    # server: say whether THAT socket is listening. This is exactly the
+    # state a "Set up direct socket" run that stopped at the probe leaves
+    # behind, and the one question the operator has at that moment.
+    jen_socket = None
+    if identified_key == "Control-agent" and server is not None:
+        jen_socket = _probe_jen_socket(server, service, user, pwd, urlparse(answered_url).hostname or "")
+        if jen_socket is not None:
+            attempts.append({"url": jen_socket["url"], "mode": "direct (Jen's CA)", "error": jen_socket["error"]})
+            if jen_socket["ok"]:
+                extra = (
+                    f' The https socket Jen set up on {jen_socket["url"]} answers as kea-{service} — run "Set up '
+                    'direct socket" again and Jen switches over.'
+                )
+            else:
+                extra = (
+                    f" The https socket Jen set up on {jen_socket['url']} does not answer ({jen_socket['error']}) — "
+                    f"kea-{service} isn't listening on it: check `journalctl -u kea-{_CONF_STEM[service]}-server -n 30` "
+                    f"on the host (TLS files under /etc/kea/tls/{service}/ the daemon's user can't read are the usual cause)."
+                )
+            rec = (rec[0] + extra, rec[1])
+
     __user.audit(
         "PROBE_KEA",
         "kea_api",
@@ -836,8 +859,48 @@ def probe_kea():
             "answered_url": answered_url,
             "attempts": attempts,
             "recommendation": {"text": rec[0], "level": rec[1]},
+            "jen_socket": jen_socket,
         }
     )
+
+
+def _probe_jen_socket(server: dict, service: str, user: str, pwd: str, fallback_host: str):
+    """v5.29.3 — if Jen has issued an https certificate for `service` on
+    `server` (a kea-servers/ copy exists), probe the socket it was issued
+    for — bind address from the certificate's SAN (else the URL's host),
+    the conventional port — with Jen's CA and client certificate, and
+    check it identifies as the daemon. Returns None when Jen never issued
+    one, else {"url", "ok", "error"}. Never raises."""
+    import os
+
+    from jen.services import kea_tls
+    from jen.services.kea_authoring import DIRECT_SOCKET_DEFAULT_PORTS
+
+    copy = kea_tls.server_copy_path(server.get("id"), service)
+    if not os.path.isfile(copy):
+        return None
+    host = fallback_host
+    try:
+        from cryptography import x509
+
+        san = kea_tls.load_cert(copy).extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        ips = san.get_values_for_type(x509.IPAddress)
+        if ips:
+            host = str(ips[0])
+    except Exception:
+        pass
+    if not host:
+        return None
+    url = _socket_url("https", host, DIRECT_SOCKET_DEFAULT_PORTS[service])
+    ca = kea_tls.ca_paths()[0]
+    cert = kea_tls.client_paths()
+    version_text, err = _probe_once(url, user, pwd, omit_service=True, service=service, verify=ca, cert=cert)
+    if not version_text:
+        return {"url": url, "ok": False, "error": err}
+    who = _identify_daemon(url, user, pwd, service, verify=ca, cert=cert)
+    if who != _DAEMON_KEY[service]:
+        return {"url": url, "ok": False, "error": f"answered as {who or 'an unknown daemon'}, not kea-{service}"}
+    return {"url": url, "ok": True, "error": ""}
 
 
 # ── Direct control sockets, set up by Jen (v5.29.0, Q29) ────────────────────

@@ -19,6 +19,15 @@ setup flow and in Rotate Kea CA alike; a socket that genuinely never
 answers says so with the attempt count. As before, a failed probe
 changes nothing in Jen and re-running the form only re-probes.
 
+And for the state that leaves behind — Jen still pointed at the
+Control Agent, a certificate already issued for the daemon — the
+**Probe** button now also tries the https socket Jen set up (the bind
+address from the certificate it issued, the conventional port, Jen's
+CA and client certificate) and says either that it answers as the
+daemon, so re-running the form will switch Jen over, or that it
+doesn't, with the reason and the `journalctl` command to look at on
+the host.
+
 ## [5.29.2] - 2026-09-13
 
 ### Fix: "Update helper" answered "v3 is already installed"
