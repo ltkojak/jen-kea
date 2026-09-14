@@ -974,14 +974,61 @@ class TestMainSourceShape:
         assert "KEEP_MARKER" in src[i - 800 : i]
 
     def test_exits_zero_without_downloading_when_already_current(self, jen_update_root):
+        # v5.32.0 (Q38): fetch_json now returns the release LIST and main()
+        # picks per channel — a stable box ignores the newer beta here.
+        listing = [
+            {"tag_name": "v9.9.10-beta.1", "prerelease": True, "draft": False, "assets": []},
+            {"tag_name": "v9.9.9", "prerelease": False, "draft": False, "assets": []},
+        ]
         with (
-            patch.object(jen_update_root, "fetch_json", return_value={"tag_name": "v9.9.9", "assets": []}),
+            patch.object(jen_update_root, "fetch_json", return_value=listing),
+            patch.object(jen_update_root, "_update_channel", return_value="stable"),
             patch.object(jen_update_root, "_installed_version", return_value="9.9.9"),
             patch.object(jen_update_root, "_prune_old_releases"),
             patch.object(jen_update_root, "fetch_bytes_with_sha256") as download,
             patch.object(jen_update_root.sys, "argv", ["jen-update-root.py"]),
         ):
             assert jen_update_root.main() == 0
+        download.assert_not_called()
+
+    def test_beta_channel_picks_the_prerelease_and_stable_channel_does_not(self, jen_update_root):
+        """The root side's own channel decision — the web page only
+        suggests; this unit re-derives "latest" and must agree. The beta
+        release carries no assets on purpose: reaching "no valid release
+        asset" proves main() picked it (and got past "already running"),
+        without needing the whole download/verify chain stubbed."""
+        listing = [
+            {"tag_name": "v9.9.10-beta.1", "prerelease": True, "draft": False, "assets": []},
+            {"tag_name": "v9.9.9", "prerelease": False, "draft": False, "assets": []},
+        ]
+        for channel, expect_rc, expect_log in (
+            ("beta", 1, "no valid release asset"),
+            ("stable", 0, "Already running v9.9.9"),
+        ):
+            logs = []
+            with (
+                patch.object(jen_update_root, "fetch_json", return_value=listing),
+                patch.object(jen_update_root, "_update_channel", return_value=channel),
+                patch.object(jen_update_root, "_installed_version", return_value="9.9.9"),
+                patch.object(jen_update_root, "_prune_old_releases"),
+                patch.object(jen_update_root, "log", side_effect=logs.append),
+                patch.object(jen_update_root, "fetch_bytes_with_sha256") as download,
+                patch.object(jen_update_root.sys, "argv", ["jen-update-root.py"]),
+            ):
+                assert jen_update_root.main() == expect_rc, (channel, logs)
+            assert any(expect_log in m for m in logs), (channel, logs)
+            download.assert_not_called()
+
+    def test_no_usable_release_for_channel_is_an_error_not_an_install(self, jen_update_root):
+        with (
+            patch.object(jen_update_root, "fetch_json", return_value=[{"tag_name": "v9.9.9", "draft": True}]),
+            patch.object(jen_update_root, "_update_channel", return_value="stable"),
+            patch.object(jen_update_root, "_installed_version", return_value="1.0.0"),
+            patch.object(jen_update_root, "_prune_old_releases"),
+            patch.object(jen_update_root, "fetch_bytes_with_sha256") as download,
+            patch.object(jen_update_root.sys, "argv", ["jen-update-root.py"]),
+        ):
+            assert jen_update_root.main() == 1
         download.assert_not_called()
 
 
