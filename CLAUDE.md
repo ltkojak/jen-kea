@@ -76,10 +76,26 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
 - A standalone harness that `importlib`-loads `jen-update-root.py` (pure stdlib) and
   exercises the function under test against real temp dirs, real venvs, real local
   servers — this is how the updater work has been verified before each push.
-- Tests that need no DB can be listed and reasoned about, but still won't *run* here:
-  test_dependency_consistency, test_docker_config, test_small_hardening_fixes,
-  test_htmx_vendoring, test_pwa_manifest, test_device_identity, test_sudoers_command_matching,
-  test_jen_update_root, test_changelog. CI is the arbiter; expect one push per round.
+- Tests that need no DB *do* run here, straight up: `py -m pytest --noconftest
+  tests/test_config_doctor.py` (Q41 — `jen/services/config_doctor.py` is pure, no
+  DB/Kea/Flask). Others can be listed and reasoned about but still won't *run* without
+  `--noconftest` skipping the autouse DB fixture, or will themselves error even with it
+  (a DB-backed test class mixed into an otherwise-pure file): test_dependency_consistency,
+  test_docker_config, test_small_hardening_fixes, test_htmx_vendoring, test_pwa_manifest,
+  test_device_identity, test_sudoers_command_matching, test_jen_update_root,
+  test_changelog. CI is the arbiter; expect one push per round.
+- `tests/e2e/` (Q40 — Playwright, `pytest.mark.e2e`) needs both a MariaDB **and**
+  `playwright install chromium`, so it doesn't run here either — but its collection
+  *safety* does: `py -m pytest --collect-only -q` must still exit 0 and collect every
+  other test unchanged, because `tests/e2e/conftest.py` opens with
+  `pytest.importorskip("playwright")` precisely so the default `pytest`/`pytest tests/`
+  run never notices playwright is absent. Verify that property after touching anything
+  under `tests/e2e/`. Template changes for the suite's journeys can still be checked the
+  usual way: `py -m ruff check`/`format --check`, and a plain Jinja `Environment` with
+  `StrictUndefined` rendering the template against a fabricated context catches undefined
+  variables without a server. Run it for real with `JEN_DB_HOST=... python -m pytest
+  tests/e2e -m e2e -v` once `playwright install chromium` has run — CI's `e2e` job
+  (`.github/workflows/tests.yml`) is what actually gates every push and release.
 
 Gotchas learned the hard way:
 

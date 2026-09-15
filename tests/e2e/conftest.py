@@ -172,11 +172,15 @@ def live_server(fake_kea):
 
     from werkzeug.serving import make_server
 
-    httpd = make_server("127.0.0.1", 0, app)
+    # "localhost", not the raw 127.0.0.1 it resolves to: the passkey
+    # journeys need a real hostname for WebAuthn's RP ID (RP id = request
+    # host minus port, jen/services/passkeys.py) — an IP address there is
+    # the kind of thing some WebAuthn implementations refuse outright.
+    httpd = make_server("localhost", 0, app)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
 
-    base_url = f"http://127.0.0.1:{httpd.server_port}"
+    base_url = f"http://localhost:{httpd.server_port}"
     _wait_until_up(base_url)
 
     yield base_url
