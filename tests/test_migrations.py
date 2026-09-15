@@ -465,7 +465,10 @@ class TestMigration26ServerStats:
             cur.execute("SHOW COLUMNS FROM server_stats")
             cols = {c["Field"]: c for c in cur.fetchall()}
         assert set(cols) == {"id", "server_id", "snapshot_time", "stats"}
-        assert cols["stats"]["Type"].lower() == "json"
+        # MySQL 8 reports a real "json" type; MariaDB implements JSON as
+        # LONGTEXT + an implicit json_valid() CHECK (see CLAUDE.md's
+        # MariaDB JSON gotcha) and SHOW COLUMNS reports it as "longtext".
+        assert cols["stats"]["Type"].lower() in ("json", "longtext")
         assert cols["server_id"]["Null"] == "NO"
 
     def test_rerun_is_idempotent(self):
