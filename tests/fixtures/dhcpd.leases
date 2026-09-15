@@ -1,0 +1,49 @@
+# The format of this file is documented in the dhcpd.leases(5) manual page.
+# This lease file was written by isc-dhcp-4.4.1
+
+authoring-byte-order little-endian;
+
+lease 10.0.1.101 {
+  starts 1 2026/09/14 10:00:00;
+  ends 1 2026/09/14 11:00:00;
+  cltt 1 2026/09/14 10:00:00;
+  binding state active;
+  next binding state free;
+  rewind binding state free;
+  hardware ethernet 00:11:22:33:44:01;
+  uid "\001\000\021\"3D\001";
+  client-hostname "laptop-1";
+}
+lease 10.0.1.102 {
+  starts 1 2026/09/14 10:00:00;
+  ends 1 2026/09/14 11:00:00;
+  binding state active;
+  hardware ethernet 00:11:22:33:44:02;
+}
+lease 10.0.1.102 {
+  starts 1 2026/09/14 10:00:00;
+  ends 1 2026/09/14 10:30:00;
+  binding state free;
+  hardware ethernet 00:11:22:33:44:02;
+}
+lease 10.0.1.50 {
+  starts 1 2026/09/14 10:00:00;
+  ends 1 2026/09/14 11:00:00;
+  binding state active;
+  hardware ethernet 0:80:77:1:2:3;
+}
+lease 10.0.2.44 {
+  starts 1 2026/09/14 10:00:00;
+  ends 1 2026/09/14 11:00:00;
+  binding state active;
+  hardware ethernet 00:11:22:33:44:03;
+}
+lease 172.16.0.77 {
+  binding state active;
+  hardware ethernet 00:11:22:33:44:04;
+}
+lease 10.0.1.103 {
+  binding state expired;
+  hardware ethernet 00:11:22:33:44:05;
+}
+server-duid "\000\001\000\001";

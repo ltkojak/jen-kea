@@ -63,6 +63,11 @@ class Policy:
     conditions: list[dict] = field(default_factory=list)  # [{"type","operator","value"}]
     ip_ranges: list[tuple[str, str]] = field(default_factory=list)  # [(start, end)]
     options: dict[int, str] = field(default_factory=dict)  # code -> raw joined Value text
+    # v5.37.0 (Q36) — the ISC importer hands over rule rows already in
+    # kea_classes' model ({"field","op","value"}, ops beyond "equals"),
+    # bypassing the Windows condition mapping. Empty for Windows policies.
+    rules: list[dict] = field(default_factory=list)
+    negate: bool = False
 
 
 @dataclass
@@ -79,6 +84,8 @@ class Scope:
     reservations: list[Reservation] = field(default_factory=list)
     policies: list[Policy] = field(default_factory=list)
     superscope_name: str | None = None
+    next_server: str = ""  # v5.37.0 (Q36) — dhcpd `next-server`; Windows has no equivalent
+    boot_file: str = ""  # v5.37.0 (Q36) — dhcpd `filename`
 
 
 @dataclass
@@ -93,6 +100,13 @@ class Plan:
     # instead) — nothing in the pinned spec maps them further, so they're
     # surfaced to the review page as a count + names, not applied.
     warnings: list[str] = field(default_factory=list)
+    # v5.37.0 (Q36) — which importer produced this plan ("windows" | "isc");
+    # the shared review/preview/apply templates word themselves by it.
+    source: str = "windows"
+    # v5.37.0 (Q36) — classes declared globally in dhcpd.conf that no
+    # pool references (PXE classes carrying their own options, say):
+    # upserted by to_kea() when selections["classes"] is not False.
+    global_classes: list[Policy] = field(default_factory=list)
 
 
 # ── XML helpers (namespace-agnostic, attribute-name tolerant) ───────────────
@@ -666,28 +680,33 @@ def policy_to_class(policy: Policy, context: str) -> tuple[dict | None, list[str
     if not policy.enabled:
         warnings.append(f"{label}: disabled in Windows — not imported")
         return None, warnings
-    if not policy.conditions:
-        warnings.append(f"{label}: has no conditions — not imported")
-        return None, warnings
-
-    operators = {(c.get("operator") or "Equals").strip().lower() for c in policy.conditions}
-    negate = False
-    if operators == {"notequals"}:
-        if len(policy.conditions) > 1:
-            warnings.append(f"{label}: NotEquals is only supported on a single-condition policy — not imported")
+    if policy.rules:
+        # v5.37.0 (Q36) — rule rows already in kea_classes' model.
+        rules = list(policy.rules)
+        negate = policy.negate
+    else:
+        if not policy.conditions:
+            warnings.append(f"{label}: has no conditions — not imported")
             return None, warnings
-        negate = True
-    elif "notequals" in operators:
-        warnings.append(f"{label}: mixes Equals and NotEquals conditions — not imported")
-        return None, warnings
 
-    rules = []
-    for cond in policy.conditions:
-        rule, warning = _condition_to_rule(cond, label)
-        if warning:
-            warnings.append(f"{warning} — policy not imported")
+        operators = {(c.get("operator") or "Equals").strip().lower() for c in policy.conditions}
+        negate = False
+        if operators == {"notequals"}:
+            if len(policy.conditions) > 1:
+                warnings.append(f"{label}: NotEquals is only supported on a single-condition policy — not imported")
+                return None, warnings
+            negate = True
+        elif "notequals" in operators:
+            warnings.append(f"{label}: mixes Equals and NotEquals conditions — not imported")
             return None, warnings
-        rules.append(rule)
+
+        rules = []
+        for cond in policy.conditions:
+            rule, warning = _condition_to_rule(cond, label)
+            if warning:
+                warnings.append(f"{warning} — policy not imported")
+                return None, warnings
+            rules.append(rule)
 
     combinator = "any" if policy.condition == "OR" else "all"
     try:
@@ -824,6 +843,12 @@ def scope_to_subnet(scope: Scope, jen_id: int) -> MappedScope:
                 warnings.append(
                     f"{context}: option {58 if timer_key == 'renew-timer' else 59} value isn't a number — skipped"
                 )
+    # v5.37.0 (Q36) — dhcpd `next-server` / `filename` are Kea's own
+    # subnet fields, not option-data.
+    if scope.next_server:
+        subnet["next-server"] = scope.next_server
+    if scope.boot_file:
+        subnet["boot-file-name"] = scope.boot_file
     return MappedScope(
         subnet=subnet, classes=classes, pool_guards=pool_guards, subnet_guards=subnet_guards, warnings=warnings
     )
@@ -874,6 +899,15 @@ def to_kea(plan: Plan, existing_dhcp4_cfg: dict | None, subnet_names: dict, sele
                 report.append(f"server option {e['code']} already present at global level — kept as-is")
                 continue
             existing.append(e)
+
+    # v5.37.0 (Q36) — classes declared globally in dhcpd.conf (the pool
+    # guards below may reference them via member('…'), so they go first).
+    if selections.get("classes", True):
+        for policy in plan.global_classes:
+            class_dict, class_warnings = policy_to_class(policy, "global")
+            report.extend(class_warnings)
+            if class_dict is not None:
+                cfg, _code = _edit.upsert_class4(cfg, class_dict)
 
     # Which scope_ids share a superscope with at least one OTHER included
     # scope — a superscope containing only one included member isn't
