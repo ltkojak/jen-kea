@@ -193,15 +193,17 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-secondary">▶️ Continue</button>
             </form>
+            {# v5.32.1 — Kea's ha-maintenance-start is sent to the server that KEEPS serving; the PARTNER goes into maintenance. #}
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-start') }}"
-                  data-confirm="{{ ha_actions['maintenance-start'].confirm }}" title="{{ ha_actions['maintenance-start'].help }}">
+                  data-confirm="Put {{ s.ha_partner or 'the partner' }} into maintenance? {{ s.server.name }} will answer all DHCP traffic while {{ s.ha_partner or 'the partner' }} is taken down — shut it down only once its state shows in-maintenance."
+                  title="{{ ha_actions['maintenance-start'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">🛠️ Start Maintenance</button>
+                <button type="submit" class="btn btn-sm btn-secondary">🛠️ Take over for {{ s.ha_partner or 'partner' }}</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-cancel') }}"
                   data-confirm="{{ ha_actions['maintenance-cancel'].confirm }}" title="{{ ha_actions['maintenance-cancel'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">✖️ Cancel Maintenance</button>
+                <button type="submit" class="btn btn-sm btn-secondary">✖️ Cancel Handover</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='reset') }}"
                   data-confirm="{{ ha_actions['reset'].confirm }}" title="{{ ha_actions['reset'].help }}">

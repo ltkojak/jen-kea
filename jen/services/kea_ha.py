@@ -39,17 +39,32 @@ HA_ACTIONS = {
         "help": "Leave a waiting/terminated state and resume normal HA operation.",
         "confirm": "Tell this server to leave its current waiting/terminated state and continue?",
     },
+    # v5.32.1 — direction fixed. Kea's ha-maintenance-start goes to the
+    # server that KEEPS serving: it tells its partner to enter
+    # in-maintenance and takes over every scope itself (partner-in-
+    # maintenance). The 5.21.0 wording promised the opposite — that the
+    # clicked server was the one being taken down — so an operator would
+    # click the node they meant to patch and leave it serving all traffic.
     "maintenance-start": {
         "command": "ha-maintenance-start",
         "role": "superadmin",
-        "help": "Tell the partner to take over from this server for planned maintenance.",
-        "confirm": "Start maintenance on this server? The partner will be told to take over.",
+        "help": (
+            "Put this server's PARTNER into maintenance: this server takes over all DHCP traffic "
+            "so the partner can be shut down for planned work."
+        ),
+        "confirm": (
+            "Put this server's partner into maintenance? THIS server will answer all DHCP traffic "
+            "while the partner is taken down; shut the partner down only after its state shows in-maintenance."
+        ),
     },
     "maintenance-cancel": {
         "command": "ha-maintenance-cancel",
         "role": "superadmin",
-        "help": "Cancel a pending or active maintenance handover.",
-        "confirm": "Cancel maintenance mode on this server?",
+        "help": (
+            "Return this server and its partner to their previous states — only while this server "
+            "is still partner-in-maintenance (once the partner is actually down, it recovers on its own when it returns)."
+        ),
+        "confirm": "Cancel the maintenance handover and return both servers to their previous states?",
     },
     "reset": {
         "command": "ha-reset",

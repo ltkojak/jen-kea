@@ -407,3 +407,29 @@ class TestServersPageHaPanel:
         self._wire_page(monkeypatch, {"Primary": _status_get_response(unacked_left=5), "Standby": None})
         r = logged_in_client.get("/servers")
         assert b"partner-down imminent" not in r.data
+
+
+class TestMaintenanceDirectionWording:
+    """v5.32.1 — Kea's ha-maintenance-start goes to the server that KEEPS
+    serving; its PARTNER enters in-maintenance. From v5.21.0 the button,
+    confirm and admin guide said the opposite. The command routing was
+    always right (sent to the clicked server), so this pins the words."""
+
+    def test_action_table_says_the_partner_goes_quiet(self):
+        start = kea_ha.HA_ACTIONS["maintenance-start"]
+        assert "PARTNER" in start["help"] and "takes over" in start["help"]
+        assert "partner into maintenance" in start["confirm"]
+        assert "take over from this server" not in (start["help"] + start["confirm"])
+        cancel = kea_ha.HA_ACTIONS["maintenance-cancel"]
+        assert "partner-in-maintenance" in cancel["help"]
+
+    def test_template_and_guide_no_longer_promise_the_old_direction(self):
+        import pathlib
+
+        for path in ("templates/servers.html", "docs/admin-guide.md", "jen/services/kea_ha.py"):
+            text = pathlib.Path(path).read_text(encoding="utf-8")
+            assert "take over from this server" not in text, path
+        page = pathlib.Path("templates/servers.html").read_text(encoding="utf-8")
+        assert "Take over for" in page and "Cancel Handover" in page
+        guide = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        assert "click **Take over for B** on node **A**" in guide

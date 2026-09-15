@@ -2,6 +2,35 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.32.1-beta.1] - 2026-09-14
+
+*The first release through the beta channel. Set Settings → System →
+Updates to Beta to be offered it; stable boxes see nothing until it is
+promoted.*
+
+### The HA "Start Maintenance" button pointed the wrong way
+
+Found while writing up the planned HA maintenance flow (Q37), and
+confirmed against ISC's own HA hook documentation: Kea's
+`ha-maintenance-start` command is sent to the server that will **keep
+serving**. That server tells its partner to enter `in-maintenance` and
+takes over every scope itself. Jen's button, its confirmation text and
+the admin guide have said the opposite since v5.21.0 — that clicking
+on a server took *that* server down. An operator following the words
+would click the node they meant to patch and leave it answering all
+DHCP traffic while the healthy node went quiet.
+
+The command was always sent to the clicked server, which is the
+correct Kea semantics; only the words were wrong, so this is a wording
+fix with no change to what the route does. The button now reads **Take
+over for &lt;partner&gt;**, the confirmation names both servers and
+says which one goes quiet, the cancel button is **Cancel Handover**
+with help that says it only applies while the clicked server is still
+`partner-in-maintenance`, and the admin guide's HA section spells out
+the sequence: click on the node that stays, wait for the partner to
+show `in-maintenance`, shut the partner down, and let Kea
+re-synchronise on its own when it returns.
+
 ## [5.32.0] - 2026-09-14
 
 ### Release channels: beta first, stable on promotion

@@ -37,11 +37,13 @@ class TestComposeFilesUseEnvFile:
             )
 
     def test_image_tag_matches_jen_version(self):
+        # v5.32.0 (Q38): a prerelease carries its suffix in every version spot.
         ver = re.search(
-            r'JEN_VERSION\s*=\s*"([0-9.]+)"', (REPO / "jen" / "__init__.py").read_text(encoding="utf-8")
+            r'JEN_VERSION\s*=\s*"([0-9.]+(?:-(?:beta|rc)\.[0-9]+)?)"',
+            (REPO / "jen" / "__init__.py").read_text(encoding="utf-8"),
         ).group(1)
         for name in COMPOSE:
-            m = re.search(r"image:\s*jen-dhcp:([0-9.]+)", _text(name))
+            m = re.search(r"image:\s*jen-dhcp:([0-9.]+(?:-(?:beta|rc)\.[0-9]+)?)", _text(name))
             assert m and m.group(1) == ver, f"{name}: image tag {m and m.group(1)} != {ver}"
 
 

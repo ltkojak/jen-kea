@@ -1266,12 +1266,21 @@ runs and recorded in the audit log:
   a `waiting` or `terminated` state and resume normal HA operation. Use
   it once you've confirmed the condition that caused the stall (a config
   mismatch, a manual `ha-reset` on the partner, etc.) is resolved.
-- **Start/Cancel Maintenance** (superadmin) — `ha-maintenance-start` /
-  `ha-maintenance-cancel`: tells the partner to take over from this
-  server for planned work (an OS update, a hardware swap), then cancels
-  that handover when you're done. Prefer this over stopping the Kea
-  service directly — it's a clean, HA-aware handover instead of the
-  partner discovering a dead peer.
+- **Take over for partner / Cancel Handover** (superadmin) —
+  `ha-maintenance-start` / `ha-maintenance-cancel`. **Read the
+  direction carefully — it is the opposite of what v5.21.0–v5.32.0
+  said.** Kea's `ha-maintenance-start` is sent to the server that will
+  *keep serving*: that server tells its partner to enter
+  `in-maintenance` and takes over every scope itself
+  (`partner-in-maintenance`). So to take node B down for an OS update,
+  click **Take over for B** on node **A**. Wait for B's state to show
+  `in-maintenance`, then shut B down; A moves to `partner-down`, and
+  when B comes back Kea re-synchronises and both return to normal on
+  their own — no further clicks. **Cancel Handover** returns both
+  servers to their previous states and only works while A is still
+  `partner-in-maintenance` (before B is actually down). Prefer this over
+  stopping the Kea service directly — it's a clean, HA-aware handover
+  instead of the partner discovering a dead peer.
 - **Reset** (superadmin) — `ha-reset`: re-runs the HA state machine from
   scratch. This is the last resort Kea's own HA documentation describes
   for a state that isn't otherwise recovering — don't reach for it
