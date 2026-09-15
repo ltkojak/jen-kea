@@ -136,6 +136,10 @@ def ha_config(dhcp4_cfg: dict | None) -> dict | None:
             "max_ack_delay": ha.get("max-ack-delay"),
             "max_unacked_clients": ha.get("max-unacked-clients"),
             "peers": ha.get("peers", []) or [],
+            # v5.38.0 (Q37) — false on either means one shared lease
+            # database; the maintenance flow then has no sync to wait for.
+            "send_lease_updates": ha.get("send-lease-updates", True),
+            "sync_leases": ha.get("sync-leases", True),
         }
     return None
 

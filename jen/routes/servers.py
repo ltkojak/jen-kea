@@ -6,11 +6,13 @@ Kea server management routes.
 
 import json
 import logging
+from datetime import datetime, timezone
 
-from flask import Blueprint, Response, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
 import jen.models.user as __user
+import jen.services.ha_maintenance as __maint
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
@@ -265,6 +267,275 @@ def ha_action(server_id, action):
     flash(f"{server['name']}: {text}", level)
     __user.audit("ha_" + action, server["name"], text)
     return redirect(url_for("servers.servers"))
+
+
+# ── Planned maintenance (v5.38.0 — Q37) ────────────────────────────────────
+#
+# A guided page around the HA maintenance commands, using no new Kea
+# command: pick the server to TAKE DOWN (A); Jen resolves its partner B
+# from both servers' own HA configs, runs the relevant Health checks as
+# a preflight, sends `ha-maintenance-start` to B (the server that keeps
+# serving — see kea_ha.HA_ACTIONS), polls both until Kea reports the
+# handover, and then waits for A to come back. State lives in the
+# session (nothing new in the DB); every transition is audited on both
+# server names. The page polls a partial every 5 s — no auto-advance
+# past "do your work": the operator clicks Back.
+
+_MAINT_KEY = "ha_maint"
+
+
+def _maint_state():
+    return session.get(_MAINT_KEY)
+
+
+def _maint_save(state):
+    session[_MAINT_KEY] = state
+    session.modified = True
+
+
+def _maint_clear():
+    session.pop(_MAINT_KEY, None)
+
+
+def _maint_servers(state):
+    """(down, up) server dicts for a stored state, or (None, None) when
+    either has been removed from Settings → Kea since."""
+    if not state:
+        return None, None
+    return _find_server(state.get("down")), _find_server(state.get("up"))
+
+
+def _ha_configs_for_all():
+    out = {}
+    for s in extensions.KEA_SERVERS:
+        r = __kea.kea_command("config-get", server=s)
+        dhcp4 = r.get("arguments", {}).get("Dhcp4", {}) if r.get("result") == 0 else None
+        out[s["id"]] = __ha.ha_config(dhcp4) if dhcp4 is not None else None
+    return out
+
+
+def _maint_status(server):
+    try:
+        return __ha.ha_status(server)
+    except Exception as e:
+        logger.warning(f"ha maintenance: status of {server.get('name')}: {e}")
+        return None
+
+
+def _maint_audit(step, state, detail=""):
+    __user.audit(f"ha_maintenance_{step}", f"{state.get('down_name')} / {state.get('up_name')}", detail)
+
+
+def _maint_view(state):
+    """Everything the status partial needs; advances the stored step when
+    the stepper says so."""
+    down, up = _maint_servers(state)
+    if down is None or up is None:
+        return None
+    view = __maint.next_step(state, _maint_status(down), _maint_status(up))
+    if view["advance"]:
+        state["step"] = view["advance"]
+        state["step_at"] = datetime.now(timezone.utc).isoformat()
+        _maint_save(state)
+        _maint_audit(view["advance"], state, view["message"])
+        view["step"] = state["step"]
+    view["down"] = down
+    view["up"] = up
+    view["state"] = state
+    view["step_index"] = __maint.STEPS.index(state["step"])
+    return view
+
+
+@bp.route("/servers/ha/maintenance")
+@login_required
+@_superadmin_required
+@_recent_auth_required(10)
+def ha_maintenance():
+    state = _maint_state()
+    if state:
+        view = _maint_view(state)
+        if view is None:
+            _maint_clear()
+            flash("A server in the running maintenance flow is no longer configured — starting over.", "error")
+            return redirect(url_for("servers.ha_maintenance"))
+        return render_template("ha_maintenance.html", state=state, view=view, steps=__maint.STEPS, servers=None)
+    try:
+        preselect = int(request.args.get("down", "0") or 0)
+    except ValueError:
+        preselect = 0
+    return render_template(
+        "ha_maintenance.html",
+        state=None,
+        view=None,
+        steps=__maint.STEPS,
+        servers=list(extensions.KEA_SERVERS),
+        preselect=preselect,
+        ha_mode=extensions.cfg.get("kea", "ha_mode", fallback=""),
+    )
+
+
+@bp.route("/servers/ha/maintenance/begin", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(10)
+def ha_maintenance_begin():
+    try:
+        down_id = int(request.form.get("down", ""))
+    except ValueError:
+        flash("Pick the server to take down.", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    down = _find_server(down_id)
+    if down is None:
+        flash("Server not found.", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    configs = _ha_configs_for_all()
+    up, reason = __maint.resolve_partner(down, extensions.KEA_SERVERS, configs)
+    if up is None:
+        flash(reason, "error")
+        return redirect(url_for("servers.ha_maintenance"))
+
+    from jen.services import health as _health
+
+    checks = _health.run_checks({"subnet_filter": lambda _sid: True})
+    wanted = {c.id: c for c in checks if c.id in __maint.PREFLIGHT_CHECK_IDS}
+    preflight = [
+        {"id": cid, "title": wanted[cid].title, "status": wanted[cid].status, "detail": wanted[cid].detail[:160]}
+        for cid in __maint.PREFLIGHT_CHECK_IDS
+        if cid in wanted
+    ]
+    state = {
+        "down": down["id"],
+        "up": up["id"],
+        "down_name": down["name"],
+        "up_name": up["name"],
+        "step": "preflight",
+        "step_at": datetime.now(timezone.utc).isoformat(),
+        "leases_shared": __maint.leases_shared(configs.get(down["id"])),
+        "preflight": preflight,
+        "preflight_ok": not any(p["status"] == "fail" for p in preflight),
+    }
+    _maint_save(state)
+    _maint_audit("preflight", state, "; ".join(f"{p['id']}={p['status']}" for p in preflight))
+    return redirect(url_for("servers.ha_maintenance"))
+
+
+@bp.route("/servers/ha/maintenance/status")
+@login_required
+@_superadmin_required
+def ha_maintenance_status():
+    state = _maint_state()
+    view = _maint_view(state) if state else None
+    if request.args.get("partial") == "1":
+        if view is None:
+            return render_template("_ha_maintenance_status.html", view=None)
+        return render_template("_ha_maintenance_status.html", view=view)
+    if view is None:
+        return jsonify({"active": False})
+    return jsonify(
+        {
+            "active": True,
+            "step": view["step"],
+            "down": {"id": view["down"]["id"], "name": view["down"]["name"], "state": view["down_state"]},
+            "up": {"id": view["up"]["id"], "name": view["up"]["name"], "state": view["up_state"]},
+            "can_cancel": view["can_cancel"],
+            "timed_out": view["timed_out"],
+            "message": view["message"],
+        }
+    )
+
+
+def _maint_send(server, action):
+    spec = __ha.HA_ACTIONS[action]
+    result = __kea.kea_command(spec["command"], "dhcp4", {}, server=server)
+    ok = result.get("result") == 0
+    text = result.get("text") or ("Done." if ok else "Failed.")
+    return ok, text
+
+
+@bp.route("/servers/ha/maintenance/handover", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(10)
+def ha_maintenance_handover():
+    state = _maint_state()
+    down, up = _maint_servers(state)
+    if not state or state.get("step") != "preflight" or up is None:
+        flash("Start the maintenance flow first.", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    if not state.get("preflight_ok"):
+        flash("A preflight check failed — fix it (or start over) before handing over.", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    # ha-maintenance-start goes to the server that KEEPS serving: B.
+    ok, text = _maint_send(up, "maintenance-start")
+    _maint_audit("handover", state, f"ha-maintenance-start → {up['name']}: {text}")
+    if not ok:
+        flash(f"{up['name']} refused ha-maintenance-start: {text}", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    state["step"] = "handover"
+    state["step_at"] = datetime.now(timezone.utc).isoformat()
+    _maint_save(state)
+    flash(f"{up['name']} is taking over; waiting for {down['name']} to enter in-maintenance.", "success")
+    return redirect(url_for("servers.ha_maintenance"))
+
+
+@bp.route("/servers/ha/maintenance/cancel", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(10)
+def ha_maintenance_cancel():
+    state = _maint_state()
+    down, up = _maint_servers(state)
+    if not state or up is None:
+        flash("No maintenance flow is running.", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    ok, text = _maint_send(up, "maintenance-cancel")
+    _maint_audit("cancel", state, f"ha-maintenance-cancel → {up['name']}: {text}")
+    if not ok:
+        flash(f"{up['name']} refused ha-maintenance-cancel: {text}", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    _maint_clear()
+    flash(f"Handover cancelled — {down['name']} and {up['name']} return to their previous states.", "success")
+    return redirect(url_for("servers.servers"))
+
+
+@bp.route("/servers/ha/maintenance/back", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(10)
+def ha_maintenance_back():
+    state = _maint_state()
+    if not state or state.get("step") != "work":
+        flash("Nothing to bring back yet.", "error")
+        return redirect(url_for("servers.ha_maintenance"))
+    state["step"] = "back"
+    state["step_at"] = datetime.now(timezone.utc).isoformat()
+    _maint_save(state)
+    _maint_audit("back", state)
+    return redirect(url_for("servers.ha_maintenance"))
+
+
+@bp.route("/servers/ha/maintenance/finish", methods=["POST"])
+@login_required
+@_superadmin_required
+def ha_maintenance_finish():
+    state = _maint_state()
+    if state:
+        _maint_audit("finish", state, f"ended at step {state.get('step')}")
+    _maint_clear()
+    return redirect(url_for("servers.servers"))
+
+
+@bp.route("/servers/ha/<int:server_id>/status.json")
+@login_required
+@_admin_required
+def ha_status_json(server_id):
+    server = _find_server(server_id)
+    if server is None:
+        return jsonify({"error": "not found"}), 404
+    status = _maint_status(server)
+    if status is None:
+        return jsonify({"reachable": False, "id": server_id, "name": server["name"]})
+    return jsonify({"reachable": True, "id": server_id, "name": server["name"], **status})
 
 
 # ── Config history (v5.16.0 — Q11) ─────────────────────────────────────────

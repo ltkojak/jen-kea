@@ -2,6 +2,62 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.38.0-beta.1] - 2026-09-15
+
+*Beta channel. Stacked on the unpromoted 5.37.0-beta.1 and everything
+below it back to 5.32.1-beta.1. This completes the Q list; the whole
+stack is ready for promotion.*
+
+### Planned maintenance, guided
+
+5.32.1-beta.1 fixed the words on the HA maintenance buttons: Kea's
+`ha-maintenance-start` goes to the server that *keeps serving*, and it
+is the partner that goes quiet. The words were right; the operator
+still had to remember them at two in the morning. **Servers → Planned
+maintenance** (superadmin, with a password confirmation) is the same
+two commands as a stepper that cannot be pointed the wrong way.
+
+Pick the server to take down. Jen reads both servers' HA configs and
+finds the partner — the Jen server whose `this-server-name` is the one
+other peer the first server lists — and stops if that partner is not a
+server it knows. Preflight runs the Health checks that matter for a
+handover (both reachable, HA healthy, clocks in sync, subnet map not
+drifted, snapshots current); a fail blocks, a warn is shown. Start
+handover sends `ha-maintenance-start` to the partner and polls both
+every five seconds until Kea reports `partner-in-maintenance` on one
+side and `in-maintenance` on the other — or, after sixty seconds, says
+which side did not move. Then the page tells you the node is out of
+service, lists what to do on it, offers Cancel only while Kea can
+still honour it (once the node is actually down the partner is
+`partner-down` and the page says cancel no longer applies), and waits,
+when you click Back, for both to report normal again. Kea negotiates
+and syncs leases on its own; with a shared lease database the page
+says there is nothing to sync instead of pretending to watch for it.
+One click repeats the whole thing for the other node. State lives in
+your session, every transition is audited against both server names,
+and `GET /servers/ha/<id>/status.json` returns a server's normalised
+HA status for anything that wants to script around it.
+
+### Kea 3.2 readiness
+
+Kea 3.2 removes the Control Agent. The Health Center's existing *Kea
+version supported* check reports the status of what is running; a new
+**Kea 3.2 readiness** group at the bottom of the page reports the
+plan. Five checks, all read-only, all `skip` where an install has
+nothing to look at (a single Docker box with no helper, no HA and no
+DDNS skips most of them): the control transport (Control Agent mode
+fails once any server is on 3.0 and warns below that with the exact
+next step; direct mode warns for any server or daemon still without
+its own socket URL), the Kea host helper version, config keys Kea has
+removed or renamed — `require-client-classes`, `only-if-required`, the
+singular `client-class`, `reservation-mode`, and the DDNS parameters
+that moved out of the `dhcp-ddns` block — each named with its path and
+replacement, HA peers on matching Kea minors, and D2 answering on its
+own socket. Settings → Kea's servers card carries the same result as
+one line: *Ready for Kea 3.2* or *N action(s) before upgrading*. The
+admin guide's Health Center section gained "Upgrading Kea", the order
+to work through those actions in.
+
 ## [5.37.0-beta.1] - 2026-09-15
 
 *Beta channel. Stacked on the unpromoted 5.36.0-beta.1 and everything

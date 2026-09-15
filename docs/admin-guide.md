@@ -1330,6 +1330,44 @@ runs and recorded in the audit log:
   for a state that isn't otherwise recovering — don't reach for it
   first.
 
+#### Planned maintenance, step by step (v5.38.0)
+
+**Servers → Planned maintenance** (superadmin, with a password
+confirmation) wraps the two maintenance commands above in a guided
+page so the direction can't be got wrong. No new Kea command is used.
+
+1. **Pick the server to take down** (A). Jen reads both servers' HA
+   configs and finds A's partner B — the Jen server whose
+   `this-server-name` is the one other peer A's config lists. If B is
+   not a server under Settings → Kea, the page stops: Jen only knows one
+   side of the pair; add the partner first.
+2. **Preflight.** The relevant Health checks run and are shown: both
+   servers reachable, HA state healthy, clocks in sync, subnet map not
+   drifted, lease snapshots current. A `fail` blocks the handover; a
+   `warn` is shown and lets you decide.
+3. **Start handover.** Jen sends `ha-maintenance-start` to **B** — the
+   server that keeps serving — and polls both every 5 seconds until B
+   reports `partner-in-maintenance` and A reports `in-maintenance`. If
+   that hasn't happened after 60 seconds the page says which side did
+   not move and offers Cancel while B is still `partner-in-maintenance`.
+4. **Do your work.** A is out of service; B answers everything. Stop
+   Kea on A, patch, reboot. **Cancel** (`ha-maintenance-cancel` to B)
+   is offered only while B is still `partner-in-maintenance`; once A is
+   actually down, B moves to `partner-down` and cancel no longer applies
+   — the page says so. Nothing advances on its own here.
+5. **Bring A back.** Click Back once A is up. Jen polls until A answers
+   and both report `hot-standby` / `load-balancing` again; Kea
+   negotiates and syncs leases by itself (with a shared lease database
+   — `send-lease-updates` / `sync-leases` false — there is nothing to
+   sync, and the page says that instead).
+6. **Repeat for B** with one click, if both nodes need the same work
+   (an OS or Kea upgrade — see "Upgrading Kea" under Health Center).
+
+The flow's state lives in your session, not the database; every
+transition is recorded in the audit log as `ha_maintenance_<step>`
+against both server names. `GET /servers/ha/<id>/status.json` (admin)
+returns a server's normalised HA status for scripting.
+
 **Kea ≥ 3.2 in `ca` mode:** these HA commands go through the Control
 Agent, which Kea 3.2 removes (see "Kea Version Supported" in Health
 Center). On such a host, switch to `direct` mode first (Settings → Kea)

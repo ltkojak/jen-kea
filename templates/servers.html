@@ -23,6 +23,9 @@
         {% for s in statuses %}{% if s.is_active %}
         <span class="badge badge-reserved" style="margin-left:auto;">⚡ Active: {{ s.server.name }}</span>
         {% endif %}{% endfor %}
+        {% if current_user.role == 'superadmin' %}
+        <a href="{{ url_for('servers.ha_maintenance') }}" class="btn btn-sm btn-secondary" title="Take one node down for patching with a guided, HA-aware handover">🛠️ Planned maintenance</a>
+        {% endif %}
     </div>
 </div>
 {% elif not single_server and not ha_mode %}

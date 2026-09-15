@@ -1,0 +1,48 @@
+{% if not view %}
+<p style="font-size:13px;color:var(--text-muted);">No maintenance flow is running.</p>
+{% else %}
+<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-bottom:10px;">
+    <div><strong>{{ view.down.name }}</strong> (going down): <span class="badge {% if view.down_state in ('in-maintenance',) %}badge-dynamic{% elif view.down_state in ('hot-standby','load-balancing') %}badge-reserved{% elif view.down_state %}badge-danger{% else %}badge-muted{% endif %}">{{ view.down_state or 'unreachable' }}</span></div>
+    <div><strong>{{ view.up.name }}</strong> (serving): <span class="badge {% if view.up_state in ('partner-in-maintenance','partner-down','hot-standby','load-balancing') %}badge-reserved{% elif view.up_state %}badge-danger{% else %}badge-muted{% endif %}">{{ view.up_state or 'unreachable' }}</span></div>
+</div>
+<div class="alert {% if view.tone == 'fail' %}alert-danger{% elif view.tone == 'warn' %}alert-warning{% else %}alert-info{% endif %}" style="margin-bottom:12px;">{{ view.message }}</div>
+
+{% if view.step == 'work' %}
+<ul style="font-size:13px;margin:0 0 12px 18px;color:var(--text-muted);">
+    <li>Stop Kea on {{ view.down.name }} (<code>systemctl stop kea-dhcp4-server</code>), or reboot the host outright.</li>
+    <li>Patch, upgrade Kea, or do whatever the maintenance is.</li>
+    <li>Start Kea again. {{ view.up.name }} will see it, negotiate, and both return to normal on their own.</li>
+</ul>
+{% endif %}
+
+<div style="display:flex;gap:10px;flex-wrap:wrap;">
+    {% if view.step == 'preflight' %}
+    <form method="POST" action="{{ url_for('servers.ha_maintenance_handover') }}"
+          data-confirm="Put {{ view.down.name }} into maintenance so it can be shut down? {{ view.up.name }} will serve everything in the meantime.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary" {% if not view.state.preflight_ok %}disabled title="A preflight check failed."{% endif %}>⚡ Start handover</button>
+    </form>
+    {% endif %}
+    {% if view.can_cancel and view.step in ('handover', 'work') %}
+    <form method="POST" action="{{ url_for('servers.ha_maintenance_cancel') }}"
+          data-confirm="Cancel the handover and return {{ view.down.name }} and {{ view.up.name }} to their previous states?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-secondary">✖️ Cancel handover</button>
+    </form>
+    {% endif %}
+    {% if view.step == 'work' %}
+    <form method="POST" action="{{ url_for('servers.ha_maintenance_back') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary">↩️ {{ view.down.name }} is back — watch it rejoin</button>
+    </form>
+    {% endif %}
+    {% if view.step == 'done' %}
+    <a href="{{ url_for('servers.ha_maintenance') }}?down={{ view.up.id }}" class="btn btn-primary" hx-boost="false">🔁 Repeat for {{ view.up.name }}</a>
+    {% endif %}
+    <form method="POST" action="{{ url_for('servers.ha_maintenance_finish') }}"
+          {% if view.step in ('handover', 'work', 'back') %}data-confirm="Leave the flow? Kea keeps whatever state it is in — this only forgets the stepper."{% endif %}>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-secondary">{% if view.step == 'done' %}Finish{% else %}Leave the flow{% endif %}</button>
+    </form>
+</div>
+{% endif %}
