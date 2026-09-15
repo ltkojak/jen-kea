@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>📖 REST API Documentation</h1>
-    <p>Jen v{{ jen_version }} — Read-only API for integrations with Home Assistant, Zabbix, and custom scripts.</p>
+    <p>Jen v{{ jen_version }} — integration API for Home Assistant, Zabbix, and custom scripts. Reads with any key; writes (v5.34.0) with a key that has <em>Allow writes</em>. Machine-readable: <a href="/api/v1/openapi.json">OpenAPI 3.0 document</a>.</p>
 </div>
 
 {% if keys %}
@@ -128,6 +128,46 @@
         ],
         "example_path": "/api/v1/reservations?subnet=IoT",
         "example_response": '{\n  "count": 17,\n  "reservations": [\n    {\n      "ip": "10.10.30.1",\n      "mac": "70:2c:1f:31:37:7d",\n      "hostname": "samsung-familyhub",\n      "subnet_id": 30,\n      "subnet_name": "IoT"\n    }\n  ]\n}'
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/reservations",
+        "title": "Create Reservation (write key)",
+        "auth": true,
+        "desc": "Creates a static reservation through Kea's host_cmds hook — the same path the Reservations page uses. JSON body: subnet_id, ip, mac (required); hostname, dns, notes (optional). 403 for a read-only key; 502 with Kea's own message if Kea refuses (duplicate address, unknown subnet).",
+        "params": [],
+        "example_path": "/api/v1/reservations",
+        "example_response": '{\n  "host_id": 42,\n  "ip": "10.10.30.50",\n  "mac": "aa:bb:cc:dd:ee:ff",\n  "hostname": "printer",\n  "subnet_id": 30\n}'
+    },
+    {
+        "method": "DELETE",
+        "path": "/api/v1/reservations/{host_id}",
+        "title": "Delete Reservation (write key)",
+        "auth": true,
+        "desc": "Deletes the reservation with that Kea host id (host_id comes from the create response or Kea's hosts table).",
+        "params": [],
+        "example_path": "/api/v1/reservations/42",
+        "example_response": '{\n  "deleted": 42,\n  "ip": "10.10.30.50",\n  "mac": "aa:bb:cc:dd:ee:ff",\n  "subnet_id": 30\n}'
+    },
+    {
+        "method": "PATCH",
+        "path": "/api/v1/devices/{mac}",
+        "title": "Edit Device (write key)",
+        "auth": true,
+        "desc": "Sets a device's name, owner and/or notes — any subset; null clears a field. Type and icon overrides stay UI-only.",
+        "params": [],
+        "example_path": "/api/v1/devices/aa:bb:cc:dd:ee:ff",
+        "example_response": '{\n  "mac": "aa:bb:cc:dd:ee:ff",\n  "name": "Printer",\n  "owner": "Office",\n  "notes": null,\n  "last_ip": "10.10.30.50",\n  "subnet_id": 30\n}'
+    },
+    {
+        "method": "POST",
+        "path": "/api/v1/subnets/{subnet_id}/notes",
+        "title": "Set Subnet Notes (write key)",
+        "auth": true,
+        "desc": "Replaces the subnet's note. JSON body: text (empty string clears it).",
+        "params": [],
+        "example_path": "/api/v1/subnets/30/notes",
+        "example_response": '{\n  "subnet_id": 30,\n  "notes": "IoT VLAN — core switch closet"\n}'
     }
 ] %}
 

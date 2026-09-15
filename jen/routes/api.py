@@ -710,6 +710,17 @@ def api_v1_subnet_notes(subnet_id):
     return api_ok({"subnet_id": subnet_id, "notes": text})
 
 
+@bp.route("/api/v1/openapi.json")
+def api_v1_openapi():
+    """v5.34.0 (Q33) — the OpenAPI 3.0 description of this API, from one
+    dict in jen/routes/api_spec.py; tests/test_api_spec.py diffs it
+    against the URL map. No auth, like /api/v1/health."""
+    from jen import JEN_VERSION as _v
+    from jen.routes.api_spec import build_spec
+
+    return jsonify(build_spec(_v, request.host_url.rstrip("/")))
+
+
 # ── API Key Management ────────────────────────────────────────────────────────
 
 

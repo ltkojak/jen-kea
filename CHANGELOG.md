@@ -2,6 +2,65 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.34.0-beta.1] - 2026-09-15
+
+*Beta channel. Stacked on the unpromoted 5.33.0-beta.1 (support
+bundle) and 5.32.1-beta.1 (HA maintenance wording).*
+
+### One import surface for plugins — `jen.plugin_api`
+
+Both bundled plugins reached into Jen's internals — the database
+module, the access service, the alert sender, the fingerprinter — and
+every rename inside Jen was a silent plugin break waiting to happen.
+`jen.plugin_api` is now the one module a plugin imports from: a thin,
+versioned re-export (`PLUGIN_API_VERSION = 1`) of exactly what plugins
+have needed so far — database context managers, audit and settings,
+the access checks and decorators, `subnet_map()` and the subnet
+context, alerts, periodic jobs, the CSV guard, device fingerprinting,
+plugin introspection. Nothing new lives behind it and importing it does
+no work. Adding a name is a MINOR Jen release; removing one or changing
+a signature moves the version and is a MAJOR. A manifest may declare
+`"plugin_api": N`, and Jen refuses to load a plugin written against a
+newer surface than it offers — the Plugins page says *needs plugin API
+vN* instead of the plugin dying with an ImportError at boot. A test
+pins that the bundled copies import only the surface (a short
+transitional list of internals is tolerated until IPAM Lite 1.5.1 and
+Network Discovery 1.1.1, the plugin releases that move over) and that
+everything they use is offered by it. `plugins/README.md` documents
+the surface.
+
+### API v1 writes, behind a per-key flag
+
+The REST API was read-only. It gains writes for exactly the things that
+are Jen's own tables or Kea's host database — never anything that edits
+a Kea configuration file, which needs the changeset engine and a human
+preview:
+
+- `POST /api/v1/reservations` and `DELETE /api/v1/reservations/{host_id}`
+  through Kea's `host_cmds` hook, the same path the Reservations page
+  uses; a Kea refusal (duplicate address, unknown subnet) comes back as
+  `502` with Kea's own message.
+- `PATCH /api/v1/devices/{mac}` — name, owner, notes; any subset, `null`
+  clears.
+- `POST /api/v1/subnets/{id}/notes`.
+
+Write access is per key and **off by default**: tick *Allow writes* when
+creating a key (migration 25 adds the flag; every key that existed
+before stays read-only and gets `403` on a write). Writes honour the
+key's subnet scope exactly as reads do, are limited to 60 a minute per
+key, and are audited with the key's name as the actor — an API request
+has no signed-in user. The API Keys page shows read-only or read/write
+per key.
+
+### OpenAPI
+
+`GET /api/v1/openapi.json` (no auth, like `/api/v1/health`) describes
+the whole surface as an OpenAPI 3.0 document generated from one Python
+dict — no new dependency, nothing introspected from Flask. A test
+walks the app's URL map and fails when a `/api/v1/` route and the
+document disagree in either direction, so the document can't drift.
+The API Docs page links it and documents the write endpoints.
+
 ## [5.33.0-beta.1] - 2026-09-14
 
 *Beta channel. Carries the unpromoted 5.32.1-beta.1 (HA maintenance
