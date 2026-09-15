@@ -627,7 +627,19 @@ def create_app() -> Flask:
 
         items = get_nav_items()
         role = current_user.role if current_user and current_user.is_authenticated else None
-        return {"plugin_nav_items": items, "nav": nav_context(request.endpoint, role, items)}
+        pill = None
+        if role in ("admin", "superadmin"):
+            try:
+                from jen.services.onboarding import cached_pill
+
+                pill = cached_pill(current_user, is_superadmin=role == "superadmin")
+            except Exception:
+                pill = None
+        return {
+            "plugin_nav_items": items,
+            "nav": nav_context(request.endpoint, role, items),
+            "getting_started_pill": pill,
+        }
 
     # ── DB init ───────────────────────────────────────────────────────────────
     from jen.models.db import init_jen_db
@@ -677,6 +689,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.health import bp as health_bp
     from jen.routes.leases import bp as leases_bp
     from jen.routes.mfa_routes import bp as mfa_bp
+    from jen.routes.onboarding import bp as onboarding_bp
     from jen.routes.plugins import bp as plugins_bp
     from jen.routes.reports import bp as reports_bp
     from jen.routes.reservations import bp as reservations_bp
@@ -698,6 +711,7 @@ def _register_blueprints(app: Flask) -> None:
         explain_bp,
         leases_bp,
         mfa_bp,
+        onboarding_bp,
         plugins_bp,
         reports_bp,
         reservations_bp,

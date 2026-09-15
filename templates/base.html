@@ -421,6 +421,12 @@
     </div>
 
     <div class="nav-right">
+        {% if getting_started_pill %}
+        <a href="/getting-started" class="nav-link" title="The first-hour checklist"
+           style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;white-space:nowrap;">
+            🚀 Getting started ({{ getting_started_pill.done }}/{{ getting_started_pill.total }})
+        </a>
+        {% endif %}
         <span class="kea-status" id="kea-indicator" title="Kea status"></span>
         <button class="theme-toggle">🌙</button>
         <!-- User avatar dropdown -->
