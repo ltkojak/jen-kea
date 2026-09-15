@@ -153,8 +153,16 @@ def live_server(fake_kea):
     thread.join(timeout=5)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def base_url(live_server):
+    """Overrides pytest-base-url's own `base_url` fixture (a
+    pytest-playwright dependency) — that one is session-scoped and reads
+    a `--base-url` CLI option we never pass, so shadowing it here with
+    the live app's real URL is the documented way to supply it
+    programmatically. Must stay session-scoped: pytest-base-url's own
+    internal fixture requests it at session scope, and a function-scoped
+    override here is a hard ScopeMismatch, not just unused (caught in
+    CI — every test errored at setup)."""
     return live_server
 
 
