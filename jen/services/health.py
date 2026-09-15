@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import jen.models.db as __db
+import jen.services.capacity as __capacity
 import jen.services.kea as __kea
 from jen import extensions
 
@@ -339,6 +340,73 @@ def _pool_utilization(ctx) -> Check:
         c.status, c.detail = "warn", f"over {threshold}%: " + ", ".join(warn)
     else:
         c.status, c.detail = "ok", f"{len(rows)} subnet(s) below {threshold}%"
+    return c
+
+
+def lease_history_window(days: int = __capacity.WINDOW_DAYS + 1) -> dict[int, list[dict]]:
+    """subnet_id → rows (snapshot_time, active_leases, pool_size) for the
+    last `days` days, oldest first. One query for every subnet; the
+    forecast (v5.36.0) wants a month of snapshots per subnet, which the
+    newest-row reader above cannot give it. Shared with the API and the
+    Reports page."""
+    out: dict[int, list[dict]] = {}
+    with __db.jen_db() as db, db.cursor() as cur:
+        cur.execute(
+            """
+            SELECT subnet_id, snapshot_time, active_leases, pool_size
+            FROM lease_history
+            WHERE snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            ORDER BY snapshot_time ASC
+            """,
+            (int(days),),
+        )
+        for r in cur.fetchall():
+            out.setdefault(int(r["subnet_id"]), []).append(r)
+    return out
+
+
+def _pool_exhaustion_forecast(ctx) -> Check:
+    """v5.36.0 (Q35): where is each pool heading? Least squares on the
+    last 30 days of daily peaks (jen/services/capacity.py). warn when a
+    subnet reaches 90 % of its pool within 30 days, fail within 7; skip
+    until any subnet has 7 days of snapshots."""
+    c = Check("pool_exhaustion_forecast", "Pool exhaustion forecast", "capacity", fix_url="/reports")
+    try:
+        history = lease_history_window()
+    except Exception as e:
+        _log_err("pool_exhaustion_forecast", e)
+        c.status, c.detail = "fail", "could not read lease history — see server logs"
+        return c
+    history = {sid: rows for sid, rows in history.items() if ctx["subnet_filter"](sid)}
+    if not history:
+        c.status, c.detail = "skip", "first snapshot pending"
+        return c
+    fits = {sid: __capacity.forecast(rows) for sid, rows in history.items()}
+    fitted = {sid: f for sid, f in fits.items() if f["trend"] not in ("insufficient", "no-pool")}
+    if not fitted:
+        have = max((f["days"] for f in fits.values()), default=0)
+        c.status, c.detail = "skip", f"needs {__capacity.MIN_DAYS} days of snapshots ({have} so far)"
+        return c
+    crit, warn = [], []
+    for sid, f in fitted.items():
+        d = f["days_to_90pct"]
+        if d is None:
+            continue
+        label = f"{_subnet_label(sid)} 90% in ~{d}d ({f['date_90']})"
+        if d <= __capacity.FAIL_DAYS:
+            crit.append(label)
+        elif d <= __capacity.WARN_DAYS:
+            warn.append(label)
+    if crit:
+        c.status, c.detail = "fail", "exhaustion imminent: " + ", ".join(crit)
+    elif warn:
+        c.status, c.detail = "warn", "trending toward exhaustion: " + ", ".join(warn)
+    else:
+        rising = sum(1 for f in fitted.values() if f["trend"] == "rising")
+        c.status = "ok"
+        c.detail = f"{len(fitted)} subnet(s) forecast, none reach 90% within {__capacity.WARN_DAYS} days"
+        if rising:
+            c.detail += f" ({rising} rising)"
     return c
 
 
@@ -686,6 +754,7 @@ _CHECKS = [
     _kea_config_drift,
     _kea_subnets_declared,
     _pool_utilization,
+    _pool_exhaustion_forecast,
     _lease_snapshot_fresh,
     _d2_reachable,
     _d2_errors,
@@ -709,6 +778,7 @@ _CHECK_META = {
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "pool_utilization": ("Pool utilization", "capacity"),
+    "pool_exhaustion_forecast": ("Pool exhaustion forecast", "capacity"),
     "lease_snapshot_fresh": ("Lease snapshots current", "capacity"),
     "d2_reachable": ("kea-dhcp-ddns reachable", "ddns"),
     "d2_errors": ("kea-dhcp-ddns error counters", "ddns"),

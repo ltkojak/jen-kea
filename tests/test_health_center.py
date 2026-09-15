@@ -267,6 +267,72 @@ class TestPoolUtilization:
         assert c.status == "ok"  # subnet 1 (the hot one) filtered out
 
 
+class TestPoolExhaustionForecast:
+    """v5.36.0 (Q35)."""
+
+    def _seed_days(self, db, sid, peaks, pool_size=254):
+        """One snapshot per day, oldest first, ending yesterday."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history WHERE subnet_id=%s", (sid,))
+            for i, peak in enumerate(peaks):
+                days_ago = len(peaks) - i
+                cur.execute(
+                    "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
+                    "VALUES (%s, %s, %s, DATE_SUB(NOW(), INTERVAL %s DAY))",
+                    (sid, peak, pool_size, days_ago),
+                )
+        db.commit()
+
+    def _clear(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history")
+        db.commit()
+
+    def test_no_rows_skips(self, db):
+        self._clear(db)
+        c = health._pool_exhaustion_forecast(_ctx())
+        assert c.status == "skip" and c.id == "pool_exhaustion_forecast" and c.group == "capacity"
+
+    def test_too_little_history_skips_and_counts_days(self, db):
+        self._clear(db)
+        self._seed_days(db, 1, [10, 20, 30])
+        c = health._pool_exhaustion_forecast(_ctx())
+        assert c.status == "skip" and "3 so far" in c.detail
+
+    def test_flat_pool_is_ok(self, db):
+        self._clear(db)
+        self._seed_days(db, 1, [50] * 10)
+        c = health._pool_exhaustion_forecast(_ctx())
+        assert c.status == "ok" and "none reach 90%" in c.detail
+
+    def test_slow_rise_warns(self, db):
+        self._clear(db)
+        # +4/day from 100 on a 254 pool: 90% (228.6) in ~23 days after today
+        self._seed_days(db, 1, [100 + 4 * i for i in range(10)])
+        c = health._pool_exhaustion_forecast(_ctx())
+        assert c.status == "warn" and "90% in ~" in c.detail
+
+    def test_fast_rise_fails(self, db):
+        self._clear(db)
+        self._seed_days(db, 1, [100 + 12 * i for i in range(10)])
+        c = health._pool_exhaustion_forecast(_ctx())
+        assert c.status == "fail" and "imminent" in c.detail
+
+    def test_restricted_viewer_only_sees_own(self, db):
+        self._clear(db)
+        self._seed_days(db, 1, [100 + 12 * i for i in range(10)])
+        self._seed_days(db, 2, [50] * 10)
+        c = health._pool_exhaustion_forecast(_ctx(subnet_filter=lambda sid: sid == 2))
+        assert c.status == "ok"
+
+    def test_lease_history_window_groups_by_subnet(self, db):
+        self._clear(db)
+        self._seed_days(db, 1, [1, 2])
+        self._seed_days(db, 2, [3])
+        win = health.lease_history_window()
+        assert sorted(win) == [1, 2] and [r["active_leases"] for r in win[1]] == [1, 2]
+
+
 class TestLeaseSnapshotFresh:
     def test_no_rows_skips(self, db):
         with db.cursor() as cur:

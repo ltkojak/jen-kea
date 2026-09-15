@@ -142,8 +142,32 @@ def api_v1_subnets():
                         "pool_size": 0,
                         "pools": [],
                         "utilization_pct": 0,
+                        "peak_30d": None,
+                        "trend_per_day": None,
+                        "days_to_90pct": None,
+                        "forecast": "insufficient",
                     }
                 )
+        # v5.36.0 (Q35): the exhaustion forecast from the lease history.
+        # A history read that fails leaves the forecast fields at their
+        # "insufficient" defaults rather than failing the whole call.
+        try:
+            from jen.services import capacity as _capacity
+            from jen.services.health import lease_history_window
+
+            history = lease_history_window()
+            for r in result:
+                rows = history.get(r["id"], [])
+                if not rows:
+                    continue
+                f = _capacity.forecast(rows)
+                hw = _capacity.high_water(rows)
+                r["peak_30d"] = hw["peak"] if hw else None
+                r["trend_per_day"] = f["slope_per_day"] if f["trend"] in ("rising", "flat", "falling") else None
+                r["days_to_90pct"] = f["days_to_90pct"]
+                r["forecast"] = f["trend"]
+        except Exception as e:
+            logger.warning(f"api_v1_subnets forecast skipped: {e}")
         try:
             cfg_result = kea_command("config-get", server=get_active_kea_server())
             if cfg_result.get("result") == 0:

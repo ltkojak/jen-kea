@@ -70,6 +70,25 @@ def build_spec(version: str, base_url: str = "") -> dict:
                         "reserved": {"type": "integer"},
                         "pool_size": {"type": "integer"},
                         "utilization_pct": {"type": "number"},
+                        "peak_30d": {
+                            "type": "integer",
+                            "nullable": True,
+                            "description": "Highest active-lease count in the last 30 days of snapshots (v5.36.0).",
+                        },
+                        "trend_per_day": {
+                            "type": "number",
+                            "nullable": True,
+                            "description": "Least-squares slope of the daily peaks, leases per day; null until 7 days of history.",
+                        },
+                        "days_to_90pct": {
+                            "type": "integer",
+                            "nullable": True,
+                            "description": "Days until the trend reaches 90% of the pool; null when flat, falling, beyond 365 days or unknown.",
+                        },
+                        "forecast": {
+                            "type": "string",
+                            "enum": ["rising", "flat", "falling", "insufficient", "no-pool"],
+                        },
                     },
                 },
                 "SubnetList": {
