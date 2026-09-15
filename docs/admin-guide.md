@@ -1152,6 +1152,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **Kea clock in sync** | the `Date` header Kea returns vs Jen's clock — warns > 30 s, fails > 5 min (HA and lease timers assume synced clocks) | NTP on the Kea host and the Jen host |
 | **Subnet map matches Kea** | `check_config_drift()` — Jen's `[subnets]` list vs Kea's live config | Settings → Kea → `[subnets]` |
 | **Every Kea subnet is named** | every subnet id in Kea's config has a name in Jen's `[subnets]`, and vice-versa | Settings → Kea → `[subnets]` |
+| **Configuration Doctor** (v5.40.0) | `jen/services/config_doctor.py`'s sixteen semantic checks on the live config — see "Configuration Doctor" below | Network → Doctor |
 | **Pool utilization** | the latest lease snapshot per subnet — warns at the alert threshold, fails at 95 % | Subnets page; widen the pool |
 | **Pool exhaustion forecast** (v5.36.0) | a least-squares line through the last 30 days of daily peak active leases per subnet — warns when it reaches 90 % of the pool within 30 days, fails within 7; `skip` until a subnet has 7 days of snapshots. A pool resize restarts the fit. | Reports page; widen the pool or shorten lease lifetimes |
 | **Lease snapshots current** | the newest snapshot is no older than 2× the snapshot interval | Settings → System; check the background worker is running |
@@ -1198,6 +1199,46 @@ every 7 days (the settings key `pool_forecast_alerted_<subnet id>` holds
 the date it last fired). It is a complement to the utilization alert, not
 a replacement: utilization says where you are, the forecast says where
 you are heading.
+
+## Configuration Doctor
+
+**Network → Doctor** (`/tools/doctor`, v5.40.0) looks for things in the
+live Kea config that are valid syntax and valid types — so `kea-dhcp4
+-t` (Settings → Kea → Test config) has nothing to say about them — but
+are contradictory, unreachable, or simply pointless. It is **not** a
+syntax or type checker: run Test config for that. Admin/superadmin
+only, unrestricted by subnet access, since the whole config's shape is
+what the page shows. Each finding is `fail` (Kea will refuse to load
+the config, or the affected part can never actually work),
+`warn` (loads fine, but is very likely a mistake), or `info`
+(harmless, flagged so you know it's there) and always says why, not
+just what.
+
+| Check | What it means |
+|---|---|
+| Pools overlap | Two pool ranges intersect — Kea refuses to load a config with overlapping pools |
+| Pool outside its subnet | A pool's range extends past its subnet's prefix — Kea refuses to load this too |
+| Reservation address outside its subnet | A reservation's address doesn't fall inside the subnet prefix Jen filed it under |
+| Reservation address is inside a dynamic pool | Info normally (Kea excludes it automatically); `warn` when `reservations-out-of-pool` is on for that subnet, since Kea then refuses the reservation |
+| Same identifier / address reserved twice in one subnet | Two host-database rows collide on (subnet, MAC or client-id) or (subnet, address) — only one is actually in effect |
+| Class is never attached anywhere | A defined client class that no subnet, pool, shared network, or other class's `member()` ever references |
+| `member()` references an undefined class | A class's test names another class that doesn't exist — that clause never evaluates true |
+| Class test can never be true | An `and`-chain that pins the same field to two different literal values at once — only proven for the flat-AND grammar the Explain page's parser understands |
+| Pool guard contradicts its subnet's guard | A pool requires class C while its subnet requires a class whose test is the exact negation of C's — the pool can never be reached |
+| Subnet has nothing to hand out | No pools and no reservations — every request in it gets no offer |
+| Lease timers out of order / very short / very long | `renew-timer` / `rebind-timer` / `valid-lifetime` should strictly increase; under a minute is usually a units typo; over 30 days is just flagged for awareness |
+| Global option is never actually used | Every subnet overrides a globally-set option, so the global value never wins for any client |
+| Shared network members disagree on lease time / gateway | Subnets in the same shared network usually should behave alike |
+| HA peers disagree on configuration | The two servers' `high-availability` blocks differ in mode, timers, or peer roles beyond `this-server-name` — checked only when HA is configured, and only when both peers answer |
+| Config key removed or renamed in a newer Kea | The same removed-key scan the Health Center's readiness group runs, folded in here as findings with a fix link |
+
+Findings link straight to where you'd fix them: a subnet or pool
+finding to the Subnets page, a class finding to Client Classes (which
+also offers "Explain a client against this class" — the Explain page
+re-evaluates every class for whatever client attributes you give it),
+a reservation finding to Reservations filtered by the address in
+question. **Re-run** just reloads the page — every check reads the
+config fresh each time, nothing is cached.
 
 ---
 

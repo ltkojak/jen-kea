@@ -2,6 +2,32 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.40.0-beta.1] - 2026-09-15
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.39.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q41, the Configuration Doctor: `kea-dhcp4 -t` catches syntax and type
+errors, but has nothing to say about a config that's valid and still
+wrong — two overlapping pools, a reservation filed under a subnet it
+doesn't belong to, a client class nothing ever attaches, a pool whose
+guard can never be satisfied at the same time as its subnet's. Network
+→ Doctor (`/tools/doctor`) runs sixteen such checks against the live
+config and explains each finding rather than just naming it — pools
+overlapping or extending past their subnet, reservations outside their
+subnet or colliding with each other, unreferenced or unreachable
+client classes, a `member()` that points at nothing, lease timers out
+of order or oddly short or long, a global option every subnet
+overrides, shared-network members that disagree with each other, HA
+peers whose configuration doesn't match, and the same removed/renamed
+config keys the Health Center's Kea 3.2 readiness group already
+watches for. The checks that reason about class expressions reuse the
+Explain page's own parser rather than a second implementation, so what
+this page can and can't prove about a class always matches what
+Explain can. Health Center gained one new check, Configuration Doctor,
+summarizing the same findings with a link to the full page.
+
 ## [5.39.0-beta.1] - 2026-09-15
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
