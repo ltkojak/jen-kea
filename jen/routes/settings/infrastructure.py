@@ -278,7 +278,15 @@ def settings_kea():
             from jen.services import health as _health
             from jen.services import kea_readiness as _readiness
 
-            readiness = _readiness.summarize(_health.readiness_checks())
+            # no new Kea round trips on this page: one status row from the
+            # version-get above, no config-get (the Health Center has the rest)
+            primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else {"id": 1, "name": "Kea Server 1"}
+            light_ctx = {
+                "server_status": [{"server": primary, "up": True, "ha_state": None, "version": kea_version}],
+                "active_server": None,
+                "dhcp4_config": None,
+            }
+            readiness = _readiness.summarize(_health.readiness_checks(light_ctx))
         except Exception as e:
             logger.warning(f"readiness summary: {e}")
     return render_template(

@@ -922,9 +922,33 @@ def _kea32_d2_socket(ctx) -> Check:
     return c
 
 
+_READINESS_CHECKS = None  # filled after _CHECKS is defined below
+
+
 def readiness_checks(ctx: dict | None = None) -> list[Check]:
-    """Just the readiness group, for the Settings → Kea one-liner."""
-    return [c for c in run_checks(ctx) if c.group == "readiness"]
+    """Just the readiness group. With `ctx` given (the Settings → Kea
+    page passes what it already fetched: one server status row and no
+    config), only those five functions run and NO extra Kea round trip
+    is made — checks that need what the ctx lacks `skip`. With no ctx,
+    the shared reads are built as for the full run."""
+    if ctx is None:
+        ctx = _build_ctx(None)
+    else:
+        ctx = dict(ctx)
+        ctx.setdefault("subnet_filter", lambda _sid: True)
+        ctx.setdefault("server_status", [])
+        ctx.setdefault("active_server", None)
+        ctx.setdefault("dhcp4_config", None)
+    out: list[Check] = []
+    for fn in _READINESS_CHECKS or []:
+        cid = fn.__name__.lstrip("_")
+        try:
+            out.append(fn(ctx))
+        except Exception as e:
+            title, group = _CHECK_META[cid]
+            logger.warning(f"health check {cid} errored: {e}")
+            out.append(Check(cid, title, group, "fail", f"check errored: {e}"))
+    return out
 
 
 # ── runner ─────────────────────────────────────────────────────────────────
@@ -987,6 +1011,7 @@ _CHECK_META = {
 }
 
 CHECK_IDS = list(_CHECK_META.keys())
+_READINESS_CHECKS = [fn for fn, cid in zip(_CHECKS, CHECK_IDS, strict=True) if _CHECK_META[cid][1] == "readiness"]
 GROUP_ORDER = ["kea", "capacity", "ddns", "jen", "readiness"]
 GROUP_LABELS = {"kea": "Kea", "capacity": "Capacity", "ddns": "DDNS", "jen": "Jen", "readiness": "Kea 3.2 readiness"}
 # v5.38.0 (Q37) — one line above a group, when it needs framing.
