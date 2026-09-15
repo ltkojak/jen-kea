@@ -376,7 +376,7 @@ def _collect_plugins() -> list[dict]:
 def _collect_db() -> dict:
     from jen.models import migrations
     from jen.models.db import jen_db
-    from jen.services.dbexport import JEN_TABLES
+    from jen.services.dbexport import JEN_TABLES, _row_count
 
     out: dict = {"schema_latest": migrations.latest_version(), "schema_applied": sorted(migrations.applied_versions())}
     with jen_db() as db, db.cursor() as cur:
@@ -386,9 +386,9 @@ def _collect_db() -> dict:
         out["plugin_migrations"] = list(cur.fetchall())
         counts = {}
         for table in JEN_TABLES:
+            # dbexport's own counter (table names come from its fixed dict).
             try:
-                cur.execute(f"SELECT COUNT(*) AS c FROM `{table}`")  # table names come from dbexport's fixed dict
-                counts[table] = (cur.fetchone() or {}).get("c")
+                counts[table] = _row_count(db, table)
             except Exception as e:
                 counts[table] = f"error: {type(e).__name__}"
         out["row_counts"] = counts
