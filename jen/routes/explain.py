@@ -44,19 +44,14 @@ def _load_reservations(mac_hex: str, cid_hex: str) -> list[dict]:
     rows: list[dict] = []
     try:
         with __db.kea_db() as db, db.cursor() as cur:
-            wants = []
-            params = []
-            if mac_hex:
-                wants.append("(HEX(dhcp_identifier)=%s AND dhcp_identifier_type=0)")
-                params.append(mac_hex)
-            if cid_hex:
-                wants.append("(HEX(dhcp_identifier)=%s AND dhcp_identifier_type=3)")
-                params.append(cid_hex)
+            # One fixed statement; an absent identifier is passed as '' and
+            # can't match anything (HEX() of a real identifier is never empty).
             cur.execute(
                 "SELECT host_id, dhcp4_subnet_id AS subnet_id, dhcp_identifier_type AS identifier_type, "
                 "HEX(dhcp_identifier) AS identifier, inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_client_classes "
-                "FROM hosts WHERE " + " OR ".join(wants),
-                params,
+                "FROM hosts WHERE (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=0) "
+                "OR (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=3)",
+                (mac_hex or "", cid_hex or ""),
             )
             for r in cur.fetchall():
                 classes = [c.strip() for c in str(r.get("dhcp4_client_classes") or "").split(",") if c.strip()]
