@@ -14,7 +14,7 @@ import pymysql.cursors
 import pytest
 
 from tests.conftest import TEST_DB
-from tests.e2e.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, FRESH_PASSWORD, FRESH_USERNAME
+from tests.e2e.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, FRESH_PASSWORD, FRESH_USERNAME, login
 
 pytestmark = pytest.mark.e2e
 
@@ -40,11 +40,7 @@ def _seed_active_lease(mac_hex="AABBCCDDEE01", ip="10.99.0.50", subnet_id=1, hos
 
 class TestLogin:
     def test_login_reaches_the_dashboard(self, page, base_url):
-        page.goto(f"{base_url}/login")
-        page.fill('input[name="username"]', ADMIN_USERNAME)
-        page.fill('input[name="password"]', ADMIN_PASSWORD)
-        page.click(".btn-login")
-        page.wait_for_url(f"{base_url}/")
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
         assert page.locator("h1", has_text="Dashboard").count() > 0
 
     def test_wrong_password_stays_on_login_with_a_flash(self, page, base_url):
@@ -59,11 +55,7 @@ class TestLogin:
 
 class TestForcedPasswordChange:
     def test_a_fresh_account_is_routed_to_the_change_password_form_and_back_out(self, page, base_url):
-        page.goto(f"{base_url}/login")
-        page.fill('input[name="username"]', FRESH_USERNAME)
-        page.fill('input[name="password"]', FRESH_PASSWORD)
-        page.click(".btn-login")
-        page.wait_for_url(f"{base_url}/force-password-change")
+        login(page, base_url, FRESH_USERNAME, FRESH_PASSWORD, f"{base_url}/force-password-change")
         assert page.locator("h1", has_text="Password Change Required").count() > 0
 
         new_password = "e2e-Brand-New-Pw!2"

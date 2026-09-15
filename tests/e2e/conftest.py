@@ -126,6 +126,12 @@ def live_server(fake_kea):
     import jen.config as jen_config
 
     jen_config.ssl_configured = lambda: False
+    # jen/__init__.py imports `ssl_configured` by name at module load, so
+    # patching jen.config.ssl_configured alone doesn't reach
+    # _ssl_configured_cached()'s already-bound reference — same fix
+    # tests/conftest.py's `app` fixture applies, for the same reason
+    # (SESSION_COOKIE_SECURE must come out False under plain HTTP).
+    jen_pkg._ssl_configured_cache = False
 
     app = jen_pkg.create_app()
     app.config.update(TESTING=True, SECRET_KEY="e2e-secret-not-for-production")
@@ -166,14 +172,29 @@ def base_url(live_server):
     return live_server
 
 
+def login(page, base_url, username, password, expect_url):
+    """Submit the real login form and wait for the post-login redirect.
+    On failure, surfaces whatever the page actually says (a flash
+    message, or the URL it got stuck on) instead of a bare Playwright
+    timeout — that message is the difference between a five-second fix
+    and another round of guessing from a CI log."""
+    page.goto(f"{base_url}/login")
+    page.fill('input[name="username"]', username)
+    page.fill('input[name="password"]', password)
+    page.click(".btn-login")
+    try:
+        page.wait_for_url(expect_url, timeout=10000)
+    except Exception:
+        alerts = page.locator(".alert").all_text_contents()
+        raise AssertionError(
+            f"login as {username!r} did not reach {expect_url!r} — stuck at {page.url!r}; on-page alerts: {alerts!r}"
+        ) from None
+    return page
+
+
 @pytest.fixture
 def logged_in_page(page, base_url):
     """A page already past login, as the always-ready superadmin — the
     journey most tests actually care about starts here, not at the
     login form (login itself is its own journey below)."""
-    page.goto(f"{base_url}/login")
-    page.fill('input[name="username"]', ADMIN_USERNAME)
-    page.fill('input[name="password"]', ADMIN_PASSWORD)
-    page.click(".btn-login")
-    page.wait_for_url(f"{base_url}/")
-    return page
+    return login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
