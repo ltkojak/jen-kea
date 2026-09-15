@@ -101,6 +101,48 @@ ip)`. The Kea config behind it is one cached `config-get` (30 s), so
 calling it per page render adds nothing. Use it before calling an
 address "unknown" or "available".
 
+## The plugin API surface — `jen.plugin_api` (v5.34.0)
+
+A plugin imports from **`jen.plugin_api` and nowhere else inside `jen`**.
+It is a thin, versioned re-export of what plugins have needed so far;
+nothing new lives behind it, and importing it does no work:
+
+| Area | Names |
+|---|---|
+| Database | `jen_db()`, `kea_db()`, `kea6_db()` (context managers, preferred); `get_jen_db()`, `get_kea_db()` (raw connections — close what you open) |
+| Audit & settings | `audit(action, entity, details)`, `get_global_setting(key, default)`, `set_global_setting(key, value)` |
+| Access control | `assert_subnet_access(subnet_id)`, `get_accessible_subnet_map()`, `is_admin_or_above()`, `is_superadmin()`, decorators `admin_required`, `superadmin_required`, `viewer_or_above` |
+| Subnets | `subnet_map()` (all IPv4 subnets), `subnet_context(subnet_id)`, `classify_address(ctx, ip)`, `in_pool(ctx, ip)`, `dhcp4_config()` |
+| Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)` |
+| Background | `register_periodic(plugin_id, name, fn, every_minutes)`, `unregister_periodic`, `periodic_jobs()` |
+| CSV | `safe_cell(value)`, `safe_row(values)` |
+| Devices | `classify_device(mac, hostname)` → (manufacturer, type, icon) |
+| Plugins | `installed_plugins()`, `is_systemd_host()` |
+| Jen | `jen_version()`, `PLUGIN_API_VERSION` |
+
+```python
+from jen.plugin_api import assert_subnet_access, audit, jen_db, subnet_context
+```
+
+**Versioning.** `PLUGIN_API_VERSION` is `1`. Adding a name is a MINOR Jen
+release and does not move it; removing a name or changing a signature
+moves it and is a MAJOR for Jen. A manifest may declare the version it
+was written against:
+
+```json
+"plugin_api": 1
+```
+
+Jen refuses to load a plugin whose `plugin_api` is newer than what it
+offers — the Plugins page shows *needs plugin API vN* instead of the
+plugin failing with an ImportError at boot. A plugin that uses the
+surface should set `requires_jen` to `5.34.0` or later.
+
+`tests/test_plugin_api.py` checks that the bundled copies import only
+the surface (a short transitional list of internals is tolerated until
+the plugins' own releases move over), and that every name they use is
+offered by it.
+
 ## Writing migrations
 
 `db_migrations` entries are `{"version": N, "description": "…", "sql":

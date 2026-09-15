@@ -112,6 +112,21 @@ def _parse_version(v: str) -> tuple:
     return numeric(v)
 
 
+def plugin_api_ok(manifest: dict) -> bool:
+    """True unless the manifest declares a `plugin_api` newer than this
+    Jen's jen.plugin_api.PLUGIN_API_VERSION. Absent or malformed → True
+    (pre-5.34.0 plugins declare nothing)."""
+    from jen.plugin_api import PLUGIN_API_VERSION
+
+    raw = manifest.get("plugin_api")
+    if raw is None:
+        return True
+    try:
+        return int(raw) <= PLUGIN_API_VERSION
+    except (TypeError, ValueError):
+        return True
+
+
 def jen_version_meets(required: str) -> bool:
     """Return True if the running Jen version satisfies required minimum."""
     from jen import JEN_VERSION
@@ -167,6 +182,10 @@ def discover_plugins() -> list[dict]:
                 manifest["root_owned"] = root_owned
                 manifest["enabled"] = _is_enabled(manifest["id"])
                 manifest["version_ok"] = jen_version_meets(manifest.get("requires_jen", "0.0.0"))
+                # v5.34.0 (Q33) — optional `plugin_api: N`; a plugin written
+                # against a newer surface than this Jen offers is refused
+                # with a chip, not an ImportError at boot.
+                manifest["api_ok"] = plugin_api_ok(manifest)
                 by_id[manifest["id"]] = manifest  # later base in `bases` wins
             except Exception as e:
                 logger.warning(f"Could not load plugin manifest from {path}: {e}")
@@ -210,6 +229,12 @@ def load_plugins(app) -> None:
         if not plugin.get("version_ok", True):
             logger.warning(
                 f"Plugin '{plugin['id']}' requires Jen {plugin.get('requires_jen')} — skipping (version mismatch)"
+            )
+            continue
+        if not plugin.get("api_ok", True):
+            logger.warning(
+                f"Plugin '{plugin['id']}' needs plugin API v{plugin.get('plugin_api')} — this Jen offers "
+                f"v{__import__('jen.plugin_api', fromlist=['PLUGIN_API_VERSION']).PLUGIN_API_VERSION}; skipping"
             )
             continue
         plugin_id = plugin["id"]

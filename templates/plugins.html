@@ -63,6 +63,8 @@
             <td>
                 {% if not p.version_ok %}
                 <span style="color:var(--warning);font-size:12px;">⚠ Jen version mismatch</span>
+                {% elif p.get('api_ok', True) == false %}
+                <span style="color:var(--warning);font-size:12px;" title="This plugin is written against a newer plugin API than this Jen offers — upgrade Jen.">⚠ needs plugin API v{{ p.plugin_api }}</span>
                 {% elif p.enabled %}
                 <span style="color:var(--success);font-size:12px;">● Enabled</span>
                 {% else %}
