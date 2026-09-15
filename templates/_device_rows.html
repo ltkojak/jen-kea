@@ -52,6 +52,7 @@
                 {% else %}
                 <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 {% endif %}
+                <a href="/timeline?mac={{ d.mac }}" class="action-menu-item">🕐 Timeline</a>
                 {% if current_user.role in ('superadmin','admin') %}
                 <div class="action-menu-divider"></div>
                 <form method="POST" action="/devices/delete/{{ d.id }}" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

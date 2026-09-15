@@ -178,6 +178,26 @@
         "params": [],
         "example_path": "/api/v1/subnets/30/notes",
         "example_response": '{\n  "subnet_id": 30,\n  "notes": "IoT VLAN — core switch closet"\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/events",
+        "title": "Event Stream",
+        "auth": true,
+        "desc": "Raw events rows — lease/device/reservation/config/HA/drift/alert activity Jen has recorded. mac, ip, kind and since (ISO 8601) all filter; a subnet-scoped key never sees another subnet's events, or a subnet-less one.",
+        "params": [],
+        "example_path": "/api/v1/events?mac=aa:bb:cc:dd:ee:ff&kind=lease.new",
+        "example_response": '{\n  "count": 1,\n  "events": [\n    {\n      "id": 42,\n      "ts": "2026-09-15T12:00:00",\n      "kind": "lease.new",\n      "mac": "aa:bb:cc:dd:ee:ff",\n      "ip": "10.10.10.50",\n      "subnet_id": 1,\n      "hostname": "laptop",\n      "server": null,\n      "actor": null,\n      "detail": ""\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/timeline/{mac}",
+        "title": "Client Timeline",
+        "auth": true,
+        "desc": "The same merged view the Timeline page renders for one MAC — events, matching audit log and alert entries, plus its current lease, reservation and device record — newest first.",
+        "params": [],
+        "example_path": "/api/v1/timeline/aa:bb:cc:dd:ee:ff",
+        "example_response": '{\n  "mac": "aa:bb:cc:dd:ee:ff",\n  "ip": "10.10.10.50",\n  "subnet_id": 1,\n  "device": null,\n  "lease": {\n    "ip": "10.10.10.50",\n    "subnet_id": 1,\n    "hostname": "laptop",\n    "expire": "2026-09-15T13:00:00"\n  },\n  "reservation": null,\n  "rows": [\n    {\n      "ts": "2026-09-15T12:00:00",\n      "kind": "lease.new",\n      "source": "event",\n      "detail": "",\n      "subnet_id": 1\n    }\n  ]\n}'
     }
 ] %}
 

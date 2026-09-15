@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Timeline{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>🕐 Timeline</h1>
+    <p>Everything Jen has recorded about one client — events, config changes, alerts sent, and its current lease and reservation — newest first.</p>
+</div>
+
+<div class="card">
+    <form method="GET" action="/timeline" autocomplete="off">
+        <div class="form-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+            <div class="form-group" style="margin:0;">
+                <label>MAC address</label>
+                <input type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>IP address</label>
+                <input type="text" name="ip" class="mono" value="{{ ip }}" placeholder="10.0.0.50">
+            </div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+            <button type="submit" class="btn btn-primary">🕐 Show timeline</button>
+            <span class="form-hint" style="margin:0;">Either field is enough — an IP resolves to its current lease's MAC when one exists.</span>
+        </div>
+    </form>
+</div>
+
+{% if result %}
+<div class="card" style="border-color:rgba(0,180,216,0.3);">
+    <div class="card-header">
+        <span class="card-title">{{ result.mac or result.ip or 'Client' }}</span>
+        <span style="font-size:12px;color:var(--text-muted);">
+            {% if result.mac %}<a href="/tools/explain?mac={{ result.mac }}" class="mono">🧭 Explain</a>{% endif %}
+            {% if result.mac %} · <a href="/reservations?search={{ result.mac }}">📌 Reservations</a>{% endif %}
+        </span>
+    </div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap;">
+        {% if result.mac %}<div><div class="stat-label">MAC</div><div class="mono">{{ result.mac }}</div></div>{% endif %}
+        {% if result.ip %}<div><div class="stat-label">Current / last IP</div><div class="mono">{{ result.ip }}</div></div>{% endif %}
+        {% if result.device %}
+        <div><div class="stat-label">Device first seen</div><div class="mono">{{ result.device.first_seen|utcfmt }}</div></div>
+        <div><div class="stat-label">Device last seen</div><div class="mono">{{ result.device.last_seen|utcfmt }}</div></div>
+        {% endif %}
+        {% if result.lease %}
+        <div><div class="stat-label">Active lease</div><div class="mono">{{ result.lease.ip }} — expires {{ result.lease.expire|utcfmt }}</div></div>
+        {% else %}
+        <div><div class="stat-label">Active lease</div><div style="color:var(--text-muted);">none</div></div>
+        {% endif %}
+        {% if result.reservation %}
+        <div><div class="stat-label">Reservation</div><div class="mono">{{ result.reservation.ip }}</div></div>
+        {% endif %}
+    </div>
+</div>
+
+{% if kinds|length > 1 %}
+<div class="card" style="padding:10px 16px;">
+    <div id="tl-filters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;">
+        <span style="color:var(--text-muted);">Filter:</span>
+        <button type="button" class="badge badge-reserved tl-filter-btn" data-kind="">all</button>
+        {% for k in kinds %}
+        <button type="button" class="badge badge-dynamic tl-filter-btn" data-kind="{{ k }}">{{ k }}</button>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">History</span>
+        <span style="font-size:12px;color:var(--text-muted);">{{ result.rows|length }} entr{{ 'y' if result.rows|length == 1 else 'ies' }}</span>
+    </div>
+    {% if result.rows %}
+    <div id="tl-rows" style="display:flex;flex-direction:column;gap:2px;">
+        {% for r in result.rows %}
+        <div class="tl-row" data-kind="{{ r.kind }}" style="display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:13px;align-items:baseline;">
+            <div class="mono" style="color:var(--text-muted);white-space:nowrap;min-width:150px;">{{ r.ts|utcfmt }}</div>
+            <div style="min-width:170px;">
+                <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{{ r.kind }}</span>
+            </div>
+            <div style="color:var(--text-muted);">{{ r.detail }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    {% from '_empty.html' import empty_state %}
+    {{ empty_state('🕐', 'Nothing recorded for this client yet.') }}
+    {% endif %}
+</div>
+{% elif mac or ip %}
+<div class="card">
+    <p style="color:var(--text-muted);">No client matched that MAC or IP, or you don't have access to it.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+{% if result and result.rows and kinds|length > 1 %}
+document.querySelectorAll('.tl-filter-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var kind = btn.getAttribute('data-kind');
+        document.querySelectorAll('.tl-row').forEach(function(row) {
+            row.hidden = !!(kind && row.getAttribute('data-kind') !== kind);
+        });
+    });
+});
+{% endif %}
+{% endblock %}

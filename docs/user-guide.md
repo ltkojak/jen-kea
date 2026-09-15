@@ -130,6 +130,18 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 Kea has no dry-run, so this is a reconstruction from the configuration Jen holds; it cannot see which interface a request arrived on. Only subnets you can access are shown.
 
+## Timeline (v5.42.0)
+
+**Network → Timeline**, or *Timeline* in the action menu of any lease, reservation or device inventory row — also linked from an Explain result ("What happened to this client?"). Give it a MAC or an IP and it shows everything Jen has recorded about that one client, newest first:
+
+- **Events** — a new lease, an IP or hostname change, an expired lease, a reservation added/deleted/changed, a config push, an HA state change, config drift detected or resolved, and every alert Jen sent, with which channel and whether it landed.
+- **Audit log** entries and **alert** deliveries that mention the MAC or IP in their text.
+- The device's first-seen/last-seen bookends, and its current lease and reservation, at the top.
+
+An IP with no MAC given resolves to its current lease's MAC automatically. Filter chips narrow the list to one kind of event at a time. Only subnets you can access are shown — a client whose subnet you can't see, or one with no resolvable subnet at all, isn't shown to a subnet-restricted user.
+
+Jen keeps events for 90 days by default — the same retention job that prunes lease history.
+
 ## Subnets & Scope Options
 
 The Subnets page shows the live configuration of all subnets pulled directly from the Kea API. It is read-only by default unless SSH is configured for subnet editing.

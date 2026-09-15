@@ -2,6 +2,41 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.42.0-beta.1] - 2026-09-15
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.41.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q43, an event stream and the client timeline it makes possible: every
+alert Jen fires today throws away the reasoning behind it the moment
+the message is sent, and a support conversation about "what happened to
+this device last Tuesday" has always meant grepping the Jen log by
+hand. `jen/services/events.py` gives Jen a proper, best-effort event
+stream — one row per `emit()` call (migration 27's `events` table),
+notifying any subscriber registered through the plugin API without
+raising if a subscriber misbehaves. The alert thread's lease-tracking
+loop, previously a bare set of active IPs compared between polls, was
+factored into a pure `alerts.diff_leases(prev, cur)` first — unit
+tested without a database — which turns out to also make an IP change
+on the same MAC and a hostname change visible for the first time,
+alongside the lease.new/lease.expired the old comparison already
+implied. Every other natural emit point got wired in alongside its
+existing alert: HA state changes, config drift detected/resolved, one
+alert.sent per delivery attempt (not per alert), a reservation add/
+edit/delete from either the UI or the API, and a config push once every
+server in a change set commits. The Timeline page
+(`GET /timeline?mac=…` or `?ip=…`, linked from every lease, reservation
+and device row's menu, and from an Explain result) merges those events
+with matching audit log and alert entries and the client's current
+lease, reservation and device record into one newest-first view, with
+filter chips by kind; a subnet-restricted user only ever sees a client
+whose subnet they can access, including per-row for a client whose
+history spans more than one. Two new API endpoints, `GET /api/v1/events`
+and `GET /api/v1/timeline/{mac}`, expose the same data for scripting.
+The plugin API gains `subscribe`/`unsubscribe`/`event_kinds` and moves
+to version 2 — additive; a version-1 plugin still loads unchanged.
+
 ## [5.41.0-beta.1] - 2026-09-15
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

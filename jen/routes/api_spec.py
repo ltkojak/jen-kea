@@ -222,6 +222,54 @@ def build_spec(version: str, base_url: str = "") -> dict:
                     "type": "object",
                     "properties": {"subnet_id": {"type": "integer"}, "notes": {"type": "string"}},
                 },
+                "Event": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "ts": {"type": "string"},
+                        "kind": {"type": "string"},
+                        "mac": {"type": "string", "nullable": True},
+                        "ip": {"type": "string", "nullable": True},
+                        "subnet_id": {"type": "integer", "nullable": True},
+                        "hostname": {"type": "string", "nullable": True},
+                        "server": {"type": "string", "nullable": True},
+                        "actor": {"type": "string", "nullable": True},
+                        "detail": {"type": "string"},
+                    },
+                },
+                "EventList": {
+                    "type": "object",
+                    "properties": {
+                        "events": {"type": "array", "items": {"$ref": "#/components/schemas/Event"}},
+                        "count": {"type": "integer"},
+                    },
+                },
+                "Timeline": {
+                    "type": "object",
+                    "description": "The merged view GET /timeline renders — the same one Event rows plus device/lease/reservation bookends, for one MAC.",
+                    "properties": {
+                        "mac": {"type": "string"},
+                        "ip": {"type": "string"},
+                        "subnet_id": {"type": "integer", "nullable": True},
+                        "device": {"type": "object", "nullable": True},
+                        "lease": {"type": "object", "nullable": True},
+                        "reservation": {"type": "object", "nullable": True},
+                        "rows": {
+                            "type": "array",
+                            "description": "events, audit_log and alert_log rows merged and sorted newest-first.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "ts": {"type": "string"},
+                                    "kind": {"type": "string"},
+                                    "source": {"type": "string", "enum": ["event", "audit", "alert"]},
+                                    "detail": {"type": "string"},
+                                    "subnet_id": {"type": "integer", "nullable": True},
+                                },
+                            },
+                        },
+                    },
+                },
             },
         },
         "paths": {
@@ -240,6 +288,28 @@ def build_spec(version: str, base_url: str = "") -> dict:
                     "summary": "Kea servers, HA state and packet health (Q42)",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "ServerList"), "401": _ERR},
+                }
+            },
+            "/api/v1/events": {
+                "get": {
+                    "summary": "Raw event stream rows (Q43)",
+                    "security": [_KEY],
+                    "parameters": [
+                        _q("mac", "Filter by MAC"),
+                        _q("ip", "Filter by IP"),
+                        _q("kind", "Filter by exact kind, e.g. lease.new"),
+                        _q("since", "ISO 8601 date/datetime — only rows at or after it"),
+                        _q("limit", "Max rows, default 200, max 1000", "integer"),
+                    ],
+                    "responses": {"200": _resp("OK", "EventList"), "400": _ERR, "401": _ERR},
+                }
+            },
+            "/api/v1/timeline/{mac}": {
+                "get": {
+                    "summary": "One client's merged timeline (Q43)",
+                    "security": [_KEY],
+                    "parameters": [{"name": "mac", "in": "path", "required": True, "schema": {"type": "string"}}],
+                    "responses": {"200": _resp("OK", "Timeline"), "400": _ERR, "401": _ERR, "403": _ERR},
                 }
             },
             "/api/v1/leases": {

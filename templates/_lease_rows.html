@@ -30,6 +30,7 @@
                 {% else %}
                 <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item">🧭 Why this address?</a>
+                <a href="/timeline?mac={{ l.mac }}" class="action-menu-item">🕐 Timeline</a>
                 <div class="action-menu-divider"></div>
                 <form method="POST" action="/leases/release" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="ip" value="{{ l.ip }}">

@@ -36,7 +36,7 @@ TOP_NAV = [
         "label": "Network",
         "icon": "🌐",
         "url": "/subnets",
-        "match": ("subnets.", "servers.", "ddns.", "health."),
+        "match": ("subnets.", "servers.", "ddns.", "health.", "timeline."),
     },
     {"id": "settings", "label": "Settings", "icon": "⚙️", "url": "/settings", "roles": ADMIN_ROLES, "match": ()},
     {"id": "about", "label": "About", "icon": "ℹ️", "url": "/about", "match": ("users.about",)},
@@ -57,6 +57,7 @@ SECTION_STRIPS = {
         {"icon": "🩺", "label": "Health", "url": "/health-center", "match": ("health.",)},
         {"icon": "🧭", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
         {"icon": "🩻", "label": "Doctor", "url": "/tools/doctor", "match": ("doctor.",)},
+        {"icon": "🕐", "label": "Timeline", "url": "/timeline", "match": ("timeline.",)},
         # plugin nav items with section == "network" are appended at render time
     ],
 }

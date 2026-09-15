@@ -746,6 +746,18 @@ def take_server_stats_snapshot():
         logger.error(f"Server stats snapshot error: {e}")
 
 
+def _purge_old_events() -> None:
+    """v5.42.0 (Q43) — the events retention job, same cadence as
+    lease_history's: `events_retention_days` (default 90), pruned in the
+    same snapshot pass."""
+    try:
+        retention_days = int(__get_global_setting("events_retention_days", "90"))
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute(f"DELETE FROM events WHERE ts < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)")
+    except Exception as e:
+        logger.error(f"Events retention purge error: {e}")
+
+
 def _check_packet_health_alerts(alerted_packet_health) -> None:
     """Fire `packet_health` (warn/fail) / `packet_health_ok` (recovery)
     once per server per transition — the utilization_high/utilization_ok
@@ -1367,6 +1379,7 @@ def check_alerts():
                 take_lease_snapshot()
                 take_server_stats_snapshot()
                 _check_packet_health_alerts(alerted_packet_health)
+                _purge_old_events()
                 last_snapshot_time = now_ts
 
             # ── Daily summary ──

@@ -115,6 +115,7 @@ nothing new lives behind it, and importing it does no work:
 | Subnets | `subnet_map()` (all IPv4 subnets), `subnet_context(subnet_id)`, `classify_address(ctx, ip)`, `in_pool(ctx, ip)`, `dhcp4_config()` |
 | Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)` |
 | Background | `register_periodic(plugin_id, name, fn, every_minutes)`, `unregister_periodic`, `periodic_jobs()` |
+| Events (v5.42.0) | `subscribe(kind_or_"*", fn)`, `unsubscribe(fn)`, `event_kinds` (the pinned kind vocabulary) |
 | CSV | `safe_cell(value)`, `safe_row(values)` |
 | Devices | `classify_device(mac, hostname)` → (manufacturer, type, icon) |
 | Plugins | `installed_plugins()`, `is_systemd_host()` |
@@ -124,13 +125,44 @@ nothing new lives behind it, and importing it does no work:
 from jen.plugin_api import assert_subnet_access, audit, jen_db, subnet_context
 ```
 
-**Versioning.** `PLUGIN_API_VERSION` is `1`. Adding a name is a MINOR Jen
-release and does not move it; removing a name or changing a signature
-moves it and is a MAJOR for Jen. A manifest may declare the version it
-was written against:
+### Events — `subscribe(kind_or_"*", fn)` / `unsubscribe(fn)` (v5.42.0)
+
+Jen's event stream (`jen.services.events`, the record behind the
+Timeline page and `GET /api/v1/events`) calls every subscriber after
+each `emit()` — a plugin can react to `lease.new`, `reservation.added`,
+`config.applied`, and the rest of the pinned kind vocabulary (`from
+jen.plugin_api import event_kinds`) without polling. There is no
+`emit()` in the plugin surface — plugins observe the stream, they don't
+write to it; `discovery.unknown` is reserved for network-discovery's own
+future use.
+
+```python
+from jen.plugin_api import subscribe, unsubscribe
+
+
+def _on_new_lease(event):
+    # event: {id, kind, mac, ip, subnet_id, hostname, server, actor, detail}
+    ...
+
+
+subscribe("lease.new", _on_new_lease)  # or subscribe("*", fn) for every kind
+```
+
+`fn` is called synchronously, right after the row is written — keep it
+fast, and never let it raise: an exception is logged and swallowed, but
+a slow subscriber still blocks whatever thread called `emit()` (usually
+the alert loop's tick). There's no `unsubscribe_all` — a plugin that
+`register(app)`s a subscriber and can be disabled at runtime is
+responsible for calling `unsubscribe(fn)` itself if it needs to stop
+listening.
+
+**Versioning.** `PLUGIN_API_VERSION` is `2` (events pushed it from `1`
+— see below). Adding a name is a MINOR Jen release and does not move
+it; removing a name or changing a signature moves it and is a MAJOR for
+Jen. A manifest may declare the version it was written against:
 
 ```json
-"plugin_api": 1
+"plugin_api": 2
 ```
 
 Jen refuses to load a plugin whose `plugin_api` is newer than what it

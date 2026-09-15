@@ -801,6 +801,114 @@ def api_v1_subnet_notes(subnet_id):
     return api_ok({"subnet_id": subnet_id, "notes": text})
 
 
+@bp.route("/api/v1/events")
+def api_v1_events():
+    """v5.42.0 (Q43) — raw events rows (jen.services.events.emit()), not
+    the merged timeline. mac/ip/kind/since are all optional filters,
+    ANDed together; a key scoped to specific subnets never sees another
+    subnet's events, and never sees a subnet-less event (config.applied,
+    alert.sent to no particular subnet, …) at all."""
+    key = _api_auth()
+    if not key:
+        return api_error("Invalid or missing API key.", 401)
+    mac = (request.args.get("mac") or "").strip().lower()
+    ip = (request.args.get("ip") or "").strip()
+    kind = (request.args.get("kind") or "").strip()
+    since_raw = (request.args.get("since") or "").strip()
+    since = ""
+    if since_raw:
+        try:
+            datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
+            since = since_raw
+        except ValueError:
+            return api_error("since must be an ISO 8601 date or datetime.", 400)
+    try:
+        limit = max(1, min(int(request.args.get("limit", 200)), 1000))
+    except ValueError:
+        limit = 200
+
+    scope = _api_key_subnet_ids(key)
+    result = []
+    try:
+        with jen_db() as db, db.cursor() as cur:
+            # One fixed statement (bandit B608) — each filter is
+            # "blank means match everything", never string-joined.
+            cur.execute(
+                "SELECT id, ts, kind, mac, ip, subnet_id, hostname, server, actor, detail FROM events "
+                "WHERE (%s = '' OR mac = %s) AND (%s = '' OR ip = %s) AND (%s = '' OR kind = %s) "
+                "AND (%s = '' OR ts >= %s) ORDER BY ts DESC LIMIT %s",
+                (mac, mac, ip, ip, kind, kind, since, since, limit),
+            )
+            for r in cur.fetchall():
+                if scope is not None and (r["subnet_id"] is None or r["subnet_id"] not in scope):
+                    continue
+                result.append(
+                    {
+                        "id": r["id"],
+                        "ts": r["ts"].isoformat() if r["ts"] else None,
+                        "kind": r["kind"],
+                        "mac": r["mac"],
+                        "ip": r["ip"],
+                        "subnet_id": r["subnet_id"],
+                        "hostname": r["hostname"],
+                        "server": r["server"],
+                        "actor": r["actor"],
+                        "detail": r["detail"],
+                    }
+                )
+    except Exception as e:
+        logger.error(f"api_v1_events error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    return api_ok({"events": result, "count": len(result)})
+
+
+@bp.route("/api/v1/timeline/<mac>")
+def api_v1_timeline(mac):
+    """v5.42.0 (Q43) — the same merged view GET /timeline renders,
+    scoped to a single MAC. Subnet rules match the page: a key scoped to
+    specific subnets needs access to the client's resolved subnet (or is
+    refused outright if it can't be resolved at all), and any individual
+    row outside that key's scope — including every subnet-less audit_log/
+    alert_log row — is dropped rather than returned."""
+    key = _api_auth()
+    if not key:
+        return api_error("Invalid or missing API key.", 401)
+    mac = (mac or "").strip().lower()
+    if not __auth.valid_mac(mac):
+        return api_error("Invalid MAC address.", 400)
+
+    from jen.services.timeline import build_timeline
+
+    result = build_timeline(mac=mac)
+    scope = _api_key_subnet_ids(key)
+    if scope is not None:
+        if result["subnet_id"] is None or result["subnet_id"] not in scope:
+            return api_error("This key has no access to that subnet.", 403)
+        result["rows"] = [r for r in result["rows"] if r["subnet_id"] in scope]
+
+    device = result["device"]
+    lease = result["lease"]
+    if device:
+        device = {
+            **device,
+            "first_seen": device["first_seen"].isoformat(),
+            "last_seen": device["last_seen"].isoformat(),
+        }
+    if lease:
+        lease = {**lease, "expire": lease["expire"].isoformat()}
+    return api_ok(
+        {
+            "mac": result["mac"],
+            "ip": result["ip"],
+            "subnet_id": result["subnet_id"],
+            "device": device,
+            "lease": lease,
+            "reservation": result["reservation"],
+            "rows": [{**r, "ts": r["ts"].isoformat() if r["ts"] else None} for r in result["rows"]],
+        }
+    )
+
+
 @bp.route("/api/v1/openapi.json")
 def api_v1_openapi():
     """v5.34.0 (Q33) — the OpenAPI 3.0 description of this API, from one
