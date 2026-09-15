@@ -224,6 +224,65 @@ class TestKeaSubnetsDeclared:
         assert c.status == "warn" and "7" in c.detail
 
 
+class TestConfigDoctorCheck:
+    """v5.40.0 (Q41) — the Health twin of jen/services/config_doctor.py.
+    The check function itself reads hosts/HA from the real DB/Kea
+    (_doctor_hosts / _doctor_ha_configs) rather than from ctx like most
+    other checks, since config_doctor.diagnose() needs the reservation
+    rows and (for HA) a second server's config that the shared health
+    ctx doesn't otherwise carry — monkeypatched here to isolate the
+    severity-selection logic from the two DB-backed tests below."""
+
+    def test_skips_without_config(self):
+        c = health._config_doctor(_ctx(dhcp4_config=None))
+        assert c.status == "skip"
+
+    def test_ok_when_no_findings(self, monkeypatch):
+        monkeypatch.setattr(health, "_doctor_hosts", list)
+        monkeypatch.setattr(health, "_doctor_ha_configs", lambda: None)
+        cfg = {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "pools": [{"pool": "10.0.0.10 - 10.0.0.50"}]}]}
+        c = health._config_doctor(_ctx(dhcp4_config=cfg))
+        assert c.status == "ok"
+
+    def test_warn_when_only_warn_findings(self, monkeypatch):
+        monkeypatch.setattr(health, "_doctor_hosts", list)
+        monkeypatch.setattr(health, "_doctor_ha_configs", lambda: None)
+        cfg = {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "reservation-mode": "out-of-pool"}]}
+        c = health._config_doctor(_ctx(dhcp4_config=cfg))
+        assert c.status == "warn"
+        assert "/tools/doctor" in c.detail
+
+    def test_fail_when_any_fail_finding(self, monkeypatch):
+        monkeypatch.setattr(health, "_doctor_hosts", list)
+        monkeypatch.setattr(health, "_doctor_ha_configs", lambda: None)
+        cfg = {
+            "subnet4": [
+                {
+                    "id": 1,
+                    "subnet": "10.0.0.0/24",
+                    "pools": [{"pool": "10.0.0.10 - 10.0.0.50"}, {"pool": "10.0.0.40 - 10.0.0.60"}],
+                }
+            ]
+        }
+        c = health._config_doctor(_ctx(dhcp4_config=cfg))
+        assert c.status == "fail"
+
+    def test_doctor_hosts_reads_the_real_table(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts")
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE01'), 0, 1, INET_ATON('10.0.0.20'), 'test')"
+            )
+        db.commit()
+        rows = health._doctor_hosts()
+        assert any(r["ip"] == "10.0.0.20" and r["subnet_id"] == 1 for r in rows)
+
+    def test_doctor_ha_configs_none_when_not_ha(self, monkeypatch):
+        monkeypatch.setattr(health, "_ha_configured", lambda: False)
+        assert health._doctor_ha_configs() is None
+
+
 # ── capacity ───────────────────────────────────────────────────────────────
 
 

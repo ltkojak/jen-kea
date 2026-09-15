@@ -287,6 +287,75 @@ def _kea_subnets_declared(ctx) -> Check:
     return c
 
 
+def _doctor_hosts() -> list[dict]:
+    """Every reservation row config_doctor's checks need — id/identifier/
+    address only, one SELECT, no per-subnet filtering (the pure checks
+    just ignore a subnet_id that isn't in the config)."""
+    try:
+        with __db.kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT dhcp4_subnet_id AS subnet_id, dhcp_identifier_type AS identifier_type, "
+                "HEX(dhcp_identifier) AS identifier, inet_ntoa(ipv4_address) AS ip, hostname FROM hosts"
+            )
+            return cur.fetchall()
+    except Exception as e:
+        _log_err("config_doctor", e)
+        return []
+
+
+def _doctor_ha_configs() -> dict | None:
+    """{server_id: kea_ha.ha_config() result} for every configured
+    server, only when HA is actually set up — same shape and same
+    per-server config-get servers.py's own _ha_configs_for_all() does,
+    kept separate since routes shouldn't be imported from here."""
+    if not _ha_configured():
+        return None
+    from jen.services import kea_ha
+
+    out = {}
+    for s in extensions.KEA_SERVERS:
+        try:
+            r = __kea.kea_command("config-get", server=s)
+            dhcp4 = r.get("arguments", {}).get("Dhcp4", {}) if r.get("result") == 0 else None
+            out[s["id"]] = kea_ha.ha_config(dhcp4) if dhcp4 is not None else None
+        except Exception as e:
+            _log_err("config_doctor", e)
+            out[s["id"]] = None
+    return out
+
+
+def _config_doctor(ctx) -> Check:
+    from jen.services import config_doctor
+
+    c = Check("config_doctor", "Configuration Doctor", "kea", fix_url="/tools/doctor")
+    cfg = ctx["dhcp4_config"]
+    if cfg is None:
+        c.status, c.detail = "skip", "config-get unavailable"
+        return c
+
+    findings = config_doctor.diagnose(cfg, _doctor_hosts(), ha_configs=_doctor_ha_configs())
+    if not findings:
+        c.status, c.detail = "ok", "no findings"
+        return c
+
+    fails = [f for f in findings if f["severity"] == "fail"]
+    warns = [f for f in findings if f["severity"] == "warn"]
+    infos = [f for f in findings if f["severity"] == "info"]
+    if fails:
+        c.status = "fail"
+    elif warns:
+        c.status = "warn"
+    else:
+        c.status = "ok"
+
+    if c.status == "ok":
+        c.detail = f"{len(infos)} informational note(s) — see /tools/doctor"
+    else:
+        first = fails[0] if fails else warns[0]
+        c.detail = f"{first['title']}: {first['detail']} — {len(findings)} finding(s), see /tools/doctor"
+    return c
+
+
 # ── capacity group ─────────────────────────────────────────────────────────
 
 
@@ -961,6 +1030,7 @@ _CHECKS = [
     _kea_time_sync,
     _kea_config_drift,
     _kea_subnets_declared,
+    _config_doctor,
     _pool_utilization,
     _pool_exhaustion_forecast,
     _lease_snapshot_fresh,
@@ -990,6 +1060,7 @@ _CHECK_META = {
     "kea_time_sync": ("Kea clock in sync", "kea"),
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
+    "config_doctor": ("Configuration Doctor", "kea"),
     "pool_utilization": ("Pool utilization", "capacity"),
     "pool_exhaustion_forecast": ("Pool exhaustion forecast", "capacity"),
     "lease_snapshot_fresh": ("Lease snapshots current", "capacity"),
