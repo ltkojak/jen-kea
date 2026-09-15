@@ -452,6 +452,19 @@ UI. A key with `subnet_access = NULL` is still global — that's the
 default for a key created by an unrestricted admin, and remains a valid
 "this is a trusted integration credential" choice.
 
+**Writes (v5.34.0, Q33).** The API was read-only until then. Write
+endpoints exist now for exactly the things that are Jen's own tables or
+Kea's host database (reservations via `host_cmds`, device name/owner/
+notes, subnet notes) — never for anything that edits a Kea
+configuration file, which needs the changeset engine (§3.11) and a
+human preview. Two additional controls: a per-key `can_write` flag
+(migration 25), off by default so every pre-existing key stays
+read-only; and a per-key rate limit on writes. An API request has no
+Flask-Login user, so every write is audited with the key's name as the
+actor. The surface is described by `/api/v1/openapi.json`, generated
+from one Python dict; a test walks Flask's URL map and fails when a
+`/api/v1/` route and the document disagree.
+
 **Client IP behind a proxy (v5.17.0 / Q6 6D).** Rate limiting, the audit
 log and MFA trusted-device records all key off `request.remote_addr`.
 When `[server] trusted_proxies` is set (a list of proxy IPs / CIDRs),

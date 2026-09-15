@@ -36,6 +36,13 @@
             <input type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
             <div class="form-hint">A descriptive name so you know what this key is used for.</div>
         </div>
+        <div class="form-group" style="margin:0;min-width:160px;">
+            <label>Access</label>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer;">
+                <input type="checkbox" name="can_write" value="1"> Allow writes
+            </label>
+            <div class="form-hint">Off = read-only (every key before v5.34.0). On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
+        </div>
         <div class="form-group" style="margin:0;flex:1;min-width:200px;">
             <label>Subnet Access</label>
             <select name="subnet_ids" multiple style="width:100%;min-height:90px;">
@@ -70,6 +77,7 @@
             <th>Name</th>
             <th>Key Prefix</th>
             <th>Subnet Access</th>
+            <th>Access</th>
             <th>Created</th>
             <th>Last Used</th>
             <th>Status</th>
@@ -86,6 +94,9 @@
                 {% else %}
                 <span style="color:var(--text-muted);">All subnets</span>
                 {% endif %}
+            </td>
+            <td style="font-size:12px;">
+                {% if k.can_write %}<span style="color:var(--warning);">✎ read/write</span>{% else %}<span style="color:var(--text-muted);">read-only</span>{% endif %}
             </td>
             <td style="color:var(--text-muted);font-size:12px;">
                 {{ k.created_at|utcdate }}

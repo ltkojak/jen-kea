@@ -532,8 +532,16 @@ Go to **Settings → Access & Security → API Keys** to generate, view, and rev
 | GET | `/api/v1/devices` | Device inventory — params: mac, name, subnet, limit |
 | GET | `/api/v1/devices/{mac}` | Single device with online status and current lease |
 | GET | `/api/v1/reservations` | Reservations — params: subnet, limit |
+| POST | `/api/v1/reservations` | Create a reservation — JSON `{subnet_id, ip, mac, hostname?, dns?, notes?}` → 201 (v5.34.0, write key) |
+| DELETE | `/api/v1/reservations/{host_id}` | Delete a reservation by Kea host id (v5.34.0, write key) |
+| PATCH | `/api/v1/devices/{mac}` | Set a device's `name`, `owner`, `notes` (any subset; `null` clears) (v5.34.0, write key) |
+| POST | `/api/v1/subnets/{id}/notes` | Set the subnet's note — JSON `{text}` (empty clears) (v5.34.0, write key) |
 
-Full documentation with examples is available at **Settings → Access & Security → API Docs** in the Jen interface.
+Full documentation with examples is available at **Settings → Access & Security → API Docs** in the Jen interface, and as an OpenAPI 3.0 document at `/api/v1/openapi.json`.
+
+### Writing through the API (v5.34.0)
+
+Write access is **per key and off by default**: tick *Allow writes* when creating the key. A read-only key gets `403` on every write endpoint; every key created before v5.34.0 is read-only. Writes honour the key's subnet scope exactly as reads do, are audited with the key's name as the actor (`[api-key:Home Assistant] …`), and are limited to 60 per minute per key. Reservations go through Kea's `host_cmds` hook like the Reservations page — never a config-file change — so a Kea refusal (duplicate address, unknown subnet) comes back as `502` with Kea's own message. Nothing that edits a Kea configuration file (subnets, pools, options, classes) is exposed through the API; those need the preview-and-apply flow in the UI.
 
 ### Home Assistant Quick Start
 

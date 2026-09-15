@@ -429,3 +429,25 @@ class TestMigration24WebauthnColumns:
         with jen_db() as db:
             _m024_webauthn_transports_aaguid(db)  # must not raise when both columns already exist
             db.commit()
+
+
+class TestMigration25ApiKeysCanWrite:
+    """v5.34.0 (Q33) — API keys gain `can_write`, off by default: every
+    key that existed before the write endpoints stays read-only."""
+
+    def test_migration_recorded(self):
+        assert 25 in applied_versions()
+
+    def test_column_present_not_null_default_zero(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM api_keys LIKE 'can_write'")
+            row = cur.fetchone()
+            assert row is not None
+            assert row["Null"] == "NO" and str(row["Default"]) == "0"
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m025_api_keys_can_write
+
+        with jen_db() as db:
+            _m025_api_keys_can_write(db)
+            db.commit()

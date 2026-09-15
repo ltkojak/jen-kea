@@ -12,6 +12,8 @@ from datetime import datetime
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
+import jen.services.auth as __auth
+import jen.services.kea as __kea
 from jen import extensions
 from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
@@ -48,7 +50,9 @@ def _api_auth():
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
         with jen_db() as db, db.cursor() as cur:
-            cur.execute("SELECT id, name, subnet_access FROM api_keys WHERE key_hash=%s AND active=1", (key_hash,))
+            cur.execute(
+                "SELECT id, name, subnet_access, can_write FROM api_keys WHERE key_hash=%s AND active=1", (key_hash,)
+            )
             row = cur.fetchone()
             if row:
                 cur.execute(
@@ -465,6 +469,247 @@ def api_v1_reservations():
     return api_ok({"reservations": result, "count": len(result)})
 
 
+# ── REST API v1 — writes (v5.34.0, Q33) ──────────────────────────────────────
+#
+# Same Bearer auth and the same per-key subnet scope as the reads, plus the
+# key's `can_write` flag (migration 25, off by default). Nothing here
+# touches a Kea config file: reservations go through Kea's host_cmds hook
+# exactly like the Reservations page, device overrides and subnet notes are
+# Jen's own tables. Every write is audited with the key's name as the
+# actor — an API request has no Flask-Login user.
+
+_WRITE_RATE_PER_MINUTE = 60
+_write_hits: dict = {}
+
+
+def _write_rate_limited(key_id) -> bool:
+    """In-memory per-key limiter for the write endpoints: at most
+    _WRITE_RATE_PER_MINUTE calls in any rolling 60 s window."""
+    import time as _time
+
+    now = _time.monotonic()
+    hits = [t for t in _write_hits.get(key_id, []) if now - t < 60]
+    if len(hits) >= _WRITE_RATE_PER_MINUTE:
+        _write_hits[key_id] = hits
+        return True
+    hits.append(now)
+    _write_hits[key_id] = hits
+    return False
+
+
+def _api_write_gate():
+    """(key, None) when the request may write, else (None, error response)."""
+    key = _api_auth()
+    if not key:
+        return None, api_error("Invalid or missing API key.", 401)
+    if not key.get("can_write"):
+        return None, api_error(
+            "This API key is read-only. Create one with write access under Settings → API Keys.", 403
+        )
+    if _write_rate_limited(key["id"]):
+        return None, api_error("Rate limit: at most 60 write requests per minute per key.", 429)
+    return key, None
+
+
+def _api_scope_allows(key, subnet_id) -> bool:
+    scope = _api_key_subnet_ids(key)
+    return scope is None or int(subnet_id) in scope
+
+
+def _api_audit(key, action, entity, details=""):
+    audit(action, entity, f"[api-key:{key.get('name')}] {details}".strip())
+
+
+def _json_body() -> dict:
+    body = request.get_json(silent=True)
+    return body if isinstance(body, dict) else {}
+
+
+@bp.route("/api/v1/reservations", methods=["POST"])
+def api_v1_reservation_create():
+    key, err = _api_write_gate()
+    if err:
+        return err
+    body = _json_body()
+    try:
+        subnet_id = int(body.get("subnet_id"))
+    except (TypeError, ValueError):
+        return api_error("subnet_id (integer) is required.", 400)
+    if subnet_id not in extensions.SUBNET_MAP:
+        return api_error(f"Unknown subnet_id {subnet_id}.", 404)
+    if not _api_scope_allows(key, subnet_id):
+        return api_error("This key has no access to that subnet.", 403)
+    ip = str(body.get("ip") or "").strip()
+    mac = str(body.get("mac") or "").strip().lower()
+    hostname = str(body.get("hostname") or "").strip()[:253]
+    dns = str(body.get("dns") or "").strip()
+    notes = str(body.get("notes") or "").strip()[:1000]
+    problems = []
+    if not __auth.valid_ip(ip):
+        problems.append(f"invalid ip {ip!r}")
+    if not __auth.valid_mac(mac):
+        problems.append(f"invalid mac {mac!r}")
+    if hostname and not __auth.valid_hostname(hostname):
+        problems.append("invalid hostname")
+    if dns and not __auth.valid_dns(dns):
+        problems.append("invalid dns")
+    if problems:
+        return api_error("; ".join(problems), 400)
+    res = {"subnet-id": subnet_id, "hw-address": mac, "ip-address": ip, "hostname": hostname}
+    if dns:
+        res["option-data"] = [{"name": "domain-name-servers", "data": dns}]
+    result = __kea.kea_command("reservation-add", arguments={"reservation": res})
+    if result.get("result") != 0:
+        return api_error(f"Kea refused the reservation: {result.get('text', 'unknown error')}", 502)
+    host_id = None
+    try:
+        with kea_db() as db, db.cursor() as cur:
+            cur.execute("SELECT host_id FROM hosts WHERE inet_ntoa(ipv4_address)=%s", (ip,))
+            row = cur.fetchone()
+            host_id = row["host_id"] if row else None
+        if notes and host_id is not None:
+            with jen_db() as jdb, jdb.cursor() as jcur:
+                jcur.execute(
+                    "INSERT INTO reservation_notes (host_id, notes) VALUES (%s,%s) ON DUPLICATE KEY UPDATE notes=%s",
+                    (host_id, notes, notes),
+                )
+                jdb.commit()
+    except Exception as e:
+        logger.warning(f"api reservation create: notes/host_id lookup failed: {e}")
+    _api_audit(key, "ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname} subnet={subnet_id}")
+    return api_ok({"host_id": host_id, "ip": ip, "mac": mac, "hostname": hostname, "subnet_id": subnet_id}), 201
+
+
+@bp.route("/api/v1/reservations/<int:host_id>", methods=["DELETE"])
+def api_v1_reservation_delete(host_id):
+    key, err = _api_write_gate()
+    if err:
+        return err
+    try:
+        with kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id "
+                "FROM hosts WHERE host_id=%s",
+                (host_id,),
+            )
+            host = cur.fetchone()
+    except Exception as e:
+        logger.error(f"api reservation delete lookup: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    if not host:
+        return api_error(f"No reservation with host_id {host_id}.", 404)
+    if not _api_scope_allows(key, host["subnet_id"] or 0):
+        return api_error("This key has no access to that subnet.", 403)
+    mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower() if host["mac_hex"] else ""
+    result = __kea.kea_command(
+        "reservation-del",
+        arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
+    )
+    if result.get("result") != 0:
+        return api_error(f"Kea refused the deletion: {result.get('text', 'unknown error')}", 502)
+    try:
+        with jen_db() as jdb, jdb.cursor() as jcur:
+            jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
+            jdb.commit()
+    except Exception as e:
+        logger.warning(f"api reservation delete: notes cleanup failed: {e}")
+    _api_audit(key, "DELETE_RESERVATION", host["ip"], f"MAC={mac} host_id={host_id}")
+    return api_ok({"deleted": host_id, "ip": host["ip"], "mac": mac, "subnet_id": host["subnet_id"]})
+
+
+@bp.route("/api/v1/devices/<mac>", methods=["PATCH"])
+def api_v1_device_patch(mac):
+    """The plain-text fields an admin can set on the Devices page: name,
+    owner, notes. Type/icon overrides stay UI-only (they map through a
+    display table)."""
+    key, err = _api_write_gate()
+    if err:
+        return err
+    mac = (mac or "").strip().lower()
+    if not __auth.valid_mac(mac):
+        return api_error("Invalid MAC address.", 400)
+    body = _json_body()
+    fields = {}
+    for name, column, limit in (("name", "device_name", 200), ("owner", "owner", 200), ("notes", "notes", 1000)):
+        if name in body:
+            value = body.get(name)
+            if value is not None and not isinstance(value, str):
+                return api_error(f"{name} must be a string or null.", 400)
+            fields[column] = (value or "").strip()[:limit] or None
+    if not fields:
+        return api_error("Nothing to change: send name, owner and/or notes.", 400)
+    try:
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT id, last_subnet_id FROM devices WHERE mac=%s", (mac,))
+            row = cur.fetchone()
+            if not row:
+                return api_error(f"No device with MAC {mac}.", 404)
+            if row.get("last_subnet_id") is not None and not _api_scope_allows(key, row["last_subnet_id"]):
+                return api_error("This key has no access to that device's subnet.", 403)
+            # One fixed statement: IF(flag, new, old) per column, so no SQL is
+            # built from strings and an unsent field is left untouched.
+            cur.execute(
+                "UPDATE devices SET device_name=IF(%s, %s, device_name), owner=IF(%s, %s, owner), "
+                "notes=IF(%s, %s, notes) WHERE id=%s",
+                (
+                    "device_name" in fields,
+                    fields.get("device_name"),
+                    "owner" in fields,
+                    fields.get("owner"),
+                    "notes" in fields,
+                    fields.get("notes"),
+                    row["id"],
+                ),
+            )
+            db.commit()
+            cur.execute(
+                "SELECT mac, device_name, owner, notes, last_ip, last_subnet_id FROM devices WHERE id=%s", (row["id"],)
+            )
+            out = cur.fetchone()
+    except Exception as e:
+        logger.error(f"api device patch: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    _api_audit(key, "EDIT_DEVICE", mac, ", ".join(f"{k}={v!r}" for k, v in fields.items()))
+    return api_ok(
+        {
+            "mac": out["mac"],
+            "name": out["device_name"],
+            "owner": out["owner"],
+            "notes": out["notes"],
+            "last_ip": out["last_ip"],
+            "subnet_id": out["last_subnet_id"],
+        }
+    )
+
+
+@bp.route("/api/v1/subnets/<int:subnet_id>/notes", methods=["POST"])
+def api_v1_subnet_notes(subnet_id):
+    key, err = _api_write_gate()
+    if err:
+        return err
+    if subnet_id not in extensions.SUBNET_MAP:
+        return api_error(f"Unknown subnet_id {subnet_id}.", 404)
+    if not _api_scope_allows(key, subnet_id):
+        return api_error("This key has no access to that subnet.", 403)
+    body = _json_body()
+    text = body.get("text")
+    if text is not None and not isinstance(text, str):
+        return api_error("text must be a string (empty string clears the note).", 400)
+    text = (text or "").strip()[:5000]
+    try:
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO subnet_notes (subnet_id, notes) VALUES (%s, %s) ON DUPLICATE KEY UPDATE notes=%s, updated_at=NOW()",
+                (subnet_id, text, text),
+            )
+            db.commit()
+    except Exception as e:
+        logger.error(f"api subnet notes: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    _api_audit(key, "SUBNET_NOTES", str(subnet_id), f"{len(text)} chars")
+    return api_ok({"subnet_id": subnet_id, "notes": text})
+
+
 # ── API Key Management ────────────────────────────────────────────────────────
 
 
@@ -488,14 +733,14 @@ def api_keys():
             # works everywhere else in the app.
             if current_user.is_superadmin:
                 cur.execute(
-                    "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
+                    "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, k.can_write, "
                     "k.subnet_access, k.created_by, u.username as created_by_name "
                     "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
                     "ORDER BY k.created_at DESC"
                 )
             else:
                 cur.execute(
-                    "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, "
+                    "SELECT k.id, k.name, k.key_prefix, k.created_at, k.last_used, k.active, k.can_write, "
                     "k.subnet_access, k.created_by, u.username as created_by_name "
                     "FROM api_keys k LEFT JOIN users u ON u.id = k.created_by "
                     "WHERE k.created_by = %s "
@@ -559,19 +804,26 @@ def api_keys_create():
             return redirect(url_for("api.api_keys"))
         subnet_access = _json.dumps(ids)
 
+    # v5.34.0 (Q33) — write access is opt-in per key, off by default.
+    can_write = 1 if request.form.get("can_write") == "1" else 0
     raw_key = "jen_" + secrets.token_hex(24)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     try:
         with jen_db() as db:
             with db.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access) "
-                    "VALUES (%s,%s,%s,%s,%s)",
-                    (name, key_hash, raw_key[:8], current_user.id, subnet_access),
+                    "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, subnet_access, can_write) "
+                    "VALUES (%s,%s,%s,%s,%s,%s)",
+                    (name, key_hash, raw_key[:8], current_user.id, subnet_access, can_write),
                 )
             db.commit()
         scope_desc = "all subnets" if subnet_access is None else f"subnets {subnet_access}"
-        audit("API_KEY_CREATE", "api_keys", f"Key '{name}' created by {current_user.username}, scope={scope_desc}")
+        audit(
+            "API_KEY_CREATE",
+            "api_keys",
+            f"Key '{name}' created by {current_user.username}, scope={scope_desc}, "
+            f"{'read/write' if can_write else 'read-only'}",
+        )
         session["new_api_key"] = raw_key
         session["new_api_key_name"] = name
         flash("API key created. Copy it now — it won't be shown again.", "success")

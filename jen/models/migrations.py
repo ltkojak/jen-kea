@@ -973,6 +973,20 @@ def _m024_webauthn_transports_aaguid(db):
             logger.info("Migration 24: webauthn_credentials.aaguid column added")
 
 
+def _m025_api_keys_can_write(db):
+    """
+    v5.34.0 (Q33) — API keys gain a `can_write` flag, off by default. The
+    read endpoints never needed it; the new write endpoints (reservation
+    create/delete, device overrides, subnet notes) refuse a key without it
+    with 403. Every existing key stays read-only, which is exactly what it
+    was. Idempotent via the SHOW COLUMNS guard.
+    """
+    with db.cursor() as cur:
+        if _column_missing(cur, "api_keys", "can_write"):
+            cur.execute("ALTER TABLE api_keys ADD COLUMN can_write TINYINT(1) NOT NULL DEFAULT 0")
+            logger.info("Migration 25: api_keys.can_write column added")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1014,6 +1028,7 @@ MIGRATIONS = [
         _m023_user_foreign_keys,
     ),
     (24, "webauthn_credentials.transports + aaguid columns for passkeys (v5.31.0)", _m024_webauthn_transports_aaguid),
+    (25, "api_keys.can_write flag for the API write endpoints (v5.34.0)", _m025_api_keys_can_write),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
