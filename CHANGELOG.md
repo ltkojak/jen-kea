@@ -2,6 +2,23 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.34.0-beta.2] - 2026-09-15
+
+### The bundled plugins move onto the surface
+
+IPAM Lite v1.5.1 and Network Discovery v1.1.1 import only
+`jen.plugin_api` and declare `"plugin_api": 1`; both require Jen
+5.34.0 (a 5.34.0 beta counts). The registry pins those releases and the
+bundled copies are resynced from their tags. With that, the transitional
+allowance in `tests/test_plugin_api.py` is gone: a bundled plugin that
+imports anything inside `jen` other than the surface fails CI.
+
+A box on the **stable** channel (5.32.0) will see these plugin versions
+offered on the Plugins page and refused with the usual "requires Jen
+5.34.0" message until it upgrades — the registry is fetched live and is
+not channel-aware. That is the existing behaviour for any plugin whose
+`requires_jen` runs ahead of the install.
+
 ## [5.34.0-beta.1] - 2026-09-15
 
 *Beta channel. Stacked on the unpromoted 5.33.0-beta.1 (support

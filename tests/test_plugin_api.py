@@ -121,21 +121,11 @@ class TestManifestGate:
 
 
 ALLOWED_PLUGIN_IMPORTS = {"jen.plugin_api"}
-# Until ipam v1.5.1 / network-discovery v1.1.1 land on the surface (the
-# plugin releases that follow this Jen release), the bundled copies still
-# import the internals they always did. Step 3 of Q33 empties this set.
-TRANSITIONAL_ALLOWED = {
-    "jen.models.db",
-    "jen.models",
-    "jen.services.access",
-    "jen.services.alerts",
-    "jen.services.background",
-    "jen.services.csv_safe",
-    "jen.services.fingerprint",
-    "jen.services.plugins",
-    "jen.services.subnet_context",
-    "jen",
-}
+# v5.34.0-beta.2: ipam v1.5.1 and network-discovery v1.1.1 import only the
+# surface, so nothing else is tolerated any more. If a future plugin
+# release genuinely needs something new, add it to jen.plugin_api (MINOR),
+# never to this set.
+TRANSITIONAL_ALLOWED: set[str] = set()
 
 _IMPORT_RE = re.compile(
     r"^\s*(?:from\s+(jen(?:\.[A-Za-z_.]+)?)\s+import|import\s+(jen(?:\.[A-Za-z_.]+)?))", re.MULTILINE

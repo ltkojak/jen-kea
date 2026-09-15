@@ -2,10 +2,10 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. Needs nmap on the Jen host (Settings → Plugins can install it).",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.30.0",
+    "requires_jen": "5.34.0",
     "tags": [
       "network",
       "security",
@@ -66,21 +66,22 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_settings (subnet_id INT PRIMARY KEY, every_hours INT NOT NULL DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.1.0",
-    "sha256": "13c1e96ef4f006e71b4976bbf14ea7bd8068d05b28e7f64e0fb07f059f7e7c7d",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.1.1",
+    "sha256": "e84e779de764533dd282104b5452300d0362c434a7fc2f166bb8a943d84f3215",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery",
     "os_packages": [
       "nmap"
-    ]
+    ],
+    "plugin_api": 1
   },
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.30.0",
+    "requires_jen": "5.34.0",
     "tags": [
       "ipam",
       "addresses",
@@ -171,9 +172,10 @@
         "sql": "ALTER TABLE ipam_subnets ADD COLUMN gateway VARCHAR(15) NULL AFTER description"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.5.0",
-    "sha256": "32d062f9560ed2475659e1477f101f4a71f8f5b8f00a25f20666e3bdf9b0e405",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.5.1",
+    "sha256": "90a0b5522cd421473aa2e0c4e08e65b4c67cc28c61224bf9514b5763d9f1edba",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
-    "source_url": "https://github.com/ltkojak/jen-plugin-ipam"
+    "source_url": "https://github.com/ltkojak/jen-plugin-ipam",
+    "plugin_api": 1
   }
 ]
