@@ -490,7 +490,7 @@ def explain(
         if not isinstance(c, dict) or not c.get("name"):
             continue
         name = c["name"]
-        only = bool(c.get(_classes.NEW_ONLY) or c.get(_classes.OLD_ONLY))
+        additional_only = bool(c.get(_classes.NEW_ONLY) or c.get(_classes.OLD_ONLY))
         test = c.get("test")
         row = {
             "name": name,
@@ -498,10 +498,10 @@ def explain(
             "evaluable": True,
             "matched": None,
             "reason": "",
-            "only_additional": only,
+            "only_additional": additional_only,
             "builtin": _classes.is_builtin(name),
         }
-        if only and name not in additional_lists:
+        if additional_only and name not in additional_lists:
             row["matched"] = False
             row["reason"] = (
                 "only-in-additional-list, and nothing in this subnet/pool/shared network lists it — Kea never evaluates it here"
