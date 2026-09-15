@@ -53,6 +53,52 @@ class TestLogin:
         assert page.get_by_text("Invalid username or password").count() > 0
 
 
+class TestLoginDiagnostics:
+    """Temporary — v5.39.0 (Q40) debugging. Every login after the very
+    first one in a run comes back "Invalid username or password." with
+    no server exception logged, for the *correct* admin password too,
+    not just the fresh account. This probes the same in-process Flask
+    app directly (no browser, no HTTP) right where the pattern starts,
+    to see which of {row missing, hash mismatch, silently locked out}
+    it actually is before guessing at another fix blind. Remove once
+    the real cause has a real fix."""
+
+    def test_probe_admin_row_and_verify_password_in_process(self, page, base_url):
+        # Reproduce the exact failure first: log in as admin a second
+        # time in this run (test_login_reaches_the_dashboard already
+        # did it once, successfully, earlier in this same session).
+        page.goto(f"{base_url}/login")
+        page.fill('input[name="username"]', ADMIN_USERNAME)
+        page.fill('input[name="password"]', ADMIN_PASSWORD)
+        page.click(".btn-login")
+        page.wait_for_load_state("networkidle")
+        stuck_at_login = "/login" in page.url
+        alerts = page.locator(".alert").all_text_contents()
+
+        from jen.models.db import jen_db
+        from jen.models.user import verify_password
+        from jen.services.auth import get_rate_limit_settings, is_locked_out
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT id, username, password FROM users WHERE username=%s", (ADMIN_USERNAME,))
+            rows = cur.fetchall()
+            cur.execute("SELECT COUNT(*) AS cnt FROM users WHERE username=%s", (ADMIN_USERNAME,))
+            admin_count = cur.fetchone()["cnt"]
+            cur.execute("SELECT ip_address, username, attempted_at FROM login_attempts ORDER BY attempted_at")
+            attempts = cur.fetchall()
+
+        verified = [verify_password(r["password"], ADMIN_PASSWORD) for r in rows]
+        locked, remaining = is_locked_out("127.0.0.1", ADMIN_USERNAME)
+
+        raise AssertionError(
+            f"stuck_at_login={stuck_at_login} alerts={alerts!r} | "
+            f"admin_row_count={admin_count} verify_password_results={verified} | "
+            f"rate_limit_settings={get_rate_limit_settings()!r} "
+            f"is_locked_out={locked!r}/{remaining!r} | "
+            f"login_attempts={attempts!r}"
+        )
+
+
 class TestForcedPasswordChange:
     def test_a_fresh_account_is_routed_to_the_change_password_form_and_back_out(self, page, base_url):
         login(page, base_url, FRESH_USERNAME, FRESH_PASSWORD, f"{base_url}/force-password-change")
