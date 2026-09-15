@@ -11,3 +11,11 @@ pytest
 bandit
 pip-audit
 ruff==0.16.6
+
+# Browser end-to-end suite (tests/e2e/, v5.39.0/Q40) — excluded from the
+# default `pytest`/`pytest tests/` run (tests/e2e/conftest.py
+# importorskip()s playwright, so the rest of the suite never notices
+# it's absent). Only needed to run tests/e2e/ explicitly, or in the CI
+# `e2e` job, which also runs `playwright install --with-deps chromium`.
+playwright
+pytest-playwright

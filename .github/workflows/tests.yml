@@ -90,6 +90,78 @@ jobs:
         run: |
           python3 -m pytest tests/ -v
 
+  # v5.39.0 (Q40) — a small Playwright suite driving a real Chromium
+  # against a real create_app() (werkzeug, ephemeral port, background
+  # thread) and a real MariaDB, plus a fake Kea Control Agent
+  # (tests/e2e/_fake_kea_server.py). Matrix-free (one Python, one DB) —
+  # this suite exercises browser JS and page wiring, not database
+  # portability, which the matrix above already covers. Runs after
+  # `pytest` so a broken unit suite fails fast without waiting on
+  # Chromium; gates releases the same way every job in this workflow
+  # does (release.yml calls this whole workflow via workflow_call).
+  e2e:
+    name: e2e (Playwright)
+    needs: pytest
+    runs-on: ubuntu-latest
+
+    env:
+      JEN_ROOT: ${{ github.workspace }}
+
+    services:
+      database:
+        image: mariadb:10.11
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: jen_test
+          MYSQL_USER: jen
+          MYSQL_PASSWORD: ci_jen_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        # Same single-source-of-truth rule as the pytest job above, plus
+        # the two e2e-only packages (requirements-dev.txt, not a runtime
+        # pin — test_dependency_consistency.py only governs requirements.txt).
+        run: pip install -q -r requirements.txt pytest playwright pytest-playwright
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Provision /etc/jen
+        run: |
+          sudo mkdir -p /etc/jen/ssl /etc/jen/ssh
+          sudo chown -R "$(whoami)" /etc/jen
+
+      - name: Run e2e suite
+        env:
+          JEN_DB_HOST: 127.0.0.1
+          JEN_DB_USER: jen
+          JEN_DB_PASS: ci_jen_pw
+        run: python -m pytest tests/e2e -m e2e -v --tracing=retain-on-failure
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-traces
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   ruff:
     runs-on: ubuntu-latest
     steps:
