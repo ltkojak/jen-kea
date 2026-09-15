@@ -13,6 +13,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
+import jen.services.events as __events
 import jen.services.kea as __kea
 from jen import extensions
 from jen.models.db import jen_db, kea_db
@@ -663,6 +664,9 @@ def api_v1_reservation_create():
     except Exception as e:
         logger.warning(f"api reservation create: notes/host_id lookup failed: {e}")
     _api_audit(key, "ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname} subnet={subnet_id}")
+    __events.emit(
+        "reservation.added", mac=mac, ip=ip, subnet_id=subnet_id, hostname=hostname or None, actor=key["name"]
+    )
     return api_ok({"host_id": host_id, "ip": ip, "mac": mac, "hostname": hostname, "subnet_id": subnet_id}), 201
 
 
@@ -700,6 +704,7 @@ def api_v1_reservation_delete(host_id):
     except Exception as e:
         logger.warning(f"api reservation delete: notes cleanup failed: {e}")
     _api_audit(key, "DELETE_RESERVATION", host["ip"], f"MAC={mac} host_id={host_id}")
+    __events.emit("reservation.deleted", mac=mac, ip=host["ip"], subnet_id=host["subnet_id"], actor=key["name"])
     return api_ok({"deleted": host_id, "ip": host["ip"], "mac": mac, "subnet_id": host["subnet_id"]})
 
 

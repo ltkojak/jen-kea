@@ -477,3 +477,28 @@ class TestMigration26ServerStats:
         with jen_db() as db:
             _m026_server_stats(db)  # must not raise when the table already exists
             db.commit()
+
+
+class TestMigration27Events:
+    """v5.42.0 (Q43) — the event stream `jen.services.events.emit()` writes to."""
+
+    def test_migration_recorded(self):
+        assert 27 in applied_versions()
+
+    def test_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM events")
+            cols = {c["Field"]: c for c in cur.fetchall()}
+        assert set(cols) == {"id", "ts", "kind", "mac", "ip", "subnet_id", "hostname", "server", "actor", "detail"}
+        assert cols["kind"]["Type"].lower() == "varchar(40)"
+        assert cols["kind"]["Null"] == "NO"
+        for nullable in ("mac", "ip", "subnet_id", "hostname", "server", "actor"):
+            assert cols[nullable]["Null"] == "YES", nullable
+        assert cols["detail"]["Null"] == "NO"
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m027_events
+
+        with jen_db() as db:
+            _m027_events(db)  # must not raise when the table already exists
+            db.commit()

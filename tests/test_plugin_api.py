@@ -18,15 +18,15 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 
 class TestSurface:
-    def test_version_is_one(self):
-        assert plugin_api.PLUGIN_API_VERSION == 1
+    def test_version_is_two(self):
+        assert plugin_api.PLUGIN_API_VERSION == 2
 
     def test_every_name_in_all_exists_and_is_the_real_object(self):
         """Re-exports, not copies: monkeypatching the internal in a test
         must affect what a plugin sees."""
         from jen.models import db as _db
         from jen.models import user as _user
-        from jen.services import access, alerts, background, csv_safe, fingerprint, plugins, subnet_context
+        from jen.services import access, alerts, background, csv_safe, events, fingerprint, plugins, subnet_context
 
         same = {
             "jen_db": _db.jen_db,
@@ -51,6 +51,9 @@ class TestSurface:
             "safe_row": csv_safe.safe_row,
             "safe_cell": csv_safe.safe_cell,
             "classify_device": fingerprint.classify_device,
+            "event_kinds": events.KINDS,
+            "subscribe": events.subscribe,
+            "unsubscribe": events.unsubscribe,
             "installed_plugins": plugins.discover_plugins,
             "is_systemd_host": plugins.is_systemd_host,
             "subnet_context": subnet_context.subnet_context,

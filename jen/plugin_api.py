@@ -24,7 +24,7 @@ Rules (also in plugins/README.md):
 from jen import extensions as _extensions
 
 # ── Version ──────────────────────────────────────────────────────────────────
-PLUGIN_API_VERSION = 1
+PLUGIN_API_VERSION = 2
 
 # ── Database ─────────────────────────────────────────────────────────────────
 # Context managers (preferred): `with jen_db() as db, db.cursor() as cur: …`
@@ -55,6 +55,10 @@ from jen.services.background import periodic_jobs, register_periodic, unregister
 
 # ── CSV formula guard ────────────────────────────────────────────────────────
 from jen.services.csv_safe import safe_cell, safe_row  # noqa: E402
+
+# ── Events (v5.42.0, Q43) ────────────────────────────────────────────────────
+from jen.services.events import KINDS as event_kinds  # noqa: E402
+from jen.services.events import subscribe, unsubscribe  # noqa: E402
 
 # ── Device fingerprinting ────────────────────────────────────────────────────
 from jen.services.fingerprint import classify_device  # noqa: E402
@@ -87,6 +91,7 @@ __all__ = [
     "classify_address",
     "classify_device",
     "dhcp4_config",
+    "event_kinds",
     "get_accessible_subnet_map",
     "get_global_setting",
     "get_jen_db",
@@ -108,7 +113,9 @@ __all__ = [
     "set_global_setting",
     "subnet_context",
     "subnet_map",
+    "subscribe",
     "superadmin_required",
     "unregister_periodic",
+    "unsubscribe",
     "viewer_or_above",
 ]

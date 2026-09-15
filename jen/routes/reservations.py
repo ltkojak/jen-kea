@@ -22,6 +22,7 @@ from flask_login import current_user, login_required
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.events as __events
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
@@ -365,6 +366,7 @@ def add_reservation_post():
                 pass
         flash(f"Reservation added: {ip} → {mac}", "success")
         __user.audit("ADD_RESERVATION", ip, f"MAC={mac} hostname={hostname}")
+        __events.emit("reservation.added", mac=mac, ip=ip, subnet_id=subnet_id, hostname=hostname or None)
         return redirect(url_for("reservations.reservations"))
     else:
         flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
@@ -468,6 +470,9 @@ def edit_reservation_post(host_id):
             jdb.commit()
         flash("Reservation updated.", "success")
         __user.audit("EDIT_RESERVATION", host["ip"], f"hostname={hostname}")
+        __events.emit(
+            "reservation.changed", mac=mac, ip=host["ip"], subnet_id=host["subnet_id"], hostname=hostname or None
+        )
     except Exception as e:
         logger.error(f"Error editing reservation {host_id}: {e}")
         flash("Error saving reservation. Check server logs for details.", "error")
@@ -506,6 +511,7 @@ def delete_reservation(host_id):
                             jcur.execute("DELETE FROM reservation_notes WHERE host_id=%s", (host_id,))
                         jdb.commit()
                     __user.audit("DELETE_RESERVATION", host["ip"], f"MAC={mac}")
+                    __events.emit("reservation.deleted", mac=mac, ip=host["ip"], subnet_id=host["subnet_id"])
                     if is_htmx:
                         # Return empty string — HTMX swaps row with nothing (removes it)
                         return "", 200

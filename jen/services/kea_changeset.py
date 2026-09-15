@@ -32,6 +32,7 @@ import logging
 from dataclasses import dataclass, field
 
 from jen import extensions
+from jen.services import events as _events
 from jen.services import kea_host as _host
 
 logger = logging.getLogger(__name__)
@@ -269,6 +270,11 @@ def apply_change(
             names = ", ".join(d.name for d in committed)
             lines.append(("error", f"↩️ reverted {len(committed)} server(s) that had already been updated: {names}"))
         return ChangeSetResult("aborted", res.get("code", "error"), lines)
+
+    # Every target committed — the config write itself succeeded on
+    # every server, independent of whether the restart below does.
+    for t in targets:
+        _events.emit("config.applied", server=t.name, detail=summary)
 
     # ── Phase 4: restart (every apply succeeded) ──────────────────────
     restart_failures: list[str] = []

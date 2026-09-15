@@ -1009,6 +1009,34 @@ def _m026_server_stats(db):
     logger.info("Migration 26: server_stats table")
 
 
+def _m027_events(db):
+    """
+    v5.42.0 (Q43) — `events` is Jen's best-effort, in-process event
+    stream: one row per `jen.services.events.emit()` call, the record
+    the `/timeline` page and `GET /api/v1/events` read. Idempotent
+    (CREATE TABLE IF NOT EXISTS).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS events (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                kind VARCHAR(40) NOT NULL,
+                mac VARCHAR(17) NULL,
+                ip VARCHAR(45) NULL,
+                subnet_id INT NULL,
+                hostname VARCHAR(253) NULL,
+                server VARCHAR(100) NULL,
+                actor VARCHAR(100) NULL,
+                detail TEXT NOT NULL,
+                KEY idx_mac_ts (mac, ts),
+                KEY idx_ip_ts (ip, ts),
+                KEY idx_ts (ts)
+            )"""
+        )
+    logger.info("Migration 27: events table")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1052,6 +1080,7 @@ MIGRATIONS = [
     (24, "webauthn_credentials.transports + aaguid columns for passkeys (v5.31.0)", _m024_webauthn_transports_aaguid),
     (25, "api_keys.can_write flag for the API write endpoints (v5.34.0)", _m025_api_keys_can_write),
     (26, "server_stats table for packet health tracking (v5.41.0, Q42)", _m026_server_stats),
+    (27, "events table for the event stream / timeline (v5.42.0, Q43)", _m027_events),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

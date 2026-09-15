@@ -96,6 +96,12 @@ def __set_global_setting(key, value):
     return set_global_setting(key, value)
 
 
+def __emit_event(*a, **kw):
+    from jen.services.events import emit
+
+    return emit(*a, **kw)
+
+
 def __get_jen_db_direct():
     from jen.models.db import get_jen_db
 
@@ -439,6 +445,17 @@ def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
                     db.commit()
             except Exception as e:
                 logger.error(f"Alert log error: {e}")
+        # v5.42.0 (Q43) — one event per delivery attempt (per channel),
+        # not per send_alert() call, so the timeline shows exactly what
+        # was tried and whether it landed.
+        __emit_event(
+            "alert.sent",
+            mac=kwargs.get("mac"),
+            ip=kwargs.get("ip"),
+            subnet_id=subnet_id,
+            server=ctype,
+            detail=f"{alert_type} -> {'ok' if ok else 'failed'}" + (f": {error}" if error else ""),
+        )
         results.append((ctype, ok, error))
     return results
 
@@ -870,11 +887,107 @@ def check_pool_forecast_alerts(today=None) -> None:
         __set_global_setting(key, today.isoformat())
 
 
+def diff_leases(prev: dict, cur: dict) -> list[dict]:
+    """Pure diff between two snapshots of currently-active leases, each
+    `{ip: {"mac", "hostname", "subnet_id", "is_reserved"}}` (one entry
+    per lease4 row with `state=0`). No I/O — `check_alerts()`'s
+    lease-tracking block builds the two dicts and calls this; factored
+    out (Q43) so it's unit-testable without a database.
+
+    Returns event dicts (each with `kind` plus the fields above, `ip`,
+    and — for `lease.ip_changed` — `old_ip`) in Q43's KINDS vocabulary:
+
+    - `lease.new`: an IP active now that wasn't in `prev` at all.
+    - `lease.ip_changed`: a MAC whose IP changed — paired by matching a
+      newly-active IP to a now-inactive IP with the SAME mac, rather
+      than reporting an unrelated expired+new pair for what is really
+      one client moving addresses. Best-effort: if a MAC has more than
+      one lease appear/disappear in the same pass, pairing is by
+      iteration order, not any stronger correlation.
+    - `lease.expired`: an IP that was active in `prev` and isn't now,
+      whose mac wasn't matched to a `lease.ip_changed` above.
+    - `lease.hostname_changed`: an IP active in both snapshots whose
+      hostname differs, and the new hostname isn't empty (a client that
+      stops sending option 12 isn't "renamed" to nothing).
+
+    Iteration is sorted by IP throughout, so results are deterministic
+    for a given pair of inputs — needed for tests to assert exact order.
+    """
+    events: list[dict] = []
+    prev_ips, cur_ips = set(prev), set(cur)
+    new_ips = cur_ips - prev_ips
+    gone_ips = prev_ips - cur_ips
+
+    gone_by_mac: dict[str, list[str]] = {}
+    for ip in sorted(gone_ips):
+        gone_by_mac.setdefault(prev[ip]["mac"], []).append(ip)
+
+    matched_gone_ips = set()
+    for ip in sorted(new_ips):
+        row = cur[ip]
+        candidates = gone_by_mac.get(row["mac"])
+        if candidates:
+            old_ip = candidates.pop(0)
+            matched_gone_ips.add(old_ip)
+            events.append(
+                {
+                    "kind": "lease.ip_changed",
+                    "mac": row["mac"],
+                    "ip": ip,
+                    "old_ip": old_ip,
+                    "subnet_id": row["subnet_id"],
+                    "hostname": row["hostname"],
+                    "is_reserved": row["is_reserved"],
+                }
+            )
+        else:
+            events.append(
+                {
+                    "kind": "lease.new",
+                    "mac": row["mac"],
+                    "ip": ip,
+                    "subnet_id": row["subnet_id"],
+                    "hostname": row["hostname"],
+                    "is_reserved": row["is_reserved"],
+                }
+            )
+
+    for ip in sorted(gone_ips - matched_gone_ips):
+        row = prev[ip]
+        events.append(
+            {
+                "kind": "lease.expired",
+                "mac": row["mac"],
+                "ip": ip,
+                "subnet_id": row["subnet_id"],
+                "hostname": row["hostname"],
+                "is_reserved": row["is_reserved"],
+            }
+        )
+
+    for ip in sorted(cur_ips & prev_ips):
+        new_hostname = cur[ip]["hostname"]
+        if new_hostname and new_hostname != prev[ip]["hostname"]:
+            events.append(
+                {
+                    "kind": "lease.hostname_changed",
+                    "mac": cur[ip]["mac"],
+                    "ip": ip,
+                    "subnet_id": cur[ip]["subnet_id"],
+                    "hostname": new_hostname,
+                    "old_hostname": prev[ip]["hostname"],
+                    "is_reserved": cur[ip]["is_reserved"],
+                }
+            )
+
+    return events
+
+
 def check_alerts():
     import time
 
     last_kea_status = {}
-    last_seen_leases = set()
+    last_seen_leases = {}  # ip -> {mac, hostname, subnet_id, is_reserved} — see diff_leases()
     known_macs = set()
     alerted_high_subnets = set()
     alerted_stale_macs = set()
@@ -935,6 +1048,9 @@ def check_alerts():
                                 send_alert(
                                     "ha_failover", server_name=srv["name"], old_state=old_state, new_state=new_state
                                 )
+                                __emit_event(
+                                    "ha.state_changed", server=srv["name"], detail=f"{old_state} -> {new_state}"
+                                )
                             last_ha_states[srv_id] = new_state
                 time.sleep(5)
 
@@ -973,12 +1089,20 @@ def check_alerts():
                                 AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
                             WHERE l.state=0
                         """)
-                    current_leases = set()
-                    new_lease_rows = []
-                    for row in cur.fetchall():
-                        current_leases.add(row["ip"])
-                        if not first_run and row["ip"] not in last_seen_leases:
-                            new_lease_rows.append(row)
+                    # v5.42.0 (Q43) — IP-keyed dict, not just a set of IPs,
+                    # so diff_leases() (pure, factored out) can also spot
+                    # an IP change or a hostname change on the same MAC,
+                    # not just "this IP is newly active".
+                    current_leases = {
+                        row["ip"]: {
+                            "mac": __format_mac(row["hwaddr"]),
+                            "hostname": row["hostname"] or "",
+                            "subnet_id": row["subnet_id"],
+                            "is_reserved": bool(row["is_reserved"]),
+                        }
+                        for row in cur.fetchall()
+                    }
+                    lease_events = [] if first_run else diff_leases(last_seen_leases, current_leases)
 
                     # ── Device inventory update ──
                     cur.execute("""
@@ -1027,23 +1151,40 @@ def check_alerts():
                     except Exception as e:
                         logger.error(f"Device tracking error: {e}")
 
-                    # ── New lease alerts ──
-                    # A row only reaches here once per genuinely new
-                    # binding (last_seen_leases already filtered out
-                    # renewals) — is_reserved just picks which alert
-                    # type describes it. A reserved device gets
-                    # new_reserved_lease every time its lease goes
-                    # active again, not just once ever; new_device
-                    # remains the "genuinely never seen this MAC
-                    # before" signal for the dynamic-pool case, since a
-                    # reserved MAC is by definition already known.
-                    for row in new_lease_rows:
-                        mac = __format_mac(row["hwaddr"])
-                        subnet_name = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get(
-                            "name", f"Subnet {row['subnet_id']}"
+                    # ── Event stream + new-lease alerts (Q43) ──
+                    # diff_leases() (pure, factored out) does the actual
+                    # comparison; this loop emits every lease/device kind
+                    # to the event stream and, for lease.new specifically,
+                    # ALSO drives the pre-Q43 new_lease/new_reserved_lease/
+                    # new_device alerts — same semantics as before
+                    # (is_reserved picks the alert type; a reserved
+                    # device's recurrence follows reserved_lease_mode;
+                    # new_device only fires for a MAC truly never seen),
+                    # just sourced from the pure diff instead of an inline
+                    # set comparison.
+                    for ev in lease_events:
+                        subnet_name = extensions.SUBNET_MAP.get(ev["subnet_id"], {}).get(
+                            "name", f"Subnet {ev['subnet_id']}"
                         )
-                        hostname = safe_text(row["hostname"]) if row["hostname"] else "(none)"
-                        if row["is_reserved"]:
+                        hostname = safe_text(ev["hostname"]) if ev["hostname"] else "(none)"
+                        if ev["kind"] == "lease.ip_changed":
+                            detail = f"was {ev['old_ip']}"
+                        elif ev["kind"] == "lease.hostname_changed":
+                            detail = f"was {ev['old_hostname']!r}"
+                        else:
+                            detail = ""
+                        __emit_event(
+                            ev["kind"],
+                            mac=ev["mac"],
+                            ip=ev["ip"],
+                            subnet_id=ev["subnet_id"],
+                            hostname=ev["hostname"] or None,
+                            detail=detail,
+                        )
+                        if ev["kind"] != "lease.new":
+                            continue
+                        mac = ev["mac"]
+                        if ev["is_reserved"]:
                             # v5.1.16 — recurrence is now an admin
                             # choice, not something hardcoded either
                             # way. "always" (default, matches the
@@ -1059,21 +1200,21 @@ def check_alerts():
                                 continue
                             send_alert(
                                 "new_reserved_lease",
-                                ip=row["ip"],
+                                ip=ev["ip"],
                                 mac=mac,
                                 hostname=hostname,
                                 subnet=subnet_name,
-                                subnet_id=row["subnet_id"],
+                                subnet_id=ev["subnet_id"],
                             )
                             known_macs.add(mac)
                             continue
                         send_alert(
                             "new_lease",
-                            ip=row["ip"],
+                            ip=ev["ip"],
                             mac=mac,
                             hostname=hostname,
                             subnet=subnet_name,
-                            subnet_id=row["subnet_id"],
+                            subnet_id=ev["subnet_id"],
                         )
                         # New device alert — only fire for MACs truly never
                         # seen before (not in devices table, not just unknown
@@ -1081,11 +1222,18 @@ def check_alerts():
                         if mac not in known_macs:
                             send_alert(
                                 "new_device",
-                                ip=row["ip"],
+                                ip=ev["ip"],
                                 mac=mac,
                                 hostname=hostname,
                                 subnet=subnet_name,
-                                subnet_id=row["subnet_id"],
+                                subnet_id=ev["subnet_id"],
+                            )
+                            __emit_event(
+                                "device.first_seen",
+                                mac=mac,
+                                ip=ev["ip"],
+                                subnet_id=ev["subnet_id"],
+                                hostname=ev["hostname"] or None,
                             )
                             known_macs.add(mac)  # prevent repeat alerts this session
 
@@ -1201,11 +1349,13 @@ def check_alerts():
                                 send_alert(
                                     "config_drift_detected", message=issue["message"], subnet_id=issue["subnet_id"]
                                 )
+                                __emit_event("drift.detected", subnet_id=issue["subnet_id"], detail=issue["message"])
                         for key, issue in last_drift_issues.items():
                             if key not in current_issues:
                                 send_alert(
                                     "config_drift_resolved", message=issue["message"], subnet_id=issue["subnet_id"]
                                 )
+                                __emit_event("drift.resolved", subnet_id=issue["subnet_id"], detail=issue["message"])
                         last_drift_issues = current_issues
                     except Exception as e:
                         logger.error(f"Config drift check error: {e}")
