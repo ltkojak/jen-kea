@@ -76,7 +76,7 @@ class TestLoginDiagnostics:
         alerts = page.locator(".alert").all_text_contents()
 
         from jen.models.db import jen_db
-        from jen.models.user import verify_password
+        from jen.models.user import hash_password, needs_rehash, verify_password
         from jen.services.auth import get_rate_limit_settings, is_locked_out
 
         with jen_db() as db, db.cursor() as cur:
@@ -88,11 +88,18 @@ class TestLoginDiagnostics:
             attempts = cur.fetchall()
 
         verified = [verify_password(r["password"], ADMIN_PASSWORD) for r in rows]
+        stored_prefix = rows[0]["password"][:25] if rows else None
+        needs_rehash_result = needs_rehash(rows[0]["password"]) if rows else None
+        fresh_hash = hash_password(ADMIN_PASSWORD)
+        fresh_prefix = fresh_hash[:25]
+        fresh_self_check = verify_password(fresh_hash, ADMIN_PASSWORD)
         locked, remaining = is_locked_out("127.0.0.1", ADMIN_USERNAME)
 
         raise AssertionError(
             f"stuck_at_login={stuck_at_login} alerts={alerts!r} | "
             f"admin_row_count={admin_count} verify_password_results={verified} | "
+            f"stored_hash_prefix={stored_prefix!r} needs_rehash={needs_rehash_result!r} | "
+            f"fresh_hash_prefix={fresh_prefix!r} fresh_self_check={fresh_self_check!r} | "
             f"rate_limit_settings={get_rate_limit_settings()!r} "
             f"is_locked_out={locked!r}/{remaining!r} | "
             f"login_attempts={attempts!r}"
