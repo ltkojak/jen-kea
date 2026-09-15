@@ -93,6 +93,32 @@ def _seed_users():
         )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def test_database():
+    """Overrides tests/conftest.py's autouse session fixture of the same
+    name — that one exists to set up the unit suite's isolated DB once;
+    this suite's own live_server fixture below does its own one-time
+    setup (_reset_test_db + _patch_extensions + _ensure_kea_schema +
+    init_jen_db), so running both would just double the work."""
+    yield
+
+
+@pytest.fixture(autouse=True)
+def clean_tables():
+    """Overrides tests/conftest.py's autouse per-test fixture of the
+    same name. Root cause of a real bug found running this suite in CI:
+    that fixture resets the 'admin' user's password to
+    hash_password("admin") and deletes every other user after EVERY
+    test — because tests/e2e/ sits under tests/, pytest applies it here
+    too, and it silently clobbered this suite's e2e-seeded admin/fresh-
+    account passwords the moment the very first journey finished, so
+    every login after that first one failed with "Invalid username or
+    password" for no visible server-side reason. This suite seeds its
+    users once per session in live_server and every journey is meant to
+    share that one baseline, not get it reset between tests."""
+    yield
+
+
 @pytest.fixture(scope="session")
 def fake_kea():
     server = FakeKeaServer()
