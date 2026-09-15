@@ -254,8 +254,8 @@ route-rendered for a swap may contain a `<script>` tag (`tests/test_csp.py` enfo
   file (`docs/ARCHITECTURE.md` §6).
 - `/etc/jen/` — config, secrets, SSL certs, SSH keys. Never touched by upgrades.
 - The version string lives in `jen/__init__.py` (`JEN_VERSION`), `install.sh`
-  (`JEN_VERSION`), and the README badges — keep them in sync. Bump for a release along
-  with a `CHANGELOG.md` entry.
+  (`JEN_VERSION`), the Dockerfile and compose files — keep them in sync (never the
+  README; see Versioning). Bump for a release along with a `CHANGELOG.md` entry.
 - `CHANGELOG.md` entries are detailed narrative prose explaining *why*, not terse bullet
   lists; a release commonly bundles several independently-scoped fixes. Commit messages
   for releases are version-prefixed (`v5.3.3: ...`).
@@ -288,12 +288,17 @@ actually be MAJOR — so keep fallbacks, banner them, and don't remove them in 5
 
 Process:
 
-- The version strings move together in the **same commit**: `jen/__init__.py`
-  `JEN_VERSION`, `install.sh` `JEN_VERSION`, `Dockerfile` `LABEL version`, the
-  `jen-dhcp:` image tag in `docker-compose.yml` and `docker-compose.mysql.yml`,
-  the README badge, and the two `jen-vX.Y.Z.tar.gz` examples in the README.
+- The version strings move together in the **same commit** — six spots:
+  `jen/__init__.py` `JEN_VERSION`, `install.sh` `JEN_VERSION`, `Dockerfile`
+  `LABEL version`, the `jen-dhcp:` image tag in `docker-compose.yml` and
+  `docker-compose.mysql.yml`, and the CHANGELOG heading.
   `tests/test_dependency_consistency.py` enforces this — it will fail on the
-  next release until every one is bumped.
+  next release until every one is bumped. **The README is deliberately NOT a
+  version spot** (v5.33.0): its badge is shields.io's `github/v/release`, which
+  shows the latest *stable* GitHub release on its own, and its install/upgrade
+  commands say `jen-vX.Y.Z.tar.gz` and link the releases page — `main` carries a
+  `-beta.N` most of the time and a stranger's first screen must be the stable one.
+  A test refuses a hard-coded version badge or a versioned tarball name in it.
 - Bump only at release time, bundled with the `CHANGELOG.md` entry — never per-fix on a
   working branch.
 - Once a version has been described as deployed it is frozen; see rule 4 below.
@@ -312,7 +317,7 @@ non-prerelease, so it is the bootstrap that lets a box choose beta at all. From 
 release after it, every MINOR and every non-trivial PATCH ships beta-first:
 
 1. Steps land on `main` as usual (CI green between commits).
-2. The release commit sets **all 8 version spots and the CHANGELOG heading** to
+2. The release commit sets **all six version spots (CHANGELOG heading included)** to
    `X.Y.Z-beta.1`; push; CI green; tag `vX.Y.Z-beta.1`. The release workflow marks any
    tag containing `-` as a GitHub **prerelease**: beta boxes are offered it, stable
    boxes never see it.
@@ -328,8 +333,8 @@ release after it, every MINOR and every non-trivial PATCH ships beta-first:
 
 Say which channel a tag is for in the commit message and in the final report
 ("tagged v5.33.0-beta.1 (beta channel)"). Never tag a plain `vX.Y.Z` without the
-maintainer's promote; never tag a `-beta.N` on a commit whose 8 spots don't carry that
-exact suffix (the box would re-install itself forever).
+maintainer's promote; never tag a `-beta.N` on a commit whose six version spots don't
+carry that exact suffix (the box would re-install itself forever).
 
 ## Release & Working Discipline
 
@@ -365,7 +370,7 @@ exact suffix (the box would re-install itself forever).
    (`/usr/local/sbin/jen-kea-helper`, bare command); the legacy `/usr/bin/python3` grant
    is the banner-warned fallback and is never removed in 5.x.
 10. **Beta first, promote on the maintainer's word (Q38 / v5.32.0+).** A release is
-   tagged `vX.Y.Z-beta.N` first (all 8 version spots carry the suffix); the plain
+   tagged `vX.Y.Z-beta.N` first (all six version spots carry the suffix); the plain
    `vX.Y.Z` tag is a separate promotion commit that changes only version strings and
    the CHANGELOG, made only when the maintainer says "promote". See "Release
    channels" above for the full flow, including the stable-hotfix branch case.

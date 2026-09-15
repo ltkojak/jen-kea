@@ -114,10 +114,19 @@ class TestVersionStringsInSync:
             m = re.search(r"image:\s*jen-dhcp:([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)", text)
             assert m and m.group(1) == self._jen_version(), f"{name} jen-dhcp image tag out of sync"
 
-    def test_readme_badge_matches(self):
+    def test_readme_front_door_is_the_stable_release_not_the_working_version(self):
+        """v5.33.0 — the README is what a stranger sees first. Its badge
+        comes from GitHub's latest *stable* release (shields.io
+        `github/v/release` excludes pre-releases unless asked) and its
+        install/upgrade commands point at the releases page — never at the
+        version string on `main`, which is a `-beta.N` most of the time."""
         readme = (REPO / "README.md").read_text(encoding="utf-8")
-        m = re.search(r"Version-([0-9]+\.[0-9]+\.[0-9]+(?:-(?:beta|rc)\.[0-9]+)?)-blue", readme)
-        assert m and m.group(1) == self._jen_version()
+        assert "img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable" in readme
+        assert "releases/latest" in readme
+        assert not re.search(r"Version-[0-9]+\.[0-9]+\.[0-9]+", readme), "hard-coded version badge is back"
+        assert not re.search(r"jen-v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z]+\.[0-9]+)?\.tar\.gz", readme), (
+            "README must not name a versioned tarball — a beta bump would put a beta on the front door"
+        )
 
     def test_changelog_has_an_entry_for_current_version(self):
         changelog = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")

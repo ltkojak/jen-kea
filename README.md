@@ -6,7 +6,8 @@
 
 A full-featured web-based management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built with Python and Flask. Jen provides a comprehensive UI for managing DHCP leases, reservations, subnets, and infrastructure — accessible from any browser including mobile and iPad.
 
-[![Version](https://img.shields.io/badge/Version-5.33.0-beta.1-blue?style=flat)](https://github.com/ltkojak/jen-kea/releases)
+[![Latest stable release](https://img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable&style=flat)](https://github.com/ltkojak/jen-kea/releases/latest)
+[![Latest beta](https://img.shields.io/github/v/release/ltkojak/jen-kea?include_prereleases&label=Beta&style=flat&color=orange)](https://github.com/ltkojak/jen-kea/releases)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
@@ -178,8 +179,13 @@ threat model.
 
 ### Guided Installer (recommended)
 
+Install from the **[latest stable release](https://github.com/ltkojak/jen-kea/releases/latest)** — download its
+`jen-vX.Y.Z.tar.gz` (every release is signed; the installer and the in-app updater verify the signature). The `main`
+branch is where the next beta is built and usually carries an unpromoted `-beta.N` version: don't install from a
+clone unless you mean to run the beta channel.
+
 ```bash
-tar xzf jen-v5.33.0-beta.1.tar.gz
+tar xzf jen-vX.Y.Z.tar.gz
 cd jen
 sudo ./install.sh
 ```
@@ -231,8 +237,10 @@ Open `http://your-server:5050` and sign in as **`admin`**.
 
 ## Upgrading
 
+Download the **[latest stable release](https://github.com/ltkojak/jen-kea/releases/latest)** tarball, then:
+
 ```bash
-tar xzf jen-v5.33.0-beta.1.tar.gz
+tar xzf jen-vX.Y.Z.tar.gz
 cd jen
 sudo ./install.sh
 ```
