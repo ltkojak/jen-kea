@@ -815,7 +815,12 @@ def api_v1_events():
     ip = (request.args.get("ip") or "").strip()
     kind = (request.args.get("kind") or "").strip()
     since_raw = (request.args.get("since") or "").strip()
-    since = ""
+    # Epoch, not '' — MySQL 8's strict mode rejects casting '' to the
+    # ts column outright (error 1525) even inside an "(%s = '' OR …)"
+    # branch that would otherwise short-circuit past it; a real,
+    # always-valid TIMESTAMP sidesteps that rather than relying on
+    # short-circuiting a typed column comparison.
+    since = "1970-01-01 00:00:00"
     if since_raw:
         try:
             datetime.fromisoformat(since_raw.replace("Z", "+00:00"))
@@ -836,8 +841,8 @@ def api_v1_events():
             cur.execute(
                 "SELECT id, ts, kind, mac, ip, subnet_id, hostname, server, actor, detail FROM events "
                 "WHERE (%s = '' OR mac = %s) AND (%s = '' OR ip = %s) AND (%s = '' OR kind = %s) "
-                "AND (%s = '' OR ts >= %s) ORDER BY ts DESC LIMIT %s",
-                (mac, mac, ip, ip, kind, kind, since, since, limit),
+                "AND ts >= %s ORDER BY ts DESC LIMIT %s",
+                (mac, mac, ip, ip, kind, kind, since, limit),
             )
             for r in cur.fetchall():
                 if scope is not None and (r["subnet_id"] is None or r["subnet_id"] not in scope):
