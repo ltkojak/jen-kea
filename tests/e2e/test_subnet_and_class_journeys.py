@@ -18,7 +18,12 @@ class TestSubnetEditPreviewApply:
     def test_edit_preview_and_apply_with_no_ssh_configured(self, logged_in_page, base_url):
         page = logged_in_page
         page.goto(f"{base_url}/subnets/edit/1")
-        page.fill("#f-routers", "10.99.0.1")
+        # Genuinely different from the fake Kea server's existing value
+        # for this subnet (10.99.0.1, tests/e2e/_fake_kea_server.py) —
+        # the page's own JS does a client-side diff against the
+        # page-load value before ever calling the preview endpoint, and
+        # skips the round trip entirely when nothing actually changed.
+        page.fill("#f-routers", "10.99.0.254")
         page.click("#show-confirm-btn")
         page.wait_for_selector("#confirm-panel", state="visible", timeout=10000)
         # Not wait_for_function() — Jen's CSP has no 'unsafe-eval', so
@@ -36,8 +41,13 @@ class TestClassBuilderLivePreview:
         page = logged_in_page
         page.goto(f"{base_url}/subnets/classes/new")
         page.fill('input[name="name"]', "e2e-test-class")
-        page.click("#add-rule-btn")
 
+        # The page's own JS already adds one empty rule row on load
+        # (dhcp_class_edit.html: "if (initialRules.length) {...} else
+        # { addRow(); }" for a brand-new class) — clicking #add-rule-btn
+        # here would add a *second*, still-empty row, and
+        # build_expression() rejects any rule with an empty value, which
+        # renders the error branch instead of the expression preview.
         row = page.locator(".jen-rule-row").first
         # Fill the value first, then change the select last — htmx's
         # trigger here is "change, keyup delay:500ms changed", and a
