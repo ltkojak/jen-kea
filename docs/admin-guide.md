@@ -797,6 +797,8 @@ separately — see [Migrating from Windows DHCP](#migrating-from-windows-dhcp-v5
 
 ---
 
+**Explaining a client (v5.35.0).** Network → Explain reconstructs the decision for one client — subnet, reservation, classes, guards, pools, options — from the config Jen holds. It evaluates class `test` expressions itself, but only the grammar the guided rule builder writes (`<accessor> == 'string'`, `<accessor> == 0xhex`, `substring(<accessor>,0,n) == 'string'`, `member('class')`, `and` / `or` / `not`, over option 60/77/12/61, `pkt4.mac`, relay circuit/remote id). A class written as a raw expression outside that grammar is reported as *not evaluable* and shown verbatim; an input the operator didn't supply makes a class *undecided* and the page names the input. The answer assumes those classes did not match. Built-in `KNOWN` / `UNKNOWN` follow the reservation step; `only-in-additional-list` classes are evaluated only where something in the selected subnet, its pools, its shared network or the matched reservation lists them. Subnet selection is the operator's (or the lease's) subnet — Kea's real choice depends on the receiving interface, which Jen cannot see; a supplied giaddr is checked against the subnet's relay addresses and range.
+
 ## SSH Setup for Subnet Editing
 
 ### Generate the Key

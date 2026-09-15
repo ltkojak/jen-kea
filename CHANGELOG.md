@@ -2,6 +2,55 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.35.0-beta.1] - 2026-09-15
+
+*Beta channel. Stacked on the unpromoted 5.34.0-beta.2, 5.33.0-beta.1
+and 5.32.1-beta.1.*
+
+### "Why did this client get this?"
+
+Plenty of tools show a DHCP configuration. Far fewer can take one
+client and say which subnet it lands in, whether a reservation caught
+it, which classes matched and why, which pools it may draw from, what
+address it gets, and where every option in the reply came from. That
+is what **Network → Explain** does, and what the new *Why this
+address?* item in every lease and reservation row's menu opens with
+the client filled in.
+
+Give it a MAC — and, if you have them, the vendor class (option 60),
+user class (77), hostname (12), client id (61), relay circuit and
+remote ids, or the relay's giaddr — and Jen walks Kea's decision in
+order: subnet selection (a giaddr is checked against the subnet's
+relay addresses and range), reservation by MAC or client id in the
+subnet or globally where the subnet allows it (which decides KNOWN /
+UNKNOWN), every client class in config order, subnet guards across a
+shared network, pool guards, and then the answer — the reserved
+address, else the current lease renewed, else the first pool whose
+guards are satisfied — with the reply's options merged reservation >
+pool > subnet > shared network > class > global, each one naming its
+source and what it overrode, and the lease lifetime with its source.
+
+**What it evaluates, and what it refuses to guess.** Kea has no
+dry-run command, so Jen evaluates class expressions itself — but only
+the grammar its own rule builder writes: equality against a string or
+hex literal, `substring(…,0,n)` prefixes, `member()`, `and` / `or` /
+`not`, over the option-60/77/12/61, MAC, OUI and relay-id accessors.
+The parser is round-tripped against the builder's output in the
+tests. A class written as a raw expression outside that grammar
+(`ifelse`, `concat`, vendor options, `pkt4.transid`, …) is reported
+as *not evaluable* and shown verbatim; a class whose input you didn't
+supply is *undecided* and the page names the input that would settle
+it. The answer states that it assumes those classes did not match.
+`only-in-additional-list` classes are evaluated only where the
+selected subnet, its pools, its shared network or the matched
+reservation lists them, exactly as Kea does. Subnet selection is the
+operator's or the lease's subnet: Kea's real choice depends on the
+receiving interface, which Jen cannot see, and the page says so.
+
+Subnet-restricted users can only explain subnets they can access — the
+decision reveals a subnet's pools and options. Nothing is sent to Kea
+beyond the cached `config-get` and reads of the host and lease tables.
+
 ## [5.34.0-beta.2] - 2026-09-15
 
 ### The bundled plugins move onto the surface

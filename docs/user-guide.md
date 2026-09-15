@@ -117,6 +117,19 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 ---
 
+## Why did this client get this? (v5.35.0)
+
+**Network → Explain**, or *Why this address?* in the action menu of any lease or reservation row. Give it a MAC (and, if you have them, the vendor class, user class, hostname, client id, relay ids or giaddr the client sends) and Jen walks the decision Kea makes, step by step:
+
+1. **Subnet selection** — the subnet you chose, or the lease's / a reservation's; a giaddr is checked against the subnet's relay addresses and range.
+2. **Reservation** — by MAC or client id, in this subnet or globally when the subnet allows global reservations. This decides KNOWN / UNKNOWN.
+3. **Client classes** — every class in config order, with *matched*, *no*, *undecided* (an input you didn't supply, named) or *not evaluable*. Jen evaluates exactly the expressions its own rule builder writes; anything else is shown verbatim rather than guessed.
+4. **Subnet guards** — which subnets in the shared network the client is allowed into.
+5. **Pools and address** — the reserved address, else the current lease (renewed), else the first pool whose guard classes are satisfied.
+6. **Options** — the reply's options with where each came from and what it overrode (reservation > pool > subnet > shared network > class > global), and the lease lifetime.
+
+Kea has no dry-run, so this is a reconstruction from the configuration Jen holds; it cannot see which interface a request arrived on. Only subnets you can access are shown.
+
 ## Subnets & Scope Options
 
 The Subnets page shows the live configuration of all subnets pulled directly from the Kea API. It is read-only by default unless SSH is configured for subnet editing.

@@ -82,6 +82,11 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
   review the subnets/pools/options/reservations/classes Jen would create,
   preview a real `kea-dhcp4 -t` + diff, then apply in one guarded push
   (v5.24.0)
+- "Why did this client get this?" — give it a MAC (and whatever else the
+  client sends) and see the path Kea takes: subnet, reservation, which
+  classes matched and why, eligible pools, the answer address, and every
+  option with its source and what it overrode. Says plainly what it
+  can't evaluate instead of guessing (v5.35.0)
 
 ### Health Center
 - One page of read-only checks — server reachability, Kea version, HA
