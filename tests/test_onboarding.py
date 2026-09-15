@@ -11,7 +11,6 @@ import pytest
 from jen.services import onboarding
 from jen.services.health import Check
 
-
 _TITLES = {
     "kea_reachable": "Kea servers reachable",
     "kea_subnets_declared": "Every Kea subnet is named",
