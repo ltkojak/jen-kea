@@ -2,6 +2,35 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.41.0-beta.1] - 2026-09-15
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.40.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q42, packet health: Kea being reachable and having a valid config says
+nothing about whether the traffic hitting it is actually being served —
+a saturated pool, a misbehaving relay, or a bad ACL can drown a server in
+NAKs or drops while every existing check still reports green. Each
+snapshot pass now also records every server's `pkt4-*`/`v4-allocation-
+fail*`/`v4-lease-reuses` counters from `statistic-get-all` (migration 26,
+`server_stats`); a pure `jen/services/packet_health.py` turns two or more
+snapshots into deltas (restart-aware — a counter that drops between
+snapshots means Kea restarted, not a negative rate), per-minute rates
+over a trailing window, and a verdict: warn when drops and parse
+failures exceed 1% of received traffic or any allocation failure
+occurred, fail when NAKs exceed 10% of ACKs or drops exceed 10%, and a
+distinct "no traffic" reading (informational, not a fault) for a
+hot-standby peer that legitimately sees nothing. The Servers page shows
+each server's verdict, a received-packets sparkline, and a collapsed
+all-counters table — so a Kea 3.2 server's new drop-reason counters
+(verified against ISC's own ARM, since no 3.2 box was available to
+capture live) show up without Jen needing to know their names in
+advance. Health Center gained a `packet_health` check (skipped until a
+server has two snapshots), a new `packet_health`/`packet_health_ok` alert
+pair fires once per transition, and `GET /api/v1/servers` is a new
+endpoint carrying HA state and `packet_health` alongside it.
+
 ## [5.40.0-beta.1] - 2026-09-15
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

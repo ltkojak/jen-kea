@@ -369,3 +369,16 @@ The **Network → Servers** page shows the status of all configured Kea servers.
 If multiple servers are configured but HA mode is not set, the page shows a warning with a link to configure it.
 
 Configure HA in **Settings → Infrastructure → High Availability**.
+
+### Packet Health (v5.41.0)
+
+Below each server's status card, the **Servers** page shows a **Packet health (last 60 min)** block — is Kea actually processing DHCP traffic cleanly, not just reachable?
+
+- A status badge: **OK**, **Warn**, **Fail**, or **No traffic** (informational — a standby server in a hot-standby HA pair legitimately sees no traffic).
+- A sparkline of packets received per snapshot.
+- Rates for received / offered / acked / naked / dropped / parse-failed / allocation-failed traffic.
+- A collapsed **All counters** table with every other `pkt4-*`/`v4-*` counter Kea reports — including any newer Kea version's counters Jen doesn't specifically name.
+
+The block reads **Warn** when drops and parse failures exceed 1% of received traffic (over the trailing window) or any allocation failure occurred, and **Fail** when NAKs exceed 10% of ACKs or drops exceed 10% of received. It needs two snapshots before it can show a rate — the snapshot interval is the same one configured in **Reports → History Settings**.
+
+A **Packet Health** alert fires once when a server's status flips to Warn or Fail, and again when it recovers — see **Alert Channels** above to configure where it's sent. The admin guide's Health Center also carries a `packet_health` row with the always-current verdict.

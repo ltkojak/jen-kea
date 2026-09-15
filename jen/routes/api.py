@@ -195,6 +195,68 @@ def api_v1_subnets():
     return api_ok({"subnets": result, "count": len(result)})
 
 
+def _packet_health_summary(server_id, window_minutes=60):
+    """{status, window_minutes, rates} for GET /api/v1/servers — a lighter
+    shape than servers.html's block (jen.routes.servers::
+    _packet_health_for_server), which also carries the sparkline and the
+    full counters table. None until the server has two snapshots."""
+    import json as _json
+
+    from jen.services import packet_health as _packet_health
+
+    try:
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT snapshot_time, stats FROM server_stats WHERE server_id=%s "
+                "AND snapshot_time > DATE_SUB(NOW(), INTERVAL 90 MINUTE) ORDER BY snapshot_time",
+                (server_id,),
+            )
+            raw_rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"api_v1_servers packet health for server {server_id}: {e}")
+        return None
+    rows = []
+    for r in raw_rows:
+        stats = r["stats"]
+        if isinstance(stats, str):
+            stats = _json.loads(stats)
+        rows.append({"snapshot_time": r["snapshot_time"], "stats": stats})
+    if len(rows) < 2:
+        return None
+    rates = _packet_health.rates(_packet_health.deltas(rows), window_minutes=window_minutes)
+    assessment = _packet_health.assess(rates)
+    return {
+        "status": assessment["status"],
+        "window_minutes": round(rates["window_minutes"]),
+        "rates": {k: round(v, 2) for k, v in rates["rates"].items()},
+    }
+
+
+@bp.route("/api/v1/servers")
+def api_v1_servers():
+    key = _api_auth()
+    if not key:
+        return api_error("Invalid or missing API key.", 401)
+    result = []
+    try:
+        for s in __kea.get_all_server_status():
+            result.append(
+                {
+                    "id": s["server"]["id"],
+                    "name": s["server"]["name"],
+                    "role": s["server"].get("role", ""),
+                    "up": s["up"],
+                    "ha_state": s.get("ha_state"),
+                    "version": s.get("version", ""),
+                    "packet_health": _packet_health_summary(s["server"]["id"]) if s["up"] else None,
+                }
+            )
+    except Exception as e:
+        logger.error(f"api_v1_servers error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    return api_ok({"servers": result, "count": len(result)})
+
+
 @bp.route("/api/v1/leases")
 def api_v1_leases():
     key = _api_auth()

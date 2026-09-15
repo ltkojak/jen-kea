@@ -1,0 +1,46 @@
+{# Q42 — packet health block for one server. Included (never route-rendered
+   for an htmx swap) from servers.html's single- and multi-server views;
+   expects `s` (one entry from `statuses`). The sparkline canvas itself is
+   drawn by servers.html's own script block (one PACKET_HEALTH object for
+   every server, same pattern as reports.html's HISTORY). #}
+{% if s.packet_health %}
+{% set ph = s.packet_health %}
+<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <div style="font-weight:600;">📦 Packet health (last {{ ph.window_minutes }} min)</div>
+        <span class="badge {% if ph.status == 'fail' %}badge-danger{% elif ph.status == 'warn' %}badge-dynamic{% else %}badge-reserved{% endif %}">
+            {{ ph.status|replace('_',' ')|title }}
+        </span>
+    </div>
+    {% if ph.notes %}
+    <div style="color:var(--text-muted);margin-bottom:8px;">{{ ph.notes|join('; ') }}</div>
+    {% endif %}
+    <canvas id="ph-chart-{{ s.server.id }}" height="50"></canvas>
+    <table style="width:100%;font-size:11px;margin-top:8px;">
+        <tr>
+        {% for n in ph.named %}
+            <td class="stat-label" style="padding:2px 4px;">{{ n.label }}</td>
+        {% endfor %}
+        </tr>
+        <tr>
+        {% for n in ph.named %}
+            <td class="mono" style="padding:2px 4px;">{{ n.total }}</td>
+        {% endfor %}
+        </tr>
+    </table>
+    {% if ph.other_counters %}
+    <details style="margin-top:6px;">
+        <summary style="cursor:pointer;color:var(--text-muted);">All counters ({{ ph.other_counters|length }})</summary>
+        <table style="width:100%;font-size:11px;margin-top:4px;">
+        {% for key, value in ph.other_counters %}
+            <tr><td class="mono">{{ key }}</td><td class="mono" style="text-align:right;">{{ value }}</td></tr>
+        {% endfor %}
+        </table>
+    </details>
+    {% endif %}
+</div>
+{% elif s.up %}
+<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
+    📦 Packet health: collecting — needs a second snapshot before it can show a rate.
+</div>
+{% endif %}

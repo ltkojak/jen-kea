@@ -545,6 +545,7 @@ Go to **Settings → Access & Security → API Keys** to generate, view, and rev
 |---|---|---|
 | GET | `/api/v1/health` | Kea status and Jen version — no auth |
 | GET | `/api/v1/subnets` | Subnet utilization with pool sizes; since v5.36.0 also `peak_30d`, `trend_per_day`, `days_to_90pct` and `forecast` (rising / flat / falling / insufficient) |
+| GET | `/api/v1/servers` | Kea servers, HA state, and `packet_health` — `{status, window_minutes, rates}`, null until two snapshots exist (v5.41.0) |
 | GET | `/api/v1/leases` | Active leases — params: subnet, mac, hostname, limit |
 | GET | `/api/v1/leases/{mac}` | Single device lease with active boolean |
 | GET | `/api/v1/devices` | Device inventory — params: mac, name, subnet, limit |
@@ -1153,6 +1154,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **Subnet map matches Kea** | `check_config_drift()` — Jen's `[subnets]` list vs Kea's live config | Settings → Kea → `[subnets]` |
 | **Every Kea subnet is named** | every subnet id in Kea's config has a name in Jen's `[subnets]`, and vice-versa | Settings → Kea → `[subnets]` |
 | **Configuration Doctor** (v5.40.0) | `jen/services/config_doctor.py`'s sixteen semantic checks on the live config — see "Configuration Doctor" below | Network → Doctor |
+| **Packet health** (v5.41.0) | `pkt4-*`/`v4-allocation-fail*` counters from the last hour of `statistic-get-all` snapshots — worst verdict across servers; warns when drops + parse failures exceed 1 % of received or any allocation failure occurred, fails when NAKs exceed 10 % of ACKs or drops exceed 10 %; `skip` until a server has two snapshots | Servers page — see "Packet Health" in the user guide |
 | **Pool utilization** | the latest lease snapshot per subnet — warns at the alert threshold, fails at 95 % | Subnets page; widen the pool |
 | **Pool exhaustion forecast** (v5.36.0) | a least-squares line through the last 30 days of daily peak active leases per subnet — warns when it reaches 90 % of the pool within 30 days, fails within 7; `skip` until a subnet has 7 days of snapshots. A pool resize restarts the fit. | Reports page; widen the pool or shorten lease lifetimes |
 | **Lease snapshots current** | the newest snapshot is no older than 2× the snapshot interval | Settings → System; check the background worker is running |
@@ -1199,6 +1201,13 @@ every 7 days (the settings key `pool_forecast_alerted_<subnet id>` holds
 the date it last fired). It is a complement to the utilization alert, not
 a replacement: utilization says where you are, the forecast says where
 you are heading.
+
+The **Packet health** alert (v5.41.0) fires once per server when its
+packet-processing verdict flips to warn or fail, and again — a separate
+"recovered" notice — once it returns to a clean state, the same
+detected-once/resolved-once pattern as HA failover and config drift. It
+is computed in the same snapshot pass as `lease_history`, so it fires on
+the same cadence as the snapshot interval, not every alert-loop tick.
 
 ## Configuration Doctor
 

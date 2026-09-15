@@ -69,6 +69,7 @@
         {% endif %}
     </div>
     {% endif %}
+    {% include "_packet_health_block.html" %}
 </div>
 
 <div class="card" style="background:var(--surface2);border-style:dashed;">
@@ -229,6 +230,7 @@
         {% endif %}
     </div>
     {% endif %}
+    {% include "_packet_health_block.html" %}
 </div>
 {% endfor %}
 </div>
@@ -273,4 +275,40 @@
 {% block scripts %}
 // Auto-refresh server status every 30 seconds
 setInterval(function() { location.reload(); }, 30000);
+{% if packet_health_sparklines %}
+</script>
+<script src="/static/js/chart.umd.min.js"></script>
+<script nonce="{{ csp_nonce }}">
+const PACKET_HEALTH = {{ packet_health_sparklines | tojson }};
+const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
+
+Object.entries(PACKET_HEALTH).forEach(([serverId, points]) => {
+    const canvas = document.getElementById('ph-chart-' + serverId);
+    if (!canvas || !points.length) return;
+    new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: points.map(p => p.ts),
+            datasets: [{
+                label: 'pkt4-received',
+                data: points.map(p => p.received),
+                borderColor: '#00b4d8',
+                backgroundColor: 'rgba(0,180,216,0.15)',
+                fill: true,
+                tension: 0.4,
+                pointRadius: 0,
+                borderWidth: 2,
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: { legend: { display: false }, tooltip: { intersect: false, mode: 'index' } },
+            scales: {
+                x: { display: false },
+                y: { display: false, beginAtZero: true }
+            }
+        }
+    });
+});
+{% endif %}
 {% endblock %}

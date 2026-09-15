@@ -299,3 +299,65 @@ class TestUntrustedHostnameHtmlEscaping:
         msg = render_template_str(DEFAULT_TEMPLATES["daily_summary"], summary=summary)
         assert "<b>Daily Network Summary</b>" in msg
         assert "&lt;b&gt;" not in msg
+
+
+class TestPacketHealthAlerts:
+    """Q42 step 2 — _check_packet_health_alerts, factored out of
+    check_alerts()'s snapshot pass (unlike utilization_high/ok, which are
+    inline in that loop) specifically so it's testable in isolation:
+    fires `packet_health` once when assess() reads warn/fail and
+    `packet_health_ok` once when it recovers, mirroring the
+    utilization_high/utilization_ok pattern at alerts.py:960-990."""
+
+    def _insert(self, db, minutes_ago, stats):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO server_stats (server_id, snapshot_time, stats) "
+                "VALUES (1, DATE_SUB(NOW(), INTERVAL %s MINUTE), %s)",
+                (minutes_ago, json.dumps(stats)),
+            )
+        db.commit()
+
+    def test_fires_once_on_transition_to_fail_then_ok_on_recovery(self, db, monkeypatch):
+        from jen.services import alerts
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        calls = []
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)))
+
+        alerted = set()
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50})  # 25% drop -> fail
+        alerts._check_packet_health_alerts(alerted)
+        assert alerted == {1}
+        assert len(calls) == 1 and calls[0][0] == "packet_health"
+        assert calls[0][1]["status"] == "fail"
+
+        # Same bad state again — must not re-fire while already alerted.
+        alerts._check_packet_health_alerts(alerted)
+        assert len(calls) == 1
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 0})  # clean -> recovery
+        alerts._check_packet_health_alerts(alerted)
+        assert alerted == set()
+        assert len(calls) == 2 and calls[1][0] == "packet_health_ok"
+
+    def test_no_alert_while_status_stays_ok(self, db, monkeypatch):
+        from jen.services import alerts
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        calls = []
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)))
+
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180})
+        alerts._check_packet_health_alerts(set())
+        assert calls == []

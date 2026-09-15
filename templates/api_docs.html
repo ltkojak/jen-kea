@@ -64,6 +64,16 @@
     },
     {
         "method": "GET",
+        "path": "/api/v1/servers",
+        "title": "Servers & Packet Health",
+        "auth": true,
+        "desc": "Returns every configured Kea server with its HA state and packet health (Q42) — drop/NAK/allocation-failure rates over the trailing hour. packet_health is null until the server has two statistic snapshots.",
+        "params": [],
+        "example_path": "/api/v1/servers",
+        "example_response": '{\n  "count": 1,\n  "servers": [\n    {\n      "id": 1,\n      "name": "kea-primary",\n      "role": "primary",\n      "up": true,\n      "ha_state": "hot-standby",\n      "version": "Kea 3.0.0",\n      "packet_health": {\n        "status": "ok",\n        "window_minutes": 60,\n        "rates": {\n          "pkt4-received": 12.3,\n          "pkt4-ack-sent": 11.9\n        }\n      }\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
         "path": "/api/v1/leases",
         "title": "List Active Leases",
         "auth": true,

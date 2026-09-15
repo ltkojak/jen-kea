@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, Response, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
+import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.ha_maintenance as __maint
 import jen.services.kea as __kea
@@ -18,6 +19,7 @@ import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
 import jen.services.kea_ha as __ha
 import jen.services.kea_host as __host
+import jen.services.packet_health as __packet_health
 from jen import extensions
 from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
@@ -35,6 +37,64 @@ _HISTORY_SERVICES = ("dhcp4", "dhcp6")
 
 def _find_server(server_id):
     return next((s for s in extensions.KEA_SERVERS if s["id"] == server_id), None)
+
+
+# Named for the block's "received / offered / acked / naked / dropped /
+# parse-failed / allocation-failed" rate rows — every other pkt4-*/v4-*
+# key the server reports still shows up in the "all counters" table.
+_PACKET_HEALTH_NAMED_KEYS = (
+    ("pkt4-received", "Received"),
+    ("pkt4-offer-sent", "Offered"),
+    ("pkt4-ack-sent", "Acked"),
+    ("pkt4-nak-sent", "Naked"),
+    ("pkt4-receive-drop", "Dropped"),
+    ("pkt4-parse-failed", "Parse failed"),
+)
+
+
+def _packet_health_for_server(server_id, window_minutes=60):
+    """None until a server has two snapshots (see
+    jen.services.alerts.take_server_stats_snapshot / migration 26)."""
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT snapshot_time, stats FROM server_stats WHERE server_id=%s "
+                "AND snapshot_time > DATE_SUB(NOW(), INTERVAL 90 MINUTE) ORDER BY snapshot_time",
+                (server_id,),
+            )
+            raw_rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"packet health for server {server_id}: {e}")
+        return None
+
+    rows = []
+    for r in raw_rows:
+        stats = r["stats"]
+        if isinstance(stats, str):
+            stats = json.loads(stats)
+        rows.append({"snapshot_time": r["snapshot_time"], "stats": stats})
+    if len(rows) < 2:
+        return None
+
+    deltas = __packet_health.deltas(rows)
+    rates = __packet_health.rates(deltas, window_minutes=window_minutes)
+    assessment = __packet_health.assess(rates)
+
+    totals = rates["totals"]
+    alloc_fail_total = sum(v for k, v in totals.items() if k.startswith("v4-allocation-fail"))
+    named = [{"label": label, "key": key, "total": totals.get(key, 0)} for key, label in _PACKET_HEALTH_NAMED_KEYS]
+    named.append({"label": "Allocation failed", "key": "v4-allocation-fail*", "total": alloc_fail_total})
+    named_keys = {key for key, _label in _PACKET_HEALTH_NAMED_KEYS}
+    other_counters = sorted((k, v) for k, v in totals.items() if k not in named_keys)
+
+    return {
+        "status": assessment["status"],
+        "notes": assessment["notes"],
+        "window_minutes": round(rates["window_minutes"]),
+        "named": named,
+        "other_counters": other_counters,
+        "sparkline": [{"ts": d["ts"].isoformat(), "received": d["delta"].get("pkt4-received", 0)} for d in deltas],
+    }
 
 
 def _history_service(raw):
@@ -86,9 +146,11 @@ def servers():
             s["lease_stats"] = (
                 stats_result.get("arguments", {}).get("result-set", {}) if stats_result.get("result") == 0 else {}
             )
+            s["packet_health"] = _packet_health_for_server(s["server"]["id"])
         else:
             s["version"] = ""
             s["lease_stats"] = {}
+            s["packet_health"] = None
     single_server = len(extensions.KEA_SERVERS) == 1
     ha_mode = extensions.cfg.get("kea", "ha_mode", fallback="")
 
@@ -183,6 +245,9 @@ def servers():
         history_counts=history_counts,
         ha_actions=__ha.HA_ACTIONS,
         compare_rows=compare_rows,
+        packet_health_sparklines={
+            s["server"]["id"]: s["packet_health"]["sparkline"] for s in statuses if s["packet_health"]
+        },
     )
 
 

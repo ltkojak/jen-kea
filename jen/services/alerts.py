@@ -125,6 +125,8 @@ DEFAULT_TEMPLATES = {
     "utilization_ok": "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
     "pool_exhaustion": "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
     "pool_forecast": "📈 <b>Pool Exhaustion Forecast</b>\nSubnet <b>{subnet}</b> ({cidr})\nTrend <b>{trend}/day</b> — on track to reach 90% in ~<b>{days}</b> days ({date})\nPeak so far: {peak}/{total}",
+    "packet_health": "⚠️ <b>Packet Health Alert</b> ({status})\n{server_name}: {detail}",
+    "packet_health_ok": "✅ <b>Packet Health Recovered</b>\n{server_name} is back to clean packet processing.",
     "reservation_added": "📌 <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "reservation_deleted": "🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
     "stale_reservation": "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
@@ -200,6 +202,8 @@ ALERT_TYPE_LABELS = {
     "utilization_ok": "Subnet utilization recovery",
     "pool_exhaustion": "Pool exhaustion warning",
     "pool_forecast": "Pool exhaustion forecast (90% within 30 days)",
+    "packet_health": "Packet health warn/fail (drops, NAKs, allocation failures)",
+    "packet_health_ok": "Packet health recovery",
     "reservation_added": "Reservation added",
     "reservation_deleted": "Reservation deleted",
     "stale_reservation": "Stale reservation detected",
@@ -725,6 +729,47 @@ def take_server_stats_snapshot():
         logger.error(f"Server stats snapshot error: {e}")
 
 
+def _check_packet_health_alerts(alerted_packet_health) -> None:
+    """Fire `packet_health` (warn/fail) / `packet_health_ok` (recovery)
+    once per server per transition — the utilization_high/utilization_ok
+    pattern. Reads the server_stats rows take_server_stats_snapshot() just
+    wrote; called right after it in the same snapshot pass.
+    `alerted_packet_health` is the caller's set of currently-alerted
+    server ids, mutated in place."""
+    import json
+
+    from jen.services import packet_health
+
+    try:
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            for srv in extensions.KEA_SERVERS:
+                jcur.execute(
+                    "SELECT snapshot_time, stats FROM server_stats WHERE server_id=%s "
+                    "AND snapshot_time > DATE_SUB(NOW(), INTERVAL 90 MINUTE) ORDER BY snapshot_time",
+                    (srv["id"],),
+                )
+                rows = []
+                for r in jcur.fetchall():
+                    stats = r["stats"]
+                    if isinstance(stats, str):
+                        stats = json.loads(stats)
+                    rows.append({"snapshot_time": r["snapshot_time"], "stats": stats})
+                if len(rows) < 2:
+                    continue
+                a = packet_health.assess(packet_health.rates(packet_health.deltas(rows), window_minutes=60))
+                sid = srv["id"]
+                if a["status"] in ("warn", "fail") and sid not in alerted_packet_health:
+                    send_alert(
+                        "packet_health", server_name=srv["name"], status=a["status"], detail="; ".join(a["notes"])
+                    )
+                    alerted_packet_health.add(sid)
+                elif a["status"] not in ("warn", "fail") and sid in alerted_packet_health:
+                    send_alert("packet_health_ok", server_name=srv["name"])
+                    alerted_packet_health.discard(sid)
+    except Exception as e:
+        logger.error(f"Packet health alert check error: {e}")
+
+
 def send_daily_summary():
     """Build and send daily summary."""
     try:
@@ -833,6 +878,7 @@ def check_alerts():
     known_macs = set()
     alerted_high_subnets = set()
     alerted_stale_macs = set()
+    alerted_packet_health = set()  # server_id, while assess() reads warn/fail
     first_run = True
     last_summary_date = None
     last_cert_check_date = None  # v5.12.0 — cert-expiry check runs once per process-day
@@ -1170,6 +1216,7 @@ def check_alerts():
             if now_ts - last_snapshot_time >= snapshot_interval:
                 take_lease_snapshot()
                 take_server_stats_snapshot()
+                _check_packet_health_alerts(alerted_packet_health)
                 last_snapshot_time = now_ts
 
             # ── Daily summary ──

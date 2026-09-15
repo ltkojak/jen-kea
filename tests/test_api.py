@@ -180,3 +180,69 @@ class TestApiDocsKeyListIsAdminOnly:
         assert r.status_code == 200
         assert b"keybtn-" not in r.data
         assert b"xyz98765" not in r.data
+
+
+class TestServersApi:
+    """Q42 step 2 — GET /api/v1/servers: server list + packet_health
+    (null until a server has two server_stats snapshots)."""
+
+    def _key(self, db, admin_id, raw, name):
+        import hashlib
+
+        from tests.test_api_key_authorization import _insert_api_key
+
+        key_id = _insert_api_key(db, name, created_by=admin_id)
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE api_keys SET key_hash=%s WHERE id=%s", (hashlib.sha256(raw.encode()).hexdigest(), key_id)
+            )
+        db.commit()
+
+    def test_requires_key(self, client, mock_kea):
+        r = client.get("/api/v1/servers")
+        assert r.status_code == 401
+
+    def test_lists_servers_with_null_packet_health_by_default(self, logged_in_client, db, mock_kea):
+        from tests.test_api_key_authorization import _insert_admin_user
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys WHERE name='_servers_api_probe1'")
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        admin_id = _insert_admin_user(db, "servers_api_admin1")
+        db.commit()
+        raw = "jen_servers_api_probe_key1"
+        self._key(db, admin_id, raw, "_servers_api_probe1")
+
+        r = logged_in_client.get("/api/v1/servers", headers={"Authorization": f"Bearer {raw}"})
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data["count"] == 1
+        srv = data["servers"][0]
+        assert srv["id"] == 1
+        assert srv["up"] is True
+        assert srv["packet_health"] is None
+
+    def test_packet_health_populated_with_two_snapshots(self, logged_in_client, db, mock_kea):
+        from tests.test_api_key_authorization import _insert_admin_user
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys WHERE name='_servers_api_probe2'")
+            cur.execute("DELETE FROM server_stats")
+            cur.execute(
+                "INSERT INTO server_stats (server_id, snapshot_time, stats) VALUES "
+                "(1, DATE_SUB(NOW(), INTERVAL 30 MINUTE), %s), (1, NOW(), %s)",
+                (json.dumps({"pkt4-received": 100}), json.dumps({"pkt4-received": 200})),
+            )
+        db.commit()
+        admin_id = _insert_admin_user(db, "servers_api_admin2")
+        db.commit()
+        raw = "jen_servers_api_probe_key2"
+        self._key(db, admin_id, raw, "_servers_api_probe2")
+
+        r = logged_in_client.get("/api/v1/servers", headers={"Authorization": f"Bearer {raw}"})
+        assert r.status_code == 200
+        ph = r.get_json()["servers"][0]["packet_health"]
+        assert ph is not None
+        assert ph["status"] == "ok"
+        assert ph["rates"]["pkt4-received"] > 0

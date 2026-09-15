@@ -95,6 +95,39 @@ def build_spec(version: str, base_url: str = "") -> dict:
                     "type": "object",
                     "properties": {"subnets": {"type": "array", "items": {"$ref": "#/components/schemas/Subnet"}}},
                 },
+                "PacketHealth": {
+                    "type": "object",
+                    "nullable": True,
+                    "description": "null until the server has two statistic-get-all snapshots (Q42).",
+                    "properties": {
+                        "status": {"type": "string", "enum": ["ok", "warn", "fail", "no_traffic"]},
+                        "window_minutes": {"type": "integer", "description": "Actual minutes of data covered."},
+                        "rates": {
+                            "type": "object",
+                            "description": "pkt4-*/v4-* counter name to per-minute rate over the window.",
+                            "additionalProperties": {"type": "number"},
+                        },
+                    },
+                },
+                "Server": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "name": {"type": "string"},
+                        "role": {"type": "string"},
+                        "up": {"type": "boolean"},
+                        "ha_state": {"type": "string", "nullable": True},
+                        "version": {"type": "string"},
+                        "packet_health": {"$ref": "#/components/schemas/PacketHealth"},
+                    },
+                },
+                "ServerList": {
+                    "type": "object",
+                    "properties": {
+                        "servers": {"type": "array", "items": {"$ref": "#/components/schemas/Server"}},
+                        "count": {"type": "integer"},
+                    },
+                },
                 "Lease": {
                     "type": "object",
                     "properties": {
@@ -200,6 +233,13 @@ def build_spec(version: str, base_url: str = "") -> dict:
                     "summary": "Subnet utilization",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "SubnetList"), "401": _ERR},
+                }
+            },
+            "/api/v1/servers": {
+                "get": {
+                    "summary": "Kea servers, HA state and packet health (Q42)",
+                    "security": [_KEY],
+                    "responses": {"200": _resp("OK", "ServerList"), "401": _ERR},
                 }
             },
             "/api/v1/leases": {

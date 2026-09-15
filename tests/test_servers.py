@@ -9,6 +9,8 @@ boundary on both routes and the restart route's error-handling paths
 without ever actually invoking a real SSH connection.
 """
 
+import json
+
 from tests.conftest import restricted_client as _restricted_client
 
 
@@ -250,3 +252,91 @@ class TestHaStatusDerivation:
         assert r.status_code == 200
         assert r.data.count(b"ACTIVE") == 2
         assert b"no working backup" not in r.data.lower()
+
+
+class TestPacketHealthOnServersPage:
+    """Q42 step 2 — the Servers page's "Packet health" block, backed by
+    server_stats (migration 26 / alerts.take_server_stats_snapshot)."""
+
+    def _insert(self, db, minutes_ago, stats):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO server_stats (server_id, snapshot_time, stats) "
+                "VALUES (1, DATE_SUB(NOW(), INTERVAL %s MINUTE), %s)",
+                (minutes_ago, json.dumps(stats)),
+            )
+        db.commit()
+
+    def test_collecting_message_with_no_snapshots(self, logged_in_client, mock_kea, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        r = logged_in_client.get("/servers")
+        assert r.status_code == 200
+        assert b"collecting" in r.data.lower()
+
+    def test_shows_rates_with_two_snapshots(self, logged_in_client, mock_kea, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180})
+        r = logged_in_client.get("/servers")
+        body = r.data.decode()
+        assert "Packet health" in body
+        assert "Received" in body
+
+    def test_fail_status_and_all_counters_table_shown(self, logged_in_client, mock_kea, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0, "pkt4-queue-full": 1})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50, "pkt4-queue-full": 4})
+        r = logged_in_client.get("/servers")
+        body = r.data.decode()
+        assert "Fail" in body
+        # pkt4-queue-full isn't one of the named rate rows — it must still
+        # surface, in the "all counters" table, so a Kea 3.2 drop reason
+        # this Q's research didn't name doesn't get silently dropped.
+        assert "pkt4-queue-full" in body
+
+
+class TestPacketHealthForServer:
+    """Unit coverage for jen.routes.servers._packet_health_for_server —
+    the route-level query/shape function the block above renders."""
+
+    def _insert(self, db, minutes_ago, stats):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO server_stats (server_id, snapshot_time, stats) "
+                "VALUES (1, DATE_SUB(NOW(), INTERVAL %s MINUTE), %s)",
+                (minutes_ago, json.dumps(stats)),
+            )
+        db.commit()
+
+    def test_none_with_fewer_than_two_snapshots(self, db):
+        from jen.routes.servers import _packet_health_for_server
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        assert _packet_health_for_server(1) is None
+        self._insert(db, 0, {"pkt4-received": 10})
+        assert _packet_health_for_server(1) is None
+
+    def test_named_and_other_counters_split(self, db):
+        from jen.routes.servers import _packet_health_for_server
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90, "pkt4-duplicate": 0})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180, "pkt4-duplicate": 3})
+
+        ph = _packet_health_for_server(1)
+        assert ph is not None
+        assert ph["status"] == "ok"
+        named_labels = {n["label"] for n in ph["named"]}
+        assert {"Received", "Acked", "Offered", "Naked", "Dropped", "Parse failed", "Allocation failed"} <= named_labels
+        assert ("pkt4-duplicate", 3) in ph["other_counters"]
+        assert len(ph["sparkline"]) == 1
