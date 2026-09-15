@@ -987,6 +987,28 @@ def _m025_api_keys_can_write(db):
             logger.info("Migration 25: api_keys.can_write column added")
 
 
+def _m026_server_stats(db):
+    """
+    v5.41.0 (Q42) — `server_stats` records the `pkt4-*` / `v4-allocation-
+    fail*` / `v4-lease-reuses` counters from `statistic-get-all` for every
+    Kea server, one row per server per snapshot, taken in the same pass as
+    `lease_history`. `stats` is a JSON object of {counter name: value}, so
+    a future Kea version's new counters are captured without a schema
+    change. Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS server_stats (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL,
+                snapshot_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                stats JSON NOT NULL,
+                KEY idx_server_time (server_id, snapshot_time)
+            )"""
+        )
+    logger.info("Migration 26: server_stats table")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1029,6 +1051,7 @@ MIGRATIONS = [
     ),
     (24, "webauthn_credentials.transports + aaguid columns for passkeys (v5.31.0)", _m024_webauthn_transports_aaguid),
     (25, "api_keys.can_write flag for the API write endpoints (v5.34.0)", _m025_api_keys_can_write),
+    (26, "server_stats table for packet health tracking (v5.41.0, Q42)", _m026_server_stats),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

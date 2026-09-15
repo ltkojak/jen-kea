@@ -7,6 +7,7 @@ d2 branch. The page/route/nav/alert tests live further down (step 2/3).
 """
 
 import http.server
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -277,6 +278,65 @@ class TestConfigDoctorCheck:
         db.commit()
         rows = health._doctor_hosts()
         assert any(r["ip"] == "10.0.0.20" and r["subnet_id"] == 1 for r in rows)
+
+
+class TestPacketHealthCheck:
+    """Q42 — reads server_stats directly off the real DB (like
+    _doctor_hosts above), not from ctx: the snapshots come from
+    alerts.take_server_stats_snapshot, not the shared health ctx."""
+
+    def _insert(self, db, server_id, minutes_ago, stats):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO server_stats (server_id, snapshot_time, stats) "
+                "VALUES (%s, DATE_SUB(NOW(), INTERVAL %s MINUTE), %s)",
+                (server_id, minutes_ago, json.dumps(stats)),
+            )
+        db.commit()
+
+    def test_skips_with_no_rows(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        c = health._packet_health(_ctx())
+        assert c.status == "skip"
+
+    def test_skips_with_only_one_snapshot(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 1, 30, {"pkt4-received": 100})
+        c = health._packet_health(_ctx())
+        assert c.status == "skip"
+
+    def test_ok_when_clean(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 1, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90})
+        self._insert(db, 1, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180})
+        c = health._packet_health(_ctx())
+        assert c.status == "ok"
+
+    def test_fail_when_drops_high(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 1, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0})
+        self._insert(db, 1, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50})
+        c = health._packet_health(_ctx())
+        assert c.status == "fail"
+        assert "Test Kea" in c.detail
+
+    def test_ok_with_no_traffic_note(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 1, 30, {"pkt4-received": 0})
+        self._insert(db, 1, 0, {"pkt4-received": 0})
+        c = health._packet_health(_ctx())
+        assert c.status == "ok"
+        assert "no traffic" in c.detail
 
     def test_doctor_ha_configs_none_when_not_ha(self, monkeypatch):
         monkeypatch.setattr(health, "_ha_configured", lambda: False)

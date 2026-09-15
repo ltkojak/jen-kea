@@ -451,3 +451,26 @@ class TestMigration25ApiKeysCanWrite:
         with jen_db() as db:
             _m025_api_keys_can_write(db)
             db.commit()
+
+
+class TestMigration26ServerStats:
+    """v5.41.0 (Q42) — packet health snapshots, one row per Kea server per
+    snapshot pass, alongside lease_history."""
+
+    def test_migration_recorded(self):
+        assert 26 in applied_versions()
+
+    def test_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM server_stats")
+            cols = {c["Field"]: c for c in cur.fetchall()}
+        assert set(cols) == {"id", "server_id", "snapshot_time", "stats"}
+        assert cols["stats"]["Type"].lower() == "json"
+        assert cols["server_id"]["Null"] == "NO"
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m026_server_stats
+
+        with jen_db() as db:
+            _m026_server_stats(db)  # must not raise when the table already exists
+            db.commit()

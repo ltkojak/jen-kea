@@ -675,6 +675,56 @@ def take_lease_snapshot():
         logger.error(f"Snapshot error: {e}")
 
 
+def _packet_stat_key(key):
+    """pkt4-* (all of it — received/sent/drop reasons, present and
+    future) plus the two v4-* counters packet health cares about."""
+    return key.startswith(("pkt4-", "v4-allocation-fail")) or key == "v4-lease-reuses"
+
+
+def take_server_stats_snapshot():
+    """Record pkt4-*/v4-allocation-fail*/v4-lease-reuses counters for every
+    Kea server (packet health, Q42). One row per server per snapshot;
+    `stats` captures whatever keys statistic-get-all actually returns, so a
+    newer Kea version's counters show up without a Jen upgrade."""
+    import json
+
+    try:
+        retention_days = int(__get_global_setting("history_retention_days", "90"))
+        with __jen_db_ctx() as jdb:
+            with jdb.cursor() as jcur:
+                for srv in extensions.KEA_SERVERS:
+                    try:
+                        result = __kea_command("statistic-get-all", server=srv)
+                    except Exception as e:
+                        logger.warning(f"Packet health snapshot ({srv['name']}): {e}")
+                        continue
+                    if result.get("result") != 0:
+                        continue
+                    args = result.get("arguments", {})
+                    stats = {}
+                    for key, samples in args.items():
+                        if not _packet_stat_key(key):
+                            continue
+                        try:
+                            stats[key] = int(samples[0][0])
+                        except (TypeError, IndexError, ValueError):
+                            continue
+                    if not stats:
+                        continue
+                    jcur.execute(
+                        "INSERT INTO server_stats (server_id, stats) VALUES (%s, %s)",
+                        (srv["id"], json.dumps(stats)),
+                    )
+
+                # Purge old history
+                jcur.execute(
+                    f"DELETE FROM server_stats WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
+                )
+            jdb.commit()
+    except Exception as e:
+        logger.error(f"Server stats snapshot error: {e}")
+
+
 def send_daily_summary():
     """Build and send daily summary."""
     try:
@@ -1119,6 +1169,7 @@ def check_alerts():
             now_ts = time.time()
             if now_ts - last_snapshot_time >= snapshot_interval:
                 take_lease_snapshot()
+                take_server_stats_snapshot()
                 last_snapshot_time = now_ts
 
             # ── Daily summary ──

@@ -13,7 +13,7 @@ Groups and check ids are stable (tests and the JSON twin key off them):
 
   kea       kea_reachable · kea_version_supported · kea_ha_state ·
             kea_hooks · kea_time_sync · kea_config_drift ·
-            kea_subnets_declared
+            kea_subnets_declared · config_doctor · packet_health
   capacity  pool_utilization · lease_snapshot_fresh
   ddns      d2_reachable · d2_errors
   jen       cert_expiry · db_jen · db_kea · schema_current ·
@@ -353,6 +353,66 @@ def _config_doctor(ctx) -> Check:
     else:
         first = fails[0] if fails else warns[0]
         c.detail = f"{first['title']}: {first['detail']} — {len(findings)} finding(s), see /tools/doctor"
+    return c
+
+
+def _packet_health(ctx) -> Check:
+    """Q42 — is Kea processing DHCPv4 traffic cleanly? Reads recent
+    `server_stats` snapshots (written by
+    alerts.take_server_stats_snapshot alongside lease_history) and runs
+    them through packet_health.deltas/rates/assess per server, taking the
+    worst verdict across servers. Skips until at least one server has two
+    snapshots — assess() needs a delta, not just a raw counter."""
+    import json as _json
+
+    from jen.services import packet_health
+
+    c = Check("packet_health", "Packet health", "kea", fix_url="/servers")
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT server_id, snapshot_time, stats FROM server_stats "
+                "WHERE snapshot_time > DATE_SUB(NOW(), INTERVAL 90 MINUTE) "
+                "ORDER BY server_id, snapshot_time"
+            )
+            rows = cur.fetchall()
+    except Exception as e:
+        _log_err("packet_health", e)
+        c.status, c.detail = "fail", "could not read packet statistics — see server logs"
+        return c
+
+    by_server: dict[int, list[dict]] = {}
+    for r in rows:
+        stats = r["stats"]
+        if isinstance(stats, str):
+            stats = _json.loads(stats)
+        by_server.setdefault(r["server_id"], []).append({"snapshot_time": r["snapshot_time"], "stats": stats})
+
+    if not any(len(v) >= 2 for v in by_server.values()):
+        c.status, c.detail = "skip", "fewer than two snapshots yet"
+        return c
+
+    server_names = {s["id"]: s["name"] for s in extensions.KEA_SERVERS}
+    rank = {"fail": 3, "warn": 2, "ok": 1, "no_traffic": 0}
+    worst = None
+    notes = []
+    for server_id, srv_rows in by_server.items():
+        if len(srv_rows) < 2:
+            continue
+        a = packet_health.assess(packet_health.rates(packet_health.deltas(srv_rows), window_minutes=60))
+        name = server_names.get(server_id, f"server {server_id}")
+        if a["status"] in ("warn", "fail"):
+            notes.append(f"{name}: {'; '.join(a['notes'])}")
+        if worst is None or rank[a["status"]] > rank[worst]:
+            worst = a["status"]
+
+    if worst is None:
+        c.status, c.detail = "skip", "fewer than two snapshots yet"
+    elif worst == "no_traffic":
+        c.status, c.detail = "ok", "no traffic on any server in the window (idle, or a hot-standby peer)"
+    else:
+        c.status = worst
+        c.detail = "; ".join(notes) if notes else "clean — no drops, parse failures, NAKs, or allocation failures"
     return c
 
 
@@ -1031,6 +1091,7 @@ _CHECKS = [
     _kea_config_drift,
     _kea_subnets_declared,
     _config_doctor,
+    _packet_health,
     _pool_utilization,
     _pool_exhaustion_forecast,
     _lease_snapshot_fresh,
@@ -1061,6 +1122,7 @@ _CHECK_META = {
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),
+    "packet_health": ("Packet health", "kea"),
     "pool_utilization": ("Pool utilization", "capacity"),
     "pool_exhaustion_forecast": ("Pool exhaustion forecast", "capacity"),
     "lease_snapshot_fresh": ("Lease snapshots current", "capacity"),
