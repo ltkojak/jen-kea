@@ -31,6 +31,7 @@ def _run():
     return {
         "checks": checks,
         "grouped": __health.group_checks(checks),
+        "group_banners": __health.GROUP_BANNERS,
         "summary": __health.summarize(checks),
         "checked_at": datetime.now(timezone.utc),
     }

@@ -1145,10 +1145,34 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version, and (v5.20.0) whether the legacy `python3` grant is still present | Settings → Kea → SSH → Install helper; remove `/etc/sudoers.d/jen-kea` |
 | **Background workers running** | the scheduler + alert loop started with this process | only reported under gunicorn, not the werkzeug fallback |
 | **Jen up to date** | always `skip` here — run the check from **Settings → System → Updates** (it contacts GitHub) | — |
+| **Control transport ready for 3.2** (readiness, v5.38.0) | `ca` mode fails once any server is on Kea 3.0+ and warns below that; `direct` mode warns for any server/daemon without its own control-socket URL | Settings → Kea → Set up direct socket |
+| **Kea host helper current for 3.2** (readiness) | each SSH host's recorded `jen-kea-helper` version against the one Jen ships (v4 carries the direct-socket and TLS ops) | Settings → Kea → SSH → Update helper |
+| **No removed config keys** (readiness) | the live config for keys Kea removed or renamed: `require-client-classes`, `only-if-required`, the singular `client-class`, `reservation-mode`, and the DDNS parameters that moved out of `dhcp-ddns` (`qualifying-suffix`, `override-*`, `replace-client-name`, `generated-prefix`, `hostname-char-*`) — each with its path and replacement | Client Classes (Jen rewrites the class keys on save); by hand for the rest |
+| **HA peers on the same Kea** (readiness) | both reachable peers' Kea minor version | upgrade one node at a time (planned maintenance) but finish both |
+| **kea-dhcp-ddns on its own socket** (readiness) | when DDNS updates are on: D2 answers `version-get` on its own http socket rather than via the Control Agent | Settings → Kea → D2 Control Socket |
 
 The **TLS certificate expiring** alert (Settings → Alerts & Integrations)
 fires once when the certificate crosses 30, 7, and 1 days remaining, and
 resets when you install a renewed one.
+
+### Upgrading Kea (the 3.2 readiness group, v5.38.0)
+
+Kea 3.2 removes the Control Agent. The **Kea 3.2 readiness** group at
+the bottom of the Health Center is the plan for that upgrade: five
+checks that only report, never change anything, and `skip` wherever
+this install has nothing to look at (a single Docker box with no
+helper, no HA and no DDNS skips most of them). Settings → Kea shows
+the same result as one line on the Servers card: *Ready for Kea 3.2*
+or *N action(s) before upgrading*. Work through the actions in this
+order: put every server and daemon on its own control socket
+(Settings → Kea → Set up direct socket, which needs Kea 2.7.2+ and the
+current helper), fix any removed config key the check names, make
+sure D2 has its own socket if you use DDNS, then upgrade the HA pair
+one node at a time with the planned-maintenance flow and finish both
+nodes before calling it done — Kea's HA hook expects matching
+versions. The existing **Kea version supported** check keeps
+reporting what is running today; readiness reports what has to
+happen before tomorrow.
 
 The **Pool exhaustion forecast** alert (v5.36.0) fires when a subnet's
 trend reaches 90 % of its pool within 30 days, at most once per subnet

@@ -743,6 +743,190 @@ def _subnet_label(subnet_id) -> str:
     return info.get("name") or f"Subnet {subnet_id}"
 
 
+# ── readiness group (v5.38.0, Q37) ─────────────────────────────────────────
+#
+# Kea 3.2 removes the Control Agent. These checks only *report* what has
+# to happen before an upgrade — the "Kea version supported" check above
+# keeps the status of what is running now. Every one `skip`s (never
+# fails) on an install where it has nothing to look at: a single
+# CA-less Docker box with no helper, no HA, no DDNS.
+
+
+def _reachable_versions(ctx) -> list[tuple[str, tuple]]:
+    out = []
+    for s in ctx["server_status"]:
+        if not s.get("up"):
+            continue
+        v = __kea.parse_kea_version(s.get("version", ""))
+        if v is not None:
+            out.append((_server_name(s["server"]), v))
+    return out
+
+
+def _kea32_control_transport(ctx) -> Check:
+    c = Check("kea32_control_transport", "Control transport ready for 3.2", "readiness", fix_url="/settings/kea")
+    c.fix_hint = "Settings → Kea"
+    versions = _reachable_versions(ctx)
+    if extensions.KEA_CONNECTION_MODE != "direct":
+        if any(v >= (3, 0, 0) for _n, v in versions):
+            c.status = "fail"
+            c.detail = (
+                "Jen still talks to Kea through the Control Agent, which 3.2 removes — "
+                'switch now: Settings → Kea → "Set up direct socket" for each server and daemon'
+            )
+        else:
+            c.status = "warn"
+            c.detail = (
+                'before you upgrade: Settings → Kea → "Set up direct socket" gives each daemon its own '
+                "control socket (Kea 2.7.2+), so the Control Agent can go"
+            )
+        return c
+    missing = []
+    ipv6 = False
+    try:
+        from jen.services import kea6 as _kea6
+
+        ipv6 = _kea6.is_ipv6_enabled()
+    except Exception:
+        ipv6 = False
+    ddns = _ddns_updates_enabled(ctx) if ctx.get("dhcp4_config") is not None else False
+    for i, s in enumerate(extensions.KEA_SERVERS):
+        name = _server_name(s)
+        if not s.get("api_url"):
+            missing.append(f"{name}: kea-dhcp4")
+        if ipv6 and not (s.get("api6_url") or (i == 0 and extensions.KEA6_API_URL)):
+            missing.append(f"{name}: kea-dhcp6")
+        if ddns and not (s.get("api_d2_url") or (i == 0 and extensions.D2_API_URL)):
+            missing.append(f"{name}: kea-dhcp-ddns")
+    if missing:
+        c.status = "warn"
+        c.detail = "direct mode, but no control-socket URL for " + "; ".join(missing)
+        return c
+    daemons = 1 + (1 if ipv6 else 0) + (1 if ddns else 0)
+    c.status = "ok"
+    c.detail = (
+        f"direct mode — {len(extensions.KEA_SERVERS)} server(s) × {daemons} daemon(s) on their own control sockets"
+    )
+    return c
+
+
+def _kea32_helper_version(ctx) -> Check:
+    c = Check("kea32_helper_version", "Kea host helper current for 3.2", "readiness", fix_url="/settings/kea")
+    c.fix_hint = "Settings → Kea → SSH"
+    ssh_servers = [s for s in extensions.KEA_SERVERS if s.get("ssh_host")]
+    if not ssh_servers:
+        c.status, c.detail = "skip", "no Kea host has SSH configured — nothing for the helper to do"
+        return c
+    from jen.services import kea_host
+
+    status = kea_host.helper_status()
+    want = kea_host.JEN_HELPER_SHIPPED_VERSION
+    behind = []
+    unknown = []
+    for s in ssh_servers:
+        v = status.get(str(s.get("id")), {}).get("version")
+        if not isinstance(v, int):
+            unknown.append(_server_name(s))
+        elif v < want:
+            behind.append(f"{_server_name(s)} (v{v})")
+    if behind or unknown:
+        parts = []
+        if behind:
+            parts.append(f"{', '.join(behind)} below helper v{want}")
+        if unknown:
+            parts.append(f"{', '.join(unknown)} never recorded a helper")
+        c.status = "warn"
+        c.detail = (
+            "; ".join(parts) + f" — helper v{want} carries the direct-socket and TLS ops the 3.2 move uses; "
+            "update from Settings → Kea → SSH"
+        )
+        return c
+    c.status, c.detail = "ok", f"{len(ssh_servers)} host(s) on helper v{want}"
+    return c
+
+
+def _kea32_removed_keys(ctx) -> Check:
+    from jen.services import kea_readiness
+
+    c = Check("kea32_removed_keys", "No removed config keys", "readiness", fix_url="/subnets/classes")
+    c.fix_hint = "Client Classes"
+    cfg = ctx.get("dhcp4_config")
+    if cfg is None:
+        c.status, c.detail = "skip", "config-get unavailable"
+        return c
+    found = kea_readiness.scan_removed_keys(cfg)
+    if not found:
+        c.status, c.detail = "ok", f"none of the {len(kea_readiness.REMOVED_KEYS)} keys Kea has removed or renamed"
+        return c
+    shown = [f"{f['path']} → {f['replacement']} (since {f['since']})" for f in found[:3]]
+    more = f" … and {len(found) - 3} more" if len(found) > 3 else ""
+    c.status = "warn"
+    c.detail = f"{len(found)} key(s) Kea has removed or renamed: " + "; ".join(shown) + more
+    if any(f["key"] == "reservation-mode" for f in found):
+        c.fix_url, c.fix_hint = "/servers", "Servers"
+    return c
+
+
+def _kea32_ha_versions_match(ctx) -> Check:
+    from jen.services import kea_readiness
+
+    c = Check("kea32_ha_versions_match", "HA peers on the same Kea", "readiness", fix_url="/servers")
+    c.fix_hint = "Servers"
+    if not _ha_configured():
+        c.status, c.detail = "skip", "not an HA deployment"
+        return c
+    versions = _reachable_versions(ctx)
+    if len(versions) < 2:
+        c.status, c.detail = "skip", "fewer than two reachable servers reported a version"
+        return c
+    minors = {kea_readiness.minor_of(v) for _n, v in versions}
+    if len(minors) > 1:
+        c.status = "warn"
+        c.detail = (
+            ", ".join(f"{n} {_vstr(v)}" for n, v in versions)
+            + " — upgrade the pair one node at a time (Servers → HA → Planned maintenance) but finish both; "
+            "Kea's HA hook expects matching versions"
+        )
+        return c
+    c.status, c.detail = "ok", f"both on Kea {minors.pop()}"
+    return c
+
+
+def _kea32_d2_socket(ctx) -> Check:
+    c = Check("kea32_d2_socket", "kea-dhcp-ddns on its own socket", "readiness", fix_url="/settings/kea")
+    c.fix_hint = "Settings → Kea → D2"
+    if ctx.get("dhcp4_config") is None:
+        c.status, c.detail = "skip", "config-get unavailable"
+        return c
+    if not _ddns_updates_enabled(ctx):
+        c.status, c.detail = "skip", "DDNS updates disabled in dhcp4"
+        return c
+    if extensions.KEA_CONNECTION_MODE != "direct":
+        c.status = "warn"
+        c.detail = (
+            "D2 commands ride the Control Agent today; Kea 3.2 needs kea-dhcp-ddns's own http control socket — "
+            "Settings → Kea → D2 Control Socket once you are on direct mode"
+        )
+        return c
+    primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else {}
+    url = primary.get("api_d2_url") or extensions.D2_API_URL
+    if not url:
+        c.status, c.detail = "warn", "direct mode, but no [d2] api_url — Settings → Kea → D2 Control Socket"
+        return c
+    r = __kea.kea_command("version-get", service="d2", server=ctx["active_server"])
+    if r.get("result") == 0:
+        c.status, c.detail = "ok", f"D2 answers on {url}"
+    else:
+        logger.warning(f"health check kea32_d2_socket: {r.get('text', '')}")
+        c.status, c.detail = "warn", f"D2 did not answer on its socket {url}"
+    return c
+
+
+def readiness_checks(ctx: dict | None = None) -> list[Check]:
+    """Just the readiness group, for the Settings → Kea one-liner."""
+    return [c for c in run_checks(ctx) if c.group == "readiness"]
+
+
 # ── runner ─────────────────────────────────────────────────────────────────
 
 _CHECKS = [
@@ -766,6 +950,11 @@ _CHECKS = [
     _helper_installed,
     _background_workers,
     _update_available,
+    _kea32_control_transport,
+    _kea32_helper_version,
+    _kea32_removed_keys,
+    _kea32_ha_versions_match,
+    _kea32_d2_socket,
 ]
 
 # id → (title, group), for the try/except fallback and the tests.
@@ -790,11 +979,18 @@ _CHECK_META = {
     "helper_installed": ("Kea host helper installed", "jen"),
     "background_workers": ("Background workers running", "jen"),
     "update_available": ("Jen up to date", "jen"),
+    "kea32_control_transport": ("Control transport ready for 3.2", "readiness"),
+    "kea32_helper_version": ("Kea host helper current for 3.2", "readiness"),
+    "kea32_removed_keys": ("No removed config keys", "readiness"),
+    "kea32_ha_versions_match": ("HA peers on the same Kea", "readiness"),
+    "kea32_d2_socket": ("kea-dhcp-ddns on its own socket", "readiness"),
 }
 
 CHECK_IDS = list(_CHECK_META.keys())
-GROUP_ORDER = ["kea", "capacity", "ddns", "jen"]
-GROUP_LABELS = {"kea": "Kea", "capacity": "Capacity", "ddns": "DDNS", "jen": "Jen"}
+GROUP_ORDER = ["kea", "capacity", "ddns", "jen", "readiness"]
+GROUP_LABELS = {"kea": "Kea", "capacity": "Capacity", "ddns": "DDNS", "jen": "Jen", "readiness": "Kea 3.2 readiness"}
+# v5.38.0 (Q37) — one line above a group, when it needs framing.
+GROUP_BANNERS = {"readiness": "Kea 3.2 removes the Control Agent — Jen checks the parts it can see."}
 
 
 def run_checks(ctx: dict | None = None) -> list[Check]:
@@ -832,3 +1028,7 @@ def group_checks(checks: list[Check]) -> list[tuple[str, str, list[Check]]]:
     for c in checks:
         by_group.setdefault(c.group, []).append(c)
     return [(g, GROUP_LABELS.get(g, g.title()), by_group[g]) for g in GROUP_ORDER if g in by_group]
+
+
+def group_banner(group_id: str) -> str:
+    return GROUP_BANNERS.get(group_id, "")

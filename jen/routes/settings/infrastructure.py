@@ -271,8 +271,19 @@ def settings_kea():
     # older (unknown = show them; the route re-checks before writing).
     direct_socket_supported = kea_version_tuple is None or kea_version_tuple >= (2, 7, 2)
     ipv6_enabled = __kea6.is_ipv6_enabled()
+    # v5.38.0 (Q37) — the Kea 3.2 readiness one-liner on the servers card.
+    readiness = None
+    if kea_up:
+        try:
+            from jen.services import health as _health
+            from jen.services import kea_readiness as _readiness
+
+            readiness = _readiness.summarize(_health.readiness_checks())
+        except Exception as e:
+            logger.warning(f"readiness summary: {e}")
     return render_template(
         "settings_kea.html",
+        readiness=readiness,
         infra=infra,
         kea_up=kea_up,
         ssh_pub_key=ssh_pub_key,

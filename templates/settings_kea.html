@@ -260,6 +260,12 @@
         <span class="card-title">🖥️ Servers &amp; High Availability</span>
         <span style="font-size:12px;color:var(--text-muted);">Server 1 is the Control Agent above</span>
     </div>
+    {% if readiness %}
+    <div class="form-hint" style="margin-bottom:12px;">
+        {% if readiness.ready %}✅ Ready for Kea 3.2{% elif readiness.actions %}⚠️ {{ readiness.actions }} action(s) before upgrading to Kea 3.2{% else %}Kea 3.2 readiness: nothing to check on this install{% endif %}
+        — <a href="/health-center">Health Center → Kea 3.2 readiness</a>
+    </div>
+    {% endif %}
     <form method="POST" action="/settings/infrastructure/save-ha"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
