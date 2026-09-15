@@ -239,6 +239,9 @@ class TestKeysPage:
         with db.cursor() as cur:
             cur.execute("SELECT can_write FROM api_keys WHERE name='_probe_created_rw'")
             assert cur.fetchone()["can_write"] == 1
+        # End this connection's REPEATABLE-READ snapshot before the second
+        # create, or the next SELECT can't see the row the route inserted.
+        db.commit()
         r = logged_in_client.post(
             "/settings/api-keys/create",
             data={"name": "_probe_created_ro", "subnet_ids": ["all"]},
