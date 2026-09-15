@@ -301,7 +301,10 @@ class TestMaintenanceRoutes:
         logged_in_client.post("/servers/ha/maintenance/begin", data={"down": "1"})
         logged_in_client.post("/servers/ha/maintenance/handover")
         with logged_in_client.session_transaction() as sess:
-            sess["ha_maint"]["step_at"] = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+            # reassign the whole dict: a nested edit never marks the cookie session modified
+            st = dict(sess["ha_maint"])
+            st["step_at"] = (datetime.now(timezone.utc) - timedelta(seconds=90)).isoformat()
+            sess["ha_maint"] = st
         body = logged_in_client.get("/servers/ha/maintenance/status?partial=1").data.decode()
         assert "No handover after 60s" in body and "Standby is hot-standby, not partner-in-maintenance" in body
 
