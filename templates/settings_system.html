@@ -176,6 +176,22 @@
     </form>
 </div>
 
+<!-- Support bundle (v5.33.0) -->
+<div class="card" id="sys-support">
+    <div class="card-header"><span class="card-title">🧰 Support bundle</span></div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+        One zip to attach to a bug report: Jen and Kea versions, Health Center results, HA state, subnet drift,
+        each server's latest Kea config, plugin state, schema versions, recent audit and alert rows, and a tail of the
+        Jen log. Every password, key, token and secret is masked before it goes in — a test asserts none can survive —
+        and nothing is stored on this server; the zip is built when you click and sent to your browser.
+    </p>
+    {% if current_user.role == 'superadmin' %}
+    <a href="/settings/system/support-bundle" class="btn btn-secondary">🧰 Download support bundle</a>
+    {% else %}
+    <span style="font-size:12px;color:var(--text-muted);">A superadmin can download it from here.</span>
+    {% endif %}
+</div>
+
 <!-- Audit Log Retention -->
 <div class="card" id="sys-retention">
     <div class="card-header">

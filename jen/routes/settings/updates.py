@@ -4,6 +4,7 @@ jen/routes/settings/updates.py
 Check for a new release; trigger the in-app self-update.
 """
 
+import io
 import json
 import logging
 import subprocess
@@ -118,6 +119,29 @@ def save_update_channel():
     else:
         flash("This install now follows the stable channel.", "success")
     return redirect(url_for("settings.settings_system"))
+
+
+@bp.route("/settings/system/support-bundle")
+@login_required
+@_superadmin_required
+@_recent_auth_required()
+def support_bundle():
+    """v5.33.0 (Q32) — one zip to attach to a bug report. Built in memory,
+    never stored; every secret masked by construction (see
+    jen/services/support_bundle.py and its sentinel test). Superadmin +
+    step-up: it reveals the whole topology."""
+    from flask import send_file
+
+    from jen.services import support_bundle as _sb
+
+    try:
+        data, filename, names = _sb.make_bundle()
+    except Exception as e:
+        logger.error(f"support bundle failed: {e}")
+        flash("Could not build the support bundle — see the Jen log.", "error")
+        return redirect(url_for("settings.settings_system"))
+    __user.audit("SUPPORT_BUNDLE", "settings", f"{filename} ({len(names)} members, {len(data)} bytes)")
+    return send_file(io.BytesIO(data), mimetype="application/zip", as_attachment=True, download_name=filename)
 
 
 def _parse_systemctl_show(text: str) -> dict:

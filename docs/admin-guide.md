@@ -1104,6 +1104,8 @@ Available metrics:
 
 ## Health Center
 
+**Support bundle (v5.33.0).** When you need to ask for help, Settings → System → Support bundle → **Download** gives you one zip to attach: the Health Center results below, plus versions and channel, HA state, subnet drift, each server's latest Kea config, plugin state, schema versions, recent audit and alert rows, and a scrubbed tail of the Jen log. Every password, key, token and secret is masked before it is written (a test in the suite seeds each secret location with a sentinel and asserts none survive), key *paths* appear but key *files* are never opened, and the zip is built in memory when you click — nothing is stored on the server. Superadmin, with a password confirmation, because the bundle describes the whole topology.
+
 **Network → Health** (`/health-center`) runs a fixed list of read-only
 checks and shows `ok` / `warn` / `fail` / `skip` for each, with a one-line
 detail and a link to the page that fixes it. It is **read-only** — no

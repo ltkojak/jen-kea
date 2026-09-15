@@ -2,6 +2,21 @@
 
 ---
 
+## Before opening an issue: attach a support bundle (v5.33.0)
+
+**Settings → System → Support bundle → Download** produces
+`jen-support-<host>-<date>.zip` with everything a bug report needs —
+versions and channel, Health Center results, HA state, drift, each
+server's latest Kea config, plugin state, schema versions, recent audit
+and alert rows, and a scrubbed tail of the Jen log. Passwords, keys,
+tokens and secrets are masked before anything is written and the
+archive is built in memory, never stored. Read `README.txt` inside it
+if you want to check what was included. If Jen logs to journald (no
+`[server] log_file`), also attach `journalctl -u jen -n 500 --no-pager`.
+
+If Jen itself won't start, the bundle can't be made; the sections
+below cover that.
+
 ## Jen Won't Start
 
 **Check the logs first:**

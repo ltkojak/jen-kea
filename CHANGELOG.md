@@ -2,6 +2,61 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.33.0-beta.1] - 2026-09-14
+
+*Beta channel. Carries the unpromoted 5.32.1-beta.1 (HA maintenance
+wording) beneath it.*
+
+### Support bundle: one zip instead of a description
+
+As Jen gets users beyond its maintainer, "the dashboard doesn't work"
+has to arrive as an attachment. Settings → System gains a **Support
+bundle** card; a superadmin (with a password confirmation, since the
+result describes the whole topology) clicks **Download** and gets
+`jen-support-<host>-<date>.zip`:
+
+- `jen.json` — version and channel, Python, serving mode, paths,
+  whether it's Docker, ports, proxy trust, Kea connection mode.
+- `config.ini.redacted` — `jen.config` with every secret value masked.
+  A key that names a *path* to a secret (`key_path`, `api_client_key`)
+  keeps its value: the path is diagnostic, the file is never opened.
+- `servers.json` — each Kea server's URLs, SSH target, recorded helper
+  version and the mTLS server-cert copies Jen holds.
+- `health.json`, `drift.json` — the Health Center run and subnet-map
+  drift, exactly as the pages show them.
+- `kea/<server>-<daemon>.json` — the *latest* config revision per
+  server and daemon, through the same redaction the config-history
+  page uses (control-socket credentials, database passwords, HA peer
+  passwords all masked). The revision history itself is not included.
+- `plugins.json`, `db.json` — installed plugins and their state;
+  schema versions, plugin migrations, row counts, the database
+  server's version string.
+- `audit-tail.json`, `alerts-tail.json`, `lease-history-7d.json` —
+  recent rows and a per-subnet utilization summary.
+- `logs/jen.log.tail` — the last 2,000 lines of the Jen log with
+  bearer tokens, passwords, and long hex or base64 runs scrubbed, or
+  a note telling you which `journalctl` line to attach when Jen logs
+  to journald.
+
+Nothing is stored on the server; the archive is built in memory and
+sent to the browser. A 20 MB cap drops the log and audit tails first
+and says so in the bundle's `README.txt`, as does every section that
+couldn't be collected — a failing Health check or an undecryptable
+revision becomes a line in the README, never a missing bundle.
+
+**The redaction is a test, not a promise.** `tests/test_support_bundle.py`
+seeds every secret-bearing input the bundle reads — both database
+passwords, the Kea API password, the OIDC client secret, the metrics
+token, a Kea basic-auth password and a hosts-database password and an
+HA peer password inside a config revision, a bearer token and a
+password and an API key in log lines — builds the archive from that
+raw data, unzips it, and asserts no sentinel appears in any member. A
+second test proves the collectors never open the private key the
+config points at. The member list is pinned too, so a table dump can't
+sneak in unnoticed.
+
+The troubleshooting guide now opens with "attach a support bundle".
+
 ## [5.32.1-beta.1] - 2026-09-14
 
 *The first release through the beta channel. Set Settings → System →
