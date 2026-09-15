@@ -43,6 +43,13 @@
         {{ (s.current / s.pool_size * 100)|round }}% utilized
     </div>
     {% endif %}
+    {% set f = forecast.get(subnet_id) %}
+    {% if f %}
+    <div class="forecast-line" style="font-size:11px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);color:var(--text-muted);">
+        {% if f.high_water %}Peak <strong>{{ f.high_water.peak }}{% if f.pool_size %}/{{ f.pool_size }}{% endif %}</strong> on {{ f.high_water.on }} ·{% endif %}
+        <span style="{% if f.days_to_90pct is not none and f.days_to_90pct <= 7 %}color:var(--danger);font-weight:600;{% elif f.days_to_90pct is not none and f.days_to_90pct <= 30 %}color:var(--warning);font-weight:600;{% endif %}">{{ f.line }}</span>
+    </div>
+    {% endif %}
 </div>
 {% endfor %}
 </div>
@@ -109,6 +116,7 @@ document.getElementById('days-select').addEventListener('change', function() {
 <script src="/static/js/chart.umd.min.js"></script>
 <script nonce="{{ csp_nonce }}">
 const HISTORY = {{ history | tojson }};
+const FORECAST = {{ forecast | tojson }};
 const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
 
 function buildCharts() {
@@ -124,6 +132,16 @@ function buildCharts() {
         const reserved = h.data.map(d => d.reserved_leases);
         const poolSize = h.data.map(d => d.pool_size);
         const free = h.data.map((d, i) => Math.max(0, (d.pool_size || 0) - d.active_leases));
+
+        // v5.36.0: the dashed projection — null under the history so the
+        // line starts at the last real point and runs forward day by day.
+        const fc = FORECAST[subnetId];
+        const proj = (fc && fc.projection && fc.projection.length) ? fc.projection : [];
+        const projection = h.data.map(() => null);
+        if (proj.length) {
+            projection[projection.length - 1] = h.data[h.data.length - 1].active_leases;
+            proj.forEach(p => { labels.push(p[0]); projection.push(p[1]); poolSize.push(fc.pool_size); });
+        }
 
         new Chart(canvas, {
             type: 'line',
@@ -160,6 +178,19 @@ function buildCharts() {
                         pointRadius: 0,
                         borderWidth: 1,
                         borderDash: [4, 4],
+                    },
+                    {
+                        label: 'Projected (trend)',
+                        data: projection,
+                        borderColor: '#f39c12',
+                        backgroundColor: 'transparent',
+                        fill: false,
+                        tension: 0,
+                        pointRadius: 0,
+                        borderWidth: 2,
+                        borderDash: [6, 4],
+                        spanGaps: false,
+                        hidden: proj.length === 0,
                     }
                 ]
             },

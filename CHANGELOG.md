@@ -2,6 +2,56 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.36.0-beta.1] - 2026-09-15
+
+*Beta channel. Stacked on the unpromoted 5.35.0-beta.1, 5.34.0-beta.2,
+5.33.0-beta.1 and 5.32.1-beta.1.*
+
+### Where is this pool heading?
+
+Jen has taken a lease snapshot per subnet every half hour since 4.x and
+charted it on Reports, and it has warned when utilization crossed a
+threshold. What it never did was look at the direction of the line.
+A /24 at 70 % that has been at 70 % for a year is fine; a /24 at 70 %
+that was at 40 % last month is a problem in three weeks. This release
+adds the forecast, and puts it in the four places an operator would
+look for it.
+
+**How it is computed** (`jen/services/capacity.py`, pure and tested
+without a database): the highest active-lease count of each day over
+the last 30 days of snapshots, a least-squares line through those
+daily peaks, and the day that line crosses 90 % and 100 % of the pool.
+It refuses to guess: fewer than 7 distinct days of snapshots is
+reported as *not enough history*, a crossing more than 365 days out is
+*beyond the horizon* rather than a date, a flat or falling trend shows
+no date at all, and only snapshots taken since the pool was last
+resized are fitted, because a peak against the old pool size says
+nothing about the new one.
+
+**Reports.** Each subnet card now ends with the 30-day high-water mark
+and the day it happened, the trend in leases per day, and — when
+rising — roughly when 90 % arrives, with the date. The line is amber
+within 30 days and red within 7. The chart draws the trend forward as
+a dashed *Projected (trend)* line from the last snapshot to the day
+the pool would fill, at most 30 days ahead.
+
+**Health Center.** A new *Pool exhaustion forecast* check in the
+capacity group: warn when any subnet reaches 90 % within 30 days, fail
+within 7, and `skip` (saying how many days of snapshots it has so far)
+until a subnet has a week of history. Subnet-restricted viewers see
+only their own subnets, as with the utilization check.
+
+**Alerts.** A new *Pool exhaustion forecast* alert type, off until you
+enable it on a channel, fires when a subnet's trend reaches 90 % within
+30 days — at most once per subnet every 7 days, so a slowly filling
+pool is a weekly reminder rather than a daily one. The existing
+utilization alert says where you are; this one says where you are
+heading.
+
+**API.** `GET /api/v1/subnets` rows gain `peak_30d`, `trend_per_day`,
+`days_to_90pct` and `forecast` (`rising`, `flat`, `falling`,
+`insufficient`, `no-pool`), documented in the OpenAPI spec.
+
 ## [5.35.0-beta.1] - 2026-09-15
 
 *Beta channel. Stacked on the unpromoted 5.34.0-beta.2, 5.33.0-beta.1

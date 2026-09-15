@@ -526,7 +526,7 @@ Go to **Settings → Access & Security → API Keys** to generate, view, and rev
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/v1/health` | Kea status and Jen version — no auth |
-| GET | `/api/v1/subnets` | Subnet utilization with pool sizes |
+| GET | `/api/v1/subnets` | Subnet utilization with pool sizes; since v5.36.0 also `peak_30d`, `trend_per_day`, `days_to_90pct` and `forecast` (rising / flat / falling / insufficient) |
 | GET | `/api/v1/leases` | Active leases — params: subnet, mac, hostname, limit |
 | GET | `/api/v1/leases/{mac}` | Single device lease with active boolean |
 | GET | `/api/v1/devices` | Device inventory — params: mac, name, subnet, limit |
@@ -1135,6 +1135,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **Subnet map matches Kea** | `check_config_drift()` — Jen's `[subnets]` list vs Kea's live config | Settings → Kea → `[subnets]` |
 | **Every Kea subnet is named** | every subnet id in Kea's config has a name in Jen's `[subnets]`, and vice-versa | Settings → Kea → `[subnets]` |
 | **Pool utilization** | the latest lease snapshot per subnet — warns at the alert threshold, fails at 95 % | Subnets page; widen the pool |
+| **Pool exhaustion forecast** (v5.36.0) | a least-squares line through the last 30 days of daily peak active leases per subnet — warns when it reaches 90 % of the pool within 30 days, fails within 7; `skip` until a subnet has 7 days of snapshots. A pool resize restarts the fit. | Reports page; widen the pool or shorten lease lifetimes |
 | **Lease snapshots current** | the newest snapshot is no older than 2× the snapshot interval | Settings → System; check the background worker is running |
 | **kea-dhcp-ddns reachable** | when dhcp4 `dhcp-ddns.enable-updates` is on: `version-get` on the `d2` service (`ca` mode only) | DDNS page; the D2 service |
 | **kea-dhcp-ddns error counters** | D2's `ncr-error` + `update-error` statistics | DDNS page; the DNS server / TSIG keys |
@@ -1148,6 +1149,13 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 The **TLS certificate expiring** alert (Settings → Alerts & Integrations)
 fires once when the certificate crosses 30, 7, and 1 days remaining, and
 resets when you install a renewed one.
+
+The **Pool exhaustion forecast** alert (v5.36.0) fires when a subnet's
+trend reaches 90 % of its pool within 30 days, at most once per subnet
+every 7 days (the settings key `pool_forecast_alerted_<subnet id>` holds
+the date it last fired). It is a complement to the utilization alert, not
+a replacement: utilization says where you are, the forecast says where
+you are heading.
 
 ---
 

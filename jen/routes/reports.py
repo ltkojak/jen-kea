@@ -11,6 +11,8 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.capacity as __capacity
+import jen.services.health as __health
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 
@@ -94,6 +96,24 @@ def reports():
     except Exception as e:
         logger.error(f"Reports summary error: {e}")
 
+    # v5.36.0 (Q35): the exhaustion forecast per subnet, from the last
+    # 30 days regardless of the range shown. Missing history simply
+    # leaves a subnet out of `forecast`.
+    forecast = {}
+    try:
+        window = __health.lease_history_window()
+        for subnet_id in current_user.filter_subnet_map(extensions.SUBNET_MAP):
+            rows = window.get(subnet_id)
+            if not rows:
+                continue
+            f = __capacity.forecast(rows)
+            hw = __capacity.high_water(rows)
+            f["line"] = __capacity.summary_line(f)
+            f["high_water"] = {"peak": hw["peak"], "on": hw["on"].isoformat()} if hw else None
+            forecast[subnet_id] = f
+    except Exception as e:
+        logger.error(f"Reports forecast error: {e}")
+
     snapshot_interval = __user.get_global_setting("snapshot_interval_minutes", "30")
     retention_days = __user.get_global_setting("history_retention_days", "90")
     data_points = sum(len(h["data"]) for h in history.values())
@@ -102,6 +122,7 @@ def reports():
         "reports.html",
         history=history,
         summary=summary,
+        forecast=forecast,
         days=days,
         subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
         data_points=data_points,

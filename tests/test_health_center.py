@@ -333,6 +333,90 @@ class TestPoolExhaustionForecast:
         assert sorted(win) == [1, 2] and [r["active_leases"] for r in win[1]] == [1, 2]
 
 
+class TestPoolForecastAlert:
+    """v5.36.0 (Q35): once per subnet per 7 days, only within 30 days of 90 %."""
+
+    def _rows(self, peaks, pool_size=254, today=None):
+        from datetime import datetime, timedelta
+
+        today = today or datetime(2026, 9, 15)
+        return [
+            {"snapshot_time": today - timedelta(days=len(peaks) - i), "active_leases": p, "pool_size": pool_size}
+            for i, p in enumerate(peaks)
+        ]
+
+    def _run(self, monkeypatch, history, calls, today):
+        from jen.services import alerts
+
+        monkeypatch.setattr("jen.services.health.lease_history_window", lambda days=31: history)
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **kw: calls.append(kw))
+        alerts.check_pool_forecast_alerts(today=today)
+
+    def test_fires_once_then_again_after_seven_days(self, db, monkeypatch):
+        from datetime import date, timedelta
+
+        from jen.models.user import get_global_setting, set_global_setting
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        set_global_setting("pool_forecast_alerted_1", "")
+        calls = []
+        today = date(2026, 9, 15)
+        hist = {1: self._rows([100 + 8 * i for i in range(10)])}
+        self._run(monkeypatch, hist, calls, today)
+        assert len(calls) == 1 and calls[0]["subnet"] == "LAN" and calls[0]["subnet_id"] == 1
+        assert get_global_setting("pool_forecast_alerted_1") == "2026-09-15"
+        self._run(monkeypatch, hist, calls, today + timedelta(days=3))
+        assert len(calls) == 1
+        self._run(monkeypatch, hist, calls, today + timedelta(days=7))
+        assert len(calls) == 2
+
+    def test_flat_or_far_off_never_fires(self, db, monkeypatch):
+        from datetime import date
+
+        from jen.models.user import set_global_setting
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        set_global_setting("pool_forecast_alerted_1", "")
+        calls = []
+        self._run(monkeypatch, {1: self._rows([50] * 10)}, calls, date(2026, 9, 15))
+        self._run(monkeypatch, {1: self._rows([10 + i for i in range(10)])}, calls, date(2026, 9, 15))
+        assert calls == []
+
+    def test_alert_type_is_registered(self):
+        from jen.services import alerts
+
+        assert "pool_forecast" in alerts.DEFAULT_TEMPLATES and "pool_forecast" in alerts.ALERT_TYPE_LABELS
+
+
+class TestReportsForecastCard:
+    """v5.36.0 (Q35): the Reports card shows the forecast line and the
+    chart gets the projection data."""
+
+    def _seed(self, db, sid, peaks, pool_size=254):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history")
+            for i, peak in enumerate(peaks):
+                cur.execute(
+                    "INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size, snapshot_time) "
+                    "VALUES (%s, %s, %s, 0, %s, DATE_SUB(NOW(), INTERVAL %s DAY))",
+                    (sid, peak, peak, pool_size, len(peaks) - i),
+                )
+        db.commit()
+
+    def test_rising_subnet_shows_days_to_ninety(self, logged_in_client, db):
+        self._seed(db, 1, [100 + 8 * i for i in range(10)])
+        r = logged_in_client.get("/reports?days=30")
+        body = r.data.decode()
+        assert r.status_code == 200
+        assert "reaches 90% in ~" in body and "Peak <strong>172/254</strong>" in body
+        assert "const FORECAST" in body and "Projected (trend)" in body
+
+    def test_short_history_says_so(self, logged_in_client, db):
+        self._seed(db, 1, [10, 20])
+        body = logged_in_client.get("/reports?days=30").data.decode()
+        assert "not enough history (2 of 7 days needed)" in body
+
+
 class TestLeaseSnapshotFresh:
     def test_no_rows_skips(self, db):
         with db.cursor() as cur:

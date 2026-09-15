@@ -69,6 +69,19 @@ class TestForecast:
         assert f["days_to_100pct"] == 5
         assert "reaches 90% in ~3 days" in cap.summary_line(f)
 
+    def test_projection_starts_today_and_stops_at_the_pool(self):
+        rows = _rows(list(range(100, 200, 10)))  # +10/day, the line hits the pool at x=15.4 → day 6
+        f = cap.forecast(rows, today=TODAY)
+        proj = f["projection"]
+        assert proj[0][0] == TODAY.isoformat() and proj[-1][0] == (TODAY + timedelta(days=6)).isoformat()
+        assert proj[-1][1] == 254 and all(v <= 254 for _d, v in proj)
+        assert proj[0][1] == 200  # intercept 100 + 10 * x_today(10)
+
+    def test_projection_is_capped_at_thirty_days_and_empty_when_not_rising(self):
+        rows = _rows([10 + i // 10 for i in range(30)])
+        assert len(cap.forecast(rows, today=TODAY)["projection"]) == 31
+        assert cap.forecast(_rows([50] * 12), today=TODAY)["projection"] == []
+
     def test_flat_and_falling(self):
         f = cap.forecast(_rows([50] * 12), today=TODAY)
         assert f["trend"] == "flat" and f["days_to_90pct"] is None

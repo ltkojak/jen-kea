@@ -159,6 +159,32 @@ Changes are validated before being applied. If validation fails, your previous c
 
 ---
 
+## Reports and the exhaustion forecast (v5.36.0)
+
+**Reports** charts each subnet's lease history from the snapshots Jen
+takes every few minutes (the interval and retention are set at the
+bottom of the page). Each subnet card shows the current active leases,
+the peak over the selected range, the pool size and free addresses.
+
+Below that is the forecast: the highest active-lease count in the last
+30 days and the day it happened, the trend in leases per day, and — when
+the trend is rising — roughly when it reaches 90 % of the pool, with the
+date. The chart draws that trend forward as a dashed *Projected (trend)*
+line from the last snapshot to the day the pool would fill (at most 30
+days ahead).
+
+How it is worked out: the highest active-lease count of each day over the
+last 30 days, a straight line fitted through those daily peaks, extended
+forward. It needs 7 days of snapshots before it says anything, only uses
+snapshots taken since the pool was last resized, and reports a crossing
+more than a year out as "beyond the horizon" rather than a date. A flat
+or falling trend shows no date. The forecast line turns amber when 90 %
+is within 30 days and red within 7 — the same thresholds the **Pool
+exhaustion forecast** check on the Health page and the optional
+**Pool exhaustion forecast** alert use.
+
+---
+
 ## DDNS Status
 
 The DDNS Status page shows activity from the Technitium DNS update script that runs alongside Kea.

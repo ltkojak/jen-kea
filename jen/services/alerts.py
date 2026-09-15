@@ -124,6 +124,7 @@ DEFAULT_TEMPLATES = {
     "utilization_high": "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
     "utilization_ok": "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
     "pool_exhaustion": "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
+    "pool_forecast": "📈 <b>Pool Exhaustion Forecast</b>\nSubnet <b>{subnet}</b> ({cidr})\nTrend <b>{trend}/day</b> — on track to reach 90% in ~<b>{days}</b> days ({date})\nPeak so far: {peak}/{total}",
     "reservation_added": "📌 <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "reservation_deleted": "🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
     "stale_reservation": "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
@@ -198,6 +199,7 @@ ALERT_TYPE_LABELS = {
     "utilization_high": "Subnet utilization high",
     "utilization_ok": "Subnet utilization recovery",
     "pool_exhaustion": "Pool exhaustion warning",
+    "pool_forecast": "Pool exhaustion forecast (90% within 30 days)",
     "reservation_added": "Reservation added",
     "reservation_deleted": "Reservation deleted",
     "stale_reservation": "Stale reservation detected",
@@ -729,6 +731,50 @@ def check_cert_expiry_alert() -> None:
         __set_global_setting("cert_expiry_alerted", "0")
 
 
+def check_pool_forecast_alerts(today=None) -> None:
+    """v5.36.0 (Q35): fire `pool_forecast` for every subnet whose trend
+    reaches 90 % of its pool within 30 days — at most once per subnet per
+    7 days, tracked in the settings key `pool_forecast_alerted_<id>` (the
+    date last fired) so a restart doesn't re-alert. The forecast itself is
+    jen/services/capacity.py; the history read is health.lease_history_window."""
+    from datetime import date, timedelta
+
+    from jen.services import capacity
+    from jen.services.health import lease_history_window
+
+    today = today or date.today()
+    history = lease_history_window()
+    for sid, rows in history.items():
+        info = extensions.SUBNET_MAP.get(sid)
+        if not info:
+            continue
+        f = capacity.forecast(rows, today=today)
+        d = f["days_to_90pct"]
+        if d is None or d > capacity.WARN_DAYS:
+            continue
+        key = f"pool_forecast_alerted_{sid}"
+        last = __get_global_setting(key, "") or ""
+        try:
+            last_day = date.fromisoformat(last) if last else None
+        except ValueError:
+            last_day = None
+        if last_day is not None and today - last_day < timedelta(days=7):
+            continue
+        hw = capacity.high_water(rows)
+        send_alert(
+            "pool_forecast",
+            subnet=info["name"],
+            cidr=info["cidr"],
+            trend=f"{f['slope_per_day']:+.1f}",
+            days=d,
+            date=f["date_90"],
+            peak=hw["peak"] if hw else f["latest_peak"],
+            total=f["pool_size"],
+            subnet_id=sid,
+        )
+        __set_global_setting(key, today.isoformat())
+
+
 def check_alerts():
     import time
 
@@ -1097,6 +1143,11 @@ def check_alerts():
                     check_cert_expiry_alert()
                 except Exception as e:
                     logger.error(f"Cert expiry check error: {e}")
+                # ── Pool exhaustion forecast (v5.36.0) — same once-per-day cadence ──
+                try:
+                    check_pool_forecast_alerts()
+                except Exception as e:
+                    logger.error(f"Pool forecast check error: {e}")
 
         except Exception as e:
             logger.error(f"Alert thread error: {e}")

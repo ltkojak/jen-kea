@@ -19,11 +19,13 @@ date nobody should plan around.
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime, timedelta
 
 WINDOW_DAYS = 30
 MIN_DAYS = 7
 HORIZON_DAYS = 365
+PROJECTION_DAYS = 30
 WARN_DAYS = 30
 FAIL_DAYS = 7
 
@@ -109,13 +111,15 @@ def forecast(
     window_days: int = WINDOW_DAYS,
     min_days: int = MIN_DAYS,
     horizon_days: int = HORIZON_DAYS,
+    projection_days: int = PROJECTION_DAYS,
 ) -> dict:
     """The forecast for one subnet's rows. Always returns the same keys:
     trend ('rising' | 'flat' | 'falling' | 'insufficient' | 'no-pool'),
     slope_per_day, r2, days (distinct days fitted), pool_size,
     latest_peak, pct_now, days_to_90pct, date_90, days_to_100pct,
     date_100 (None when not reached inside the horizon or not rising),
-    beyond_horizon (bool)."""
+    beyond_horizon (bool), projection ([[iso_date, value], …] for a
+    rising trend, empty otherwise)."""
     today = today or date.today()
     pool = current_pool_size(rows)
     out = {
@@ -131,6 +135,7 @@ def forecast(
         "days_to_100pct": None,
         "date_100": None,
         "beyond_horizon": False,
+        "projection": [],
     }
     if pool <= 0:
         out["trend"] = "no-pool"
@@ -167,6 +172,15 @@ def forecast(
             continue
         out[f"days_to_{key}pct"] = days_out
         out[f"date_{key}"] = (today + timedelta(days=days_out)).isoformat()
+    # The dashed line on the Reports chart: today onward, up to the day
+    # the pool fills or `projection_days`, whichever is first, clamped
+    # at the pool.
+    x_full = (pool - intercept) / slope - x_today  # fractional days until the line hits the pool
+    span = max(1, min(math.ceil(x_full) if x_full > 0 else 1, projection_days))
+    out["projection"] = [
+        ((today + timedelta(days=i)).isoformat(), int(round(min(pool, intercept + slope * (x_today + i)))))
+        for i in range(span + 1)
+    ]
     return out
 
 
