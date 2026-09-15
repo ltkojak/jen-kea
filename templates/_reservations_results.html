@@ -25,7 +25,11 @@
     {% for h in hosts %}
     {% include '_reservation_row.html' %}
     {% else %}
-    <tr id="no-reservations"><td colspan="9" style="text-align:center;padding:32px;color:var(--text-muted);">No reservations found.</td></tr>
+    {% from '_empty.html' import empty_state %}
+    <tr id="no-reservations"><td colspan="9">
+        {% set res_buttons = [('➕ Add reservation', '/reservations/add')] if current_user.role in ('superadmin','admin') else [] %}
+        {{ empty_state('📌', 'No reservations. Convert a lease or add one.', res_buttons) }}
+    </td></tr>
     {% endfor %}
     </tbody>
 </table>

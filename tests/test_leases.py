@@ -72,6 +72,15 @@ class TestLeases:
         r = logged_in_client.get("/ipmap")
         assert r.status_code == 200
 
+    def test_empty_state_teaches_instead_of_a_blank_table(self, logged_in_client, mock_kea_db):
+        """v5.39.0 (Q39) — mock_kea_db returns zero leases; the empty
+        row should explain why (Kea hands out leases on demand) and
+        point at Health rather than leaving a bare table."""
+        r = logged_in_client.get("/leases")
+        body = r.data.decode()
+        assert "No active leases yet" in body
+        assert 'href="/health-center"' in body
+
 
 class TestIpMapPoolBlocks:
     """Unit tests for leases._build_pool_blocks — pure logic, no DB/Kea needed.

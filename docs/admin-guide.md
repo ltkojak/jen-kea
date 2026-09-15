@@ -4,6 +4,24 @@ This guide covers installation, configuration, and administration of Jen.
 
 ---
 
+## Runbooks
+
+Quick links into the procedures below, roughly in the order you're likely to need them. The in-app [Getting Started](#first-time-setup-checklist) checklist covers the same ground for a fresh install.
+
+- **Install Jen** — [First-Time Setup Checklist](#first-time-setup-checklist)
+- **First login** — [First-Time Setup Checklist](#first-time-setup-checklist) (forced password change, SSL certificate, SSH key)
+- **Add the HA partner** — [Kea HA Configuration](#kea-ha-configuration), [Operating HA from Jen](#operating-ha-from-jen-v5210)
+- **Set up direct control sockets** — [Direct control sockets](#direct-control-sockets-kea-272--required-for-32)
+- **Rotate the Kea CA** — [Direct control sockets](#direct-control-sockets-kea-272--required-for-32) ("Let Jen do it" — the Rotate Kea CA button)
+- **Take a node down for patching** — [Planned maintenance, step by step](#planned-maintenance-step-by-step-v5380)
+- **Upgrade Kea to 3.2** — [Upgrading Kea](#upgrading-kea-the-32-readiness-group-v5380)
+- **Migrate from Windows DHCP** — [Migrating from Windows DHCP](#migrating-from-windows-dhcp-v5240)
+- **Migrate from ISC DHCP** — [Migrating from ISC DHCP (dhcpd.conf)](#migrating-from-isc-dhcp-dhcpdconf-v5370)
+- **Restore from a backup** — Settings → Databases → Backups; Jen doesn't automate a one-shot restore yet, so bring a fresh install back to a backed-up state the same way you'd move data between installs (export/import)
+- **Get help** — Settings → System → "Report an issue" opens a GitHub issue with your version filled in; grab a support bundle first from the button next to it
+
+---
+
 ## First-Time Setup Checklist
 
 Before starting Jen for the first time, work through this checklist:

@@ -73,6 +73,19 @@ class TestReservationsList:
         r = logged_in_client.get("/reservations/add")
         assert r.status_code == 200
 
+    def test_empty_state_teaches_instead_of_a_blank_table(self, logged_in_client, mock_kea_reservations, db):
+        """v5.39.0 (Q39) — the `hosts` table isn't covered by the
+        autouse clean_tables fixture (other tests manage it themselves),
+        so clear it explicitly rather than assume it's empty."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+
+        r = logged_in_client.get("/reservations")
+        body = r.data.decode()
+        assert "No reservations. Convert a lease or add one." in body
+        assert 'href="/reservations/add"' in body
+
 
 class TestAddReservation:
     """Add reservation — POST /reservations/add"""

@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.39.0-beta.1] - 2026-09-15
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.38.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q39, the first hour: a new admin or superadmin lands on `/getting-started`,
+which turns the Health Center's own check engine plus a handful of cheap
+settings reads (MFA enrollment, alert channels, backups, HA server count)
+into a ten-row checklist with a fix link on anything undone. A small pill
+in the top nav points at the page until every row is done or a superadmin
+dismisses it; the pill's count is cached for five minutes per process so
+it never adds a Kea round trip to a page load that doesn't need one, while
+the page itself always recomputes fresh. Two rows — HTTPS and MFA — only
+show for a superadmin, since a plain admin has no way to act on either.
+
+Several list pages that used to render a bare empty table now explain
+what they're waiting for and offer the obvious next step: Leases points
+at Health when nothing's there to check whether that's expected, Devices
+explains the inventory fills itself from leases, Reservations offers to
+add one, and Subnets offers to add a subnet or import one from Windows or
+ISC DHCP. The shared markup lives in `templates/_empty.html` so every one
+of these looks and behaves the same way.
+
+The admin guide gained a "Runbooks" section near the top — one link per
+procedure (install, first login, add the HA partner, direct sockets,
+rotate the Kea CA, planned maintenance, upgrading Kea, migrating from
+Windows or ISC DHCP, restoring from a backup, getting help) so a lost
+admin has one place to start instead of scrolling a 1,700-line document.
+Settings → System gained a "Report an issue" button next to the support
+bundle download, which opens a new GitHub issue with the running version
+pre-filled in the title.
+
 ## [5.38.0-beta.1] - 2026-09-15
 
 *Beta channel. Stacked on the unpromoted 5.37.0-beta.1 and everything

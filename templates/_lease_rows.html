@@ -1,5 +1,6 @@
 {% from '_device_badge.html' import device_badge %}
 {% from '_icons.html' import icon_trash, icon_pin, icon_dots %}
+{% from '_empty.html' import empty_state %}
 {% for l in leases %}
 <tr>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
@@ -41,5 +42,7 @@
     {% endif %}
 </tr>
 {% else %}
-<tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}" style="text-align:center;padding:32px;color:var(--text-muted);">No leases found.</td></tr>
+<tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}">
+    {{ empty_state('📭', 'No active leases yet — Kea hands out leases as clients ask; check Health if you expected some.', [('🩺 Health', '/health-center')]) }}
+</td></tr>
 {% endfor %}

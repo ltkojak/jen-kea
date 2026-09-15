@@ -19,6 +19,7 @@
         <th>Actions</th>
     </tr></thead>
     <tbody>
+    {% from '_empty.html' import empty_state %}
     {% for s in searches %}
     <tr>
         <td><strong>{{ s.name }}</strong></td>
@@ -33,6 +34,10 @@
             </form>
         </td>
     </tr>
+    {% else %}
+    <tr><td colspan="5">
+        {{ empty_state('🔖', 'No saved searches yet — save a filter from any list page and it shows up here.', []) }}
+    </td></tr>
     {% endfor %}
     </tbody>
 </table>

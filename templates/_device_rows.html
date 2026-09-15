@@ -1,4 +1,5 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
+{% from '_empty.html' import empty_state %}
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
     {% if current_user.role in ('superadmin','admin') %}
@@ -62,9 +63,13 @@
     </td>
 </tr>
 {% else %}
-<tr><td colspan="{{ 11 if current_user.role in ('superadmin','admin') else 10 }}" style="text-align:center;padding:32px;color:var(--text-muted);">
-    {% if show_stale %}No stale devices found (none inactive for {{ stale_days }}+ days).
-    {% elif search %}No devices matching "{{ search }}".
-    {% else %}No devices in inventory yet. Devices appear automatically as DHCP leases are issued.{% endif %}
+<tr><td colspan="{{ 11 if current_user.role in ('superadmin','admin') else 10 }}">
+    {% if show_stale %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No stale devices found (none inactive for {{ stale_days }}+ days).</div>
+    {% elif search %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">No devices matching "{{ search }}".</div>
+    {% else %}
+    {{ empty_state('📱', 'Devices appear as leases are seen; the inventory fills itself.', [('📋 Leases', '/leases')]) }}
+    {% endif %}
 </td></tr>
 {% endfor %}

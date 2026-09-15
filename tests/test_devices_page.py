@@ -151,6 +151,22 @@ class TestDevicesActionMenu:
         assert "data-icon=" in body
 
 
+class TestDevicesEmptyState:
+    def test_teaches_instead_of_a_blank_table(self, logged_in_client, db):
+        """v5.39.0 (Q39) — devices is cleared by the autouse clean_tables
+        fixture already, but clear it explicitly so this test doesn't
+        depend on that ordering."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+        db.commit()
+
+        r = logged_in_client.get("/devices")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "the inventory fills itself" in body
+        assert 'href="/leases"' in body
+
+
 class TestBulkDeleteDevices:
     """v5.2.2 — bulk removal of multiple devices from inventory at
     once, following the same shape as reservations.py's

@@ -372,6 +372,21 @@ class TestSubnetsPageKeaConfigError:
         assert b"Kea config unavailable" not in r.data
 
 
+class TestSubnetsEmptyState:
+    def test_teaches_instead_of_a_blank_page(self, logged_in_client, mock_kea, monkeypatch):
+        """v5.39.0 (Q39) — subnets are driven by extensions.SUBNET_MAP,
+        not by Kea's live subnet4 list (see TestSubnetsPageKeaConfigError
+        above), so an empty page needs the map itself emptied."""
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        r = logged_in_client.get("/subnets")
+        assert r.status_code == 200
+        body = r.data.decode()
+        assert "No subnets declared yet" in body
+        assert 'href="/subnets/add"' in body
+
+
 class TestEditSubnetExtraPoolsPreserved:
     """Regression test for the v4.3.8 fix: submitting the edit-subnet form on
     a subnet with 2+ Kea pools must not silently drop every pool after the

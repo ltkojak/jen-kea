@@ -233,6 +233,18 @@ document.addEventListener('click', function(e) {
     </div>
     {% endfor %}
 </div>
+{% else %}
+{% from '_empty.html' import empty_state %}
+{% set sb = namespace(buttons=[]) %}
+{% if current_user.role in ('superadmin','admin') %}
+    {% set sb.buttons = sb.buttons + [('➕ Add Subnet', '/subnets/add')] %}
+{% endif %}
+{% if current_user.role == 'superadmin' %}
+    {% set sb.buttons = sb.buttons + [('🪟 Import from Windows', url_for('subnets.import_windows')), ('📄 Import from ISC', url_for('subnets.import_isc'))] %}
+{% endif %}
+<div class="card">
+    {{ empty_state('🌐', 'No subnets declared yet — add one, or import from Windows / ISC DHCP.', sb.buttons) }}
+</div>
 {% endfor %}
 
 {% if can_manage_networks and ssh_ready %}
