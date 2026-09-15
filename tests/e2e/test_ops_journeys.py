@@ -95,8 +95,12 @@ class TestHaPlannedMaintenance:
 
         # The stepper polls #maint-status every 5s on its own
         # (hx-trigger="every 5s") — no click needed, just wait for one
-        # such request to actually happen.
-        page.wait_for_response("**/servers/ha/maintenance/status?partial=1", timeout=10000)
+        # such request to actually happen. expect_response() is the
+        # real Playwright API (there is no bare wait_for_response()); it
+        # still needs something happening inside the block, so that's a
+        # plain timed wait rather than a click.
+        with page.expect_response("**/servers/ha/maintenance/status?partial=1", timeout=10000):
+            page.wait_for_timeout(6000)
 
 
 class TestApiKeyCreation:

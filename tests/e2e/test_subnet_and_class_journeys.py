@@ -21,15 +21,12 @@ class TestSubnetEditPreviewApply:
         page.fill("#f-routers", "10.99.0.1")
         page.click("#show-confirm-btn")
         page.wait_for_selector("#confirm-panel", state="visible", timeout=10000)
-        page.wait_for_function(
-            "document.querySelector('#validation-summary') && "
-            "document.querySelector('#validation-summary').textContent.includes('No Kea servers with SSH')",
-            timeout=10000,
-        )
-        page.wait_for_function(
-            "document.querySelector('#apply-btn') && !document.querySelector('#apply-btn').disabled",
-            timeout=10000,
-        )
+        # Not wait_for_function() — Jen's CSP has no 'unsafe-eval', so
+        # Playwright can't evaluate a JS-string predicate in the page.
+        # Playwright's own :has-text()/attribute selectors don't need
+        # page-context eval at all.
+        page.wait_for_selector("#validation-summary:has-text('No Kea servers with SSH')", timeout=10000)
+        page.wait_for_selector("#apply-btn:not([disabled])", timeout=10000)
         page.click("#apply-btn")
         page.wait_for_url(f"{base_url}/subnets", timeout=10000)
 
@@ -50,8 +47,4 @@ class TestClassBuilderLivePreview:
         row.locator('input[name="rule_value"]').fill("PXEClient")
         row.locator('select[name="rule_field"]').select_option("vendor_class")
 
-        page.wait_for_function(
-            "document.querySelector('#class-preview') && "
-            "document.querySelector('#class-preview').textContent.includes('PXEClient')",
-            timeout=10000,
-        )
+        page.wait_for_selector("#class-preview:has-text('PXEClient')", timeout=10000)

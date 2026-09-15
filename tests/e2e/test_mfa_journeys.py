@@ -122,7 +122,12 @@ class TestMfaChallengeTabsAndRememberFor:
         page.goto(f"{base_url}/mfa/enroll")
         page.fill("#passkey-name", "e2e-second-factor")
         page.click("#passkey-add-btn")
-        page.wait_for_url("**/mfa/passkey/enrolled", timeout=15000)
+        # /mfa/passkey/enrolled only shows the backup-codes page when
+        # this was the user's *first* factor (TestPasskeyRegistrationAndLogin
+        # covers that case) — as a second factor here, it 302s straight
+        # back to /mfa/enroll instead, so there's no distinct URL to wait
+        # for; wait for the enrollment POST's own round trip to settle.
+        page.wait_for_load_state("networkidle", timeout=15000)
 
         page.context.clear_cookies()
         page.goto(f"{base_url}/login")
