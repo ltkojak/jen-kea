@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>📝 Author a starting {{ 'kea-dhcp4.conf' if service == 'dhcp4' else 'kea-dhcp6.conf' }}</h1>
-    <p>For a Kea install with no config yet on <strong>{{ target_server.name or target_server.ssh_host }}</strong>. This is not for editing an existing subnet — use Subnets → Edit for that.</p>
+    <p>For a Kea install with no config yet on <strong>{{ target_server.name or target_server.ssh_host }}</strong>. This is not for editing an existing subnet — use Subnets → Edit for that. Replacing a Windows DHCP or ISC dhcpd server? Author the starting config here first, then bring its scopes across with <a href="{{ url_for('subnets.import_windows') }}">Import from Windows DHCP</a> or <a href="{{ url_for('subnets.import_isc') }}">Import from ISC DHCP</a>.</p>
 </div>
 
 <div class="alert alert-warning">⚠️ This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>

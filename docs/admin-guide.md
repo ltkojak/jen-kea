@@ -1518,6 +1518,86 @@ hand-authored fixture — read the preview diff before you apply.
 
 ---
 
+## Migrating from ISC DHCP (dhcpd.conf) (v5.37.0)
+
+**Subnets → Import from ISC DHCP** (superadmin only) reads an ISC
+`dhcpd.conf` and runs it through the same review → preview → apply
+wizard as the Windows importer above. Copy `/etc/dhcp/dhcpd.conf` off
+the old server and upload it; if it uses `include`, paste the included
+files into it first — includes are not followed. You can add
+`/var/lib/dhcp/dhcpd.leases` too: it is read only so the review page
+can say how many active leases sit in the ranges you are importing.
+
+**What maps:**
+
+- Global `option` statements → Kea global `option-data` (on by default
+  on the review page, because a dhcpd.conf's global options are
+  inherited by every subnet exactly as Kea's are). `default-lease-time`
+  → `valid-lifetime`, inherited down from global and `shared-network`
+  the way dhcpd inherits it; dhcpd's own default (12 hours) applies when
+  none is set.
+- `subnet A netmask M { … }` → a `subnet4`. Every `range` becomes a pool
+  (adjacent ranges are merged); `range dynamic-bootp` is treated as a
+  plain range. A subnet with no range is imported without pools
+  (reservations only). The comment on the line above a `subnet` is used
+  as its name — `# Office LAN` — so name your subnets there.
+- `shared-network N { … }` → a Kea shared network of the same name.
+- `host H { hardware ethernet …; fixed-address …; }` → a reservation
+  (`option host-name` names it, else the host declaration name). Hosts
+  declared outside a subnet are placed by their address; options set
+  directly on a host, or in an enclosing `group { }`, travel with the
+  reservation.
+- `class "C" { match if …; }` → a client class, for the forms Jen's
+  class builder can express: `option vendor-class-identifier = "X"`,
+  `substring(option vendor-class-identifier, 0, n) = "X"` (a prefix),
+  the same on `user-class` and `host-name`, `hardware = 1:MAC`,
+  `substring(hardware, 1, 6)` (MAC) and `substring(hardware, 1, 3)`
+  (OUI), `option dhcp-client-identifier`, `option agent.circuit-id` /
+  `agent.remote-id`, joined by `and` or `or` (one kind per class) and
+  optionally wrapped in `not (…)`. Options and `filename` inside the
+  class become its option-data.
+- A pool's `allow members of "C"` guards that pool with C. `deny members
+  of "C"` guards it with a generated `not_C` class (`not member('C')`);
+  several `allow` lines become an `A_or_B` class. Both need the referenced
+  classes to exist, so they are created even when you untick the class
+  checkbox.
+- `next-server` and `filename` on a subnet → Kea's own `next-server` /
+  `boot-file-name` subnet fields.
+- `option rfc3442-classless-static-routes` (and the `ms-` spelling) in
+  dhcpd's decimal-byte form → option 121, decoded.
+
+**What doesn't map** — every one is a warning with its source line
+number on the review page, never a silent drop: option definitions
+(`option foo code N = …`) and option spaces, `include`, `failover peer`
+(set up Kea HA instead — see [Kea HA Configuration](#kea-ha-configuration)),
+`if` / `elsif` / `else` blocks, `subclass` and `match` without `if`,
+`spawn with`, regex (`~=`) matches, OMAPI, DDNS statements (`key`,
+`zone`, `ddns-*` — configure dynamic DNS on the DDNS page), pool-level
+options and lease times (Kea pools carry neither), `deny
+unknown-clients` (guard the pool with Kea's built-in `KNOWN` class
+afterwards), `max-lease-time` (Kea's `valid-lifetime` is fixed; set
+`max-valid-lifetime` by hand if clients may ask for longer), hosts
+identified by `dhcp-client-identifier` rather than a MAC, hosts whose
+`fixed-address` is a hostname or in no declared subnet, `deny booting`
+hosts, and per-host `filename`/`next-server`. Server tuning knobs with
+no Kea equivalent (`log-facility`, `ping-check`, …) are collapsed into
+one summary line. `dhcpd6.conf` is not imported (IPv4 only).
+
+**Leases are never imported** — this is a config migration. Kea starts
+with an empty lease database; clients keep the address dhcpd gave them
+until their lease's renewal time, then ask Kea, which hands out a fresh
+lease from the same pool (a reservation keeps its fixed address). The
+only visible effect is that a client may change address once, at
+renewal, if its old one is taken first. If you need to keep addresses
+stable through the cutover, shorten `default-lease-time` on dhcpd a day
+before switching so every client renews quickly afterwards.
+
+Review, preview and apply behave exactly as for the Windows importer
+above, including the primary-server-only rule and the 30-minute
+reservation retry window after a failed restart.
+
+---
+
 ## Single sign-on (OIDC) (v5.25.0)
 
 **Settings → Access & Security → Single Sign-On** (superadmin only) lets

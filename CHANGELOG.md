@@ -2,6 +2,66 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.37.0-beta.1] - 2026-09-15
+
+*Beta channel. Stacked on the unpromoted 5.36.0-beta.1 and everything
+below it back to 5.32.1-beta.1.*
+
+### Import from ISC DHCP (dhcpd.conf)
+
+Since 5.24.0 a Windows DHCP server could be brought into Kea through a
+review → preview → apply wizard. The other server people migrate from
+is ISC dhcpd, and its `dhcpd.conf` is a very different thing from an
+XML export: a free-form configuration language with nesting, inheritance,
+classes with expressions, and thirty years of directives. **Subnets →
+Import from ISC DHCP** reads one and runs it through the same wizard.
+
+**One wizard, two sources.** `jen/services/isc_dhcp_import.py` parses a
+dhcpd.conf into the exact `Plan` the Windows importer produces, so the
+review page, the `kea-dhcp4 -t` preview with its diff, the guarded apply
+and the 30-minute reservation retry are the same code, now registered
+under `/subnets/import-isc/…` as well and worded for whichever source
+the plan came from. The Windows importer gained three additive fields
+for this (pre-built class rules, `next-server`/`filename`, global
+classes) and none of its behaviour changed.
+
+**What the parser understands.** A hand-written tokenizer (`#` comments,
+quoted strings that may contain `;`) and a generic statement tree with
+line numbers, interpreted for the subset of dhcpd Jen can express in
+Kea: global options and `default-lease-time` (inherited down through
+`shared-network` and `group` the way dhcpd inherits them), `subnet …
+netmask …` with any number of `range`s (each a pool; adjacent ones
+merged), `shared-network` (a Kea shared network), `host` reservations
+by `hardware ethernet` + `fixed-address` — placed by address when
+declared outside a subnet, carrying the options of an enclosing
+`group` — and `class "C" { match if … }` for every form Jen's own class
+builder can express: equality or `substring(…, 0, n)` prefix on the
+vendor class, user class and hostname, `hardware` MAC and OUI, client
+id, relay circuit/remote id, joined by `and` or `or` and optionally
+negated. A pool's `allow members of "C"` guards that pool with C;
+`deny members of "C"` guards it with a generated `not_C` class; several
+allows become an `A_or_B` class. `next-server` and `filename` land on
+Kea's own subnet fields, and dhcpd's decimal-byte
+`rfc3442-classless-static-routes` decodes into option 121. The comment
+above a `subnet` becomes its name.
+
+**What it refuses, and how it says so.** Every directive outside that
+subset — option definitions and spaces, `include`, `failover peer`,
+`if`/`elsif`/`else`, `subclass`, `spawn with`, regex matches, OMAPI,
+DDNS keys and zones, pool-level options, `deny unknown-clients`,
+`max-lease-time`, hosts without a MAC or with a hostname for an
+address, `deny booting`, per-host `filename` — is one warning on the
+review page carrying its source line number. Nothing is silently
+dropped, nothing raises on a malformed file, and server tuning knobs
+with no Kea meaning collapse into a single summary line.
+
+**Leases are counted, never imported.** Upload `dhcpd.leases` alongside
+the config and the review page says how many active leases sit inside
+the ranges being imported and how many are on addresses that become
+reservations. Kea starts with an empty lease database; the admin guide
+explains what that means for clients at cutover and how to make it a
+non-event.
+
 ## [5.36.0-beta.1] - 2026-09-15
 
 *Beta channel. Stacked on the unpromoted 5.35.0-beta.1, 5.34.0-beta.2,

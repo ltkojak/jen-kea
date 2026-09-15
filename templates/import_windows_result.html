@@ -2,7 +2,7 @@
 {% block title %}Import Complete{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🪟 Import Complete</h1>
+    <h1>{{ src.icon }} Import Complete</h1>
     <p>Here's what happened.</p>
 </div>
 
@@ -16,7 +16,7 @@
 </div>
 
 {% if restart_failed %}
-<form method="post" action="{{ url_for('subnets.import_windows_apply_reservations') }}" style="display:inline;">
+<form method="post" action="{{ url_for('subnets.import_windows_apply_reservations', source=src.key) }}" style="display:inline;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-primary">Add the reservations now</button>
 </form>

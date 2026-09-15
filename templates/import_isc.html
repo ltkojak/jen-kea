@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Import from ISC DHCP{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>📄 Import from ISC DHCP</h1>
+    <p>Migrate subnets, reservations and classes from an ISC <code>dhcpd.conf</code>.</p>
+</div>
+
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><h3>Step 1 — Upload dhcpd.conf</h3></div>
+    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+        Copy <code>/etc/dhcp/dhcpd.conf</code> from the ISC DHCP server (and, if it uses <code>include</code>,
+        paste the included files into it first — includes are not followed). Optionally add
+        <code>/var/lib/dhcp/dhcpd.leases</code>: it is read only to tell you how many active leases sit in the
+        ranges you are about to import, never imported.
+    </p>
+    <form method="POST" action="{{ url_for('subnets.import_isc') }}" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>dhcpd.conf</label>
+            <input type="file" name="conf_file" accept=".conf,text/plain" required style="width:100%;">
+            <div class="form-hint">IPv4 (<code>dhcpd.conf</code>), up to 5 MB. A <code>dhcpd6.conf</code> is not imported.</div>
+        </div>
+        <div class="form-group">
+            <label>dhcpd.leases (optional)</label>
+            <input type="file" name="leases_file" accept=".leases,text/plain" style="width:100%;">
+            <div class="form-hint">Only counted on the review page. Kea starts with an empty lease database.</div>
+        </div>
+        <button type="submit" class="btn btn-primary">📤 Upload &amp; Review</button>
+    </form>
+</div>
+
+<div class="alert alert-info">
+    ℹ️ Nothing is written to Kea at upload. The review step lists every subnet, reservation and class Jen
+    would create — and every directive it cannot map, with its line number — then Preview runs
+    <code>kea-dhcp4 -t</code> and shows a diff before anything changes. This only ever touches the
+    <strong>primary</strong> Kea server's config; an HA partner gets it the way you already sync config.
+</div>
+
+<div class="alert alert-warning">
+    ⚠️ What maps: global and per-subnet options, <code>default-lease-time</code>, <code>subnet</code>/<code>range</code>
+    (several ranges become several pools), <code>shared-network</code>, <code>host</code> reservations
+    (<code>hardware ethernet</code> + <code>fixed-address</code>), <code>class … match if</code> on vendor/user class,
+    hostname, MAC/OUI, client id and relay ids, pool <code>allow</code>/<code>deny members of</code>,
+    <code>next-server</code> and <code>filename</code>. Not mapped, and listed as warnings: option definitions,
+    <code>include</code>, <code>failover</code>, <code>if</code>/<code>elsif</code>, <code>subclass</code>,
+    <code>spawn</code>, OMAPI and DDNS keys/zones.
+</div>
+{% endblock %}

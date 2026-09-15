@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Preview Windows DHCP Import{% endblock %}
+{% block title %}Preview {{ src.label }} Import{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🪟 Preview Import</h1>
+    <h1>{{ src.icon }} Preview Import</h1>
     <p>This is exactly what would be applied to the primary Kea server. Nothing has been written yet.</p>
 </div>
 
@@ -38,7 +38,7 @@
     {% endif %}
 </div>
 
-<form method="POST" action="{{ url_for('subnets.import_windows_apply') }}"
+<form method="POST" action="{{ url_for('subnets.import_windows_apply', source=src.key) }}"
       data-confirm="Apply this import to the primary Kea server, restart it, and add {{ reservation_count }} reservation(s)? This is a live change.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div style="display:flex;gap:10px;">
@@ -47,7 +47,7 @@
         {% else %}
         <button type="submit" class="btn btn-danger" disabled title="Kea did not accept this config.">⚡ Confirm &amp; Apply</button>
         {% endif %}
-        <a href="{{ url_for('subnets.import_windows_review') }}" class="btn btn-secondary">← Back to Review</a>
+        <a href="{{ url_for('subnets.import_windows_review', source=src.key) }}" class="btn btn-secondary">← Back to Review</a>
     </div>
 </form>
 {% endblock %}

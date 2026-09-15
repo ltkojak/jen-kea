@@ -82,6 +82,10 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
   review the subnets/pools/options/reservations/classes Jen would create,
   preview a real `kea-dhcp4 -t` + diff, then apply in one guarded push
   (v5.24.0)
+- Import from ISC DHCP — upload a `dhcpd.conf` (subnets, ranges, shared
+  networks, hosts, classes, pool allow/deny) through the same review →
+  preview → apply wizard, every unmappable directive listed with its
+  line number (v5.37.0)
 - "Why did this client get this?" — give it a MAC (and whatever else the
   client sends) and see the path Kea takes: subnet, reservation, which
   classes matched and why, eligible pools, the answer address, and every

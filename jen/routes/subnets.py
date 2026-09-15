@@ -18,6 +18,7 @@ import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.dhcp_options as __opts
+import jen.services.isc_dhcp_import as __isc
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_changeset as __changeset
@@ -1938,6 +1939,41 @@ _WIN_IMPORT_PLANS: dict[str, dict] = {}
 _WIN_IMPORT_TTL_SECONDS = 30 * 60
 _WIN_IMPORT_MAX_BYTES = 5 * 1024 * 1024
 
+# v5.37.0 (Q36) — the same wizard serves two sources. Everything after
+# the upload (review → preview → apply → retry) is one set of routes,
+# registered under both /subnets/import-windows/… and
+# /subnets/import-isc/… ; the plan entry records which importer produced
+# it and the templates word themselves from this table.
+_IMPORT_SOURCES = {
+    "windows": {
+        "key": "windows",
+        "label": "Windows DHCP",
+        "icon": "🪟",
+        "file": "export",
+        "thing": "scope",
+        "classes_label": "Policies",
+        "network_label": "Superscope",
+        "upload_endpoint": "subnets.import_windows",
+        "audit": "IMPORT_WINDOWS_DHCP",
+    },
+    "isc": {
+        "key": "isc",
+        "label": "ISC DHCP",
+        "icon": "📄",
+        "file": "dhcpd.conf",
+        "thing": "subnet",
+        "classes_label": "Pool classes",
+        "network_label": "Shared network",
+        "upload_endpoint": "subnets.import_isc",
+        "audit": "IMPORT_ISC_DHCP",
+    },
+}
+
+
+def _import_src(entry, url_source="windows"):
+    key = (entry or {}).get("source") or url_source
+    return _IMPORT_SOURCES.get(key, _IMPORT_SOURCES["windows"])
+
 
 def _prune_win_import_plans():
     now = time.time()
@@ -1945,10 +1981,32 @@ def _prune_win_import_plans():
         _WIN_IMPORT_PLANS.pop(token, None)
 
 
-def _get_win_import_plan():
+def _get_import_plan():
     _prune_win_import_plans()
     token = session.get("win_import_token")
     return token, _WIN_IMPORT_PLANS.get(token) if token else None
+
+
+def _store_import_plan(plan, source, extra=None):
+    token = uuid.uuid4().hex
+    entry = {
+        "plan": plan,
+        "source": source,
+        "expires": time.time() + _WIN_IMPORT_TTL_SECONDS,
+        "subnet_names": None,
+        "selections": None,
+        # v5.28.1 (Q26, B1) — an explicit plan state, so apply/retry can
+        # refuse a call that's out of sequence instead of only catching
+        # it indirectly (a stale sha mismatch, a missing reservation
+        # list). uploaded -> previewed -> config_applied_restart_failed
+        # -> complete; see import_windows_preview/apply/_finish_windows_import.
+        "state": "uploaded",
+        "leases": None,
+    }
+    entry.update(extra or {})
+    _WIN_IMPORT_PLANS[token] = entry
+    session["win_import_token"] = token
+    return token
 
 
 @bp.route("/subnets/import-windows", methods=["GET", "POST"])
@@ -1980,24 +2038,54 @@ def import_windows():
         )
         return redirect(url_for("subnets.import_windows"))
 
-    token = uuid.uuid4().hex
-    _WIN_IMPORT_PLANS[token] = {
-        "plan": plan,
-        "expires": time.time() + _WIN_IMPORT_TTL_SECONDS,
-        "subnet_names": None,
-        "selections": None,
-        # v5.28.1 (Q26, B1) — an explicit plan state, so apply/retry can
-        # refuse a call that's out of sequence instead of only catching
-        # it indirectly (a stale sha mismatch, a missing reservation
-        # list). uploaded -> previewed -> config_applied_restart_failed
-        # -> complete; see import_windows_preview/apply/_finish_windows_import.
-        "state": "uploaded",
-    }
-    session["win_import_token"] = token
+    _store_import_plan(plan, "windows")
     __user.audit(
         "IMPORT_WINDOWS_DHCP", "upload", f"{len(plan.scopes)} scope(s) parsed, {len(plan.warnings)} warning(s)"
     )
-    return redirect(url_for("subnets.import_windows_review"))
+    return redirect(url_for("subnets.import_windows_review", source="windows"))
+
+
+@bp.route("/subnets/import-isc", methods=["GET", "POST"])
+@login_required
+@_superadmin_required
+def import_isc():
+    """v5.37.0 (Q36) — ISC dhcpd.conf upload; the rest of the wizard is
+    shared with the Windows importer (jen/services/isc_dhcp_import.py
+    produces the same Plan)."""
+    _prune_win_import_plans()
+    if request.method == "GET":
+        return render_template("import_isc.html", src=_IMPORT_SOURCES["isc"])
+
+    file = request.files.get("conf_file")
+    if not file or not file.filename:
+        flash("No file selected.", "error")
+        return redirect(url_for("subnets.import_isc"))
+    data = file.read(_WIN_IMPORT_MAX_BYTES + 1)
+    if len(data) > _WIN_IMPORT_MAX_BYTES:
+        flash("That file is larger than the 5 MB limit for a dhcpd.conf.", "error")
+        return redirect(url_for("subnets.import_isc"))
+
+    plan = __isc.parse_config(data)
+    if not plan.scopes:
+        flash(
+            "No `subnet … netmask … { … }` declarations found in that file — is it really a dhcpd.conf? "
+            + (plan.warnings[0] if plan.warnings else ""),
+            "error",
+        )
+        return redirect(url_for("subnets.import_isc"))
+
+    leases = None
+    leases_file = request.files.get("leases_file")
+    if leases_file and leases_file.filename:
+        leases_data = leases_file.read(_WIN_IMPORT_MAX_BYTES + 1)
+        if len(leases_data) > _WIN_IMPORT_MAX_BYTES:
+            flash("The dhcpd.leases file is larger than the 5 MB limit — the config was read without it.", "warning")
+        else:
+            leases = __isc.active_leases_in_ranges(__isc.parse_leases(leases_data), plan)
+
+    _store_import_plan(plan, "isc", {"leases": leases})
+    __user.audit("IMPORT_ISC_DHCP", "upload", f"{len(plan.scopes)} subnet(s) parsed, {len(plan.warnings)} warning(s)")
+    return redirect(url_for("subnets.import_windows_review", source="isc"))
 
 
 def _suggested_subnet_names(plan):
@@ -2017,14 +2105,16 @@ def _suggested_subnet_names(plan):
     return out
 
 
-@bp.route("/subnets/import-windows/review")
+@bp.route("/subnets/import-windows/review", defaults={"source": "windows"})
+@bp.route("/subnets/import-isc/review", defaults={"source": "isc"})
 @login_required
 @_superadmin_required
-def import_windows_review():
-    token, entry = _get_win_import_plan()
+def import_windows_review(source):
+    token, entry = _get_import_plan()
+    src = _import_src(entry, source)
     if entry is None:
-        flash("Your Windows DHCP import expired or was never started — upload the export again.", "error")
-        return redirect(url_for("subnets.import_windows"))
+        flash(f"Your {src['label']} import expired or was never started — upload the {src['file']} again.", "error")
+        return redirect(url_for(src["upload_endpoint"]))
     plan = entry["plan"]
     suggested = _suggested_subnet_names(plan)
     rows = []
@@ -2053,6 +2143,9 @@ def import_windows_review():
         plan=plan,
         rows=rows,
         server_options_count=len(plan.server_options),
+        src=src,
+        leases=entry.get("leases"),
+        global_class_count=len(plan.global_classes),
     )
 
 
@@ -2071,30 +2164,36 @@ def _read_review_form(plan, form):
         chosen_name = form.get(f"name_{sid}", "").strip() or scope.name
         subnet_names[sid] = {"id": chosen_id, "name": chosen_name}
     selections = {"scopes": scope_selected, "server_options": form.get("server_options") == "1"}
+    # v5.37.0 (Q36) — the checkbox is only rendered when the plan has
+    # global classes (ISC); a Windows plan never has any.
+    selections["classes"] = form.get("classes") == "1" if plan.global_classes else True
     return subnet_names, selections
 
 
-@bp.route("/subnets/import-windows/preview", methods=["POST"])
+@bp.route("/subnets/import-windows/preview", methods=["POST"], defaults={"source": "windows"})
+@bp.route("/subnets/import-isc/preview", methods=["POST"], defaults={"source": "isc"})
 @login_required
 @_superadmin_required
-def import_windows_preview():
-    token, entry = _get_win_import_plan()
+def import_windows_preview(source):
+    token, entry = _get_import_plan()
+    src = _import_src(entry, source)
     if entry is None:
-        flash("Your Windows DHCP import expired or was never started — upload the export again.", "error")
-        return redirect(url_for("subnets.import_windows"))
+        flash(f"Your {src['label']} import expired or was never started — upload the {src['file']} again.", "error")
+        return redirect(url_for(src["upload_endpoint"]))
     plan = entry["plan"]
+    review_url = url_for("subnets.import_windows_review", source=src["key"])
 
     subnet_names, selections = _read_review_form(plan, request.form)
     bad_ids = [
         sid for sid, sel in selections["scopes"].items() if sel and (subnet_names.get(sid) or {}).get("id") is None
     ]
     if bad_ids:
-        flash("Every included scope needs a valid whole-number subnet ID.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        flash(f"Every included {src['thing']} needs a valid whole-number subnet ID.", "error")
+        return redirect(review_url)
     chosen_ids = [v["id"] for k, v in subnet_names.items() if selections["scopes"].get(k) and v["id"] is not None]
     if len(chosen_ids) != len(set(chosen_ids)):
-        flash("Two included scopes were given the same subnet ID — make them unique.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        flash(f"Two included {src['thing']}s were given the same subnet ID — make them unique.", "error")
+        return redirect(review_url)
 
     entry["subnet_names"] = subnet_names
     entry["selections"] = selections
@@ -2102,14 +2201,17 @@ def import_windows_preview():
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
     if primary is None or not primary.get("ssh_host"):
         flash("The primary Kea server needs SSH configured before you can preview or apply an import.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     existing_cfg, _sha = __host.read_config_versioned(primary, "dhcp4")
     if existing_cfg is None:
         flash("Could not read the primary server's kea-dhcp4.conf.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     new_cfg, reservations, subnets_to_declare, report = __win.to_kea(plan, existing_cfg, subnet_names, selections)
+    if src["key"] == "isc":
+        # to_kea's summary lines say "scope" (the Windows word); a dhcpd.conf has subnets
+        report = [("subnet " + line[len("scope ") :]) if line.startswith("scope ") else line for line in report]
     test_result = __host.test_config(primary, "dhcp4", new_cfg)
 
     # v5.28.0 (Q24, C4) — preview==apply: Apply pushes exactly this
@@ -2138,6 +2240,7 @@ def import_windows_preview():
         diff_rows=_diff_rows(config_diff),
         reservation_count=len(reservations),
         subnet_count=len(subnets_to_declare),
+        src=src,
     )
 
 
@@ -2173,21 +2276,24 @@ def _finish_windows_import(token, entry):
     _WIN_IMPORT_PLANS.pop(token, None)
     session.pop("win_import_token", None)
     __user.audit(
-        "IMPORT_WINDOWS_DHCP",
+        _import_src(entry)["audit"],
         "apply",
         f"{len(subnets_to_declare)} subnet(s), {reservation_results['added']} reservation(s)",
     )
     return report
 
 
-@bp.route("/subnets/import-windows/apply", methods=["POST"])
+@bp.route("/subnets/import-windows/apply", methods=["POST"], defaults={"source": "windows"})
+@bp.route("/subnets/import-isc/apply", methods=["POST"], defaults={"source": "isc"})
 @login_required
 @_superadmin_required
-def import_windows_apply():
-    token, entry = _get_win_import_plan()
+def import_windows_apply(source):
+    token, entry = _get_import_plan()
+    src = _import_src(entry, source)
+    review_url = url_for("subnets.import_windows_review", source=src["key"])
     if entry is None or entry.get("selections") is None:
-        flash("Your Windows DHCP import expired — upload the export again.", "error")
-        return redirect(url_for("subnets.import_windows"))
+        flash(f"Your {src['label']} import expired — upload the {src['file']} again.", "error")
+        return redirect(url_for(src["upload_endpoint"]))
     # v5.28.0 (Q24, C4) — preview==apply: apply pushes exactly the config
     # import_windows_preview already ran test_config() against, and
     # refuses if either that test failed or the live config has moved
@@ -2201,35 +2307,39 @@ def import_windows_apply():
             "This import has already been applied — use the retry option to add reservations, or start a new import.",
             "error",
         )
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
     if not entry.get("preview_ok"):
         flash("Preview the import — with a passing config test — before applying it.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
     if primary is None or not primary.get("ssh_host"):
         flash("The primary Kea server needs SSH configured before you can apply an import.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
     if live_cfg is None:
         flash("Could not read the primary server's kea-dhcp4.conf.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
     if live_sha != entry["preview_sha"]:
         flash(
             "The Kea config on the primary server changed since you previewed this import — preview it again.", "error"
         )
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     apply_result = __host.apply_config(
-        primary, "dhcp4", entry["candidate_cfg"], expect_sha256=entry["preview_sha"], summary="Windows DHCP import"
+        primary,
+        "dhcp4",
+        entry["candidate_cfg"],
+        expect_sha256=entry["preview_sha"],
+        summary=f"{src['label']} import",
     )
     if apply_result["code"] == "conflict":
         flash(_conflict_flash(primary.get("name", "the primary server")), "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
     if apply_result["code"] != "ok":
         flash(f"Kea rejected the imported config: {apply_result.get('detail', apply_result['code'])}", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     report = entry["report"]
     restart = __host.service_action(primary, "dhcp4", "restart")
@@ -2252,7 +2362,7 @@ def import_windows_apply():
         entry["expires"] = time.time() + _WIN_IMPORT_TTL_SECONDS
         report.append(f"⚠️ Config applied, but Kea did not restart cleanly: {restart['detail']}")
         report.append(
-            "You have 30 minutes to add the reservations below. Re-importing the export after that is "
+            f"You have 30 minutes to add the reservations below. Re-importing the {src['file']} after that is "
             "not a recovery path — the subnet's CIDR would already exist in Kea, so its reservations "
             "would be skipped too. Add them by hand if you miss the window."
         )
@@ -2261,17 +2371,18 @@ def import_windows_apply():
             "here to add the reservations within 30 minutes.",
             "error",
         )
-        return render_template("import_windows_result.html", report=report, restart_failed=True)
+        return render_template("import_windows_result.html", report=report, restart_failed=True, src=src)
     report.append("✅ Kea restarted on the primary server.")
 
     report = _finish_windows_import(token, entry)
-    return render_template("import_windows_result.html", report=report)
+    return render_template("import_windows_result.html", report=report, src=src)
 
 
-@bp.route("/subnets/import-windows/apply-reservations", methods=["POST"])
+@bp.route("/subnets/import-windows/apply-reservations", methods=["POST"], defaults={"source": "windows"})
+@bp.route("/subnets/import-isc/apply-reservations", methods=["POST"], defaults={"source": "isc"})
 @login_required
 @_superadmin_required
-def import_windows_apply_reservations():
+def import_windows_apply_reservations(source):
     """v5.28.0 (Q24, C4) — the retry path after apply's restart failed:
     the config is already live, this just finishes the reservation-add +
     Jen SUBNET_MAP write + audit that apply deferred.
@@ -2283,29 +2394,31 @@ def import_windows_apply_reservations():
     could have hand-edited or otherwise changed the file again in the
     meantime — adding reservations against a config that isn't the one
     that was just applied would be worse than not adding them yet."""
-    token, entry = _get_win_import_plan()
+    token, entry = _get_import_plan()
+    src = _import_src(entry, source)
+    review_url = url_for("subnets.import_windows_review", source=src["key"])
     if entry is None or entry.get("reservation_rows") is None:
-        flash("Your Windows DHCP import expired — upload the export again.", "error")
-        return redirect(url_for("subnets.import_windows"))
+        flash(f"Your {src['label']} import expired — upload the {src['file']} again.", "error")
+        return redirect(url_for(src["upload_endpoint"]))
     if entry.get("state") != "config_applied_restart_failed":
         flash("The imported config hasn't been applied yet — use Apply.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     primary = extensions.KEA_SERVERS[0] if extensions.KEA_SERVERS else None
     if primary is None or not primary.get("ssh_host"):
         flash("The primary Kea server needs SSH configured before you can add reservations.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
     live_cfg, live_sha = __host.read_config_versioned(primary, "dhcp4")
     if live_cfg is None:
         flash("Could not read the primary server's kea-dhcp4.conf.", "error")
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
     if live_sha != entry.get("applied_sha"):
         flash(
             "The Kea config on the primary server changed since the import was applied — check "
             "Servers → Config history before adding reservations.",
             "error",
         )
-        return redirect(url_for("subnets.import_windows_review"))
+        return redirect(review_url)
 
     report = _finish_windows_import(token, entry)
-    return render_template("import_windows_result.html", report=report)
+    return render_template("import_windows_result.html", report=report, src=src)

@@ -54,6 +54,7 @@ document.addEventListener('click', function(e) {
         {% endif %}
         {% if current_user.role == 'superadmin' %}
         <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">🪟 Import from Windows DHCP</a>
+        <a href="{{ url_for('subnets.import_isc') }}" class="btn btn-secondary">📄 Import from ISC DHCP</a>
         {% endif %}
         <a href="/subnets/add" class="btn btn-primary">➕ Add Subnet</a>
     </div>

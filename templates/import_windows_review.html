@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Review Windows DHCP Import{% endblock %}
+{% block title %}Review {{ src.label }} Import{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🪟 Review Import</h1>
+    <h1>{{ src.icon }} Review Import</h1>
     <p>Nothing has been written to Kea yet. Uncheck anything you don't want, adjust the subnet ID or name if needed, then continue.</p>
 </div>
 
 {% if plan.warnings %}
 <div class="card" style="border-color:var(--warning);margin-bottom:20px;">
-    <div class="card-header"><span class="card-title">⚠️ {{ plan.warnings|length }} warning(s) from the export</span></div>
+    <div class="card-header"><span class="card-title">⚠️ {{ plan.warnings|length }} warning(s) from the {{ src.file }}</span></div>
     <ul style="margin:0;padding-left:20px;font-size:13px;color:var(--text-muted);">
         {% for w in plan.warnings %}
         <li>{{ w }}</li>
@@ -17,17 +17,41 @@
 </div>
 {% endif %}
 
-<form method="POST" action="{{ url_for('subnets.import_windows_preview') }}">
+{% if leases %}
+<div class="card" style="margin-bottom:20px;">
+    <div class="card-header"><span class="card-title">📋 dhcpd.leases</span></div>
+    <p style="font-size:13px;margin:0;">
+        <strong>{{ leases.active }}</strong> active lease(s) in the file — <strong>{{ leases.in_ranges }}</strong> inside
+        the ranges being imported, <strong>{{ leases.reserved }}</strong> on an address that becomes a reservation.
+    </p>
+    <div class="form-hint">Leases are never imported: Kea starts with an empty lease database and clients pick
+        up new leases as they renew (at most one lease time). Reservations keep their fixed addresses.</div>
+</div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('subnets.import_windows_preview', source=src.key) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     {% if plan.server_options %}
     <div class="card" style="margin-bottom:16px;">
         <div class="card-header"><h3>Server-level options</h3></div>
         <label style="font-size:13px;cursor:pointer;">
-            <input type="checkbox" name="server_options" value="1">
+            <input type="checkbox" name="server_options" value="1"{% if src.key == 'isc' %} checked{% endif %}>
             Import {{ server_options_count }} server-level option(s) as global options
         </label>
-        <div class="form-hint">Off by default — server-level options usually overlap with what each subnet already sets.</div>
+        <div class="form-hint">{% if src.key == 'isc' %}On by default — a dhcpd.conf's global options are inherited by every subnet exactly as Kea's global option-data is.{% else %}Off by default — server-level options usually overlap with what each subnet already sets.{% endif %}</div>
+    </div>
+    {% endif %}
+
+    {% if plan.global_classes %}
+    <div class="card" style="margin-bottom:16px;">
+        <div class="card-header"><h3>Client classes</h3></div>
+        <label style="font-size:13px;cursor:pointer;">
+            <input type="checkbox" name="classes" value="1" checked>
+            Create {{ global_class_count }} client class(es) declared in the {{ src.file }}
+            ({% for c in plan.global_classes %}{{ c.name }}{% if not loop.last %}, {% endif %}{% endfor %})
+        </label>
+        <div class="form-hint">Classes a pool refers to are created regardless (the pool guard needs them).</div>
     </div>
     {% endif %}
 
@@ -36,7 +60,7 @@
             <thead>
                 <tr>
                     <th>Include</th>
-                    <th>Scope</th>
+                    <th>{{ src.thing|capitalize }}</th>
                     <th>Subnet ID</th>
                     <th>Name</th>
                     <th>CIDR</th>
@@ -44,8 +68,8 @@
                     <th>Lease</th>
                     <th>Options</th>
                     <th>Reservations</th>
-                    <th>Policies</th>
-                    <th>Superscope</th>
+                    <th>{{ src.classes_label }}</th>
+                    <th>{{ src.network_label }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -76,7 +100,7 @@
 
     <div style="display:flex;gap:10px;">
         <button type="submit" class="btn btn-primary">👁️ Preview Changes</button>
-        <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">Cancel</a>
+        <a href="{{ url_for(src.upload_endpoint) }}" class="btn btn-secondary">Cancel</a>
     </div>
 </form>
 {% endblock %}
