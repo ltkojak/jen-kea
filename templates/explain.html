@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Explain a client{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>🧭 Why did this client get this?</h1>
+    <p>The path Kea takes for one client — subnet, reservation, classes, pools, options — reconstructed from the config Jen already holds. Kea has no dry-run, so Jen evaluates what it can and says plainly what it can't.</p>
+</div>
+
+<div class="card">
+    <form method="GET" action="/tools/explain" autocomplete="off">
+        <div class="form-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
+            <div class="form-group" style="margin:0;">
+                <label>MAC address <span style="color:var(--danger);">*</span></label>
+                <input type="text" name="mac" class="mono" value="{{ client.mac }}" placeholder="aa:bb:cc:dd:ee:ff" required>
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Subnet</label>
+                <select name="subnet">
+                    <option value="">auto (lease, then reservation, then first)</option>
+                    {% for sid, info in subnet_map.items() %}
+                    <option value="{{ sid }}" {% if subnet_id == sid %}selected{% endif %}>{{ info.name }} ({{ info.cidr }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Vendor class (option 60)</label>
+                <input type="text" name="vendor_class" value="{{ client.vendor_class }}" placeholder="MSFT 5.0, android-dhcp-14, PXEClient…">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>User class (option 77)</label>
+                <input type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Hostname (option 12)</label>
+                <input type="text" name="hostname" value="{{ client.hostname }}">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Client id (option 61)</label>
+                <input type="text" name="client_id" class="mono" value="{{ client.client_id }}" placeholder="01:aa:bb:cc:dd:ee:ff">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Relay circuit id / remote id</label>
+                <div style="display:flex;gap:6px;">
+                    <input type="text" name="circuit_id" class="mono" value="{{ client.circuit_id }}" placeholder="circuit id">
+                    <input type="text" name="remote_id" class="mono" value="{{ client.remote_id }}" placeholder="remote id (hex)">
+                </div>
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>giaddr (relay agent address)</label>
+                <input type="text" name="giaddr" class="mono" value="{{ client.giaddr }}" placeholder="10.0.1.1">
+            </div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+            <button type="submit" class="btn btn-primary">🧭 Explain</button>
+            <span class="form-hint" style="margin:0;">Only the MAC is required. Anything you leave blank that a class expression needs is reported as <em>undecided</em> with the input named.</span>
+        </div>
+    </form>
+</div>
+
+{% if result %}
+<!-- Answer -->
+<div class="card" style="border-color:rgba(0,180,216,0.3);">
+    <div class="card-header"><span class="card-title">Answer</span>
+        <span style="font-size:12px;color:var(--text-muted);">subnet {{ result.subnet.id }} · {{ result.subnet.cidr }}{% if result.subnet.shared_network %} · shared network {{ result.subnet.shared_network }}{% endif %}{% if chosen_how %} · {{ chosen_how }}{% endif %}</span>
+    </div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-end;">
+        <div>
+            <div style="font-size:24px;font-weight:700;color:{% if result.answer.ip %}var(--primary){% else %}var(--warning){% endif %};" class="mono">{{ result.answer.ip or 'no address' }}</div>
+            <div style="font-size:12px;color:var(--text-muted);">{{ result.answer.how }}</div>
+        </div>
+        <div>
+            <div style="font-size:18px;font-weight:600;">{{ result.answer.lifetime }} s</div>
+            <div style="font-size:12px;color:var(--text-muted);">valid-lifetime from {{ result.answer.lifetime_from }}</div>
+        </div>
+        <div>
+            <div style="font-size:18px;font-weight:600;">{{ result.options|length }}</div>
+            <div style="font-size:12px;color:var(--text-muted);">options in the reply</div>
+        </div>
+        {% if result.answer.hostname %}
+        <div>
+            <div style="font-size:18px;font-weight:600;">{{ result.answer.hostname }}</div>
+            <div style="font-size:12px;color:var(--text-muted);">hostname</div>
+        </div>
+        {% endif %}
+    </div>
+    {% if result.confidence.not_evaluable or result.confidence.classes_undecided %}
+    <div class="alert alert-warning" style="margin-top:14px;">
+        {% if result.confidence.not_evaluable %}Not evaluable by Jen (shown verbatim below): <strong>{{ result.confidence.not_evaluable|join(', ') }}</strong>.{% endif %}
+        {% if result.confidence.classes_undecided %} Undecided until you supply more: <strong>{{ result.confidence.classes_undecided|join(', ') }}</strong>.{% endif %}
+        The answer above assumes those classes did not match.
+    </div>
+    {% endif %}
+</div>
+
+<!-- Steps -->
+{% for step in result.steps %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">{{ loop.index }}. {{ {'subnet':'Subnet selection','reservation':'Reservation','classes':'Client classes','subnet-guards':'Subnet guards','pools':'Pools and address','options':'Options'}[step.stage] }}</span>
+        <span style="font-size:12px;color:var(--text-muted);">{{ step.verdict }}</span>
+    </div>
+    <p style="font-size:13px;margin-bottom:{% if step.evidence %}10px{% else %}0{% endif %};">{{ step.detail }}</p>
+    {% if step.evidence %}
+    <ul style="font-size:12px;color:var(--text-muted);margin:0;padding-left:18px;">
+        {% for e in step.evidence %}<li class="mono" style="margin-bottom:2px;">{{ e }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+</div>
+{% endfor %}
+
+<!-- Classes table -->
+{% if result.classes %}
+<div class="card" style="padding:0;">
+    <div class="card-header" style="padding:16px 20px 12px;"><span class="card-title">Class expressions</span></div>
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Class</th><th>Result</th><th>Expression</th><th>Why</th></tr></thead>
+        <tbody>
+        {% for c in result.classes %}
+        <tr>
+            <td class="mono">{{ c.name }}</td>
+            <td style="font-size:12px;{% if c.matched %}color:var(--success){% elif c.matched is none %}color:var(--warning){% else %}color:var(--text-muted){% endif %};">
+                {% if not c.evaluable %}not evaluable{% elif c.matched %}matched{% elif c.matched is none %}undecided{% else %}no{% endif %}
+            </td>
+            <td class="mono" style="font-size:11px;word-break:break-all;">{{ c.expression or '—' }}</td>
+            <td style="font-size:12px;color:var(--text-muted);">{{ c.reason }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
+{% endblock %}

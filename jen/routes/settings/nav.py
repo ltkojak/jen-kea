@@ -55,6 +55,7 @@ SECTION_STRIPS = {
         {"icon": "🖥️", "label": "Servers", "url": "/servers", "match": ("servers.",)},
         {"icon": "🔗", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
         {"icon": "🩺", "label": "Health", "url": "/health-center", "match": ("health.",)},
+        {"icon": "🧭", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
         # plugin nav items with section == "network" are appended at render time
     ],
 }

@@ -673,6 +673,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.database import bp as database_bp
     from jen.routes.ddns import bp as ddns_bp
     from jen.routes.devices import bp as devices_bp
+    from jen.routes.explain import bp as explain_bp
     from jen.routes.health import bp as health_bp
     from jen.routes.leases import bp as leases_bp
     from jen.routes.mfa_routes import bp as mfa_bp
@@ -694,6 +695,7 @@ def _register_blueprints(app: Flask) -> None:
         ddns_bp,
         health_bp,
         devices_bp,
+        explain_bp,
         leases_bp,
         mfa_bp,
         plugins_bp,
