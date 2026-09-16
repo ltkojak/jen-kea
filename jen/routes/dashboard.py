@@ -805,7 +805,7 @@ def prometheus_metrics():
                 for key, value in (stats or {}).items():
                     if not key.startswith("pkt4-"):
                         continue
-                    metric_name = f"jen_server_pkt4_{key.replace('-', '_')}_total"
+                    metric_name = f"jen_server_{key.replace('-', '_')}_total"
                     by_metric.setdefault(metric_name, []).append((name, int(value)))
         for metric_name in sorted(by_metric):
             lines.append(

@@ -145,7 +145,7 @@ class TestGrafanaDashboardDownload:
         from tests.conftest import restricted_client
 
         c, _uid = restricted_client(client, db, allowed_subnets=None, role="viewer", username="grafana_viewer1")
-        r = c.get("/settings/system/grafana-dashboard.json")
+        r = c.get("/settings/system/grafana-dashboard.json", follow_redirects=True)
         assert r.status_code == 200
         assert b"admin access required" in r.data.lower()
 

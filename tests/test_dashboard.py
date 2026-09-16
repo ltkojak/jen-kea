@@ -137,6 +137,26 @@ class TestApiStats:
         assert data.get("kea_up") is False
 
 
+@pytest.fixture
+def metrics_open(monkeypatch):
+    """Opts into the old default-open /metrics behavior for tests that
+    are actually about metric content/format, not about the access
+    control TestPrometheusMetrics also tests directly. Module-level
+    (not a TestPrometheusMetrics method) so TestGrafanaDashboard's
+    exposition-scrape test can use it too — a fixture defined as a
+    class method is only visible to tests in that same class."""
+    import configparser
+
+    from jen import extensions
+
+    test_cfg = configparser.ConfigParser()
+    test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
+    if "server" not in test_cfg:
+        test_cfg["server"] = {}
+    test_cfg["server"]["metrics_open"] = "true"
+    monkeypatch.setattr(extensions, "cfg", test_cfg)
+
+
 class TestPrometheusMetrics:
     """v4.4.15: /metrics expanded from 2 metric families to 7. This
     endpoint never required Flask-Login session auth (by design, for
@@ -144,24 +164,8 @@ class TestPrometheusMetrics:
     does require either a configured metrics_token or an explicit
     metrics_open=true opt-in; neither configured means 401. Tests
     whose actual focus is the metric OUTPUT (not the auth behavior
-    itself) use the metrics_open fixture below to get past that check
+    itself) use the metrics_open fixture above to get past that check
     without needing to fabricate a token for every single test."""
-
-    @pytest.fixture
-    def metrics_open(self, monkeypatch):
-        """Opts into the old default-open behavior for tests that are
-        actually about metric content/format, not about the access
-        control this class also tests directly."""
-        import configparser
-
-        from jen import extensions
-
-        test_cfg = configparser.ConfigParser()
-        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
-        if "server" not in test_cfg:
-            test_cfg["server"] = {}
-        test_cfg["server"]["metrics_open"] = "true"
-        monkeypatch.setattr(extensions, "cfg", test_cfg)
 
     def test_default_denies_access_with_no_configuration(self, client, mock_kea):
         """v5.3.3 — the actual behavior change: no metrics_token and no
