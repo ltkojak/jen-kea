@@ -277,7 +277,12 @@ def recovery_bundle():
         members = _recovery_members()
         blob = recovery.build(members, passphrase)
     except recovery.BundleTooLarge as e:
-        flash(f"Recovery bundle too large to build: {e}", "error")
+        logger.warning(f"recovery bundle too large: {e}")
+        flash(
+            f"Recovery bundle would be over the {recovery.SIZE_CAP_BYTES // (1024 * 1024)} MB size cap — "
+            "check server logs for the exact size.",
+            "error",
+        )
         return redirect(url_for("database.database", tab="recovery"))
     except Exception as e:
         logger.error(f"recovery bundle build failed: {e}")
