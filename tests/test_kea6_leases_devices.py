@@ -739,6 +739,11 @@ class TestDashboardMergedV4V6Grid:
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {7: {"name": "V6LAN", "cidr": "2001:db8:7::/64", "paired_subnet4_id": None}}
         )
+
+        class _FakeUser:
+            all_subnets = True
+
+        monkeypatch.setattr(dashboard_module, "current_user", _FakeUser())
         try:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM lease6")
