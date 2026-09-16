@@ -164,6 +164,9 @@ class TestCheckKeaMajor:
         assert any("no jen.config" in w for w in warnings)
 
     def test_unreachable_server_warns_but_does_not_refuse(self, tmp_path, monkeypatch):
+        import contextlib
+
+        from jen import config as jen_config
         from jen import extensions
         from jen.tools.restore import check_kea_major
 
@@ -178,7 +181,16 @@ class TestCheckKeaMajor:
             warnings = check_kea_major(_manifest(), bundle_dir)
             assert any("unreachable" in w for w in warnings)
         finally:
+            # check_kea_major() reloads extensions.* from `good_original`
+            # (fake creds) as part of its own restore-CONFIG_FILE finally.
+            # Resetting the CONFIG_FILE string back here isn't enough on
+            # its own — extensions.JEN_DB_USER/PASS/etc stay pointed at
+            # the fake config until reload() re-derives them, and a later
+            # test in this same process (e.g. a real DB connection) would
+            # otherwise inherit that corruption.
             monkeypatch.setattr(extensions, "CONFIG_FILE", original)
+            with contextlib.suppress(Exception):
+                jen_config.app_config.reload()
 
 
 class TestRunEndToEnd:
