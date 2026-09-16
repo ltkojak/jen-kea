@@ -9,11 +9,14 @@ none of which "assigned subnets only" scoping can meaningfully apply to.
 Menu item hidden for non-superadmin users in base.html.
 """
 
+import contextlib
 import gzip
 import json
 import logging
 import os
 import queue
+import socket
+import tempfile
 import threading
 from datetime import datetime
 
@@ -24,6 +27,7 @@ from jen import extensions
 from jen.models import user as __user
 from jen.services import dbexport
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -130,6 +134,185 @@ def export_kea():
         logger.error(f"Kea DB export failed: {e}")
         flash("Kea export failed. Check server logs for details.", "error")
         return redirect(url_for("database.database", tab="export"))
+
+
+# ── Recovery bundle (v5.44.0, Q45) ──────────────────────────────────────────
+# Everything needed to stand Jen back up on a new machine, encrypted with a
+# passphrase (jen/services/recovery.py). Deliberately NOT redacted — unlike
+# the support bundle (v5.33.0), this is meant to restore the box, not to
+# hand to someone else; the page and the admin guide both say so.
+
+
+def _recovery_manifest() -> dict:
+    from jen import JEN_VERSION
+    from jen.models.migrations import MIGRATIONS
+    from jen.services import kea as __kea
+    from jen.services import kea_host as __host
+    from jen.services.plugins import discover_plugins
+
+    try:
+        hostname = socket.gethostname() or "jen"
+    except OSError:
+        hostname = "jen"
+
+    kea_versions = {}
+    for srv in extensions.KEA_SERVERS:
+        try:
+            r = __kea.kea_command("version-get", server=srv)
+            if r.get("result") == 0:
+                v = r.get("arguments", {}).get("extended", r.get("text", ""))
+                kea_versions[srv["name"]] = v.splitlines()[0] if v else ""
+        except Exception as e:
+            logger.warning(f"recovery bundle: version-get failed for {srv.get('name')}: {e}")
+
+    return {
+        "jen_version": JEN_VERSION,
+        "channel": extensions.UPDATE_CHANNEL,
+        "hostname": hostname,
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "schema_version": MIGRATIONS[-1][0] if MIGRATIONS else 0,
+        "kea_versions": kea_versions,
+        "plugins": [{"id": p.get("id"), "version": p.get("version")} for p in discover_plugins()],
+        "helper_versions": __host.helper_status(),
+    }
+
+
+def _walk_files(root: str, prefix: str, skip: set[str] | None = None) -> dict[str, bytes]:
+    """Every regular file under `root`, as `{f"{prefix}/{relpath}": content}`
+    (forward slashes — this goes into a tar, not a Windows path). `skip` is
+    a set of already-`os.path.normpath`'d absolute directories pruned from
+    the walk entirely (never even descended into)."""
+    out: dict[str, bytes] = {}
+    if not os.path.isdir(root):
+        return out
+    skip = skip or set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        if os.path.normpath(dirpath) in skip:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames if os.path.normpath(os.path.join(dirpath, d)) not in skip]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            try:
+                with open(full, "rb") as f:
+                    out[f"{prefix}/{rel}"] = f.read()
+            except OSError as e:
+                logger.warning(f"recovery bundle: could not read {full}: {e}")
+    return out
+
+
+def _recovery_members() -> dict[str, bytes]:
+    """Every file the bundle carries, as `{archive path: content}`."""
+    members: dict[str, bytes] = {"manifest.json": json.dumps(_recovery_manifest(), indent=2).encode("utf-8")}
+
+    if os.path.isfile(extensions.CONFIG_FILE):
+        with open(extensions.CONFIG_FILE, "rb") as f:
+            members["jen.config"] = f.read()
+
+    # Same two-candidate lookup as jen.services.crypto._key_candidates() —
+    # not imported directly since this bundle-building code is deliberately
+    # standalone from the app's own runtime key cache.
+    for candidate in (extensions.MFA_KEY_PATH, os.path.join(extensions.CONTENT_KEYS_DIR, ".mfa_key")):
+        if os.path.isfile(candidate):
+            with open(candidate, "rb") as f:
+                members["mfa_key"] = f.read()
+            break
+
+    members.update(_walk_files(os.path.dirname(extensions.SSL_CERT), "ssl"))
+    members.update(_walk_files(os.path.dirname(extensions.SSH_KEY_PATH), "ssh"))
+
+    content, _fname = dbexport.export_jen()
+    members["jen_db.json.gz"] = gzip.compress(content)
+
+    # content/ — CONTENT_DIR minus the scheduled-backup archives (redundant
+    # with the fresh jen_db.json.gz above) and the plugin code trees
+    # (re-fetched by id+version from the registry on restore, not frozen).
+    excluded = {
+        os.path.normpath(p)
+        for p in (
+            extensions.CONTENT_BACKUP_DIR,
+            extensions.CONTENT_PLUGIN_DIR,
+            extensions.CONTENT_PLUGIN_REQUESTS_DIR,
+            extensions.CONTENT_TMP_DIR,
+        )
+    }
+    members.update(_walk_files(extensions.CONTENT_DIR, "content", skip=excluded))
+
+    from jen.services import config_revisions as __rev
+
+    for srv in extensions.KEA_SERVERS:
+        for service in ("dhcp4", "dhcp6", "d2"):
+            try:
+                row = __rev.latest(srv["id"], service)
+            except Exception as e:
+                logger.warning(f"recovery bundle: config_revisions.latest({srv['id']}, {service}) failed: {e}")
+                continue
+            if row and row.get("config"):
+                members[f"kea-configs/{srv['name']}-{service}.json"] = row["config"].encode("utf-8")
+
+    return members
+
+
+@bp.route("/settings/databases/recovery-bundle", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required()
+def recovery_bundle():
+    """v5.44.0 (Q45) — streams `jen-recovery-<host>-<ts>.tar.enc`. Built in
+    a tempfile (not held whole in the response), never left on disk after
+    the response is sent."""
+    from jen.services import recovery
+
+    passphrase = request.form.get("passphrase", "")
+    confirm = request.form.get("passphrase_confirm", "")
+    if len(passphrase) < recovery.MIN_PASSPHRASE_LEN:
+        flash(f"Passphrase must be at least {recovery.MIN_PASSPHRASE_LEN} characters.", "error")
+        return redirect(url_for("database.database", tab="recovery"))
+    if passphrase != confirm:
+        flash("Passphrases did not match.", "error")
+        return redirect(url_for("database.database", tab="recovery"))
+
+    try:
+        members = _recovery_members()
+        blob = recovery.build(members, passphrase)
+    except recovery.BundleTooLarge as e:
+        flash(f"Recovery bundle too large to build: {e}", "error")
+        return redirect(url_for("database.database", tab="recovery"))
+    except Exception as e:
+        logger.error(f"recovery bundle build failed: {e}")
+        flash("Could not build the recovery bundle — see server logs.", "error")
+        return redirect(url_for("database.database", tab="recovery"))
+
+    hostname = socket.gethostname() or "jen"
+    ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
+    filename = f"jen-recovery-{hostname}-{ts}.tar.enc"
+
+    os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".tar.enc")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(blob)
+        __user.audit("RECOVERY_BUNDLE_EXPORT", "settings", f"{filename} ({len(blob)} bytes, {len(members)} members)")
+
+        def _stream():
+            try:
+                with open(tmp_path, "rb") as f:
+                    while chunk := f.read(1024 * 1024):
+                        yield chunk
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+
+        return Response(
+            stream_with_context(_stream()),
+            mimetype="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={filename}", "Content-Length": str(len(blob))},
+        )
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
 
 
 # ── Backup download / delete ───────────────────────────────────────────────────

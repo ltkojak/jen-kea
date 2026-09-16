@@ -295,6 +295,40 @@
     <a href="/settings/databases/migrate" class="btn btn-primary">🔀 Open Migration Wizard</a>
 </div>
 {% endif %}
+
+{% if active_tab == 'recovery' %}
+<div class="card">
+    <div class="card-header"><h3>🧳 Recovery Bundle</h3></div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+        One encrypted file to stand Jen back up on a new machine: <code>jen.config</code>, the MFA encryption key, TLS/SSH keys, a fresh export of every Jen database table, uploaded content (icons, branding), and the latest Kea config Jen has seen for each server.
+    </p>
+    <div class="alert alert-warning" style="margin-bottom:18px;">
+        ⚠️ <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file.
+    </div>
+    <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Passphrase</label>
+                <input type="password" name="passphrase" minlength="12" required placeholder="At least 12 characters">
+            </div>
+            <div class="form-group">
+                <label>Confirm passphrase</label>
+                <input type="password" name="passphrase_confirm" minlength="12" required>
+            </div>
+        </div>
+        <div class="form-hint" style="margin-bottom:12px;">
+            Write this passphrase down somewhere safe — Jen never stores it, and there is no recovery if you lose it.
+        </div>
+        <button type="submit" class="btn btn-primary">🧳 Download recovery bundle</button>
+    </form>
+</div>
+<div class="card" style="background:var(--surface2);border-style:dashed;">
+    <div style="padding:8px 4px;color:var(--text-muted);font-size:13px;">
+        To restore onto a new machine, run <code class="mono-box">sudo ./install.sh --restore /path/to/bundle.tar.enc</code> — see the admin guide's "Recover Jen on a new machine" runbook for the full walkthrough.
+    </div>
+</div>
+{% endif %}
 {% endif %}{# superadmin tools #}
 
 <script nonce="{{ csp_nonce }}">

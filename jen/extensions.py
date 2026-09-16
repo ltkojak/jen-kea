@@ -212,6 +212,10 @@ CONTENT_KEYS_DIR = os.path.join(CONTENT_DIR, "keys")
 # empty <id>.install/<id>.remove marker goes here; jen-update-root.py
 # --plugins (running as root) picks it up and writes <id>.result back.
 CONTENT_PLUGIN_REQUESTS_DIR = os.path.join(CONTENT_DIR, "plugin-requests")
+# v5.44.0 (Q45) — the recovery bundle is built here (a full DB dump +
+# /etc/jen + content can be well over what fits comfortably in memory)
+# and streamed from the temp file, never held whole in a request body.
+CONTENT_TMP_DIR = os.path.join(CONTENT_DIR, "tmp")
 
 # The shipped default favicon (release-owned, always present); an uploaded
 # override lands at FAVICON_PATH under CONTENT_DIR. The /favicon.ico route

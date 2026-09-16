@@ -37,6 +37,7 @@ _DATABASE_ROUTES = [
     ("POST", "/database/schedule", {}),
     ("GET", "/settings/databases/migrate", {}),
     ("POST", "/database/migrate/test", {}),
+    ("POST", "/settings/databases/recovery-bundle", {}),  # v5.44.0 (Q45)
     # /database/migrate/run deliberately excluded — it spawns a background
     # thread and streams SSE; the auth decorator runs before any of that,
     # so it's covered adequately by the same pattern, but exercising it
@@ -160,3 +161,80 @@ class TestImportConfirmTmpPathValidation:
         import os
 
         assert not os.path.exists(real_tmp.name)
+
+
+class TestRecoveryBundleRoute:
+    """v5.44.0 (Q45) — POST /settings/databases/recovery-bundle. The
+    generic superadmin/anonymous gating is already covered by
+    _DATABASE_ROUTES above; this is the route's own behavior."""
+
+    PASSPHRASE = "correct horse battery staple"
+
+    def test_passphrase_too_short_is_rejected(self, logged_in_client):
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": "short", "passphrase_confirm": "short"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"at least" in r.data.lower()
+
+    def test_mismatched_confirmation_is_rejected(self, logged_in_client):
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": "a different phrase entirely"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"did not match" in r.data.lower()
+
+    def test_successful_build_streams_a_decryptable_bundle(self, logged_in_client, db, mock_kea):
+        from jen.services.recovery import open_bundle
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        assert r.status_code == 200
+        assert r.headers["Content-Disposition"].startswith("attachment;")
+        tf = open_bundle(r.data, self.PASSPHRASE)
+        names = tf.getnames()
+        assert "manifest.json" in names
+        assert "jen_db.json.gz" in names
+
+    def test_wrong_passphrase_cannot_open_it(self, logged_in_client, db, mock_kea):
+        from jen.services.recovery import BadPassphrase, open_bundle
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        with pytest.raises(BadPassphrase):
+            open_bundle(r.data, "not the right passphrase")
+
+    def test_audit_logged(self, logged_in_client, db, mock_kea):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM audit_log WHERE action='RECOVERY_BUNDLE_EXPORT'")
+        db.commit()
+        logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS cnt FROM audit_log WHERE action='RECOVERY_BUNDLE_EXPORT'")
+            assert cur.fetchone()["cnt"] == 1
+
+    def test_manifest_carries_jen_version_and_channel(self, logged_in_client, db, mock_kea):
+        import json
+
+        from jen import JEN_VERSION
+        from jen.services.recovery import open_bundle
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        tf = open_bundle(r.data, self.PASSPHRASE)
+        manifest = json.loads(tf.extractfile("manifest.json").read())
+        assert manifest["jen_version"] == JEN_VERSION
+        assert "channel" in manifest and "schema_version" in manifest

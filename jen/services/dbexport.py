@@ -46,6 +46,27 @@ JEN_TABLES = {
     "lease_history": "Historical lease count snapshots",
     "subnet_notes": "Notes attached to subnets",
     "backup_schedule": "Backup scheduler configuration",
+    # v5.44.0 (Q45) — added while auditing this list against every table a
+    # migration creates (PENDING.md's Q45: "check _validate_tables' known
+    # list covers everything migrations create"). These were always
+    # missing from a "full" export, not just from the new recovery
+    # bundle — this fixes the pre-existing regular Backups feature too.
+    "webauthn_credentials": "Passkey credentials (public keys only — nothing here lets a passkey be replayed elsewhere)",
+    "login_attempts": "Rate-limiting log of recent login attempts, by IP and username",
+    "mfa_attempts": "MFA brute-force throttling log",
+    "plugins": "Installed plugin records (id, version, enabled state)",
+    "plugin_schema_migrations": "Per-plugin schema migration tracking",
+    "kea_config_revisions": (
+        "Kea config history Jen has pushed or noticed — config bodies are encrypted at rest; "
+        "the key lives in /etc/jen, NOT in this export"
+    ),
+    "lease6_history": "Historical IPv6 lease count snapshots",
+    "server_stats": "Packet health snapshots (statistic-get-all counters per server)",
+    "events": "The event stream (lease/reservation/config/HA/drift/alert activity)",
+    # schema_migrations is deliberately NOT exported/imported — it's the
+    # migration runner's own bookkeeping for the DATABASE THIS BOX HAS,
+    # not portable data; a fresh install already creates its own correct
+    # row for every migration it actually ran.
 }
 
 # ── Kea tables available for export ──────────────────────────────────────────

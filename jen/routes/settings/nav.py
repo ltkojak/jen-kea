@@ -138,6 +138,7 @@ SUBTABS = {
         {"id": "backups", "label": "Backups", "url": "/settings/databases?tab=backups", "roles": ("superadmin",)},
         {"id": "schedule", "label": "Schedule", "url": "/settings/databases?tab=schedule", "roles": ("superadmin",)},
         {"id": "migrate", "label": "Migrate", "url": "/settings/databases?tab=migrate", "roles": ("superadmin",)},
+        {"id": "recovery", "label": "Recovery", "url": "/settings/databases?tab=recovery", "roles": ("superadmin",)},
     ],
     "logs": [
         {"id": "audit", "label": "Audit Log", "url": "/settings/logs?tab=audit"},

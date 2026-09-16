@@ -127,3 +127,45 @@ class TestBackupCount:
         monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
         (tmp_path / "corrupt.json.gz").write_bytes(b"not gzip at all")
         assert dbexport.backup_count() == 1
+
+
+class TestJenTablesCoverage:
+    """v5.44.0 (Q45) — JEN_TABLES had silently drifted behind every table
+    a migration actually creates (webauthn_credentials, plugins,
+    kea_config_revisions, … — found while building the recovery bundle,
+    which needs export_jen() to cover everything). This pins it so the
+    next new table added by a migration fails CI instead of silently
+    being left out of both the recovery bundle and the regular "export
+    everything" Backups feature."""
+
+    # schema_migrations is deliberately excluded — see the comment above
+    # JEN_TABLES in dbexport.py: it's the migration runner's bookkeeping
+    # for THIS box's schema, not portable data.
+    DELIBERATELY_EXCLUDED = {"schema_migrations"}
+
+    def _migration_created_tables(self) -> set[str]:
+        import pathlib
+        import re
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "models" / "migrations.py").read_text(
+            encoding="utf-8"
+        )
+        return set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", src))
+
+    def test_every_migration_table_is_exportable_or_deliberately_excluded(self):
+        from jen.services.dbexport import JEN_TABLES
+
+        created = self._migration_created_tables()
+        assert created, "regex found no tables — migrations.py's CREATE TABLE shape changed?"
+        missing = created - set(JEN_TABLES) - self.DELIBERATELY_EXCLUDED
+        assert not missing, f"migration-created table(s) missing from JEN_TABLES: {missing}"
+
+    def test_no_stale_entries_for_tables_that_no_longer_exist(self):
+        """The reverse check — JEN_TABLES listing something no migration
+        (or the Kea-side tables, which never belong here) creates would
+        mean export_jen() tries to read a table that was never there."""
+        from jen.services.dbexport import JEN_TABLES
+
+        created = self._migration_created_tables()
+        stale = set(JEN_TABLES) - created
+        assert not stale, f"JEN_TABLES has entrie(s) no migration creates: {stale}"
