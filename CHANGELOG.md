@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.45.0-beta.1] - 2026-09-16
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.44.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q46, dual-stack that stops feeling like a toggle: the Dashboard and
+Devices pages now show IPv4 and IPv6 side by side instead of routing
+IPv6 to a separate section or page. The Dashboard's subnet grid tags
+each card **v4**/**v6**; an IPv6 subnet paired with an IPv4 one
+(config-driven `paired_subnet4_id`, the same pairing the Subnets page
+already uses) nests inside that card, and an unpaired one gets its own
+— both the initial render and the live 30-second poll are filtered to
+subnets the viewing user can actually access, matching the same rule
+the Devices page's IPv6 view already applies. The old boxed "IPv6"
+section in the Total Summary widget is gone; its active/reserved
+numbers now sit inline in the same row, tagged. The Devices page joins
+IPv6 addresses onto the matching IPv4 row by MAC — but only when Kea
+itself captured that MAC on the IPv6 lease (a raw socket capture,
+EUI-64, or a relay-agent option), never from Jen's own DUID-based
+guess; a lease with no captured hardware address can't be safely
+attributed to a device at all, so it becomes its own row at the
+bottom, badged "DUID only", never merged into an existing one. The
+device Timeline page picks up the same IPv6 addresses for whichever
+MAC you're looking at. Every one of these surfaces is a no-op with
+IPv6 turned off — extended the existing zero-behavior-change test to
+assert the new lookups aren't even called when disabled, not just that
+they come back empty.
+
+Also folded the IPv6 subnet edit page into the IPv4 one: they were two
+copies of the same ~275-line form and JS confirm-panel chrome with a
+handful of real differences (IPv6 has a preferred lifetime, no router
+option; IPv4 does have a router option, no preferred lifetime) that a
+`family` variable now threads through cleanly, at real routes still
+served from their original URLs. The v6-specific options/class editor
+templates the plan assumed existed turned out not to — that work
+hasn't been built yet, so there was nothing there to fold.
+
 ## [5.44.0-beta.1] - 2026-09-15
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

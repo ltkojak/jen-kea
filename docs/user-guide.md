@@ -42,6 +42,10 @@ The small dot in the top right navigation bar shows whether Jen can reach the Ke
 - 🟢 **Green** — Kea is online and responding
 - 🔴 **Red** — Kea is unreachable (check if `isc-kea-dhcp4-server` is running on your Kea server)
 
+### IPv6 (v5.45.0)
+
+With IPv6 enabled (Settings → Infrastructure), the subnet grid shows IPv6 alongside IPv4 rather than as a separate section: a small **v4**/**v6** tag on each card tells you which is which, and an IPv6 subnet that's paired with one of your IPv4 subnets (configured in `jen.config`'s `[subnets6]` section) nests inside that same card instead of getting a card of its own — an unpaired IPv6 subnet still gets its own card. IPv6 has no pool-size concept comparable to IPv4's, so its cards show active leases and reservations only, with no utilization bar. The Total Summary widget adds IPv6 active/reserved numbers to the same row, tagged the same way.
+
 ---
 
 ## Leases
@@ -290,6 +294,10 @@ Click the **✕** button to remove a device from the inventory. It will reappear
 ### Converting to a Reservation
 
 Click the **📌** button to pre-fill the Add Reservation form with this device's MAC, last IP, and hostname.
+
+### IPv6 (v5.45.0)
+
+With IPv6 enabled, a device row shows its current IPv6 address(es) in an **IPv6** column whenever Kea itself captured that device's hardware address on an IPv6 lease — Jen only ever links the two by the address Kea reports, never by guessing a MAC from a DUID. An IPv6 client that only ever sent a DUID — no hardware address at all — can't be safely matched to a device, so it appears as its own row at the bottom of the inventory, badged **DUID only**, rather than being merged into an existing one.
 
 ---
 

@@ -552,6 +552,7 @@ def edit_subnet(subnet_id):
     kea_data["base_shas"] = _config_shas("dhcp4")
     return render_template(
         "edit_subnet.html",
+        family="v4",
         subnet_id=subnet_id,
         subnet=extensions.SUBNET_MAP[subnet_id],
         kea=kea_data,
@@ -1745,7 +1746,7 @@ def edit_subnet6(subnet_id):
     kea_data = __kea6.get_subnet6_kea_data(subnet_id)
     kea_data["base_shas"] = _config_shas("dhcp6")
     return render_template(
-        "edit_subnet6.html", subnet_id=subnet_id, subnet=extensions.SUBNET6_MAP[subnet_id], kea=kea_data
+        "edit_subnet.html", family="v6", subnet_id=subnet_id, subnet=extensions.SUBNET6_MAP[subnet_id], kea=kea_data
     )
 
 

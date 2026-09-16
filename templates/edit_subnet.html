@@ -1,12 +1,13 @@
 {% extends "base.html" %}
-{% block title %}Edit Subnet{% endblock %}
+{% set family = family|default('v4') %}
+{% block title %}Edit {{ 'IPv6 ' if family == 'v6' else '' }}Subnet{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>✏️ Edit Subnet</h1>
-    <p>{{ subnet.name }} — {{ subnet.subnet }}</p>
+    <h1>✏️ Edit {{ 'IPv6 ' if family == 'v6' else '' }}Subnet</h1>
+    <p>{{ subnet.name }} — {{ subnet.cidr if family == 'v6' else subnet.subnet }}</p>
 </div>
 
-<div class="alert alert-warning">⚠️ Changes will modify <code>kea-dhcp4.conf</code> on your Kea server and restart the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop. <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
+<div class="alert alert-warning">⚠️ Changes will modify <code>{{ 'kea-dhcp6.conf' if family == 'v6' else 'kea-dhcp4.conf' }}</code> on your Kea server and restart the Kea{{ ' IPv6' if family == 'v6' else '' }} service. Kea will be briefly unavailable during restart.{% if family != 'v6' %} If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.{% endif %} <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
 
 <div class="card" style="max-width:680px;">
     <form method="POST" id="edit-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for sid, sha in kea.base_shas.items() %}<input type="hidden" name="base_sha_{{ sid }}" value="{{ sha or '' }}">{% endfor %}
@@ -16,11 +17,11 @@
             <label>Address Pool</label>
             <input type="text" name="pool" id="f-pool"
                    value="{{ kea.pool_str }}"
-                   placeholder="x.x.x.1–x.x.x.250" style="font-family:monospace;">
+                   placeholder="{{ '2001:db8::10-2001:db8::20 or 2001:db8::/64' if family == 'v6' else 'x.x.x.1–x.x.x.250' }}" style="font-family:monospace;">
             {% if kea.pool_str %}
-            <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.pool_str }}</code> &nbsp;·&nbsp; Format: start–end</div>
+            <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.pool_str }}</code> &nbsp;·&nbsp; {{ 'Range or CIDR' if family == 'v6' else 'Format: start–end' }}</div>
             {% else %}
-            <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Format: start–end</div>
+            <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; {{ 'Range or CIDR' if family == 'v6' else 'Format: start–end' }}</div>
             {% endif %}
             {% if kea.pools|length > 1 %}
             <div class="form-hint" style="color:var(--warning);">
@@ -32,7 +33,31 @@
             {% endif %}
         </div>
 
-        <!-- Timers -->
+        <!-- Timers — v6 has both preferred AND valid lifetime, unlike v4 -->
+        {% if family == 'v6' %}
+        <div class="form-row">
+            <div class="form-group">
+                <label>Preferred Lifetime (seconds)</label>
+                <input type="number" name="preferred_lifetime" id="f-preferred"
+                       value="{{ kea.preferred_lifetime }}" placeholder="e.g. 3600" min="60">
+                {% if kea.preferred_lifetime %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.preferred_lifetime }}</code></div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                {% endif %}
+            </div>
+            <div class="form-group">
+                <label>Valid Lifetime (seconds)</label>
+                <input type="number" name="valid_lifetime" id="f-valid"
+                       value="{{ kea.valid_lifetime }}" placeholder="e.g. 7200" min="60">
+                {% if kea.valid_lifetime %}
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.valid_lifetime }}</code> &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
+                {% else %}
+                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
+                {% endif %}
+            </div>
+        </div>
+        {% else %}
         <div class="form-row">
             <div class="form-group">
                 <label>Valid Lifetime (seconds)</label>
@@ -44,30 +69,34 @@
                 <div class="form-hint" style="color:var(--warning);">Not currently set</div>
                 {% endif %}
             </div>
+        </div>
+        {% endif %}
+        <div class="form-row">
             <div class="form-group">
                 <label>Renew Timer / T1 (seconds)</label>
                 <input type="number" name="renew_timer" id="f-renew"
-                       value="{{ kea.renew_timer }}" placeholder="e.g. 43200" min="0">
+                       value="{{ kea.renew_timer }}" placeholder="{{ 'e.g. 1000' if family == 'v6' else 'e.g. 43200' }}" min="0">
                 {% if kea.renew_timer %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.renew_timer }}</code> &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.renew_timer }}</code>{% if family != 'v6' %} &nbsp;·&nbsp; Typically ½ of valid lifetime{% endif %}</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
+                <div class="form-hint" style="color:var(--warning);">Not currently set{% if family != 'v6' %} &nbsp;·&nbsp; Typically ½ of valid lifetime{% endif %}</div>
                 {% endif %}
             </div>
             <div class="form-group">
                 <label>Rebind Timer / T2 (seconds)</label>
                 <input type="number" name="rebind_timer" id="f-rebind"
-                       value="{{ kea.rebind_timer }}" placeholder="e.g. 75600" min="0">
+                       value="{{ kea.rebind_timer }}" placeholder="{{ 'e.g. 2000' if family == 'v6' else 'e.g. 75600' }}" min="0">
                 {% if kea.rebind_timer %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.rebind_timer }}</code> &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
+                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.rebind_timer }}</code>{% if family != 'v6' %} &nbsp;·&nbsp; Typically ⅞ of valid lifetime{% endif %}</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
+                <div class="form-hint" style="color:var(--warning);">Not currently set{% if family != 'v6' %} &nbsp;·&nbsp; Typically ⅞ of valid lifetime{% endif %}</div>
                 {% endif %}
             </div>
         </div>
 
-        <!-- Router + DNS -->
+        <!-- Router (v4 only — DHCPv6 has no router option, that's Router Advertisement's job) + DNS -->
         <div class="form-row">
+            {% if family != 'v6' %}
             <div class="form-group">
                 <label>Router / Gateway</label>
                 <input type="text" name="routers" id="f-routers"
@@ -79,21 +108,25 @@
                 <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config</div>
                 {% endif %}
             </div>
+            {% endif %}
             <div class="form-group">
                 <label>DNS Servers</label>
                 <input type="text" name="dns_servers" id="f-dns"
                        value="{{ kea.dns_servers }}"
-                       placeholder="e.g. 1.1.1.1,8.8.8.8" style="font-family:monospace;">
+                       placeholder="{{ 'e.g. 2001:4860:4860::8888,2001:4860:4860::8844' if family == 'v6' else 'e.g. 1.1.1.1,8.8.8.8' }}" style="font-family:monospace;">
                 {% if kea.dns_servers %}
                 <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.dns_servers }}</code> &nbsp;·&nbsp; Comma-separated</div>
                 {% else %}
                 <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Comma-separated</div>
                 {% endif %}
+                {% if family == 'v6' %}
+                <div class="form-hint">No router/gateway field — DHCPv6 doesn't carry a default-gateway option; that comes from Router Advertisement instead.</div>
+                {% endif %}
             </div>
         </div>
 
         <div style="display:flex;gap:8px;margin-top:16px;">
-            <button type="button" class="btn btn-danger" id="show-confirm-btn">⚡ Apply &amp; Restart Kea</button>
+            <button type="button" class="btn btn-danger" id="show-confirm-btn">⚡ Apply &amp; Restart Kea{{ ' IPv6' if family == 'v6' else '' }}</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -105,10 +138,10 @@
         <div style="display:flex;align-items:flex-start;gap:12px;">
             <span style="font-size:22px;line-height:1;">⚠️</span>
             <div style="flex:1;">
-                <div style="font-weight:600;margin-bottom:4px;">Apply changes and restart Kea?</div>
+                <div style="font-weight:600;margin-bottom:4px;">Apply changes and restart Kea{{ ' IPv6' if family == 'v6' else '' }}?</div>
                 <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
-                    Kea DHCP will be briefly unavailable while it restarts.
-                    Existing leases are not affected. New lease requests will queue.
+                    {{ 'kea-dhcp6-server' if family == 'v6' else 'Kea DHCP' }} will be briefly unavailable while it restarts.
+                    Existing {{ 'IPv6 ' if family == 'v6' else '' }}leases are not affected. New lease requests will queue.
                 </div>
                 <div id="change-summary" style="font-size:12px;color:var(--text-muted);
                      background:var(--surface);border-radius:var(--radius);
@@ -134,7 +167,39 @@ document.getElementById('show-confirm-btn').addEventListener('click', showConfir
 document.getElementById('apply-btn').addEventListener('click', submitForm);
 document.getElementById('confirm-cancel-btn').addEventListener('click', hideConfirm);
 
-// Store original values for change summary
+// v5.45.0 (Q46) — one shared chrome for both families now (this used to
+// be two near-identical templates, edit_subnet.html/edit_subnet6.html);
+// only the field set differs, so _orig/_labels/_fields are the one
+// family-conditional block left — everything below them is unchanged
+// between the two.
+{% if family == 'v6' %}
+var _orig = {
+    pool:               {{ kea.pool_str | tojson }},
+    preferred_lifetime: {{ kea.preferred_lifetime | tojson if kea.preferred_lifetime else '""' }},
+    valid_lifetime:     {{ kea.valid_lifetime | tojson if kea.valid_lifetime else '""' }},
+    renew_timer:        {{ kea.renew_timer | tojson if kea.renew_timer else '""' }},
+    rebind_timer:       {{ kea.rebind_timer | tojson if kea.rebind_timer else '""' }},
+    dns_servers:        {{ kea.dns_servers | tojson }},
+};
+
+var _labels = {
+    pool:               'Address Pool',
+    preferred_lifetime: 'Preferred Lifetime',
+    valid_lifetime:     'Valid Lifetime',
+    renew_timer:        'Renew Timer (T1)',
+    rebind_timer:       'Rebind Timer (T2)',
+    dns_servers:        'DNS Servers',
+};
+
+var _fields = {
+    pool:               'f-pool',
+    preferred_lifetime: 'f-preferred',
+    valid_lifetime:     'f-valid',
+    renew_timer:        'f-renew',
+    rebind_timer:       'f-rebind',
+    dns_servers:        'f-dns',
+};
+{% else %}
 var _orig = {
     pool:           {{ kea.pool_str | tojson }},
     valid_lifetime: {{ kea.valid_lifetime | tojson if kea.valid_lifetime else '""' }},
@@ -161,6 +226,7 @@ var _fields = {
     routers:        'f-routers',
     dns_servers:    'f-dns',
 };
+{% endif %}
 
 function getChanges() {
     var changes = [];
@@ -170,11 +236,7 @@ function getChanges() {
         var newVal = el.value.trim();
         var oldVal = String(_orig[key] || '').trim();
         if (newVal !== oldVal && newVal !== '') {
-            changes.push({
-                label: _labels[key],
-                from:  oldVal || '(not set)',
-                to:    newVal
-            });
+            changes.push({ label: _labels[key], from: oldVal || '(not set)', to: newVal });
         }
     });
     return changes;
@@ -193,9 +255,9 @@ function renderChangeSummary(changes) {
     }
 }
 
-// v4.4.24: "Preview & Validate" — before this, the diff shown here was
+// v4.4.24 — "Preview & Validate": before this, the diff shown here was
 // entirely client-side (comparing against page-load-time values) and
-// never actually ran kea-dhcp4 -t before the user committed to
+// never actually ran kea-dhcp{4,6} -t before the user committed to
 // applying. The backend already tested-then-applied atomically on
 // submit, but that test result was invisible until after the restart
 // attempt. Now the confirm panel actually calls the real preview
@@ -225,7 +287,7 @@ async function showConfirm() {
     try {
         var formEl = document.getElementById('edit-subnet-form');
         var formData = new FormData(formEl);
-        var resp = await fetch({{ url_for('subnets.edit_subnet_preview', subnet_id=subnet_id) | tojson }}, {
+        var resp = await fetch({{ (url_for('subnets.edit_subnet6_preview', subnet_id=subnet_id) if family == 'v6' else url_for('subnets.edit_subnet_preview', subnet_id=subnet_id)) | tojson }}, {
             method: 'POST',
             body: formData,
         });
