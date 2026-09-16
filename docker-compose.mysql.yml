@@ -20,7 +20,7 @@
 services:
   jen:
     build: .
-    image: jen-dhcp:5.43.0-beta.1
+    image: jen-dhcp:5.44.0-beta.1
     container_name: jen
     restart: unless-stopped
     ports:

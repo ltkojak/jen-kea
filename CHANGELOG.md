@@ -2,6 +2,50 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.44.0-beta.1] - 2026-09-15
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.43.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q45, a recovery bundle: move Jen from one box to another without
+rebuilding it by hand. Settings → Databases → Recovery (superadmin,
+step-up re-authentication) takes a passphrase (12 characters minimum,
+entered twice) and streams `jen-recovery-<host>-<timestamp>.tar.enc` —
+an AES-GCM-encrypted tar, key derived from the passphrase via Scrypt
+(`jen/services/recovery.py`, dependency-free from the rest of Jen so it
+can run before the app's own runtime is up). It bundles everything
+`/etc/jen` holds (`jen.config` and every credential in it, the MFA
+encryption key, TLS/SSH material, the Jen-managed Kea CA), a fresh
+export of every `jen_db` table, `/var/lib/jen` content, and the latest
+Kea config Jen has a record of per server — **not redacted**, and the
+export page says so. On a new machine, after a normal `sudo
+./install.sh`, `sudo ./install.sh --restore /path/to/bundle.tar.enc`
+prompts for the passphrase and hands off to a new standalone module
+(`jen/tools/restore.py`, `python3 -m jen.tools.restore`) that refuses
+outright — before writing anything — if the bundle's Jen version is a
+different MAJOR than the target install, or if a Kea server the bundle
+can reach is now running a different Kea MAJOR than what the manifest
+recorded at export time (an unreachable server only warns). It then
+writes `/etc/jen`, restores content, imports the database through the
+same code the Backups page's Import already uses, and prints a
+checklist: restart Jen, re-run "Update helper" on each Kea server (a
+version mismatch right after a restore is expected), and check Settings
+→ Plugins for anything that needs reinstalling from the registry (the
+bundle restores plugin database rows, not plugin code). Never touches a
+Kea host directly. Docs: a new "Recover Jen on a new machine" runbook
+in the admin guide, and ARCHITECTURE.md §6.2 on exactly what the bundle
+contains and why it's deliberately not redacted.
+
+Along the way, auditing the recovery bundle's database export against
+every table any migration actually creates turned up a real,
+pre-existing gap in `jen/services/dbexport.py`'s exportable-tables list
+— nine tables (including `webauthn_credentials`, `plugins`, and
+`kea_config_revisions`) were missing from it, silently absent from the
+regular Backups feature's "export everything" as well as the new
+recovery bundle. Fixed, with a regression test that diffs the exportable
+list against the migrations file so this can't drift back unnoticed.
+
 ## [5.43.0-beta.1] - 2026-09-15
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

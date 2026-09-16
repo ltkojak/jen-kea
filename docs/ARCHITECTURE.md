@@ -1391,6 +1391,58 @@ until the root install's own final step removes it. Uninstalling a
 bundled-only plugin disables it rather than deleting release-owned
 files.
 
+### 6.2 Recovery bundle (v5.44.0)
+
+`jen/services/recovery.py` builds a single encrypted archive
+(`jen-recovery-<host>-<ts>.tar.enc`) that a new install can restore from
+via `sudo ./install.sh --restore <bundle>` — see the admin guide's
+"Recover Jen on a new machine" runbook for the operator-facing flow. The
+format is deliberately simple: `build_tar()` produces a plain
+uncompressed tar of the members below, then `encrypt()` wraps it as
+`MAGIC ("JENREC1") || salt || nonce || AES-GCM(...)`, the key derived
+from an operator-supplied passphrase via Scrypt (N=2^15, r=8, p=1) — no
+key material is stored anywhere; losing the passphrase loses the bundle.
+`MAGIC` doubles as the AEAD associated data, so a corrupted or edited
+header fails the same way a wrong passphrase does — `decrypt()`
+deliberately never distinguishes the two, to avoid leaking which guess
+was closer. A 200 MB cap is enforced before key derivation even starts.
+
+**The bundle is everything in §6.1's `/etc/jen/` row and most of
+`/var/lib/jen/`, in the clear once decrypted — it is explicitly NOT
+redacted.** That is the whole point (a partial bundle can't reconstruct
+a working install), but it means the file is exactly as sensitive as
+`/etc/jen` itself: `jen.config` (every DB, Kea Control Agent, and OIDC
+credential Jen holds), the MFA encryption key (§3.6 — without it, every
+stored TOTP secret and passkey the export/import cycle otherwise
+survives becomes permanently unreadable), the Jen-managed Kea CA and
+Jen's own HTTPS key if configured (§3.12), and the SSH keypair used for
+every Kea host (§3.2). Alongside those: a full `export_jen()` of every
+`jen_db` table, and `/var/lib/jen` content minus `backups/` (redundant
+with the fresh export just taken) and the plugin-code trees under
+`plugins-installed`/legacy `plugins/` (§3.10) — a restore re-registers
+installed plugins by id/version and leaves fetching their code to the
+existing registry-install path, the same trust boundary as §3.7, rather
+than smuggling arbitrary plugin code through the bundle. The export
+route requires superadmin plus step-up re-authentication
+(`recent_auth_required`, same gate as other high-sensitivity actions)
+and is audited (`RECOVERY_BUNDLE_EXPORT`); the page itself carries an
+explicit non-redaction warning rather than relying on an operator to
+infer it.
+
+Restore (`jen/tools/restore.py`, invoked by `install.sh --restore`) runs
+as a standalone script against an already-`install.sh`'d box — it never
+sets up the venv, systemd unit, or sudoers grant, and it never touches a
+Kea host directly (a bundled `kea-configs/*.json` is a reference copy
+only). It refuses outright — before writing anything — if the bundle's
+Jen MAJOR doesn't match the target install's, or if a Kea server named
+in the bundle's own (not-yet-installed) `jen.config` is reachable right
+now and running a different Kea MAJOR than the manifest recorded at
+export time; an unreachable server only warns, since Kea may simply not
+be up yet during a recovery. Restored `/etc/jen` files keep the mode
+`§6.1` already specifies (`0600`) and take on whatever ownership already
+exists at the destination, rather than the script guessing a service
+username.
+
 ## 7. Known gaps (as of this writing)
 
 Documenting these here rather than letting them go unstated:

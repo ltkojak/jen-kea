@@ -17,7 +17,8 @@ Quick links into the procedures below, roughly in the order you're likely to nee
 - **Upgrade Kea to 3.2** — [Upgrading Kea](#upgrading-kea-the-32-readiness-group-v5380)
 - **Migrate from Windows DHCP** — [Migrating from Windows DHCP](#migrating-from-windows-dhcp-v5240)
 - **Migrate from ISC DHCP** — [Migrating from ISC DHCP (dhcpd.conf)](#migrating-from-isc-dhcp-dhcpdconf-v5370)
-- **Restore from a backup** — Settings → Databases → Backups; Jen doesn't automate a one-shot restore yet, so bring a fresh install back to a backed-up state the same way you'd move data between installs (export/import)
+- **Recover Jen on a new machine** — [Recover Jen on a new machine](#recover-jen-on-a-new-machine); `sudo ./install.sh --restore` from a Settings → Databases → Recovery bundle
+- **Restore from a backup on the same machine** — Settings → Databases → Backups (export/import individual tables without moving to a new box)
 - **Get help** — Settings → System → "Report an issue" opens a GitHub issue with your version filled in; grab a support bundle first from the button next to it
 
 ---
@@ -1063,6 +1064,40 @@ ls /opt/jen/releases
 sudo ln -sfn releases/<X.Y.Z> /opt/jen/current
 sudo systemctl restart jen
 ```
+
+---
+
+## Recovery Bundle (v5.44.0)
+
+### Recover Jen on a new machine
+
+**Export**, on the box you're moving away from: **Settings → Databases → Recovery**, superadmin, step-up (recent password confirmation) required. Choose a passphrase (12 characters minimum, entered twice) and download `jen-recovery-<hostname>-<timestamp>.tar.enc`. This is **not the same as a regular backup** — it is NOT redacted. It contains, in the clear once decrypted:
+
+- `jen.config` — every credential Jen holds: the Jen and Kea database passwords, Kea Control Agent credentials, and (if configured) the OIDC client secret.
+- The MFA encryption key (`/etc/jen/mfa_key`) — without it, every stored TOTP secret and passkey is permanently unusable, and encrypted `kea_config_revisions`/`alert_channels` rows can't be decrypted either.
+- `/etc/jen/ssl/` and `/etc/jen/ssh/` wholesale — Jen's own HTTPS certificate and key, the private Kea CA (v5.29.0) if you use direct HTTPS control sockets, and the SSH keypair Jen uses to reach your Kea hosts.
+- A fresh export of every Jen database table (users, reservations notes, alert config, MFA, API keys, audit log, plugin state — everything `Settings → Databases → Export` can select, plus a few tables that export never exposed individually).
+- Uploaded content (custom icons, the nav logo) — not the plugin code trees themselves (those come back from the plugin registry on restore) and not the scheduled-backup archives (redundant with the fresh export just taken).
+- The latest Kea config Jen has a record of pushing or noticing, per server and service — a reference copy, never pushed anywhere automatically.
+
+The bundle is only as secret as the passphrase. Anyone with both the file and the passphrase can read all of the above. Store the file somewhere only you control, and never send the passphrase alongside it (a different channel, or memorize it).
+
+**Restore**, on the new machine, after a normal `sudo ./install.sh` has already set up Jen (venv, systemd unit, sudoers) with its own fresh secrets:
+
+```bash
+sudo ./install.sh --restore /path/to/jen-recovery-*.tar.enc
+```
+
+You'll be prompted for the passphrase (never pass it as a command-line argument — anything on argv is visible to every other process on the box via `ps`). The installer refuses to proceed if the bundle's Jen major version doesn't match the installed one, or if the Kea server the bundle's own `jen.config` points at is reachable right now and running a different Kea *major* version than the manifest recorded at export time (unreachable skips this check with a loud warning, since you may be restoring before Kea itself is back up). Once those pass, it overwrites `/etc/jen/*`, restores the content directory, and imports the database — all through `python3 -m jen.tools.restore`, the same module `install.sh --restore` calls.
+
+Afterward:
+
+1. `sudo systemctl restart jen` (the installer does this for you, but confirm it came back up).
+2. Log in and go to **Settings → Kea → SSH** — run **Update helper** on each server. A helper-version mismatch right after a restore is expected, not a bug (this box's `jen-kea-helper` copy came from wherever `install.sh` last ran, not from the old box).
+3. Check **Settings → Plugins** — the database rows for any plugin you had installed came back with the restore, but the plugin *code* was not re-copied; reinstall from the registry for anything the page flags as missing.
+4. Confirm HTTPS and the SSH connection to each Kea host still work — the restored certs/keys should just work if the new box's hostname and network position match the old one, but verify rather than assume.
+
+Never touches a Kea host directly — every Kea-side operation you take after a restore (the helper update, anything else) goes through the exact same UI you'd use any other day.
 
 ---
 

@@ -10,11 +10,15 @@
 #    sudo ./install.sh --repair      Reinstall files + restart, keep config
 #    sudo ./install.sh --unattended  Fully silent upgrade (CI/CD)
 #    sudo ./install.sh --docker      Docker installation path
+#    sudo ./install.sh --restore <bundle.tar.enc>
+#                                    Restore a recovery bundle (Settings → Databases
+#                                    → Recovery) onto this install — run AFTER a normal
+#                                    install/upgrade, not instead of one
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
-JEN_VERSION="5.43.0-beta.1"
+JEN_VERSION="5.44.0-beta.1"
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 INSTALL_DIR="/opt/jen"
@@ -64,6 +68,8 @@ MODE_CONFIGURE=false
 MODE_REPAIR=false
 MODE_UNATTENDED=false
 MODE_DOCKER=false
+MODE_RESTORE=false
+RESTORE_BUNDLE=""
 IS_UPGRADE=false
 CONFIGURE=false
 EXISTING_VERSION=""
@@ -71,14 +77,24 @@ EXISTING_VERSION=""
 # on an upgrade; fatal() rolls back automatically while this is set (below).
 ROLLBACK_ARMED=false
 
-for arg in "$@"; do
-    case "$arg" in
+# v5.44.0 (Q45) — --restore takes the bundle path as its own next
+# argument, unlike every other flag here, so this loop is index-based
+# (shift) rather than the plain `for arg in "$@"` every other flag
+# still uses.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --upgrade)     MODE_UPGRADE=true ;;
         --configure)   MODE_CONFIGURE=true ;;
         --repair)      MODE_REPAIR=true ;;
         --unattended)  MODE_UNATTENDED=true ;;
         --docker)      MODE_DOCKER=true ;;
+        --restore)
+            MODE_RESTORE=true
+            shift
+            RESTORE_BUNDLE="${1:-}"
+            ;;
     esac
+    shift
 done
 
 # ── ANSI colors ──────────────────────────────────────────────────────────────
@@ -1452,6 +1468,37 @@ _docker_pick_compose_and_run() {
 main() {
     show_banner
     require_root
+
+    # Handle --restore mode (v5.44.0, Q45) — layers a recovery bundle onto
+    # an ALREADY-installed Jen (venv, systemd unit, sudoers untouched).
+    # Deliberately thin: every real decision (passphrase, version checks,
+    # what gets written, the DB import) lives in jen/tools/restore.py,
+    # which needs cryptography/pymysql and JSON/version parsing that are
+    # all far more pleasant in Python than bash. This shells out to it
+    # and does nothing else — no new sudoers-invoked command is added
+    # (rule 8), because this IS the installer, run directly by the
+    # operator via sudo, the same way every other mode here already is.
+    if [[ "$MODE_RESTORE" == "true" ]]; then
+        if [[ -z "$RESTORE_BUNDLE" ]]; then
+            fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc"
+        fi
+        if [[ ! -f "$RESTORE_BUNDLE" ]]; then
+            fatal "Bundle not found: $RESTORE_BUNDLE"
+        fi
+        RESTORE_PY="$PYBIN"
+        if [[ ! -x "$RESTORE_PY" ]]; then
+            fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first, then --restore."
+        fi
+        info "Restoring from $RESTORE_BUNDLE"
+        # `if ! ( ... )` — not a bare `cmd1 && cmd2` — so a nonzero exit
+        # from the Python tool is caught here, not treated by `set -e`
+        # as a reason to abort the whole script before fatal() can run.
+        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE"); then
+            fatal "Restore failed — see the messages above."
+        fi
+        ok "Restore complete."
+        exit 0
+    fi
 
     # Handle --configure mode (just re-run wizard, restart service)
     if [[ "$MODE_CONFIGURE" == "true" ]]; then
