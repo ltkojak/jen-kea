@@ -197,8 +197,10 @@ class TestRunEndToEnd:
         # A settings row this test can look for after restore, to prove
         # the DB import actually ran (not just "didn't crash").
         with db.cursor() as cur:
-            cur.execute("DELETE FROM settings WHERE `key`='_q45_restore_probe'")
-            cur.execute("INSERT INTO settings (`key`, value) VALUES ('_q45_restore_probe', 'restored-ok')")
+            cur.execute("DELETE FROM settings WHERE setting_key='_q45_restore_probe'")
+            cur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES ('_q45_restore_probe', 'restored-ok')"
+            )
         db.commit()
 
         content, _fname = dbexport.export_jen(["settings"])
@@ -254,9 +256,9 @@ class TestRunEndToEnd:
         assert (content_dir / "icons" / "logo.png").read_bytes() == b"fake-png"
 
         with db.cursor() as cur:
-            cur.execute("SELECT value FROM settings WHERE `key`='_q45_restore_probe'")
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key='_q45_restore_probe'")
             row = cur.fetchone()
-        assert row is not None and row["value"] == "restored-ok"
+        assert row is not None and row["setting_value"] == "restored-ok"
 
     def test_wrong_passphrase_returns_nonzero_without_writing_anything(self, tmp_path):
         from jen.tools.restore import run
