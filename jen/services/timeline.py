@@ -16,6 +16,7 @@ subnet to gate on at all.
 import logging
 
 import jen.models.db as __db
+import jen.services.kea6 as __kea6
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,20 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300) -> dict:
     rows.sort(key=lambda r: r["ts"], reverse=True)
     rows = rows[:limit]
 
+    # v5.45.0 (Q46) — "a device detail/timeline shows both": this client's
+    # current v6 address(es), when Kea captured a real hwaddr for one (the
+    # same hwaddr-only join the Devices page uses — see
+    # kea6.lease6_by_hwaddr_mac()). No access control here either, same
+    # as everything else in this function — the caller already gates the
+    # whole response on subnet_id_for()'s v4 subnet.
+    v6_addresses = []
+    if mac:
+        try:
+            if __kea6.is_ipv6_enabled():
+                v6_addresses = __kea6.lease6_by_hwaddr_mac().get(mac, [])
+        except Exception as e:
+            logger.error(f"timeline v6 address lookup failed for mac={mac!r}: {e}")
+
     return {
         "mac": mac,
         "ip": ip,
@@ -198,4 +213,5 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300) -> dict:
         "reservation": reservation,
         "subnet_id": subnet_id_for(device, lease, reservation),
         "rows": rows,
+        "v6_addresses": v6_addresses,
     }

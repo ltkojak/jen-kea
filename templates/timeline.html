@@ -50,6 +50,9 @@
         {% if result.reservation %}
         <div><div class="stat-label">Reservation</div><div class="mono">{{ result.reservation.ip }}</div></div>
         {% endif %}
+        {% if result.v6_addresses %}
+        <div><div class="stat-label">IPv6 <span class="badge badge-production" style="font-size:9px;padding:1px 5px;">v6</span></div><div class="mono">{% for a in result.v6_addresses %}{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
+        {% endif %}
     </div>
 </div>
 

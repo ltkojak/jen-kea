@@ -163,6 +163,41 @@ def devices():
         logger.error(f"Devices error: {e}")
         flash("Could not load device inventory. Check server logs for details.", "error")
 
+    # v5.45.0 (Q46) — join v6 leases onto this same list, one row per
+    # thing rather than the separate ?view=v6 page's own disconnected
+    # list: a lease6 with a REAL captured hwaddr (not Jen's own DUID
+    # guess — see kea6.list_lease6()'s mac_source) joins onto the v4
+    # device row with the matching MAC; a lease6 with no hwaddr can't be
+    # safely attributed to a v4 device at all, so it becomes its own
+    # "DUID only" row instead, appended at the bottom, never merged.
+    # Access-filtered exactly like devices.py's own _devices_v6(): a v6
+    # subnet is visible only when paired to a v4 subnet this user can
+    # already access, or — unpaired — only for an all_subnets user.
+    v6_duid_only = []
+    v6_by_mac = {}
+    if __kea6.is_ipv6_enabled() and extensions.SUBNET6_MAP:
+        accessible_v4_ids = set(accessible_subnet_map.keys())
+        try:
+            for mac, addrs in __kea6.lease6_by_hwaddr_mac().items():
+                allowed_addrs = []
+                for a in addrs:
+                    info = extensions.SUBNET6_MAP.get(a["subnet_id"])
+                    paired = info.get("paired_subnet4_id") if info else None
+                    if info and (current_user.all_subnets or (paired is not None and paired in accessible_v4_ids)):
+                        allowed_addrs.append(a)
+                if allowed_addrs:
+                    v6_by_mac[mac] = allowed_addrs
+            for dev in __kea6.lease6_devices_without_hwaddr():
+                info = extensions.SUBNET6_MAP.get(dev["subnet_id"])
+                paired = info.get("paired_subnet4_id") if info else None
+                if info and (current_user.all_subnets or (paired is not None and paired in accessible_v4_ids)):
+                    dev["subnet_name"] = info.get("name", "")
+                    v6_duid_only.append(dev)
+        except Exception as e:
+            logger.error(f"Could not load IPv6 device correlation: {e}")
+    for row in devices_list:
+        row["v6_addresses"] = v6_by_mac.get(row["mac"], [])
+
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
     bundled_icons = (
         sorted([f.replace(".svg", "") for f in os.listdir(extensions.ICONS_BUNDLED_DIR) if f.endswith(".svg")])
@@ -194,6 +229,7 @@ def devices():
         "custom_icons": custom_icons,
         "view_mode": "v4",
         "subnet6_map": extensions.SUBNET6_MAP,
+        "v6_duid_only": v6_duid_only,
     }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: same class of bug fixed in leases.py/reservations.py

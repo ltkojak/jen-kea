@@ -138,6 +138,60 @@ class TestBuildTimeline:
         assert result["lease"] is None
         assert result["reservation"] is None
 
+    def test_v6_addresses_empty_when_no_mac(self, db):
+        from jen.services.timeline import build_timeline
+
+        _clean(db)
+        result = build_timeline(ip="10.0.0.250")
+        assert result["v6_addresses"] == []
+
+    def test_v6_addresses_empty_when_disabled(self, db, monkeypatch):
+        """v5.45.0 (Q46) — TestZeroBehaviorChange's property applies
+        here too: no v6 lookup happens at all when ipv6 is off."""
+        import jen.services.kea6 as kea6_module
+        from jen.models.user import set_global_setting
+        from jen.services.timeline import build_timeline
+
+        set_global_setting("ipv6_enabled", "false")
+        monkeypatch.setattr(
+            kea6_module, "lease6_by_hwaddr_mac", lambda: (_ for _ in ()).throw(AssertionError("must not be called"))
+        )
+        _clean(db)
+        result = build_timeline(mac="aa:bb:cc:dd:ee:01")
+        assert result["v6_addresses"] == []
+
+    def test_v6_addresses_populated_from_hwaddr_join(self, db):
+        import jen.services.kea6 as kea6_module
+        from jen.models.user import set_global_setting
+        from jen.services.timeline import build_timeline
+
+        set_global_setting("ipv6_enabled", "true")
+        try:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease6")
+                cur.execute(
+                    """
+                    INSERT INTO lease6 (address, duid, valid_lifetime, expire,
+                        subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
+                        hostname, hwaddr, state)
+                    VALUES ('2001:db8::1', %s, 3600, '2026-08-15 00:00:00',
+                        1, 1800, 0, 1, 128, '', %s, 0)
+                """,
+                    (bytes.fromhex("00030001001a2b3c4d5e"), bytes.fromhex("aabbccddee01")),
+                )
+            db.commit()
+            _clean_lease6 = kea6_module.list_lease6()  # sanity: hwaddr present
+            assert _clean_lease6[0]["mac_source"] == "hwaddr"
+            result = build_timeline(mac="aa:bb:cc:dd:ee:01")
+            assert result["v6_addresses"] == [
+                {"address": "2001:db8::1", "type_name": "IA_NA", "prefix_len": 128, "subnet_id": 1}
+            ]
+        finally:
+            set_global_setting("ipv6_enabled", "false")
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease6")
+            db.commit()
+
 
 class TestTimelinePage:
     def test_requires_login(self, client):

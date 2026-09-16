@@ -313,11 +313,21 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
             params,
         )
         for row in cur.fetchall():
+            mac = get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or ""
+            # v5.45.0 (Q46) — which of the two sources actually produced
+            # `mac` matters to callers deciding whether it's safe to join
+            # onto a v4 device by MAC: "hwaddr" means Kea itself captured
+            # it (raw socket, EUI-64, a relay-agent option), "duid" means
+            # Jen guessed it from the DUID (extract_mac_from_duid — only
+            # works for DUID-LL/DUID-LLT, and is Jen's own inference, not
+            # something Kea observed). See lease6_by_hwaddr_mac().
+            mac_source = "hwaddr" if row["hwaddr_hex"] else ("duid" if mac else "")
             results.append(
                 {
                     "address": row["address"],
                     "duid_hex": row["duid_hex"] or "",
-                    "mac": get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or "",
+                    "mac": mac,
+                    "mac_source": mac_source,
                     "valid_lifetime": row["valid_lifetime"],
                     "expire": row["expire"],
                     "obtained": row["obtained"],
@@ -444,6 +454,76 @@ def list_lease6_devices(subnet_id: int = None, search: str = None) -> list:
                 "manufacturer": manufacturer if manufacturer != "Unknown" else "",
                 "device_type": device_type if device_type != "unknown" else "",
                 "icon": icon if manufacturer != "Unknown" else "",
+                "hostname": lease["hostname"],
+                "subnet_id": lease["subnet_id"],
+                "addresses": [],
+                "last_expire": lease["expire"],
+            }
+            order.append(key)
+        dev = by_duid[key]
+        if not dev["hostname"] and lease["hostname"]:
+            dev["hostname"] = lease["hostname"]
+        if lease["expire"] and (not dev["last_expire"] or lease["expire"] > dev["last_expire"]):
+            dev["last_expire"] = lease["expire"]
+        dev["addresses"].append(
+            {
+                "address": lease["address"],
+                "type_name": lease["lease_type_name"],
+                "prefix_len": lease["prefix_len"],
+            }
+        )
+    return [by_duid[k] for k in order]
+
+
+def lease6_by_hwaddr_mac() -> dict:
+    """
+    v5.45.0 (Q46) — v6 leases whose MAC is known because Kea itself
+    captured a real hwaddr (raw socket capture, EUI-64, a relay-agent
+    option — see get_lease6_mac()), keyed by that MAC, for joining onto
+    Jen's v4 `devices` table on the Devices page. Deliberately excludes
+    any lease whose mac came from DUID-LL/DUID-LLT inspection alone
+    (list_lease6_devices()'s docstring already rejected joining v4/v6 on
+    a guessed MAC as riskier than not joining at all) — those hwaddr-
+    less leases are what lease6_devices_without_hwaddr() lists instead,
+    as their own rows.
+
+    One MAC can carry more than one v6 address/prefix at once (an IA_NA
+    and an IA_PD simultaneously) — each MAC key maps to a list.
+    """
+    by_mac: dict[str, list] = {}
+    for lease in list_lease6(show_expired=False):
+        if lease["mac_source"] != "hwaddr":
+            continue
+        by_mac.setdefault(lease["mac"], []).append(
+            {
+                "address": lease["address"],
+                "type_name": lease["lease_type_name"],
+                "prefix_len": lease["prefix_len"],
+                "subnet_id": lease["subnet_id"],
+            }
+        )
+    return by_mac
+
+
+def lease6_devices_without_hwaddr(subnet_id: int = None) -> list:
+    """
+    v5.45.0 (Q46) — the Devices page's "DUID only" rows: v6 leases with
+    no captured hwaddr, grouped by DUID the same way
+    list_lease6_devices() groups the standalone v6 view, but without a
+    MAC field at all — these are shown as their own rows precisely
+    because Jen can't safely say which v4 device, if any, they belong
+    to (see lease6_by_hwaddr_mac()).
+    """
+    leases = list_lease6(subnet_id=subnet_id, show_expired=False)
+    by_duid = {}
+    order = []
+    for lease in leases:
+        if lease["mac_source"] == "hwaddr":
+            continue  # has a real hwaddr — lease6_by_hwaddr_mac() joins this one instead
+        key = lease["duid_hex"] or f"__no_duid_{lease['address']}"
+        if key not in by_duid:
+            by_duid[key] = {
+                "duid_hex": lease["duid_hex"],
                 "hostname": lease["hostname"],
                 "subnet_id": lease["subnet_id"],
                 "addresses": [],

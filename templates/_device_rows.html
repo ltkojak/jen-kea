@@ -1,5 +1,6 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
 {% from '_empty.html' import empty_state %}
+{% set colspan = (11 if current_user.role in ('superadmin','admin') else 10) + (1 if ipv6_enabled and subnet6_map else 0) %}
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
     {% if current_user.role in ('superadmin','admin') %}
@@ -11,6 +12,13 @@
     <td data-label="Name"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
     <td data-label="Owner" class="hide-tablet"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
     <td data-label="IP" class="mono">{{ d.last_ip or '—' }}</td>
+    {% if ipv6_enabled and subnet6_map %}
+    <td data-label="IPv6" class="mono hide-mobile" style="font-size:11px;">
+        {% if d.v6_addresses %}
+        {% for a in d.v6_addresses %}<div title="{{ a.type_name }}">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</div>{% endfor %}
+        {% else %}—{% endif %}
+    </td>
+    {% endif %}
     <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname | hostname or '—' }}</td>
     <td data-label="Subnet" class="hide-mobile">
         {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
@@ -64,7 +72,8 @@
     </td>
 </tr>
 {% else %}
-<tr><td colspan="{{ 11 if current_user.role in ('superadmin','admin') else 10 }}">
+{% if not v6_duid_only %}
+<tr><td colspan="{{ colspan }}">
     {% if show_stale %}
     <div style="text-align:center;padding:32px;color:var(--text-muted);">No stale devices found (none inactive for {{ stale_days }}+ days).</div>
     {% elif search %}
@@ -73,4 +82,30 @@
     {{ empty_state('📱', 'Devices appear as leases are seen; the inventory fills itself.', [('📋 Leases', '/leases')]) }}
     {% endif %}
 </td></tr>
+{% endif %}
+{% endfor %}
+{% for d in v6_duid_only %}
+<tr>
+    {% if current_user.role in ('superadmin','admin') %}
+    <td data-label="" class="no-label"></td>
+    {% endif %}
+    <td data-label="MAC" class="mono hide-mobile"><span class="badge" style="font-size:10px;padding:1px 6px;background:var(--surface2);color:var(--text-muted);" title="No hwaddr captured — DUID: {{ d.duid_hex }}">DUID only</span></td>
+    <td data-label="Name">—</td>
+    <td data-label="Owner" class="hide-tablet">—</td>
+    <td data-label="IP" class="mono">—</td>
+    {% if ipv6_enabled and subnet6_map %}
+    <td data-label="IPv6" class="mono hide-mobile" style="font-size:11px;">
+        {% for a in d.addresses %}<div title="{{ a.type_name }}">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</div>{% endfor %}
+    </td>
+    {% endif %}
+    <td data-label="Hostname" style="white-space:nowrap;">{{ d.hostname | hostname or '—' }}</td>
+    <td data-label="Subnet" class="hide-mobile">
+        {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
+    </td>
+    <td>—</td>
+    <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">—</td>
+    <td data-label="Last Seen" class="mono hide-tablet">{{ d.last_expire|utcfmt if d.last_expire else '—' }}</td>
+    <td data-label="Status" class="hide-mobile">—</td>
+    <td data-label=""></td>
+</tr>
 {% endfor %}

@@ -65,6 +65,56 @@ def _get_ipv6_dashboard_summary():
     return {"active": active, "reserved": reserved, "subnet_count": len(extensions.SUBNET6_MAP)}
 
 
+def _get_subnets6_data(accessible_v4_ids) -> list:
+    """
+    v5.45.0 (Q46) — per-v6-subnet {active, reserved} counts for the
+    dashboard's merged v4/v6 stat-grid: one card per v4 subnet, with a
+    paired v6 subnet's numbers nested inside it (matched via
+    paired_subnet4_id — the same config-driven pairing
+    jen/routes/subnets.py's own _get_subnets6_data() and
+    jen/routes/devices.py's _devices_v6() already use, deliberately not
+    name/VLAN-guessed), and any unpaired v6 subnet rendered as its own
+    standalone card.
+
+    Unlike the Subnets page's sibling function (which shows every v6
+    subnet to any logged-in user today), this dashboard already
+    restricts every v4 card to accessible_v4_ids, so a v6 card is held
+    to the same bar: paired to an accessible v4 subnet, or — when
+    unpaired — visible only to an all_subnets user. Matches
+    jen/routes/devices.py::_devices_v6()'s access check exactly.
+
+    Per-subnet exceptions are swallowed to a 0/0 row rather than
+    aborting the whole list (unlike _get_ipv6_dashboard_summary()
+    above, which deliberately returns None on ANY error rather than a
+    partial total) — a live per-card number is expected to occasionally
+    read as 0 mid-scrape the same way a v4 card already can.
+    """
+    if not __kea6.is_ipv6_enabled() or not extensions.SUBNET6_MAP:
+        return []
+    result = []
+    for subnet_id, info in extensions.SUBNET6_MAP.items():
+        paired = info.get("paired_subnet4_id")
+        allowed = current_user.all_subnets or (paired is not None and paired in accessible_v4_ids)
+        if not allowed:
+            continue
+        try:
+            active = len(__kea6.list_lease6(subnet_id=subnet_id))
+            reserved = len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
+        except Exception:
+            active = reserved = 0
+        result.append(
+            {
+                "id": subnet_id,
+                "name": info["name"],
+                "cidr": info["cidr"],
+                "paired_subnet4_id": paired,
+                "active": active,
+                "reserved": reserved,
+            }
+        )
+    return result
+
+
 @bp.route("/")
 @login_required
 def dashboard():
@@ -186,6 +236,7 @@ def dashboard():
         "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
         "ipv6_summary": _get_ipv6_dashboard_summary(),
+        "subnets6": _get_subnets6_data(set(accessible_subnet_map.keys())),
         "kea_config_error": kea_config_error,
     }
     # HTMX time window change — return just the recent leases rows
@@ -301,6 +352,14 @@ def api_stats():
                         "name": info["name"],
                         "cidr": info["cidr"],
                     }
+        # v5.45.0 (Q46) — v6 per-subnet {active, reserved}, access-filtered
+        # the same way as the v4 stats above, for the merged dashboard
+        # grid's live poll. jsonify stringifies int dict keys anyway, so
+        # this matches "subnets"'s own str(subnet_id) keying.
+        subnets6 = {
+            s["id"]: {"active": s["active"], "reserved": s["reserved"]}
+            for s in _get_subnets6_data(set(accessible.keys()))
+        }
         # Get pool sizes from Kea config
         pool_sizes = {}
         kea_config_error = None
@@ -357,6 +416,7 @@ def api_stats():
                 "kea_version": kea_version,
                 "servers": server_statuses,
                 "kea_config_error": kea_config_error,
+                "subnets6": subnets6,
             }
         )
     except Exception as e:
@@ -367,6 +427,7 @@ def api_stats():
                 "pool_sizes": {},
                 "kea_up": False,
                 "servers": [],
+                "subnets6": {},
                 "error": "Could not load dashboard stats.",
             }
         )

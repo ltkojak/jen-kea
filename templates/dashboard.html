@@ -53,7 +53,7 @@
     <div class="stat-card" data-href="/leases?subnet={{ subnet_id }}" style="cursor:pointer;" title="View leases for {{ s.name }}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div style="flex:1;">
-                <div class="stat-label">{{ s.name }} — {{ s.cidr }}</div>
+                <div class="stat-label">{% if subnets6 %}<span class="badge" style="font-size:9px;padding:1px 5px;background:var(--surface2);color:var(--text-muted);margin-right:4px;">v4</span>{% endif %}{{ s.name }} — {{ s.cidr }}</div>
                 <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
             </div>
         </div>
@@ -80,6 +80,26 @@
             {% endif %}
         </div>
         {% endif %}
+        {% for s6 in subnets6 if s6.paired_subnet4_id == subnet_id %}
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                <span class="badge badge-production" style="font-size:9px;padding:1px 5px;">v6</span>
+                <span class="mono" style="font-size:11px;color:var(--text-muted);">{{ s6.cidr }}</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-muted);" id="stat6-meta-{{ s6.id }}">{{ s6.active }} active &nbsp;·&nbsp; {{ s6.reserved }} reserved</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    {% for s6 in subnets6 if not s6.paired_subnet4_id %}
+    <div class="stat-card" data-href="/devices?view=v6&subnet={{ s6.id }}" style="cursor:pointer;" title="View IPv6 devices for {{ s6.name }}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="flex:1;">
+                <div class="stat-label"><span class="badge badge-production" style="font-size:9px;padding:1px 5px;margin-right:4px;">v6</span>{{ s6.name }} — {{ s6.cidr }}</div>
+                <div class="stat-value" id="stat6-active-{{ s6.id }}">{{ s6.active }}</div>
+            </div>
+        </div>
+        <div class="stat-meta" id="stat6-meta-{{ s6.id }}">{{ s6.active }} active &nbsp;·&nbsp; {{ s6.reserved }} reserved</div>
     </div>
     {% endfor %}
     </div>
@@ -88,14 +108,9 @@
 <!-- Total summary widget -->
 <div id="dash-totals" style="display:none;">
     <div class="card" style="padding:16px 20px;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-            {% if ipv6_summary %}
-            <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">IPv4</span>
-            {% endif %}
-        </div>
         <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Total Active</div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Total Active{% if ipv6_summary %} <span class="badge" style="font-size:8px;padding:0 4px;background:var(--surface2);color:var(--text-muted);">v4</span>{% endif %}</div>
                 <div style="font-size:24px;font-weight:700;color:var(--primary);" id="total-active">—</div>
             </div>
             <div>
@@ -103,39 +118,31 @@
                 <div style="font-size:24px;font-weight:700;" id="total-dynamic">—</div>
             </div>
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reserved</div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reserved{% if ipv6_summary %} <span class="badge" style="font-size:8px;padding:0 4px;background:var(--surface2);color:var(--text-muted);">v4</span>{% endif %}</div>
                 <div style="font-size:24px;font-weight:700;" id="total-reserved">—</div>
             </div>
             <div>
                 <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Pool Used</div>
                 <div style="font-size:24px;font-weight:700;" id="total-pct">—</div>
             </div>
+            {% if ipv6_summary %}
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Active <span class="badge badge-production" style="font-size:8px;padding:0 4px;">v6</span></div>
+                <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ ipv6_summary.active }}</div>
+            </div>
+            <div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reserved <span class="badge badge-production" style="font-size:8px;padding:0 4px;">v6</span></div>
+                <div style="font-size:24px;font-weight:700;">{{ ipv6_summary.reserved }}</div>
+            </div>
+            {% endif %}
             <div style="flex:1;min-width:200px;">
-                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length }} subnet{{ 's' if stats|length != 1 else '' }}{% if not ipv6_summary %} (IPv4 only){% endif %}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Across {{ stats|length }} subnet{{ 's' if stats|length != 1 else '' }}{% if ipv6_summary %} + {{ ipv6_summary.subnet_count }} IPv6{% else %} (IPv4 only){% endif %}</div>
                 <div class="util-bar">
                     <div class="util-fill" id="total-util-fill" style="width:0%;transition:width 0.5s ease;background:var(--primary);"></div>
                 </div>
             </div>
         </div>
     </div>
-    {% if ipv6_summary %}
-    <div class="card" style="padding:16px 20px;margin-top:12px;">
-        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">IPv6</div>
-        <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
-            <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Active Leases</div>
-                <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ ipv6_summary.active }}</div>
-            </div>
-            <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reservations</div>
-                <div style="font-size:24px;font-weight:700;">{{ ipv6_summary.reserved }}</div>
-            </div>
-            <div style="flex:1;min-width:200px;">
-                <div style="font-size:11px;color:var(--text-muted);">Across {{ ipv6_summary.subnet_count }} IPv6 subnet{{ 's' if ipv6_summary.subnet_count != 1 else '' }} — no pool-utilization percentage yet (v6 pools don't have a comparable finite-size concept to v4)</div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
 </div>
 
 
@@ -642,6 +649,18 @@ function updateStats() {
                     if (pctEl) pctEl.textContent = pct + '% of pool (' + s.dynamic + '/' + poolSize + ')';
                 }
             });
+
+            // v6 cards — paired (nested meta only) and standalone (headline + meta)
+            if (data.subnets6) {
+                Object.keys(data.subnets6).forEach(function(id) {
+                    var s6 = data.subnets6[id];
+                    var meta = s6.active + ' active · ' + s6.reserved + ' reserved';
+                    var active6El = document.getElementById('stat6-active-' + id);
+                    var meta6El   = document.getElementById('stat6-meta-'   + id);
+                    if (active6El) active6El.textContent = s6.active;
+                    if (meta6El)   meta6El.textContent = meta;
+                });
+            }
 
             // Totals widget
             var ta = document.getElementById('total-active');

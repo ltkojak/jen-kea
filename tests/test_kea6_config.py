@@ -372,3 +372,42 @@ class TestZeroBehaviorChange:
         if not is_ipv6_enabled():
             pass  # a real route would return here without calling kea6_command
         assert called["count"] == 0
+
+    def test_devices_page_skips_v6_join_when_disabled(self, logged_in_client, monkeypatch, db):
+        """v5.45.0 (Q46) — the Devices page's v4/v6 join
+        (lease6_by_hwaddr_mac / lease6_devices_without_hwaddr) must not
+        even be called when ipv6 is off, same "gated before anything
+        v6-shaped runs" property as test_no_v6_command_reaches_kea_when_
+        disabled above."""
+        import jen.services.kea6 as kea6_module
+        from jen.models.user import _invalidate_settings_cache
+
+        def fail_if_called(*a, **kw):
+            raise AssertionError("v6 join must not run when ipv6 is disabled")
+
+        monkeypatch.setattr(kea6_module, "lease6_by_hwaddr_mac", fail_if_called)
+        monkeypatch.setattr(kea6_module, "lease6_devices_without_hwaddr", fail_if_called)
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        _invalidate_settings_cache()
+        resp = logged_in_client.get("/devices")
+        assert resp.status_code == 200
+
+    def test_dashboard_get_subnets6_data_skips_query_when_disabled(self, monkeypatch, db):
+        """Same property for jen/routes/dashboard.py::_get_subnets6_data()
+        — the merged v4/v6 grid's per-subnet query must not run at all
+        when ipv6 is off, not just return an empty result after running."""
+        import jen.routes.dashboard as dashboard_module
+        import jen.services.kea6 as kea6_module
+        from jen.models.user import _invalidate_settings_cache
+
+        def fail_if_called(*a, **kw):
+            raise AssertionError("list_lease6 must not run when ipv6 is disabled")
+
+        monkeypatch.setattr(kea6_module, "list_lease6", fail_if_called)
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        _invalidate_settings_cache()
+        assert dashboard_module._get_subnets6_data({1}) == []
