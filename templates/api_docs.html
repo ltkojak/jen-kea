@@ -198,6 +198,26 @@
         "params": [],
         "example_path": "/api/v1/timeline/aa:bb:cc:dd:ee:ff",
         "example_response": '{\n  "mac": "aa:bb:cc:dd:ee:ff",\n  "ip": "10.10.10.50",\n  "subnet_id": 1,\n  "device": null,\n  "lease": {\n    "ip": "10.10.10.50",\n    "subnet_id": 1,\n    "hostname": "laptop",\n    "expire": "2026-09-15T13:00:00"\n  },\n  "reservation": null,\n  "rows": [\n    {\n      "ts": "2026-09-15T12:00:00",\n      "kind": "lease.new",\n      "source": "event",\n      "detail": "",\n      "subnet_id": 1\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/health/checks",
+        "title": "Health Center (JSON)",
+        "auth": true,
+        "desc": "The same read-only checks the Health Center page runs, as JSON — scoped to the key's subnet access exactly like a restricted viewer's page load.",
+        "params": [],
+        "example_path": "/api/v1/health/checks",
+        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ok": 20, "warn": 1, "fail": 0, "skip": 4},\n  "checks": [\n    {\n      "id": "kea_reachable",\n      "title": "Kea servers reachable",\n      "group": "kea",\n      "status": "ok",\n      "detail": "1/1 servers reachable",\n      "fix_hint": "",\n      "fix_url": "",\n      "elapsed_ms": 12\n    }\n  ]\n}'
+    },
+    {
+        "method": "GET",
+        "path": "/api/v1/health/readiness",
+        "title": "Kea 3.2 Readiness",
+        "auth": true,
+        "desc": "Just the five-check readiness group — the same summary Settings → Kea shows as \"Ready for Kea 3.2\" or \"N action(s) before upgrading\".",
+        "params": [],
+        "example_path": "/api/v1/health/readiness",
+        "example_response": '{\n  "checked_at": "2026-09-15T12:00:00+00:00",\n  "summary": {"ready": false, "actions": 1, "checked": 3},\n  "checks": [\n    {\n      "id": "kea32_control_transport",\n      "title": "Control transport ready for 3.2",\n      "group": "readiness",\n      "status": "warn",\n      "detail": "Control Agent mode — set up a direct socket before Kea 3.2",\n      "fix_hint": "Settings → Kea",\n      "fix_url": "/settings/kea",\n      "elapsed_ms": 8\n    }\n  ]\n}'
     }
 ] %}
 

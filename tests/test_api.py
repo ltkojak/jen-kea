@@ -246,3 +246,90 @@ class TestServersApi:
         assert ph is not None
         assert ph["status"] == "ok"
         assert ph["rates"]["pkt4-received"] > 0
+
+
+class TestHealthApi:
+    """Q44 — GET /api/v1/health/checks and GET /api/v1/health/readiness:
+    the same jen.services.health run(s) the Health Center page uses,
+    as JSON, gated the same way as every other read endpoint."""
+
+    def _key(self, db, admin_id, raw, name, subnet_access=None):
+        import hashlib
+
+        from tests.test_api_key_authorization import _insert_api_key
+
+        key_id = _insert_api_key(db, name, created_by=admin_id, subnet_access=subnet_access)
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE api_keys SET key_hash=%s WHERE id=%s", (hashlib.sha256(raw.encode()).hexdigest(), key_id)
+            )
+        db.commit()
+
+    def test_checks_requires_key(self, client, mock_kea):
+        r = client.get("/api/v1/health/checks")
+        assert r.status_code == 401
+
+    def test_readiness_requires_key(self, client, mock_kea):
+        r = client.get("/api/v1/health/readiness")
+        assert r.status_code == 401
+
+    def test_checks_returns_the_health_center_run(self, logged_in_client, db, mock_kea):
+        from tests.test_api_key_authorization import _insert_admin_user
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys WHERE name='_health_api_probe1'")
+        db.commit()
+        admin_id = _insert_admin_user(db, "health_api_admin1")
+        db.commit()
+        raw = "jen_health_api_probe_key1"
+        self._key(db, admin_id, raw, "_health_api_probe1")
+
+        r = logged_in_client.get("/api/v1/health/checks", headers={"Authorization": f"Bearer {raw}"})
+        assert r.status_code == 200
+        data = r.get_json()
+        assert set(data) == {"checked_at", "summary", "checks"}
+        assert set(data["summary"]) == {"ok", "warn", "fail", "skip"}
+        assert any(c["id"] == "kea_reachable" for c in data["checks"])
+
+    def test_readiness_returns_only_the_readiness_group(self, logged_in_client, db, mock_kea):
+        from tests.test_api_key_authorization import _insert_admin_user
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys WHERE name='_health_api_probe2'")
+        db.commit()
+        admin_id = _insert_admin_user(db, "health_api_admin2")
+        db.commit()
+        raw = "jen_health_api_probe_key2"
+        self._key(db, admin_id, raw, "_health_api_probe2")
+
+        r = logged_in_client.get("/api/v1/health/readiness", headers={"Authorization": f"Bearer {raw}"})
+        assert r.status_code == 200
+        data = r.get_json()
+        assert set(data["summary"]) == {"ready", "actions", "checked"}
+        assert data["checks"]
+        assert all(c["group"] == "readiness" for c in data["checks"])
+
+    def test_scoped_key_only_sees_its_own_subnet_in_capacity_checks(self, logged_in_client, db, mock_kea):
+        """Mirrors TestHealthCenterPage's restricted-viewer test for the
+        page itself: the checks list is unaffected (kea/ddns/jen groups
+        aren't subnet-scoped), but pool_utilization only reasons about
+        subnets in the key's scope."""
+        from tests.test_api_key_authorization import _insert_admin_user
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys WHERE name='_health_api_probe3'")
+            cur.execute("DELETE FROM lease_history")
+            cur.execute(
+                "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
+                "VALUES (1, 98, 100, NOW())"
+            )
+        db.commit()
+        admin_id = _insert_admin_user(db, "health_api_admin3")
+        db.commit()
+        raw = "jen_health_api_probe_key3"
+        self._key(db, admin_id, raw, "_health_api_probe3", subnet_access=[999])
+
+        r = logged_in_client.get("/api/v1/health/checks", headers={"Authorization": f"Bearer {raw}"})
+        assert r.status_code == 200
+        util = next(c for c in r.get_json()["checks"] if c["id"] == "pool_utilization")
+        assert util["status"] in ("ok", "skip")

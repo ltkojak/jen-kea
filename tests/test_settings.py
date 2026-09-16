@@ -131,6 +131,35 @@ class TestSystemSettings:
         assert r.status_code == 200
 
 
+class TestGrafanaDashboardDownload:
+    """v5.43.0 (Q44) — GET /settings/system/grafana-dashboard.json serves
+    contrib/grafana/jen-kea.json off disk, not /static/, so the tarball's
+    repo tree is the source of truth and the link is stable across a
+    version bump."""
+
+    def test_requires_login(self, client):
+        r = client.get("/settings/system/grafana-dashboard.json", follow_redirects=False)
+        assert r.status_code in (301, 302, 308)
+
+    def test_viewer_forbidden(self, client, db):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=None, role="viewer", username="grafana_viewer1")
+        r = c.get("/settings/system/grafana-dashboard.json")
+        assert r.status_code == 200
+        assert b"admin access required" in r.data.lower()
+
+    def test_admin_gets_the_real_dashboard_json(self, logged_in_client):
+        import json
+
+        r = logged_in_client.get("/settings/system/grafana-dashboard.json")
+        assert r.status_code == 200
+        assert r.mimetype == "application/json"
+        data = json.loads(r.data)
+        assert data["uid"] == "jen-kea"
+        assert data["panels"]
+
+
 class TestMetricsSettings:
     """v5.3.3 — /metrics now defaults to closed unless metrics_token or
     metrics_open is configured. This project deliberately avoids

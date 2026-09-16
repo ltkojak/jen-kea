@@ -2,6 +2,35 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.43.0-beta.1] - 2026-09-15
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.42.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q44, Grafana and two health endpoints for scripts: `/metrics` gains
+`jen_subnet_days_to_90pct` (the same pool-exhaustion forecast the
+Reports page and `/api/v1/subnets` already compute, as a gauge — `-1`
+when the trend is flat, falling, or there isn't enough history yet,
+since a Prometheus gauge has no native "unknown") and
+`jen_server_pkt4_<name>_total`, one metric family per DHCPv4 packet
+counter from the latest packet health snapshot (v5.41.0/Q42's
+`server_stats`) — absent entirely until a server has taken one. A
+ready-made dashboard for both, plus the existing pool/lease/reachability
+metrics, ships at `contrib/grafana/jen-kea.json` and is also served
+straight off disk (not `/static/`, so the tarball's own copy is always
+the one downloaded) from Settings → System → Download Grafana
+dashboard, `GET /settings/system/grafana-dashboard.json`. Two new read
+endpoints put the Health Center behind a script: `GET
+/api/v1/health/checks` is the full run as JSON, scoped to the calling
+key's subnet access exactly like a restricted viewer's page load;
+`GET /api/v1/health/readiness` is just the five-check Kea 3.2 readiness
+group and its `{ready, actions, checked}` summary, the same one
+Settings → Kea already shows as one line. Also fixed in passing: the
+admin guide's REST API table was missing the `/api/v1/events` and
+`/api/v1/timeline/{mac}` rows Q43 shipped two releases ago — added
+alongside this Q's own two rows.
+
 ## [5.42.0-beta.1] - 2026-09-15
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

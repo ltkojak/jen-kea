@@ -7,7 +7,7 @@ REST API v1 endpoints and API key management routes.
 import hashlib
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
@@ -910,6 +910,58 @@ def api_v1_timeline(mac):
             "lease": lease,
             "reservation": result["reservation"],
             "rows": [{**r, "ts": r["ts"].isoformat() if r["ts"] else None} for r in result["rows"]],
+        }
+    )
+
+
+@bp.route("/api/v1/health/checks")
+def api_v1_health_checks():
+    """v5.43.0 (Q44) — the Health Center run as JSON, scoped to the key's
+    subnet access exactly like a restricted viewer's page load
+    (health.run_checks's subnet_filter callable)."""
+    key = _api_auth()
+    if not key:
+        return api_error("Invalid or missing API key.", 401)
+
+    from jen.services import health as _health
+
+    scope = _api_key_subnet_ids(key)
+    subnet_filter = (lambda _sid: True) if scope is None else (lambda sid: sid in scope)
+    try:
+        checks = _health.run_checks({"subnet_filter": subnet_filter})
+    except Exception as e:
+        logger.error(f"api_v1_health_checks error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    return api_ok(
+        {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "summary": _health.summarize(checks),
+            "checks": [c.as_dict() for c in checks],
+        }
+    )
+
+
+@bp.route("/api/v1/health/readiness")
+def api_v1_health_readiness():
+    """v5.43.0 (Q44) — just the Kea 3.2 readiness group, the same five
+    checks Settings → Kea's "ready for Kea 3.2?" line summarizes."""
+    key = _api_auth()
+    if not key:
+        return api_error("Invalid or missing API key.", 401)
+
+    from jen.services import health as _health
+    from jen.services import kea_readiness as _readiness
+
+    try:
+        checks = _health.readiness_checks()
+    except Exception as e:
+        logger.error(f"api_v1_health_readiness error: {e}")
+        return api_error("Internal error. Check server logs for details.", 500)
+    return api_ok(
+        {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "summary": _readiness.summarize(checks),
+            "checks": [c.as_dict() for c in checks],
         }
     )
 

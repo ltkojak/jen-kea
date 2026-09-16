@@ -193,6 +193,17 @@
     {% endif %}
 </div>
 
+<!-- Grafana dashboard (v5.43.0, Q44) -->
+<div class="card" id="sys-grafana">
+    <div class="card-header"><span class="card-title">📊 Grafana dashboard</span></div>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+        A ready-made dashboard for the metrics at <code>/metrics</code> — Kea reachability, pool utilization,
+        active leases, the pool exhaustion forecast, and packet health rates. Import it into Grafana and point
+        its Prometheus datasource variable at whatever scrapes Jen.
+    </p>
+    <a href="/settings/system/grafana-dashboard.json" class="btn btn-secondary">📊 Download Grafana dashboard</a>
+</div>
+
 <!-- Audit Log Retention -->
 <div class="card" id="sys-retention">
     <div class="card-header">

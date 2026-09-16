@@ -189,6 +189,7 @@ class TestPrometheusMetrics:
             "jen_subnet_reserved_hosts",
             "jen_subnet_pool_size",
             "jen_subnet_utilization_ratio",
+            "jen_subnet_days_to_90pct",
             "jen_alerts_sent_total",
             "jen_kea_up",
             "jen_server_up",
@@ -237,3 +238,135 @@ class TestPrometheusMetrics:
         r = client.get("/metrics")
         assert r.status_code == 200
         assert "jen_kea_up 0" in r.data.decode()
+
+    def test_days_to_90pct_is_minus_one_without_enough_history(self, client, mock_kea, metrics_open, db):
+        """v5.43.0 (Q44) — capacity.forecast()'s days_to_90pct is None for
+        flat/falling/insufficient trends; -1 is the metric's stand-in,
+        since a Prometheus gauge has no native way to say "unknown"."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history")
+        db.commit()
+        r = client.get("/metrics")
+        text = r.data.decode()
+        assert "jen_subnet_days_to_90pct{" in text
+        assert "} -1" in text
+
+    def test_pkt4_counters_from_latest_server_stats_row(self, client, mock_kea, metrics_open, db):
+        """v5.43.0 (Q44) — one metric family per pkt4-* counter name, all
+        of one family's samples grouped together (the Prometheus
+        exposition format requires it); v4-* keys are out of scope for
+        this metric family."""
+        import json
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+            cur.execute(
+                "INSERT INTO server_stats (server_id, stats) VALUES (1, %s)",
+                (json.dumps({"pkt4-received": 42, "pkt4-ack-sent": 40, "v4-lease-reuses": 3}),),
+            )
+        db.commit()
+        r = client.get("/metrics")
+        text = r.data.decode()
+        assert "# TYPE jen_server_pkt4_received_total counter" in text
+        assert 'jen_server_pkt4_received_total{server="Test Kea"} 42' in text
+        assert 'jen_server_pkt4_ack_sent_total{server="Test Kea"} 40' in text
+        assert "v4_lease_reuses" not in text
+
+    def test_no_server_stats_rows_produces_no_pkt4_metrics(self, client, mock_kea, metrics_open, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        r = client.get("/metrics")
+        text = r.data.decode()
+        assert "jen_server_pkt4_" not in text
+
+    def test_pkt4_samples_for_one_metric_are_grouped_across_servers(
+        self, client, mock_kea, metrics_open, db, monkeypatch
+    ):
+        """The Prometheus exposition format requires every sample of one
+        metric family to be contiguous — with two servers both reporting
+        pkt4-received, both samples must sit together, not be split up
+        by an unrelated family in between."""
+        import json
+
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}],
+        )
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+            cur.execute(
+                "INSERT INTO server_stats (server_id, stats) VALUES (1, %s), (2, %s)",
+                (json.dumps({"pkt4-received": 10}), json.dumps({"pkt4-received": 20})),
+            )
+        db.commit()
+        r = client.get("/metrics")
+        text = r.data.decode()
+        lines = [ln for ln in text.splitlines() if ln.startswith("jen_server_pkt4_received_total{")]
+        assert len(lines) == 2
+        first_idx = text.index(lines[0])
+        second_idx = text.index(lines[1])
+        between = text[first_idx + len(lines[0]) : second_idx]
+        assert "jen_server_pkt4_" not in between
+
+
+class TestGrafanaDashboard:
+    """v5.43.0 (Q44) — contrib/grafana/jen-kea.json. Not served by Jen
+    itself in this step (that's the Settings → System download route);
+    just: it's valid JSON, and everything it queries is something
+    /metrics actually emits, so a stale panel can't ship silently."""
+
+    def _dashboard_path(self):
+        import pathlib
+
+        return pathlib.Path(__file__).resolve().parent.parent / "contrib" / "grafana" / "jen-kea.json"
+
+    def test_json_parses_and_has_panels(self):
+        import json
+
+        data = json.loads(self._dashboard_path().read_text(encoding="utf-8"))
+        assert data["panels"]
+        assert data["templating"]["list"][0]["name"] == "DS_PROMETHEUS"
+
+    def test_every_expr_references_a_metric_metrics_actually_emits(self, client, mock_kea, metrics_open, db):
+        import json
+        import re
+
+        # Seed everything conditionally-emitted (pool_size/utilization_ratio
+        # need a lease_history row; the pkt4-* families need a server_stats
+        # row) so an absent-because-no-data metric doesn't look like a
+        # dashboard referencing something /metrics can never produce.
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history")
+            cur.execute("INSERT INTO lease_history (subnet_id, active_leases, pool_size) VALUES (1, 5, 100)")
+            cur.execute("DELETE FROM server_stats")
+            cur.execute(
+                "INSERT INTO server_stats (server_id, stats) VALUES (1, %s)",
+                (
+                    json.dumps(
+                        {
+                            "pkt4-received": 1,
+                            "pkt4-ack-sent": 1,
+                            "pkt4-nak-sent": 1,
+                            "pkt4-receive-drop": 1,
+                            "pkt4-parse-failed": 1,
+                        }
+                    ),
+                ),
+            )
+        db.commit()
+
+        dash = json.loads(self._dashboard_path().read_text(encoding="utf-8"))
+        referenced = set()
+        for panel in dash["panels"]:
+            for target in panel.get("targets", []):
+                referenced.update(re.findall(r"jen_[a-z0-9_]*", target["expr"]))
+        assert referenced, "no metric names found in any panel expr — regex or fixture is wrong"
+
+        text = client.get("/metrics").data.decode()
+        emitted = set(re.findall(r"^(jen_[a-z0-9_]*)[\s{]", text, re.MULTILINE))
+        missing = referenced - emitted
+        assert not missing, f"dashboard panel(s) reference metric(s) /metrics never emits: {missing}"

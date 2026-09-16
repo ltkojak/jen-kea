@@ -1,0 +1,226 @@
+{
+  "title": "Jen / Kea DHCP",
+  "uid": "jen-kea",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "timezone": "browser",
+  "time": { "from": "now-24h", "to": "now" },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Kea reachability",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Kea servers up",
+      "description": "jen_server_up{server=\"...\"} — 1 reachable, 0 not. One value per configured Kea server; see Servers page for HA state, which /metrics doesn't carry.",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "jen_server_up",
+          "legendFormat": "{{server}}",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "up", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "textMode": "value_and_name", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 3,
+      "type": "row",
+      "title": "Pool utilization",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "collapsed": false
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Utilization now, by subnet",
+      "description": "jen_subnet_utilization_ratio{subnet=\"...\"} * 100 — from the most recent periodic snapshot (snapshot_interval_minutes), not a live read.",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "jen_subnet_utilization_ratio * 100",
+          "legendFormat": "{{subnet}}",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 75 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "textMode": "value_and_name", "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Utilization over time, by subnet",
+      "description": "jen_subnet_utilization_ratio{subnet=\"...\"} * 100",
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "jen_subnet_utilization_ratio * 100",
+          "legendFormat": "{{subnet}}",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 6,
+      "type": "row",
+      "title": "Active leases",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "collapsed": false
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Active leases, by subnet",
+      "description": "jen_subnet_active_leases{subnet=\"...\"} — live, queried on every scrape (not from a snapshot).",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "jen_subnet_active_leases",
+          "legendFormat": "{{subnet}}",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 8,
+      "type": "row",
+      "title": "Pool exhaustion forecast (v5.36.0)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "collapsed": false
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Days to 90% of pool, by subnet",
+      "description": "jen_subnet_days_to_90pct{subnet=\"...\"} — a least-squares trend through 30 days of daily peaks; -1 means flat, falling, or not enough history yet (not a real forecast value — style it as N/A, not as a literal day count).",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "jen_subnet_days_to_90pct",
+          "legendFormat": "{{subnet}}",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "mappings": [{ "type": "special", "options": { "match": "-1", "result": { "text": "N/A", "color": "text" } } }],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0 },
+              { "color": "red", "value": 0 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": { "textMode": "value_and_name", "colorMode": "value", "graphMode": "none" }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Packet health (v5.41.0/Q42)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Packets received, by server",
+      "description": "rate(jen_server_pkt4_received_total{server=\"...\"}[5m]) — a real Prometheus counter (from Q42's server_stats snapshots), so rate() gives packets/sec; jen_server_pkt4_* only exists once a server has at least one snapshot.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "rate(jen_server_pkt4_received_total[5m])",
+          "legendFormat": "{{server}} received",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "pps", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Drops, parse failures and NAKs, by server",
+      "description": "rate() of jen_server_pkt4_receive_drop_total, jen_server_pkt4_parse_failed_total and jen_server_pkt4_nak_sent_total — the same three counters Health Center's packet_health check weighs against pkt4-received.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 30 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "rate(jen_server_pkt4_receive_drop_total[5m])",
+          "legendFormat": "{{server}} dropped",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        },
+        {
+          "expr": "rate(jen_server_pkt4_parse_failed_total[5m])",
+          "legendFormat": "{{server}} parse-failed",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        },
+        {
+          "expr": "rate(jen_server_pkt4_nak_sent_total[5m])",
+          "legendFormat": "{{server}} NAKed",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "pps", "min": 0 }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

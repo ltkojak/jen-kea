@@ -13,6 +13,7 @@ dropped, renamed, or double-registered route fails here.
 EXPECTED_ENDPOINTS = {
     "settings.settings",
     "settings.settings_system",
+    "settings.grafana_dashboard_json",  # v5.43.0 (Q44)
     "settings.save_update_channel",
     "settings.support_bundle",
     "settings.save_audit_retention",

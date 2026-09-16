@@ -25,7 +25,7 @@ pages moved, and the old URLs 301 to their new homes.
 import logging
 import os
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 import jen.config as __config
@@ -183,6 +183,28 @@ def settings_system():
         audit_retention_days=audit_retention_days,
         audit_log_count=audit_log_count if audit_log_count is not None else "?",
         config_revision_keep=__user.get_global_setting("config_revision_keep", "50"),
+    )
+
+
+@bp.route("/settings/system/grafana-dashboard.json")
+@login_required
+@_admin_required
+def grafana_dashboard_json():
+    """v5.43.0 (Q44) — serves contrib/grafana/jen-kea.json straight from
+    disk rather than /static/ (which the browser may cache across a
+    version bump that ships a changed dashboard at the same path) —
+    the tarball carries the repo tree, so this file is always present
+    at $JEN_ROOT/contrib/grafana/jen-kea.json."""
+    path = os.path.join(extensions.JEN_ROOT, "contrib", "grafana", "jen-kea.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            body = f.read()
+    except OSError as e:
+        logger.error(f"grafana dashboard read failed: {e}")
+        flash("Could not read the Grafana dashboard file — see server logs.", "error")
+        return redirect(url_for("settings.settings_system"))
+    return Response(
+        body, mimetype="application/json", headers={"Content-Disposition": "attachment; filename=jen-kea.json"}
     )
 
 

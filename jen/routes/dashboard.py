@@ -751,6 +751,73 @@ def prometheus_metrics():
     except Exception:
         pass
 
+    # ── Pool exhaustion forecast per subnet (v5.36.0's forecast, reused
+    #    from the same lease_history window api_v1_subnets already
+    #    computes it from) — -1 when not rising or there isn't enough
+    #    history yet, since Prometheus has no native "unknown" for a
+    #    gauge and a missing series is easy to miss in a dashboard;
+    #    -1 is an unambiguous "no forecast" a panel can filter on. ────
+    lines.append(
+        "# HELP jen_subnet_days_to_90pct Days until the lease trend reaches 90% of the pool "
+        "(-1 when flat, falling, or there's not yet enough history)"
+    )
+    lines.append("# TYPE jen_subnet_days_to_90pct gauge")
+    try:
+        from jen.services import capacity as __capacity
+        from jen.services.health import lease_history_window
+
+        history = lease_history_window()
+        for subnet_id, info in extensions.SUBNET_MAP.items():
+            rows = history.get(subnet_id, [])
+            days = __capacity.forecast(rows)["days_to_90pct"] if rows else None
+            lines.append(
+                f'jen_subnet_days_to_90pct{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} '
+                f"{days if days is not None else -1}"
+            )
+    except Exception:
+        pass
+
+    # ── Packet health counters per server (v5.41.0/Q42's server_stats —
+    #    the latest snapshot row per server, same "read the snapshot,
+    #    don't hit Kea live" tradeoff as pool_size/utilization above).
+    #    Only pkt4-* keys, hyphens to underscores for a valid Prometheus
+    #    name; v4-allocation-fail*/v4-lease-reuses are in packet_health.py's
+    #    UI but out of scope for this metric family. Each pkt4-* counter
+    #    is its own metric family (jen_server_pkt4_received_total, …) —
+    #    grouped by metric name, not by server, since the exposition
+    #    format requires every sample of one metric to be contiguous;
+    #    collect everything first, then emit family by family. ──────────
+    try:
+        server_names = {s["id"]: s["name"] for s in extensions.KEA_SERVERS}
+        by_metric: dict[str, list[tuple[str, int]]] = {}
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute("""
+                SELECT ss.server_id, ss.stats FROM server_stats ss
+                INNER JOIN (
+                    SELECT server_id, MAX(snapshot_time) AS mx FROM server_stats GROUP BY server_id
+                ) m ON m.server_id = ss.server_id AND m.mx = ss.snapshot_time
+            """)
+            for row in cur.fetchall():
+                name = str(server_names.get(row["server_id"], row["server_id"])).replace('"', "")
+                stats = row["stats"]
+                if isinstance(stats, str):
+                    stats = json.loads(stats)
+                for key, value in (stats or {}).items():
+                    if not key.startswith("pkt4-"):
+                        continue
+                    metric_name = f"jen_server_pkt4_{key.replace('-', '_')}_total"
+                    by_metric.setdefault(metric_name, []).append((name, int(value)))
+        for metric_name in sorted(by_metric):
+            lines.append(
+                f"# HELP {metric_name} DHCPv4 packet counter from the latest statistic-get-all "
+                "snapshot per server (see Servers → Packet health) — a real counter, use rate()/increase()"
+            )
+            lines.append(f"# TYPE {metric_name} counter")
+            for name, value in by_metric[metric_name]:
+                lines.append(f'{metric_name}{{server="{name}"}} {value}')
+    except Exception:
+        pass
+
     # ── Alerts sent, cumulative — a real Prometheus counter, since
     #    alert_log is never pruned (confirmed: no DELETE/retention logic
     #    exists for it anywhere in the codebase) ─────────────────────────

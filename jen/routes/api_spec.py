@@ -270,11 +270,72 @@ def build_spec(version: str, base_url: str = "") -> dict:
                         },
                     },
                 },
+                "HealthCheck": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "title": {"type": "string"},
+                        "group": {"type": "string"},
+                        "status": {"type": "string", "enum": ["ok", "warn", "fail", "skip"]},
+                        "detail": {"type": "string"},
+                        "fix_hint": {"type": "string"},
+                        "fix_url": {"type": "string"},
+                        "elapsed_ms": {"type": "integer"},
+                    },
+                },
+                "HealthSummary": {
+                    "type": "object",
+                    "properties": {
+                        "ok": {"type": "integer"},
+                        "warn": {"type": "integer"},
+                        "fail": {"type": "integer"},
+                        "skip": {"type": "integer"},
+                    },
+                },
+                "HealthChecksResult": {
+                    "type": "object",
+                    "properties": {
+                        "checked_at": {"type": "string"},
+                        "summary": {"$ref": "#/components/schemas/HealthSummary"},
+                        "checks": {"type": "array", "items": {"$ref": "#/components/schemas/HealthCheck"}},
+                    },
+                },
+                "ReadinessSummary": {
+                    "type": "object",
+                    "description": "ready is true only once every non-skipped readiness check is ok.",
+                    "properties": {
+                        "ready": {"type": "boolean"},
+                        "actions": {"type": "integer", "description": "warn + fail count"},
+                        "checked": {"type": "integer", "description": "non-skipped check count"},
+                    },
+                },
+                "HealthReadinessResult": {
+                    "type": "object",
+                    "properties": {
+                        "checked_at": {"type": "string"},
+                        "summary": {"$ref": "#/components/schemas/ReadinessSummary"},
+                        "checks": {"type": "array", "items": {"$ref": "#/components/schemas/HealthCheck"}},
+                    },
+                },
             },
         },
         "paths": {
             "/api/v1/health": {
                 "get": {"summary": "Kea status and Jen version (no auth)", "responses": {"200": _resp("OK", "Health")}}
+            },
+            "/api/v1/health/checks": {
+                "get": {
+                    "summary": "The Health Center run as JSON (Q44)",
+                    "security": [_KEY],
+                    "responses": {"200": _resp("OK", "HealthChecksResult"), "401": _ERR},
+                }
+            },
+            "/api/v1/health/readiness": {
+                "get": {
+                    "summary": "Just the Kea 3.2 readiness group (Q44)",
+                    "security": [_KEY],
+                    "responses": {"200": _resp("OK", "HealthReadinessResult"), "401": _ERR},
+                }
             },
             "/api/v1/subnets": {
                 "get": {

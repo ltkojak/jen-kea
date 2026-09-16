@@ -546,6 +546,10 @@ Go to **Settings → Access & Security → API Keys** to generate, view, and rev
 | GET | `/api/v1/health` | Kea status and Jen version — no auth |
 | GET | `/api/v1/subnets` | Subnet utilization with pool sizes; since v5.36.0 also `peak_30d`, `trend_per_day`, `days_to_90pct` and `forecast` (rising / flat / falling / insufficient) |
 | GET | `/api/v1/servers` | Kea servers, HA state, and `packet_health` — `{status, window_minutes, rates}`, null until two snapshots exist (v5.41.0) |
+| GET | `/api/v1/events` | Raw event stream rows — params: mac, ip, kind, since (ISO 8601), limit (v5.42.0) |
+| GET | `/api/v1/timeline/{mac}` | One client's merged timeline — events, matching audit/alert entries, current lease/reservation/device (v5.42.0) |
+| GET | `/api/v1/health/checks` | The Health Center run as JSON, scoped to the key's subnet access (v5.43.0) |
+| GET | `/api/v1/health/readiness` | Just the Kea 3.2 readiness group + its `{ready, actions, checked}` summary (v5.43.0) |
 | GET | `/api/v1/leases` | Active leases — params: subnet, mac, hostname, limit |
 | GET | `/api/v1/leases/{mac}` | Single device lease with active boolean |
 | GET | `/api/v1/devices` | Device inventory — params: mac, name, subnet, limit |
@@ -1128,6 +1132,22 @@ above.**
 Available metrics:
 - `jen_subnet_active_leases` — active lease count per subnet (with subnet name and CIDR labels)
 - `jen_kea_up` — 1 if Kea is reachable, 0 if not
+- `jen_subnet_days_to_90pct` (v5.43.0) — the pool exhaustion forecast's days-to-90% per subnet; `-1` when the trend is flat, falling, or there isn't yet enough history
+- `jen_server_pkt4_<name>_total` (v5.43.0) — DHCPv4 packet counters per server, one metric family per counter name (`jen_server_pkt4_received_total`, `jen_server_pkt4_ack_sent_total`, …), from the latest packet health snapshot (v5.41.0/Q42) — absent entirely until a server has taken one
+
+### Grafana dashboard (v5.43.0)
+
+A ready-made dashboard ships at `contrib/grafana/jen-kea.json` in the
+release tarball, and Settings → System → **Download Grafana dashboard**
+(admin) serves the same file at
+`GET /settings/system/grafana-dashboard.json`. Import it into Grafana
+(Dashboards → Import → Upload JSON file, or paste the URL) and point
+its `DS_PROMETHEUS` datasource variable at whatever Prometheus instance
+scrapes `/metrics`. Panels: Kea reachability per server, pool
+utilization (stat + time series), active leases, the pool exhaustion
+forecast, and packet health rates — the last two skip a subnet/server
+gracefully rather than erroring when there isn't yet enough history or
+a first packet health snapshot.
 
 ---
 
