@@ -644,3 +644,206 @@ class TestDdnsVerifyTab:
         r = logged_in_client.get("/ddns", query_string={"tab": "verify", "hostname": "nope.example.com"})
         assert r.status_code == 200
         assert b"Name or service not known" in r.data
+
+
+class TestDdnsReconcileRoute:
+    """v5.47.0 (Q48) — GET /ddns/reconcile: row-building (reservations
+    then active leases, subnet-restricted), the cached
+    dns_reconcile_last summary, CSV export, and the limit/verdict
+    params. The verdict logic itself is jen.services.dns_reconcile's
+    own job, thoroughly covered without a DB in
+    tests/test_dns_reconcile.py — these tests mock the resolver (same
+    socket.getaddrinfo/gethostbyaddr TestDdnsVerifyTab already mocks),
+    not jen.services.dns_reconcile.reconcile."""
+
+    def _clean(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE hostname LIKE 'q48-%'")
+            cur.execute("DELETE FROM lease4 WHERE hostname LIKE 'q48-%'")
+        db.commit()
+
+    def _seed(self, db, subnet_id=1):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE01'), 0, %s, INET_ATON('10.0.0.10'), 'q48-reserved')",
+                (subnet_id,),
+            )
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, valid_lifetime, expire, state, hostname) VALUES "
+                "(INET_ATON('10.0.0.20'), UNHEX('AABBCCDDEE02'), %s, 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 0, 'q48-leased')",
+                (subnet_id,),
+            )
+        db.commit()
+
+    def _mock_matching_resolver(self, monkeypatch):
+        """Every name resolves forward+reverse to exactly what's asked —
+        every row scores "ok"."""
+        import socket
+
+        def getaddrinfo(host, port):
+            ip = {"q48-reserved": "10.0.0.10", "q48-leased": "10.0.0.20"}.get(host, "0.0.0.0")
+            return [(None, None, None, None, (ip, 0))]
+
+        def gethostbyaddr(ip):
+            name = {"10.0.0.10": "q48-reserved", "10.0.0.20": "q48-leased"}.get(ip, "unknown")
+            return (name, [], [ip])
+
+        monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+        monkeypatch.setattr(socket, "gethostbyaddr", gethostbyaddr)
+
+    def test_requires_admin(self, client, db, mock_kea):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="reconcile_viewer1")
+        r = client.get("/ddns/reconcile", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Admin access required." in r.data
+
+    def test_reservation_and_lease_rows_both_appear(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        self._clean(db)
+        self._seed(db)
+        self._mock_matching_resolver(monkeypatch)
+        try:
+            r = logged_in_client.get("/ddns/reconcile")
+            assert r.status_code == 200
+            body = r.data.decode()
+            assert "q48-reserved" in body
+            assert "q48-leased" in body
+            assert "Results — 2 checked" in body
+        finally:
+            self._clean(db)
+
+    def test_all_matched_scores_ok(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        self._clean(db)
+        self._seed(db)
+        self._mock_matching_resolver(monkeypatch)
+        try:
+            r = logged_in_client.get("/ddns/reconcile")
+            assert r.status_code == 200
+            assert b"ok (2)" in r.data
+        finally:
+            self._clean(db)
+
+    def test_subnet_restriction_hides_other_subnets_rows(self, client, db, mock_kea, monkeypatch):
+        from jen import extensions
+        from tests.conftest import restricted_client
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {1: {"name": "LAN", "cidr": "10.0.0.0/24"}, 2: {"name": "IOT", "cidr": "10.0.1.0/24"}},
+        )
+        self._clean(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE01'), 0, 1, INET_ATON('10.0.0.10'), 'q48-reserved')"
+            )
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE03'), 0, 2, INET_ATON('10.0.1.10'), 'q48-other-subnet')"
+            )
+        db.commit()
+        self._mock_matching_resolver(monkeypatch)
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="reconcile_restricted1")
+        try:
+            r = client.get("/ddns/reconcile")
+            assert r.status_code == 200
+            body = r.data.decode()
+            assert "q48-reserved" in body
+            assert "q48-other-subnet" not in body
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM hosts WHERE hostname LIKE 'q48-%'")
+            db.commit()
+
+    def test_caches_summary_for_health_check(self, logged_in_client, db, mock_kea, monkeypatch):
+        import json
+
+        from jen import extensions
+        from jen.models.user import get_global_setting
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        self._clean(db)
+        self._seed(db)
+        self._mock_matching_resolver(monkeypatch)
+        try:
+            r = logged_in_client.get("/ddns/reconcile")
+            assert r.status_code == 200
+            raw = get_global_setting("dns_reconcile_last", "")
+            assert raw
+            summary = json.loads(raw)
+            assert summary["total"] == 2
+            assert summary["verdicts"]["ok"] == 2
+            assert "ts" in summary
+        finally:
+            self._clean(db)
+
+    def test_limit_is_clamped(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        self._clean(db)
+        self._mock_matching_resolver(monkeypatch)
+        r = logged_in_client.get("/ddns/reconcile", query_string={"limit": "99999"})
+        assert r.status_code == 200
+        assert b'value="1000"' in r.data
+        r2 = logged_in_client.get("/ddns/reconcile", query_string={"limit": "0"})
+        assert r2.status_code == 200
+        assert b'value="1"' in r2.data
+
+    def test_verdict_filter_narrows_results(self, logged_in_client, db, mock_kea, monkeypatch):
+        import socket
+
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        self._clean(db)
+        self._seed(db)
+
+        # q48-reserved matches, q48-leased doesn't resolve at all.
+        def getaddrinfo(host, port):
+            if host == "q48-reserved":
+                return [(None, None, None, None, ("10.0.0.10", 0))]
+            raise socket.gaierror("NXDOMAIN")
+
+        def gethostbyaddr(ip):
+            if ip == "10.0.0.10":
+                return ("q48-reserved", [], [ip])
+            raise OSError("no PTR")
+
+        monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+        monkeypatch.setattr(socket, "gethostbyaddr", gethostbyaddr)
+        try:
+            r = logged_in_client.get("/ddns/reconcile", query_string={"verdict": "missing-forward"})
+            assert r.status_code == 200
+            body = r.data.decode()
+            assert "q48-leased" in body
+            assert "q48-reserved" not in body
+        finally:
+            self._clean(db)
+
+    def test_csv_export(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        self._clean(db)
+        self._seed(db)
+        self._mock_matching_resolver(monkeypatch)
+        try:
+            r = logged_in_client.get("/ddns/reconcile", query_string={"format": "csv"})
+            assert r.status_code == 200
+            assert r.mimetype == "text/csv"
+            body = r.data.decode()
+            assert "q48-reserved" in body
+            assert "q48-leased" in body
+            assert body.startswith("name,ip,source,expected_a,observed_a,expected_ptr,observed_ptr,verdict")
+        finally:
+            self._clean(db)

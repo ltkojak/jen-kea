@@ -1737,6 +1737,46 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
       "test_id": "B608",
       "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "387         cur.execute(\n388             f\"SELECT inet_ntoa(ipv4_address) AS ip, hostname FROM hosts WHERE {' AND '.join(where)} ORDER BY ipv4_address\",\n389             params,\n",
+      "col_offset": 12,
+      "end_col_offset": 122,
+      "filename": "jen/routes/ddns.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 388,
+      "line_range": [
+        388
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "396         cur.execute(\n397             f\"SELECT inet_ntoa(l.address) AS ip, l.hostname FROM lease4 l WHERE {' AND '.join(where)} ORDER BY l.address\",\n398             params,\n",
+      "col_offset": 12,
+      "end_col_offset": 121,
+      "filename": "jen/routes/ddns.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 397,
+      "line_range": [
+        397
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
     }
   ]
 }

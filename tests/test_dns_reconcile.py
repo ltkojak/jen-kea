@@ -1,0 +1,201 @@
+"""
+tests/test_dns_reconcile.py
+─────────────────────────────
+v5.47.0 (Q48) — jen.services.dns_reconcile: pure, no DB, no resolver —
+`resolve` is injected so every verdict, the row cap, and a genuinely
+timing-out lookup can all be exercised deterministically.
+"""
+
+import time
+
+from jen.services import dns_reconcile as dr
+
+
+def _resolver(responses):
+    """`responses` maps fqdn -> the dict `resolve(name, ip)` should
+    return, mirroring ddns._run_verify's shape."""
+
+    def resolve(name, ip):
+        return responses.get(name, {})
+
+    return resolve
+
+
+class TestQualify:
+    def test_bare_name_gets_suffix_appended(self):
+        assert dr._qualify("host1", "lan.example.com") == "host1.lan.example.com"
+
+    def test_already_qualified_name_is_untouched(self):
+        assert dr._qualify("host1.lan.example.com", "lan.example.com") == "host1.lan.example.com"
+
+    def test_name_equal_to_suffix_is_untouched(self):
+        assert dr._qualify("lan.example.com", "lan.example.com") == "lan.example.com"
+
+    def test_blank_suffix_leaves_name_bare(self):
+        assert dr._qualify("host1", "") == "host1"
+
+    def test_trailing_dots_stripped(self):
+        assert dr._qualify("host1.", "lan.example.com.") == "host1.lan.example.com"
+
+
+class TestClassify:
+    """Every verdict in dr.VERDICTS, reachable by construction."""
+
+    def test_ok(self):
+        observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "host1.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "ok"
+
+    def test_missing_forward(self):
+        observed = {"forward_error": "nodename nor servname provided"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "missing-forward"
+
+    def test_wrong_forward(self):
+        observed = {"forward_ips": ["10.0.0.9"], "reverse_name": "host1.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "wrong-forward"
+
+    def test_missing_ptr(self):
+        observed = {"forward_ips": ["10.0.0.5"], "reverse_error": "unknown host"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "missing-ptr"
+
+    def test_wrong_ptr(self):
+        observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "somebody-else.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "wrong-ptr"
+
+    def test_stale_ptr_when_reverse_name_belongs_to_an_expired_host(self):
+        observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "old-laptop.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", {"old-laptop.lan"}) == "stale-ptr"
+
+    def test_stale_ptr_matches_on_bare_name_too(self):
+        observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "old-laptop.lan.example.com"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan.example.com", {"old-laptop"}) == "stale-ptr"
+
+    def test_duplicate_a(self):
+        observed = {"forward_ips": ["10.0.0.5", "10.0.0.9"], "reverse_name": "host1.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "duplicate-a"
+
+    def test_duplicate_a_takes_priority_over_wrong_forward(self):
+        # two A records, neither of which happens to be the expected IP —
+        # still "two IPs claim the name", not "wrong-forward".
+        observed = {"forward_ips": ["10.0.0.8", "10.0.0.9"], "reverse_name": "host1.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "duplicate-a"
+
+    def test_reverse_case_insensitive_match_is_ok(self):
+        observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "HOST1.LAN"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "ok"
+
+    def test_no_reverse_name_and_no_reverse_error_is_ok(self):
+        # expected_ip wasn't given (blank), forward is fine, nothing to
+        # compare on the reverse side.
+        observed = {"forward_ips": ["10.0.0.5"]}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "ok"
+
+
+class TestReconcile:
+    def test_every_verdict_reachable_through_reconcile(self):
+        rows = [
+            {"name": "ok1", "ip": "10.0.0.1", "source": "reservation"},
+            {"name": "miss-fwd", "ip": "10.0.0.2", "source": "lease"},
+            {"name": "wrong-fwd", "ip": "10.0.0.3", "source": "reservation"},
+            {"name": "miss-ptr", "ip": "10.0.0.4", "source": "lease"},
+            {"name": "wrong-ptr", "ip": "10.0.0.5", "source": "reservation"},
+            {"name": "stale-ptr", "ip": "10.0.0.6", "source": "lease"},
+            {"name": "dup-a", "ip": "10.0.0.7", "source": "reservation"},
+        ]
+        responses = {
+            "ok1": {"forward_ips": ["10.0.0.1"], "reverse_name": "ok1"},
+            "miss-fwd": {"forward_error": "NXDOMAIN"},
+            "wrong-fwd": {"forward_ips": ["10.0.0.99"], "reverse_name": "wrong-fwd"},
+            "miss-ptr": {"forward_ips": ["10.0.0.4"], "reverse_error": "no PTR"},
+            "wrong-ptr": {"forward_ips": ["10.0.0.5"], "reverse_name": "unrelated"},
+            "stale-ptr": {"forward_ips": ["10.0.0.6"], "reverse_name": "retired-host"},
+            "dup-a": {"forward_ips": ["10.0.0.7", "10.0.0.70"], "reverse_name": "dup-a"},
+        }
+        results = dr.reconcile(rows, _resolver(responses), expired_names={"retired-host"})
+        by_name = {r["name"]: r["verdict"] for r in results}
+        assert by_name == {
+            "ok1": "ok",
+            "miss-fwd": "missing-forward",
+            "wrong-fwd": "wrong-forward",
+            "miss-ptr": "missing-ptr",
+            "wrong-ptr": "wrong-ptr",
+            "stale-ptr": "stale-ptr",
+            "dup-a": "duplicate-a",
+        }
+        # Every result row carries the full column set the page renders.
+        for r in results:
+            assert set(r.keys()) == {
+                "name",
+                "ip",
+                "source",
+                "expected_a",
+                "observed_a",
+                "expected_ptr",
+                "observed_ptr",
+                "verdict",
+            }
+
+    def test_suffix_applied_before_resolving(self):
+        rows = [{"name": "host1", "ip": "10.0.0.1", "source": "reservation"}]
+        seen = {}
+
+        def resolve(name, ip):
+            seen["name"] = name
+            return {"forward_ips": [ip], "reverse_name": name}
+
+        results = dr.reconcile(rows, resolve, suffix="lan.example.com")
+        assert seen["name"] == "host1.lan.example.com"
+        assert results[0]["name"] == "host1.lan.example.com"
+        assert results[0]["verdict"] == "ok"
+
+    def test_limit_caps_rows_and_preserves_order(self):
+        rows = [{"name": f"h{i}", "ip": f"10.0.0.{i}", "source": "lease"} for i in range(10)]
+        results = dr.reconcile(rows, _resolver({}), limit=3)
+        assert [r["name"] for r in results] == ["h0", "h1", "h2"]
+
+    def test_empty_rows_returns_empty(self):
+        assert dr.reconcile([], _resolver({})) == []
+
+    def test_timing_out_resolver_is_scored_not_raised(self, monkeypatch):
+        monkeypatch.setattr(dr, "LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+        def slow_resolve(name, ip):
+            time.sleep(0.3)
+            return {"forward_ips": [ip], "reverse_name": name}  # never actually returned in time
+
+        rows = [{"name": "slow-host", "ip": "10.0.0.1", "source": "reservation"}]
+        results = dr.reconcile(rows, slow_resolve)
+        assert len(results) == 1
+        assert results[0]["verdict"] == "missing-forward"
+
+    def test_resolver_exception_is_scored_not_raised(self):
+        def flaky_resolve(name, ip):
+            raise RuntimeError("resolver exploded")
+
+        rows = [{"name": "flaky", "ip": "10.0.0.1", "source": "lease"}]
+        results = dr.reconcile(rows, flaky_resolve)
+        assert results[0]["verdict"] == "missing-forward"
+
+    def test_observed_a_joins_multiple_forward_ips(self):
+        rows = [{"name": "dup", "ip": "10.0.0.1", "source": "reservation"}]
+        responses = {"dup": {"forward_ips": ["10.0.0.2", "10.0.0.1"], "reverse_name": "dup"}}
+        results = dr.reconcile(rows, _resolver(responses))
+        assert results[0]["observed_a"] == "10.0.0.1, 10.0.0.2"
+
+    def test_source_carried_through(self):
+        rows = [{"name": "h", "ip": "10.0.0.1", "source": "lease"}]
+        results = dr.reconcile(rows, _resolver({"h": {"forward_ips": ["10.0.0.1"], "reverse_name": "h"}}))
+        assert results[0]["source"] == "lease"
+
+
+class TestSummarize:
+    def test_every_verdict_present_even_at_zero(self):
+        counts = dr.summarize([])
+        assert set(counts.keys()) == set(dr.VERDICTS)
+        assert all(v == 0 for v in counts.values())
+
+    def test_counts_match(self):
+        results = [{"verdict": "ok"}, {"verdict": "ok"}, {"verdict": "wrong-ptr"}]
+        counts = dr.summarize(results)
+        assert counts["ok"] == 2
+        assert counts["wrong-ptr"] == 1
+        assert counts["missing-forward"] == 0

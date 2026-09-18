@@ -1509,7 +1509,7 @@ Add an alert channel and enable the **HA failover / state change** alert type. Y
 
 ## DDNS
 
-The **DDNS** page (Network → DDNS) has four tabs: **Status**, **Naming**, **D2 Configuration**, and **Verify**. It covers two independent mechanisms for keeping DNS in sync with DHCP leases, and Jen treats neither as more "correct" than the other:
+The **DDNS** page (Network → DDNS) has five tabs: **Status**, **Naming**, **D2 Configuration**, **Verify**, and **Reconcile**. It covers two independent mechanisms for keeping DNS in sync with DHCP leases, and Jen treats neither as more "correct" than the other:
 
 - **Provider mode** — Jen itself pushes hostname records to an external DNS server's REST API (Technitium, Pi-hole, AdGuard Home) or over SSH (`dig`/`host` against BIND/Unbound). This existed before v5.23.0 and is unchanged.
 - **D2 mode** — Kea's own DNS-update daemon, `kea-dhcp-ddns` ("D2"), sends dynamic DNS updates (RFC 2136) directly from `kea-dhcp4` as leases are issued/renewed/released. Jen v5.23.0 added the ability to read D2's status, configure its forward/reverse zones and TSIG keys, and verify what actually landed in DNS.
@@ -1594,6 +1594,26 @@ In Jen's D2 Configuration tab:
 Each Add/Remove pushes to every SSH-configured server, guarded by that server's own current config hash (a stale read elsewhere can't silently overwrite a change made in between), tests the result with `kea-dhcp-ddns -t` before writing, and restarts D2 — exactly the same lifecycle as every other Kea config edit in Jen.
 
 **4. Verify it actually worked.** The **Verify** tab runs `socket.getaddrinfo()`/`socket.gethostbyaddr()` from the Jen host's own system resolver — not from Kea, not from D2 directly — so a green check here means an ordinary client would see the same thing. Type a hostname and/or IP (or use one from an active lease) and Jen shows the forward and reverse results side by side with a ✓/✗ for whether they match what you typed.
+
+### Reconcile (v5.47.0)
+
+Verify checks one name at a time; **Reconcile** (Network → DDNS → Reconcile) runs the same forward/reverse check over the whole fleet at once — every reservation, then every active lease with a hostname, up to the limit you set (max 1000; each one is a live lookup). Nothing is written anywhere, to Jen's database or to Kea — this is a read-only report, subnet-restricted the same way every other subnet-scoped page in Jen is.
+
+Each row gets one verdict:
+
+| Verdict | Meaning |
+|---|---|
+| `ok` | Forward and reverse both resolve to what's expected. |
+| `missing-forward` | The name doesn't resolve at all (NXDOMAIN or the resolver timed out). |
+| `wrong-forward` | The name resolves, but not to the IP Jen expects. |
+| `missing-ptr` | The IP has no PTR record (or the reverse lookup timed out). |
+| `wrong-ptr` | The PTR record points to a different name than expected. |
+| `stale-ptr` | The PTR record points to a name that belongs to a lease that has since expired elsewhere — DNS wasn't cleaned up when that name's lease ended. |
+| `duplicate-a` | More than one A record exists for the name — two addresses are claiming it. |
+
+Filter to one verdict with the badges above the table, or **Export CSV** for the current filter. A mismatched row has **Fix in Kea** (jumps to Reservations, searched by that row's IP) and **re-verify** (jumps to the Verify tab, pre-filled) links; an `ok` row has neither, there's nothing to do.
+
+The Health Center's **DNS/DHCP names match** check (group DDNS) reads the summary from the last time someone ran this page — it never resolves anything itself, so it stays instant like every other Health check. It shows `skip` until DDNS is on and at least one Reconcile run has happened.
 
 ### Troubleshooting D2
 

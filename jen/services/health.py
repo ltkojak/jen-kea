@@ -15,7 +15,7 @@ Groups and check ids are stable (tests and the JSON twin key off them):
             kea_hooks · kea_time_sync · kea_config_drift ·
             kea_subnets_declared · config_doctor · packet_health
   capacity  pool_utilization · lease_snapshot_fresh
-  ddns      d2_reachable · d2_errors
+  ddns      d2_reachable · d2_errors · dns_reconcile
   jen       cert_expiry · db_jen · db_kea · schema_current ·
             helper_installed · background_workers · update_available
 """
@@ -621,6 +621,54 @@ def _d2_errors(ctx) -> Check:
     return c
 
 
+def _dns_reconcile(ctx) -> Check:
+    """v5.47.0 (Q48) — never resolves anything itself (Health must stay
+    cheap): reads the summary jen/routes/ddns.py::ddns_reconcile()
+    cached in the dns_reconcile_last setting the last time someone ran
+    the real reconcile page, same as pool_exhaustion_forecast reads a
+    snapshot rather than recomputing live."""
+    import json
+
+    c = Check("dns_reconcile", "DNS/DHCP names match", "ddns", fix_url="/ddns/reconcile")
+    if ctx["dhcp4_config"] is None or not _ddns_updates_enabled(ctx):
+        c.status, c.detail = "skip", "DDNS updates disabled"
+        return c
+
+    raw = __get_setting("dns_reconcile_last", "")
+    if not raw:
+        c.status, c.detail = "skip", "no reconcile run yet — see Network → DDNS → Reconcile"
+        return c
+    try:
+        summary = json.loads(raw)
+        total = int(summary.get("total", 0))
+        verdicts = summary.get("verdicts") or {}
+        ok = int(verdicts.get("ok", 0))
+    except Exception as e:
+        logger.warning(f"health check dns_reconcile: could not parse dns_reconcile_last: {e}")
+        c.status, c.detail = "skip", "last reconcile summary unreadable"
+        return c
+
+    age_note = ""
+    try:
+        ts = datetime.fromisoformat(summary["ts"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+        age_note = f", last run {age_hours:.0f}h ago"
+    except Exception:
+        pass
+
+    if total == 0:
+        c.status, c.detail = "skip", f"last reconcile run had nothing to check{age_note}"
+        return c
+    problems = total - ok
+    if problems == 0:
+        c.status, c.detail = "ok", f"{total} name(s) checked, all matched{age_note}"
+    else:
+        c.status, c.detail = "warn", f"{problems}/{total} name(s) mismatched{age_note}"
+    return c
+
+
 # ── jen group ──────────────────────────────────────────────────────────────
 
 
@@ -1097,6 +1145,7 @@ _CHECKS = [
     _lease_snapshot_fresh,
     _d2_reachable,
     _d2_errors,
+    _dns_reconcile,
     _cert_expiry,
     _kea_tls_expiry,
     _db_jen,
@@ -1128,6 +1177,7 @@ _CHECK_META = {
     "lease_snapshot_fresh": ("Lease snapshots current", "capacity"),
     "d2_reachable": ("kea-dhcp-ddns reachable", "ddns"),
     "d2_errors": ("kea-dhcp-ddns error counters", "ddns"),
+    "dns_reconcile": ("DNS/DHCP names match", "ddns"),
     "cert_expiry": ("TLS certificate expiry", "jen"),
     "kea_tls_expiry": ("Kea mTLS certificates", "jen"),
     "db_jen": ("Jen database", "jen"),

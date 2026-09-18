@@ -2,6 +2,38 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.47.0-beta.1] - 2026-09-18
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.46.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q48, DNS ↔ DHCP reconciliation: the DDNS page's Verify tab checks one
+name at a time; a new **Reconcile** tab (Network → DDNS → Reconcile)
+runs the same forward/reverse check over the whole fleet at once —
+every reservation, then every active lease with a hostname, up to a
+configurable limit (max 1000). `jen/services/dns_reconcile.py::
+reconcile()` runs the lookups through a thread pool with a 2-second
+budget each (a resolver call past that is scored the same as a real
+timeout — the row just can't confirm a match, same as a genuine
+NXDOMAIN would), and classifies each row into one of seven verdicts:
+ok, missing-forward, wrong-forward, missing-ptr, wrong-ptr, stale-ptr
+(the PTR record names a host whose lease has since expired elsewhere —
+DNS wasn't cleaned up), or duplicate-a (more than one A record claims
+the name). Nothing is ever written, to Jen's database or to Kea — this
+is entirely read-only, and subnet-restricted the same way every other
+subnet-scoped page in Jen already is. The page shows totals per
+verdict as filter badges, exports the current filter to CSV, and links
+a mismatched row to Reservations (to fix it) or back to Verify (to
+re-check one). The Health Center's new **DNS/DHCP names match** check
+(group DDNS) reads the summary the page caches from its last real run
+rather than ever resolving anything itself, so it stays exactly as
+cheap as every other Health check — it shows skip until DDNS is on and
+at least one Reconcile run exists.
+
+Docs: admin guide DDNS section gets a new Reconcile subsection with
+the full verdict table.
+
 ## [5.46.0-beta.1] - 2026-09-18
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

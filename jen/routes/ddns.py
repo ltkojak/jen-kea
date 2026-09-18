@@ -12,22 +12,31 @@ there's no natural entry there. Viewers see the Status tab only;
 everything else is admin+.
 """
 
+import csv
+import io
+import json
 import logging
 import shlex
 import socket
 import subprocess
+from datetime import datetime, timezone
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import Blueprint, Response, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
+import jen.models.db as __db
+import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.dns_reconcile as __reconcile
 import jen.services.kea as __kea
 import jen.services.kea_changeset as __changeset
 import jen.services.kea_config_edit as __edit
 import jen.services.kea_ddns as __d2
 import jen.services.kea_host as __host
 from jen import extensions
+from jen.services.access import add_subnet_restriction as _add_subnet_restriction
 from jen.services.access import admin_required as _admin_required
+from jen.services.csv_safe import safe_row as _safe_row
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("ddns", __name__)
@@ -359,6 +368,121 @@ def ddns():
     elif tab == "verify":
         ctx.update(_verify_tab_context())
     return render_template("ddns.html", **ctx)
+
+
+# ── Reconcile (v5.47.0 — Q48) ────────────────────────────────────────────────
+
+
+def _reconcile_rows():
+    """Reservations first, then active leases with a hostname — subnet-
+    restricted to what current_user can see — plus the set of hostnames
+    that belong to an EXPIRED lease somewhere (for telling a stale PTR
+    record apart from one that was simply never right). Read-only;
+    never touches Kea."""
+    rows = []
+    expired_names = set()
+    with __db.kea_db() as db, db.cursor() as cur:
+        where, params = ["dhcp4_subnet_id > 0", "hostname != ''"], []
+        where, params = _add_subnet_restriction(where, params, "hosts", "dhcp4_subnet_id")
+        cur.execute(
+            f"SELECT inet_ntoa(ipv4_address) AS ip, hostname FROM hosts WHERE {' AND '.join(where)} ORDER BY ipv4_address",
+            params,
+        )
+        for row in cur.fetchall():
+            rows.append({"name": row["hostname"], "ip": row["ip"], "source": "reservation"})
+
+        where, params = ["l.state=0", "l.hostname != ''"], []
+        where, params = _add_subnet_restriction(where, params, "l", "subnet_id")
+        cur.execute(
+            f"SELECT inet_ntoa(l.address) AS ip, l.hostname FROM lease4 l WHERE {' AND '.join(where)} ORDER BY l.address",
+            params,
+        )
+        for row in cur.fetchall():
+            rows.append({"name": row["hostname"], "ip": row["ip"], "source": "lease"})
+
+        cur.execute("SELECT DISTINCT hostname FROM lease4 WHERE state != 0 AND hostname != ''")
+        for row in cur.fetchall():
+            expired_names.add(row["hostname"].lower())
+    return rows, expired_names
+
+
+def _reconcile_suffix() -> str:
+    active_server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
+    if active_server is None:
+        return ""
+    r = __kea.kea_command("config-get", server=active_server)
+    if r.get("result") != 0:
+        return ""
+    return (r.get("arguments") or {}).get("Dhcp4", {}).get("ddns-qualifying-suffix", "")
+
+
+@bp.route("/ddns/reconcile")
+@login_required
+@_admin_required
+def ddns_reconcile():
+    try:
+        limit = int(request.args.get("limit", "200"))
+    except ValueError:
+        limit = 200
+    limit = max(1, min(limit, 1000))
+    verdict_filter = request.args.get("verdict", "").strip()
+
+    try:
+        rows, expired_names = _reconcile_rows()
+    except Exception as e:
+        logger.error(f"dns_reconcile row fetch failed: {e}")
+        flash("Could not load reservations/leases to reconcile. Check server logs for details.", "error")
+        return redirect(url_for("ddns.ddns"))
+
+    suffix = _reconcile_suffix()
+    results = __reconcile.reconcile(rows, _run_verify, suffix=suffix, limit=limit, expired_names=expired_names)
+    counts = __reconcile.summarize(results)
+
+    # Cached for the Health Center check — that check must stay cheap
+    # (never resolves at render), so it reads this instead.
+    __user.set_global_setting(
+        "dns_reconcile_last",
+        json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "total": len(results), "verdicts": counts}),
+    )
+
+    filtered = [r for r in results if not verdict_filter or r["verdict"] == verdict_filter]
+
+    if request.args.get("format") == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["name", "ip", "source", "expected_a", "observed_a", "expected_ptr", "observed_ptr", "verdict"])
+        for r in filtered:
+            writer.writerow(
+                _safe_row(
+                    [
+                        r["name"],
+                        r["ip"],
+                        r["source"],
+                        r["expected_a"],
+                        r["observed_a"],
+                        r["expected_ptr"],
+                        r["observed_ptr"],
+                        r["verdict"],
+                    ]
+                )
+            )
+        output.seek(0)
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv",
+            headers={"Content-Disposition": "attachment;filename=dns_reconcile.csv"},
+        )
+
+    return render_template(
+        "ddns_reconcile.html",
+        results=filtered,
+        counts=counts,
+        total=len(results),
+        limit=limit,
+        verdict_filter=verdict_filter,
+        verdicts=__reconcile.VERDICTS,
+        tab="reconcile",
+    )
 
 
 @bp.route("/ddns/naming/save", methods=["POST"])

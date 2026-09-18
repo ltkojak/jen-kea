@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}DNS Reconcile{% endblock %}
+{% block content %}
+{% from '_settings_subtabs.html' import subtabs %}
+<div class="page-header">
+    <h1>🔗 DDNS</h1>
+    <p>Read-only: reservations and active leases with a hostname, checked against what your resolver actually
+       returns for them — nothing here is ever written to Kea.</p>
+</div>
+
+{% set ddns_tabs = [
+    {'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'},
+    {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
+    {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
+    {'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'},
+    {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
+] %}
+{{ subtabs(ddns_tabs, tab) }}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">🔎 Reconcile</span></div>
+    <div class="form-hint" style="margin-bottom:12px;">
+        Every reservation, then every active lease with a hostname, up to the limit below — each one's forward
+        (name → IP) and reverse (IP → name) lookup, run through the Jen host's own resolver, the same one the
+        Verify tab uses one name at a time.
+    </div>
+    <form method="GET">
+        <input type="hidden" name="verdict" value="{{ verdict_filter }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Limit</label>
+                <input type="number" name="limit" value="{{ limit }}" min="1" max="1000" style="max-width:120px;">
+                <div class="form-hint">Max 1000 — each name is a live DNS lookup.</div>
+            </div>
+            <div class="form-group" style="align-self:flex-end;">
+                <button type="submit" class="btn btn-primary">Run</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div class="card-header"><span class="card-title">Results — {{ total }} checked</span></div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+        <a href="?limit={{ limit }}" class="badge {{ 'badge-production' if not verdict_filter else '' }}" style="{% if not verdict_filter %}background:var(--primary);{% endif %}">All ({{ total }})</a>
+        {% for v in verdicts %}
+        <a href="?limit={{ limit }}&verdict={{ v }}"
+           class="badge"
+           style="{% if verdict_filter == v %}background:var(--primary);{% elif v == 'ok' %}background:#1a2a1a;color:var(--success);{% else %}background:#2a1a1a;color:var(--warning);{% endif %}">
+            {{ v }} ({{ counts.get(v, 0) }})
+        </a>
+        {% endfor %}
+        <a href="/ddns/reconcile?format=csv&limit={{ limit }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}" class="btn btn-secondary btn-sm" style="margin-left:auto;">⬇️ Export CSV</a>
+    </div>
+
+    {% if not results %}
+    <div style="text-align:center;padding:32px;color:var(--text-muted);">
+        {% if total == 0 %}No reservations or active leases with a hostname to check.
+        {% else %}No rows match the "{{ verdict_filter }}" filter.{% endif %}
+    </div>
+    {% else %}
+    <div class="table-wrap">
+    <table class="sortable mobile-cards">
+        <thead><tr>
+            <th>Name</th>
+            <th class="hide-mobile">Source</th>
+            <th>Expected A</th>
+            <th>Observed A</th>
+            <th class="hide-tablet">Expected PTR</th>
+            <th class="hide-tablet">Observed PTR</th>
+            <th>Verdict</th>
+            <th></th>
+        </tr></thead>
+        <tbody>
+        {% for r in results %}
+        <tr>
+            <td data-label="Name" class="mono">{{ r.name }}</td>
+            <td data-label="Source" class="hide-mobile">{{ r.source }}</td>
+            <td data-label="Expected A" class="mono">{{ r.expected_a }}</td>
+            <td data-label="Observed A" class="mono">{{ r.observed_a or '—' }}</td>
+            <td data-label="Expected PTR" class="mono hide-tablet">{{ r.expected_ptr }}</td>
+            <td data-label="Observed PTR" class="mono hide-tablet">{{ r.observed_ptr or '—' }}</td>
+            <td data-label="Verdict">
+                {% if r.verdict == 'ok' %}<span class="badge" style="background:#1a2a1a;color:var(--success);">✓ ok</span>
+                {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">{{ r.verdict }}</span>{% endif %}
+            </td>
+            <td data-label="">
+                {% if r.verdict != 'ok' %}
+                <a href="/reservations?search={{ r.ip }}" style="font-size:12px;">Fix in Kea</a>
+                &nbsp;·&nbsp;
+                <a href="/ddns?tab=verify&hostname={{ r.name }}&ip={{ r.ip }}" style="font-size:12px;">re-verify</a>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

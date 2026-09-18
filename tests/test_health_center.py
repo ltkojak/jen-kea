@@ -610,6 +610,69 @@ class TestD2:
         assert c.status == "ok"
 
 
+class TestDnsReconcileCheck:
+    """v5.47.0 (Q48) — must never resolve anything itself: reads the
+    dns_reconcile_last setting jen/routes/ddns.py::ddns_reconcile()
+    caches, same "skip until DDNS is on and a real run exists" gate
+    TestD2's own tests exercise for d2_reachable/d2_errors."""
+
+    def _cfg(self, enabled):
+        return {"dhcp-ddns": {"enable-updates": enabled}}
+
+    def test_skip_when_ddns_disabled(self):
+        c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(False)))
+        assert c.status == "skip" and "disabled" in c.detail
+
+    def test_skip_when_no_run_yet(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("dns_reconcile_last", "")
+        c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
+        assert c.status == "skip"
+        assert "no reconcile run" in c.detail
+
+    def test_ok_when_all_matched(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting(
+            "dns_reconcile_last",
+            json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "total": 5, "verdicts": {"ok": 5}}),
+        )
+        c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
+        assert c.status == "ok"
+        assert "5" in c.detail
+
+    def test_warn_when_mismatches(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting(
+            "dns_reconcile_last",
+            json.dumps(
+                {"ts": datetime.now(timezone.utc).isoformat(), "total": 5, "verdicts": {"ok": 3, "wrong-ptr": 2}}
+            ),
+        )
+        c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
+        assert c.status == "warn"
+        assert "2/5" in c.detail
+
+    def test_skip_when_total_zero(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting(
+            "dns_reconcile_last",
+            json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "total": 0, "verdicts": {}}),
+        )
+        c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
+        assert c.status == "skip"
+
+    def test_unparseable_summary_skips_not_raises(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("dns_reconcile_last", "not-json-at-all")
+        c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
+        assert c.status == "skip"
+
+
 # ── jen ────────────────────────────────────────────────────────────────────
 
 
