@@ -117,6 +117,20 @@
             </div>
         </div>
         <div class="form-group">
+            <label>Subnet Mapping <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(v5.46.0 — optional)</span></label>
+            <input type="text" id="oidc-subnet-map" name="subnet_map" value="{{ oidc.subnet_map }}" placeholder="network-iot-admins:30,31;network-all:*" style="width:100%;">
+            <div class="form-hint">Same claim as Role Claim above → <code>;</code>-separated <code>group:id,id</code> pairs, or <code>group:*</code> for every subnet. Blank (default) leaves every SSO user unrestricted, same as before this setting existed.</div>
+            <div id="subnet-map-preview" class="mono" style="font-size:12px;margin-top:6px;color:var(--text-muted);"></div>
+        </div>
+        <div class="form-group">
+            <label>When no group matches the Subnet Mapping</label>
+            <select name="subnet_map_default" style="width:100%;">
+                <option value="none" {% if oidc.subnet_map_default == 'none' %}selected{% endif %}>Restrict to nothing (recommended — deliberately fail closed)</option>
+                <option value="all" {% if oidc.subnet_map_default == 'all' %}selected{% endif %}>Leave unrestricted</option>
+            </select>
+            <div class="form-hint">Only matters once Subnet Mapping above is non-blank.</div>
+        </div>
+        <div class="form-group">
             <label><input type="checkbox" name="auto_create" value="1" style="width:auto;" {% if oidc.auto_create %}checked{% endif %}> Automatically create an account on first SSO login</label>
         </div>
         <div class="form-group">
@@ -228,4 +242,54 @@
     </form>
     <div class="form-hint" style="margin-top:8px;">Ports are set on <a href="/settings/system#sys-ports">System → Ports &amp; threads</a>.</div>
 </div>
+{% endblock %}
+{% block scripts %}
+// v5.46.0 (Q47) — live, entirely client-side preview of what the
+// Subnet Mapping field would resolve to against the subnets Jen
+// already knows about; no round trip, matching the class builder's
+// own live expression preview (Q40). Built with textContent, never
+// innerHTML — this is superadmin-typed input, but the same discipline
+// as the icon picker elsewhere in the app either way.
+var SUBNET_MAP_FOR_PREVIEW = {{ subnet_map | tojson }};
+
+function renderSubnetMapPreview() {
+    var input = document.getElementById('oidc-subnet-map');
+    var out = document.getElementById('subnet-map-preview');
+    if (!input || !out) return;
+    out.textContent = '';
+    var raw = input.value;
+    if (!raw.trim()) return;
+    raw.split(';').forEach(function(segment) {
+        segment = segment.trim();
+        var idx = segment.indexOf(':');
+        if (!segment || idx === -1) return;
+        var group = segment.slice(0, idx).trim();
+        var valuesRaw = segment.slice(idx + 1).trim();
+        if (!group) return;
+
+        var label;
+        if (valuesRaw === '*') {
+            label = 'all subnets';
+        } else {
+            var names = [];
+            valuesRaw.split(',').forEach(function(v) {
+                v = v.trim();
+                if (!/^\d+$/.test(v)) return;
+                var info = SUBNET_MAP_FOR_PREVIEW[v];
+                names.push(info ? info.name : ('#' + v + ' (unknown)'));
+            });
+            label = names.length ? names.join(', ') : '(no valid subnet ids)';
+        }
+
+        var line = document.createElement('div');
+        line.textContent = group + ': ' + label;
+        out.appendChild(line);
+    });
+}
+
+var oidcSubnetMapInput = document.getElementById('oidc-subnet-map');
+if (oidcSubnetMapInput) {
+    oidcSubnetMapInput.addEventListener('input', renderSubnetMapPreview);
+    renderSubnetMapPreview();
+}
 {% endblock %}

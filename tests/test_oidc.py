@@ -33,6 +33,8 @@ _OIDC_DEFAULTS = {
     "OIDC_BUTTON_LABEL": "Sign in with SSO",
     "OIDC_REDIRECT_URI": "",
     "OIDC_LOCAL_LOGIN": True,
+    "OIDC_SUBNET_MAP": "",
+    "OIDC_SUBNET_MAP_DEFAULT": "none",
 }
 
 
@@ -114,6 +116,74 @@ class TestMapRole:
         assert oidc.map_role({"groups": ["jen-admin"]}) is None
 
 
+class TestParseSubnetMap:
+    def test_basic_ids(self):
+        assert oidc.parse_subnet_map("net-a:1,2;net-b:3") == {"net-a": {1, 2}, "net-b": {3}}
+
+    def test_wildcard(self):
+        assert oidc.parse_subnet_map("net-all:*") == {"net-all": "*"}
+
+    def test_blank_is_empty(self):
+        assert oidc.parse_subnet_map("") == {}
+        assert oidc.parse_subnet_map(None) == {}
+
+    def test_malformed_segments_skipped_not_raised(self):
+        # no ':', empty group name, no valid subnet id and not '*' —
+        # none of these may raise; a config typo must not turn login
+        # into a 500.
+        assert oidc.parse_subnet_map("garbage;:1,2;net-c:not-a-number") == {}
+
+    def test_whitespace_tolerant(self):
+        assert oidc.parse_subnet_map(" net-a : 1 , 2 ; net-b : * ") == {"net-a": {1, 2}, "net-b": "*"}
+
+    def test_non_digit_ids_in_a_list_are_dropped_not_fatal(self):
+        assert oidc.parse_subnet_map("net-a:1,garbage,2") == {"net-a": {1, 2}}
+
+
+class TestMapSubnetAccess:
+    def test_unconfigured_is_unrestricted(self):
+        """v5.46.0 (Q47) — blank subnet_map is the pre-Q47 behavior:
+        every OIDC login stays all_subnets true. This must hold
+        regardless of what groups the token carries."""
+        assert oidc.map_subnet_access({"groups": ["anything"]}) is None
+
+    def test_matching_group_returns_sorted_json_list(self):
+        extensions.OIDC_SUBNET_MAP = "net-iot:31,30"
+        assert oidc.map_subnet_access({"groups": ["net-iot"]}) == "[30, 31]"
+
+    def test_union_over_multiple_matching_groups(self):
+        extensions.OIDC_SUBNET_MAP = "net-a:1,2;net-b:2,3"
+        assert oidc.map_subnet_access({"groups": ["net-a", "net-b"]}) == "[1, 2, 3]"
+
+    def test_wildcard_group_wins_and_is_unrestricted(self):
+        extensions.OIDC_SUBNET_MAP = "net-iot:30;net-all:*"
+        assert oidc.map_subnet_access({"groups": ["net-iot", "net-all"]}) is None
+
+    def test_unmatched_group_default_none_gets_empty_set(self):
+        extensions.OIDC_SUBNET_MAP = "net-iot:30"
+        extensions.OIDC_SUBNET_MAP_DEFAULT = "none"
+        assert oidc.map_subnet_access({"groups": ["nothing-mapped"]}) == "[]"
+
+    def test_unmatched_group_default_all_is_unrestricted(self):
+        extensions.OIDC_SUBNET_MAP = "net-iot:30"
+        extensions.OIDC_SUBNET_MAP_DEFAULT = "all"
+        assert oidc.map_subnet_access({"groups": ["nothing-mapped"]}) is None
+
+    def test_missing_claim_entirely_is_treated_as_no_match(self):
+        extensions.OIDC_SUBNET_MAP = "net-iot:30"
+        extensions.OIDC_SUBNET_MAP_DEFAULT = "none"
+        assert oidc.map_subnet_access({}) == "[]"
+
+    def test_custom_role_claim_name_is_reused_for_subnet_matching(self):
+        extensions.OIDC_ROLE_CLAIM = "roles"
+        extensions.OIDC_SUBNET_MAP = "net-iot:30"
+        assert oidc.map_subnet_access({"roles": ["net-iot"]}) == "[30]"
+
+    def test_string_claim_space_separated(self):
+        extensions.OIDC_SUBNET_MAP = "net-a:1;net-b:2"
+        assert oidc.map_subnet_access({"groups": "net-a net-b"}) == "[1, 2]"
+
+
 class TestConfigParsing:
     """AppConfig.apply() against an isolated [oidc] section — same
     fixture shape as tests/test_appconfig.py's isolated_config."""
@@ -137,6 +207,8 @@ class TestConfigParsing:
             "default_role": "none",
             "auto_create": "false",
             "local_login": "false",
+            "subnet_map": "net-iot:30,31",
+            "subnet_map_default": "all",
         }
         path = tmp_path / "jen.config"
         with open(path, "w") as f:
@@ -158,6 +230,8 @@ class TestConfigParsing:
         assert extensions.OIDC_DEFAULT_ROLE == "none"
         assert extensions.OIDC_AUTO_CREATE is False
         assert extensions.OIDC_LOCAL_LOGIN is False
+        assert extensions.OIDC_SUBNET_MAP == "net-iot:30,31"
+        assert extensions.OIDC_SUBNET_MAP_DEFAULT == "all"
 
     def test_no_oidc_section_defaults_to_disabled(self, tmp_path):
         from jen.config import app_config
@@ -178,6 +252,8 @@ class TestConfigParsing:
             assert extensions.OIDC_LOCAL_LOGIN is True
             assert extensions.OIDC_AUTO_CREATE is True
             assert extensions.OIDC_DEFAULT_ROLE == "viewer"
+            assert extensions.OIDC_SUBNET_MAP == ""
+            assert extensions.OIDC_SUBNET_MAP_DEFAULT == "none"
         finally:
             extensions.CONFIG_FILE = original_path
             from tests.conftest import _patch_extensions
@@ -452,6 +528,110 @@ class TestOidcCallback:
         assert stub.userinfo_called
 
 
+class TestOidcSubnetScope:
+    """v5.46.0 (Q47) — [oidc] subnet_map applied through the real
+    callback route end to end: the DB row's subnet_access column and
+    the OIDC_SUBNET_SCOPE audit trail, on top of map_subnet_access()'s
+    pure return value already covered by TestMapSubnetAccess above."""
+
+    def _claims_token(self, **claims):
+        base = {"sub": "idp-subject-scope-1", "preferred_username": "ssoscope1", "groups": ["jen-admin"]}
+        base.update(claims)
+        return {"userinfo": base}
+
+    def test_new_user_created_with_restricted_subnet_access(self, client, db, monkeypatch):
+        extensions.OIDC_SUBNET_MAP = "jen-admin:30,31"
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='ssoscope1'")
+            row = cur.fetchone()
+        assert row["subnet_access"] == "[30, 31]"
+
+    def test_new_user_unrestricted_when_subnet_map_not_configured(self, client, db, monkeypatch):
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='ssoscope1'")
+            row = cur.fetchone()
+        assert row["subnet_access"] is None
+
+    def test_unmatched_group_gets_empty_set_by_default(self, client, db, monkeypatch):
+        extensions.OIDC_SUBNET_MAP = "some-other-group:30"
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='ssoscope1'")
+            row = cur.fetchone()
+        assert row["subnet_access"] == "[]"
+
+    def test_unmatched_group_stays_unrestricted_with_default_all(self, client, db, monkeypatch):
+        extensions.OIDC_SUBNET_MAP = "some-other-group:30"
+        extensions.OIDC_SUBNET_MAP_DEFAULT = "all"
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='ssoscope1'")
+            row = cur.fetchone()
+        assert row["subnet_access"] is None
+
+    def test_second_login_with_changed_map_updates_access_and_audits(self, client, db, monkeypatch):
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")  # first login, no subnet_map -> unrestricted
+
+        extensions.OIDC_SUBNET_MAP = "jen-admin:30"
+        client.get("/login/oidc/callback")  # second login, now restricted
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='ssoscope1'")
+            row = cur.fetchone()
+            assert row["subnet_access"] == "[30]"
+            cur.execute("SELECT COUNT(*) AS cnt FROM audit_log WHERE action='OIDC_SUBNET_SCOPE'")
+            assert cur.fetchone()["cnt"] == 1
+
+    def test_wildcard_group_leaves_all_subnets_true(self, client, db, monkeypatch):
+        extensions.OIDC_SUBNET_MAP = "jen-admin:*"
+        stub = _StubOidcClient(token=self._claims_token())
+        monkeypatch.setattr(oidc, "oidc_client", lambda: stub)
+        client.get("/login/oidc/callback")
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='ssoscope1'")
+            row = cur.fetchone()
+        assert row["subnet_access"] is None
+
+    def test_local_account_subnet_access_untouched_by_oidc_subnet_map(self, client, db):
+        """The whole feature lives behind find_or_create_user(), which a
+        local /login never calls — a local account's subnet_access must
+        be completely unaffected by [oidc] subnet_map being configured
+        at all."""
+        from jen.models.user import hash_password
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO users (username, password, role, subnet_access) VALUES (%s, %s, 'admin', %s)",
+                ("localscope1", hash_password("localpass123"), "[99]"),
+            )
+        db.commit()
+
+        extensions.OIDC_SUBNET_MAP = "anything:1,2,3"
+        client.post("/login", data={"username": "localscope1", "password": "localpass123"})
+
+        with db.cursor() as cur:
+            cur.execute("SELECT subnet_access FROM users WHERE username='localscope1'")
+            row = cur.fetchone()
+        assert row["subnet_access"] == "[99]"
+
+
 class TestLocalLoginRefusedForOidcUser:
     def test_local_login_generic_message_for_oidc_user(self, client, db):
         with db.cursor() as cur:
@@ -606,6 +786,38 @@ class TestOidcSettingsRoute:
         r = self._post(logged_in_client, role_map="")
         assert r.status_code == 200
         assert _on_disk(isolated_oidc_settings_config).get("oidc", "role_map") == ""
+
+    def test_subnet_map_persists_to_disk(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, subnet_map="net-iot:30,31;net-all:*", subnet_map_default="all")
+        assert r.status_code == 200
+        on_disk = _on_disk(isolated_oidc_settings_config)
+        assert on_disk.get("oidc", "subnet_map") == "net-iot:30,31;net-all:*"
+        assert on_disk.get("oidc", "subnet_map_default") == "all"
+        assert extensions.OIDC_SUBNET_MAP == "net-iot:30,31;net-all:*"
+
+    def test_subnet_map_field_renders_on_get(self, logged_in_client, isolated_oidc_settings_config):
+        self._post(logged_in_client, subnet_map="net-iot:30,31")
+        r = logged_in_client.get("/settings/security")
+        assert r.status_code == 200
+        assert b"net-iot:30,31" in r.data
+        assert b"oidc-subnet-map" in r.data
+
+    def test_malformed_subnet_map_is_refused(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, subnet_map="garbage-with-no-colon")
+        assert r.status_code == 200
+        assert b"could not be parsed" in r.data.lower()
+        assert not _on_disk(isolated_oidc_settings_config).has_section("oidc")
+
+    def test_blank_subnet_map_is_allowed(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, subnet_map="")
+        assert r.status_code == 200
+        assert _on_disk(isolated_oidc_settings_config).get("oidc", "subnet_map") == ""
+
+    def test_invalid_subnet_map_default_is_refused(self, logged_in_client, isolated_oidc_settings_config):
+        r = self._post(logged_in_client, subnet_map_default="bogus")
+        assert r.status_code == 200
+        assert b"none or all" in r.data.lower()
+        assert not _on_disk(isolated_oidc_settings_config).has_section("oidc")
 
     def test_requires_superadmin(self, client, db, isolated_oidc_settings_config):
         from tests.conftest import restricted_client as _restricted_client

@@ -2,6 +2,36 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.46.0-beta.1] - 2026-09-18
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.45.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q47, OIDC group → subnet scope mapping: an SSO login can now be scoped
+to specific subnets by IdP group, the same way role mapping already
+scopes it to a role. Settings → Access & Security → Single Sign-On
+gets a new **Subnet Mapping** field —
+`group:subnet-id[,subnet-id...]|*;...`, read from the same claim Role
+Mapping already reads — applied on every OIDC login, after role
+mapping: a user's allowed subnets become the union of every group that
+matches, a matching `*` group wins outright (unrestricted), and a
+login whose groups match nothing in a configured map gets no subnet
+access at all by default (deliberately fail closed, since the operator
+chose to start scoping access) unless **When no group matches** is set
+to leave it unrestricted instead. A live preview under the field shows
+what the current text resolves to against the real subnet list as you
+type, entirely client-side, no round trip. Leaving the field blank —
+the default — disables the feature outright: an existing SSO
+deployment's access does not narrow the moment it upgrades to a
+version carrying this field. Local accounts are untouched either way;
+the whole feature lives behind the OIDC login callback, which a local
+`/login` never reaches.
+
+Docs: the admin guide's Single Sign-On section gets a new Subnet
+Mapping subsection, and the "Not covered" list drops the line that
+used to say this wasn't possible yet.
+
 ## [5.45.0-beta.1] - 2026-09-16
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

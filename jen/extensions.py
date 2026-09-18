@@ -160,6 +160,18 @@ OIDC_AUTO_CREATE: bool = True
 OIDC_BUTTON_LABEL: str = "Sign in with SSO"
 OIDC_REDIRECT_URI: str = ""  # blank = derive from url_for(..., _external=True)
 OIDC_LOCAL_LOGIN: bool = True  # false hides the password form (escape hatch: /login?local=1)
+# v5.46.0 (Q47) — "<group>:<subnet id>[,<subnet id>...]|*;..." — see
+# oidc.parse_subnet_map(). Blank (the default) means this feature is
+# off entirely: every OIDC login keeps all_subnets true, unchanged from
+# pre-Q47 behavior — this must never silently narrow an existing SSO
+# deployment's access the first time this code runs on it.
+OIDC_SUBNET_MAP: str = ""
+# What a login whose groups match none of OIDC_SUBNET_MAP gets: "none"
+# (default) means all_subnets false with an empty set — the user sees
+# nothing, deliberately, since the operator chose to start scoping
+# access at all; "all" restores the pre-Q47 unrestricted behavior for
+# that specific case.
+OIDC_SUBNET_MAP_DEFAULT: str = "none"
 
 # ── Runtime state ────────────────────────────────────────────────────────────
 KEA_SERVERS: list = []  # list of server dicts loaded from config

@@ -16,6 +16,7 @@ misconfigured or unreachable issuer never blocks app startup.
 
 from __future__ import annotations
 
+import json
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -79,21 +80,25 @@ def parse_role_map(raw: str) -> dict[str, list[str]]:
     return out
 
 
+def _groups_from_claims(claims: dict, claim_name: str) -> set[str]:
+    """role_claim/subnet grouping both read the same claim shape: a list
+    claim, or a space-separated string claim (both are real-world IdP
+    shapes)."""
+    raw = claims.get(claim_name)
+    if raw is None:
+        return set()
+    if isinstance(raw, str):
+        return set(raw.split())
+    return {str(g) for g in raw}
+
+
 def map_role(claims: dict) -> str | None:
     """Highest of superadmin > admin > viewer among the groups this
-    token's role_claim actually carries. role_claim may be a list claim
-    or a space-separated string claim (both are real-world IdP shapes).
-    Falls back to OIDC_DEFAULT_ROLE when nothing matches; "none" (or an
-    unmapped, non-matching claim with default_role="none") returns None,
-    which the caller treats as "deny this login"."""
-    raw = claims.get(extensions.OIDC_ROLE_CLAIM)
-    if raw is None:
-        groups: list[str] = []
-    elif isinstance(raw, str):
-        groups = raw.split()
-    else:
-        groups = [str(g) for g in raw]
-    group_set = set(groups)
+    token's role_claim actually carries. Falls back to OIDC_DEFAULT_ROLE
+    when nothing matches; "none" (or an unmapped, non-matching claim
+    with default_role="none") returns None, which the caller treats as
+    "deny this login"."""
+    group_set = _groups_from_claims(claims, extensions.OIDC_ROLE_CLAIM)
 
     role_map = parse_role_map(extensions.OIDC_ROLE_MAP)
     for role in _ROLES_BY_RANK:
@@ -102,6 +107,72 @@ def map_role(claims: dict) -> str | None:
 
     default = extensions.OIDC_DEFAULT_ROLE
     return None if default == "none" else default
+
+
+def parse_subnet_map(raw: str) -> dict[str, set[int] | str]:
+    """`"group1:1,2;group2:*"` -> `{"group1": {1, 2}, "group2": "*"}`.
+    Same forgiving-on-typo behavior as parse_role_map(): a malformed
+    segment (no ':', an empty group name, or a value list with no valid
+    subnet id and not exactly '*') is skipped rather than raised — a
+    config typo must not turn into a 500 on every login."""
+    out: dict[str, set[int] | str] = {}
+    for segment in (raw or "").split(";"):
+        segment = segment.strip()
+        if not segment or ":" not in segment:
+            continue
+        group, _, values_raw = segment.partition(":")
+        group = group.strip()
+        values_raw = values_raw.strip()
+        if not group:
+            continue
+        if values_raw == "*":
+            out[group] = "*"
+            continue
+        ids = {int(v) for v in values_raw.split(",") if v.strip().isdigit()}
+        if ids:
+            out[group] = ids
+    return out
+
+
+def map_subnet_access(claims: dict) -> str | None:
+    """The `users.subnet_access` value (None = all subnets, else a JSON
+    array string — same convention as jen/routes/users.py's
+    set_user_subnets()) this login's groups resolve to under
+    `[oidc] subnet_map`, applied on every OIDC login AFTER map_role().
+
+    No subnet_map configured at all -> None (unrestricted), unchanged
+    from pre-Q47 behavior — this feature is opt-in and must never
+    silently narrow an existing SSO deployment's access. Once a map IS
+    configured: any matching group mapped to '*' wins outright (None,
+    unrestricted); otherwise the allowed set is the union over every
+    matching group; a login whose groups match nothing in the map gets
+    an empty set (all_subnets False, sees nothing) unless
+    `[oidc] subnet_map_default = all` says to fall back to
+    unrestricted for that case specifically."""
+    raw = extensions.OIDC_SUBNET_MAP
+    if not (raw or "").strip():
+        return None
+
+    subnet_map = parse_subnet_map(raw)
+    groups = _groups_from_claims(claims, extensions.OIDC_ROLE_CLAIM)
+
+    if any(subnet_map.get(g) == "*" for g in groups):
+        return None
+
+    union: set[int] = set()
+    matched = False
+    for g in groups:
+        value = subnet_map.get(g)
+        if value is None:
+            continue
+        matched = True
+        if isinstance(value, set):
+            union |= value
+
+    if not matched:
+        return None if extensions.OIDC_SUBNET_MAP_DEFAULT == "all" else json.dumps([])
+
+    return json.dumps(sorted(union))
 
 
 def external_id_for(user_id: int) -> str | None:
@@ -174,6 +245,11 @@ def find_or_create_user(claims: dict) -> tuple[dict | None, str]:
                 cur.execute("UPDATE users SET role=%s WHERE id=%s", (role, row["id"]))
                 audit("oidc_role_change", row["username"], f"{row['role']} -> {role}")
                 row["role"] = role
+            subnet_access = map_subnet_access(claims)
+            if subnet_access != row.get("subnet_access"):
+                cur.execute("UPDATE users SET subnet_access=%s WHERE id=%s", (subnet_access, row["id"]))
+                audit("OIDC_SUBNET_SCOPE", row["username"], f"{row.get('subnet_access')} -> {subnet_access}")
+                row["subnet_access"] = subnet_access
             return row, "ok"
 
         if not extensions.OIDC_AUTO_CREATE:
@@ -193,13 +269,14 @@ def find_or_create_user(claims: dict) -> tuple[dict | None, str]:
             return None, "username_collision"
 
         random_password = hash_password(secrets.token_urlsafe(32))
+        subnet_access = map_subnet_access(claims)
         cur.execute(
-            "INSERT INTO users (username, password, role, auth_provider, external_id, must_change_password) "
-            "VALUES (%s, %s, %s, 'oidc', %s, 0)",
-            (username, random_password, role, sub),
+            "INSERT INTO users (username, password, role, auth_provider, external_id, must_change_password, "
+            "subnet_access) VALUES (%s, %s, %s, 'oidc', %s, 0, %s)",
+            (username, random_password, role, sub, subnet_access),
         )
         new_id = cur.lastrowid
-        audit("oidc_create", username, f"role={role} sub={sub}")
+        audit("oidc_create", username, f"role={role} sub={sub} subnet_access={subnet_access or 'all'}")
 
         cur.execute(
             "SELECT id, username, role, session_timeout, subnet_access, "

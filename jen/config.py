@@ -224,6 +224,8 @@ class AppConfig:
         extensions.OIDC_BUTTON_LABEL = cfg.get("oidc", "button_label", fallback="Sign in with SSO")
         extensions.OIDC_REDIRECT_URI = cfg.get("oidc", "redirect_uri", fallback="").strip()
         extensions.OIDC_LOCAL_LOGIN = cfg.getboolean("oidc", "local_login", fallback=True)
+        extensions.OIDC_SUBNET_MAP = cfg.get("oidc", "subnet_map", fallback="")
+        extensions.OIDC_SUBNET_MAP_DEFAULT = cfg.get("oidc", "subnet_map_default", fallback="none").strip().lower()
 
         extensions.KEA_SERVERS = self.derive_kea_servers(cfg)
         extensions.SUBNET_MAP = self.derive_subnet_map(cfg)

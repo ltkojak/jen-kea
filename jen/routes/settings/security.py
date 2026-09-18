@@ -230,6 +230,8 @@ def save_oidc():
     button_label = request.form.get("button_label", "").strip() or "Sign in with SSO"
     redirect_uri = request.form.get("redirect_uri", "").strip()
     local_login = request.form.get("local_login", "") == "1"
+    subnet_map = request.form.get("subnet_map", "").strip()
+    subnet_map_default = request.form.get("subnet_map_default", "none").strip().lower()
 
     if enabled:
         if not __auth.valid_oidc_issuer(issuer):
@@ -248,6 +250,15 @@ def save_oidc():
     if role_map and not __oidc.parse_role_map(role_map):
         flash("Role mapping could not be parsed — check the format (role=value;role=value,value).", "error")
         return redirect(url_for("settings.settings_security"))
+    if subnet_map_default not in ("none", "all"):
+        flash("Subnet mapping default must be none or all.", "error")
+        return redirect(url_for("settings.settings_security"))
+    if subnet_map and not __oidc.parse_subnet_map(subnet_map):
+        flash(
+            "Subnet mapping could not be parsed — check the format (group:id,id;group:*).",
+            "error",
+        )
+        return redirect(url_for("settings.settings_security"))
 
     items = [
         ("oidc", "enabled", "true" if enabled else "false"),
@@ -262,6 +273,8 @@ def save_oidc():
         ("oidc", "button_label", button_label),
         ("oidc", "redirect_uri", redirect_uri),
         ("oidc", "local_login", "true" if local_login else "false"),
+        ("oidc", "subnet_map", subnet_map),
+        ("oidc", "subnet_map_default", subnet_map_default),
     ]
     if client_secret:
         items.append(("oidc", "client_secret", client_secret))

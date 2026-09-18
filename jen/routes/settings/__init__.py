@@ -244,6 +244,8 @@ def settings_security():
         "button_label": extensions.OIDC_BUTTON_LABEL,
         "redirect_uri": extensions.OIDC_REDIRECT_URI,
         "local_login": extensions.OIDC_LOCAL_LOGIN,
+        "subnet_map": extensions.OIDC_SUBNET_MAP,
+        "subnet_map_default": extensions.OIDC_SUBNET_MAP_DEFAULT,
     }
     return render_template(
         "settings_security.html",
@@ -257,6 +259,7 @@ def settings_security():
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,
         oidc=oidc_settings,
+        subnet_map=extensions.SUBNET_MAP,
     )
 
 

@@ -1861,8 +1861,36 @@ like an auto-created account.
 
 On every subsequent login, an OIDC user's role is recomputed from
 their current groups and overwritten if it changed — Jen doesn't trust
-a role assigned to them locally to still be correct. Subnet access
-stays Jen-managed either way; nothing about SSO touches it.
+a role assigned to them locally to still be correct. Subnet access is
+similarly recomputed on every login when **Subnet Mapping** (below) is
+configured; when it isn't, subnet access stays whatever it was set to
+locally (by default, unrestricted).
+
+### Subnet Mapping (v5.46.0)
+
+By default, SSO logins are subnet-unrestricted — the same as before
+this setting existed. To scope IdP groups to specific subnets, fill in
+**Subnet Mapping** on the same Single Sign-On card:
+`group:subnet-id[,subnet-id...]|*;...`, for example
+`network-iot-admins:30,31;network-all:*`. The left side is a group/claim
+value from the same claim **Role Claim** already reads; the right side
+is either a comma-separated list of subnet IDs (see each subnet's
+numeric ID on the Subnets page) or a bare `*` for every subnet. A field
+below it previews what the current text would resolve to against your
+actual subnets as you type — no round trip, and nothing is saved until
+you click Save.
+
+This is applied on every login, after role mapping: a user whose groups
+match one or more mapped entries gets the union of those subnets (or
+unrestricted access outright if any matching group is `*`). A user
+whose groups match **nothing** in the mapping gets **no subnet access
+at all** by default — set **When no group matches the Subnet Mapping**
+to **Leave unrestricted** if you'd rather that case fall back to full
+access instead of a deliberately locked-out account. Subnet Mapping
+never affects a local account, only SSO logins, and leaving the field
+blank (the default) disables the whole feature — no existing SSO
+deployment's access narrows the moment this box is upgraded to a
+version that has this field.
 
 ### What's different for an SSO-managed account
 
@@ -1914,7 +1942,5 @@ back in.
 
 ### Not covered
 
-SAML and LDAP providers, SCIM provisioning, RP-initiated logout, API
-keys via OIDC, and mapping IdP groups to per-subnet access restrictions
-(the role mapping only ever produces superadmin/admin/viewer) are all
-out of scope for this release.
+SAML and LDAP providers, SCIM provisioning, RP-initiated logout, and
+API keys via OIDC are all out of scope for this release.
