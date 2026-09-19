@@ -180,6 +180,8 @@ SUBNET6_MAP: dict = {}  # {subnet_id: {"name": str, "cidr": str}} — v5.0
 # Kea's own v6 subnet-ID numbering space,
 # does NOT overlap SUBNET_MAP's v4 IDs.
 DDNS_LOG: str = "/var/log/kea/kea-ddns.log"
+# v5.48.0 (Q49) — kea-dhcp4's own log, tailed by the client trace page
+DHCP4_LOG: str = "/var/log/kea/kea-dhcp4.log"
 
 # ── Active server cache (TTL 10s) ────────────────────────────────────────────
 _active_server_cache: dict = {"server": None, "ts": 0}

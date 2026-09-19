@@ -39,6 +39,7 @@
                 <a href="/reservations/edit/{{ h.host_id }}" class="action-menu-item">{{ icon_edit() }}Edit reservation</a>
                 <a href="/tools/explain?mac={{ h.mac }}&subnet={{ h.subnet_id }}&hostname={{ h.hostname|urlencode }}" class="action-menu-item">🧭 Why this address?</a>
                 <a href="/timeline?mac={{ h.mac }}" class="action-menu-item">🕐 Timeline</a>
+                {% if current_user.role in ('superadmin','admin') %}<a href="/tools/trace?mac={{ h.mac }}" class="action-menu-item">📜 Trace in Kea log</a>{% endif %}
                 <div class="action-menu-divider"></div>
                 <button type="button" class="action-menu-item danger"
                         hx-post="/reservations/delete/{{ h.host_id }}"

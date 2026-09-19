@@ -2,6 +2,41 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.48.0-beta.1] - 2026-09-19
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.47.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q49, client trace from Kea's own log: Explain predicts what Kea should
+do for a client; the new **Trace** page (`/tools/trace`, linked from
+Explain and from the action menu of any lease or reservation row)
+shows what it actually did. It reads the tail of a Kea server's
+kea-dhcp4 log through the helper's existing `tail-log` op — no packet
+capture, no new privilege, nothing installed on the Kea host — keeps
+the lines that name the client's MAC, translates each Kea message id
+into plain English (offered, allocated, reused, released, declined,
+NAK reasons, a failed DNS update request) and groups them into
+exchanges where the lines are less than two seconds apart, with
+Explain's prediction for the same client above it for comparison.
+"Watch for 60 s" re-reads every five seconds and stops by itself. The
+message ids were checked against ISC's own dhcp4_messages.mes and
+dhcp4_srv.cc at Kea 3.0.0 rather than written from memory, and doing
+that showed a few names the plan had assumed do not exist (there is no
+DHCP4_NAK, no DHCP4_LEASE_ADVERT, no DHCP4_NO_SUBNET_*, and no log line
+at all when a DDNS update is merely queued — only when sending one
+fails), and that DHCP4_PACKET_RECEIVED is an INFO line, not DEBUG; the
+page states honestly which lines a server at its default INFO level
+can and cannot show, since DISCOVER/REQUEST processing, subnet
+selection and most NAK reasons are DEBUG-only. The page scans at most
+the helper's own 1000-line tail limit. The log can hold other clients'
+data, so the page is admin-only, a subnet-restricted admin can only
+trace a client whose current lease or reservation is in a subnet they
+can access, and it is never part of the support bundle. New optional
+`[kea] dhcp4_log_path` (default `/var/log/kea/kea-dhcp4.log`).
+
+Docs: user guide "Trace a client"; admin guide config table.
+
 ## [5.47.0-beta.1] - 2026-09-18
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

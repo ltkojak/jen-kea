@@ -172,6 +172,7 @@ class AppConfig:
         extensions.SSH_KEY_PATH = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
+        extensions.DHCP4_LOG = cfg.get("kea", "dhcp4_log_path", fallback="/var/log/kea/kea-dhcp4.log").strip()
 
         # v5.0 Phase 1 — IPv6. Every [kea6]/[kea6_db] value falls back to its
         # v4 counterpart when absent, matching the common same-CA/same-DB Kea

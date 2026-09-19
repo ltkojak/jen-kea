@@ -134,6 +134,16 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 Kea has no dry-run, so this is a reconstruction from the configuration Jen holds; it cannot see which interface a request arrived on. Only subnets you can access are shown.
 
+## Trace a client (v5.48.0)
+
+**Network → Explain → "What Kea logged"**, or *Trace in Kea log* in the action menu of any lease or reservation row (admins only). Explain predicts what Kea *should* do; Trace shows what it *did*: Jen reads the tail of the Kea server's `kea-dhcp4` log (through the same helper `tail-log` op the DDNS log tab uses — no packet capture, nothing installed), keeps the lines that name the client's MAC, and shows them in plain English grouped into exchanges — DISCOVER → offer → REQUEST → ACK, a NAK, a release or a decline. Lines are grouped when they are less than two seconds apart. Above the timeline, Explain's answer for the same client ("Jen expects subnet 3, 10.0.1.55") sits next to it so the two can be compared.
+
+**Watch for 60 s** re-reads the log every 5 seconds, then stops on its own.
+
+What it can see depends on the server's log level. At Kea's default (INFO) the log shows packets received and sent, offers, allocations, reuse, releases, declines and errors — but not DISCOVER/REQUEST processing, subnet selection, or most of the reasons for a NAK, which Kea only logs at DEBUG. The page says which case it found; see the [Kea logging section](https://kea.readthedocs.io/en/latest/arm/logging.html) to raise the level. Kea logs no line when it queues a DDNS update — only when sending one fails — so a healthy DNS update leaves nothing to show here.
+
+Only the last 1000 lines are scanned (the helper's own limit), so on a busy server an older exchange may already be out of the window. If your Kea writes its log somewhere other than `/var/log/kea/kea-dhcp4.log`, set `[kea] dhcp4_log_path`. The log can contain other clients' data, so the page is admin-only, and a subnet-restricted admin can only trace a client whose current lease or reservation is in a subnet they can access. It is never part of the support bundle.
+
 ## Timeline (v5.42.0)
 
 **Network → Timeline**, or *Timeline* in the action menu of any lease, reservation or device inventory row — also linked from an Explain result ("What happened to this client?"). Give it a MAC or an IP and it shows everything Jen has recorded about that one client, newest first:

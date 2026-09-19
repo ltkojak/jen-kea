@@ -130,6 +130,7 @@ All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root
 | `api_tls_verify` | Optional, default `true`. Set `false` to skip TLS verification for an `https://` `api_url` (only sensible with a self-signed cert and no `api_ca`). | `true` |
 | `api_client_cert` | Optional. Client-certificate PEM on the Jen host. Kea's per-daemon `https` socket defaults `cert-required` to `true` (mutual TLS), so without this an `https://` endpoint refuses the handshake. Set with `api_client_key` (both or neither). **Validated on save** — the pair must load and match. | `/etc/jen/ssl/jen-kea-client.pem` |
 | `api_client_key` | Optional. The private key for `api_client_cert`. Must be readable by `www-data` (`root:www-data` `640` under `/etc/jen/ssl/`) — Jen checks that at save time, as the service user. | `/etc/jen/ssl/jen-kea-client.key` |
+| `dhcp4_log_path` | Optional (v5.48.0). Where kea-dhcp4 writes its log on the Kea server, read by the client trace page through the helper's `tail-log` op — must be an absolute `*.log` path under `/var/log`. | `/var/log/kea/kea-dhcp4.log` |
 
 All of these are optional and backward-compatible — an existing
 `jen.config` with none of them behaves exactly as it did before v5.10.0.

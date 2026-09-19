@@ -1,0 +1,43 @@
+<div id="trace-results"{% if watching %} hx-get="/tools/trace?mac={{ mac|urlencode }}&server={{ server_id }}&lines={{ lines }}&watch=1&t={{ next_t }}" hx-trigger="every {{ watch_step }}s" hx-target="#trace-results" hx-swap="outerHTML"{% endif %}>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% elif groups is not none %}
+<div class="form-hint" style="margin-bottom:12px;">{{ note }}
+    See the <a href="https://kea.readthedocs.io/en/latest/arm/logging.html" target="_blank" rel="noopener">Kea logging section</a> to raise the level.
+    {% if watching %}<strong>Watching</strong> — refreshing every {{ watch_step }} s, stops after 60 s.{% endif %}
+</div>
+
+{% if explained %}
+<div class="card" style="border-color:rgba(0,180,216,0.3);">
+    <div class="card-header"><span class="card-title">🧭 What Jen expects</span>
+        <a href="/tools/explain?mac={{ mac }}&subnet={{ subnet_id }}" style="font-size:12px;">full explanation</a></div>
+    <div style="display:flex;gap:28px;flex-wrap:wrap;">
+        <div><div class="stat-label">Subnet</div><div class="mono">{{ explained.subnet.id }} · {{ explained.subnet.cidr }}</div></div>
+        <div><div class="stat-label">Address</div><div class="mono">{{ explained.answer.ip or 'no address' }}</div><div class="form-hint">{{ explained.answer.how }}</div></div>
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">📜 What Kea logged — {{ total_events }} line{{ '' if total_events == 1 else 's' }}</span></div>
+    {% if not groups %}
+    <div style="text-align:center;padding:24px;color:var(--text-muted);">No lines in the scanned window name {{ mac }}. The client may not have talked to this server recently, or the lines are older than the window.</div>
+    {% endif %}
+    {% for g in groups %}
+    <div style="border-top:1px solid var(--border);padding:12px 0;">
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
+            <span class="badge" style="{% if g.outcome == 'nak' %}background:#2a1a1a;color:var(--danger);{% elif g.outcome in ('ack','offer') %}background:#1a2a1a;color:var(--success);{% else %}background:var(--surface2);color:var(--text-muted);{% endif %}">{{ g.outcome }}</span>
+            <span class="mono" style="font-size:12px;">{{ g.start.strftime('%Y-%m-%d %H:%M:%S') if g.start else '?' }}</span>
+            {% if g.ip %}<span class="mono" style="font-size:12px;">{{ g.ip }}</span>{% endif %}
+        </div>
+        {% for e in g.events %}
+        <div style="font-size:13px;padding-left:12px;" title="{{ e.raw }}">
+            <span class="mono" style="color:var(--text-muted);font-size:11px;">{{ e.ts.strftime('%H:%M:%S.%f')[:-3] if e.ts else '' }} {{ e.level }}</span>
+            {{ e.summary }} <span class="mono" style="color:var(--text-muted);font-size:11px;">{{ e.id }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+</div>

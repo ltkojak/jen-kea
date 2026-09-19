@@ -63,7 +63,8 @@
 <div class="card" style="border-color:rgba(0,180,216,0.3);">
     <div class="card-header"><span class="card-title">Answer</span>
         <span style="font-size:12px;color:var(--text-muted);">subnet {{ result.subnet.id }} · {{ result.subnet.cidr }}{% if result.subnet.shared_network %} · shared network {{ result.subnet.shared_network }}{% endif %}{% if chosen_how %} · {{ chosen_how }}{% endif %}
-            {% if client.mac %} · <a href="/timeline?mac={{ client.mac }}">🕐 What happened to this client?</a>{% endif %}</span>
+            {% if client.mac %} · <a href="/timeline?mac={{ client.mac }}">🕐 What happened to this client?</a>{% endif %}
+            {% if client.mac and current_user.role in ('superadmin','admin') %} · <a href="/tools/trace?mac={{ client.mac }}">📜 What Kea logged</a>{% endif %}</span>
     </div>
     <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-end;">
         <div>
