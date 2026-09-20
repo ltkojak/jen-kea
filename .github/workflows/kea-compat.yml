@@ -48,7 +48,7 @@ jobs:
 
     services:
       database:
-        image: mariadb:10.11
+        image: mariadb:11.4
         env:
           MYSQL_ROOT_PASSWORD: ci_root_pw
           MYSQL_DATABASE: kea
@@ -81,6 +81,11 @@ jobs:
             exit 1
           fi
 
+      # MariaDB 11.4 because Kea 3.2's bundled client refuses a server
+      # with no TLS at all ("SSL is required, but the server does not
+      # support it") and 11.4 is the first image that serves TLS with a
+      # self-generated cert out of the box — hence peer verification off
+      # on the daemon below (a throwaway loopback database).
       - name: Install the Kea MySQL schema
         # No kea-admin image is published, so borrow the daemon image
         # (it already has ISC's apk repo configured) and add kea-admin at
@@ -111,6 +116,7 @@ jobs:
           printf '%s' jen_api_pw > kea-conf/jen-api.pw
           chmod 644 kea-conf/jen-api.user kea-conf/jen-api.pw
           docker run -d --name kea --network host --tmpfs /var/run/kea \
+            -e MARIADB_TLS_DISABLE_PEER_VERIFICATION=1 \
             -v "$PWD/kea-conf:/etc/kea:ro" "$IMAGE"
           for i in $(seq 1 30); do
             if curl -sf -m 2 -H 'Content-Type: application/json' \
