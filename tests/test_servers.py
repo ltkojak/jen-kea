@@ -290,15 +290,15 @@ class TestPacketHealthOnServersPage:
         with db.cursor() as cur:
             cur.execute("DELETE FROM server_stats")
         db.commit()
-        self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0, "pkt4-queue-full": 1})
-        self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50, "pkt4-queue-full": 4})
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0, "pkt4-unknown-received": 1})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50, "pkt4-unknown-received": 4})
         r = logged_in_client.get("/servers")
         body = r.data.decode()
         assert "Fail" in body
-        # pkt4-queue-full isn't one of the named rate rows — it must still
-        # surface, in the "all counters" table, so a Kea 3.2 drop reason
-        # this Q's research didn't name doesn't get silently dropped.
-        assert "pkt4-queue-full" in body
+        # pkt4-unknown-received isn't one of the named rate rows — it must
+        # still surface, in the "all counters" table, so a counter no one
+        # has named yet doesn't get silently dropped.
+        assert "pkt4-unknown-received" in body
 
 
 class TestPacketHealthForServer:
@@ -330,13 +330,36 @@ class TestPacketHealthForServer:
         with db.cursor() as cur:
             cur.execute("DELETE FROM server_stats")
         db.commit()
-        self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90, "pkt4-duplicate": 0})
-        self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180, "pkt4-duplicate": 3})
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90, "pkt4-unknown-received": 0})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180, "pkt4-unknown-received": 3})
 
         ph = _packet_health_for_server(1)
         assert ph is not None
         assert ph["status"] == "ok"
         named_labels = {n["label"] for n in ph["named"]}
         assert {"Received", "Acked", "Offered", "Naked", "Dropped", "Parse failed", "Allocation failed"} <= named_labels
-        assert ("pkt4-duplicate", 3) in ph["other_counters"]
+        assert ("pkt4-unknown-received", 3) in ph["other_counters"]
         assert len(ph["sparkline"]) == 1
+
+    def test_kea_3_2_drop_reasons_are_named_only_when_reported(self, db):
+        """v5.49.0-beta.3 (Q52) - the names are the ones read from the
+        kea-compat run's 3.2.0 artifact; a server that doesn't report them
+        (3.0) gets no row of zeros."""
+        from jen.routes.servers import _packet_health_for_server
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 30, {"pkt4-received": 100, "pkt4-duplicate": 0})
+        self._insert(db, 0, {"pkt4-received": 200, "pkt4-duplicate": 3})
+        ph = _packet_health_for_server(1)
+        assert {"label": "Duplicate packet", "key": "pkt4-duplicate", "total": 3} in ph["named"]
+        assert ("pkt4-duplicate", 3) not in ph["other_counters"]
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM server_stats")
+        db.commit()
+        self._insert(db, 30, {"pkt4-received": 100})
+        self._insert(db, 0, {"pkt4-received": 200})
+        ph = _packet_health_for_server(1)
+        assert "Duplicate packet" not in {n["label"] for n in ph["named"]}
