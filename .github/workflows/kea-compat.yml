@@ -111,7 +111,7 @@ jobs:
             -v "$PWD/kea-conf/kea-dhcp4.conf:/etc/kea/kea-dhcp4.conf:ro" "$IMAGE"
           for i in $(seq 1 30); do
             if curl -sf -m 2 -H 'Content-Type: application/json' \
-                 -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
+                 -u jen:jen_api_pw -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
               echo "kea-dhcp4 answered after ${i}s"; exit 0
             fi
             sleep 1
@@ -123,6 +123,8 @@ jobs:
       - name: Run the compatibility suite
         env:
           KEA_COMPAT_URL: http://127.0.0.1:8004/
+          KEA_COMPAT_USER: jen
+          KEA_COMPAT_PASS: jen_api_pw
           KEA_COMPAT_VERSION: ${{ matrix.kea }}
           KEA_COMPAT_RESULTS: ${{ github.workspace }}/results/${{ matrix.kea }}.json
           KEA_COMPAT_PKT4_OUT: ${{ github.workspace }}/results/pkt4-${{ matrix.kea }}.json

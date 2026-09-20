@@ -17,6 +17,8 @@ import json
 import os
 
 HOOKS_DIR = "/usr/lib/kea/hooks"
+API_USER = "jen"
+API_PASS = "jen_api_pw"
 
 
 def build(db_host="127.0.0.1", db_name="kea", db_user="kea", db_pass="kea_pw", http_port=8004) -> dict:
@@ -33,11 +35,25 @@ def build(db_host="127.0.0.1", db_name="kea", db_user="kea", db_pass="kea_pw", h
             },
             "control-sockets": [
                 {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl.sock"},
-                {"socket-type": "http", "socket-address": "127.0.0.1", "socket-port": http_port},
+                {
+                    "socket-type": "http",
+                    "socket-address": "127.0.0.1",
+                    "socket-port": http_port,
+                    # Kea 3.2+ refuses an http control socket with neither
+                    # TLS nor authentication ("Unsecured HTTP control channel").
+                    "authentication": {
+                        "type": "basic",
+                        "realm": "kea-compat",
+                        "clients": [{"user": API_USER, "password": API_PASS}],
+                    },
+                },
             ],
             "lease-database": dict(backend),
             "hosts-database": dict(backend),
             "hooks-libraries": [
+                # Kea 3.0+ ships its database backends as hooks: without
+                # libdhcp_mysql the daemon has no "mysql" lease/host type.
+                {"library": f"{HOOKS_DIR}/libdhcp_mysql.so"},
                 {"library": f"{HOOKS_DIR}/libdhcp_lease_cmds.so"},
                 {"library": f"{HOOKS_DIR}/libdhcp_host_cmds.so"},
             ],

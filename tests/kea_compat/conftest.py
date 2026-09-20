@@ -48,8 +48,8 @@ def direct_mode():
     saved = {n: getattr(extensions, n) for n in names}
     extensions.KEA_CONNECTION_MODE = "direct"
     extensions.KEA_API_URL = KEA_URL
-    extensions.KEA_API_USER = ""
-    extensions.KEA_API_PASS = ""
+    extensions.KEA_API_USER = os.environ.get("KEA_COMPAT_USER", "")
+    extensions.KEA_API_PASS = os.environ.get("KEA_COMPAT_PASS", "")
     yield
     for n, v in saved.items():
         setattr(extensions, n, v)
