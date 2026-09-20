@@ -143,6 +143,23 @@ API key) sees an object only when every subnet it belongs to is one they can
 access, and rows that carry no subnet at all (audit and alert matches) are for
 unrestricted callers only.
 
+**The event stream and Timeline (v5.42.0).** `jen/services/events.py` writes
+one row per notable happening to the `events` table and hands the same event
+to in-process subscribers (`jen.plugin_api.subscribe`). It is best-effort
+telemetry: a failed row write or a raising subscriber is logged and never
+propagates, and subscribers run on one shared bounded worker (v5.49.0-beta.2),
+so a plugin can neither veto nor delay core behaviour. The Timeline page
+(`jen/routes/timeline.py`) gates the whole response on the client's subnet and
+then each row on its own `subnet_id`; rows with no subnet at all — audit and
+alert matches that merely mention a MAC or IP — are hidden from restricted
+users, because their text can name a subnet the user cannot see.
+
+**Doctor and Trace are read-only views over data Jen already holds.** Doctor
+(`jen/services/config_doctor.py`) is pure analysis of the config Jen already
+reads from Kea. Trace (`jen/routes/trace.py`) reads the tail of the Kea log
+through the existing helper `tail-log` op — deliberately not a packet capture,
+so §3.3's narrow helper surface is unchanged.
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather

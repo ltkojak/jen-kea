@@ -382,6 +382,10 @@ def _reconcile_rows():
     rows = []
     expired_names = set()
     with __db.kea_db() as db, db.cursor() as cur:
+        # bandit B608 (reviewed, baselined): the f-string interpolates only a
+        # WHERE clause joined from fixed literals and add_subnet_restriction's
+        # fixed fragments — the same pattern every subnet-scoped query uses.
+        # Every value is a bound parameter.
         where, params = ["dhcp4_subnet_id > 0", "hostname != ''"], []
         where, params = _add_subnet_restriction(where, params, "hosts", "dhcp4_subnet_id")
         cur.execute(
@@ -391,6 +395,7 @@ def _reconcile_rows():
         for row in cur.fetchall():
             rows.append({"name": row["hostname"], "ip": row["ip"], "source": "reservation"})
 
+        # (same reviewed B608 pattern as the reservations query above)
         where, params = ["l.state=0", "l.hostname != ''"], []
         where, params = _add_subnet_restriction(where, params, "l", "subnet_id")
         cur.execute(

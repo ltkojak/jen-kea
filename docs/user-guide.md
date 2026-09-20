@@ -121,6 +121,10 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 ---
 
+## Getting started (v5.39.0)
+
+**Getting started** (admins; the nav pill, or `/getting-started`) is the first-hour checklist: each row is one thing worth having in place — SSH and the Kea host helper current, HTTPS, MFA on your account, an alert channel, a backup, a second server for HA — with a **Fix** link on any that isn't. The pill in the top bar shows `done/total` until everything is green. A superadmin can hide the pill for the whole install with **Dismiss the nav reminder**; the page itself stays available.
+
 ## Why did this client get this? (v5.35.0)
 
 **Network → Explain**, or *Why this address?* in the action menu of any lease or reservation row. Give it a MAC (and, if you have them, the vendor class, user class, hostname, client id, relay ids or giaddr the client sends) and Jen walks the decision Kea makes, step by step:
@@ -212,6 +216,18 @@ exhaustion forecast** check on the Health page and the optional
 ---
 
 ## DDNS Status
+
+### Reconcile (v5.47.0)
+
+**Network → DDNS → Reconcile** checks every reservation and active lease that carries a hostname against DNS — does the name resolve to that IP, and does the IP resolve back to the name — and gives each row a verdict (`ok`, `missing-forward`, `wrong-forward`, `missing-ptr`, `wrong-ptr`, `stale-ptr`, `multiple-a`, `lookup-failed`). It is read-only and subnet-restricted; nothing is written to DNS or Kea. `lookup-failed` means the resolver could not answer — it says nothing about the record. Filter by verdict or export CSV; the admin guide has the full table.
+
+## Configuration Doctor (v5.40.0)
+
+**Network → Doctor** (admins with access to all subnets) reads the live Kea config and lists contradictions, unused objects and risky settings, worst first, each with what to change. It only reads. The admin guide's "Configuration Doctor" section lists every check.
+
+## Recovery bundle (v5.44.0)
+
+A superadmin can download one encrypted **recovery bundle** from Settings → Databases: config, keys, content and the Jen database in a single file protected by a passphrase you choose. It is for rebuilding a lost Jen host — see "Recovery Bundle" in the admin guide for the restore steps.
 
 The DDNS Status page shows activity from the Technitium DNS update script that runs alongside Kea.
 

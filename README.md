@@ -93,6 +93,33 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
   option with its source and what it overrode. Says plainly what it
   can't evaluate instead of guessing (v5.35.0)
 
+### Diagnose and plan
+- **Getting started** — a first-hour checklist with a nav reminder until
+  it's done (v5.39.0)
+- **Explain** — why did this client get this address? Subnet, reservation,
+  classes, pools and options, with what each overrode (v5.35.0)
+- **Trace** — what Kea actually logged for one client, in plain English,
+  read through the existing helper — no packet capture (v5.48.0)
+- **Timeline** — everything recorded about one client: events, config
+  changes, alerts, lease and reservation (v5.42.0)
+- **Configuration Doctor** — contradictions, unused objects and risky
+  settings in the live Kea config (v5.40.0)
+- **DNS ↔ DHCP Reconcile** — checks every reservation and lease name
+  against forward and reverse DNS, read-only (v5.47.0)
+- **Exhaustion forecast** — which pools run out, and when, from lease
+  history (v5.36.0)
+- **Kea 3.2 readiness** — what to change before the Control Agent goes away
+  (v5.38.0)
+
+### Operate
+- **Planned maintenance** — a stepper for taking one HA server down and back
+  without a split-brain (v5.38.0)
+- **Packet health** — DHCP drops, parse failures and NAKs per server from
+  Kea's own counters, with the drop reasons Kea 3.2 adds (v5.41.0)
+- **Recovery bundle** — one encrypted file with config, keys, content and the
+  Jen database; `install.sh --restore` puts it back (v5.44.0)
+- **Grafana dashboard** and API health endpoints for monitoring (v5.43.0)
+
 ### Health Center
 - One page of read-only checks — server reachability, Kea version, HA
   state, hooks, clock sync, config drift, pool utilization, DDNS, TLS
@@ -294,6 +321,9 @@ opposite directions.
 If you run a fleet, want Prometheus/Grafana dashboards, or also manage
 BIND, use Stork. If you want a single-process console to *operate* a
 small number of Kea servers from any browser, that's what Jen is for.
+Where a fleet console shows what happened, Jen also answers why this client
+got this address, what is about to run out, what changed, and what to do
+before Kea 3.2.
 
 ---
 
