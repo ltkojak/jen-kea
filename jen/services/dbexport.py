@@ -63,10 +63,11 @@ JEN_TABLES = {
     "lease6_history": "Historical IPv6 lease count snapshots",
     "server_stats": "Packet health snapshots (statistic-get-all counters per server)",
     "events": "The event stream (lease/reservation/config/HA/drift/alert activity)",
-    # schema_migrations is deliberately NOT exported/imported — it's the
-    # migration runner's own bookkeeping for the DATABASE THIS BOX HAS,
-    # not portable data; a fresh install already creates its own correct
-    # row for every migration it actually ran.
+    # v5.49.0-beta.3 — schema_migrations travels with the data. Left out, a
+    # restored database looked brand new to the migration runner and every
+    # migration re-ran on the next boot (idempotent, but slow and noisy, and
+    # a restore onto a NEWER Jen applied later migrations twice over).
+    "schema_migrations": "Which schema migrations this database has applied (tiny)",
 }
 
 # ── Kea tables available for export ──────────────────────────────────────────

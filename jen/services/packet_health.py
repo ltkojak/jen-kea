@@ -24,6 +24,25 @@ DEFAULT_THRESHOLDS = {
 }
 
 
+# v5.49.0-beta.3 (Q52) — the pkt4-* counters Kea 3.2 adds beyond the five
+# classic ones. The NAMES below are the verified ones from the Q50
+# kea-compat run's `pkt4-3.2.0.json` artifact (real kea-dhcp4 3.2.0 and
+# 3.3.1 report identical lists; 3.0.3 reports none of these); the labels
+# are plain-English readings of the names, no more. They are shown next to
+# the classic counters and summarised in the Health detail — they do not
+# change the ok/warn/fail thresholds, which stay on the classic counters.
+DROP_REASON_LABELS = {
+    "pkt4-admin-filtered": "Filtered by an administrator rule",
+    "pkt4-duplicate": "Duplicate packet",
+    "pkt4-limit-exceeded": "Limit exceeded",
+    "pkt4-not-for-us": "Addressed to a different server",
+    "pkt4-processing-failed": "Processing failed",
+    "pkt4-queue-full": "Queue full",
+    "pkt4-rfc-violation": "RFC violation",
+    "pkt4-service-disabled": "Service disabled",
+}
+
+
 def deltas(rows):
     """rows: snapshots ordered oldest→newest, each
     `{"snapshot_time": datetime, "stats": {counter_name: int}}` (Kea's raw,
@@ -127,6 +146,9 @@ def assess(rates_result, thresholds=None):
             notes.append(f"{naks} NAK(s), 0 ACKs")
     if alloc_fail_total:
         notes.append(f"{alloc_fail_total} allocation failure(s)")
+    reasons = [f"{label} {totals[key]}" for key, label in DROP_REASON_LABELS.items() if totals.get(key, 0) > 0]
+    if reasons:
+        notes.append("Kea 3.2 drop reasons: " + ", ".join(reasons))
     if not notes:
         notes.append("no drops, parse failures, NAKs, or allocation failures")
 

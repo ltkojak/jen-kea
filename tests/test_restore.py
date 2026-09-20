@@ -358,7 +358,7 @@ class TestRunEndToEnd:
             )
         db.commit()
 
-        content, _fname = dbexport.export_jen(["settings"])
+        content, _fname = dbexport.export_jen(["settings", "schema_migrations"])
         jen_db_gz = gzip.compress(content)
 
         # The bundle's own jen.config must carry THIS test's real DB
@@ -414,6 +414,13 @@ class TestRunEndToEnd:
             cur.execute("SELECT setting_value FROM settings WHERE setting_key='_q45_restore_probe'")
             row = cur.fetchone()
         assert row is not None and row["setting_value"] == "restored-ok"
+
+        # v5.49.0-beta.3 — schema_migrations rode along: the restored DB
+        # reports every migration as applied and the runner has nothing to do.
+        from jen.models.migrations import MIGRATIONS, applied_versions, run_migrations
+
+        assert applied_versions() == {v for v, _d, _fn in MIGRATIONS}
+        assert run_migrations() == 0
 
     def test_wrong_passphrase_returns_nonzero_without_writing_anything(self, tmp_path):
         from jen.tools.restore import run

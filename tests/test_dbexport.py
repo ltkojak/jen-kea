@@ -138,10 +138,10 @@ class TestJenTablesCoverage:
     being left out of both the recovery bundle and the regular "export
     everything" Backups feature."""
 
-    # schema_migrations is deliberately excluded — see the comment above
-    # JEN_TABLES in dbexport.py: it's the migration runner's bookkeeping
-    # for THIS box's schema, not portable data.
-    DELIBERATELY_EXCLUDED = {"schema_migrations"}
+    # v5.49.0-beta.3: nothing is deliberately excluded any more —
+    # schema_migrations is exported so a restore doesn't re-run every
+    # migration.
+    DELIBERATELY_EXCLUDED: set[str] = set()
 
     def _migration_created_tables(self) -> set[str]:
         import pathlib

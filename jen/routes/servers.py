@@ -85,6 +85,13 @@ def _packet_health_for_server(server_id, window_minutes=60):
     named = [{"label": label, "key": key, "total": totals.get(key, 0)} for key, label in _PACKET_HEALTH_NAMED_KEYS]
     named.append({"label": "Allocation failed", "key": "v4-allocation-fail*", "total": alloc_fail_total})
     named_keys = {key for key, _label in _PACKET_HEALTH_NAMED_KEYS}
+    # Kea 3.2's extra drop reasons: shown only when the server actually
+    # reports the key (3.0 reports none of them — a row of zeros there
+    # would read as "checked and clean").
+    for key, label in __packet_health.DROP_REASON_LABELS.items():
+        if key in totals:
+            named.append({"label": label, "key": key, "total": totals[key]})
+            named_keys.add(key)
     other_counters = sorted((k, v) for k, v in totals.items() if k not in named_keys)
 
     return {

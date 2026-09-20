@@ -131,3 +131,39 @@ class TestAssess:
         r = {"totals": {"pkt4-received": 1000, "pkt4-receive-drop": 5}}
         assert assess(r)["status"] == "ok"
         assert assess(r, thresholds={"warn_drop_pct": 0.1})["status"] == "warn"
+
+
+class TestKea32DropReasons:
+    """v5.49.0-beta.3 (Q52) - the names come from the kea-compat run's
+    pkt4-3.2.0.json artifact (real kea-dhcp4 3.2.0), not from the ARM."""
+
+    VERIFIED_3_2_EXTRAS = {
+        "pkt4-admin-filtered",
+        "pkt4-duplicate",
+        "pkt4-lease-query-received",
+        "pkt4-lease-query-response-active-sent",
+        "pkt4-lease-query-response-unassigned-sent",
+        "pkt4-lease-query-response-unknown-sent",
+        "pkt4-limit-exceeded",
+        "pkt4-not-for-us",
+        "pkt4-processing-failed",
+        "pkt4-queue-full",
+        "pkt4-rfc-violation",
+        "pkt4-service-disabled",
+    }
+
+    def test_every_named_reason_is_a_verified_3_2_counter(self):
+        from jen.services.packet_health import DROP_REASON_LABELS
+
+        assert set(DROP_REASON_LABELS) <= self.VERIFIED_3_2_EXTRAS
+        assert all(DROP_REASON_LABELS.values())
+
+    def test_reasons_appear_in_the_notes_but_do_not_change_status(self):
+        r = {"totals": {"pkt4-received": 1000, "pkt4-queue-full": 3, "pkt4-rfc-violation": 2}}
+        result = assess(r)
+        assert result["status"] == "ok"
+        assert any("Queue full 3" in n and "RFC violation 2" in n for n in result["notes"])
+
+    def test_zero_reasons_add_no_note(self):
+        r = {"totals": {"pkt4-received": 1000, "pkt4-queue-full": 0}}
+        assert not any("drop reasons" in n for n in assess(r)["notes"])
