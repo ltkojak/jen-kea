@@ -2,6 +2,63 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.49.0-beta.4] - 2026-09-20
+
+Beta channel. The last beta before promotion — the second audit. Stacked on
+the unpromoted 5.32.1-beta.1 through 5.49.0-beta.3 chain — stable stays at
+v5.32.0 until the maintainer promotes.
+
+A second review of the beta stack found nine more problems, of the same two
+families as the first: things that could hurt a running install, and places
+where a subnet-restricted user saw more than the access rules promise. Each
+was checked against the code before it was fixed.
+
+**Restore is now a lifecycle.** `install.sh --restore` used to replace
+`jen.config`, the keys, the content directory and the database underneath a
+running Jen, then tell you to restart it, with no way back if the restored
+install did not work. It now stops the service (when Jen is a running systemd
+unit), snapshots what it is about to replace to
+`<content>/backups/pre-restore-<timestamp>/`, applies the bundle, starts Jen,
+polls `/api/v1/health` for up to 60 seconds, and — if anything fails while
+applying or Jen does not come up — rolls the snapshot back and exits non-zero
+naming it. `--rollback <dir>` redoes that by hand from a finished restore,
+`--no-stop` skips the service control (Docker, or a Jen that is not a systemd
+unit) and `--start` starts Jen afterwards even if it was stopped. If the
+snapshot cannot be taken, nothing is changed. The admin guide's recovery
+runbooks carry the new sequence.
+
+**A client that moved subnets no longer leaks the new subnet through the old
+one.** A device Jen last saw in subnet A whose active lease and reservation
+are now in subnet B was authorised on A alone, and the Timeline, its API,
+the device API and the Devices page then showed the lease and reservation
+from B. Every object is now judged on its own subnet through one shared rule,
+`filter_client_view`: the device's placement fields are hidden when its own
+subnet is not yours, a lease or reservation in a subnet you cannot see is
+dropped, and the page or key is refused only when nothing remains. A regression
+fixture covers the moved client and its inverse for a restricted user, a
+scoped key and an unrestricted one.
+
+**Devices Jen has never placed in a subnet are for unrestricted users only.**
+Global Search listed every unplaced device's MAC, address, name, owner and
+notes to a restricted user, and to a user with no subnets at all; and the
+Devices page let a restricted user edit, delete or bulk-delete such a device.
+Both are now refused, the same rule the API applies since beta.2.
+
+**Reconcile bounds threads, not just time.** Each run created its own thread
+pool and abandoned hung lookups at the deadline, so repeated runs against a
+wedged resolver piled up threads. There is now one pool of eight threads, and
+a second reconciliation while one is running gets a notice instead of starting
+more work.
+
+Smaller fixes: stopping the event dispatcher could forget a worker it had not
+managed to stop, letting a second one start; the Health Center's D2 socket
+check put the socket's address in text a viewer can read, and now says only
+that D2 does or does not answer on its own control socket; and two examples in
+the plugin README imported from Jen's internals instead of `jen.plugin_api`,
+which a new test now prevents. The weekly real-Kea compatibility run was
+checked for a newer 3.0.x image — 3.0.3 is still the newest published — and
+passed by hand on 3.0.3, 3.2.0 and 3.3.1.
+
 ## [5.49.0-beta.3] - 2026-09-20
 
 Beta channel. The last beta before promotion. Stacked on the unpromoted
