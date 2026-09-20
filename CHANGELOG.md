@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.49.0-beta.3] - 2026-09-20
+
+Beta channel. The last beta before promotion. Stacked on the unpromoted
+5.32.1-beta.1 through 5.49.0-beta.2 chain — stable stays at v5.32.0 until
+the maintainer promotes.
+
+Q52, polish from the pre-promotion audit. The audit found the routes' gates
+right; what it found wrong was the front door and a few loose ends, and
+they are fixed here.
+
+The **Getting started** page's "Dismiss the nav reminder" rendered as the
+browser's plain grey button: the `linkish` style it asked for only existed
+inside the account dropdown. It now has a global rule, and a browser
+journey checks the button is visible, not grey, and that dismissing clears
+the nav pill. The **README Features** list and the user guide had not
+followed the last dozen releases; both now cover Getting started, Explain,
+Trace, Timeline, Doctor, DNS Reconcile, the exhaustion forecast, Kea 3.2
+readiness, planned maintenance, packet health, the recovery bundle and the
+Grafana dashboard, and ARCHITECTURE gains paragraphs on the event stream and
+Timeline gating and on Doctor and Trace being read-only views.
+
+The **recovery bundle now carries `schema_migrations`** (and so do database
+exports and scheduled backups). Before, a restored database looked brand new
+to the migration runner and every migration re-ran on the next boot; now the
+restored database reports the bundle's schema version and the runner has
+nothing to do.
+
+**Kea 3.2 drop reasons are named.** Packet health used to name five classic
+counters and show everything else raw. The names of the eight drop counters
+Kea 3.2 adds (`pkt4-admin-filtered`, `pkt4-duplicate`, `pkt4-limit-exceeded`,
+`pkt4-not-for-us`, `pkt4-processing-failed`, `pkt4-queue-full`,
+`pkt4-rfc-violation`, `pkt4-service-disabled`) were read from the weekly
+real-Kea compatibility run's artifact for 3.2.0, not from documentation; they
+appear with plain-English labels on the Servers page (only for a server that
+reports them) and in the Health detail. They do not change the ok/warn/fail
+thresholds.
+
+Five new browser journeys cover Configuration Doctor, Timeline, Trace
+(including refusing a subnet-restricted user), DNS Reconcile and Getting
+started. The two reviewed SQL-construction findings in DNS Reconcile now carry
+their reasoning as a comment beside the queries.
+
 ## [5.49.0-beta.2] - 2026-09-20
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
