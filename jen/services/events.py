@@ -81,7 +81,7 @@ def start_dispatcher() -> bool:
     this call started it."""
     global _dispatcher
     with _lock:
-        if _dispatcher is not None and _dispatcher.is_alive():
+        if _alive(_dispatcher):
             return False
         _dispatcher = threading.Thread(target=_dispatch_loop, name="jen-events", daemon=True)
         _dispatcher.start()
@@ -94,7 +94,7 @@ def stop_dispatcher(timeout: float = 5.0) -> None:
     with _lock:
         t = _dispatcher
         _dispatcher = None
-    if t is not None and t.is_alive():
+    if _alive(t):
         try:
             _queue.put(_STOP, timeout=1)
         except queue.Full:
@@ -103,8 +103,16 @@ def stop_dispatcher(timeout: float = 5.0) -> None:
 
 
 def dispatcher_running() -> bool:
-    t = _dispatcher
-    return t is not None and t.is_alive()
+    return _alive(_dispatcher)
+
+
+def _alive(t) -> bool:
+    """True for a live thread. Tolerates a stand-in with no `is_alive` (tests
+    that replace `threading.Thread` and call start_background_workers())."""
+    try:
+        return t is not None and bool(t.is_alive())
+    except Exception:
+        return False
 
 
 def _dispatch_loop() -> None:

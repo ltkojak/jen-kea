@@ -203,11 +203,15 @@ class TestApiDocsListsOnlyOwnKeys:
         assert "THEIRPF1" not in body
 
     def test_superadmin_still_sees_every_key(self, logged_in_client, db):
+        from tests.test_api_key_authorization import _insert_admin_user
+
+        second = _insert_admin_user(db, "docs_second_owner")
         with db.cursor() as cur:
             cur.execute("DELETE FROM api_keys")
             cur.execute(
                 "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active) VALUES "
-                "('a', 'h-a', 'AAAAPFX1', 1, 1), ('b', 'h-b', 'BBBBPFX1', 2, 1)"
+                "('a', 'h-a', 'AAAAPFX1', 1, 1), ('b', 'h-b', 'BBBBPFX1', %s, 1)",
+                (second,),
             )
         db.commit()
         body = logged_in_client.get("/settings/api-docs").data.decode()
