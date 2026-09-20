@@ -98,9 +98,8 @@ jobs:
             apk update >/dev/null
             apk search -v "isc-kea*"
             apk add --no-cache mariadb-client "isc-kea-admin~=$v" >/dev/null
-            printf "[client]
-skip-ssl
-" > /etc/my.cnf.d/nossl.cnf
+            echo "[client]" > /etc/my.cnf.d/nossl.cnf
+            echo "skip-ssl" >> /etc/my.cnf.d/nossl.cnf
             kea-admin db-init mysql -h 127.0.0.1 -u kea -p kea_pw -n kea
           '
 
