@@ -112,10 +112,11 @@ def global_search():
                             }
                         )
 
-                # Search devices — devices.last_subnet_id is nullable
-                # (a device we've never seen a lease/subnet for yet), so
-                # a restricted user can still find those since they
-                # can't be attributed to any subnet they lack access to.
+                # Search devices — devices.last_subnet_id is nullable (a device
+                # Jen has never placed in a subnet). An unattributed object is
+                # visible to all_subnets users only, the same rule as the v6
+                # search below; a restricted user gets only devices in a subnet
+                # they can access, and with none, nothing.
                 where, params = (
                     ["(mac LIKE %s OR last_ip LIKE %s OR device_name LIKE %s OR owner LIKE %s)"],
                     [s, s, s, s],
@@ -124,10 +125,10 @@ def global_search():
                     ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
                     if ids:
                         placeholders = ",".join(["%s"] * len(ids))
-                        where.append(f"(last_subnet_id IS NULL OR last_subnet_id IN ({placeholders}))")
+                        where.append(f"last_subnet_id IN ({placeholders})")
                         params.extend(ids)
                     else:
-                        where.append("last_subnet_id IS NULL")
+                        where.append("1=0")
                 with jdb.cursor() as cur:
                     cur.execute(
                         f"""

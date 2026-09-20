@@ -143,6 +143,19 @@ API key) sees an object only when every subnet it belongs to is one they can
 access, and rows that carry no subnet at all (audit and alert matches) are for
 unrestricted callers only.
 
+**A client that moves subnets (v5.49.0-beta.4).** One MAC can have a device row
+in subnet A, an active lease in B and a reservation in B. Authorising on a
+single "subject" subnet and then returning every object leaked B through A, so
+`jen/services/access.py::filter_client_view` now judges the device, the lease
+and the reservation each on its OWN subnet (Timeline and its API, the device
+API, the Devices page's reservation lookup), recomputes the subject subnet from
+what remains, and callers refuse only when nothing remains. Explain and Trace
+keep their own rules (Explain rejects a subnet outside the caller's map; Trace
+requires every subnet the client is known in). An unplaced device
+(`last_subnet_id` NULL) belongs to no subnet a restricted user has: Global
+Search, Devices edit/delete/bulk-delete and the API all treat it as
+unrestricted-only.
+
 **The event stream and Timeline (v5.42.0).** `jen/services/events.py` writes
 one row per notable happening to the `events` table and hands the same event
 to in-process subscribers (`jen.plugin_api.subscribe`). It is best-effort

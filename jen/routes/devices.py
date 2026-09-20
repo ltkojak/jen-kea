@@ -146,10 +146,21 @@ def devices():
                 for row in rows:
                     mac_hex = row["mac"].replace(":", "")
                     kcur.execute(
-                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip FROM hosts WHERE HEX(dhcp_identifier)=%s",
+                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip, dhcp4_subnet_id AS subnet_id "
+                        "FROM hosts WHERE HEX(dhcp_identifier)=%s",
                         (mac_hex,),
                     )
-                    res = kcur.fetchone()
+                    # A client that moved subnets can have a reservation in a
+                    # subnet this user cannot see: only a reservation in an
+                    # accessible subnet is shown (unrestricted users see all).
+                    res = next(
+                        (
+                            h
+                            for h in kcur.fetchall()
+                            if current_user.all_subnets or current_user.can_access_subnet(h["subnet_id"])
+                        ),
+                        None,
+                    )
                     row["has_reservation"] = bool(res)
                     row["reservation_ip"] = res["ip"] if res else None
                     row["subnet_name"] = (
@@ -326,12 +337,8 @@ def edit_device(device_id):
             with db.cursor() as cur:
                 cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                 existing = cur.fetchone()
-                if (
-                    existing
-                    and existing.get("last_subnet_id") is not None
-                    and not current_user.can_access_subnet(existing["last_subnet_id"])
-                ):
-                    return jsonify({"ok": False, "error": "You do not have access to that subnet."}), 403
+                if existing and not _may_touch_device(existing.get("last_subnet_id")):
+                    return jsonify({"ok": False, "error": "You do not have access to that device."}), 403
                 if type_override == "auto" or type_override == "":
                     # Clear manual override (but keep icon override if set)
                     if icon_override:
@@ -404,6 +411,17 @@ def edit_device(device_id):
         return jsonify({"ok": False, "error": "Could not save device. Check server logs for details."})
 
 
+def _may_touch_device(last_subnet_id) -> bool:
+    """Edit/delete gate for one device row. A restricted user may act only on
+    a device Jen has placed in a subnet they can access; an UNPLACED device
+    (last_subnet_id NULL) belongs to no subnet they have, so it is for
+    unrestricted users only — the same rule as the API (Q54-F) and Global
+    Search."""
+    if current_user.all_subnets:
+        return True
+    return last_subnet_id is not None and current_user.can_access_subnet(last_subnet_id)
+
+
 @bp.route("/devices/delete/<int:device_id>", methods=["POST"])
 @login_required
 @_admin_required
@@ -413,12 +431,8 @@ def delete_device(device_id):
             with db.cursor() as cur:
                 cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                 existing = cur.fetchone()
-                if (
-                    existing
-                    and existing.get("last_subnet_id") is not None
-                    and not current_user.can_access_subnet(existing["last_subnet_id"])
-                ):
-                    flash("You do not have access to that subnet.", "error")
+                if existing and not _may_touch_device(existing.get("last_subnet_id")):
+                    flash("You do not have access to that device.", "error")
                     return redirect(url_for("devices.devices"))
                 cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
             db.commit()
@@ -460,11 +474,7 @@ def bulk_delete_devices():
                         device_id = int(device_id)
                         cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                         existing = cur.fetchone()
-                        if (
-                            existing
-                            and existing.get("last_subnet_id") is not None
-                            and not current_user.can_access_subnet(existing["last_subnet_id"])
-                        ):
+                        if existing and not _may_touch_device(existing.get("last_subnet_id")):
                             errors += 1
                             continue
                         cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))

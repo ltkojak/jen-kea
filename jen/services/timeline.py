@@ -129,6 +129,7 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
     page's rule. The service stays Flask-free; the caller passes the set in."""
     mac = (mac or "").strip().lower()
     ip = (ip or "").strip()
+    supplied_ip = ip
     if not mac and ip:
         mac = _mac_from_ip(ip)
 
@@ -223,6 +224,18 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
         except Exception as e:
             logger.error(f"timeline v6 address lookup failed for mac={mac!r}: {e}")
 
+    subnet_id = subnet_id_for(device, lease, reservation)
+    if accessible_v4_ids is not None:
+        # A client that moved subnets: judge the device, the lease and the
+        # reservation each on ITS OWN subnet (see access.filter_client_view),
+        # not all of them on one "subject" subnet.
+        from jen.services.access import filter_client_view
+
+        view = filter_client_view({"device": device, "lease": lease, "reservation": reservation}, accessible_v4_ids)
+        device, lease, reservation, subnet_id = view["device"], view["lease"], view["reservation"], view["subnet_id"]
+        if not supplied_ip:  # the IP was derived from an object that may now be hidden
+            ip = (lease["ip"] if lease else "") or ((device or {}).get("last_ip") or "")
+
     return {
         "mac": mac,
         "ip": ip,
@@ -230,7 +243,7 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
         "device": device,
         "lease": lease,
         "reservation": reservation,
-        "subnet_id": subnet_id_for(device, lease, reservation),
+        "subnet_id": subnet_id,
         "rows": rows,
         "v6_addresses": v6_addresses,
     }

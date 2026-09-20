@@ -179,6 +179,60 @@ def assert_subnet_access(subnet_id):
     return False
 
 
+# Device fields that describe WHERE a client is / what is recorded about it
+# there; hidden when the device's own subnet is not the caller's.
+_DEVICE_PLACEMENT_FIELDS = ("last_ip", "last_hostname", "last_subnet_id", "device_name", "owner", "notes")
+
+
+def filter_client_view(view: dict, accessible_ids) -> dict:
+    """The single rule for showing ONE client (a MAC) to a caller who may see
+    only some subnets. `view` is `{"device", "lease", "reservation", ...}` as
+    the Timeline / device API build it; `accessible_ids` is `None` for an
+    unrestricted caller (returned untouched) else the set of subnet ids the
+    caller may see.
+
+    A client that moved subnets used to leak through its OLD one: the caller
+    was authorised on a single "subject" subnet and then handed the lease and
+    reservation from ANY subnet. Now every object is judged on ITS OWN subnet:
+
+    * `lease` / `reservation` are dropped unless their `subnet_id` is accessible;
+    * the device keeps its MAC and first/last-seen bookends, but its placement
+      fields (last_ip, last_hostname, last_subnet_id, name, owner, notes) are
+      blanked when `last_subnet_id` is None (unattributed — unrestricted
+      callers only) or not accessible;
+    * `subnet_id` is recomputed from what is left, so it is None when nothing
+      remains — the caller then refuses (403), it never guesses.
+    """
+    if accessible_ids is None:
+        return view
+    ids = {int(i) for i in accessible_ids}
+
+    def ok(sid):
+        try:
+            return sid is not None and int(sid) in ids
+        except (TypeError, ValueError):
+            return False
+
+    out = dict(view)
+    lease = view.get("lease")
+    out["lease"] = lease if lease and ok(lease.get("subnet_id")) else None
+    res = view.get("reservation")
+    out["reservation"] = res if res and ok(res.get("subnet_id")) else None
+    device = view.get("device")
+    if device and not ok(device.get("last_subnet_id")):
+        device = {**device, **dict.fromkeys(_DEVICE_PLACEMENT_FIELDS)}
+    out["device"] = device
+    if device and ok(device.get("last_subnet_id")):
+        out["subnet_id"] = device["last_subnet_id"]
+    elif out["lease"]:
+        out["subnet_id"] = out["lease"]["subnet_id"]
+    elif out["reservation"]:
+        out["subnet_id"] = out["reservation"]["subnet_id"]
+    else:
+        out["subnet_id"] = None
+    return out
+
+
 def add_subnet_restriction(where_clauses, params, table_alias="l", column="subnet_id"):
     """
     If the current user has restricted subnet access, append a

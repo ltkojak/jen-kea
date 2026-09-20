@@ -465,12 +465,16 @@ def api_v1_device_by_mac(mac):
             mac_clean = mac_fmt.replace(":", "").upper()
             with kdb.cursor() as kcur:
                 kcur.execute(
-                    "SELECT inet_ntoa(address) AS ip, hostname, state, "
+                    "SELECT inet_ntoa(address) AS ip, hostname, state, subnet_id, "
                     "(expire - INTERVAL valid_lifetime SECOND) AS obtained, expire AS expires "
                     "FROM lease4 WHERE HEX(hwaddr)=%s ORDER BY expire DESC LIMIT 1",
                     (mac_clean,),
                 )
                 lease = kcur.fetchone()
+        if scope is not None and lease and lease.get("subnet_id") not in scope:
+            # the device is in a subnet this key covers, but its newest lease
+            # is in one it does not (a client that moved) — never show that
+            lease = None
         si = extensions.SUBNET_MAP.get(row["last_subnet_id"], {})
         result = {
             "mac": row["mac"],
