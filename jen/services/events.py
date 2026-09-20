@@ -93,13 +93,24 @@ def stop_dispatcher(timeout: float = 5.0) -> None:
     global _dispatcher
     with _lock:
         t = _dispatcher
-        _dispatcher = None
-    if _alive(t):
-        try:
-            _queue.put(_STOP, timeout=1)
-        except queue.Full:
-            return  # wedged behind a full queue; it is a daemon thread
-        t.join(timeout)
+    if not _alive(t):
+        with _lock:
+            if _dispatcher is t:
+                _dispatcher = None
+        return
+    # Keep the reference until STOP is actually queued: clearing it first let
+    # start_dispatcher() launch a SECOND thread while a wedged first one (behind
+    # a full queue) was still alive.
+    try:
+        _queue.put(_STOP, timeout=1)
+    except queue.Full:
+        logger.error("events.stop_dispatcher: queue full, could not queue STOP; dispatcher left running")
+        return
+    t.join(timeout)
+    if not _alive(t):
+        with _lock:
+            if _dispatcher is t:
+                _dispatcher = None
 
 
 def dispatcher_running() -> bool:

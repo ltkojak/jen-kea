@@ -239,7 +239,7 @@ class TestD2Socket:
         monkeypatch.setattr(extensions, "D2_API_URL", "http://a:8053")
         monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **kw: {"result": 0, "arguments": {"extended": "3.0.1"}})
         c = health._kea32_d2_socket(_ctx(dhcp4_config={"dhcp-ddns": {"enable-updates": True}}))
-        assert c.status == "ok" and "8053" in c.detail
+        assert c.status == "ok" and "8053" not in c.detail and "its own control socket" in c.detail
 
     def test_direct_mode_without_url_warns(self, single_ca, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")

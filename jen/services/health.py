@@ -1103,10 +1103,10 @@ def _kea32_d2_socket(ctx) -> Check:
         return c
     r = __kea.kea_command("version-get", service="d2", server=ctx["active_server"])
     if r.get("result") == 0:
-        c.status, c.detail = "ok", f"D2 answers on {url}"
+        c.status, c.detail = "ok", "D2 answers on its own control socket"
     else:
         logger.warning(f"health check kea32_d2_socket: {r.get('text', '')}")
-        c.status, c.detail = "warn", f"D2 did not answer on its socket {url}"
+        c.status, c.detail = "warn", "D2 did not answer on its own control socket — Settings → Kea → D2"
     return c
 
 

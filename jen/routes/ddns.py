@@ -440,7 +440,21 @@ def ddns_reconcile():
         return redirect(url_for("ddns.ddns"))
 
     suffix = _reconcile_suffix()
-    results = __reconcile.reconcile(rows, _run_verify, suffix=suffix, limit=limit, expired_names=expired_names)
+    try:
+        results = __reconcile.reconcile(rows, _run_verify, suffix=suffix, limit=limit, expired_names=expired_names)
+    except __reconcile.ReconcileBusy:
+        # Single-flight: no work, HTTP 200, the same page with a notice.
+        flash("A reconciliation is already running — try again in a moment.", "warning")
+        return render_template(
+            "ddns_reconcile.html",
+            results=[],
+            counts=__reconcile.summarize([]),
+            total=0,
+            limit=limit,
+            verdict_filter=verdict_filter,
+            verdicts=__reconcile.VERDICTS,
+            tab="reconcile",
+        )
     counts = __reconcile.summarize(results)
 
     # Cached for the Health Center check — that check must stay cheap

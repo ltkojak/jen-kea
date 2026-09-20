@@ -281,3 +281,28 @@ class TestBoundedDispatcher:
         events.start_dispatcher()
         emit("lease.new")
         assert done.wait(3)
+
+
+class TestDispatcherStopRace:
+    """v5.49.0-beta.4 (Q55-G) - stop_dispatcher() must not forget a thread it
+    could not stop, or start_dispatcher() launches a second one."""
+
+    def test_full_queue_stop_then_start_does_not_create_a_second_thread(self, monkeypatch):
+        import queue
+        import threading
+
+        release = threading.Event()
+        wedged = threading.Thread(target=lambda: release.wait(5), name="wedged-dispatcher")
+        wedged.start()
+        full = queue.Queue(maxsize=1)
+        full.put("filler")
+        monkeypatch.setattr(events, "_queue", full)
+        monkeypatch.setattr(events, "_dispatcher", wedged)
+        try:
+            events.stop_dispatcher()  # STOP cannot be queued (full)
+            assert events._dispatcher is wedged  # still referenced
+            assert events.start_dispatcher() is False  # so no second thread
+            assert [t for t in threading.enumerate() if t.name == "jen-events"] == []
+        finally:
+            release.set()
+            wedged.join(5)

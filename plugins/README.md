@@ -78,7 +78,7 @@ at call time (`shutil.which("nmap")`), never at import.
 
 ### Periodic jobs — `register_periodic(plugin_id, name, fn, every_minutes)`
 
-`from jen.services.background import register_periodic`, called from
+`from jen.plugin_api import register_periodic`, called from
 `register(app)`. `create_app()` must not start background work, so a
 plugin never starts its own thread: it registers a callable and Jen's
 one periodic loop (started only by the real entrypoint, never in the
@@ -90,7 +90,7 @@ progress when the next tick comes is skipped, not stacked.
 
 ### Subnet context — `subnet_context(subnet_id)`
 
-`from jen.services.subnet_context import subnet_context, classify_address, in_pool`.
+`from jen.plugin_api import subnet_context, classify_address, in_pool`.
 One dict with everything Jen already knows about a subnet: gateway(s)
 and DNS from the effective DHCP options (global → shared-network →
 subnet precedence), the pools, network and broadcast, the Kea servers'

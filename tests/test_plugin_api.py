@@ -167,3 +167,20 @@ class TestBundledPluginsImportGuard:
                 if name not in plugin_api.__all__:
                     missing.append((plugin_id, mod, name))
         assert not missing, missing
+
+
+class TestNoInternalImportsAnywhere:
+    """v5.49.0-beta.4 (Q55-F) - plugins/README.md's own examples used to
+    import from jen.services.* while the rule said `jen.plugin_api` and
+    nowhere else. Neither the README nor either bundled plugin.py may."""
+
+    _RX = re.compile(r"(?:from\s+jen\.services\b|import\s+jen\.services\b)")
+
+    @pytest.mark.parametrize(
+        "path",
+        ["plugins/README.md", "plugins/ipam/plugin.py", "plugins/network-discovery/plugin.py"],
+    )
+    def test_no_from_jen_services_import(self, path):
+        text = (REPO / path).read_text(encoding="utf-8")
+        hits = [ln.strip() for ln in text.splitlines() if self._RX.search(ln)]
+        assert not hits, f"{path} imports jen.services directly: {hits}"

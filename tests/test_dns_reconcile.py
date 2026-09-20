@@ -9,6 +9,8 @@ timing-out lookup can all be exercised deterministically.
 import socket
 import time
 
+import pytest
+
 from jen.services import dns_reconcile as dr
 
 
@@ -258,3 +260,49 @@ class TestResolverOutageIsNotAMissingRecord:
         assert out["forward_errno"] == socket.EAI_AGAIN
         assert out["reverse_errno"] == 1
         assert dr._classify(out, "10.0.0.5", "h.lan", set()) == "lookup-failed"
+
+
+class TestBoundedPoolAndSingleFlight:
+    """v5.49.0-beta.4 (Q55-D) - one module pool of eight threads and one run at a time."""
+
+    ROWS = [{"name": f"h{i}", "ip": f"10.0.0.{i}", "source": "lease"} for i in range(1, 5)]
+
+    def test_overlapping_runs_the_second_is_refused_without_work(self):
+        import threading
+
+        gate = threading.Event()
+        called = []
+
+        def blocking(name, ip):
+            called.append(name)
+            gate.wait(2)
+            return {"forward_ips": [ip], "reverse_name": name}
+
+        first = threading.Thread(target=lambda: dr.reconcile(self.ROWS[:1], blocking))
+        first.start()
+        try:
+            time.sleep(0.2)  # the first run is holding the single-flight lock
+            with pytest.raises(dr.ReconcileBusy):
+                dr.reconcile(self.ROWS[:1], lambda n, i: called.append("SECOND") or {})
+            assert "SECOND" not in called
+        finally:
+            gate.set()
+            first.join(5)
+        # and the lock is released afterwards
+        assert dr.reconcile(self.ROWS[:1], lambda n, i: {"forward_ips": [i], "reverse_name": n})[0]["verdict"] == "ok"
+
+    def test_threads_never_exceed_the_pool_across_repeated_runs_against_a_hung_resolver(self, monkeypatch):
+        import threading
+
+        monkeypatch.setattr(dr, "LOOKUP_TIMEOUT_SECONDS", 0.1)
+
+        def sleeping(name, ip):
+            time.sleep(0.6)
+            return {"forward_ips": [ip], "reverse_name": name}
+
+        for _ in range(3):
+            results = dr.reconcile(self.ROWS, sleeping)
+            assert all(r["verdict"] == "lookup-failed" for r in results)
+            n = sum(1 for t in threading.enumerate() if t.name.startswith("dns-reconcile"))
+            assert n <= dr.POOL_WORKERS, n
+        time.sleep(0.8)  # let the abandoned lookups drain before other tests run

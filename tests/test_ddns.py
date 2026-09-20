@@ -861,3 +861,19 @@ class TestDdnsReconcileRoute:
             assert body.startswith("name,ip,source,expected_a,observed_a,expected_ptr,observed_ptr,verdict")
         finally:
             self._clean(db)
+
+
+class TestDdnsReconcileBusy:
+    """v5.49.0-beta.4 (Q55-D) - single-flight: an overlapping reconciliation
+    does no work and gets the page with a notice (HTTP 200)."""
+
+    def test_second_run_gets_the_notice_not_an_error(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.services import dns_reconcile
+
+        def busy(*a, **k):
+            raise dns_reconcile.ReconcileBusy("running")
+
+        monkeypatch.setattr(dns_reconcile, "reconcile", busy)
+        r = logged_in_client.get("/ddns/reconcile")
+        assert r.status_code == 200
+        assert b"already running" in r.data

@@ -20,6 +20,7 @@ import concurrent.futures
 import logging
 import math
 import socket
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,29 @@ _DEFINITIVE_ERRNOS = {
 LOOKUP_TIMEOUT_SECONDS = 2
 # hard ceiling for the whole run however many rows are hung
 TOTAL_BUDGET_SECONDS = 10
+
+# v5.49.0-beta.4 — bound THREADS as well as time. A pool per call abandoned its
+# hung threads at every deadline, so repeated runs against a wedged resolver
+# piled them up until libc gave up. There is now ONE module-level pool of
+# POOL_WORKERS threads, created lazily and never shut down, and a lock so only
+# one reconciliation runs at a time: a stuck lookup holds one of the eight
+# slots and the next run queues behind it — that is the ceiling.
+POOL_WORKERS = 8
+_POOL: concurrent.futures.ThreadPoolExecutor | None = None
+_POOL_LOCK = threading.Lock()
+_RUN_LOCK = threading.Lock()
+
+
+class ReconcileBusy(RuntimeError):
+    """Another reconciliation is already running."""
+
+
+def _get_pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is None:
+            _POOL = concurrent.futures.ThreadPoolExecutor(max_workers=POOL_WORKERS, thread_name_prefix="dns-reconcile")
+        return _POOL
 
 
 def _qualify(name: str, suffix: str) -> str:
@@ -144,13 +168,13 @@ def reconcile(
         return []
 
     prepared: list[tuple[dict, str]] = []
-    n_workers = max(1, workers)
-    # NOT a `with` block: its exit joins every worker, so one hung lookup
-    # would hold the whole request. shutdown(wait=False, cancel_futures=True)
-    # returns at once; a thread stuck in the resolver is abandoned.
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_workers)
+    n_workers = POOL_WORKERS  # the shared pool's size; the `workers` argument is kept for old callers
+    # Single-flight: a second reconciliation while one runs does no work.
+    if not _RUN_LOCK.acquire(blocking=False):
+        raise ReconcileBusy("a reconciliation is already running")
+    pool = _get_pool()
+    futures = []
     try:
-        futures = []
         for row in capped:
             fqdn = _qualify(row["name"], suffix)
             prepared.append((row, fqdn))
@@ -191,7 +215,12 @@ def reconcile(
                 }
             )
     finally:
-        pool.shutdown(wait=False, cancel_futures=True)
+        # Lookups still QUEUED are cancelled; one already running in the
+        # resolver cannot be interrupted and keeps its pool slot until libc
+        # returns — that, not a growing thread count, is the ceiling.
+        for fut in futures:
+            fut.cancel()
+        _RUN_LOCK.release()
     return results
 
 
