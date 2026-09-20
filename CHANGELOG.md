@@ -2,6 +2,69 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.49.0-beta.2] - 2026-09-20
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.49.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+**Audit fixes before promotion.** An external review of the beta stack
+turned up twelve real problems, each checked against the code before it
+was fixed. Two sit on the recovery-restore path, which runs as root; the
+rest are places where a subnet-restricted user or API key saw a little
+more than the access rules promise. What each one allowed before, and
+what it allows now:
+
+*Recovery and restore.* The restore tool extracted the bundle with
+`extractall(filter="data")` and, on an interpreter without that argument,
+fell back to a bare `extractall()` that follows symlinks, hardlinks and
+`..` paths. It now walks the archive itself and refuses (naming the
+member, before writing anything) every entry that is not a plain file or
+directory with a relative, in-tree name. Separately, the fallback secret
+and MFA key files under `content/keys/` were carried as ordinary content
+and written back world-readable; they are now explicit `secret_key` and
+`mfa_key` members, restored `0600`, and never part of `content/` (a bundle
+made by an earlier beta has its `keys/` files restored `0600` too).
+Restore also used to compare only the MAJOR version: it now refuses a
+bundle from a newer Jen, or one whose database schema is ahead of this
+install's, unless `--force` is passed (`install.sh --restore … --force`
+passes it through); an older bundle into a newer Jen is unchanged.
+
+*Authorization.* Timeline kept rows with no subnet (audit and alert
+matches) for restricted users; it now drops them, as the API already
+did. Timeline listed every IPv6 address Kea knew for a MAC; a restricted
+user now sees one only when its v6 subnet is paired to a v4 subnet they
+can access, the Devices page's rule. Trace let a restricted user in when
+ANY subnet the client was known in was theirs and then returned the whole
+log unfiltered; it now requires all of them, and answers 403 if any is not.
+A subnet-scoped write API key could PATCH a device Jen had never placed
+in a subnet; it is now refused (an unscoped key still can). Doctor
+renders the whole Kea config, so it now requires unrestricted subnet
+access like config history, and its navigation entry is hidden from
+restricted users. The API Docs page listed every active key to any admin;
+it now lists only the keys the admin created (superadmins still see all).
+The policy is written down in ARCHITECTURE §2: surfaces that render the
+whole config need unrestricted access; per-object surfaces filter by
+subnet.
+
+*Behaviour.* DNS Reconcile scored any resolver error as
+`missing-forward` and any second A record as `duplicate-a`, and its
+"2 second budget" was joined back by the executor, so one hung lookup
+held the page. There is now a `lookup-failed` verdict for a resolver that
+could not answer (timeout, SERVFAIL) versus a definitive "no such
+record", `duplicate-a` is renamed `multiple-a` and shown as informational,
+and the run returns at its budget with the hung thread abandoned. Packet
+health scored 50 NAKs with 0 ACKs as green because it divided NAKs by
+ACKs; it now uses NAKs as a share of all replies and needs at least 10
+NAKs in the window before the ratio alone can warn or fail. Event
+subscribers used to run inline on whatever thread emitted the event;
+they now run on one shared bounded worker (a full queue drops deliveries
+and logs, the Timeline row is still written), and inline when the worker
+isn't running.
+
+Also: a deterministic fuzz and a real-file harness
+(`tests/fixtures/isc/`) for the ISC dhcpd.conf parser.
+
 ## [5.49.0-beta.1] - 2026-09-20
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
