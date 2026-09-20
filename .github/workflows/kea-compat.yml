@@ -107,8 +107,11 @@ jobs:
         run: |
           mkdir -p kea-conf results
           python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
+          printf '%s' jen > kea-conf/jen-api.user
+          printf '%s' jen_api_pw > kea-conf/jen-api.pw
+          chmod 644 kea-conf/jen-api.user kea-conf/jen-api.pw
           docker run -d --name kea --network host --tmpfs /var/run/kea \
-            -v "$PWD/kea-conf/kea-dhcp4.conf:/etc/kea/kea-dhcp4.conf:ro" "$IMAGE"
+            -v "$PWD/kea-conf:/etc/kea:ro" "$IMAGE"
           for i in $(seq 1 30); do
             if curl -sf -m 2 -H 'Content-Type: application/json' \
                  -u jen:jen_api_pw -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
