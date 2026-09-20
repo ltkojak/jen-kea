@@ -1610,19 +1610,20 @@ Each Add/Remove pushes to every SSH-configured server, guarded by that server's 
 
 ### Reconcile (v5.47.0)
 
-Verify checks one name at a time; **Reconcile** (Network → DDNS → Reconcile) runs the same forward/reverse check over the whole fleet at once — every reservation, then every active lease with a hostname, up to the limit you set (max 1000; each one is a live lookup). Nothing is written anywhere, to Jen's database or to Kea — this is a read-only report, subnet-restricted the same way every other subnet-scoped page in Jen is.
+Verify checks one name at a time; **Reconcile** (Network → DDNS → Reconcile) runs the same forward/reverse check over the whole fleet at once — every reservation, then every active lease with a hostname, up to the limit you set (max 1000; each one is a live lookup, and the whole run is bounded — lookups that haven't answered within a couple of seconds are abandoned and shown as `lookup-failed`, so one hung resolver can't hold the page). Nothing is written anywhere, to Jen's database or to Kea — this is a read-only report, subnet-restricted the same way every other subnet-scoped page in Jen is.
 
 Each row gets one verdict:
 
 | Verdict | Meaning |
 |---|---|
 | `ok` | Forward and reverse both resolve to what's expected. |
-| `missing-forward` | The name doesn't resolve at all (NXDOMAIN or the resolver timed out). |
+| `missing-forward` | The resolver definitively said the name doesn't exist (NXDOMAIN / no data). |
+| `lookup-failed` | The resolver could not answer — a timeout, SERVFAIL or an unreachable server (v5.49.0-beta.2). This says nothing about whether the record exists; fix the resolver, then run Reconcile again. |
 | `wrong-forward` | The name resolves, but not to the IP Jen expects. |
-| `missing-ptr` | The IP has no PTR record (or the reverse lookup timed out). |
+| `missing-ptr` | The resolver definitively said the IP has no PTR record. |
 | `wrong-ptr` | The PTR record points to a different name than expected. |
 | `stale-ptr` | The PTR record points to a name that belongs to a lease that has since expired elsewhere — DNS wasn't cleaned up when that name's lease ended. |
-| `duplicate-a` | More than one A record exists for the name — two addresses are claiming it. |
+| `multiple-a` | More than one A record exists for the name. Several A records are a legitimate design, so this is informational — review it, don't assume it's wrong. (Named `duplicate-a` before v5.49.0-beta.2.) |
 
 Filter to one verdict with the badges above the table, or **Export CSV** for the current filter. A mismatched row has **Fix in Kea** (jumps to Reservations, searched by that row's IP) and **re-verify** (jumps to the Verify tab, pre-filled) links; an `ok` row has neither, there's nothing to do.
 

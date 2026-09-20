@@ -738,6 +738,7 @@ def _run_verify(hostname: str, ip: str) -> dict:
                 out["forward_ok"] = ip in out["forward_ips"]
         except socket.gaierror as e:
             out["forward_error"] = str(e)
+            out["forward_errno"] = e.errno
     if ip:
         try:
             resolved_name, _aliases, _ips = socket.gethostbyaddr(ip)
@@ -746,6 +747,7 @@ def _run_verify(hostname: str, ip: str) -> dict:
                 out["reverse_ok"] = resolved_name.rstrip(".").lower() == hostname.rstrip(".").lower()
         except (OSError, socket.herror) as e:
             out["reverse_error"] = str(e)
+            out["reverse_errno"] = e.errno
     return out
 
 

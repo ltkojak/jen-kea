@@ -10,7 +10,9 @@ plugins, not a transaction anything else depends on.
 """
 
 import logging
+import queue
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,20 @@ KINDS = (
 _SUBSCRIBERS: list[tuple[str, object]] = []  # (kind_or_"*", fn)
 _lock = threading.Lock()
 
+# v5.49.0-beta.2 — subscribers run on ONE shared worker thread, not the
+# emitter's. `emit()` (called from the alert loop and request handlers)
+# writes its DB row, then enqueues the event; a slow subscriber therefore
+# delays the next subscriber, never Jen. The queue is bounded: when it is
+# full the event is dropped (the DB row is already written) and that is
+# logged at most once a minute. When the dispatcher is not running — tests,
+# CLI tools, the werkzeug fallback — `emit()` dispatches inline, exactly as
+# before.
+QUEUE_MAX = 1000
+_queue: "queue.Queue" = queue.Queue(maxsize=QUEUE_MAX)
+_dispatcher: threading.Thread | None = None
+_last_drop_log = 0.0
+_STOP = object()
+
 
 def subscribe(kind_or_star: str, fn) -> None:
     """Register `fn(event: dict)` to be called after every `emit()` whose
@@ -57,6 +73,64 @@ def unsubscribe(fn) -> None:
     False even though they're `==` (same `__self__` and `__func__`)."""
     with _lock:
         _SUBSCRIBERS[:] = [(k, f) for k, f in _SUBSCRIBERS if f != fn]
+
+
+def start_dispatcher() -> bool:
+    """Start the one dispatcher thread (idempotent). Called from
+    `jen.services.background.start_background_workers()`. Returns True if
+    this call started it."""
+    global _dispatcher
+    with _lock:
+        if _dispatcher is not None and _dispatcher.is_alive():
+            return False
+        _dispatcher = threading.Thread(target=_dispatch_loop, name="jen-events", daemon=True)
+        _dispatcher.start()
+        return True
+
+
+def stop_dispatcher(timeout: float = 5.0) -> None:
+    """Stop the dispatcher after it drains what is queued (tests, shutdown)."""
+    global _dispatcher
+    with _lock:
+        t = _dispatcher
+        _dispatcher = None
+    if t is not None and t.is_alive():
+        try:
+            _queue.put(_STOP, timeout=1)
+        except queue.Full:
+            return  # wedged behind a full queue; it is a daemon thread
+        t.join(timeout)
+
+
+def dispatcher_running() -> bool:
+    t = _dispatcher
+    return t is not None and t.is_alive()
+
+
+def _dispatch_loop() -> None:
+    while True:
+        item = _queue.get()
+        if item is _STOP:
+            return
+        try:
+            _dispatch(item)
+        except Exception as e:  # never let the worker die
+            logger.error(f"events dispatcher error: {e}")
+
+
+def _dispatch(event: dict) -> None:
+    """Call every matching subscriber for one event; a raising subscriber is
+    logged and the rest still run."""
+    kind = event["kind"]
+    with _lock:
+        subs = list(_SUBSCRIBERS)
+    for kind_or_star, fn in subs:
+        if kind_or_star != "*" and kind_or_star != kind:
+            continue
+        try:
+            fn(event)
+        except Exception as e:
+            logger.error(f"events subscriber for {kind_or_star!r} raised on kind={kind!r}: {e}")
 
 
 def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None, actor=None, detail=""):
@@ -86,14 +160,16 @@ def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None,
         "actor": actor,
         "detail": detail or "",
     }
-    with _lock:
-        subs = list(_SUBSCRIBERS)
-    for kind_or_star, fn in subs:
-        if kind_or_star != "*" and kind_or_star != kind:
-            continue
+    if dispatcher_running():
         try:
-            fn(event)
-        except Exception as e:
-            logger.error(f"events subscriber for {kind_or_star!r} raised on kind={kind!r}: {e}")
+            _queue.put_nowait(event)
+        except queue.Full:
+            global _last_drop_log
+            now = time.monotonic()
+            if now - _last_drop_log >= 60:
+                _last_drop_log = now
+                logger.error(f"events queue full ({QUEUE_MAX}); dropping subscriber delivery (rows are still written)")
+    else:
+        _dispatch(event)
 
     return event

@@ -661,11 +661,22 @@ def _dns_reconcile(ctx) -> Check:
     if total == 0:
         c.status, c.detail = "skip", f"last reconcile run had nothing to check{age_note}"
         return c
-    problems = total - ok
-    if problems == 0:
-        c.status, c.detail = "ok", f"{total} name(s) checked, all matched{age_note}"
+    # multiple-a is informational (several A records can be by design) and
+    # lookup-failed is a resolver problem, not a mismatch — count neither.
+    multiple = int(verdicts.get("multiple-a", 0))
+    failed = int(verdicts.get("lookup-failed", 0))
+    problems = total - ok - multiple - failed
+    notes = ""
+    if multiple:
+        notes += f"; {multiple} with several A records — review"
+    if failed:
+        notes += f"; {failed} lookup(s) could not be answered — check the resolver"
+    if problems > 0:
+        c.status, c.detail = "warn", f"{problems}/{total} name(s) mismatched{notes}{age_note}"
+    elif failed:
+        c.status, c.detail = "warn", f"{total} name(s) checked{notes}{age_note}"
     else:
-        c.status, c.detail = "warn", f"{problems}/{total} name(s) mismatched{age_note}"
+        c.status, c.detail = "ok", f"{total} name(s) checked, none mismatched{notes}{age_note}"
     return c
 
 

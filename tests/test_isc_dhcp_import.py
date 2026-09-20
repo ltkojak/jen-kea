@@ -436,3 +436,86 @@ class TestLeases:
 
     def test_garbage_leases_file(self):
         assert isc.parse_leases(b"not a leases file {") == {}
+
+
+class TestParserFuzzAndRealFiles:
+    """v5.49.0-beta.2 (audit M) - a deterministic token-soup fuzz (no new
+    dependency) and every file under tests/fixtures/isc/."""
+
+    VOCAB = [
+        "subnet",
+        "netmask",
+        "range",
+        "pool",
+        "host",
+        "class",
+        "match",
+        "if",
+        "option",
+        "hardware",
+        "ethernet",
+        "fixed-address",
+        "{",
+        "}",
+        ";",
+        ",",
+        '"',
+        "(",
+        ")",
+        "=",
+        "10.0.0.0",
+        "255.255.255.0",
+        "10.0.0.10",
+        "10.0.0.20",
+        "aa:bb:cc:dd:ee:01",
+        '"a;b"',
+        '"unterminated',
+        ";",
+        "}",
+        "{",
+        "routers",
+        "domain-name-servers",
+        "default-lease-time",
+        "shared-network",
+        "allow",
+        "deny",
+        "members",
+        "of",
+        "substring",
+        "vendor-class-identifier",
+    ]
+
+    WELL_FORMED = "subnet 10.9.0.0 netmask 255.255.255.0 {\n  range 10.9.0.10 10.9.0.20;\n}\n"
+
+    @staticmethod
+    def _soup(rng, n):
+        words = TestParserFuzzAndRealFiles.VOCAB
+        out = []
+        for _ in range(n):
+            w = rng.choice(words)
+            out.append(w)
+            if rng.random() < 0.15:
+                out.append("\n")
+        return " ".join(out)
+
+    def test_never_raises_is_deterministic_and_keeps_a_wellformed_subnet(self):
+        import random
+
+        rng = random.Random(20260919)
+        for _ in range(500):
+            soup = self._soup(rng, rng.randint(0, 60))
+            for text in (soup, self.WELL_FORMED + soup):
+                data = text.encode()
+                a = isc.parse_config(data)  # must not raise
+                b = isc.parse_config(data)
+                assert a == b, text
+            plan = isc.parse_config((self.WELL_FORMED + soup).encode())
+            assert any(s.scope_id == "10.9.0.0" for s in plan.scopes) or any("line 1" in w for w in plan.warnings), (
+                soup,
+                plan.warnings,
+            )
+
+    @pytest.mark.parametrize("path", sorted((FIXTURES / "isc").glob("*.conf")), ids=lambda p: p.name)
+    def test_real_world_file_parses_into_scopes_or_warnings(self, path):
+        plan = isc.parse_config(path.read_bytes())
+        assert plan.scopes or plan.warnings

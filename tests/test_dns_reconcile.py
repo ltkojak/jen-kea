@@ -6,6 +6,7 @@ v5.47.0 (Q48) — jen.services.dns_reconcile: pure, no DB, no resolver —
 timing-out lookup can all be exercised deterministically.
 """
 
+import socket
 import time
 
 from jen.services import dns_reconcile as dr
@@ -69,15 +70,15 @@ class TestClassify:
         observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "old-laptop.lan.example.com"}
         assert dr._classify(observed, "10.0.0.5", "host1.lan.example.com", {"old-laptop"}) == "stale-ptr"
 
-    def test_duplicate_a(self):
+    def test_multiple_a(self):
         observed = {"forward_ips": ["10.0.0.5", "10.0.0.9"], "reverse_name": "host1.lan"}
-        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "duplicate-a"
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "multiple-a"
 
-    def test_duplicate_a_takes_priority_over_wrong_forward(self):
+    def test_multiple_a_takes_priority_over_wrong_forward(self):
         # two A records, neither of which happens to be the expected IP —
         # still "two IPs claim the name", not "wrong-forward".
         observed = {"forward_ips": ["10.0.0.8", "10.0.0.9"], "reverse_name": "host1.lan"}
-        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "duplicate-a"
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "multiple-a"
 
     def test_reverse_case_insensitive_match_is_ok(self):
         observed = {"forward_ips": ["10.0.0.5"], "reverse_name": "HOST1.LAN"}
@@ -119,7 +120,7 @@ class TestReconcile:
             "miss-ptr": "missing-ptr",
             "wrong-ptr": "wrong-ptr",
             "stale-ptr": "stale-ptr",
-            "dup-a": "duplicate-a",
+            "dup-a": "multiple-a",
         }
         # Every result row carries the full column set the page renders.
         for r in results:
@@ -165,7 +166,7 @@ class TestReconcile:
         rows = [{"name": "slow-host", "ip": "10.0.0.1", "source": "reservation"}]
         results = dr.reconcile(rows, slow_resolve)
         assert len(results) == 1
-        assert results[0]["verdict"] == "missing-forward"
+        assert results[0]["verdict"] == "lookup-failed"
 
     def test_resolver_exception_is_scored_not_raised(self):
         def flaky_resolve(name, ip):
@@ -173,7 +174,7 @@ class TestReconcile:
 
         rows = [{"name": "flaky", "ip": "10.0.0.1", "source": "lease"}]
         results = dr.reconcile(rows, flaky_resolve)
-        assert results[0]["verdict"] == "missing-forward"
+        assert results[0]["verdict"] == "lookup-failed"
 
     def test_observed_a_joins_multiple_forward_ips(self):
         rows = [{"name": "dup", "ip": "10.0.0.1", "source": "reservation"}]
@@ -199,3 +200,61 @@ class TestSummarize:
         assert counts["ok"] == 2
         assert counts["wrong-ptr"] == 1
         assert counts["missing-forward"] == 0
+
+
+class TestResolverOutageIsNotAMissingRecord:
+    """v5.49.0-beta.2 (audit G) - only a DEFINITIVE "no such record" scores
+    missing-*; a resolver that could not answer scores lookup-failed."""
+
+    def test_nxdomain_errno_is_missing_forward(self):
+        observed = {"forward_error": "Name or service not known", "forward_errno": socket.EAI_NONAME}
+        assert dr._classify(observed, "10.0.0.5", "h.lan", set()) == "missing-forward"
+
+    def test_eai_again_is_lookup_failed_not_missing(self):
+        observed = {"forward_error": "Temporary failure", "forward_errno": socket.EAI_AGAIN}
+        assert dr._classify(observed, "10.0.0.5", "h.lan", set()) == "lookup-failed"
+
+    def test_reverse_herror_not_found_is_missing_ptr_but_try_again_is_lookup_failed(self):
+        base = {"forward_ips": ["10.0.0.5"]}
+        assert (
+            dr._classify({**base, "reverse_error": "x", "reverse_errno": 1}, "10.0.0.5", "h.lan", set())
+            == "missing-ptr"
+        )
+        assert (
+            dr._classify({**base, "reverse_error": "x", "reverse_errno": 2}, "10.0.0.5", "h.lan", set())
+            == "lookup-failed"
+        )
+
+    def test_hung_resolver_returns_at_the_budget_not_when_the_thread_finishes(self, monkeypatch):
+        monkeypatch.setattr(dr, "LOOKUP_TIMEOUT_SECONDS", 0.3)
+
+        def hung(name, ip):
+            time.sleep(3)
+            return {"forward_ips": [ip], "reverse_name": name}
+
+        rows = [{"name": f"h{i}", "ip": f"10.0.0.{i}", "source": "lease"} for i in range(3)]
+        t0 = time.monotonic()
+        results = dr.reconcile(rows, hung)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.5, elapsed
+        assert [r["verdict"] for r in results] == ["lookup-failed"] * 3
+
+    def test_summarize_and_verdicts_know_the_new_names(self):
+        assert "multiple-a" in dr.VERDICTS and "lookup-failed" in dr.VERDICTS
+        assert "duplicate-a" not in dr.VERDICTS
+        assert dr.summarize([{"verdict": "lookup-failed"}])["lookup-failed"] == 1
+
+    def test_run_verify_passes_the_errno_through(self, monkeypatch):
+        from jen.routes import ddns
+
+        def again(*a, **k):
+            raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+        monkeypatch.setattr(ddns.socket, "getaddrinfo", again)
+        monkeypatch.setattr(
+            ddns.socket, "gethostbyaddr", lambda ip: (_ for _ in ()).throw(socket.herror(1, "Unknown host"))
+        )
+        out = ddns._run_verify("h.lan", "10.0.0.5")
+        assert out["forward_errno"] == socket.EAI_AGAIN
+        assert out["reverse_errno"] == 1
+        assert dr._classify(out, "10.0.0.5", "h.lan", set()) == "lookup-failed"

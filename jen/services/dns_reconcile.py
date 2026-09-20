@@ -18,18 +18,45 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import math
+import socket
+import time
 
 logger = logging.getLogger(__name__)
 
-VERDICTS = ("ok", "missing-forward", "wrong-forward", "missing-ptr", "wrong-ptr", "stale-ptr", "duplicate-a")
+# `multiple-a` is informational (several A records are a legitimate design)
+# and `lookup-failed` means "the resolver could not answer", NOT "the record
+# is missing" — neither counts as a mismatch in the Health summary.
+VERDICTS = (
+    "ok",
+    "missing-forward",
+    "wrong-forward",
+    "missing-ptr",
+    "wrong-ptr",
+    "stale-ptr",
+    "multiple-a",
+    "lookup-failed",
+)
 
-# Per-lookup wall-clock budget. concurrent.futures can't forcibly kill a
-# blocked worker thread — a resolver call past this still runs to
-# completion in the background — but it does bound how long the PAGE
-# waits: .result(timeout=...) raises and the row is scored as if both
-# lookups failed, the same "we genuinely don't know" outcome a real
-# NXDOMAIN/timeout from the resolver would produce.
+# resolver errnos that are a DEFINITIVE "no such record": getaddrinfo's
+# EAI_NONAME/EAI_NODATA, gethostbyaddr's herror HOST_NOT_FOUND(1)/NO_DATA(4).
+# Anything else (EAI_AGAIN, EAI_FAIL, timeouts, other OSErrors) is a
+# resolver problem, not an answer.
+_DEFINITIVE_ERRNOS = {
+    getattr(socket, "EAI_NONAME", None),
+    getattr(socket, "EAI_NODATA", None),
+    1,
+    4,
+} - {None}
+
+# Per-lookup wall-clock budget, applied as one overall deadline (see
+# reconcile()). concurrent.futures can't forcibly kill a blocked worker
+# thread: a resolver call past the deadline is ABANDONED, not joined —
+# it keeps running in the background and the request returns anyway —
+# and its row is scored `lookup-failed` ("we don't know").
 LOOKUP_TIMEOUT_SECONDS = 2
+# hard ceiling for the whole run however many rows are hung
+TOTAL_BUDGET_SECONDS = 10
 
 
 def _qualify(name: str, suffix: str) -> str:
@@ -47,22 +74,31 @@ def _qualify(name: str, suffix: str) -> str:
     return f"{name}.{suffix}"
 
 
+def _definitive(errno) -> bool:
+    """True when the resolver definitively said "no such record". A dict
+    from an older caller with no errno at all keeps the pre-5.49 reading
+    (a definitive miss)."""
+    return errno is None or errno in _DEFINITIVE_ERRNOS
+
+
 def _classify(observed: dict, expected_ip: str, expected_name: str, expired_names: set[str]) -> str:
     """`observed` is whatever `resolve(name, ip)` returned — see
     ddns._run_verify's docstring for the exact shape this expects:
     forward_ips (list, absent/empty on error), forward_error,
     reverse_name, reverse_error."""
+    if observed.get("lookup_failed"):
+        return "lookup-failed"
     if observed.get("forward_error"):
-        return "missing-forward"
+        return "missing-forward" if _definitive(observed.get("forward_errno")) else "lookup-failed"
 
     forward_ips = observed.get("forward_ips") or []
     if len(forward_ips) > 1:
-        return "duplicate-a"
+        return "multiple-a"
     if expected_ip and expected_ip not in forward_ips:
         return "wrong-forward"
 
     if observed.get("reverse_error"):
-        return "missing-ptr"
+        return "missing-ptr" if _definitive(observed.get("reverse_errno")) else "lookup-failed"
 
     reverse_name = (observed.get("reverse_name") or "").rstrip(".").lower()
     expected = expected_name.rstrip(".").lower()
@@ -108,25 +144,38 @@ def reconcile(
         return []
 
     prepared: list[tuple[dict, str]] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    n_workers = max(1, workers)
+    # NOT a `with` block: its exit joins every worker, so one hung lookup
+    # would hold the whole request. shutdown(wait=False, cancel_futures=True)
+    # returns at once; a thread stuck in the resolver is abandoned.
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_workers)
+    try:
         futures = []
         for row in capped:
             fqdn = _qualify(row["name"], suffix)
             prepared.append((row, fqdn))
             futures.append(pool.submit(resolve, fqdn, row["ip"]))
 
+        # One overall deadline: each "round" of `workers` lookups gets
+        # LOOKUP_TIMEOUT_SECONDS, capped at TOTAL_BUDGET_SECONDS.
+        rounds = math.ceil(len(futures) / n_workers)
+        deadline = time.monotonic() + min(LOOKUP_TIMEOUT_SECONDS * rounds, TOTAL_BUDGET_SECONDS)
+        concurrent.futures.wait(futures, timeout=max(0.0, deadline - time.monotonic()))
+
         results = []
         for (row, fqdn), fut in zip(prepared, futures, strict=True):
-            try:
-                observed = fut.result(timeout=LOOKUP_TIMEOUT_SECONDS) or {}
-            except Exception as e:
-                # str(a bare TimeoutError()) is "" — falsy, which would
-                # slip past _classify's `if observed.get("forward_error")`
-                # check and get mis-scored as wrong-forward instead of
-                # missing-forward. Always fall back to the class name.
-                msg = str(e) or e.__class__.__name__
-                logger.warning(f"dns_reconcile lookup failed for {fqdn}: {msg}")
-                observed = {"forward_error": msg, "reverse_error": msg}
+            if not fut.done():
+                logger.warning(f"dns_reconcile lookup for {fqdn} did not finish in time; abandoned")
+                observed = {"lookup_failed": True, "forward_error": "timed out", "reverse_error": "timed out"}
+            else:
+                try:
+                    observed = fut.result() or {}
+                except Exception as e:
+                    # str(a bare TimeoutError()) is "" — always fall back to
+                    # the class name so the message is never empty.
+                    msg = str(e) or e.__class__.__name__
+                    logger.warning(f"dns_reconcile lookup failed for {fqdn}: {msg}")
+                    observed = {"lookup_failed": True, "forward_error": msg, "reverse_error": msg}
             verdict = _classify(observed, row["ip"], fqdn, expired)
             forward_ips = observed.get("forward_ips") or []
             results.append(
@@ -141,6 +190,8 @@ def reconcile(
                     "verdict": verdict,
                 }
             )
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
     return results
 
 

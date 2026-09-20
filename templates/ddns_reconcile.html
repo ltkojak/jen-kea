@@ -46,7 +46,7 @@
         {% for v in verdicts %}
         <a href="?limit={{ limit }}&verdict={{ v }}"
            class="badge"
-           style="{% if verdict_filter == v %}background:var(--primary);{% elif v == 'ok' %}background:#1a2a1a;color:var(--success);{% else %}background:#2a1a1a;color:var(--warning);{% endif %}">
+           style="{% if verdict_filter == v %}background:var(--primary);{% elif v == 'ok' %}background:#1a2a1a;color:var(--success);{% elif v == 'multiple-a' %}background:var(--surface2);color:var(--text-muted);{% else %}background:#2a1a1a;color:var(--warning);{% endif %}">
             {{ v }} ({{ counts.get(v, 0) }})
         </a>
         {% endfor %}
@@ -82,6 +82,7 @@
             <td data-label="Observed PTR" class="mono hide-tablet">{{ r.observed_ptr or '—' }}</td>
             <td data-label="Verdict">
                 {% if r.verdict == 'ok' %}<span class="badge" style="background:#1a2a1a;color:var(--success);">✓ ok</span>
+                {% elif r.verdict == 'multiple-a' %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);" title="Several A records can be intentional — review, don't assume it's wrong">{{ r.verdict }}</span>
                 {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">{{ r.verdict }}</span>{% endif %}
             </td>
             <td data-label="">

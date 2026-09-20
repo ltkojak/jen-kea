@@ -110,6 +110,23 @@ class TestAssess:
         result = assess(r)
         assert result["status"] == "fail"
 
+    def test_fifty_naks_and_no_acks_is_a_failure(self):
+        """v5.49.0-beta.2 (audit H) - the old naks/acks ratio scored 0% here."""
+        r = {"totals": {"pkt4-received": 1000, "pkt4-nak-sent": 50}}
+        assert assess(r)["status"] == "fail"
+
+    def test_one_stray_nak_stays_ok_and_is_noted(self):
+        r = {"totals": {"pkt4-received": 1000, "pkt4-nak-sent": 1}}
+        result = assess(r)
+        assert result["status"] == "ok"
+        assert any("1 NAK" in n for n in result["notes"])
+
+    def test_nak_ratio_needs_the_minimum_count_to_alert(self):
+        # 5 NAKs / 5 ACKs is 50% of replies but below min_naks (10)
+        r = {"totals": {"pkt4-received": 1000, "pkt4-ack-sent": 5, "pkt4-nak-sent": 5}}
+        assert assess(r)["status"] == "ok"
+        assert assess(r, thresholds={"min_naks": 1})["status"] == "fail"
+
     def test_custom_thresholds_override_defaults(self):
         r = {"totals": {"pkt4-received": 1000, "pkt4-receive-drop": 5}}
         assert assess(r)["status"] == "ok"

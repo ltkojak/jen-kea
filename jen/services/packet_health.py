@@ -18,6 +18,9 @@ DEFAULT_THRESHOLDS = {
     "fail_drop_pct": 10.0,
     # fail when NAKs exceed this % of ACKs
     "fail_nak_pct": 10.0,
+    # the NAK ratio alone never warns or fails below this many NAKs in the
+    # window (one stray NAK on a quiet server is not an incident)
+    "min_naks": 10,
 }
 
 
@@ -100,12 +103,16 @@ def assess(rates_result, thresholds=None):
 
     acks = totals.get("pkt4-ack-sent", 0)
     naks = totals.get("pkt4-nak-sent", 0)
-    nak_pct = (naks / acks * 100.0) if acks else 0.0
+    # NAKs as a share of ALL replies (ACK + NAK): with the old naks/acks form,
+    # 50 NAKs and 0 ACKs scored 0% and read green.
+    replies = acks + naks
+    nak_pct = (naks / replies * 100.0) if replies else 0.0
+    nak_significant = naks >= t["min_naks"]
 
     alloc_fail_total = sum(v for k, v in totals.items() if k.startswith("v4-allocation-fail"))
 
     status = "ok"
-    if drop_pct > t["fail_drop_pct"] or nak_pct > t["fail_nak_pct"]:
+    if drop_pct > t["fail_drop_pct"] or (nak_significant and nak_pct > t["fail_nak_pct"]):
         status = "fail"
     elif drop_pct > t["warn_drop_pct"] or alloc_fail_total > 0:
         status = "warn"
@@ -115,7 +122,7 @@ def assess(rates_result, thresholds=None):
         notes.append(f"drops + parse failures: {drop_pct:.1f}% of received ({drop}/{received})")
     if naks:
         if acks:
-            notes.append(f"NAKs: {nak_pct:.1f}% of ACKs ({naks}/{acks})")
+            notes.append(f"NAKs: {nak_pct:.1f}% of replies ({naks} NAK / {acks} ACK)")
         else:
             notes.append(f"{naks} NAK(s), 0 ACKs")
     if alloc_fail_total:

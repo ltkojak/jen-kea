@@ -158,6 +158,10 @@ def start_background_workers(app) -> bool:
 
     start_scheduler(app)
 
+    from jen.services.events import start_dispatcher
+
+    start_dispatcher()
+
     t = threading.Thread(target=check_alerts, name="jen-alerts", daemon=True)
     t.start()
     # v5.30.0 (Q30, A2) — the plugins' periodic-job loop, started here and
@@ -175,6 +179,12 @@ def stop_background_workers() -> None:
         from jen.services.scheduler import stop_scheduler
 
         stop_scheduler()
+    except Exception:
+        pass
+    try:
+        from jen.services.events import stop_dispatcher
+
+        stop_dispatcher(timeout=2.0)
     except Exception:
         pass
     with _lock:

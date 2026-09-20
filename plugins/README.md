@@ -148,10 +148,15 @@ def _on_new_lease(event):
 subscribe("lease.new", _on_new_lease)  # or subscribe("*", fn) for every kind
 ```
 
-`fn` is called synchronously, right after the row is written — keep it
-fast, and never let it raise: an exception is logged and swallowed, but
-a slow subscriber still blocks whatever thread called `emit()` (usually
-the alert loop's tick). There's no `unsubscribe_all` — a plugin that
+`fn` is called right after the row is written — keep it fast, and never
+let it raise: an exception is logged and swallowed. Since v5.49.0-beta.2
+subscribers run on **one shared worker thread**, not on the thread that
+called `emit()` (whenever Jen's background workers are running — under the
+gunicorn launcher, always): a slow subscriber delays the next subscriber,
+never Jen. The hand-off queue holds 1000 events; past that, deliveries are
+dropped and logged (the `events` row is still written, so the Timeline stays
+complete). Outside the background workers (tests, CLI tools) `fn` is still
+called inline. There's no `unsubscribe_all` — a plugin that
 `register(app)`s a subscriber and can be disabled at runtime is
 responsible for calling `unsubscribe(fn)` itself if it needs to stop
 listening.

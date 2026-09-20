@@ -6,6 +6,9 @@ v5.42.0 (Q43) — the event stream. `TestDiffLeases` is pure (no DB —
 everything else needs the real `events` table (migration 27).
 """
 
+import pytest
+
+from jen.services import events
 from jen.services.alerts import diff_leases
 from jen.services.events import KINDS, emit, subscribe, unsubscribe
 
@@ -197,3 +200,84 @@ class TestEmit:
             unsubscribe(seen_b.append)
         assert seen_a == []
         assert len(seen_b) == 1
+
+
+class TestBoundedDispatcher:
+    """v5.49.0-beta.2 (audit I) - subscribers run on one shared worker when
+    it is running; inline when it is not. DB-free: the row write is stubbed."""
+
+    @pytest.fixture(autouse=True)
+    def _no_db(self, monkeypatch):
+        import jen.models.db as dbmod
+
+        def boom():
+            raise RuntimeError("no db in this test")
+
+        monkeypatch.setattr(dbmod, "jen_db", boom)
+        yield
+        events.stop_dispatcher()
+        with events._lock:
+            events._SUBSCRIBERS.clear()
+
+    def test_inline_when_the_worker_is_not_running(self):
+        seen = []
+        subscribe("*", seen.append)
+        emit("lease.new", mac="aa:bb:cc:dd:ee:01")
+        assert len(seen) == 1  # delivered before emit() returned
+
+    def test_queued_when_the_worker_is_running_and_delivered_on_another_thread(self):
+        import threading
+
+        got = threading.Event()
+        threads = []
+
+        def sub(event):
+            threads.append(threading.current_thread().name)
+            got.set()
+
+        subscribe("*", sub)
+        assert events.start_dispatcher() is True
+        assert events.start_dispatcher() is False  # idempotent
+        emit("lease.new")
+        assert got.wait(3)
+        assert threads == ["jen-events"]
+
+    def test_a_slow_subscriber_does_not_block_the_emitter(self):
+        import threading
+        import time
+
+        release = threading.Event()
+        subscribe("*", lambda e: release.wait(5))
+        events.start_dispatcher()
+        t0 = time.monotonic()
+        for _ in range(5):
+            emit("lease.new")
+        assert time.monotonic() - t0 < 1.0
+        release.set()
+
+    def test_full_queue_drops_without_raising(self, monkeypatch):
+        import queue
+        import threading
+
+        # a "running" dispatcher that never drains, and a tiny queue
+        monkeypatch.setattr(events, "_queue", queue.Queue(maxsize=2))
+        monkeypatch.setattr(events, "_dispatcher", threading.Thread(target=lambda: threading.Event().wait(2)))
+        events._dispatcher.start()
+        monkeypatch.setattr(events, "_last_drop_log", 0.0)
+        for _ in range(5):
+            emit("lease.new")  # 3 of these overflow; none may raise
+        assert events._queue.qsize() == 2
+
+    def test_a_raising_subscriber_logs_and_the_next_one_still_runs(self):
+        import threading
+
+        done = threading.Event()
+
+        def bad(_e):
+            raise RuntimeError("boom")
+
+        subscribe("*", bad)
+        subscribe("*", lambda e: done.set())
+        events.start_dispatcher()
+        emit("lease.new")
+        assert done.wait(3)
