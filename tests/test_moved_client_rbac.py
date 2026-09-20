@@ -251,7 +251,12 @@ class TestUnplacedDevices:
         _seed(db, device_subnet=None, device_ip="10.99.7.7")
         with db.cursor() as cur:
             cur.execute("SELECT id FROM devices WHERE mac=%s", (MAC,))
-            return cur.fetchone()["id"]
+            device_id = cur.fetchone()["id"]
+        # end this connection's read snapshot: later checks must see what the
+        # request under test committed (REPEATABLE READ would hide it, and a
+        # "row still there" assertion would then pass for the wrong reason)
+        db.commit()
+        return device_id
 
     def test_search_hides_an_unplaced_device_from_a_restricted_user(self, client, db):
         self._unplaced(db)
