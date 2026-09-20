@@ -144,6 +144,149 @@ class TestRestoreContent:
         assert restore_content(tmp_path / "bundle", tmp_path / "content") == 0
 
 
+def _raw_tar(entries):
+    """entries: list of (name, kind, payload) -> uncompressed tar bytes.
+    kind: file | dir | sym | hard | fifo. Built by hand because
+    recovery.build_tar only ever writes regular files."""
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for name, kind, payload in entries:
+            info = tarfile.TarInfo(name=name)
+            if kind == "file":
+                info.size = len(payload)
+                tf.addfile(info, io.BytesIO(payload))
+            elif kind == "dir":
+                info.type = tarfile.DIRTYPE
+                tf.addfile(info)
+            elif kind == "sym":
+                info.type = tarfile.SYMTYPE
+                info.linkname = payload
+                tf.addfile(info)
+            elif kind == "hard":
+                info.type = tarfile.LNKTYPE
+                info.linkname = payload
+                tf.addfile(info)
+            elif kind == "fifo":
+                info.type = tarfile.FIFOTYPE
+                tf.addfile(info)
+    return buf.getvalue()
+
+
+class TestSafeExtract:
+    """v5.49.0-beta.2 (audit A) - the root-run extractor never depends on the
+    interpreter's tarfile `filter=` and refuses everything but plain,
+    in-tree files and directories - before writing anything."""
+
+    PASS = "correct horse battery staple"
+
+    def _extract(self, entries, tmp_path):
+        from jen.services.recovery import encrypt
+        from jen.tools.restore import extract_bundle
+
+        dest = tmp_path / "out"
+        extract_bundle(encrypt(_raw_tar(entries), self.PASS), self.PASS, dest)
+        return dest
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            ("../../etc/passwd", "file", b"x"),
+            ("/etc/passwd", "file", b"x"),
+            ("a/../../escape", "file", b"x"),
+            ("link", "sym", "/etc"),
+            ("hard", "hard", "manifest.json"),
+            ("pipe", "fifo", None),
+        ],
+    )
+    def test_unsafe_member_refused_and_nothing_written(self, entry, tmp_path):
+        from jen.tools.restore import RestoreRefused
+
+        with pytest.raises(RestoreRefused) as exc:
+            self._extract([("manifest.json", "file", b"{}"), entry], tmp_path)
+        assert entry[0] in str(exc.value)
+        # validated before writing: even the harmless first member is absent
+        assert not (tmp_path / "out" / "manifest.json").exists()
+        assert not (tmp_path / "escape").exists()
+        assert not (tmp_path.parent / "escape").exists()
+
+    def test_normal_bundle_restores_every_member(self, tmp_path):
+        dest = self._extract(
+            [
+                ("manifest.json", "file", b"{}"),
+                ("content", "dir", None),
+                ("content/keys/x.txt", "file", b"k"),
+                ("ssl/cert.pem", "file", b"c"),
+            ],
+            tmp_path,
+        )
+        assert (dest / "manifest.json").read_bytes() == b"{}"
+        assert (dest / "content" / "keys" / "x.txt").read_bytes() == b"k"
+        assert (dest / "ssl" / "cert.pem").read_bytes() == b"c"
+
+
+class TestRestoreKeysAndVersionGate:
+    def test_both_keys_written_0600(self, tmp_path):
+        import os
+        import stat
+
+        from jen.tools.restore import restore_etc_jen
+
+        bundle = tmp_path / "b"
+        bundle.mkdir()
+        (bundle / "mfa_key").write_bytes(b"m" * 44)
+        (bundle / "secret_key").write_bytes(b"s" * 64)
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        lines = restore_etc_jen(bundle, etc)
+        assert "wrote mfa_key" in lines and "wrote secret_key" in lines
+        if os.name != "nt":
+            for name in ("mfa_key", "secret_key"):
+                assert stat.S_IMODE((etc / name).stat().st_mode) == 0o600
+
+    def test_legacy_content_keys_are_written_0600_not_0644(self, tmp_path):
+        import os
+        import stat
+
+        from jen.tools.restore import restore_content
+
+        bundle = tmp_path / "b"
+        (bundle / "content" / "keys").mkdir(parents=True)
+        (bundle / "content" / "keys" / ".secret_key").write_bytes(b"s")
+        (bundle / "content" / "logo.png").write_bytes(b"p")
+        content = tmp_path / "content"
+        restore_content(bundle, content)
+        if os.name != "nt":
+            assert stat.S_IMODE((content / "keys" / ".secret_key").stat().st_mode) == 0o600
+            assert stat.S_IMODE((content / "logo.png").stat().st_mode) == 0o644
+
+    def test_newer_jen_refused_unless_forced(self):
+        from jen.tools.restore import RestoreRefused, check_bundle_version
+
+        newer = _manifest(jen_version="5.999.0")
+        with pytest.raises(RestoreRefused) as exc:
+            check_bundle_version(newer)
+        assert "newer" in str(exc.value)
+        check_bundle_version(newer, force=True)  # must not raise
+
+    def test_schema_ahead_refused_unless_forced(self):
+        from jen.models.migrations import MIGRATIONS
+        from jen.tools.restore import RestoreRefused, check_bundle_version
+
+        ahead = _manifest(schema_version=MIGRATIONS[-1][0] + 1)
+        with pytest.raises(RestoreRefused):
+            check_bundle_version(ahead)
+        check_bundle_version(ahead, force=True)
+
+    def test_older_bundle_is_the_supported_direction(self):
+        from jen.tools.restore import check_bundle_version
+
+        check_bundle_version(_manifest(jen_version="5.1.0", schema_version=3))
+        check_bundle_version(_manifest())  # same version, current schema
+
+
 class TestCheckKeaMajor:
     """Needs a real (if minimal) jen.config to reload from — no DB
     access happens here, config.AppConfig.reload() only parses the INI

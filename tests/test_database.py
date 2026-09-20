@@ -238,3 +238,34 @@ class TestRecoveryBundleRoute:
         manifest = json.loads(tf.extractfile("manifest.json").read())
         assert manifest["jen_version"] == JEN_VERSION
         assert "channel" in manifest and "schema_version" in manifest
+
+
+class TestRecoveryBundleKeys:
+    """v5.49.0-beta.2 (audit B) - the fallback secret/MFA keys ride as
+    explicit members (restored 0600), never as ordinary content/ files."""
+
+    PASSPHRASE = "correct horse battery staple"
+
+    def test_fallback_keys_are_explicit_members_exactly_once(
+        self, logged_in_client, db, mock_kea, monkeypatch, tmp_path
+    ):
+        from jen import extensions
+        from jen.services.recovery import open_bundle
+
+        content = tmp_path / "content"
+        (content / "keys").mkdir(parents=True)
+        (content / "keys" / ".secret_key").write_text("s" * 64)
+        (content / "keys" / ".mfa_key").write_text("m" * 44)
+        (content / "logo.png").write_bytes(b"png")
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(content))
+        monkeypatch.setattr(extensions, "CONTENT_KEYS_DIR", str(content / "keys"))
+        monkeypatch.setattr(extensions, "MFA_KEY_PATH", str(tmp_path / "nowhere" / "mfa_key"))
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        names = open_bundle(r.data, self.PASSPHRASE).getnames()
+        assert names.count("mfa_key") == 1 and names.count("secret_key") == 1
+        assert not any(n.startswith("content/keys") for n in names)
+        assert "content/logo.png" in names

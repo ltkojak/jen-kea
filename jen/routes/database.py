@@ -219,6 +219,17 @@ def _recovery_members() -> dict[str, bytes]:
                 members["mfa_key"] = f.read()
             break
 
+    # secret_key gets the same treatment as mfa_key: an explicit member,
+    # restored 0600, never carried as ordinary content.
+    for candidate in (
+        os.path.join(os.path.dirname(extensions.MFA_KEY_PATH), "secret_key"),
+        os.path.join(extensions.CONTENT_KEYS_DIR, ".secret_key"),
+    ):
+        if os.path.isfile(candidate):
+            with open(candidate, "rb") as f:
+                members["secret_key"] = f.read()
+            break
+
     members.update(_walk_files(os.path.dirname(extensions.SSL_CERT), "ssl"))
     members.update(_walk_files(os.path.dirname(extensions.SSH_KEY_PATH), "ssh"))
 
@@ -235,6 +246,7 @@ def _recovery_members() -> dict[str, bytes]:
             extensions.CONTENT_PLUGIN_DIR,
             extensions.CONTENT_PLUGIN_REQUESTS_DIR,
             extensions.CONTENT_TMP_DIR,
+            extensions.CONTENT_KEYS_DIR,  # fallback secret/MFA keys ride as explicit 0600 members
         )
     }
     members.update(_walk_files(extensions.CONTENT_DIR, "content", skip=excluded))

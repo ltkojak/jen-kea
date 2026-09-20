@@ -93,6 +93,7 @@ while [[ $# -gt 0 ]]; do
             shift
             RESTORE_BUNDLE="${1:-}"
             ;;
+        --force)       RESTORE_FORCE="--force" ;;
     esac
     shift
 done
@@ -1493,7 +1494,7 @@ main() {
         # `if ! ( ... )` — not a bare `cmd1 && cmd2` — so a nonzero exit
         # from the Python tool is caught here, not treated by `set -e`
         # as a reason to abort the whole script before fatal() can run.
-        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE"); then
+        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" ${RESTORE_FORCE:-}); then
             fatal "Restore failed — see the messages above."
         fi
         ok "Restore complete."

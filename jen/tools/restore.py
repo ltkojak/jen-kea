@@ -25,7 +25,7 @@ import getpass
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 class RestoreRefused(RuntimeError):
@@ -63,12 +63,46 @@ def extract_bundle(blob: bytes, passphrase: str, dest_dir: Path) -> None:
 
     tf = open_bundle(blob, passphrase)
     try:
-        tf.extractall(dest_dir, filter="data")
-    except TypeError:
-        # Python < 3.12 doesn't know the `filter=` kwarg yet.
-        tf.extractall(dest_dir)
+        safe_extract(tf, Path(dest_dir))
     finally:
         tf.close()
+
+
+def safe_extract(tf, dest_dir: Path) -> None:
+    """Extract every member of `tf` under `dest_dir`, refusing anything that
+    is not a plain file or directory with a relative, in-tree name.
+
+    v5.49.0-beta.2 — this runs as root, so it must not depend on which
+    patch release of Python is installed: the old `extractall(filter="data")`
+    with a bare-`extractall()` fallback on TypeError extracted symlinks,
+    hardlinks and `..` paths unrestricted on any interpreter without the
+    backported `filter=`. Every member is validated BEFORE anything is
+    written, so a refused bundle leaves `dest_dir` untouched; file modes are
+    masked to 0o644/0o755 (the restore steps set the real modes afterwards).
+    Raises `RestoreRefused` naming the offending member."""
+    dest = Path(dest_dir)
+    dest.mkdir(parents=True, exist_ok=True)
+    root = dest.resolve()
+    plan = []
+    for m in tf.getmembers():
+        pure = PurePosixPath(m.name)
+        if not (m.isfile() or m.isdir()):
+            raise RestoreRefused(f"bundle member {m.name!r} is not a plain file or directory — refusing the bundle")
+        if pure.is_absolute() or ".." in pure.parts or not m.name or m.name.startswith(("/", "\\")):
+            raise RestoreRefused(f"bundle member {m.name!r} has an unsafe path — refusing the bundle")
+        target = (root / Path(*pure.parts)).resolve()
+        if target != root and root not in target.parents:
+            raise RestoreRefused(f"bundle member {m.name!r} would land outside the restore directory")
+        plan.append((m, target))
+    for m, target in plan:
+        if m.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        src = tf.extractfile(m)
+        with open(target, "wb") as out:
+            out.write(src.read())
+        target.chmod(0o755 if m.mode & 0o111 else 0o644)
 
 
 def load_manifest(bundle_dir: Path) -> dict:
@@ -89,6 +123,30 @@ def check_jen_major(manifest: dict) -> None:
             f"this bundle was made by Jen {manifest.get('jen_version')} (major {bundle_major}); "
             f"this install is Jen {JEN_VERSION} (major {here_major}). Restoring across a MAJOR "
             f"version is not supported — install a matching Jen major version first, then restore."
+        )
+
+
+def check_bundle_version(manifest: dict, force: bool = False) -> None:
+    """Refuse a bundle from a NEWER Jen, or one whose schema is ahead of this
+    install's migrations, unless `force`. An older bundle into a newer Jen is
+    the supported direction: migrations run forward at the next boot."""
+    from jen import JEN_VERSION
+    from jen.models.migrations import MIGRATIONS
+    from jen.version import numeric
+
+    if force:
+        return
+    if numeric(manifest.get("jen_version", "")) > numeric(JEN_VERSION):
+        raise RestoreRefused(
+            f"this bundle was made by Jen {manifest.get('jen_version')}, newer than this install "
+            f"(Jen {JEN_VERSION}). Upgrade Jen first, or pass --force if you know the state is compatible."
+        )
+    here_schema = MIGRATIONS[-1][0] if MIGRATIONS else 0
+    bundle_schema = manifest.get("schema_version", 0)
+    if isinstance(bundle_schema, int) and bundle_schema > here_schema:
+        raise RestoreRefused(
+            f"this bundle's database schema (v{bundle_schema}) is ahead of this install's (v{here_schema}). "
+            "Upgrade Jen first, or pass --force to restore anyway."
         )
 
 
@@ -168,10 +226,11 @@ def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
         _write_file(etc_jen / "jen.config", config_src.read_bytes(), 0o600, owner)
         lines.append("wrote jen.config")
 
-    key_src = bundle_dir / "mfa_key"
-    if key_src.is_file():
-        _write_file(etc_jen / "mfa_key", key_src.read_bytes(), 0o600, owner)
-        lines.append("wrote mfa_key")
+    for key_name in ("mfa_key", "secret_key"):
+        key_src = bundle_dir / key_name
+        if key_src.is_file():
+            _write_file(etc_jen / key_name, key_src.read_bytes(), 0o600, owner)
+            lines.append(f"wrote {key_name}")
 
     for sub in ("ssl", "ssh"):
         src_root = bundle_dir / sub
@@ -197,7 +256,11 @@ def restore_content(bundle_dir: Path, content_dir: Path) -> int:
     for path in src_root.rglob("*"):
         if path.is_file():
             rel = path.relative_to(src_root)
-            _write_file(content_dir / rel, path.read_bytes(), 0o644, owner)
+            # A bundle from before v5.49.0-beta.2 carried the fallback key
+            # files (content/keys/) as ordinary content; never write one
+            # back world-readable.
+            mode = 0o600 if rel.parts and rel.parts[0] == "keys" else 0o644
+            _write_file(content_dir / rel, path.read_bytes(), mode, owner)
             count += 1
     return count
 
@@ -223,7 +286,13 @@ def restore_jen_db(bundle_dir: Path, config_file: Path) -> list[str]:
     return dbexport.import_jen(db_file.read_bytes())
 
 
-def run(bundle_path: str, passphrase: str, etc_jen: str = "/etc/jen", content_dir: str | None = None) -> int:
+def run(
+    bundle_path: str,
+    passphrase: str,
+    etc_jen: str = "/etc/jen",
+    content_dir: str | None = None,
+    force: bool = False,
+) -> int:
     import tempfile
 
     from jen import extensions
@@ -243,6 +312,7 @@ def run(bundle_path: str, passphrase: str, etc_jen: str = "/etc/jen", content_di
         try:
             manifest = load_manifest(bundle_dir)
             check_jen_major(manifest)
+            check_bundle_version(manifest, force=force)
             kea_warnings = check_kea_major(manifest, bundle_dir)
         except RestoreRefused as e:
             print(f"refused: {e}", file=sys.stderr)
@@ -282,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("bundle", help="Path to the jen-recovery-*.tar.enc bundle")
     parser.add_argument("--etc-jen", default="/etc/jen", help="Where to write config/keys (default: /etc/jen)")
     parser.add_argument("--content-dir", default=None, help="Where to restore content (default: Jen's own)")
+    parser.add_argument("--force", action="store_true", help="Restore a bundle from a newer Jen / newer schema anyway")
     args = parser.parse_args(argv)
 
     if not os.path.isfile(args.bundle):
@@ -293,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
         print("error: passphrase must not be empty", file=sys.stderr)
         return 1
 
-    return run(args.bundle, passphrase, etc_jen=args.etc_jen, content_dir=args.content_dir)
+    return run(args.bundle, passphrase, etc_jen=args.etc_jen, content_dir=args.content_dir, force=args.force)
 
 
 if __name__ == "__main__":
