@@ -40,11 +40,13 @@ def build(db_host="127.0.0.1", db_name="kea", db_user="kea", db_pass="kea_pw", h
                     "socket-address": "127.0.0.1",
                     "socket-port": http_port,
                     # Kea 3.2+ refuses an http control socket with neither
-                    # TLS nor authentication ("Unsecured HTTP control channel").
+                    # TLS nor authentication ("Unsecured HTTP control channel"); a clear-text
+                    # password is refused too, hence password-file (read from
+                    # the config directory).
                     "authentication": {
                         "type": "basic",
                         "realm": "kea-compat",
-                        "clients": [{"user": API_USER, "password": API_PASS}],
+                        "clients": [{"user": API_USER, "password-file": "jen-api.pw"}],
                     },
                 },
             ],
