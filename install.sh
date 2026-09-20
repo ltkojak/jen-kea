@@ -13,7 +13,12 @@
 #    sudo ./install.sh --restore <bundle.tar.enc>
 #                                    Restore a recovery bundle (Settings → Databases
 #                                    → Recovery) onto this install — run AFTER a normal
-#                                    install/upgrade, not instead of one
+#                                    install/upgrade, not instead of one.
+#                                    Stops Jen, snapshots what it replaces, restarts and
+#                                    health-checks, and rolls back on failure. Flags:
+#                                    --no-stop (Docker / not a systemd unit), --start, --force
+#    sudo ./install.sh --rollback <snapshot dir>
+#                                    Undo a restore from its pre-restore snapshot
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -94,6 +99,13 @@ while [[ $# -gt 0 ]]; do
             RESTORE_BUNDLE="${1:-}"
             ;;
         --force)       RESTORE_FORCE="--force" ;;
+        --no-stop)     RESTORE_NOSTOP="--no-stop" ;;
+        --start)       RESTORE_START="--start" ;;
+        --rollback)
+            MODE_RESTORE=true
+            shift
+            RESTORE_ROLLBACK="${1:-}"
+            ;;
     esac
     shift
 done
@@ -1480,8 +1492,19 @@ main() {
     # (rule 8), because this IS the installer, run directly by the
     # operator via sudo, the same way every other mode here already is.
     if [[ "$MODE_RESTORE" == "true" ]]; then
+        if [[ -n "${RESTORE_ROLLBACK:-}" ]]; then
+            # --rollback <snapshot dir>: redo the rollback of a restore by hand.
+            RESTORE_PY="$PYBIN"
+            [[ -x "$RESTORE_PY" ]] || fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first."
+            info "Rolling back from $RESTORE_ROLLBACK"
+            if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" ${RESTORE_NOSTOP:-}); then
+                fatal "Rollback failed — see the messages above."
+            fi
+            ok "Rollback complete."
+            exit 0
+        fi
         if [[ -z "$RESTORE_BUNDLE" ]]; then
-            fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc"
+            fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc [--no-stop] [--start] [--force]"
         fi
         if [[ ! -f "$RESTORE_BUNDLE" ]]; then
             fatal "Bundle not found: $RESTORE_BUNDLE"
@@ -1494,7 +1517,7 @@ main() {
         # `if ! ( ... )` — not a bare `cmd1 && cmd2` — so a nonzero exit
         # from the Python tool is caught here, not treated by `set -e`
         # as a reason to abort the whole script before fatal() can run.
-        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" ${RESTORE_FORCE:-}); then
+        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
             fatal "Restore failed — see the messages above."
         fi
         ok "Restore complete."

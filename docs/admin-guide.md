@@ -17,7 +17,8 @@ Quick links into the procedures below, roughly in the order you're likely to nee
 - **Upgrade Kea to 3.2** — [Upgrading Kea](#upgrading-kea-the-32-readiness-group-v5380)
 - **Migrate from Windows DHCP** — [Migrating from Windows DHCP](#migrating-from-windows-dhcp-v5240)
 - **Migrate from ISC DHCP** — [Migrating from ISC DHCP (dhcpd.conf)](#migrating-from-isc-dhcp-dhcpdconf-v5370)
-- **Recover Jen on a new machine** — [Recover Jen on a new machine](#recover-jen-on-a-new-machine); `sudo ./install.sh --restore` from a Settings → Databases → Recovery bundle
+- **Recover Jen on a new machine** — [Recover Jen on a new machine](#recover-jen-on-a-new-machine); `sudo ./install.sh --restore` from a Settings → Databases → Recovery bundle (stops Jen, snapshots what it replaces, health-checks, and rolls back on failure)
+- **Undo a restore** — `sudo ./install.sh --rollback <snapshot dir>`, see [Recover Jen on a new machine](#recover-jen-on-a-new-machine)
 - **Restore from a backup on the same machine** — Settings → Databases → Backups (export/import individual tables without moving to a new box)
 - **Get help** — Settings → System → "Report an issue" opens a GitHub issue with your version filled in; grab a support bundle first from the button next to it
 
@@ -1101,11 +1102,19 @@ The bundle is only as secret as the passphrase. Anyone with both the file and th
 sudo ./install.sh --restore /path/to/jen-recovery-*.tar.enc
 ```
 
-You'll be prompted for the passphrase (never pass it as a command-line argument — anything on argv is visible to every other process on the box via `ps`). The installer refuses to proceed if the bundle's Jen major version doesn't match the installed one, or if the Kea server the bundle's own `jen.config` points at is reachable right now and running a different Kea *major* version than the manifest recorded at export time (unreachable skips this check with a loud warning, since you may be restoring before Kea itself is back up). Once those pass, it overwrites `/etc/jen/*`, restores the content directory, and imports the database — all through `python3 -m jen.tools.restore`, the same module `install.sh --restore` calls.
+You'll be prompted for the passphrase (never pass it as a command-line argument — anything on argv is visible to every other process on the box via `ps`). The installer refuses to proceed if the bundle's Jen major version doesn't match the installed one, or if the Kea server the bundle's own `jen.config` points at is reachable right now and running a different Kea *major* version than the manifest recorded at export time (unreachable skips this check with a loud warning, since you may be restoring before Kea itself is back up). Once those pass, the restore runs as a sequence, all through `python3 -m jen.tools.restore` (the module `install.sh --restore` calls):
+
+1. **Stop** — if `jen` is a running systemd service it is stopped, so nothing is writing to the config, content or database while they are replaced.
+2. **Snapshot** — everything about to be overwritten is saved to `<content dir>/backups/pre-restore-<UTC timestamp>/` (mode 0700): a tar of `/etc/jen`, a tar of the content directory (without `backups/` and `tmp/`), and a fresh export of the Jen database. If the snapshot cannot be taken, nothing is changed.
+3. **Apply** — `/etc/jen/*`, the content directory and the database are replaced from the bundle.
+4. **Start and health-check** — Jen is started again (only if it was running before, or you passed `--start`) and `/api/v1/health` is polled for up to 60 seconds on the restored `[server] http_port`.
+5. **Roll back on failure** — if anything raises during the apply, or Jen does not come up healthy, the snapshot is put back (config, content, database), Jen is started again, and the command exits non-zero naming the snapshot directory.
+
+Flags: `--no-stop` skips the stop/start (use it in Docker, or where Jen is not a systemd unit — stop it yourself first), `--start` starts Jen afterwards even if it was not running, `--force` allows a bundle from a newer Jen. Snapshots are small and are kept. To undo a restore that finished but turned out wrong: `sudo ./install.sh --rollback /path/to/pre-restore-<timestamp>` (add `--no-stop` if Jen is not a systemd unit).
 
 Afterward:
 
-1. `sudo systemctl restart jen` (the installer does this for you, but confirm it came back up).
+1. Confirm Jen is up and you can log in (the restore already started it and checked `/api/v1/health` if it was running; if it was stopped, start it: `sudo systemctl start jen`).
 2. Log in and go to **Settings → Kea → SSH** — run **Update helper** on each server. A helper-version mismatch right after a restore is expected, not a bug (this box's `jen-kea-helper` copy came from wherever `install.sh` last ran, not from the old box).
 3. Check **Settings → Plugins** — the database rows for any plugin you had installed came back with the restore, but the plugin *code* was not re-copied; reinstall from the registry for anything the page flags as missing.
 4. Confirm HTTPS and the SSH connection to each Kea host still work — the restored certs/keys should just work if the new box's hostname and network position match the old one, but verify rather than assume.

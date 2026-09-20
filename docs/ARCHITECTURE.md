@@ -1478,6 +1478,15 @@ be up yet during a recovery. Restored `/etc/jen` files keep the mode
 exists at the destination, rather than the script guessing a service
 username.
 
+Restore is a lifecycle, not just a write (v5.49.0-beta.4): stop the service
+if it is a running systemd unit, snapshot `/etc/jen`, the content directory and
+the database to `<content>/backups/pre-restore-<ts>/`, apply, start, poll the
+unauthenticated `/api/v1/health`, and roll the snapshot back on any exception
+or a failed health-check (`--rollback <dir>` repeats it by hand; `--no-stop`
+skips the service control). `systemctl` is run with list arguments from the
+installer's own root context — the same "installer run via sudo" boundary as
+every other `install.sh` mode, so it adds no sudoers line.
+
 ## 7. Known gaps (as of this writing)
 
 Documenting these here rather than letting them go unstated:

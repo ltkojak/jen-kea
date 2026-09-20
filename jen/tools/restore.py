@@ -21,10 +21,20 @@ only, not pushed anywhere.
 from __future__ import annotations
 
 import argparse
+import configparser
+import contextlib
 import getpass
+import gzip
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tarfile
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -286,12 +296,206 @@ def restore_jen_db(bundle_dir: Path, config_file: Path) -> list[str]:
     return dbexport.import_jen(db_file.read_bytes())
 
 
+# ── lifecycle: quiesce → snapshot → apply → start → health-check → roll back ──
+#
+# v5.49.0-beta.4 (Q55) — `install.sh --restore` used to rewrite jen.config,
+# keys, content and the database underneath a RUNNING gunicorn + background
+# workers, and gave no way back from a restore that broke Jen. The tool now
+# stops the service (when it is a systemd unit that is running), takes a
+# snapshot of everything it is about to overwrite, applies the bundle,
+# starts Jen again, polls it, and rolls the snapshot back on any failure.
+
+SERVICE = "jen"
+_SNAPSHOT_EXCLUDE = ("backups", "tmp")  # top-level content dirs left out of snapshots
+HEALTH_TIMEOUT_S = 60
+
+
+def _have_systemctl() -> bool:
+    return shutil.which("systemctl") is not None
+
+
+def _systemctl(*args: str) -> int:
+    """List-args, never a shell string. Returns the exit status."""
+    return subprocess.run(["systemctl", *args], capture_output=True, text=True).returncode
+
+
+def _service_active() -> bool:
+    return _systemctl("is-active", "--quiet", SERVICE) == 0
+
+
+def _service_port(config_file: Path) -> int:
+    cp = configparser.ConfigParser()
+    try:
+        cp.read(config_file, encoding="utf-8")
+        return cp.getint("server", "http_port", fallback=5050)
+    except (configparser.Error, ValueError):
+        return 5050
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):  # a 30x is an answer, not something to follow
+        return None
+
+
+def _wait_healthy(port: int, timeout: float = HEALTH_TIMEOUT_S, interval: float = 2.0) -> bool:
+    """Poll the unauthenticated /api/v1/health until Jen answers with anything
+    below 500 (a redirect counts: with HTTPS on, the plain port only redirects,
+    and following it would trip over a self-signed certificate)."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with opener.open(f"http://127.0.0.1:{port}/api/v1/health", timeout=5):
+                return True
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                return True
+        except Exception:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+def _point_config_at(cfg: Path) -> None:
+    from jen import config as jen_config
+    from jen import extensions
+
+    extensions.CONFIG_FILE = str(cfg)
+    jen_config.app_config.reload()
+
+
+def _export_db() -> bytes:
+    from jen.services import dbexport
+
+    content, _fname = dbexport.export_jen()
+    return gzip.compress(content)
+
+
+def _import_db(gz: bytes) -> list[str]:
+    from jen.services import dbexport
+
+    return dbexport.import_jen(gz)
+
+
+def _walk_files(root: Path, exclude: tuple[str, ...]):
+    """(relative posix name, path) for every regular file/dir under `root`,
+    pruning top-level directories named in `exclude`. Symlinks are skipped."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = Path(dirpath).relative_to(root)
+        if rel_dir == Path("."):
+            dirnames[:] = [d for d in dirnames if d not in exclude]
+        for name in sorted(dirnames) + sorted(filenames):
+            path = Path(dirpath) / name
+            if path.is_symlink():
+                continue
+            yield (rel_dir / name).as_posix(), path
+
+
+def _tar_tree(root: Path, out: Path, exclude: tuple[str, ...] = ()) -> None:
+    with tarfile.open(out, "w") as tf:
+        if root.is_dir():
+            for rel, path in _walk_files(root, exclude):
+                tf.add(path, arcname=rel, recursive=False)
+    os.chmod(out, 0o600)
+
+
+def take_snapshot(etc_jen: Path, content_dir: Path) -> Path:
+    """`<content>/backups/pre-restore-<UTC ts>/`: a tar of /etc/jen, a tar of
+    the content dir minus backups/tmp, and a fresh jen_db.json.gz — all 0600
+    in a 0700 directory. Raises on any failure (the caller refuses the
+    restore rather than proceed without a way back)."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base = Path(content_dir) / "backups" / f"pre-restore-{ts}"
+    snap, n = base, 1
+    while True:  # two restores in the same second must not collide
+        try:
+            snap.mkdir(parents=True, exist_ok=False)
+            break
+        except FileExistsError:
+            n += 1
+            snap = base.with_name(f"{base.name}-{n}")
+    os.chmod(snap, 0o700)
+    _tar_tree(Path(etc_jen), snap / "etc-jen.tar")
+    _tar_tree(Path(content_dir), snap / "content.tar", _SNAPSHOT_EXCLUDE)
+    db = snap / "jen_db.json.gz"
+    db.write_bytes(_export_db())
+    os.chmod(db, 0o600)
+    return snap
+
+
+def _restore_tree(tar_path: Path, root: Path, exclude: tuple[str, ...] = ()) -> None:
+    """Make `root` match the snapshot tar again: extract every member with its
+    recorded mode/owner, and delete regular files the restore ADDED (present
+    on disk, absent from the tar). Members are validated like safe_extract's."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    real = root.resolve()
+    with tarfile.open(tar_path) as tf:
+        members = tf.getmembers()
+        for m in members:
+            pure = PurePosixPath(m.name)
+            if not (m.isfile() or m.isdir()) or pure.is_absolute() or ".." in pure.parts:
+                raise RestoreRefused(f"snapshot member {m.name!r} is not a plain in-tree file or directory")
+            target = (real / Path(*pure.parts)).resolve()
+            if target != real and real not in target.parents:
+                raise RestoreRefused(f"snapshot member {m.name!r} would land outside {root}")
+        wanted = {m.name for m in members if m.isfile()}
+        for rel, path in list(_walk_files(root, exclude)):
+            if path.is_file() and rel not in wanted:
+                path.unlink()
+        for m in members:
+            target = root / Path(*PurePosixPath(m.name).parts)
+            if m.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(tf.extractfile(m).read())
+            target.chmod(m.mode & 0o777)
+            if hasattr(os, "chown"):
+                with contextlib.suppress(OSError):
+                    os.chown(target, m.uid, m.gid)
+
+
+def rollback_snapshot(snap: Path, etc_jen: Path, content_dir: Path) -> None:
+    """Put /etc/jen, the content dir and the database back the way the
+    snapshot found them."""
+    snap = Path(snap)
+    _restore_tree(snap / "etc-jen.tar", Path(etc_jen))
+    _restore_tree(snap / "content.tar", Path(content_dir), _SNAPSHOT_EXCLUDE)
+    cfg = Path(etc_jen) / "jen.config"
+    if cfg.is_file():
+        _point_config_at(cfg)  # the DB credentials are the ORIGINAL ones again
+    _import_db((snap / "jen_db.json.gz").read_bytes())
+
+
+def _fail_with_rollback(snap: Path, etc_jen: Path, content_dir: Path, reason: str, manage: bool, restart: bool) -> int:
+    print(f"error: {reason}", file=sys.stderr)
+    print(f"rolling back from {snap} …", file=sys.stderr)
+    if manage:
+        _systemctl("stop", SERVICE)
+    try:
+        rollback_snapshot(snap, etc_jen, content_dir)
+    except Exception as e:
+        print(f"ROLLBACK FAILED: {e}", file=sys.stderr)
+        print(
+            f"The snapshot is intact at {snap}. Redo it by hand: sudo ./install.sh --rollback {snap}", file=sys.stderr
+        )
+        return 2
+    if manage and restart:
+        _systemctl("start", SERVICE)
+    print(f"rolled back — Jen is as it was before the restore. Snapshot kept at {snap}", file=sys.stderr)
+    return 1
+
+
 def run(
     bundle_path: str,
     passphrase: str,
     etc_jen: str = "/etc/jen",
     content_dir: str | None = None,
     force: bool = False,
+    no_stop: bool = False,
+    start: bool = False,
 ) -> int:
     import tempfile
 
@@ -321,20 +525,73 @@ def run(
         for w in kea_warnings:
             print(f"warning: {w}", file=sys.stderr)
 
-        etc_lines = restore_etc_jen(bundle_dir, Path(etc_jen))
-        for line in etc_lines:
-            print(line)
+        # ── quiesce ──────────────────────────────────────────────────────
+        manage = not no_stop
+        if no_stop:
+            print(
+                "--no-stop: not stopping or starting Jen — make sure it is stopped, and start it yourself afterwards."
+            )
+        elif not _have_systemctl():
+            manage = False
+            print("systemctl not found — treating this as --no-stop (stop and start Jen yourself).")
+        was_running = False
+        if manage:
+            was_running = _service_active()
+            if was_running:
+                print("stopping jen …")
+                if _systemctl("stop", SERVICE) != 0:
+                    print("refused: could not stop the jen service — nothing was changed.", file=sys.stderr)
+                    return 1
+            else:
+                print("jen is not running — leaving it stopped unless --start is given.")
 
-        content_count = restore_content(bundle_dir, Path(content_dir))
-        print(f"restored {content_count} content file(s)")
+        # ── snapshot ─────────────────────────────────────────────────────
+        try:
+            snap = take_snapshot(Path(etc_jen), Path(content_dir))
+        except Exception as e:
+            print(f"refused: could not snapshot the current state ({e}) — nothing was changed.", file=sys.stderr)
+            if manage and was_running:
+                _systemctl("start", SERVICE)
+            return 1
+        print(f"snapshot of the current state: {snap}")
 
-        db_results = restore_jen_db(bundle_dir, Path(etc_jen) / "jen.config")
-        for line in db_results:
-            print(line)
+        # ── apply ────────────────────────────────────────────────────────
+        restart = was_running or start
+        try:
+            for line in restore_etc_jen(bundle_dir, Path(etc_jen)):
+                print(line)
+            content_count = restore_content(bundle_dir, Path(content_dir))
+            print(f"restored {content_count} content file(s)")
+            for line in restore_jen_db(bundle_dir, Path(etc_jen) / "jen.config"):
+                print(line)
+        except Exception as e:
+            return _fail_with_rollback(
+                snap, Path(etc_jen), Path(content_dir), f"apply failed: {e}", manage, was_running
+            )
+
+        # ── start + health-check ─────────────────────────────────────────
+        if manage and restart:
+            print("starting jen …")
+            port = _service_port(Path(etc_jen) / "jen.config")
+            if _systemctl("start", SERVICE) != 0 or not _wait_healthy(port):
+                return _fail_with_rollback(
+                    snap,
+                    Path(etc_jen),
+                    Path(content_dir),
+                    f"Jen did not come up healthy on port {port} after the restore",
+                    manage,
+                    was_running,
+                )
+            print("jen is up and answering.")
 
     print()
-    print("Recovery bundle restored. Next:")
-    print("  1. Restart Jen: sudo systemctl restart jen")
+    print(f"Recovery bundle restored. A snapshot of what it replaced is at {snap}")
+    print(f"(undo with: sudo ./install.sh --rollback {snap})")
+    print("Next:")
+    if not (manage and restart):
+        print("  1. Start Jen: sudo systemctl start jen")
+    else:
+        print("  1. Confirm Jen is up and you can log in.")
     print("  2. Log in and go to Settings → Kea → SSH — run 'Update helper' on each server")
     print("     (a helper version mismatch after a restore is expected, not a bug).")
     print("  3. Check Settings → Plugins — any plugin the manifest recorded is back in the")
@@ -344,16 +601,70 @@ def run(
     return 0
 
 
+def run_rollback(
+    snapshot_dir: str, etc_jen: str = "/etc/jen", content_dir: str | None = None, no_stop: bool = False
+) -> int:
+    """`--rollback <dir>`: redo the rollback by hand from a named snapshot."""
+    from jen import extensions
+
+    snap = Path(snapshot_dir)
+    for name in ("etc-jen.tar", "content.tar", "jen_db.json.gz"):
+        if not (snap / name).is_file():
+            print(f"error: {snap} is not a pre-restore snapshot (missing {name})", file=sys.stderr)
+            return 1
+    content_dir = content_dir or extensions.CONTENT_DIR
+    manage = not no_stop and _have_systemctl()
+    was_running = manage and _service_active()
+    if manage and was_running:
+        print("stopping jen …")
+        if _systemctl("stop", SERVICE) != 0:
+            print("refused: could not stop the jen service — nothing was changed.", file=sys.stderr)
+            return 1
+    try:
+        rollback_snapshot(snap, Path(etc_jen), Path(content_dir))
+    except Exception as e:
+        print(f"ROLLBACK FAILED: {e}", file=sys.stderr)
+        if manage and was_running:
+            _systemctl("start", SERVICE)
+        return 2
+    print(f"rolled back from {snap}")
+    if manage and was_running:
+        _systemctl("start", SERVICE)
+        print("started jen.")
+    elif not manage:
+        print("Start Jen yourself: sudo systemctl start jen")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 -m jen.tools.restore",
         description="Restore Jen from an encrypted recovery bundle (Settings → Databases → Recovery).",
     )
-    parser.add_argument("bundle", help="Path to the jen-recovery-*.tar.enc bundle")
+    parser.add_argument("bundle", nargs="?", default=None, help="Path to the jen-recovery-*.tar.enc bundle")
+    parser.add_argument(
+        "--no-stop",
+        action="store_true",
+        help="Do not stop/start the jen service (Docker, or a Jen that is not a systemd unit)",
+    )
+    parser.add_argument(
+        "--start", action="store_true", help="Start Jen after the restore even if it was not running before"
+    )
+    parser.add_argument(
+        "--rollback",
+        metavar="SNAPSHOT_DIR",
+        default=None,
+        help="Undo a restore from its pre-restore snapshot directory",
+    )
     parser.add_argument("--etc-jen", default="/etc/jen", help="Where to write config/keys (default: /etc/jen)")
     parser.add_argument("--content-dir", default=None, help="Where to restore content (default: Jen's own)")
     parser.add_argument("--force", action="store_true", help="Restore a bundle from a newer Jen / newer schema anyway")
     args = parser.parse_args(argv)
+
+    if args.rollback:
+        return run_rollback(args.rollback, etc_jen=args.etc_jen, content_dir=args.content_dir, no_stop=args.no_stop)
+    if not args.bundle:
+        parser.error("a bundle path is required (or --rollback SNAPSHOT_DIR)")
 
     if not os.path.isfile(args.bundle):
         print(f"error: {args.bundle} not found", file=sys.stderr)
@@ -364,7 +675,15 @@ def main(argv: list[str] | None = None) -> int:
         print("error: passphrase must not be empty", file=sys.stderr)
         return 1
 
-    return run(args.bundle, passphrase, etc_jen=args.etc_jen, content_dir=args.content_dir, force=args.force)
+    return run(
+        args.bundle,
+        passphrase,
+        etc_jen=args.etc_jen,
+        content_dir=args.content_dir,
+        force=args.force,
+        no_stop=args.no_stop,
+        start=args.start,
+    )
 
 
 if __name__ == "__main__":

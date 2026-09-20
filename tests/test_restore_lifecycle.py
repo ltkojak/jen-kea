@@ -1,0 +1,303 @@
+"""
+tests/test_restore_lifecycle.py
+────────────────────────────────
+v5.49.0-beta.4 (Q55-A) — `install.sh --restore` as a lifecycle: quiesce
+(stop) → snapshot → apply → start → health-check → roll back on failure.
+
+Pure: temp dirs only, `systemctl`/`subprocess.run`, the DB export/import
+and the config switch are monkeypatched — nothing here touches /etc/jen or a
+real service. The health poll itself is tested against a real local HTTP
+server (CLAUDE.md: probes are tested against real servers).
+"""
+
+import http.server
+import json
+import os
+import stat
+import threading
+import types
+
+import pytest
+
+from jen.services.recovery import build
+from jen.tools import restore
+
+PASS = "correct horse battery staple"
+OLD_DB = b"old-database-export"
+
+
+def _manifest():
+    from jen import JEN_VERSION
+    from jen.models.migrations import MIGRATIONS
+
+    return {
+        "jen_version": JEN_VERSION,
+        "channel": "beta",
+        "hostname": "old-box",
+        "created_at": "2026-01-01T00:00:00Z",
+        "schema_version": MIGRATIONS[-1][0],
+        "kea_versions": {},
+        "plugins": [],
+        "helper_versions": {},
+    }
+
+
+def _tree(root):
+    """{relative path: bytes} for every file under root (excluding snapshots)."""
+    out = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            p = os.path.join(dirpath, f)
+            rel = os.path.relpath(p, root).replace(os.sep, "/")
+            if rel.startswith("backups/"):
+                continue
+            with open(p, "rb") as fh:
+                out[rel] = fh.read()
+    return out
+
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    """An 'installed Jen': /etc/jen and a content dir with real files, a bundle
+    to restore, and every side effect recorded in `events`."""
+    etc = tmp_path / "etc_jen"
+    content = tmp_path / "content"
+    (etc / "ssl").mkdir(parents=True)
+    (etc / "jen.config").write_text("[server]\nhttp_port = 5999\n")
+    (etc / "mfa_key").write_bytes(b"OLD-MFA")
+    (etc / "ssl" / "certificate.crt").write_bytes(b"old-cert")
+    (content / "icons").mkdir(parents=True)
+    (content / "icons" / "logo.png").write_bytes(b"old-logo")
+    (content / "backups").mkdir()
+    (content / "backups" / "big-old-backup.gz").write_bytes(b"x" * 10)
+    (content / "tmp").mkdir()
+    (content / "tmp" / "scratch").write_bytes(b"t")
+
+    members = {
+        "manifest.json": json.dumps(_manifest()).encode(),
+        "jen.config": b"[server]\nhttp_port = 5777\n",
+        "mfa_key": b"NEW-MFA",
+        "content/icons/logo.png": b"new-logo",
+        "content/icons/extra.png": b"added-by-restore",
+        "jen_db.json.gz": b"irrelevant-here",
+    }
+    bundle = tmp_path / "bundle.tar.enc"
+    bundle.write_bytes(build(members, PASS))
+
+    events = []
+    state = types.SimpleNamespace(active=True, rc={}, healthy=True, apply_error=None, imports=[])
+
+    def fake_run(argv, **kw):
+        assert argv[0] == "systemctl" and isinstance(argv, list)
+        events.append(("systemctl", *argv[1:]))
+        rc = state.rc.get(argv[1], 0)
+        if argv[1] == "is-active":
+            rc = 0 if state.active else 3
+        return types.SimpleNamespace(returncode=rc, stdout="", stderr="")
+
+    monkeypatch.setattr(restore.subprocess, "run", fake_run)
+    monkeypatch.setattr(restore.shutil, "which", lambda name: "/usr/bin/systemctl")
+    monkeypatch.setattr(restore, "_export_db", lambda: OLD_DB)
+    monkeypatch.setattr(restore, "check_kea_major", lambda manifest, bundle_dir: [])  # would reload the real app config
+
+    def fake_import(gz):
+        state.imports.append(gz)
+        events.append(("db-import",))
+        return ["ok"]
+
+    monkeypatch.setattr(restore, "_import_db", fake_import)
+    monkeypatch.setattr(restore, "_point_config_at", lambda cfg: events.append(("config", str(cfg))))
+
+    def fake_restore_db(bundle_dir, config_file):
+        events.append(("apply-db",))
+        if state.apply_error:
+            raise RuntimeError(state.apply_error)
+        return ["✅ restored"]
+
+    monkeypatch.setattr(restore, "restore_jen_db", fake_restore_db)
+
+    def fake_health(port, **kw):
+        events.append(("health", port))
+        return state.healthy
+
+    monkeypatch.setattr(restore, "_wait_healthy", fake_health)
+    return types.SimpleNamespace(etc=etc, content=content, bundle=bundle, events=events, state=state, tmp=tmp_path)
+
+
+def _run(w, **kw):
+    return restore.run(str(w.bundle), PASS, etc_jen=str(w.etc), content_dir=str(w.content), **kw)
+
+
+class TestSnapshot:
+    def test_contents_and_permissions(self, world):
+        import tarfile
+
+        snap = restore.take_snapshot(world.etc, world.content)
+        assert snap.parent == world.content / "backups" and snap.name.startswith("pre-restore-")
+        with tarfile.open(snap / "etc-jen.tar") as tf:
+            names = set(tf.getnames())
+        assert {"jen.config", "mfa_key", "ssl", "ssl/certificate.crt"} <= names
+        with tarfile.open(snap / "content.tar") as tf:
+            cnames = set(tf.getnames())
+        assert "icons/logo.png" in cnames
+        assert not any(n.startswith(("backups", "tmp")) for n in cnames)  # excluded
+        assert (snap / "jen_db.json.gz").read_bytes() == OLD_DB
+        if os.name != "nt":
+            for name in ("etc-jen.tar", "content.tar", "jen_db.json.gz"):
+                assert stat.S_IMODE((snap / name).stat().st_mode) == 0o600
+            assert stat.S_IMODE(snap.stat().st_mode) == 0o700
+
+
+class TestHappyPath:
+    def test_order_is_stop_snapshot_apply_start_health(self, world):
+        rc = _run(world)
+        assert rc == 0
+        seq = [e[0] if e[0] != "systemctl" else "systemctl:" + e[1] for e in world.events]
+        assert seq == [
+            "systemctl:is-active",
+            "systemctl:stop",
+            "apply-db",
+            "systemctl:start",
+            "health",
+        ]
+        # the new files really landed, and the port came from the RESTORED config
+        assert (world.etc / "mfa_key").read_bytes() == b"NEW-MFA"
+        assert (world.content / "icons" / "extra.png").read_bytes() == b"added-by-restore"
+        assert ("health", 5777) in world.events
+        assert list((world.content / "backups").glob("pre-restore-*"))
+
+    def test_not_running_is_left_stopped_unless_start_given(self, world):
+        world.state.active = False
+        assert _run(world) == 0
+        assert not any(e[:2] == ("systemctl", "start") for e in world.events)
+        assert not any(e[0] == "health" for e in world.events)
+        world.events.clear()
+        assert _run(world, start=True) == 0
+        assert ("systemctl", "start", "jen") in world.events and any(e[0] == "health" for e in world.events)
+
+
+class TestFailureRollsBack:
+    def test_writer_raising_mid_apply_leaves_everything_as_it_was(self, world, monkeypatch):
+        before_etc, before_content = _tree(world.etc), _tree(world.content)
+
+        real = restore.restore_content
+
+        def boom(bundle_dir, content_dir):
+            real(bundle_dir, content_dir)  # writes some files first …
+            raise OSError("disk full")  # … then dies
+
+        monkeypatch.setattr(restore, "restore_content", boom)
+        rc = _run(world)
+        assert rc == 1
+        assert _tree(world.etc) == before_etc
+        assert _tree(world.content) == before_content  # extra.png is gone again
+        assert world.state.imports == [OLD_DB]  # the DB snapshot was re-imported
+        assert ("systemctl", "start", "jen") in world.events  # it was running: it runs again
+        assert not any(e[0] == "health" for e in world.events)
+
+    def test_failing_health_check_rolls_back_and_exits_nonzero(self, world):
+        before_etc, before_content = _tree(world.etc), _tree(world.content)
+        world.state.healthy = False
+        rc = _run(world)
+        assert rc != 0
+        assert _tree(world.etc) == before_etc and _tree(world.content) == before_content
+        assert world.state.imports == [OLD_DB]
+        seq = [e[1] for e in world.events if e[0] == "systemctl"]
+        assert seq == ["is-active", "stop", "start", "stop", "start"]  # …start(bad), stop, rollback, start(good)
+
+    def test_db_apply_failure_rolls_back(self, world):
+        world.state.apply_error = "import blew up"
+        assert _run(world) == 1
+        assert world.state.imports == [OLD_DB]
+
+    def test_snapshot_failure_refuses_without_changes(self, world, monkeypatch):
+        before = _tree(world.etc)
+
+        def nope():
+            raise RuntimeError("database unreachable")
+
+        monkeypatch.setattr(restore, "_export_db", nope)
+        assert _run(world) == 1
+        assert _tree(world.etc) == before
+        assert not any(e[0] == "apply-db" for e in world.events)
+        assert ("systemctl", "start", "jen") in world.events  # we stopped it; put it back
+
+
+class TestNoStop:
+    def test_no_stop_never_calls_systemctl(self, world):
+        assert _run(world, no_stop=True) == 0
+        assert not any(e[0] == "systemctl" for e in world.events)
+        assert not any(e[0] == "health" for e in world.events)
+
+    def test_missing_systemctl_is_treated_as_no_stop(self, world, monkeypatch):
+        monkeypatch.setattr(restore.shutil, "which", lambda name: None)
+        assert _run(world) == 0
+        assert not any(e[0] == "systemctl" for e in world.events)
+
+
+class TestManualRollback:
+    def test_rollback_dir_redoes_a_finished_restore(self, world):
+        before_etc, before_content = _tree(world.etc), _tree(world.content)
+        assert _run(world, no_stop=True) == 0
+        assert _tree(world.etc) != before_etc
+        snap = next((world.content / "backups").glob("pre-restore-*"))
+        world.events.clear()
+        assert restore.run_rollback(str(snap), etc_jen=str(world.etc), content_dir=str(world.content)) == 0
+        assert _tree(world.etc) == before_etc and _tree(world.content) == before_content
+        assert world.state.imports == [OLD_DB]
+        assert [e[1] for e in world.events if e[0] == "systemctl"] == ["is-active", "stop", "start"]
+
+    def test_not_a_snapshot_is_refused(self, tmp_path):
+        assert restore.run_rollback(str(tmp_path)) == 1
+
+
+class _H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        code = self.server.code
+        self.send_response(code)
+        if code == 302:
+            self.send_header("Location", "https://127.0.0.1:1/api/v1/health")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+def _serve(code):
+    httpd = http.server.HTTPServer(("127.0.0.1", 0), _H)
+    httpd.code = code
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+class TestHealthPoll:
+    """The poll against real local servers (a redirect must be an answer, not followed)."""
+
+    @pytest.mark.parametrize("code", [200, 302, 401])
+    def test_answers_below_500_are_healthy(self, code):
+        httpd = _serve(code)
+        try:
+            assert restore._wait_healthy(httpd.server_port, timeout=3, interval=0.1) is True
+        finally:
+            httpd.shutdown()
+
+    def test_a_500_never_counts_and_times_out(self):
+        httpd = _serve(500)
+        try:
+            assert restore._wait_healthy(httpd.server_port, timeout=0.5, interval=0.1) is False
+        finally:
+            httpd.shutdown()
+
+    def test_nothing_listening_times_out(self):
+        s = _serve(200)
+        port = s.server_port
+        s.shutdown()
+        s.server_close()
+        assert restore._wait_healthy(port, timeout=0.5, interval=0.1) is False
+
+    def test_port_comes_from_the_config(self, tmp_path):
+        cfg = tmp_path / "jen.config"
+        cfg.write_text("[server]\nhttp_port = 6123\n")
+        assert restore._service_port(cfg) == 6123
+        assert restore._service_port(tmp_path / "missing") == 5050
