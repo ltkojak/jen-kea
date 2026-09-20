@@ -182,6 +182,38 @@ class TestApiDocsKeyListIsAdminOnly:
         assert b"xyz98765" not in r.data
 
 
+class TestApiDocsListsOnlyOwnKeys:
+    """v5.49.0-beta.2 (audit L) - a plain admin's docs page pre-fills from the
+    keys THEY created, exactly like the API Keys page; a superadmin sees all."""
+
+    def test_admin_sees_only_their_own_keys(self, client, db):
+        from tests.conftest import restricted_client
+
+        c, uid = restricted_client(client, db, allowed_subnets=None, role="admin", username="docs_admin_l")
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys")
+            cur.execute(
+                "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active) VALUES "
+                "('mine', 'h-mine', 'MINEPFX1', %s, 1), ('theirs', 'h-theirs', 'THEIRPF1', 1, 1)",
+                (uid,),
+            )
+        db.commit()
+        body = c.get("/settings/api-docs").data.decode()
+        assert "MINEPFX1" in body
+        assert "THEIRPF1" not in body
+
+    def test_superadmin_still_sees_every_key(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM api_keys")
+            cur.execute(
+                "INSERT INTO api_keys (name, key_hash, key_prefix, created_by, active) VALUES "
+                "('a', 'h-a', 'AAAAPFX1', 1, 1), ('b', 'h-b', 'BBBBPFX1', 2, 1)"
+            )
+        db.commit()
+        body = logged_in_client.get("/settings/api-docs").data.decode()
+        assert "AAAAPFX1" in body and "BBBBPFX1" in body
+
+
 class TestServersApi:
     """Q42 step 2 — GET /api/v1/servers: server list + packet_health
     (null until a server has two server_stats snapshots)."""

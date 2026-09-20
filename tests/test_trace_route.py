@@ -160,3 +160,33 @@ class TestTraceRoute:
         assert r.status_code == 200
         assert b"page-header" not in r.data
         assert b'id="trace-results"' in r.data
+
+
+class TestTraceFailsClosedAcrossSubnets:
+    """v5.49.0-beta.2 (audit E) - a MAC known in an allowed AND a denied subnet
+    is refused outright; the log lines are not filtered per subnet."""
+
+    def test_mac_spanning_allowed_and_denied_subnet_is_403(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        _servers(monkeypatch)
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _lease(db, subnet_id=1)  # allowed to the user below
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (MAC_HEX,))
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address) "
+                "VALUES (UNHEX(%s), 0, 999, INET_ATON('10.99.9.9'))",
+                (MAC_HEX,),
+            )
+        db.commit()
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="trace_span1")
+        try:
+            r = client.get("/tools/trace", query_string={"mac": MAC})
+            assert r.status_code == 403
+            assert calls == []
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (MAC_HEX,))
+            db.commit()
+            _clean(db)

@@ -637,7 +637,12 @@ def create_app() -> Flask:
                 pill = None
         return {
             "plugin_nav_items": items,
-            "nav": nav_context(request.endpoint, role, items),
+            "nav": nav_context(
+                request.endpoint,
+                role,
+                items,
+                all_subnets=bool(getattr(current_user, "all_subnets", True)) if role else True,
+            ),
             "getting_started_pill": pill,
         }
 

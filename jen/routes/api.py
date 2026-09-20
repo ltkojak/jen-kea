@@ -735,8 +735,14 @@ def api_v1_device_patch(mac):
             row = cur.fetchone()
             if not row:
                 return api_error(f"No device with MAC {mac}.", 404)
-            if row.get("last_subnet_id") is not None and not _api_scope_allows(key, row["last_subnet_id"]):
-                return api_error("This key has no access to that device's subnet.", 403)
+            if _api_key_subnet_ids(key) is not None:
+                # A subnet-scoped key may only touch a device Jen has placed in
+                # a subnet the key covers; an unplaced device has no subnet to
+                # check, so it is refused rather than waved through.
+                if row.get("last_subnet_id") is None:
+                    return api_error("This key is scoped to subnets and this device has no known subnet.", 403)
+                if not _api_scope_allows(key, row["last_subnet_id"]):
+                    return api_error("This key has no access to that device's subnet.", 403)
             # One fixed statement: IF(flag, new, old) per column, so no SQL is
             # built from strings and an unsent field is left untouched.
             cur.execute(
@@ -884,8 +890,8 @@ def api_v1_timeline(mac):
 
     from jen.services.timeline import build_timeline
 
-    result = build_timeline(mac=mac)
     scope = _api_key_subnet_ids(key)
+    result = build_timeline(mac=mac, accessible_v4_ids=scope)
     if scope is not None:
         if result["subnet_id"] is None or result["subnet_id"] not in scope:
             return api_error("This key has no access to that subnet.", 403)
@@ -1169,8 +1175,13 @@ def api_docs():
     if current_user.is_admin_or_above:
         try:
             with jen_db() as db, db.cursor() as cur:
+                # Same ownership predicate as the API Keys page: a plain admin
+                # sees only the keys they created, a superadmin sees all. One
+                # fixed statement (the flag picks the branch), no string building.
                 cur.execute(
-                    "SELECT id, name, key_prefix FROM api_keys WHERE active=1 ORDER BY created_at DESC LIMIT 10"
+                    "SELECT id, name, key_prefix FROM api_keys WHERE active=1 AND (%s OR created_by=%s) "
+                    "ORDER BY created_at DESC LIMIT 10",
+                    (bool(current_user.is_superadmin), current_user.id),
                 )
                 keys = cur.fetchall()
         except Exception:

@@ -56,7 +56,7 @@ SECTION_STRIPS = {
         {"icon": "🔗", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
         {"icon": "🩺", "label": "Health", "url": "/health-center", "match": ("health.",)},
         {"icon": "🧭", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
-        {"icon": "🩻", "label": "Doctor", "url": "/tools/doctor", "match": ("doctor.",)},
+        {"icon": "🩻", "label": "Doctor", "url": "/tools/doctor", "match": ("doctor.",), "requires_all_subnets": True},
         {"icon": "🕐", "label": "Timeline", "url": "/timeline", "match": ("timeline.",)},
         # plugin nav items with section == "network" are appended at render time
     ],
@@ -182,12 +182,17 @@ def all_settings_match():
     return tuple(pats)
 
 
-def nav_context(endpoint, role, plugin_nav_items=None):
+def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
     """
     Everything base.html needs for one request. Pure — tested directly in
     tests/test_settings_ia.py.
     """
     plugin_nav_items = plugin_nav_items or []
+    # Items flagged requires_all_subnets render the whole Kea config; a
+    # subnet-restricted user is not shown them (the route refuses anyway).
+    section_strips = {
+        k: [t for t in v if all_subnets or not t.get("requires_all_subnets")] for k, v in SECTION_STRIPS.items()
+    }
     group = settings_group_for(endpoint)
     in_settings = endpoint == "settings.settings" or group is not None
 
@@ -209,7 +214,7 @@ def nav_context(endpoint, role, plugin_nav_items=None):
             if _allowed(g, role):
                 strip.append({**g, "active": group is not None and g["id"] == group["id"]})
     else:
-        for section, tabs in SECTION_STRIPS.items():
+        for section, tabs in section_strips.items():
             if any(_matches(endpoint, t["match"]) for t in tabs) or (
                 section == "network" and any(p.get("endpoint") == endpoint for p in plugin_nav_items)
             ):

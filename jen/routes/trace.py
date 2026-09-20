@@ -97,9 +97,13 @@ def trace_page():
             subnet_map = get_accessible_subnet_map()
             known_subnets = {int(lease["subnet_id"])} if lease and lease.get("subnet_id") else set()
             known_subnets |= {int(r["subnet_id"]) for r in reservations if r["subnet_id"]}
+            # Fail closed: the log lines are not filtered per subnet, so EVERY
+            # subnet this client is known in (lease + reservations) must be one
+            # the user can access — a MAC that spans an allowed and a denied
+            # subnet is refused, not half-shown.
             if known_subnets:
-                if not (known_subnets & set(subnet_map)):
-                    abort(403)
+                if not all(current_user.can_access_subnet(s) for s in known_subnets):
+                    abort(403, description="This client has activity in a subnet you cannot access.")
             elif not current_user.all_subnets:
                 abort(403)
 

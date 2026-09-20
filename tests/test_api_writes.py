@@ -210,6 +210,33 @@ class TestDevices:
         assert r.status_code == 403
 
 
+class TestScopedKeyOnUnplacedDevice:
+    """v5.49.0-beta.2 (audit F) - a subnet-scoped write key may not PATCH a
+    device Jen has never placed in a subnet; an unscoped key still can."""
+
+    def _seed_unplaced(self, db):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO devices (mac, device_name, owner, notes, last_subnet_id) "
+                "VALUES ('aa:bb:cc:00:00:01', 'old', 'nobody', 'n', NULL)"
+            )
+        db.commit()
+
+    def test_scoped_key_refused(self, client, keys, mock_kea, db):
+        self._seed_unplaced(db)
+        r = client.patch("/api/v1/devices/aa:bb:cc:00:00:01", data=json.dumps({"name": "x"}), headers=_h(RAW_SCOPED))
+        assert r.status_code == 403
+        assert b"no known subnet" in r.data
+        with db.cursor() as cur:
+            cur.execute("SELECT device_name FROM devices WHERE mac='aa:bb:cc:00:00:01'")
+            assert cur.fetchone()["device_name"] == "old"
+
+    def test_unscoped_key_proceeds(self, client, keys, mock_kea, db):
+        self._seed_unplaced(db)
+        r = client.patch("/api/v1/devices/aa:bb:cc:00:00:01", data=json.dumps({"name": "x"}), headers=_h(RAW_RW))
+        assert r.status_code == 200, r.data
+
+
 class TestSubnetNotes:
     def test_set_clear_scope_and_404(self, client, keys, mock_kea, db):
         r = _post(client, "/api/v1/subnets/1/notes", RAW_RW, {"text": "  core switch closet  "})

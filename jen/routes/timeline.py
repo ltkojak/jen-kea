@@ -12,6 +12,7 @@ from flask import Blueprint, flash, render_template, request
 from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
+from jen.services.access import get_accessible_subnet_map
 from jen.services.timeline import build_timeline
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,8 @@ def timeline_page():
 
     result = None
     if mac or ip:
-        result = build_timeline(mac=mac, ip=ip)
+        accessible_v4 = None if current_user.all_subnets else set(get_accessible_subnet_map())
+        result = build_timeline(mac=mac, ip=ip, accessible_v4_ids=accessible_v4)
         # Rows with no subnet_id (audit_log/alert_log matches, or an
         # events row that predates a subnet, or a genuinely subnet-less
         # client) are visible to an unrestricted user only — same rule
@@ -46,8 +48,13 @@ def timeline_page():
             flash("You do not have access to that client.", "error")
             result = None
         if result is not None and not current_user.all_subnets:
+            # Mirrors the API: a restricted user sees only rows that carry a
+            # subnet they can access. Subnet-less rows (audit_log/alert_log
+            # matches, older events) are for unrestricted users only.
             result["rows"] = [
-                r for r in result["rows"] if r["subnet_id"] is None or current_user.can_access_subnet(r["subnet_id"])
+                r
+                for r in result["rows"]
+                if r["subnet_id"] is not None and current_user.can_access_subnet(r["subnet_id"])
             ]
 
     kinds = sorted({r["kind"] for r in result["rows"]}) if result else []

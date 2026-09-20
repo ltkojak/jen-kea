@@ -105,12 +105,28 @@ def subnet_id_for(device, lease, reservation) -> int | None:
     return None
 
 
-def build_timeline(mac: str = "", ip: str = "", limit: int = 300) -> dict:
+def _v6_visible(addr: dict, accessible_v4_ids) -> bool:
+    """Devices-page rule for a restricted caller: a v6 address shows only when
+    its v6 subnet is paired to a v4 subnet the caller can access; an unpaired
+    (or unknown) v6 subnet is unrestricted-only."""
+    from jen import extensions
+
+    info = extensions.SUBNET6_MAP.get(addr.get("subnet_id"))
+    paired = info.get("paired_subnet4_id") if info else None
+    return paired is not None and paired in accessible_v4_ids
+
+
+def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_ids=None) -> dict:
     """`mac`/`ip` are already validated/normalized by the caller (lowercase
     mac, no colons stripped). At least one must be given. Returns
     `{"mac", "ip", "device", "lease", "reservation", "subnet_id", "rows"}`
     — `rows` is `[{"ts", "kind", "source", "detail", "subnet_id"}, ...]`
-    newest-first, capped at `limit`."""
+    newest-first, capped at `limit`.
+
+    `accessible_v4_ids` is `None` for an unrestricted caller, else the set of
+    v4 subnet ids the caller may see: a v6 address is then kept only when its
+    v6 subnet is paired (`paired_subnet4_id`) to one of them — the Devices
+    page's rule. The service stays Flask-free; the caller passes the set in."""
     mac = (mac or "").strip().lower()
     ip = (ip or "").strip()
     if not mac and ip:
@@ -195,12 +211,15 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300) -> dict:
     # same hwaddr-only join the Devices page uses — see
     # kea6.lease6_by_hwaddr_mac()). No access control here either, same
     # as everything else in this function — the caller already gates the
-    # whole response on subnet_id_for()'s v4 subnet.
+    # whole response on subnet_id_for()'s v4 subnet, and passes
+    # accessible_v4_ids for a restricted caller (see _v6_visible).
     v6_addresses = []
     if mac:
         try:
             if __kea6.is_ipv6_enabled():
                 v6_addresses = __kea6.lease6_by_hwaddr_mac().get(mac, [])
+                if accessible_v4_ids is not None:
+                    v6_addresses = [a for a in v6_addresses if _v6_visible(a, accessible_v4_ids)]
         except Exception as e:
             logger.error(f"timeline v6 address lookup failed for mac={mac!r}: {e}")
 

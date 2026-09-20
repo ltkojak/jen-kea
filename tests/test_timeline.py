@@ -238,6 +238,69 @@ class TestTimelinePage:
         assert b"do not have access" not in r.data
 
 
+class TestRestrictedTimelineSeams:
+    """v5.49.0-beta.2 (audit C, D) - a restricted user's timeline never shows
+    subnet-less rows, and never shows a v6 address whose paired v4 subnet
+    they cannot access."""
+
+    MAC = "aa:bb:cc:dd:ee:01"
+
+    def _device(self, db, subnet_id=1):
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO devices (mac, last_ip, last_subnet_id) VALUES (%s, '10.0.0.5', %s)", (self.MAC, subnet_id)
+            )
+            cur.execute(
+                "INSERT INTO audit_log (username, action, entity, details) VALUES ('u','MARKER_C','aa:bb:cc:dd:ee:01','d')"
+            )
+            cur.execute(
+                "INSERT INTO events (kind, mac, subnet_id, detail) VALUES ('lease.new', %s, 1, 'x')", (self.MAC,)
+            )
+        db.commit()
+
+    def test_restricted_user_sees_no_subnetless_rows(self, client, db):
+        from tests.conftest import restricted_client
+
+        self._device(db)
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="admin", username="tl_restricted_c")
+        body = c.get("/timeline?mac=" + self.MAC).data.decode()
+        assert "do not have access" not in body
+        assert "lease.new" in body  # the subnet-carrying row stays
+        # the audit_log row has no subnet_id, so it must be gone
+        assert "MARKER_C" not in body
+
+    def test_unrestricted_user_still_sees_them(self, logged_in_client, db):
+        self._device(db)
+        body = logged_in_client.get("/timeline?mac=" + self.MAC).data.decode()
+        assert "lease.new" in body and "MARKER_C" in body
+
+    def _v6(self, monkeypatch, addrs, smap):
+        import jen.services.kea6 as kea6_module
+        from jen import extensions
+
+        monkeypatch.setattr(kea6_module, "is_ipv6_enabled", lambda: True)
+        monkeypatch.setattr(kea6_module, "lease6_by_hwaddr_mac", lambda: {self.MAC: addrs})
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", smap)
+
+    def test_v6_paired_allowed_shown_paired_denied_and_unpaired_hidden(self, db, monkeypatch):
+        from jen.services.timeline import build_timeline
+
+        _clean(db)
+        addrs = [
+            {"address": "2001:db8:1::1", "subnet_id": 10},
+            {"address": "2001:db8:2::1", "subnet_id": 20},
+            {"address": "2001:db8:3::1", "subnet_id": 30},
+        ]
+        smap = {10: {"paired_subnet4_id": 1}, 20: {"paired_subnet4_id": 2}, 30: {}}
+        self._v6(monkeypatch, addrs, smap)
+        shown = [a["address"] for a in build_timeline(mac=self.MAC, accessible_v4_ids={1})["v6_addresses"]]
+        assert shown == ["2001:db8:1::1"]  # paired+allowed only
+        assert build_timeline(mac=self.MAC, accessible_v4_ids=set())["v6_addresses"] == []
+        everything = build_timeline(mac=self.MAC)["v6_addresses"]  # unrestricted
+        assert len(everything) == 3
+
+
 class TestEventsApi:
     def test_requires_key(self, client):
         r = client.get("/api/v1/events")
