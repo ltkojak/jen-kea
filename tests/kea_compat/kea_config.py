@@ -32,7 +32,7 @@ def build(db_host="127.0.0.1", db_name="kea", db_user="kea", db_pass="kea_pw", h
                 "service-sockets-max-retries": 0,
             },
             "control-sockets": [
-                {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl.sock"},
+                {"socket-type": "unix", "socket-name": "/var/run/kea/kea4-ctrl.sock"},
                 {"socket-type": "http", "socket-address": "127.0.0.1", "socket-port": http_port},
             ],
             "lease-database": dict(backend),

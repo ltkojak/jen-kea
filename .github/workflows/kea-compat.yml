@@ -107,7 +107,7 @@ jobs:
         run: |
           mkdir -p kea-conf results
           python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
-          docker run -d --name kea --network host --tmpfs /run/kea \
+          docker run -d --name kea --network host --tmpfs /var/run/kea \
             -v "$PWD/kea-conf/kea-dhcp4.conf:/etc/kea/kea-dhcp4.conf:ro" "$IMAGE"
           for i in $(seq 1 30); do
             if curl -sf -m 2 -H 'Content-Type: application/json' \
