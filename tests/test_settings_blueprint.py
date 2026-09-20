@@ -44,6 +44,7 @@ EXPECTED_ENDPOINTS = {
     "settings.install_kea_binary",
     "settings.check_kea_helper",
     "settings.install_kea_helper",
+    "settings.remove_legacy_grant",
     "settings.save_infra_jen_db",
     "settings.save_infra_ssh",
     "settings.save_extra_servers",

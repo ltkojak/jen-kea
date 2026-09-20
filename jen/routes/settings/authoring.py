@@ -22,6 +22,7 @@ from jen import extensions
 from jen.config import AppConfig
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import recent_auth_required as _recent_auth_required
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -709,4 +710,31 @@ def install_kea_helper(server_id):
         flash(f"{name}: the sudoers file failed validation, nothing was installed: {res['detail']}", "error")
     else:
         flash(f"{name}: helper install failed: {res['detail']}", "error")
+    return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+
+
+@bp.route("/settings/infrastructure/remove-legacy-grant/<int:server_id>", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def remove_legacy_grant(server_id):
+    """v5.49.0 (Q51) — remove the legacy /etc/sudoers.d/jen-kea grant on one
+    host, through that grant (it removes itself). There is no route that
+    adds it back: granting root to Jen stays a by-hand act."""
+    server = _find_server(server_id)
+    if not server or not server.get("ssh_host"):
+        flash("Server not found or SSH not configured.", "error")
+        return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+    name = server.get("name", server_id)
+    res = __host.remove_legacy_grant(server)
+    if res["ok"]:
+        __user.audit("REMOVE_LEGACY_GRANT", str(name), res["code"])
+        flash(
+            f"Legacy root grant removed on {name}; the helper's own grant (/etc/sudoers.d/jen-kea-helper) stays."
+            if res["code"] == "removed"
+            else f"{name}: the legacy grant was already gone.",
+            "success",
+        )
+    else:
+        flash(f"{name}: legacy grant not removed — {res['detail']}", "error")
     return redirect(url_for("settings.settings_kea") + "#kea-ssh")

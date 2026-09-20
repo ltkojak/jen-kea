@@ -877,6 +877,44 @@ def legacy_grant_present(server: dict) -> bool:
         return False
 
 
+def remove_legacy_grant(server: dict) -> dict:
+    """v5.49.0 (Q51) — remove /etc/sudoers.d/jen-kea on `server`, using
+    the grant itself (it removes itself). Returns {"ok", "code":
+    removed|absent|refused|no-helper|error, "detail"}.
+
+    Jen-side gate first: the helper must already answer with a version
+    >= JEN_HELPER_MIN_VERSION, so a host is never left with no working
+    path. There is deliberately NO opposite operation: writing the grant
+    back would be Jen handing itself root (docs/ARCHITECTURE.md §3.3) —
+    granting stays by hand.
+
+    Like every legacy-engine caller (v5.28.0), an `ok:` token only counts
+    when the remote exit status was 0."""
+    from jen import extensions
+
+    chk = check_helper(server)
+    v = chk.get("version")
+    if not isinstance(v, int) or v < JEN_HELPER_MIN_VERSION:
+        return {
+            "ok": False,
+            "code": "no-helper",
+            "detail": "the helper is not answering on this host — install it first; "
+            "removing the legacy grant now would leave Jen with no root path",
+        }
+    ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
+    script = __authoring.render_remove_legacy_grant_script(ssh_user)
+    try:
+        out, err, rc = _legacy_python3(server, script, timeout=30)
+    except Exception as e:
+        return {"ok": False, "code": "error", "detail": str(e)}
+    if rc == 0 and out in ("ok:removed", "ok:absent"):
+        check_helper(server)  # the recorded legacy_grant flag flips to False
+        return {"ok": True, "code": out[3:], "detail": ""}
+    if out.startswith("refused:"):
+        return {"ok": False, "code": "refused", "detail": out[len("refused:") :]}
+    return {"ok": False, "code": "error", "detail": err or out or f"remote command exited {rc}"}
+
+
 def _helper_source():
     """The jen-kea-helper text shipped with this install."""
     import os
@@ -933,7 +971,8 @@ def install_helper(server: dict) -> dict:
             detail = (
                 f"helper v{current} is installed but v{target} needs the legacy python3 grant "
                 "to be re-added for one run, or copy it by hand: sudo install -o root -g root -m 0755 "
-                "./jen-kea-helper /usr/local/sbin/jen-kea-helper"
+                "./jen-kea-helper /usr/local/sbin/jen-kea-helper — or open 'Grant or revoke the legacy "
+                "root path by hand' on Settings → Kea → SSH"
             )
         return {"ok": False, "version": current, "code": "no-path", "detail": detail}
 

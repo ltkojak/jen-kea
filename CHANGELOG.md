@@ -2,6 +2,28 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.49.0-beta.1] - 2026-09-20
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
+5.48.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
+promotes.
+
+Q51, the legacy root grant: revoke it from the GUI, and see the by-hand
+commands for both directions. A host on the helper still showed "legacy
+grant still present" with nothing to press, and because Update helper
+copies the file through that very grant, the honest life cycle is add
+it, install or update, remove it — repeatedly. Settings → Kea → SSH now
+has **Remove legacy grant** (superadmin, recent sign-in) beside the chip:
+over the grant itself, a fixed script deletes `/etc/sudoers.d/jen-kea`,
+refusing unless the helper's own sudoers file exists, holds the helper
+line for the SSH user and passes `visudo -c`, and Jen refuses up front
+unless the helper already answers, so a host is never left with no root
+path. Afterwards the host is re-checked so the chip and the Health row
+clear. The card also carries a collapsed box with the grant and revoke
+commands filled in per server. There is no helper change and no action
+that adds the grant: Jen handing itself root on a Kea host stays out of
+scope by design (ARCHITECTURE §3.3).
+
 ## [5.48.0-beta.1] - 2026-09-19
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through

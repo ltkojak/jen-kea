@@ -100,6 +100,7 @@ def _kea_servers_with_helper_status():
                 "id": s.get("id"),
                 "name": s.get("name", f"Kea Server {s.get('id')}"),
                 "ssh_host": s.get("ssh_host", ""),
+                "ssh_user": s.get("ssh_user") or extensions.KEA_SSH_USER,
                 "helper_version": st.get("version"),  # int, None, or missing key
                 "helper_want": kea_host.JEN_HELPER_WANT_VERSION,
                 # v5.29.1 — the Update helper button is offered below this

@@ -218,8 +218,14 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
   `sudo install -o root -g root -m 0755 /opt/jen/current/app/jen-kea-helper /usr/local/sbin/jen-kea-helper`
   (`/opt/jen/jen-kea-helper` on a pre-5.14 flat install).
 
-Once every host shows `v1` you can delete `/etc/sudoers.d/jen` (the old
-`python3` = root grant). Full details: **Admin Guide → Kea host helper**.
+Legacy grant: the old `python3` = root file is `/etc/sudoers.d/jen-kea`. Jen
+needs it for one run to install the helper and for one run each time it
+updates the helper; after that, press **Remove legacy grant** in Settings →
+Kea → SSH (it refuses unless the helper's own sudoers file is valid), or run
+`sudo rm -f /etc/sudoers.d/jen-kea`. To add it back for an update, use the
+collapsed **Grant or revoke the legacy root path by hand** box on the same
+card — Jen never grants itself root. Full details: **Admin Guide → Kea host
+helper**.
 
 ### Permission denied on kea-dhcp4.conf
 

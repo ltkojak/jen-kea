@@ -293,6 +293,14 @@ host. `service` is one of `dhcp4`, `dhcp6`, or (v5.23.0) `d2`
   `install -m 0755` by an administrator. Either path still needs the
   legacy `sudo python3` grant present for that one run, same as a fresh
   install.
+- **The legacy grant can remove itself — never create itself** (v5.49.0).
+  Settings → Kea → SSH has **Remove legacy grant**: over that grant, a fixed
+  script deletes `/etc/sudoers.d/jen-kea`, refusing unless the helper's own
+  sudoers file exists, holds the helper line and passes `visudo -c`, and Jen
+  itself refuses unless the helper already answers. It is not a helper op and
+  adds no sudoers string; there is deliberately no opposite action, because
+  writing `NOPASSWD: /usr/bin/python3` would be Jen handing itself root on
+  the Kea host. Granting stays by hand (the page prints the commands).
 
 **Helper protocol v2 (v5.16.0 — optimistic concurrency).** `read-config`
 now also returns `"sha256"`, the hex SHA-256 of the raw config-file

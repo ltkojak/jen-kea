@@ -1399,6 +1399,97 @@ class TestKeaHelperTableUpgradeHint:
         assert b"Install helper" not in r.data
 
 
+class TestRemoveLegacyGrantRoute:
+    """v5.49.0 (Q51) - POST /settings/infrastructure/remove-legacy-grant/<id>
+    and the SSH-card button + by-hand box."""
+
+    URL = "/settings/infrastructure/remove-legacy-grant/1"
+
+    def _server(self, monkeypatch, user="kea"):
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4", "ssh_user": user}]
+        )
+
+    def test_admin_is_refused(self, client, db):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, allowed_subnets=[], role="admin", username="rlg_admin1")
+        assert c.post(self.URL, follow_redirects=False).status_code == 302
+
+    def test_stale_login_is_sent_to_reauth(self, logged_in_client, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        self._server(monkeypatch)
+        with logged_in_client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        r = logged_in_client.post(self.URL, follow_redirects=False)
+        assert r.status_code == 302 and "reauth" in r.headers["Location"]
+
+    def test_success_flashes_and_audits(self, logged_in_client, monkeypatch, db):
+        from jen.services import kea_host
+
+        self._server(monkeypatch)
+        monkeypatch.setattr(kea_host, "remove_legacy_grant", lambda s: {"ok": True, "code": "removed", "detail": ""})
+        r = logged_in_client.post(self.URL, follow_redirects=True)
+        assert b"Legacy root grant removed on kea-a" in r.data
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='REMOVE_LEGACY_GRANT'")
+            assert cur.fetchone()["n"] >= 1
+
+    def test_refusal_is_shown(self, logged_in_client, monkeypatch):
+        from jen.services import kea_host
+
+        self._server(monkeypatch)
+        monkeypatch.setattr(
+            kea_host,
+            "remove_legacy_grant",
+            lambda s: {"ok": False, "code": "refused", "detail": "visudo rejected the helper file"},
+        )
+        r = logged_in_client.post(self.URL, follow_redirects=True)
+        assert b"legacy grant not removed" in r.data and b"visudo rejected the helper file" in r.data
+
+    def test_unknown_server(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        assert b"not found" in logged_in_client.post(self.URL, follow_redirects=True).data.lower()
+
+    def _status(self, version, grant):
+        import json
+
+        from jen.models.user import set_global_setting
+
+        set_global_setting(
+            "kea_helper_status",
+            json.dumps({"1": {"version": version, "checked": "2026-01-01", "legacy_grant": grant}}),
+        )
+
+    def test_button_only_with_the_grant_present(self, logged_in_client, monkeypatch, db, mock_kea):
+        self._server(monkeypatch)
+        self._status(4, True)
+        assert b"Remove legacy grant" in logged_in_client.get("/settings/kea").data
+        self._status(4, False)
+        assert b"Remove legacy grant" not in logged_in_client.get("/settings/kea").data
+
+    def test_no_button_without_an_installed_helper(self, logged_in_client, monkeypatch, db, mock_kea):
+        self._server(monkeypatch)
+        self._status(None, True)
+        assert b"Remove legacy grant" not in logged_in_client.get("/settings/kea").data
+
+    def test_by_hand_box_uses_the_servers_ssh_user(self, logged_in_client, monkeypatch, db, mock_kea):
+        self._server(monkeypatch, user="dhcpops")
+        self._status(4, False)
+        body = logged_in_client.get("/settings/kea").data.decode()
+        assert "Grant or revoke the legacy root path by hand" in body
+        assert "dhcpops ALL=(root) NOPASSWD: /usr/bin/python3" in body
+        assert "sudo rm -f /etc/sudoers.d/jen-kea" in body
+
+    def test_health_names_the_button(self):
+        import inspect
+
+        from jen.services import health
+
+        assert "Remove legacy grant" in inspect.getsource(health)
+
+
 class TestKeaHelperBanner:
     def test_banner_lists_legacy_hosts_for_admin(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-legacy", "ssh_host": "1.2.3.4"}])

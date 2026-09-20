@@ -847,7 +847,7 @@ def _helper_installed(ctx) -> Check:
     if has_legacy_grant:
         sentences.append(
             f"{', '.join(has_legacy_grant)}: helper installed but the legacy python3 root grant is still "
-            "present — remove /etc/sudoers.d/jen-kea on the host (admin-guide → Legacy grant)"
+            "present — Settings → Kea → SSH → Remove legacy grant (or remove /etc/sudoers.d/jen-kea by hand)"
         )
 
     if sentences:

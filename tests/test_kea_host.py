@@ -914,3 +914,70 @@ class TestTlsSupported:
         assert file_version == kea_host.JEN_HELPER_SHIPPED_VERSION
         assert kea_host.JEN_HELPER_SHIPPED_VERSION >= kea_host.TLS_HELPER_MIN_VERSION
         assert kea_host.JEN_HELPER_SHIPPED_VERSION >= kea_host.JEN_HELPER_WANT_VERSION
+
+
+class TestRemoveLegacyGrant:
+    """v5.49.0 (Q51) - the legacy grant removes itself; Jen never re-adds it."""
+
+    def test_rendered_script_names_only_the_fixed_paths_and_has_the_three_guards(self):
+        import ast
+        import re
+
+        from jen.services.kea_authoring import render_remove_legacy_grant_script
+
+        script = render_remove_legacy_grant_script("matthew")
+        ast.parse(script)  # the remote script must be valid python
+        assert "os.path.isfile(HELPER_SUDOERS)" in script
+        assert 'WANT = USER + " ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper"' in script
+        assert '"visudo", "-c", "-f", HELPER_SUDOERS' in script
+        assert "matthew" in script
+        paths = set(re.findall(r'"(/[^"]*)"', script))
+        assert paths == {"/etc/sudoers.d/jen-kea-helper", "/etc/sudoers.d/jen-kea"}
+
+    def _stub(self, monkeypatch, replies, version=4):
+        calls = {"ssh": 0, "checks": 0}
+
+        def chk(s):
+            calls["checks"] += 1
+            return {"ok": True, "version": version} if version else {"ok": False, "version": None}
+
+        def legacy(s, script, timeout=30):
+            calls["ssh"] += 1
+            if isinstance(replies, Exception):
+                raise replies
+            return replies
+
+        monkeypatch.setattr(kea_host, "check_helper", chk)
+        monkeypatch.setattr(kea_host, "_legacy_python3", legacy)
+        return calls
+
+    def test_removed_rechecks_so_the_flag_flips(self, monkeypatch):
+        calls = self._stub(monkeypatch, ("ok:removed", "", 0))
+        res = kea_host.remove_legacy_grant(SERVER)
+        assert res == {"ok": True, "code": "removed", "detail": ""}
+        assert calls["checks"] == 2  # the gate, then the re-check
+
+    def test_absent_is_ok(self, monkeypatch):
+        self._stub(monkeypatch, ("ok:absent", "", 0))
+        assert kea_host.remove_legacy_grant(SERVER)["code"] == "absent"
+
+    def test_refused_carries_the_reason(self, monkeypatch):
+        self._stub(monkeypatch, ("refused:visudo rejected /etc/sudoers.d/jen-kea-helper", "", 1))
+        res = kea_host.remove_legacy_grant(SERVER)
+        assert res["ok"] is False and res["code"] == "refused" and "visudo rejected" in res["detail"]
+
+    def test_stale_ok_token_with_nonzero_rc_is_not_success(self, monkeypatch):
+        self._stub(monkeypatch, ("ok:removed", "sudo died", 1))
+        res = kea_host.remove_legacy_grant(SERVER)
+        assert res["ok"] is False and res["code"] == "error"
+
+    def test_ssh_failure_is_an_error_not_a_raise(self, monkeypatch):
+        self._stub(monkeypatch, OSError("connection reset"))
+        res = kea_host.remove_legacy_grant(SERVER)
+        assert res["ok"] is False and res["code"] == "error" and "connection reset" in res["detail"]
+
+    def test_no_helper_never_touches_ssh(self, monkeypatch):
+        calls = self._stub(monkeypatch, ("ok:removed", "", 0), version=None)
+        res = kea_host.remove_legacy_grant(SERVER)
+        assert res["ok"] is False and res["code"] == "no-helper"
+        assert calls["ssh"] == 0

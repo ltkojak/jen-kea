@@ -902,9 +902,17 @@ still present"** chip next to a host's helper status once it does, and
 Health Center's "Kea host helper installed" check warns for the same
 reason — even on a host that's fully upgraded to the current helper
 version, since leaving the old grant in place after you no longer need
-it is itself the residual risk. Remove
-`/etc/sudoers.d/jen-kea` once every host you administer that way shows
-`helper v2` (or later) to clear both.
+it is itself the residual risk. **v5.49.0 puts a button on it:** with
+the chip showing and the helper installed, **Remove legacy grant** (next
+to the host's Check button, superadmin, recent sign-in required) makes
+the grant delete itself. It refuses unless the helper's own sudoers
+file exists, holds the helper line for the SSH user and passes
+`visudo -c` — so a host is never left with no root path — and it
+re-checks the host afterwards so the chip and the Health row clear.
+Jen has no button that adds the grant back: it would be Jen handing
+itself root. Settings → Kea → SSH also carries a collapsed box, **Grant
+or revoke the legacy root path by hand**, with both command blocks
+filled in with each server's SSH user.
 
 **v5.29.0 ships helper v4 — one new op, `install-tls`.** It exists for
 the https option of Settings → Kea → "Set up direct socket": Jen's own
@@ -990,8 +998,12 @@ full stop; the other lines only document what Jen runs, they don't
 narrow anything. Jen shows an admin banner for every host still on this
 path.
 
-Keep this **only until every Kea host shows `helper v1`** in Settings →
-Kea → SSH, then remove `/etc/sudoers.d/jen-kea`. Two things never use
+The grant is needed for **one run** to install the helper, and again for
+one run each time Jen updates the helper (Update helper copies the file
+through it). The life cycle is: add the grant → Install or Update helper
+→ remove the grant (the **Remove legacy grant** button in Settings → Kea →
+SSH, or `sudo rm -f /etc/sudoers.d/jen-kea`). Leaving it in place between
+those runs is the residual risk. Two things never use
 this path at all, whatever the host has: D2 (kea-dhcp-ddns) operations
 (v5.23.0) and the https "Set up direct socket" material push (v5.29.0's
 `install-tls`) — both need the helper, at v3 and v4 respectively.
@@ -1219,7 +1231,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **TLS certificate expiry** | days until Jen's HTTPS certificate expires — warns at 30 days, fails at 7 | Settings → Access & Security → upload a renewed certificate |
 | **Jen database** / **Kea database** | a `SELECT 1` round trip and its latency | the database host / credentials |
 | **Database schema current** | the applied migration version matches the latest | restart Jen (migrations run at startup) |
-| **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version, and (v5.20.0) whether the legacy `python3` grant is still present | Settings → Kea → SSH → Install helper; remove `/etc/sudoers.d/jen-kea` |
+| **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version, and (v5.20.0) whether the legacy `python3` grant is still present | Settings → Kea → SSH → Install helper; **Remove legacy grant** (or remove `/etc/sudoers.d/jen-kea` by hand) |
 | **Background workers running** | the scheduler + alert loop started with this process | only reported under gunicorn, not the werkzeug fallback |
 | **Jen up to date** | always `skip` here — run the check from **Settings → System → Updates** (it contacts GitHub) | — |
 | **Control transport ready for 3.2** (readiness, v5.38.0) | `ca` mode fails once any server is on Kea 3.0+ and warns below that; `direct` mode warns for any server/daemon without its own control-socket URL | Settings → Kea → Set up direct socket |

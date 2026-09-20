@@ -607,3 +607,44 @@ except Exception as e:
 
 print("ok:{helper_version}")
 """
+
+
+def render_remove_legacy_grant_script(ssh_user: str) -> str:
+    """v5.49.0 (Q51) — the remote script that removes the legacy
+    `NOPASSWD: /usr/bin/python3` grant. Run over that very grant (it
+    removes itself; Jen never creates it). Fixed paths only — nothing
+    from the payload but `ssh_user`, `repr()`'d in.
+
+    Refuses (prints `refused:<reason>`, exits 1) unless the helper's own
+    sudoers file exists, holds the helper line for `ssh_user`, and passes
+    `visudo -c`: removing the legacy grant must never leave the host with
+    no root path at all. Otherwise prints `ok:removed`, or `ok:absent`
+    when the file was already gone."""
+    return f"""
+import os, sys, subprocess
+
+USER = {ssh_user!r}
+HELPER_SUDOERS = "/etc/sudoers.d/jen-kea-helper"
+LEGACY = "/etc/sudoers.d/jen-kea"
+WANT = USER + " ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper"
+
+def refuse(why):
+    print("refused:" + why)
+    sys.exit(1)
+
+if not os.path.isfile(HELPER_SUDOERS):
+    refuse("the helper's own sudoers file " + HELPER_SUDOERS + " is missing")
+with open(HELPER_SUDOERS) as f:
+    lines = [ln.strip() for ln in f]
+if WANT not in lines:
+    refuse(HELPER_SUDOERS + " has no helper line for " + USER)
+check = subprocess.run(["visudo", "-c", "-f", HELPER_SUDOERS], capture_output=True, text=True)
+if check.returncode != 0:
+    refuse("visudo rejected " + HELPER_SUDOERS)
+
+if os.path.exists(LEGACY):
+    os.remove(LEGACY)
+    print("ok:removed")
+else:
+    print("ok:absent")
+"""

@@ -245,11 +245,35 @@
                         <button type="submit" class="btn btn-sm btn-secondary">{% if s.helper_version %}Update helper{% else %}Install helper{% endif %}</button>
                     </form>
                     {% endif %}
+                    {% if current_user.role == 'superadmin' and s.legacy_grant and s.helper_version is integer %}
+                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" style="display:inline;" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper. You will need to add it again, for one run, the next time you update the helper."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-sm btn-secondary">Remove legacy grant</button>
+                    </form>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}
             </tbody>
         </table>
+        <details style="margin-top:12px;">
+            <summary style="cursor:pointer;font-size:13px;">Grant or revoke the legacy root path by hand</summary>
+            <p style="font-size:12px;color:var(--text-muted);margin:8px 0;">Jen needs this grant for ONE run to install the helper, and for ONE run each time it updates the helper; remove it afterwards, with the button above or the command below. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>
+            {% for s in ssh_servers %}
+            <div class="stat-label" style="margin:8px 0 4px;">{{ s.name }} &mdash; SSH user <code>{{ s.ssh_user }}</code></div>
+            <div class="stat-label" style="margin:4px 0;font-weight:normal;">Grant</div>
+<pre class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;border:1px solid var(--border);overflow-x:auto;">sudo tee /etc/sudoers.d/jen-kea &gt;/dev/null &lt;&lt;'EOF'
+{{ s.ssh_user }} ALL=(root) NOPASSWD: /usr/bin/python3
+{{ s.ssh_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart kea-dhcp4-server, /usr/bin/systemctl restart isc-kea-dhcp4-server
+{{ s.ssh_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl * kea-dhcp6-server, /usr/bin/systemctl * isc-kea-dhcp6-server
+{{ s.ssh_user }} ALL=(root) NOPASSWD: /usr/bin/tail -200 /var/log/kea/*
+{{ s.ssh_user }} ALL=(root) NOPASSWD: SETENV: /usr/bin/apt-get update -qq, /usr/bin/apt-get install -y kea-dhcp4-server, /usr/bin/apt-get install -y kea-dhcp6-server
+EOF
+sudo chmod 440 /etc/sudoers.d/jen-kea
+sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
+            <div class="stat-label" style="margin:4px 0;font-weight:normal;">Revoke</div>
+<pre class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;border:1px solid var(--border);">sudo rm -f /etc/sudoers.d/jen-kea</pre>
+            {% endfor %}
+        </details>
     </div>
     {% endif %}
 </div>
