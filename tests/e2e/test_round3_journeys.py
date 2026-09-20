@@ -121,7 +121,7 @@ def test_reconcile_with_limit_one_renders_one_verdict_row(logged_in_page, base_u
     monkeypatch.setattr(ddns, "_run_verify", lambda hostname, ip: {"forward_ips": [ip], "reverse_name": hostname})
     page = logged_in_page
     page.goto(f"{base_url}/ddns/reconcile?limit=1")
-    rows = page.locator("tbody tr")
+    rows = page.locator("table.mobile-cards tbody tr")
     expect(rows).to_have_count(1)
     expect(rows.first).to_contain_text("ok")
 
