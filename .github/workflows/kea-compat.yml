@@ -89,8 +89,9 @@ jobs:
         # exactly the way ISC's Dockerfile picked it: even minor = the
         # kea-X-Y LTS/stable repo, odd minor = kea-dev.
         run: |
-          docker run --rm --network host --entrypoint bash "$IMAGE" -c '
+          docker run --rm --network host --entrypoint ash "$IMAGE" -c '
             set -e
+            apk add --no-cache curl bash >/dev/null
             v="${{ matrix.kea }}"; minor=$(echo "$v" | cut -d . -f 2)
             if [ $((minor % 2)) = 0 ]; then repo="kea-$(echo "$v" | cut -d . -f 1)-$minor"; else repo=kea-dev; fi
             curl -1sLf "https://dl.cloudsmith.io/public/isc/$repo/setup.alpine.sh" | bash >/dev/null
