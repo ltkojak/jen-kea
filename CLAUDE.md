@@ -96,6 +96,15 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   variables without a server. Run it for real with `JEN_DB_HOST=... python -m pytest
   tests/e2e -m e2e -v` once `playwright install chromium` has run — CI's `e2e` job
   (`.github/workflows/tests.yml`) is what actually gates every push and release.
+- `tests/kea_compat/` (Q50 — `pytest.mark.kea_compat`) drives Jen's Kea client against
+  REAL kea-dhcp4 3.0 / 3.2 / 3.3 from ISC's Cloudsmith images. It belongs to its own
+  workflow, `.github/workflows/kea-compat.yml` (weekly + `workflow_dispatch`, NOT called
+  from ci.yml/release.yml, so a Kea release can't redden a push or a tag); every test skips
+  unless `KEA_COMPAT_URL` is set, so `pytest` here just reports them skipped. Image tags are
+  exact patch versions (no floating `3.0`) — bump the matrix when Kea ships a patch; the
+  3.3 dev leg is `continue-on-error`. Read-only against Kea (`config-test`, never
+  `config-set`). Run it by hand with `gh workflow run kea-compat.yml`; a workflow-only
+  change carries no version bump and no release tag.
 
 Gotchas learned the hard way:
 

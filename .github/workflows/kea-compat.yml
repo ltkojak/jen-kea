@@ -1,0 +1,154 @@
+name: Kea compatibility
+
+# v5.48.x (Q50) — Jen's Kea client against REAL kea-dhcp4 daemons, not the
+# fakes and mocked replies the unit and e2e suites use. Weekly, plus on
+# demand (`gh workflow run kea-compat.yml`); deliberately NOT called from
+# ci.yml or release.yml — an upstream Kea release must never turn a
+# push or a tagged release red. Read-only against Kea: config-get and
+# config-test, never config-set; the one write is a throwaway reservation.
+#
+# Images are ISC's own, on Cloudsmith (docker.cloudsmith.io/isc/docker/…),
+# pulled anonymously. Their tags are EXACT patch versions — there is no
+# floating `3.0`; when Kea ships a new patch, bump the matrix.
+#   3.0.x  LTS      3.2.x  stable      3.3.x  dev (informational only)
+on:
+  schedule:
+    - cron: '17 5 * * 1' # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  KEA_REGISTRY: docker.cloudsmith.io/isc/docker
+
+jobs:
+  compat:
+    name: Kea ${{ matrix.kea }}${{ matrix.dev && ' (dev, non-blocking)' || '' }}
+    runs-on: ubuntu-latest
+    # The dev leg informs, it never blocks: a red 3.3 is a heads-up about
+    # what the next stable will do, not a Jen defect to fix this week.
+    continue-on-error: ${{ matrix.dev }}
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kea: 3.0.3
+            dev: false
+          - kea: 3.2.0
+            dev: false
+          - kea: 3.3.1
+            dev: true
+
+    env:
+      JEN_ROOT: ${{ github.workspace }}
+      IMAGE: docker.cloudsmith.io/isc/docker/kea-dhcp4:${{ matrix.kea }}
+
+    services:
+      database:
+        image: mariadb:10.11
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: kea
+          MYSQL_USER: kea
+          MYSQL_PASSWORD: kea_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt pytest
+
+      - name: Pull the Kea image
+        run: |
+          if ! docker pull "$IMAGE"; then
+            echo "::error::Could not pull $IMAGE — the tag may have been removed or renamed. Tags are exact patch versions; check https://cloudsmith.io/~isc/repos/docker/ and update the matrix."
+            exit 1
+          fi
+
+      - name: Install the Kea MySQL schema
+        # No kea-admin image is published, so borrow the daemon image
+        # (it already has ISC's apk repo configured) and add kea-admin at
+        # the SAME version — the schema must match the daemon.
+        run: |
+          docker run --rm --network host --entrypoint ash "$IMAGE" -c \
+            "apk add --no-cache mariadb-client isc-kea-admin~=${{ matrix.kea }} >/dev/null && \
+             kea-admin db-init mysql -h 127.0.0.1 -u kea -p kea_pw -n kea"
+
+      - name: Start kea-dhcp4
+        run: |
+          mkdir -p kea-conf results
+          python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
+          docker run -d --name kea --network host --tmpfs /run/kea \
+            -v "$PWD/kea-conf/kea-dhcp4.conf:/etc/kea/kea-dhcp4.conf:ro" "$IMAGE"
+          for i in $(seq 1 30); do
+            if curl -sf -m 2 -H 'Content-Type: application/json' \
+                 -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
+              echo "kea-dhcp4 answered after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::kea-dhcp4 ${{ matrix.kea }} never answered on :8004"
+          docker logs kea
+          exit 1
+
+      - name: Run the compatibility suite
+        env:
+          KEA_COMPAT_URL: http://127.0.0.1:8004/
+          KEA_COMPAT_VERSION: ${{ matrix.kea }}
+          KEA_COMPAT_RESULTS: ${{ github.workspace }}/results/${{ matrix.kea }}.json
+          KEA_COMPAT_PKT4_OUT: ${{ github.workspace }}/results/pkt4-${{ matrix.kea }}.json
+        run: python -m pytest tests/kea_compat -m kea_compat -v
+
+      - name: Kea log
+        if: always()
+        run: docker logs kea > results/kea-${{ matrix.kea }}.log 2>&1 || true
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kea-compat-${{ matrix.kea }}
+          path: results/
+          if-no-files-found: ignore
+
+  summary:
+    name: Version x check table
+    needs: compat
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Download results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: kea-compat-*
+          path: artifacts
+
+      - name: Write the summary
+        run: |
+          {
+            echo "## Jen against real Kea"
+            echo
+            python -m tests.kea_compat.summarize artifacts/*/[0-9]*.json
+            echo
+            echo "3.3 is Kea's development line: a failure there is informational."
+            echo "The pkt4-* statistic names each version reports are in the per-version artifacts."
+          } >> "$GITHUB_STEP_SUMMARY"

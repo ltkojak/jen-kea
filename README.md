@@ -8,6 +8,7 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 
 [![Latest stable release](https://img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable&style=flat)](https://github.com/ltkojak/jen-kea/releases/latest)
 [![Latest beta](https://img.shields.io/github/v/release/ltkojak/jen-kea?include_prereleases&label=Beta&style=flat&color=orange)](https://github.com/ltkojak/jen-kea/releases)
+[![Kea compatibility](https://github.com/ltkojak/jen-kea/actions/workflows/kea-compat.yml/badge.svg)](https://github.com/ltkojak/jen-kea/actions/workflows/kea-compat.yml)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
