@@ -2,6 +2,62 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.49.0-beta.5] - 2026-09-21
+
+Beta channel. The last beta before promotion — the second audit, part two.
+Stacked on the unpromoted 5.32.1-beta.1 through 5.49.0-beta.4 chain — stable
+stays at v5.32.0 until the maintainer promotes. (5.49.0-beta.4 had already
+been published when the audit's remaining items were added, so they ship as
+beta.5.)
+
+**Restore is tested against everything that can go wrong.** The restore
+lifecycle from beta.4 now has its failure cases pinned as tests with one
+invariant: after any failure the box is either exactly as it was — `/etc/jen`
+and content byte-identical, database rows equal to the snapshot — or the
+restored install is healthy. Covered: wrong passphrase, a truncated bundle and
+a corrupt one (all refused before Jen is stopped, no snapshot, no `systemctl`),
+a bundle from a newer Jen without `--force`, a full disk mid-apply, the
+database import dying after its first table, Jen never coming up healthy, and
+a clean machine. Two behaviours are now defined and stated in the output: files
+already on disk that the bundle does not carry are left in place, never
+deleted, and named; and a plugin the bundle recorded whose code is not on this
+machine is a warning, its database row kept.
+
+**One authorization matrix over every diagnostic surface.** A single table
+now drives every diagnostic page and API endpoint — Explain, Trace, Timeline
+by MAC and by IP, Doctor, Reconcile, Reports, Health, Servers, Search, Devices
+and the device, lease, timeline, events and health API — for a restricted
+viewer, an admin scoped to one subnet, an unrestricted admin, a superadmin and
+scoped read and write API keys. Each cell checks the status and that nothing
+belonging to the forbidden subnet appears anywhere in the response: names,
+addresses, hostnames, flashes, JSON. A new surface is one row.
+
+**Timeline no longer merges another client's history through a recycled
+address.** A MAC's timeline used to include every event, audit line and alert
+that mentioned the address it now holds, so it showed whoever had that address
+before. It now shows only rows that belong to that MAC: events recorded for
+the same address under a different MAC are dropped, and a row that names only
+the address (an audit or alert entry, or an event with no MAC) is kept but
+shown muted as "possibly related — same address, client unknown". A timeline
+about an IP shows every holder, and marks rows from an earlier holder
+"previous holder <mac>". A DUID-only IPv6 lease is never attributed to a MAC.
+
+**Smaller fixes.** Trace no longer holds a worker for the helper's 60-second
+default when the Kea host hangs; it waits 15. The recovery bundle and the
+database exports are sent `Cache-Control: no-store`, and a failure after the
+recovery file is written removes it and shows a message instead of a server
+error. The Recovery card is bordered in the danger colour and titled "Recovery
+bundle — contains secrets", and the support bundle card says it is the
+redacted one. The root updater now refuses to install a release older than the
+one on disk: a box on 5.49.0-beta.4 whose channel is switched to stable (still
+5.32.0) is offered nothing by the page, but the update unit re-derives the
+latest release itself, so a stale button or a second click could have
+installed the older version. The real release pairs — stable and beta boxes
+with beta, final and later-beta releases published — are now tests against
+both the page and the root updater. A reconcile of a thousand rows against a
+hung resolver is tested to return within its budget with the pool still at
+eight threads.
+
 ## [5.49.0-beta.4] - 2026-09-20
 
 Beta channel. The last beta before promotion — the second audit. Stacked on
