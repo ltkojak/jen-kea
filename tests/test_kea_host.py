@@ -981,3 +981,30 @@ class TestRemoveLegacyGrant:
         res = kea_host.remove_legacy_grant(SERVER)
         assert res["ok"] is False and res["code"] == "no-helper"
         assert calls["ssh"] == 0
+
+
+class TestTailLogHelperOnly:
+    """v5.49.0-beta.6 (Q56-6) - Trace never falls back to the legacy `sudo tail`."""
+
+    def test_missing_helper_is_refused_without_the_legacy_path(self, monkeypatch):
+        def missing(*a, **k):
+            raise kea_host.HelperMissing("no helper")
+
+        def never(*a, **k):
+            raise AssertionError("the legacy engine must not run")
+
+        monkeypatch.setattr(kea_host, "helper_call", missing)
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda s: None)
+        monkeypatch.setattr(kea_host, "_legacy_ssh", never)
+        res = kea_host.tail_log({"id": 1}, "/var/log/kea/x.log", 1000, timeout=15, helper_only=True)
+        assert res["ok"] is False and res["code"] == "no-helper"
+
+    def test_the_default_still_falls_back_for_the_ddns_log_tab(self, monkeypatch):
+        def missing(*a, **k):
+            raise kea_host.HelperMissing("no helper")
+
+        monkeypatch.setattr(kea_host, "helper_call", missing)
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda s: None)
+        monkeypatch.setattr(kea_host, "_legacy_ssh", lambda s, cmd, timeout=30: ("l1\nl2", "", 0))
+        res = kea_host.tail_log({"id": 1}, "/var/log/kea/x.log", 200)
+        assert res["ok"] is True and res["via"] == "legacy"

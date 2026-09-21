@@ -172,7 +172,7 @@ TLS_HELPER_MIN_VERSION = 4
 # whether the Settings → Kea → SSH table OFFERS the Update helper button
 # at all. v5.29.0 gated the https socket option on v4 but the button only
 # appeared below WANT, so a v3 host had no way to get there from the UI.
-JEN_HELPER_SHIPPED_VERSION = 4
+JEN_HELPER_SHIPPED_VERSION = 5  # v5 (v5.49.0): tail-log reads through a bounded deque
 _TLS_NEEDS_HELPER = (
     "https setup needs jen-kea-helper v4+ on this host — update it from Settings → Kea → SSH "
     "(the http option works with any helper version)."
@@ -786,7 +786,7 @@ def install_tls(server: dict, service: str, files: dict) -> dict:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 
 
-def tail_log(server: dict, path: str, lines: int = 200, timeout: int | None = None) -> dict:
+def tail_log(server: dict, path: str, lines: int = 200, timeout: int | None = None, helper_only: bool = False) -> dict:
     """Last `lines` of a log on the Kea host. `timeout` bounds the SSH round trip (default: the
     helper's 60 s / the legacy path's 30 s) — Trace passes a short one so a hung host
     cannot hold a request worker."""
@@ -800,6 +800,15 @@ def tail_log(server: dict, path: str, lines: int = 200, timeout: int | None = No
         return {"ok": False, "code": "error", "detail": resp.get("detail") or resp.get("error") or "", "via": "helper"}
     except HelperMissing:
         _flag_legacy(server)
+        if helper_only:
+            # Trace: the legacy `sudo tail -200` grant cannot serve 1000 lines
+            # anyway, and a partial log would read as a complete one.
+            return {
+                "ok": False,
+                "code": "no-helper",
+                "detail": "the Kea host helper is not installed on this host",
+                "via": "helper",
+            }
         # v5.28.0 (Q24, B1) — rc replaces the old "err and not out"
         # stdout/stderr-shape guess.
         out, err, rc = _legacy_ssh(server, f"sudo tail -{int(lines)} {shlex.quote(path)}", timeout=timeout or 30)

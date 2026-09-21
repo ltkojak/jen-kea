@@ -194,6 +194,8 @@ Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` co
 
 ### Kea host helper (v5.11.0+)
 
+**Trace says it needs the Kea host helper.** Trace (v5.49.0) is helper-only: it never falls back to the legacy `sudo tail` grant (which cannot serve 1000 lines). Settings → Kea → SSH → **Install helper** (needs the legacy grant present once — see *Legacy grant* in the admin guide), then try again.
+
 Every Kea-side action Jen performs goes through `jen-kea-helper` at
 `/usr/local/sbin/jen-kea-helper`, behind one sudoers line. **Settings →
 Kea → SSH** shows the version for each host that has it — `v1` through

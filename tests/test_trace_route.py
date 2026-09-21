@@ -206,7 +206,7 @@ class TestTraceTimeout:
         calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
         _clean(db)
         logged_in_client.get("/tools/trace", query_string={"mac": MAC})
-        assert calls.kwargs and calls.kwargs[-1] == {"timeout": 15}
+        assert calls.kwargs and calls.kwargs[-1] == {"timeout": 15, "helper_only": True}
 
     def test_tail_log_hands_the_timeout_to_helper_call(self, monkeypatch):
         from jen.services import kea_host
@@ -288,3 +288,28 @@ class TestTraceNeedsUnrestrictedAccess:
         for name in ("explain.html", "_lease_rows.html", "_reservation_row.html"):
             lines = [ln for ln in (root / name).read_text(encoding="utf-8").splitlines() if "/tools/trace" in ln]
             assert lines and all("current_user.all_subnets" in ln for ln in lines), name
+
+
+class TestTraceIsHelperOnly:
+    """v5.49.0-beta.6 (Q56-6) - no helper means a clear message, never a partial log."""
+
+    def test_a_host_recorded_as_having_no_helper_is_refused_without_ssh(self, logged_in_client, db, monkeypatch):
+        import json
+
+        from jen.models.user import set_global_setting
+
+        _servers(monkeypatch)
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        set_global_setting("kea_helper_status", json.dumps({"1": {"version": None, "checked": "2026-09-20"}}))
+        _clean(db)
+        r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
+        assert r.status_code == 200
+        assert b"Trace needs the Kea host helper" in r.data
+        assert calls == []
+
+    def test_a_missing_helper_answer_shows_the_same_message(self, logged_in_client, db, monkeypatch):
+        _servers(monkeypatch)
+        _stub_tail(monkeypatch, {"ok": False, "code": "no-helper", "detail": "x"})
+        _clean(db)
+        r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
+        assert b"Trace needs the Kea host helper" in r.data

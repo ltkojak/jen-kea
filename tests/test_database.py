@@ -337,3 +337,16 @@ class TestBundleDownloadsAreNoStore:
         assert "NOT redacted" in recovery_page and "support bundle" in recovery_page
         system_page = logged_in_client.get("/settings/system").data.decode()
         assert "redacted</strong> one" in system_page
+
+
+class TestBackupDownloadIsNoStore:
+    """v5.49.0-beta.6 (Q56-7) - the scheduled-backup download is a database dump."""
+
+    def test_no_store_header(self, logged_in_client, db, monkeypatch, tmp_path):
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        (tmp_path / "jen-manual-test.json.gz").write_bytes(b"gz")
+        r = logged_in_client.get("/database/backup/download/jen-manual-test.json.gz")
+        assert r.status_code == 200
+        assert r.headers["Cache-Control"] == "no-store"

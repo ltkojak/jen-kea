@@ -141,6 +141,12 @@ def export_kea():
 # passphrase (jen/services/recovery.py). Deliberately NOT redacted — unlike
 # the support bundle (v5.33.0), this is meant to restore the box, not to
 # hand to someone else; the page and the admin guide both say so.
+#
+# Memory: the bundle is assembled IN MEMORY (`_recovery_members()` then
+# `recovery.build()`; peak roughly 3x the bundle size, capped at 200 MB by
+# recovery.SIZE_CAP_BYTES) and only then written to a tempfile and streamed
+# from it. A truly streaming format would need chunked AEAD (a JENREC2
+# format) — a MINOR-release change, not a release-candidate one.
 
 
 def _recovery_manifest() -> dict:
@@ -354,7 +360,11 @@ def download_backup(filename):
     with open(path, "rb") as f:
         data = f.read()
     __user.audit("DB_BACKUP_DOWNLOAD", safe, "")
-    return Response(data, mimetype="application/gzip", headers={"Content-Disposition": f"attachment; filename={safe}"})
+    return Response(
+        data,
+        mimetype="application/gzip",
+        headers={"Content-Disposition": f"attachment; filename={safe}", "Cache-Control": "no-store"},
+    )
 
 
 @bp.route("/database/backup/delete/<path:filename>", methods=["POST"])

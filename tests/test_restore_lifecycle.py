@@ -252,45 +252,126 @@ class TestManualRollback:
 
 
 class _H(http.server.BaseHTTPRequestHandler):
+    """A stand-in for whatever answers on Jen's port. `server.mode` picks the reply."""
+
     def do_GET(self):
-        code = self.server.code
-        self.send_response(code)
-        if code == 302:
-            self.send_header("Location", "https://127.0.0.1:1/api/v1/health")
-        self.send_header("Content-Length", "0")
+        mode = self.server.mode
+        if mode == "jen":
+            body = json.dumps({"jen_version": "5.49.0", "kea_up": False}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+        elif mode == "html200":
+            body = b"<html>a login page</html>"
+            self.send_response(200)
+        elif mode == "json-no-version":
+            body = b'{"status": "ok"}'
+            self.send_response(200)
+        elif mode == "redirect":
+            body = b""
+            self.send_response(302)
+            self.send_header("Location", self.server.location)
+        else:  # a bare status code: "401", "404", "500"
+            body = b""
+            self.send_response(int(mode))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *a):
         pass
 
 
-def _serve(code):
+def _serve(mode, location=None, ssl_files=None):
     httpd = http.server.HTTPServer(("127.0.0.1", 0), _H)
-    httpd.code = code
+    httpd.mode = mode
+    httpd.location = location
+    if ssl_files:
+        import ssl
+
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(*ssl_files)
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
 
+def _self_signed(tmp_path):
+    """A throwaway self-signed certificate, as Jen's own HTTPS uses."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "jen.local")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    cert_path, key_path = tmp_path / "c.pem", tmp_path / "k.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()
+        )
+    )
+    return str(cert_path), str(key_path)
+
+
+def _healthy(httpd, timeout=1.0):
+    try:
+        return restore._wait_healthy(httpd.server_port, timeout=timeout, interval=0.1)
+    finally:
+        httpd.shutdown()
+
+
 class TestHealthPoll:
-    """The poll against real local servers (a redirect must be an answer, not followed)."""
+    """v5.49.0-beta.6 (Q56-3) - healthy means HTTP 200 with a JSON body carrying
+    jen_version; a redirect counts only to Jen's own loopback HTTPS, and there it
+    must answer the same way. Against real local servers."""
 
-    @pytest.mark.parametrize("code", [200, 302, 401])
-    def test_answers_below_500_are_healthy(self, code):
-        httpd = _serve(code)
-        try:
-            assert restore._wait_healthy(httpd.server_port, timeout=3, interval=0.1) is True
-        finally:
-            httpd.shutdown()
+    def test_200_with_jen_json_is_healthy(self):
+        assert _healthy(_serve("jen")) is True
 
-    def test_a_500_never_counts_and_times_out(self):
-        httpd = _serve(500)
+    @pytest.mark.parametrize("mode", ["401", "404", "500", "html200", "json-no-version"])
+    def test_everything_else_is_unhealthy(self, mode):
+        assert _healthy(_serve(mode)) is False
+
+    def test_a_redirect_elsewhere_is_unhealthy(self):
+        assert _healthy(_serve("redirect", location="https://example.com/api/v1/health")) is False
+        assert _healthy(_serve("redirect", location="http://127.0.0.1:1/api/v1/health")) is False  # not https
+        assert _healthy(_serve("redirect", location="/api/v1/health")) is False  # relative
+
+    def test_a_redirect_to_jens_own_loopback_https_is_followed(self, tmp_path):
+        tls = _serve("jen", ssl_files=_self_signed(tmp_path))
         try:
-            assert restore._wait_healthy(httpd.server_port, timeout=0.5, interval=0.1) is False
+            plain = _serve("redirect", location=f"https://127.0.0.1:{tls.server_port}/api/v1/health")
+            assert _healthy(plain, timeout=3) is True  # a self-signed certificate is fine on loopback
+            plain = _serve("redirect", location=f"https://localhost:{tls.server_port}/api/v1/health")
+            assert _healthy(plain, timeout=3) is True
         finally:
-            httpd.shutdown()
+            tls.shutdown()
+
+    def test_the_https_side_must_itself_be_jen(self, tmp_path):
+        for mode in ("404", "html200"):
+            tls = _serve(mode, ssl_files=_self_signed(tmp_path))
+            try:
+                plain = _serve("redirect", location=f"https://127.0.0.1:{tls.server_port}/api/v1/health")
+                assert _healthy(plain, timeout=1) is False, mode
+            finally:
+                tls.shutdown()
 
     def test_nothing_listening_times_out(self):
-        s = _serve(200)
+        s = _serve("jen")
         port = s.server_port
         s.shutdown()
         s.server_close()

@@ -39,6 +39,7 @@ WATCH_STEP_S = 5
 WATCH_MAX_S = 60
 # One tail must not hold a worker for the helper's 60 s default when the host hangs.
 TAIL_TIMEOUT_S = 15
+NEEDS_HELPER = "Trace needs the Kea host helper (Settings → Kea → SSH → Install helper)."
 
 
 def _pick_server(raw: str) -> dict | None:
@@ -105,8 +106,17 @@ def trace_page():
             subnet_map = get_accessible_subnet_map()
             known_subnets = {int(lease["subnet_id"])} if lease and lease.get("subnet_id") else set()
             known_subnets |= {int(r["subnet_id"]) for r in reservations if r["subnet_id"]}
-            res = __host.tail_log(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S)
-            if res["code"] == "missing":
+            # Helper-only: a host whose recorded helper version is None (known
+            # legacy) is refused without touching SSH, and tail_log(helper_only)
+            # never falls back to the legacy `sudo tail` grant.
+            recorded = __host.helper_status().get(str(server.get("id")))
+            if recorded is not None and recorded.get("version") is None:
+                res = {"ok": False, "code": "no-helper"}
+            else:
+                res = __host.tail_log(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S, helper_only=True)
+            if res["code"] == "no-helper":
+                ctx["error"] = NEEDS_HELPER
+            elif res["code"] == "missing":
                 ctx["error"] = (
                     f"Log file not found on the Kea server: {extensions.DHCP4_LOG}. "
                     "Set [kea] dhcp4_log_path in jen.config if kea-dhcp4 logs elsewhere."

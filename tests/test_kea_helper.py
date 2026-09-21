@@ -141,7 +141,7 @@ class TestProtocolMisuse:
         stdout, stderr = io.StringIO(), io.StringIO()
         code = helper.main(argv=["jen-kea-helper", "version"], stdin=stdin, stdout=stdout, stderr=stderr)
         assert code == 2
-        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 4}
+        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 5}
 
     def test_stdout_is_exactly_one_json_document(self, helper):
         _, _, _ = _run(helper, "version", {})
@@ -165,7 +165,7 @@ class TestVersion:
         code, out, err = _run(helper, "version", {}, keep_version=True)
         assert code == 0
         assert out["ok"] is True
-        assert out["helper_version"] == helper.HELPER_VERSION == 4
+        assert out["helper_version"] == helper.HELPER_VERSION == 5
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -174,7 +174,7 @@ class TestHelperVersionEnvelope:
     """v2 (v5.16.0) — every response, including protocol-error responses,
     carries helper_version so Jen learns the real number from any op.
     Bumped to 3 in v5.23.0 (Q19, d2 support), to 4 in v5.29.0 (Q29,
-    install-tls)."""
+    install-tls), to 5 in v5.49.0 (bounded tail-log)."""
 
     @pytest.mark.parametrize(
         "op,payload",
@@ -188,7 +188,7 @@ class TestHelperVersionEnvelope:
     )
     def test_every_response_carries_helper_version(self, helper, op, payload):
         _code, out, _err = _run(helper, op, payload, keep_version=True)
-        assert out["helper_version"] == 4
+        assert out["helper_version"] == 5
 
 
 class TestPathWalls:
@@ -775,3 +775,44 @@ class TestInstallTls:
             pwd, "getpwnam", lambda name: PW() if name == "keauser" else (_ for _ in ()).throw(KeyError(name))
         )
         assert helper._daemon_group("dhcp4") == ("keauser", 4242)
+
+
+class TestBoundedTail:
+    """v5.49.0-beta.6 (Q56-6) - tail-log holds only the requested lines in memory
+    (collections.deque), however large the log file is."""
+
+    def test_uses_a_bounded_deque_not_a_full_read(self):
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper").read_text(encoding="utf-8")
+        body = src[src.index("def op_tail_log") : src.index("def op_install_package")]
+        assert "collections.deque(f, maxlen=lines)" in body
+        assert ".read()" not in body  # never the whole file
+
+    def test_a_5mb_log_returns_exactly_the_last_100_lines(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: p == str(tmp_path / "big.log"))
+        f = tmp_path / "big.log"
+        with open(f, "w") as fh:
+            for i in range(80000):
+                fh.write(f"2026-09-20 10:00:00.000 INFO [kea-dhcp4] line {i:06d} " + "x" * 40 + "\n")
+        assert f.stat().st_size >= 5_000_000
+        code, out, _ = _run(helper, "tail-log", {"path": str(f), "lines": 100})
+        assert out["ok"] is True and len(out["lines"]) == 100
+        assert out["lines"][0].split("line ")[1].startswith("079900")
+        assert out["lines"][-1].split("line ")[1].startswith("079999")
+
+    def test_lines_have_no_trailing_newline_and_bad_bytes_are_replaced(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: True)
+        f = tmp_path / "odd.log"
+        f.write_bytes(b"first\r\nsecond \xff\xfe bytes\nthird")
+        code, out, _ = _run(helper, "tail-log", {"path": str(f), "lines": 10})
+        assert out["ok"] is True
+        assert out["lines"][0] == "first" and out["lines"][2] == "third"
+        assert "�" in out["lines"][1]  # invalid bytes replaced, not an error
+
+    def test_a_short_file_and_the_clamp_still_work(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: True)
+        f = tmp_path / "s.log"
+        f.write_text("a\nb\n")
+        assert _run(helper, "tail-log", {"path": str(f), "lines": 999999})[1]["lines"] == ["a", "b"]
+        assert _run(helper, "tail-log", {"path": str(f), "lines": 0})[1]["lines"] == ["b"]  # clamped to >= 1

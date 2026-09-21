@@ -915,6 +915,8 @@ itself root. Settings → Kea → SSH also carries a collapsed box, **Grant
 or revoke the legacy root path by hand**, with both command blocks
 filled in with each server's SSH user.
 
+**v5.49.0 ships helper v5 — no new op.** `tail-log` (the op Trace and the DDNS log tab use) now reads the log through a bounded `collections.deque`, so memory is limited to the lines requested (at most 1000) however large the file is. Every host reporting v4 or older therefore shows the neutral *"v5 available"* next to its version with the **Update helper** button; nothing stops working without it.
+
 **v5.29.0 ships helper v4 — one new op, `install-tls`.** It exists for
 the https option of Settings → Kea → "Set up direct socket": Jen's own
 private CA (see "Direct control sockets") issues a server certificate
@@ -1006,8 +1008,9 @@ through it). The life cycle is: add the grant → Install or Update helper
 SSH, or `sudo rm -f /etc/sudoers.d/jen-kea`). Leaving it in place between
 those runs is the residual risk. Two things never use
 this path at all, whatever the host has: D2 (kea-dhcp-ddns) operations
-(v5.23.0) and the https "Set up direct socket" material push (v5.29.0's
-`install-tls`) — both need the helper, at v3 and v4 respectively.
+(v5.23.0), the https "Set up direct socket" material push (v5.29.0's
+`install-tls`) and Trace (v5.49.0's client trace reads up to 1000 log lines
+through the helper) — they need the helper, at v3, v4 and any version respectively.
 
 ```bash
 sudo tee /etc/sudoers.d/jen-kea >/dev/null <<'EOF'

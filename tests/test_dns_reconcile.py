@@ -76,10 +76,14 @@ class TestClassify:
         observed = {"forward_ips": ["10.0.0.5", "10.0.0.9"], "reverse_name": "host1.lan"}
         assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "multiple-a"
 
-    def test_multiple_a_takes_priority_over_wrong_forward(self):
-        # two A records, neither of which happens to be the expected IP —
-        # still "two IPs claim the name", not "wrong-forward".
+    def test_wrong_forward_is_checked_before_multiple_a(self):
+        """v5.49.0-beta.6 (Q56-5) - two records, NEITHER the expected address, is a
+        real wrong-forward; it must not hide behind the informational multiple-a."""
         observed = {"forward_ips": ["10.0.0.8", "10.0.0.9"], "reverse_name": "host1.lan"}
+        assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "wrong-forward"
+
+    def test_extra_records_that_include_the_expected_one_are_multiple_a(self):
+        observed = {"forward_ips": ["10.0.0.5", "10.0.0.9"], "reverse_name": "host1.lan"}
         assert dr._classify(observed, "10.0.0.5", "host1.lan", set()) == "multiple-a"
 
     def test_reverse_case_insensitive_match_is_ok(self):

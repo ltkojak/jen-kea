@@ -89,10 +89,17 @@ a 64 KiB cap — the helper is pure stdlib and cannot parse PEM; Jen
 validates the material it generated before sending it. A v3 helper
 answers `unknown-op`, which Jen turns into "needs helper v4"; the op is
 never routed through the legacy `sudo python3` engine.
+
+v5 (v5.49.0) — `tail-log` reads the file through a bounded
+`collections.deque(f, maxlen=lines)` instead of `f.read().splitlines()`:
+memory is bounded by the requested (at most 1000) lines whatever the size of
+the log. The request and response shapes are unchanged; the bump exists so
+Jen can offer the update (Settings → Kea → SSH shows "v5 available").
 """
 
 from __future__ import annotations
 
+import collections
 import hashlib
 import json
 import os
@@ -102,7 +109,7 @@ import shutil
 import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
 import sys
 
-HELPER_VERSION = 4
+HELPER_VERSION = 5
 
 MAX_STDIN = 4 * 1024 * 1024  # 4 MiB
 
@@ -422,11 +429,13 @@ def op_tail_log(payload):
     if not os.path.isfile(path):
         return {"ok": False, "error": "missing"}, path
     try:
-        with open(path, errors="replace") as f:
-            content = f.read().splitlines()
+        # Bounded memory: only the last `lines` lines are ever held, decoded
+        # per line with errors="replace", however large the log file is.
+        with open(path, encoding="utf-8", errors="replace") as f:
+            content = [ln.rstrip("\r\n") for ln in collections.deque(f, maxlen=lines)]
     except OSError as e:
         return {"ok": False, "error": "unreadable", "detail": str(e)}, path
-    return {"ok": True, "lines": content[-lines:]}, path
+    return {"ok": True, "lines": content}, path
 
 
 def op_install_package(payload):

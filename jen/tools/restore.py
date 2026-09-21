@@ -372,25 +372,61 @@ def _service_port(config_file: Path) -> int:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):  # a 30x is an answer, not something to follow
+    def redirect_request(self, *a, **k):  # a 30x is an answer, not something to follow blindly
         return None
 
 
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
+
+
+def _probe_health(url: str) -> tuple[bool, str | None]:
+    """One GET of a health URL. Returns (healthy, redirect_location). Healthy
+    means HTTP 200 with a JSON object carrying `jen_version` — a 404 from some
+    other service on the port, a login page, or a proxy error page is not Jen."""
+    import json as _json
+    import ssl
+
+    handlers: list = [_NoRedirect]
+    if url.startswith("https://"):
+        ctx = ssl.create_default_context()
+        # Loopback only, and only ever Jen's own self-signed certificate.
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+    opener = urllib.request.build_opener(*handlers)
+    try:
+        with opener.open(url, timeout=5) as resp:
+            if resp.status != 200:
+                return False, None
+            body = _json.loads(resp.read(65536).decode("utf-8", "replace"))
+            return (isinstance(body, dict) and bool(body.get("jen_version"))), None
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            return False, e.headers.get("Location")
+        return False, None
+    except Exception:
+        return False, None
+
+
 def _wait_healthy(port: int, timeout: float = HEALTH_TIMEOUT_S, interval: float = 2.0) -> bool:
-    """Poll the unauthenticated /api/v1/health until Jen answers with anything
-    below 500 (a redirect counts: with HTTPS on, the plain port only redirects,
-    and following it would trip over a self-signed certificate)."""
-    opener = urllib.request.build_opener(_NoRedirect)
+    """Poll /api/v1/health (unauthenticated) until Jen answers 200 with a JSON
+    body containing `jen_version`. With HTTPS on, the plain port only
+    redirects: a redirect is followed ONLY to https://127.0.0.1:<port>/… or
+    https://localhost:<port>/… (Jen's own jen/httpredirect.py), fetched
+    without certificate verification (self-signed, loopback), and must itself
+    answer 200 + JSON. 401, 404, a non-JSON 200 and a redirect anywhere else
+    are unhealthy."""
+    from urllib.parse import urlsplit
+
     deadline = time.monotonic() + timeout
     while True:
-        try:
-            with opener.open(f"http://127.0.0.1:{port}/api/v1/health", timeout=5):
-                return True
-        except urllib.error.HTTPError as e:
-            if e.code < 500:
-                return True
-        except Exception:
-            pass
+        ok, location = _probe_health(f"http://127.0.0.1:{port}/api/v1/health")
+        if not ok and location:
+            parts = urlsplit(location)
+            if parts.scheme == "https" and parts.hostname in _LOOPBACK_HOSTS and parts.port:
+                ok, _again = _probe_health(f"https://{parts.hostname}:{parts.port}{parts.path or '/'}")
+        if ok:
+            return True
         if time.monotonic() >= deadline:
             return False
         time.sleep(interval)

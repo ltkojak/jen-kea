@@ -116,10 +116,13 @@ def _classify(observed: dict, expected_ip: str, expected_name: str, expired_name
         return "missing-forward" if _definitive(observed.get("forward_errno")) else "lookup-failed"
 
     forward_ips = observed.get("forward_ips") or []
-    if len(forward_ips) > 1:
-        return "multiple-a"
+    # The expected address is checked FIRST: two records neither of which is the
+    # address Jen expects is a real wrong-forward, and must not hide behind the
+    # informational multiple-a (several records that DO include the expected one).
     if expected_ip and expected_ip not in forward_ips:
         return "wrong-forward"
+    if len(forward_ips) > 1:
+        return "multiple-a"
 
     if observed.get("reverse_error"):
         return "missing-ptr" if _definitive(observed.get("reverse_errno")) else "lookup-failed"
