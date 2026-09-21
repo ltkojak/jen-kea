@@ -116,7 +116,7 @@ class TestNamesUsedExist:
         """The two unidentifiable top-bar controls now say what they are."""
         base = (ROOT / "templates" / "base.html").read_text(encoding="utf-8")
         assert 'title="Keyboard shortcuts (?)"' in base
-        assert 'aria-label="Dashboard"' in base and 'aria-label="Toggle theme"' in base
+        assert 'aria-label="Toggle theme"' in base
 
 
 class TestNoEmojiInTheUi:

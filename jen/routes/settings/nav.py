@@ -196,6 +196,86 @@ def all_settings_match():
     return tuple(pats)
 
 
+def _tabbar(endpoint, role, in_settings):
+    """The phone's bottom tab bar (v5.51.0, Q58): Dashboard, Leases,
+    Reservations, Settings, More. A viewer has no Settings page, so the
+    fourth slot is Devices for them — the bar is always four destinations
+    plus More. `more_active` lights More when the current page is none of
+    the four, so the bar never shows "nowhere"."""
+    tabs = [
+        {"id": "dashboard", "label": "Dashboard", "icon": "layout-dashboard", "url": "/"},
+        {"id": "leases", "label": "Leases", "icon": "list", "url": "/leases"},
+        {"id": "reservations", "label": "Reservations", "icon": "pin", "url": "/reservations"},
+    ]
+    if role in ADMIN_ROLES:
+        tabs.append({"id": "settings", "label": "Settings", "icon": "settings", "url": "/settings"})
+    else:
+        tabs.append({"id": "devices", "label": "Devices", "icon": "monitor-smartphone", "url": "/devices"})
+    matches = {
+        "dashboard": ("dashboard.dashboard",),
+        "leases": ("leases.",),
+        "reservations": ("reservations.",),
+        "devices": ("devices.",),
+    }
+    out = []
+    for t in tabs:
+        active = in_settings if t["id"] == "settings" else _matches(endpoint, matches[t["id"]])
+        out.append({**t, "active": active})
+    return out
+
+
+def _sheet_groups(endpoint, role, section_strips, plugin_nav_items):
+    """Every destination, grouped as the desktop nav is (Management / Network
+    / Settings / Plugins / About), for the More sheet. Same role and
+    subnet-scope filtering as the strips and the settings groups; plugin
+    items carry `endpoint` instead of `url` (the template resolves it)."""
+    groups = []
+
+    def item(t, active):
+        d = {"icon": t.get("icon", ""), "label": t.get("label", ""), "active": active}
+        if t.get("url"):
+            d["url"] = t["url"]
+        else:
+            d["endpoint"] = t.get("endpoint")
+        return d
+
+    groups.append(
+        {
+            "id": "management",
+            "label": "Management",
+            "items": [item(t, _matches(endpoint, t["match"])) for t in section_strips["management"]],
+        }
+    )
+    network = [item(t, _matches(endpoint, t["match"])) for t in section_strips["network"]]
+    plugins = []
+    for p in plugin_nav_items:
+        it = item(p, p.get("endpoint") == endpoint)
+        (network if p.get("section") == "network" else plugins).append(it)
+    groups.append({"id": "network", "label": "Network", "items": network})
+    if role in ADMIN_ROLES:
+        groups.append(
+            {
+                "id": "settings",
+                "label": "Settings",
+                "items": [
+                    item(g, settings_group_for(endpoint) is not None and settings_group_for(endpoint)["id"] == g["id"])
+                    for g in SETTINGS_GROUPS
+                    if _allowed(g, role)
+                ],
+            }
+        )
+    if plugins:
+        groups.append({"id": "plugins", "label": "Plugins", "items": plugins})
+    groups.append(
+        {
+            "id": "about",
+            "label": "Jen",
+            "items": [item(t, _matches(endpoint, t["match"])) for t in TOP_NAV if t["id"] == "about"],
+        }
+    )
+    return [g for g in groups if g["items"]]
+
+
 def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
     """
     Everything base.html needs for one request. Pure — tested directly in
@@ -247,8 +327,12 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
                             )
                 break
 
+    tabbar = _tabbar(endpoint, role, in_settings)
     return {
         "top": top,
+        "tabbar": tabbar,
+        "tabbar_more_active": not any(t["active"] for t in tabbar),
+        "sheet": _sheet_groups(endpoint, role, section_strips, plugin_nav_items),
         "strip": strip,
         "in_settings": in_settings,
         "group": group,

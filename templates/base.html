@@ -30,14 +30,22 @@
             --bg: #0d0d0d; --surface: #141414; --surface2: #1c1c1c;
             --border: #2a2a2a; --text: #e0e0e0; --text-muted: #666;
             --primary: #00b4d8; --success: #2ecc71; --warning: #f39c12;
-            --danger: #e74c3c; --radius: 6px;
+            --danger: #e74c3c; --radius: 6px; --surface3: #252525;
         }
         :root[data-theme="light"] {
             color-scheme: light;
             --bg: #f0f2f5; --surface: #ffffff; --surface2: #f8f9fa;
             --border: #dee2e6; --text: #212529; --text-muted: #6c757d;
             --primary: #0077b6; --success: #198754; --warning: #fd7e14;
-            --danger: #dc3545; --radius: 6px;
+            --danger: #dc3545; --radius: 6px; --surface3: #eceff3;
+        }
+        /* v5.51.0 (Q58) — spacing / type / tap-target scale. Theme-independent, so
+           it lives in its own rule. New CSS uses these; docs/ui.md "Tokens". */
+        :root {
+            --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
+            --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 20px; --fs-2xl: 26px;
+            --radius-sm: 4px; --tap: 44px;
+            --tabbar-h: 56px;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; }
@@ -66,18 +74,6 @@
         .kea-status { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .kea-up { background: var(--success); box-shadow: 0 0 6px var(--success); }
         .kea-down { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
-
-        /* Hamburger — hidden on desktop */
-        .nav-hamburger { display: none; background: none; border: none; color: var(--text); font-size: 22px; cursor: pointer; padding: 8px; line-height: 1; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-
-        /* Mobile nav drawer — display none/block (transform-based hiding had iOS WebKit issues) */
-        .nav-mobile-drawer { display: none; position: fixed; top: calc(56px + env(safe-area-inset-top)); left: 0; right: 0; background: var(--surface); border-bottom: 2px solid var(--border); z-index: 101; padding: 6px 0; box-shadow: 0 8px 32px rgba(0,0,0,0.5); max-height: calc(100vh - 120px); overflow-y: auto; }
-        .nav-mobile-drawer.open { display: block; }
-        .nav-mobile-drawer a { display: flex; align-items: center; gap: 12px; padding: 14px 20px; color: var(--text); font-size: 15px; border-bottom: 1px solid var(--border); text-decoration: none; min-height: 52px; touch-action: manipulation; }
-        .nav-mobile-drawer a:hover { text-decoration: none; }
-        .nav-mobile-drawer a:last-child { border-bottom: none; }
-        .nav-mobile-drawer a.active { color: var(--primary); background: var(--surface2); }
-        .nav-mobile-drawer a:active { background: var(--surface2); }
 
         /* Section sub-tabs */
         .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; touch-action: pan-x; overscroll-behavior-x: contain; }
@@ -293,6 +289,47 @@
         .action-menu-item.danger:hover { background: #2d1215; }
         .action-menu-divider { height: 1px; background: var(--border); margin: 4px 0; }
 
+        /* ── Utilities (v5.51.0, Q58) — the inline styles the templates repeat most ── */
+        .muted { color: var(--text-muted); }
+        .small { font-size: var(--fs-sm); }
+        .xs { font-size: var(--fs-xs); }
+        .flex { display: flex; }
+        .wrap { flex-wrap: wrap; }
+        .stack { display: flex; flex-direction: column; }
+        .grow { flex: 1; min-width: 0; }
+        .right { text-align: right; }
+        .center { text-align: center; }
+        .nowrap { white-space: nowrap; }
+        .ok { color: var(--success); } .warn { color: var(--warning); } .bad { color: var(--danger); }
+        .gap-1 { gap: var(--sp-1); } .gap-2 { gap: var(--sp-2); } .gap-3 { gap: var(--sp-3); } .gap-4 { gap: var(--sp-4); }
+        .mt-2 { margin-top: var(--sp-2); } .mt-3 { margin-top: var(--sp-3); } .mt-4 { margin-top: var(--sp-4); }
+        .mb-2 { margin-bottom: var(--sp-2); } .mb-3 { margin-bottom: var(--sp-3); } .mb-4 { margin-bottom: var(--sp-4); }
+        .items-center { align-items: center; }
+        .between { justify-content: space-between; }
+
+        /* ── Bottom tab bar + sheets (v5.51.0, Q58) — phones only ── */
+        .tabbar, .sheet, .sheet-backdrop { display: none; }
+        .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 150; background: var(--surface); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+        .tabbar a, .tabbar button { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: var(--tabbar-h); background: none; border: none; border-radius: 0; color: var(--text-muted); font: inherit; font-size: var(--fs-xs); text-decoration: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+        .tabbar a:hover { text-decoration: none; }
+        .tabbar .ico { width: 22px; height: 22px; }
+        .tabbar a.active, .tabbar button.active { color: var(--primary); }
+        .sheet-backdrop { position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,0.6); }
+        .sheet-backdrop.open { display: block; }
+        .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1101; background: var(--surface); border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; max-height: 85vh; max-height: 85dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--sp-3) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom)); box-shadow: 0 -8px 32px rgba(0,0,0,0.5); overscroll-behavior: contain; }
+        .sheet.open { display: block; }
+        .sheet-grab { width: 40px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto var(--sp-3); }
+        .sheet-title { font-size: var(--fs-lg); font-weight: 600; margin-bottom: var(--sp-3); display: flex; align-items: center; justify-content: space-between; }
+        .sheet-group-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin: var(--sp-4) 0 var(--sp-1); }
+        .sheet-list { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-1); }
+        .sheet-list a, .sheet-list button { display: flex; align-items: center; gap: 10px; min-height: var(--tap); padding: 0 var(--sp-3); border-radius: var(--radius); background: var(--surface2); border: 1px solid transparent; color: var(--text); font: inherit; font-size: 14px; text-decoration: none; text-align: left; cursor: pointer; }
+        .sheet-list a:hover { text-decoration: none; }
+        .sheet-list a.active { color: var(--primary); border-color: var(--primary); }
+        .sheet-list .full { grid-column: 1 / -1; }
+        .sheet-list .danger { color: var(--danger); }
+        .sheet form.sheet-search { margin-bottom: var(--sp-2); }
+        body.sheet-open { overflow: hidden; }
+
         /* ── iPad (769–1024px) ── */
         @media (max-width: 1024px) and (min-width: 769px) {
             .hide-tablet { display: none !important; }
@@ -316,12 +353,12 @@
             .nav { padding: 6px 12px; padding-top: calc(6px + env(safe-area-inset-top)); padding-left: calc(12px + env(safe-area-inset-left)); padding-right: calc(12px + env(safe-area-inset-right)); }
             .nav-links { display: none !important; }
             .nav-search { display: none !important; }
-            .nav-hamburger { display: flex; }
             .nav-right { gap: 8px; }
-            .theme-toggle { display: none; }
-            /* Mobile drawer top is set in base rule; mobile-specific overrides not needed since display:none/block correctly hides it */
-            /* Show dashboard shortcut icon in mobile nav bar */
-            .nav-mobile-dashboard { display: inline-flex !important; font-size: 18px; padding: 4px 8px; }
+            /* v5.51.0 (Q58): the phone's top bar is logo, status dot and avatar —
+               everything else lives on the bottom tab bar / More sheet. */
+            .nav .theme-toggle, .nav-kb, .gs-pill { display: none !important; }
+            .tabbar { display: flex; }
+            body.has-tabbar { padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); }
 
             /* Layout */
             .container { padding: 10px 12px; }
@@ -346,7 +383,7 @@
 
             /* Buttons — 44px minimum tap target */
             .btn { min-height: 44px; padding: 10px 16px; font-size: 14px; }
-            .btn-sm { min-height: 38px; padding: 8px 12px; font-size: 13px; }
+            .btn-sm { min-height: var(--tap); padding: 8px 12px; font-size: 13px; }
 
             /* Section tabs */
             .section-tabs { padding: 0 12px; }
@@ -398,6 +435,10 @@
             .hide-mobile { display: none !important; }
         }
 
+        @media (min-width: 769px) {
+            .tabbar, .sheet, .sheet-backdrop { display: none !important; }
+        }
+
         /* ── Extra small (≤480px) ── */
         @media (max-width: 480px) {
             .stat-grid { grid-template-columns: 1fr; }
@@ -410,7 +451,7 @@
         }
     </style>
 </head>
-<body hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{% if current_user.is_authenticated %}has-tabbar{% endif %}" hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 {% include "_icon_sprite.html" %}
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
@@ -432,7 +473,7 @@
 
     <div class="nav-right">
         {% if getting_started_pill %}
-        <a href="/getting-started" class="nav-link" title="The first-hour checklist"
+        <a href="/getting-started" class="nav-link gs-pill" title="The first-hour checklist"
            style="font-size:11px;padding:4px 10px;border:1px solid var(--border);border-radius:999px;white-space:nowrap;">
             {{ icon("rocket") }} Getting started ({{ getting_started_pill.done }}/{{ getting_started_pill.total }})
         </a>
@@ -469,7 +510,7 @@
     </div>
 
     <!-- Keyboard shortcut hint -->
-    <div style="margin-left:4px;">
+    <div class="nav-kb" style="margin-left:4px;">
         <button id="kb-hint-btn" title="Keyboard shortcuts (?)"
                 style="background:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);padding:4px 8px;cursor:pointer;font-size:11px;">{{ icon("keyboard") }}</button>
     </div>
@@ -483,28 +524,8 @@
         </form>
     </div>
 
-    <!-- Dashboard shortcut — only visible on mobile, replaces hidden nav links -->
-    {% if current_user.is_authenticated %}
-    <a href="/" class="nav-link nav-mobile-dashboard {% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}"
-       style="display:none;" title="Dashboard" aria-label="Dashboard">{{ icon("layout-dashboard") }}</a>
-    {% endif %}
-
-    <!-- Hamburger button — only visible on mobile -->
-    {% if current_user.is_authenticated %}
-    <button class="nav-hamburger" id="nav-hamburger" aria-label="Open menu" aria-expanded="false">{{ icon("menu") }}</button>
-    {% endif %}
-
     {% endif %}
 </nav>
-
-<!-- Mobile nav drawer — slides down on hamburger tap -->
-{% if current_user.is_authenticated %}
-<div class="nav-mobile-drawer" id="nav-mobile-drawer">
-    {% for item in nav.top %}
-    <a href="{{ item.url }}" class="{% if item.active %}active{% endif %}">{{ nav_icon(item.icon) }} {{ item.label }}</a>
-    {% endfor %}
-</div>
-{% endif %}
 
 <!-- Section sub-tab strip — one template for every section, driven by
      nav.strip (jen/routes/settings/nav.py, v5.9.0). Scrolls horizontally on
@@ -570,6 +591,49 @@
     {% block content %}{% endblock %}
 </div>
 
+{% if current_user.is_authenticated %}
+<!-- v5.51.0 (Q58) — phone navigation: a bottom tab bar (Dashboard, Leases,
+     Reservations, Settings/Devices, More) and the More sheet listing every
+     destination grouped as the desktop nav. Both are display:none above 768px.
+     Rendered from `nav.tabbar` / `nav.sheet` (jen/routes/settings/nav.py). -->
+<nav class="tabbar" aria-label="Primary">
+    {% for t in nav.tabbar %}
+    <a href="{{ t.url }}" class="{% if t.active %}active{% endif %}" {% if t.active %}aria-current="page"{% endif %}>{{ icon(t.icon) }}<span>{{ t.label }}</span></a>
+    {% endfor %}
+    <button type="button" class="{% if nav.tabbar_more_active %}active{% endif %}" data-sheet-open="more-sheet" aria-haspopup="dialog" aria-controls="more-sheet">{{ icon("menu") }}<span>More</span></button>
+</nav>
+<div class="sheet-backdrop" id="sheet-backdrop"></div>
+<div class="sheet" id="more-sheet" role="dialog" aria-modal="true" aria-label="Menu">
+    <div class="sheet-grab"></div>
+    <form class="sheet-search" action="/search" method="GET">
+        <input type="text" name="q" placeholder="Search…" autocomplete="off" aria-label="Search">
+    </form>
+    {% if getting_started_pill %}
+    <div class="sheet-list"><a class="full" href="/getting-started">{{ icon("rocket") }} Getting started ({{ getting_started_pill.done }}/{{ getting_started_pill.total }})</a></div>
+    {% endif %}
+    {% for g in nav.sheet %}
+    <div class="sheet-group-label">{{ g.label }}</div>
+    <div class="sheet-list">
+        {% for i in g['items'] %}
+        <a href="{{ i.url if i.url is defined else url_for(i.endpoint) }}" class="{% if i.active %}active{% endif %}">{{ nav_icon(i.icon) }} {{ i.label }}</a>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    <div class="sheet-group-label">{{ current_user.username }}</div>
+    <div class="sheet-list">
+        <a href="/profile">{{ icon("user") }} My Profile</a>
+        <a href="/saved-searches">{{ icon("bookmark") }} Saved Searches</a>
+        <a href="/mfa/enroll">{{ icon("lock") }} Security &amp; MFA</a>
+        <a href="/mfa/trusted-devices">{{ icon("monitor-smartphone") }} Trusted Devices</a>
+        <button type="button" class="sheet-theme"><span class="theme-ico"></span> Theme</button>
+        <form method="POST" action="/logout" style="display:contents;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="danger">{{ icon("log-out") }} Logout</button>
+        </form>
+    </div>
+</div>
+{% endif %}
+
 <script nonce="{{ csp_nonce }}">
 // v5.22.0 (Q18) — htmx falls back to eval() for a couple of features
 // (hx-on inline attributes, the "js:" expression prefix) that Jen
@@ -600,14 +664,14 @@ function toggleTheme() {
     const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
     html.setAttribute('data-theme', next);
     localStorage.setItem('jen-theme', next);
-    document.querySelectorAll('.theme-toggle').forEach(b => b.innerHTML = next === 'dark' ? ICO_MOON : ICO_SUN);
+    document.querySelectorAll('.theme-toggle, .theme-ico').forEach(b => b.innerHTML = next === 'dark' ? ICO_MOON : ICO_SUN);
 }
 var ICO_MOON = '<svg class="ico" aria-hidden="true"><use href="#i-moon"></use></svg>', ICO_SUN = '<svg class="ico" aria-hidden="true"><use href="#i-sun"></use></svg>', ICO_MENU = '<svg class="ico" aria-hidden="true"><use href="#i-menu"></use></svg>', ICO_X = '<svg class="ico" aria-hidden="true"><use href="#i-x"></use></svg>';
 (function() {
     const saved = localStorage.getItem('jen-theme') || 'dark';
     document.documentElement.setAttribute('data-theme', saved);
     document.addEventListener('DOMContentLoaded', function() {
-        document.querySelectorAll('.theme-toggle').forEach(b => b.innerHTML = saved === 'dark' ? ICO_MOON : ICO_SUN);
+        document.querySelectorAll('.theme-toggle, .theme-ico').forEach(b => b.innerHTML = saved === 'dark' ? ICO_MOON : ICO_SUN);
     });
 })();
 
@@ -681,7 +745,7 @@ function sortTable(table, col, th) {
 
     // Theme toggle, keyboard-shortcuts hint/modal, search box focus width —
     // all were inline on*= handlers before the CSP nonce conversion (v5.22.0).
-    document.querySelectorAll('.theme-toggle').forEach(function(btn) {
+    document.querySelectorAll('.theme-toggle, .sheet-theme').forEach(function(btn) {
         btn.addEventListener('click', toggleTheme);
     });
     var kbHintBtn = document.getElementById('kb-hint-btn');
@@ -823,41 +887,40 @@ function sortTable(table, col, th) {
         if (routes[kbBuffer]) { window.location.href = routes[kbBuffer]; kbBuffer = ''; }
     });
 
-    // Hamburger menu toggle
-    var hamburger = document.getElementById('nav-hamburger');
-    var drawer = document.getElementById('nav-mobile-drawer');
-    if (hamburger && drawer) {
-        hamburger.addEventListener('click', function(e) {
-            e.stopPropagation();
-            var open = drawer.classList.toggle('open');
-            hamburger.innerHTML = open ? ICO_X : ICO_MENU;
-            hamburger.setAttribute('aria-expanded', open);
-        });
-        // Navigate immediately on touchstart — eliminates iOS 300ms delay on drawer links
-        drawer.querySelectorAll('a').forEach(function(a) {
-            a.addEventListener('touchstart', function(e) {
-                var href = this.getAttribute('href');
-                if (href && href !== '#') {
-                    e.preventDefault();
-                    drawer.classList.remove('open');
-                    hamburger.innerHTML = ICO_MENU;
-                    window.location.href = href;
-                }
-            }, { passive: false });
-            // Also close drawer on regular click (desktop/fallback)
-            a.addEventListener('click', function() {
-                drawer.classList.remove('open');
-                hamburger.innerHTML = ICO_MENU;
-                hamburger.setAttribute('aria-expanded', false);
-            });
-        });
-        document.addEventListener('click', function(e) {
-            if (!e.target.closest('#nav-hamburger') && !e.target.closest('#nav-mobile-drawer')) {
-                drawer.classList.remove('open');
-                hamburger.innerHTML = ICO_MENU;
-                hamburger.setAttribute('aria-expanded', false);
-            }
-        });
+    // Sheets (v5.51.0, Q58) — the More sheet, and (later in this release) the
+    // filter and action sheets. One delegated handler: [data-sheet-open="id"]
+    // opens the .sheet with that id, [data-sheet-close] / the backdrop / Esc close it.
+    var sheetBackdrop = document.getElementById('sheet-backdrop');
+    var openSheetEl = null;
+    function closeSheet() {
+        if (openSheetEl) { openSheetEl.classList.remove('open'); openSheetEl = null; }
+        if (sheetBackdrop) sheetBackdrop.classList.remove('open');
+        document.body.classList.remove('sheet-open');
+    }
+    function showSheet(id) {
+        var el = document.getElementById(id);
+        if (!el || !sheetBackdrop) return;
+        closeSheet();
+        el.classList.add('open');
+        sheetBackdrop.classList.add('open');
+        document.body.classList.add('sheet-open');
+        openSheetEl = el;
+    }
+    window.jenSheet = { open: showSheet, close: closeSheet };
+    document.addEventListener('click', function(e) {
+        var opener = e.target.closest('[data-sheet-open]');
+        if (opener) { e.preventDefault(); showSheet(opener.getAttribute('data-sheet-open')); return; }
+        if (e.target.closest('[data-sheet-close]') || e.target === sheetBackdrop) closeSheet();
+    });
+    document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSheet(); });
+    // Following a link inside a sheet closes it (bfcache can restore the page with it open).
+    window.addEventListener('pageshow', closeSheet);
+
+    // The section strip scrolls sideways on a phone: bring the active tab into view.
+    var activeTab = document.querySelector('.section-tabs .section-tab.active');
+    if (activeTab && activeTab.parentNode) {
+        var strip = activeTab.parentNode;
+        strip.scrollLeft = activeTab.offsetLeft - (strip.clientWidth - activeTab.offsetWidth) / 2;
     }
 
     // Instant navigation on touchstart for all anchor links — but NOT if the link is
