@@ -227,7 +227,7 @@ DEMO = """
 def demo(phone, base_url):
     _visit(phone, base_url, "/about")
     phone.evaluate(
-        "(html) => { document.querySelector('.container').insertAdjacentHTML('beforeend', html); window.jenUi.enhance(document); }",
+        "(html) => { document.querySelector('.container').innerHTML = html; window.jenUi.enhance(document); }",
         DEMO,
     )
     return phone
@@ -336,7 +336,7 @@ class TestDesktopIsUntouched:
     def test_the_phone_patterns_do_nothing_at_1440(self, desktop, base_url):
         _visit(desktop, base_url, "/about")
         desktop.evaluate(
-            "(html) => { document.querySelector('.container').insertAdjacentHTML('beforeend', html); window.jenUi.enhance(document); }",
+            "(html) => { document.querySelector('.container').innerHTML = html; window.jenUi.enhance(document); }",
             DEMO,
         )
         expect(desktop.locator(".fs-filter-toggle")).to_be_hidden()
