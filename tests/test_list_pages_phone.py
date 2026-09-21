@@ -11,7 +11,7 @@ TestPages renders the real pages and needs the CI database.
 
 import pathlib
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 
 from jinja2 import Environment, FileSystemLoader
@@ -320,10 +320,12 @@ class TestSourceShape:
 
 class TestRelativeTime:
     def test_future_and_past(self):
-        assert relative_time(NOW + timedelta(days=3, hours=2)) == "in 3 d"
-        assert relative_time(NOW - timedelta(hours=5, minutes=1)) == "5 h ago"
-        assert relative_time(NOW - timedelta(minutes=7, seconds=5)) == "7 min ago"
-        assert relative_time(NOW + timedelta(seconds=10)) == "now"
+        now = datetime.utcnow()  # the clock is passed in, so a slow suite cannot skew the result
+        at = lambda **kw: relative_time(now + timedelta(**kw), now=now.replace(tzinfo=timezone.utc))  # noqa: E731
+        assert at(days=3, hours=2) == "in 3 d"
+        assert at(hours=-5, minutes=-1) == "5 h ago"
+        assert at(minutes=-7, seconds=-5) == "7 min ago"
+        assert at(seconds=10) == "now"
 
     def test_empty_and_junk(self):
         assert relative_time(None) == "—"
