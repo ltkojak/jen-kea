@@ -257,6 +257,45 @@ def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
     return lines
 
 
+def _bundle_owned(bundle_dir: Path) -> tuple[set[str], set[str]]:
+    """(paths under /etc/jen, paths under the content dir) that this bundle
+    writes — everything else already on disk is left alone."""
+    etc: set[str] = set()
+    for name in ("jen.config", "mfa_key", "secret_key"):
+        if (bundle_dir / name).is_file():
+            etc.add(name)
+    for sub in ("ssl", "ssh"):
+        root = bundle_dir / sub
+        if root.is_dir():
+            etc |= {f"{sub}/{p.relative_to(root).as_posix()}" for p in root.rglob("*") if p.is_file()}
+    croot = bundle_dir / "content"
+    content = {p.relative_to(croot).as_posix() for p in croot.rglob("*") if p.is_file()} if croot.is_dir() else set()
+    return etc, content
+
+
+def unknown_files(root: Path, owned: set[str], exclude: tuple[str, ...] = ()) -> list[str]:
+    """Files under `root` that the bundle does not carry. The rule: bundle
+    files overwrite, unknown files are LEFT IN PLACE (never deleted) and named
+    in the output so the operator can decide."""
+    if not Path(root).is_dir():
+        return []
+    return sorted(rel for rel, path in _walk_files(Path(root), exclude) if path.is_file() and rel not in owned)
+
+
+def check_plugins(manifest: dict, plugin_dirs) -> list[str]:
+    """Warnings (never refusals) for plugins the manifest recorded whose code
+    is not present on this machine — their database rows are restored anyway."""
+    out = []
+    for p in manifest.get("plugins") or []:
+        pid = p.get("id") if isinstance(p, dict) else None
+        if pid and not any((Path(d) / pid).is_dir() for d in plugin_dirs):
+            out.append(
+                f"plugin {pid!r} is in the bundle but its code is not on this machine — "
+                "reinstall it from Settings → Plugins (its database row is kept)"
+            )
+    return out
+
+
 def restore_content(bundle_dir: Path, content_dir: Path) -> int:
     src_root = bundle_dir / "content"
     if not src_root.is_dir():
@@ -524,6 +563,9 @@ def run(
 
         for w in kea_warnings:
             print(f"warning: {w}", file=sys.stderr)
+        for w in check_plugins(manifest, [Path(content_dir) / "plugins", Path(extensions.JEN_ROOT) / "plugins"]):
+            print(f"warning: {w}", file=sys.stderr)
+        etc_owned, content_owned = _bundle_owned(bundle_dir)
 
         # ── quiesce ──────────────────────────────────────────────────────
         manage = not no_stop
@@ -568,6 +610,15 @@ def run(
             return _fail_with_rollback(
                 snap, Path(etc_jen), Path(content_dir), f"apply failed: {e}", manage, was_running
             )
+
+        for label, root, owned, excl in (
+            ("/etc/jen", Path(etc_jen), etc_owned, ()),
+            ("the content directory", Path(content_dir), content_owned, _SNAPSHOT_EXCLUDE),
+        ):
+            extra = unknown_files(root, owned, excl)
+            if extra:
+                shown = ", ".join(extra[:20]) + (f" … (+{len(extra) - 20} more)" if len(extra) > 20 else "")
+                print(f"left in place (not in the bundle) under {label}: {shown}")
 
         # ── start + health-check ─────────────────────────────────────────
         if manage and restart:

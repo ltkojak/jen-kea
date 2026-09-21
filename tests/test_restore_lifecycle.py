@@ -301,3 +301,202 @@ class TestHealthPoll:
         cfg.write_text("[server]\nhttp_port = 6123\n")
         assert restore._service_port(cfg) == 6123
         assert restore._service_port(tmp_path / "missing") == 5050
+
+
+# ── v5.49.0-beta.5 (Q55-A extended): the destructive cases, one invariant ──
+#
+# Every failure path leaves the box in exactly one of two states: the previous
+# install untouched, or the restored one healthy. "Untouched" is asserted as
+# byte-identical /etc/jen and content, DB rows equal to the snapshot export,
+# and - for refusals that happen before quiesce - no snapshot directory and
+# no systemctl call at all.
+
+
+def _make_bundle(w, manifest=None, extra=None, passphrase=PASS):
+    m = _manifest()
+    m.update(manifest or {})
+    members = {
+        "manifest.json": json.dumps(m).encode(),
+        "jen.config": b"[server]\nhttp_port = 5777\n",
+        "mfa_key": b"NEW-MFA",
+        "content/icons/logo.png": b"new-logo",
+        "jen_db.json.gz": b"irrelevant-here",
+    }
+    members.update(extra or {})
+    blob = build(members, passphrase)
+    w.bundle.write_bytes(blob)
+    return blob
+
+
+def _snapshot_dirs(w):
+    b = w.content / "backups"
+    return list(b.glob("pre-restore-*")) if b.is_dir() else []
+
+
+def _systemctl_calls(w):
+    return [e for e in w.events if e[0] == "systemctl"]
+
+
+@pytest.fixture
+def dbworld(world, monkeypatch):
+    """`world` plus a tiny fake database so "DB rows equal the snapshot
+    export" can be asserted, and an import that can die halfway."""
+    db = {"users": [{"id": 1, "name": "old-admin"}], "settings": [{"k": "a", "v": "old"}]}
+    world.db = db
+    monkeypatch.setattr(restore, "_export_db", lambda: json.dumps(db).encode())
+
+    def fake_import(gz):
+        data = json.loads(gz)
+        db.clear()
+        db.update(data)
+        world.events.append(("db-import",))
+        world.state.imports.append(gz)
+        return ["ok"]
+
+    monkeypatch.setattr(restore, "_import_db", fake_import)
+    world.db_before = json.loads(json.dumps(db))
+
+    def fake_restore_db(bundle_dir, config_file):
+        world.events.append(("apply-db",))
+        db["users"] = [{"id": 1, "name": "restored-admin"}]  # the first table lands ...
+        if world.state.apply_error:
+            raise RuntimeError(world.state.apply_error)  # ... then the import dies
+        db["settings"] = [{"k": "a", "v": "restored"}]
+        return ["ok"]
+
+    monkeypatch.setattr(restore, "restore_jen_db", fake_restore_db)
+    return world
+
+
+class TestRefusalsBeforeQuiesce:
+    """Nothing may have happened: no snapshot dir, no systemctl call, no writes."""
+
+    def _assert_nothing_happened(self, w, before_etc, before_content):
+        assert _snapshot_dirs(w) == []
+        assert _systemctl_calls(w) == []
+        assert _tree(w.etc) == before_etc and _tree(w.content) == before_content
+
+    def test_wrong_passphrase(self, world):
+        before = (_tree(world.etc), _tree(world.content))
+        rc = restore.run(
+            str(world.bundle), "not the passphrase", etc_jen=str(world.etc), content_dir=str(world.content)
+        )
+        assert rc != 0
+        self._assert_nothing_happened(world, *before)
+
+    def test_truncated_bundle(self, world):
+        blob = world.bundle.read_bytes()
+        world.bundle.write_bytes(blob[: len(blob) // 2])
+        before = (_tree(world.etc), _tree(world.content))
+        assert _run(world) != 0
+        self._assert_nothing_happened(world, *before)
+
+    def test_corrupt_bundle(self, world):
+        blob = bytearray(world.bundle.read_bytes())
+        blob[len(blob) // 2] ^= 0xFF
+        world.bundle.write_bytes(bytes(blob))
+        before = (_tree(world.etc), _tree(world.content))
+        assert _run(world) != 0
+        self._assert_nothing_happened(world, *before)
+
+    def test_bundle_from_a_newer_jen_without_force(self, world):
+        _make_bundle(world, manifest={"jen_version": "5.999.0"})
+        before = (_tree(world.etc), _tree(world.content))
+        assert _run(world) != 0
+        self._assert_nothing_happened(world, *before)
+
+    def test_newer_jen_with_force_proceeds(self, world):
+        _make_bundle(world, manifest={"jen_version": "5.999.0"})
+        assert _run(world, force=True) == 0
+
+
+class TestMidApplyFailuresRestoreThePreviousState:
+    def _assert_previous(self, w):
+        assert _tree(w.etc) == w.before_etc
+        assert _tree(w.content) == w.before_content
+        assert w.db == w.db_before  # DB rows equal the snapshot export
+
+    def test_enospc_in_the_content_writer(self, dbworld, monkeypatch):
+        import errno
+
+        w = dbworld
+        w.before_etc, w.before_content = _tree(w.etc), _tree(w.content)
+        real = restore.restore_content
+
+        def full(bundle_dir, content_dir):
+            real(bundle_dir, content_dir)
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(restore, "restore_content", full)
+        assert _run(w) == 1
+        self._assert_previous(w)
+
+    def test_database_import_dying_after_the_first_table(self, dbworld):
+        w = dbworld
+        w.before_etc, w.before_content = _tree(w.etc), _tree(w.content)
+        w.state.apply_error = "connection lost after table 1"
+        assert _run(w) == 1
+        assert w.db["users"][0]["name"] == "old-admin"  # the half-imported table is back
+        self._assert_previous(w)
+
+    def test_health_check_never_coming_up(self, dbworld):
+        w = dbworld
+        w.before_etc, w.before_content = _tree(w.etc), _tree(w.content)
+        w.state.healthy = False
+        assert _run(w) != 0
+        self._assert_previous(w)
+        assert w.db["settings"][0]["v"] == "old"  # the fully-imported DB was rolled back too
+
+    def test_success_leaves_the_restored_state(self, dbworld):
+        w = dbworld
+        assert _run(w) == 0
+        assert w.db["settings"][0]["v"] == "restored"
+        assert (w.etc / "mfa_key").read_bytes() == b"NEW-MFA"
+
+
+class TestExistingFilesNotInTheBundle:
+    def test_bundle_files_overwrite_unknown_files_stay_and_are_named(self, world, capsys):
+        (world.etc / "extra.conf").write_bytes(b"operator-added")
+        (world.content / "uploads").mkdir()
+        (world.content / "uploads" / "keepme.txt").write_bytes(b"mine")
+        assert _run(world) == 0
+        out = capsys.readouterr().out
+        assert (world.etc / "mfa_key").read_bytes() == b"NEW-MFA"  # overwritten
+        assert (world.etc / "extra.conf").read_bytes() == b"operator-added"  # left in place
+        assert (world.content / "uploads" / "keepme.txt").read_bytes() == b"mine"
+        assert "left in place" in out and "extra.conf" in out and "uploads/keepme.txt" in out
+        # files the bundle itself carries are never reported as unknown
+        assert "mfa_key" not in out.split("left in place", 1)[1]
+
+    def test_snapshots_and_backups_are_never_reported(self, world, capsys):
+        assert _run(world) == 0
+        lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("left in place")]
+        assert not any("pre-restore" in ln or "backups" in ln for ln in lines)
+
+
+class TestPluginsInTheManifest:
+    def test_unknown_plugin_warns_and_restore_continues(self, world, capsys):
+        _make_bundle(world, manifest={"plugins": [{"id": "no-such-plugin", "version": "9.9.9"}]})
+        assert _run(world) == 0
+        err = capsys.readouterr().err
+        assert "no-such-plugin" in err and "database row is kept" in err
+
+    def test_a_bundled_plugin_does_not_warn(self, world, capsys, monkeypatch):
+        import pathlib
+
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(pathlib.Path(__file__).resolve().parent.parent))
+        _make_bundle(world, manifest={"plugins": [{"id": "ipam", "version": "1.5.1"}]})
+        assert _run(world) == 0
+        assert "ipam" not in capsys.readouterr().err
+
+
+class TestCleanMachine:
+    def test_nothing_pre_existing(self, world, tmp_path):
+        etc, content = tmp_path / "fresh_etc", tmp_path / "fresh_content"
+        world.state.active = False
+        rc = restore.run(str(world.bundle), PASS, etc_jen=str(etc), content_dir=str(content))
+        assert rc == 0
+        assert (etc / "mfa_key").read_bytes() == b"NEW-MFA"
+        assert (content / "icons" / "logo.png").read_bytes() == b"new-logo"

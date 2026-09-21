@@ -1106,7 +1106,7 @@ You'll be prompted for the passphrase (never pass it as a command-line argument 
 
 1. **Stop** — if `jen` is a running systemd service it is stopped, so nothing is writing to the config, content or database while they are replaced.
 2. **Snapshot** — everything about to be overwritten is saved to `<content dir>/backups/pre-restore-<UTC timestamp>/` (mode 0700): a tar of `/etc/jen`, a tar of the content directory (without `backups/` and `tmp/`), and a fresh export of the Jen database. If the snapshot cannot be taken, nothing is changed.
-3. **Apply** — `/etc/jen/*`, the content directory and the database are replaced from the bundle.
+3. **Apply** — `/etc/jen/*`, the content directory and the database are replaced from the bundle. Files the bundle carries overwrite; files already on disk that it does not carry are **left in place, never deleted**, and named in the output ("left in place (not in the bundle) under …"). A plugin the bundle recorded whose code is not on this machine produces a warning — its database row is kept; reinstall it from Settings → Plugins.
 4. **Start and health-check** — Jen is started again (only if it was running before, or you passed `--start`) and `/api/v1/health` is polled for up to 60 seconds on the restored `[server] http_port`.
 5. **Roll back on failure** — if anything raises during the apply, or Jen does not come up healthy, the snapshot is put back (config, content, database), Jen is started again, and the command exits non-zero naming the snapshot directory.
 
