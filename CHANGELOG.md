@@ -4913,7 +4913,7 @@ actions applied to a given row.
 - `static/js/chart.umd.min.js` (new) — Chart.js 4.4.1, vendored.
   `templates/reports.html` now loads it locally instead of from
   cdnjs.cloudflare.com.
-- `templates/_icons.html` (new) — hand-authored inline SVG macros
+- `templates/_icon_sprite.html` (new) — hand-authored inline SVG macros
   (edit, trash, pin, dots, download, test, pause).
 - `templates/base.html` — new `.action-menu` CSS component (same
   checkbox-toggle mechanism already used for the nav avatar dropdown,

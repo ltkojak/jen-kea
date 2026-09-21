@@ -2015,7 +2015,7 @@ the Content-Security-Policy.
 - Inside a `{% block scripts %}` region write the inline form instead:
   `<svg class="ico" aria-hidden="true"><use href="#i-pencil"></use></svg>`.
 - **To add an icon:** save the Lucide SVG as `static/icons/src/<name>.svg`,
-  run `py tools/build_icon_sprite.py` to regenerate `templates/_icons.html`,
+  run `py tools/build_icon_sprite.py` to regenerate `templates/_icon_sprite.html`,
   and commit both. A test refuses a sprite that differs from its sources.
 - `tools/replace_emoji_icons.py` with `tools/icon_map.json` is the one-off
   emoji-to-icon converter used for the initial swap.

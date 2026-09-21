@@ -8,7 +8,7 @@ tables. Before this every strip was a hand-maintained list of endpoint
 names repeated three times in base.html (desktop links, drawer, strip);
 adding a page meant editing all three, and the lists quietly drifted.
 
-Item icons are Lucide sprite names (templates/_icons.html; `nav_icon()` also passes a plugin's own emoji through as text).
+Item icons are Lucide sprite names (templates/_icon_sprite.html; `nav_icon()` also passes a plugin's own emoji through as text).
 
 Pure data plus tiny helpers — nothing here imports Flask or the app, so
 the factory's context processor can import it without a cycle.

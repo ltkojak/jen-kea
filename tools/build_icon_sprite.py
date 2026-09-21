@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 tools/build_icon_sprite.py — turn static/icons/src/*.svg (Lucide sources, ISC
-licence, see static/icons/LICENSE) into templates/_icons.html: ONE hidden
+licence, see static/icons/LICENSE) into templates/_icon_sprite.html: ONE hidden
 inline <svg> holding a <symbol id="i-<name>" viewBox="0 0 24 24"> per icon.
 base.html includes it once right after <body>; pages reference an icon with
 <use href="#i-<name>"/> (see jen/services/icons.py). Inline + same-document
 means no fetch and no CSP change.
 
-    py tools/build_icon_sprite.py            # rewrite templates/_icons.html
+    py tools/build_icon_sprite.py            # rewrite templates/_icon_sprite.html
     py tools/build_icon_sprite.py --check    # exit 1 if it would change
 
 tests/test_icons.py builds the sprite into a temp file and asserts it equals
@@ -22,7 +22,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "static" / "icons" / "src"
-OUT = ROOT / "templates" / "_icons.html"
+OUT = ROOT / "templates" / "_icon_sprite.html"
 
 _INNER = re.compile(r"<svg\b[^>]*>(.*?)</svg>", re.S)
 
@@ -49,7 +49,7 @@ def main(argv: list[str]) -> int:
     if "--check" in argv:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         if current.replace("\r\n", "\n") != text:
-            print("templates/_icons.html is out of date — run: py tools/build_icon_sprite.py")
+            print("templates/_icon_sprite.html is out of date — run: py tools/build_icon_sprite.py")
             return 1
         return 0
     OUT.write_text(text, encoding="utf-8", newline="\n")

@@ -152,7 +152,7 @@
 
         /* Buttons */
         button.linkish { background: none; border: none; padding: 0; cursor: pointer; font: inherit; color: var(--primary); text-decoration: underline; }
-        /* v5.50.0 (Q57) — the inline Lucide sprite (templates/_icons.html): icons follow the theme via currentColor */
+        /* v5.50.0 (Q57) — the inline Lucide sprite (templates/_icon_sprite.html): icons follow the theme via currentColor */
         .ico { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.125em; flex: none; }
         .ico-lg { width: 1.25em; height: 1.25em; vertical-align: -0.2em; margin-right: 2px; }
         .action-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
@@ -411,7 +411,7 @@
     </style>
 </head>
 <body hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
-{% include "_icons.html" %}
+{% include "_icon_sprite.html" %}
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
         <span class="nav-brand-logo-wrap">

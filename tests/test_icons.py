@@ -5,7 +5,7 @@ v5.50.0 (Q57) — the icon system and the scanner that keeps emoji out of the UI
 
 Pure (no DB): `py -m pytest --noconftest tests/test_icons.py`.
 
-1. Drift guard: the committed templates/_icons.html equals what
+1. Drift guard: the committed templates/_icon_sprite.html equals what
    tools/build_icon_sprite.py builds from static/icons/src/*.svg.
 2. Every icon name a template, nav.py, subnets.py or the alert map uses exists
    as a symbol in the sprite (a missing one renders nothing).
@@ -52,31 +52,31 @@ def _scan_files():
 class TestSprite:
     def test_committed_sprite_equals_the_build(self, tmp_path):
         built = sprite_tool.build()
-        committed = (ROOT / "templates" / "_icons.html").read_text(encoding="utf-8").replace("\r\n", "\n")
+        committed = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8").replace("\r\n", "\n")
         assert committed == built, "run: py tools/build_icon_sprite.py"
 
     def test_every_source_is_a_symbol_and_has_a_licence_next_to_it(self):
         names = {p.stem for p in (ROOT / "static" / "icons" / "src").glob("*.svg")}
         assert len(names) >= 60
         assert (ROOT / "static" / "icons" / "LICENSE").read_text(encoding="utf-8").startswith("ISC License")
-        sprite = (ROOT / "templates" / "_icons.html").read_text(encoding="utf-8")
+        sprite = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8")
         assert set(re.findall(r'<symbol id="i-([a-z0-9-]+)"', sprite)) == names
 
     def test_nothing_is_baked_in_a_colour(self):
-        sprite = (ROOT / "templates" / "_icons.html").read_text(encoding="utf-8")
+        sprite = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8")
         assert not re.search(r'(?:fill|stroke)="(?!none|currentColor)', sprite)
 
 
 class TestNamesUsedExist:
     @staticmethod
     def _symbols():
-        sprite = (ROOT / "templates" / "_icons.html").read_text(encoding="utf-8")
+        sprite = (ROOT / "templates" / "_icon_sprite.html").read_text(encoding="utf-8")
         return set(re.findall(r'<symbol id="i-([a-z0-9-]+)"', sprite))
 
     def test_template_icon_calls_and_inline_svg_uses(self):
         symbols, missing = self._symbols(), []
         for p in (ROOT / "templates").glob("*.html"):
-            if p.name == "_icons.html":
+            if p.name == "_icon_sprite.html":
                 continue
             text = p.read_text(encoding="utf-8")
             used = set(re.findall(r"""icon\(\s*["']([a-z0-9-]+)["']""", text)) | set(
