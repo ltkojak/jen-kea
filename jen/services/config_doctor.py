@@ -669,7 +669,7 @@ def group_findings(findings: list[Finding]) -> list[dict]:
     ONE row with a count and a list, sharing the `why` once. Pure; the API keeps
     returning the flat findings.
 
-    Each group: {id, severity, title, why, fix_url, count, items: [{where, detail}]}."""
+    Each group: {id, severity, title, why, fix_url, count, entries: [{where, detail}]}."""
     groups: dict[tuple, dict] = {}
     for f in findings:
         key = (f["id"], f["severity"])
@@ -682,10 +682,10 @@ def group_findings(findings: list[Finding]) -> list[dict]:
                 "why": f.get("why", ""),
                 "fix_url": f.get("fix_url", ""),
                 "count": 0,
-                "items": [],
+                "entries": [],
             }
         g["count"] += 1
-        g["items"].append({"where": f.get("where", ""), "detail": f.get("detail", "")})
+        g["entries"].append({"where": f.get("where", ""), "detail": f.get("detail", "")})
     return list(groups.values())
 
 

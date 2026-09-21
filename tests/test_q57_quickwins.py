@@ -68,7 +68,7 @@ class TestDoctorGrouping:
         findings = [_f("a", "warn", "one"), _f("b", "info", "x")] + [_f("a", "warn", f"r{i}") for i in range(3)]
         groups = config_doctor.group_findings(findings)
         assert [g["id"] for g in groups] == ["a", "b"]
-        assert groups[0]["count"] == 4 and len(groups[0]["items"]) == 4
+        assert groups[0]["count"] == 4 and len(groups[0]["entries"]) == 4
         assert groups[1]["count"] == 1
 
     def test_same_id_different_severity_stays_apart(self):
