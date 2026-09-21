@@ -6,9 +6,9 @@
     <p>Here's what happened.</p>
 </div>
 
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><h3>Result</h3></div>
-    <ul style="margin:0;padding-left:20px;font-size:13px;">
+    <ul class="u-6be502">
         {% for line in report %}
         <li>{{ line }}</li>
         {% endfor %}
@@ -16,7 +16,7 @@
 </div>
 
 {% if restart_failed %}
-<form method="post" action="{{ url_for('subnets.import_windows_apply_reservations', source=src.key) }}" style="display:inline;">
+<form method="post" action="{{ url_for('subnets.import_windows_apply_reservations', source=src.key) }}" class="u-cccfa4">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="btn btn-primary">Add the reservations now</button>
 </form>

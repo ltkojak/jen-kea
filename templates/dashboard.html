@@ -8,10 +8,10 @@
         <p>Live overview of your DHCP infrastructure</p>
     </div>
     <div class="page-header-controls" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
-        <span id="last-updated" style="font-size:11px;color:var(--text-muted);"></span>
+        <span id="last-updated" class="u-749148"></span>
         <button class="btn btn-secondary btn-sm" id="customize-btn">{{ icon("settings") }} Customize</button>
-        <span class="dash-refresh-label" style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
-        <select id="refreshInterval" aria-label="Auto-refresh" title="Auto-refresh" style="width:auto;font-size:12px;padding:4px 8px;">
+        <span class="dash-refresh-label u-865c33">Auto-refresh:</span>
+        <select id="refreshInterval" aria-label="Auto-refresh" title="Auto-refresh" class="u-aedcdf">
             <option value="0">Off</option>
             <option value="5000">5s</option>
             <option value="10000">10s</option>
@@ -26,16 +26,16 @@
 <!-- Customize panel -->
 <div id="dash-customize" style="display:none;" class="card">
     <div class="card-header"><span class="card-title">{{ icon("settings") }} Customize Dashboard</span></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Choose which widgets to show. Changes are saved to your account.</p>
+    <p class="u-b8b1bc">Choose which widgets to show. Changes are saved to your account.</p>
     <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-subnet_stats"> Subnet Statistics</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-totals"> Total Summary</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-lease_history_chart"> Utilization History (7 days)</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-lease_sparklines"> Lease Sparklines per Subnet (30 days)</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-top_devices"> Top Active Devices (30 days)</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-recent_leases"> Recently Issued Leases</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-server_status"> Server Status</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-subnet_stats"> Subnet Statistics</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-totals"> Total Summary</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-lease_history_chart"> Utilization History (7 days)</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-lease_sparklines"> Lease Sparklines per Subnet (30 days)</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-top_devices"> Top Active Devices (30 days)</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-recent_leases"> Recently Issued Leases</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-server_status"> Server Status</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
     </div>
     <button class="btn btn-primary btn-sm" id="save-dash-prefs-btn">{{ icon("save") }} Save Layout</button>
 </div>
@@ -50,31 +50,31 @@
 <div id="dash-subnet_stats">
     <div class="stat-grid">
     {% for subnet_id, s in stats.items() %}
-    <div class="stat-card" data-href="/leases?subnet={{ subnet_id }}" style="cursor:pointer;" title="View leases for {{ s.name }}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-            <div style="flex:1;">
+    <div class="stat-card u-3b6a3a" data-href="/leases?subnet={{ subnet_id }}"  title="View leases for {{ s.name }}">
+        <div class="u-69957c">
+            <div class="u-97445a">
                 <div class="stat-label">{% if subnets6 %}<span class="badge" style="font-size:9px;padding:1px 5px;background:var(--surface2);color:var(--text-muted);margin-right:4px;">v4</span>{% endif %}{{ s.name }} — {{ s.cidr }}</div>
                 <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
             </div>
         </div>
         <div class="stat-meta" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
-        <div class="util-bar" style="margin-top:10px;">
+        <div class="util-bar u-d2c171">
             <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%;transition:width 0.5s ease;"></div>
         </div>
-        <div style="margin-top:4px;">
-            <span style="font-size:11px;color:var(--text-muted);" id="util-pct-{{ subnet_id }}"></span>
+        <div class="u-96ad60">
+            <span class="u-749148" id="util-pct-{{ subnet_id }}"></span>
         </div>
         {% if s.routers or s.dns_servers %}
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;">
             {% if s.routers %}
             <div>
-                <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px;">Gateway</span>
+                <span class="u-29d92f">Gateway</span>
                 <span class="mono" style="font-size:11px;color:var(--text);">{{ s.routers }}</span>
             </div>
             {% endif %}
             {% if s.dns_servers %}
             <div style="min-width:0;flex:1;">
-                <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;display:block;margin-bottom:3px;">DNS</span>
+                <span class="u-29d92f">DNS</span>
                 <span class="mono" style="font-size:11px;color:var(--text);word-break:break-all;">{{ s.dns_servers.replace(',', ', ') }}</span>
             </div>
             {% endif %}
@@ -83,18 +83,18 @@
         {% for s6 in subnets6 if s6.paired_subnet4_id == subnet_id %}
         <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-                <span class="badge badge-production" style="font-size:9px;padding:1px 5px;">v6</span>
-                <span class="mono" style="font-size:11px;color:var(--text-muted);">{{ s6.cidr }}</span>
+                <span class="badge badge-production u-41ccf8">v6</span>
+                <span class="mono u-749148">{{ s6.cidr }}</span>
             </div>
-            <div style="font-size:11px;color:var(--text-muted);" id="stat6-meta-{{ s6.id }}">{{ s6.active }} active &nbsp;·&nbsp; {{ s6.reserved }} reserved</div>
+            <div class="u-749148" id="stat6-meta-{{ s6.id }}">{{ s6.active }} active &nbsp;·&nbsp; {{ s6.reserved }} reserved</div>
         </div>
         {% endfor %}
     </div>
     {% endfor %}
     {% for s6 in subnets6 if not s6.paired_subnet4_id %}
-    <div class="stat-card" data-href="/devices?view=v6&subnet={{ s6.id }}" style="cursor:pointer;" title="View IPv6 devices for {{ s6.name }}">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-            <div style="flex:1;">
+    <div class="stat-card u-3b6a3a" data-href="/devices?view=v6&subnet={{ s6.id }}"  title="View IPv6 devices for {{ s6.name }}">
+        <div class="u-69957c">
+            <div class="u-97445a">
                 <div class="stat-label"><span class="badge badge-production" style="font-size:9px;padding:1px 5px;margin-right:4px;">v6</span>{{ s6.name }} — {{ s6.cidr }}</div>
                 <div class="stat-value" id="stat6-active-{{ s6.id }}">{{ s6.active }}</div>
             </div>
@@ -110,29 +110,29 @@
     <div class="card" style="padding:16px 20px;">
         <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Total Active{% if ipv6_summary %} <span class="badge" style="font-size:8px;padding:0 4px;background:var(--surface2);color:var(--text-muted);">v4</span>{% endif %}</div>
-                <div style="font-size:24px;font-weight:700;color:var(--primary);" id="total-active">—</div>
+                <div class="u-1d385c">Total Active{% if ipv6_summary %} <span class="badge u-c55bdf">v4</span>{% endif %}</div>
+                <div class="u-37e8cf" id="total-active">—</div>
             </div>
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Dynamic</div>
-                <div style="font-size:24px;font-weight:700;" id="total-dynamic">—</div>
+                <div class="u-1d385c">Dynamic</div>
+                <div class="u-c2569f" id="total-dynamic">—</div>
             </div>
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reserved{% if ipv6_summary %} <span class="badge" style="font-size:8px;padding:0 4px;background:var(--surface2);color:var(--text-muted);">v4</span>{% endif %}</div>
-                <div style="font-size:24px;font-weight:700;" id="total-reserved">—</div>
+                <div class="u-1d385c">Reserved{% if ipv6_summary %} <span class="badge u-c55bdf">v4</span>{% endif %}</div>
+                <div class="u-c2569f" id="total-reserved">—</div>
             </div>
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Pool Used</div>
-                <div style="font-size:24px;font-weight:700;" id="total-pct">—</div>
+                <div class="u-1d385c">Pool Used</div>
+                <div class="u-c2569f" id="total-pct">—</div>
             </div>
             {% if ipv6_summary %}
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Active <span class="badge badge-production" style="font-size:8px;padding:0 4px;">v6</span></div>
-                <div style="font-size:24px;font-weight:700;color:var(--primary);">{{ ipv6_summary.active }}</div>
+                <div class="u-1d385c">Active <span class="badge badge-production u-d1f783">v6</span></div>
+                <div class="u-37e8cf">{{ ipv6_summary.active }}</div>
             </div>
             <div>
-                <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px;">Reserved <span class="badge badge-production" style="font-size:8px;padding:0 4px;">v6</span></div>
-                <div style="font-size:24px;font-weight:700;">{{ ipv6_summary.reserved }}</div>
+                <div class="u-1d385c">Reserved <span class="badge badge-production u-d1f783">v6</span></div>
+                <div class="u-c2569f">{{ ipv6_summary.reserved }}</div>
             </div>
             {% endif %}
             <div style="flex:1;min-width:200px;">
@@ -151,23 +151,23 @@
     <div class="card">
         <div class="card-header">
             <span class="card-title">{{ icon("trending-up") }} Utilization History</span>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <select id="history-days" style="width:auto;font-size:12px;padding:4px 8px;">
+            <div class="u-01ef7f">
+                <select id="history-days" class="u-aedcdf">
                     <option value="1">Last 24h</option>
                     <option value="7" selected>Last 7 days</option>
                     <option value="30">Last 30 days</option>
                 </select>
             </div>
         </div>
-        <div id="history-charts" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:4px 0;">
+        <div id="history-charts" class="u-f0642d">
             {% for subnet_id, s in stats.items() %}
             <div>
-                <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">{{ s.name }}</div>
-                <canvas id="chart-{{ subnet_id }}" height="60" style="width:100%;"></canvas>
+                <div class="u-760160">{{ s.name }}</div>
+                <canvas id="chart-{{ subnet_id }}" height="60" class="u-046678"></canvas>
             </div>
             {% endfor %}
         </div>
-        <p id="history-loading" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading history...</p>
+        <p id="history-loading" class="u-6f1339">Loading history...</p>
         <p id="history-empty" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;display:none;">No history yet — data is collected every 30 minutes.</p>
     </div>
 </div>
@@ -177,10 +177,10 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">{{ icon("trending-up") }} Lease Trends — 30 Days</span>
-        <span style="font-size:11px;color:var(--text-muted);">Active leases per subnet, hourly snapshots</span>
+        <span class="u-749148">Active leases per subnet, hourly snapshots</span>
     </div>
-    <div id="sparklines-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:4px 0;">
-        <p id="sparklines-loading" style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;grid-column:1/-1;">Loading...</p>
+    <div id="sparklines-container" class="u-f0642d">
+        <p id="sparklines-loading" class="u-f65d55">Loading...</p>
     </div>
 </div>
 </div>
@@ -192,7 +192,7 @@
         <span class="card-title">{{ icon("monitor-smartphone") }} Top Active Devices <span style="font-size:11px;font-weight:400;color:var(--text-muted);">— last 30 days</span></span>
     </div>
     <div id="top-devices-container">
-        <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading...</p>
+        <p class="u-6f1339">Loading...</p>
     </div>
 </div>
 </div>
@@ -202,8 +202,8 @@
     <div class="card">
         <div class="card-header">
             <span class="card-title">{{ icon("clock") }} Recently Issued Leases</span>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <select id="recent-hours" style="width:auto;">
+            <div class="u-01ef7f">
+                <select id="recent-hours" class="u-30e741">
                     <option value="0.5">Last 30 min</option>
                     <option value="1">Last 1 hour</option>
                     <option value="4">Last 4 hours</option>
@@ -229,20 +229,20 @@
             {% for l in recent %}
             <tr>
                 <td class="mono">{{ l.ip }}</td>
-                <td style="white-space:nowrap;">
+                <td class="u-86abda">
                     {{ l.hostname | hostname or '—' }}
                     {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
                 </td>
                 <td class="mono">{{ l.mac }}</td>
                 <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-                <td class="mono" style="color:var(--text-muted);">{{ l.obtained|utctime }}</td>
+                <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
             </tr>
             {% endfor %}
             </tbody>
         </table>
         </div>
         {% else %}
-        <div style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</div>
+        <div class="u-c92bea">No leases issued in this time window.</div>
         {% endif %}
         </div>
     </div>
@@ -257,12 +257,12 @@
             <a href="/servers" class="btn btn-sm btn-secondary">View Details</a>
         </div>
         {% if server_statuses %}
-        <table style="width:100%;">
+        <table class="u-046678">
             <thead><tr>
-                <th style="text-align:left;">Server</th>
-                <th style="text-align:left;">Status</th>
-                <th style="text-align:left;">Role / HA State</th>
-                <th style="text-align:left;">Version</th>
+                <th class="u-6be0d8">Server</th>
+                <th class="u-6be0d8">Status</th>
+                <th class="u-6be0d8">Role / HA State</th>
+                <th class="u-6be0d8">Version</th>
             </tr></thead>
             <tbody>
             {% for s in server_statuses %}
@@ -270,23 +270,23 @@
                 <td class="mono">{{ s.server.get('name', s.server.get('url','?')) }}</td>
                 <td id="srv-status-{{ s.server.get('id', loop.index) }}">
                     {% if s.up is none %}
-                    <span style="color:var(--text-muted);">● Checking...</span>
+                    <span class="u-5872de">● Checking...</span>
                     {% elif s.up %}
-                    <span style="color:var(--success);">● Online</span>
+                    <span class="u-5a4529">● Online</span>
                     {% else %}
-                    <span style="color:var(--danger);">● Offline</span>
+                    <span class="u-497726">● Offline</span>
                     {% endif %}
                 </td>
-                <td style="color:var(--text-muted);font-size:12px;" id="srv-ha-{{ s.server.get('id', loop.index) }}">
+                <td class="u-2bb516" id="srv-ha-{{ s.server.get('id', loop.index) }}">
                     {% if s.ha_state %}{{ s.ha_state }}{% elif s.up is not none and s.up %}primary{% else %}—{% endif %}
                 </td>
-                <td style="color:var(--text-muted);font-size:12px;" id="srv-ver-{{ s.server.get('id', loop.index) }}" title="{{ s.version or '' }}">{{ (s.version or '—').split()[0] }}</td>
+                <td class="u-2bb516" id="srv-ver-{{ s.server.get('id', loop.index) }}" title="{{ s.version or '' }}">{{ (s.version or '—').split()[0] }}</td>
             </tr>
             {% endfor %}
             </tbody>
         </table>
         {% else %}
-        <p style="color:var(--text-muted);font-size:13px;">No servers configured.</p>
+        <p class="u-aad8e6">No servers configured.</p>
         {% endif %}
     </div>
 </div>
@@ -299,7 +299,7 @@
             <a href="/settings/alerts" class="btn btn-sm btn-secondary">Configure</a>
         </div>
         <div id="alert-summary-body">
-            <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading...</p>
+            <p class="u-6f1339">Loading...</p>
         </div>
     </div>
 </div><!-- #dash-alert_summary -->
@@ -432,7 +432,7 @@ function loadSparklines() {
                 card.innerHTML =
                     '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">'
                     + '<span style="font-size:12px;font-weight:600;">' + (info.name || sid) + '</span>'
-                    + '<span style="font-size:11px;color:var(--text-muted);">' + info.cidr + '</span>'
+                    + '<span class="u-749148">' + info.cidr + '</span>'
                     + '</div>'
                     + '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;display:block;">'
                     + '<polyline points="' + polyline + '" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'
@@ -445,7 +445,7 @@ function loadSparklines() {
                 container.appendChild(card);
             });
             if (!hasData) {
-                container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;grid-column:1/-1;">No history yet — snapshots are collected every 30 minutes.</p>';
+                container.innerHTML = '<p class="u-f65d55">No history yet — snapshots are collected every 30 minutes.</p>';
             }
         })
         .catch(function() {
@@ -463,10 +463,10 @@ function loadTopDevices() {
         .then(function(data) {
             var devices = data.devices || [];
             if (!devices.length) {
-                container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No device activity recorded in the last 30 days.</p>';
+                container.innerHTML = '<p class="u-6f1339">No device activity recorded in the last 30 days.</p>';
                 return;
             }
-            var html = '<div class="table-wrap"><table style="width:100%;font-size:12px;"><thead><tr>'
+            var html = '<div class="table-wrap"><table class="u-a1fa25"><thead><tr>'
                 + '<th>Device</th><th>IP</th><th>Subnet</th><th>Last Seen</th><th>Manufacturer</th>'
                 + '</tr></thead><tbody>';
             devices.forEach(function(d) {
@@ -480,16 +480,16 @@ function loadTopDevices() {
                     ? '<span class="badge badge-reserved" style="font-size:10px;margin-left:4px;padding:1px 5px;"><svg class="ico" aria-hidden="true"><use href="#i-pin"></use></svg></span>'
                     : '';
                 var lastSeen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
-                var mfr = d.manufacturer ? '<span style="color:var(--text-muted);">' + escapeHtml(d.manufacturer) + '</span>' : '—';
+                var mfr = d.manufacturer ? '<span class="u-5872de">' + escapeHtml(d.manufacturer) + '</span>' : '—';
                 html += '<tr>'
                     + '<td><strong>' + icon + escapeHtml(name) + '</strong>' + badge
                     + (d.hostname && d.hostname !== name
                         ? '<br><span style="color:var(--text-muted);font-size:10px;font-family:monospace;">' + escapeHtml(d.hostname.replace(/\.$/, '')) + '</span>'
                         : '')
                     + '</td>'
-                    + '<td class="mono" style="color:var(--primary);">' + escapeHtml(d.ip || '—') + '</td>'
+                    + '<td class="mono u-dc2e42">' + escapeHtml(d.ip || '—') + '</td>'
                     + '<td>' + escapeHtml(d.subnet || '—') + '</td>'
-                    + '<td style="color:var(--text-muted);white-space:nowrap;">' + lastSeen + '</td>'
+                    + '<td class="u-c61833">' + lastSeen + '</td>'
                     + '<td>' + mfr + '</td>'
                     + '</tr>';
             });
@@ -497,7 +497,7 @@ function loadTopDevices() {
             container.innerHTML = html;
         })
         .catch(function() {
-            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Could not load device data.</p>';
+            container.innerHTML = '<p class="u-6f1339">Could not load device data.</p>';
         });
 }
 
@@ -565,7 +565,7 @@ function loadAlertSummary() {
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (!data.alerts || data.alerts.length === 0) {
-                body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No alerts in the log yet.</p>';
+                body.innerHTML = '<p class="u-6f1339">No alerts in the log yet.</p>';
                 return;
             }
             // The API returns an icon NAME per alert; the SVG is built from this fixed list
@@ -582,9 +582,9 @@ function loadAlertSummary() {
             if (allFailed) {
                 html += '<div style="background:var(--surface2);border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--warning);">' +
                         '<svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> All recent alerts failed to send — check your notification channel configuration. ' +
-                        '<a href="/settings/alerts" style="color:var(--primary);">Configure →</a></div>';
+                        '<a href="/settings/alerts" class="u-dc2e42">Configure →</a></div>';
             }
-            html += '<table style="width:100%;">';
+            html += '<table class="u-046678">';
             data.alerts.forEach(function(a) {
                 var icon = alertIcon(a.icon);
                 var ok = a.status === 'ok';
@@ -602,7 +602,7 @@ function loadAlertSummary() {
             body.innerHTML = html;
         })
         .catch(function() {
-            body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Could not load alerts.</p>';
+            body.innerHTML = '<p class="u-6f1339">Could not load alerts.</p>';
         });
 }
 
@@ -700,8 +700,8 @@ function updateStats() {
                     var verEl    = document.getElementById('srv-ver-'    + srv.id);
                     if (statusEl) {
                         statusEl.innerHTML = srv.up
-                            ? '<span style="color:var(--success);">● Online</span>'
-                            : '<span style="color:var(--danger);">● Offline</span>';
+                            ? '<span class="u-5a4529">● Online</span>'
+                            : '<span class="u-497726">● Offline</span>';
                     }
                     if (haEl)  haEl.textContent = srv.ha_state || (srv.up ? srv.role || '—' : '—');
                     if (verEl) { verEl.textContent = (srv.version || '—').split(' ')[0]; verEl.title = srv.version || ''; }

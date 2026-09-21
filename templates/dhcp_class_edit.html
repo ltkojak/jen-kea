@@ -6,13 +6,13 @@
     <p>Kea's <span class="mono">Dhcp4.client-classes</span> — a guided rule builder, or a raw expression for anything the builder can't express.</p>
 </div>
 
-<div style="margin-bottom:16px;">
+<div class="u-87c136">
     <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary btn-sm">← Back to Classes</a>
 </div>
 
 {% if advanced_notice %}
-<div class="card" style="border-color:var(--warning);">
-    <p style="padding:8px;margin:0;">This class's expression doesn't match its saved guided rules (it was hand-edited) — opened in Advanced mode. Switching to Guided and saving will replace the expression with what the guided rules produce.</p>
+<div class="card u-fd6601">
+    <p class="u-08e866">This class's expression doesn't match its saved guided rules (it was hand-edited) — opened in Advanced mode. Switching to Guided and saving will replace the expression with what the guided rules produce.</p>
 </div>
 {% endif %}
 
@@ -26,12 +26,12 @@
 
     <div class="card">
         <div class="card-header"><span class="card-title">Name</span></div>
-        <div style="padding:8px;">
+        <div class="u-e2c960">
             {% if is_new %}
-            <input type="text" name="name" placeholder="e.g. printer-vlan" maxlength="64" required style="max-width:320px;">
+            <input type="text" name="name" placeholder="e.g. printer-vlan" maxlength="64" required class="u-3521b3">
             <div class="form-hint">Letters, digits, <span class="mono">_</span> and <span class="mono">-</span>; must start with a letter. Not editable once created.</div>
             {% else %}
-            <input type="text" name="name" value="{{ name }}" readonly disabled style="max-width:320px;">
+            <input type="text" name="name" value="{{ name }}" readonly disabled class="u-3521b3">
             <div class="form-hint">Names can't be changed after creation.</div>
             {% endif %}
         </div>
@@ -41,8 +41,8 @@
         <div class="card-header">
             <span class="card-title">Expression</span>
         </div>
-        <div style="padding:8px;">
-            <div style="margin-bottom:12px;">
+        <div class="u-e2c960">
+            <div class="u-da12f2">
                 <button type="button" id="tab-guided" class="btn btn-sm">Guided</button>
                 <button type="button" id="tab-advanced" class="btn btn-sm">Advanced</button>
             </div>
@@ -56,7 +56,7 @@
                             <option value="any" {% if builder and builder.combinator == 'any' %}selected{% endif %}>Any of these rules</option>
                         </select>
                     </div>
-                    <div class="form-group" style="align-self:flex-end;">
+                    <div class="form-group u-ffd20f">
                         <label>
                             <input type="checkbox" name="negate" value="1" {% if builder and builder.negate %}checked{% endif %}>
                             Negate (match clients that do <strong>not</strong> satisfy this)
@@ -64,7 +64,7 @@
                     </div>
                 </div>
                 <div id="rule-rows"></div>
-                <button type="button" id="add-rule-btn" class="btn btn-sm btn-secondary" style="margin-top:8px;">+ Add rule</button>
+                <button type="button" id="add-rule-btn" class="btn btn-sm btn-secondary u-8a77e5">+ Add rule</button>
             </div>
 
             <div id="advanced-panel" style="display:none;">
@@ -73,15 +73,15 @@
                 <div class="form-hint">Kea classification expression. Single-quoted strings only — no escape sequence.</div>
             </div>
 
-            <div id="class-preview" style="margin-top:12px;">
-                <p style="color:var(--text-muted);font-size:13px;">Preview will appear here as you edit.</p>
+            <div id="class-preview" class="u-56f435">
+                <p class="u-aad8e6">Preview will appear here as you edit.</p>
             </div>
         </div>
     </div>
 
     <div class="card">
         <div class="card-header"><span class="card-title">Boot / next-server</span></div>
-        <div class="form-row" style="padding:8px;">
+        <div class="form-row u-e2c960">
             <div class="form-group">
                 <label>next-server</label>
                 <input type="text" name="next_server" value="{{ existing.get('next-server', '') if existing else '' }}" placeholder="e.g. 10.0.0.5">
@@ -116,19 +116,19 @@
 <div class="card">
     <div class="card-header"><span class="card-title">Applies to</span></div>
     {% if scope_rows %}
-    <table style="width:100%;font-size:13px;">
+    <table class="u-95cc13">
         <thead>
-            <tr style="text-align:left;color:var(--text-muted);">
-                <th style="padding:6px;">Scope</th>
-                <th style="padding:6px;">Guard</th>
-                <th style="padding:6px;">Additional</th>
+            <tr class="u-7cd699">
+                <th class="u-492c8f">Scope</th>
+                <th class="u-492c8f">Guard</th>
+                <th class="u-492c8f">Additional</th>
             </tr>
         </thead>
         <tbody>
         {% for row in scope_rows %}
-        <tr style="border-top:1px solid var(--border);">
-            <td style="padding:6px;">{{ row.label }}</td>
-            <td style="padding:6px;">
+        <tr class="u-2eea7e">
+            <td class="u-492c8f">{{ row.label }}</td>
+            <td class="u-492c8f">
                 <form method="POST" action="{{ url_for('subnets.dhcp_class_attach') }}" data-submit>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ name }}">
@@ -138,7 +138,7 @@
                     <input type="checkbox" name="attach" value="1" {% if row.guard %}checked{% endif %}>
                 </form>
             </td>
-            <td style="padding:6px;">
+            <td class="u-492c8f">
                 <form method="POST" action="{{ url_for('subnets.dhcp_class_attach') }}" data-submit>
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ name }}">
@@ -153,7 +153,7 @@
         </tbody>
     </table>
     {% else %}
-    <p style="color:var(--text-muted);padding:8px;">No subnets, pools, or shared networks to attach this class to.</p>
+    <p class="u-d19057">No subnets, pools, or shared networks to attach this class to.</p>
     {% endif %}
 </div>
 {% endif %}

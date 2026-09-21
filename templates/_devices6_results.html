@@ -1,6 +1,6 @@
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
 <div class="table-wrap">
-<table class="sortable mobile-cards">
+<table class="sortable rowlist">
     <thead><tr>
         <th>Device</th>
         <th>Hostname</th>
@@ -12,31 +12,31 @@
     <tbody>
     {% for d in devices6 %}
     <tr>
-        <td>
+        <td data-m="primary">
             {% if d.manufacturer %}
             <span style="display:flex;align-items:center;gap:6px;">
                 <span>{{ d.icon or icon('wifi') }}</span>
                 <span>{{ d.manufacturer }}</span>
             </span>
             {% else %}
-            <span style="color:var(--text-muted);">IPv6 device</span>
+            <span class="u-5872de">IPv6 device</span>
             {% endif %}
         </td>
-        <td>{{ d.hostname or '—' }}</td>
-        <td class="hide-mobile" style="font-family:monospace;font-size:12px;">{{ d.duid_hex or '—' }}</td>
-        <td>
+        <td data-m="secondary">{{ d.hostname or '—' }}</td>
+        <td class="hide-mobile u-bca09b"  data-m="hide">{{ d.duid_hex or '—' }}</td>
+        <td data-m="secondary">
             {% for a in d.addresses %}
-            <span class="mono" style="background:var(--surface2);padding:2px 8px;border-radius:4px;font-size:11px;display:inline-block;margin:2px;">
+            <span class="mono u-77dbff">
                 {{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}
-                <span style="color:var(--text-muted);">({{ a.type_name }})</span>
+                <span class="u-5872de">({{ a.type_name }})</span>
             </span>
             {% endfor %}
         </td>
-        <td>{{ d.subnet_name or d.subnet_id }}</td>
-        <td class="hide-tablet">{{ d.last_expire }}</td>
+        <td data-m="secondary">{{ d.subnet_name or d.subnet_id }}</td>
+        <td class="hide-tablet" data-m="secondary">{{ d.last_expire }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:24px;">No IPv6 devices found.</td></tr>
+    <tr><td colspan="6" data-m="full" class="u-f23e59">No IPv6 devices found.</td></tr>
     {% endfor %}
     </tbody>
 </table>

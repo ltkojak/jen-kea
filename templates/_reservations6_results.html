@@ -1,6 +1,6 @@
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
 <div class="table-wrap">
-<table class="sortable mobile-cards">
+<table class="sortable rowlist">
     <thead><tr>
         <th>Hostname</th>
         <th class="hide-mobile">DUID</th>
@@ -11,33 +11,33 @@
     <tbody>
     {% for h in hosts6 %}
     <tr>
-        <td>{{ h.hostname or '—' }}</td>
-        <td class="hide-mobile" style="font-family:monospace;font-size:12px;">{{ h.duid_hex or '—' }}</td>
-        <td>
+        <td data-m="primary">{{ h.hostname or '—' }}</td>
+        <td class="hide-mobile u-bca09b"  data-m="hide">{{ h.duid_hex or '—' }}</td>
+        <td data-m="secondary">
             {% for r in h.reservations %}
-            <span class="mono" style="background:var(--surface2);padding:2px 8px;border-radius:4px;font-size:11px;display:inline-block;margin:2px;">
+            <span class="mono u-77dbff">
                 {{ r.address }}{% if r.type_name == 'IA_PD' %}/{{ r.prefix_len }}{% endif %}
-                <span style="color:var(--text-muted);">({{ r.type_name }})</span>
+                <span class="u-5872de">({{ r.type_name }})</span>
             </span>
             {% else %}
-            <span style="color:var(--text-muted);font-size:12px;">—</span>
+            <span class="u-2bb516">—</span>
             {% endfor %}
         </td>
-        <td>{{ h.subnet_name or h.subnet_id }}</td>
+        <td data-m="secondary">{{ h.subnet_name or h.subnet_id }}</td>
         {% if current_user.role in ('superadmin','admin') %}
-        <td>
-            <form method="POST" action="/reservations/delete6" style="display:inline;"
+        <td data-m="trailing">
+            <form method="POST" action="/reservations/delete6" class="u-cccfa4"
                   data-confirm="Delete the IPv6 reservation for DUID {{ h.duid_hex }}? This cannot be undone.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="subnet_id" value="{{ h.subnet_id }}">
                 <input type="hidden" name="duid" value="{{ h.duid_hex }}">
-                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;" title="Delete" aria-label="Delete">{{ icon("trash") }}</button>
+                <button type="submit" class="btn btn-sm u-be83f6"  title="Delete" aria-label="Delete">{{ icon("trash") }}</button>
             </form>
         </td>
         {% endif %}
     </tr>
     {% else %}
-    <tr><td colspan="{{ 5 if current_user.role in ('superadmin','admin') else 4 }}" style="text-align:center;color:var(--text-muted);padding:24px;">No IPv6 reservations found.</td></tr>
+    <tr><td colspan="{{ 5 if current_user.role in ('superadmin','admin') else 4 }}" data-m="full" class="u-f23e59">No IPv6 reservations found.</td></tr>
     {% endfor %}
     </tbody>
 </table>

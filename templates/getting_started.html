@@ -9,7 +9,7 @@
 {% if summary.all_done %}
 <div class="card" style="padding:24px;">
     <h2 style="margin-top:0;">You're set up</h2>
-    <p style="color:var(--text-muted);">Everything on the checklist is in good shape. A few places to go next:</p>
+    <p class="u-5872de">Everything on the checklist is in good shape. A few places to go next:</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">
         <a class="btn btn-primary" href="/tools/explain">{{ icon("compass") }} Explain a client</a>
         <a class="btn" href="/reports">{{ icon("chart-line") }} Reports</a>
@@ -17,13 +17,13 @@
     </div>
 </div>
 {% else %}
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
     {% for row in summary.rows %}
     <div style="display:flex;align-items:center;gap:12px;padding:14px 18px;{% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}" data-row="{{ loop.index0 }}">
-        <span style="font-size:18px;">{{ icon('circle-check') if row.done else icon('circle') }}</span>
-        <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;">{{ row.title }}</div>
-            <div style="font-size:12px;color:var(--text-muted);">{{ row.detail }}</div>
+        <span class="u-4ff818">{{ icon('circle-check') if row.done else icon('circle') }}</span>
+        <div class="u-59eddc">
+            <div class="u-eed0f8">{{ row.title }}</div>
+            <div class="u-865c33">{{ row.detail }}</div>
         </div>
         {% if not row.done %}
         <a class="btn btn-sm" href="{{ row.link }}">Fix</a>
@@ -34,9 +34,9 @@
 {% endif %}
 
 {% if is_superadmin %}
-<form method="POST" action="/getting-started/dismiss" style="margin-top:14px;">
+<form method="POST" action="/getting-started/dismiss" class="u-d6f2af">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="linkish" style="color:var(--text-muted);font-size:12px;">Dismiss the nav reminder</button>
+    <button type="submit" class="linkish u-2bb516">Dismiss the nav reminder</button>
 </form>
 {% endif %}
 {% endblock %}

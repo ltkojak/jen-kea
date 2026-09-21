@@ -9,7 +9,7 @@
 
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Changes will modify <code>{{ 'kea-dhcp6.conf' if family == 'v6' else 'kea-dhcp4.conf' }}</code> on your Kea server and restart the Kea{{ ' IPv6' if family == 'v6' else '' }} service. Kea will be briefly unavailable during restart.{% if family != 'v6' %} If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.{% endif %} <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
 
-<div class="card" style="max-width:680px;">
+<div class="card u-48a0d2">
     <form method="POST" id="edit-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for sid, sha in kea.base_shas.items() %}<input type="hidden" name="base_sha_{{ sid }}" value="{{ sha or '' }}">{% endfor %}
 
         <!-- Address Pool -->
@@ -17,14 +17,14 @@
             <label>Address Pool</label>
             <input type="text" name="pool" id="f-pool"
                    value="{{ kea.pool_str }}"
-                   placeholder="{{ '2001:db8::10-2001:db8::20 or 2001:db8::/64' if family == 'v6' else 'x.x.x.1–x.x.x.250' }}" style="font-family:monospace;">
+                   placeholder="{{ '2001:db8::10-2001:db8::20 or 2001:db8::/64' if family == 'v6' else 'x.x.x.1–x.x.x.250' }}" class="u-72126d">
             {% if kea.pool_str %}
-            <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.pool_str }}</code> &nbsp;·&nbsp; {{ 'Range or CIDR' if family == 'v6' else 'Format: start–end' }}</div>
+            <div class="form-hint">Current: <code class="u-f045bb">{{ kea.pool_str }}</code> &nbsp;·&nbsp; {{ 'Range or CIDR' if family == 'v6' else 'Format: start–end' }}</div>
             {% else %}
-            <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; {{ 'Range or CIDR' if family == 'v6' else 'Format: start–end' }}</div>
+            <div class="form-hint u-52df2b">Not currently set in Kea config &nbsp;·&nbsp; {{ 'Range or CIDR' if family == 'v6' else 'Format: start–end' }}</div>
             {% endif %}
             {% if kea.pools|length > 1 %}
-            <div class="form-hint" style="color:var(--warning);">
+            <div class="form-hint u-52df2b">
                 {{ icon("triangle-alert") }} This subnet has {{ kea.pools|length }} pools in Kea. Only the first
                 ({{ kea.pools[0] }}) is editable here — the rest
                 ({{ kea.pools[1:]|join(', ') }}) will be preserved as-is when you save.
@@ -41,9 +41,9 @@
                 <input type="number" name="preferred_lifetime" id="f-preferred"
                        value="{{ kea.preferred_lifetime }}" placeholder="e.g. 3600" min="60">
                 {% if kea.preferred_lifetime %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.preferred_lifetime }}</code></div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.preferred_lifetime }}</code></div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                <div class="form-hint u-52df2b">Not currently set</div>
                 {% endif %}
             </div>
             <div class="form-group">
@@ -51,9 +51,9 @@
                 <input type="number" name="valid_lifetime" id="f-valid"
                        value="{{ kea.valid_lifetime }}" placeholder="e.g. 7200" min="60">
                 {% if kea.valid_lifetime %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.valid_lifetime }}</code> &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.valid_lifetime }}</code> &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
+                <div class="form-hint u-52df2b">Not currently set &nbsp;·&nbsp; Must be ≥ Preferred Lifetime</div>
                 {% endif %}
             </div>
         </div>
@@ -64,9 +64,9 @@
                 <input type="number" name="valid_lifetime" id="f-lifetime"
                        value="{{ kea.valid_lifetime }}" placeholder="e.g. 86400" min="60">
                 {% if kea.valid_lifetime %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.valid_lifetime }}</code> ({{ (kea.valid_lifetime | int / 86400) | round(1) }} days)</div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.valid_lifetime }}</code> ({{ (kea.valid_lifetime | int / 86400) | round(1) }} days)</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set</div>
+                <div class="form-hint u-52df2b">Not currently set</div>
                 {% endif %}
             </div>
         </div>
@@ -77,9 +77,9 @@
                 <input type="number" name="renew_timer" id="f-renew"
                        value="{{ kea.renew_timer }}" placeholder="{{ 'e.g. 1000' if family == 'v6' else 'e.g. 43200' }}" min="0">
                 {% if kea.renew_timer %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.renew_timer }}</code>{% if family != 'v6' %} &nbsp;·&nbsp; Typically ½ of valid lifetime{% endif %}</div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.renew_timer }}</code>{% if family != 'v6' %} &nbsp;·&nbsp; Typically ½ of valid lifetime{% endif %}</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set{% if family != 'v6' %} &nbsp;·&nbsp; Typically ½ of valid lifetime{% endif %}</div>
+                <div class="form-hint u-52df2b">Not currently set{% if family != 'v6' %} &nbsp;·&nbsp; Typically ½ of valid lifetime{% endif %}</div>
                 {% endif %}
             </div>
             <div class="form-group">
@@ -87,9 +87,9 @@
                 <input type="number" name="rebind_timer" id="f-rebind"
                        value="{{ kea.rebind_timer }}" placeholder="{{ 'e.g. 2000' if family == 'v6' else 'e.g. 75600' }}" min="0">
                 {% if kea.rebind_timer %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.rebind_timer }}</code>{% if family != 'v6' %} &nbsp;·&nbsp; Typically ⅞ of valid lifetime{% endif %}</div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.rebind_timer }}</code>{% if family != 'v6' %} &nbsp;·&nbsp; Typically ⅞ of valid lifetime{% endif %}</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set{% if family != 'v6' %} &nbsp;·&nbsp; Typically ⅞ of valid lifetime{% endif %}</div>
+                <div class="form-hint u-52df2b">Not currently set{% if family != 'v6' %} &nbsp;·&nbsp; Typically ⅞ of valid lifetime{% endif %}</div>
                 {% endif %}
             </div>
         </div>
@@ -101,11 +101,11 @@
                 <label>Router / Gateway</label>
                 <input type="text" name="routers" id="f-routers"
                        value="{{ kea.routers }}"
-                       placeholder="e.g. 10.0.0.1" style="font-family:monospace;">
+                       placeholder="e.g. 10.0.0.1" class="u-72126d">
                 {% if kea.routers %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.routers }}</code></div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.routers }}</code></div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config</div>
+                <div class="form-hint u-52df2b">Not currently set in Kea config</div>
                 {% endif %}
             </div>
             {% endif %}
@@ -113,11 +113,11 @@
                 <label>DNS Servers</label>
                 <input type="text" name="dns_servers" id="f-dns"
                        value="{{ kea.dns_servers }}"
-                       placeholder="{{ 'e.g. 2001:4860:4860::8888,2001:4860:4860::8844' if family == 'v6' else 'e.g. 1.1.1.1,8.8.8.8' }}" style="font-family:monospace;">
+                       placeholder="{{ 'e.g. 2001:4860:4860::8888,2001:4860:4860::8844' if family == 'v6' else 'e.g. 1.1.1.1,8.8.8.8' }}" class="u-72126d">
                 {% if kea.dns_servers %}
-                <div class="form-hint">Current: <code style="color:var(--text);">{{ kea.dns_servers }}</code> &nbsp;·&nbsp; Comma-separated</div>
+                <div class="form-hint">Current: <code class="u-f045bb">{{ kea.dns_servers }}</code> &nbsp;·&nbsp; Comma-separated</div>
                 {% else %}
-                <div class="form-hint" style="color:var(--warning);">Not currently set in Kea config &nbsp;·&nbsp; Comma-separated</div>
+                <div class="form-hint u-52df2b">Not currently set in Kea config &nbsp;·&nbsp; Comma-separated</div>
                 {% endif %}
                 {% if family == 'v6' %}
                 <div class="form-hint">No router/gateway field — DHCPv6 doesn't carry a default-gateway option; that comes from Router Advertisement instead.</div>
@@ -125,7 +125,7 @@
             </div>
         </div>
 
-        <div style="display:flex;gap:8px;margin-top:16px;">
+        <div class="u-acb4b5">
             <button type="button" class="btn btn-danger" id="show-confirm-btn">{{ icon("zap") }} Apply &amp; Restart Kea{{ ' IPv6' if family == 'v6' else '' }}</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
@@ -135,11 +135,11 @@
     <div id="confirm-panel" style="display:none;margin-top:16px;
          background:var(--surface2);border:1px solid var(--warning);
          border-radius:var(--radius);padding:16px;">
-        <div style="display:flex;align-items:flex-start;gap:12px;">
-            <span style="font-size:22px;line-height:1;">{{ icon("triangle-alert") }}</span>
-            <div style="flex:1;">
-                <div style="font-weight:600;margin-bottom:4px;">Apply changes and restart Kea{{ ' IPv6' if family == 'v6' else '' }}?</div>
-                <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+        <div class="u-bae250">
+            <span class="u-6745f5">{{ icon("triangle-alert") }}</span>
+            <div class="u-97445a">
+                <div class="u-a27006">Apply changes and restart Kea{{ ' IPv6' if family == 'v6' else '' }}?</div>
+                <div class="u-c0a2eb">
                     {{ 'kea-dhcp6-server' if family == 'v6' else 'Kea DHCP' }} will be briefly unavailable while it restarts.
                     Existing {{ 'IPv6 ' if family == 'v6' else '' }}leases are not affected. New lease requests will queue.
                 </div>
@@ -147,8 +147,8 @@
                      background:var(--surface);border-radius:var(--radius);
                      padding:10px 12px;margin-bottom:10px;font-family:monospace;
                      line-height:1.8;"></div>
-                <div id="validation-summary" style="font-size:12px;margin-bottom:14px;"></div>
-                <div style="display:flex;gap:8px;">
+                <div id="validation-summary" class="u-2e04ad"></div>
+                <div class="u-a76d59">
                     <button type="button" class="btn btn-danger" id="apply-btn">{{ icon("circle-check") }} Yes, apply and restart</button>
                     <button type="button" class="btn btn-secondary" id="confirm-cancel-btn">✕ Cancel</button>
                 </div>
@@ -245,12 +245,12 @@ function getChanges() {
 function renderChangeSummary(changes) {
     var summary = document.getElementById('change-summary');
     if (changes.length === 0) {
-        summary.innerHTML = '<span style="color:var(--text-muted);">No changes detected — all fields match current values.</span>';
+        summary.innerHTML = '<span class="u-5872de">No changes detected — all fields match current values.</span>';
     } else {
         summary.innerHTML = changes.map(function(c) {
-            return '<div><span style="color:var(--text-muted);">' + c.label + ':</span> '
-                + '<span style="text-decoration:line-through;opacity:.5;">' + c.from + '</span>'
-                + ' → <span style="color:var(--primary);">' + c.to + '</span></div>';
+            return '<div><span class="u-5872de">' + c.label + ':</span> '
+                + '<span class="u-3c9b03">' + c.from + '</span>'
+                + ' → <span class="u-dc2e42">' + c.to + '</span></div>';
         }).join('');
     }
 }
@@ -273,7 +273,7 @@ async function showConfirm() {
     // while the real preview call is in flight.
     var clientChanges = getChanges();
     renderChangeSummary(clientChanges);
-    valDiv.innerHTML = '<span style="color:var(--text-muted);"><svg class="ico" aria-hidden="true"><use href="#i-hourglass"></use></svg> Checking configuration against Kea…</span>';
+    valDiv.innerHTML = '<span class="u-5872de"><svg class="ico" aria-hidden="true"><use href="#i-hourglass"></use></svg> Checking configuration against Kea…</span>';
     applyBtn.disabled = true;
     panel.style.display = '';
     panel.scrollIntoView({behavior:'smooth', block:'nearest'});
@@ -294,7 +294,7 @@ async function showConfirm() {
         var data = await resp.json();
 
         if (!resp.ok || !data.ok) {
-            valDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' +
+            valDiv.innerHTML = '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' +
                 (data.error || 'Could not validate the configuration.') + '</div>';
             applyBtn.disabled = true;
             return;
@@ -313,14 +313,14 @@ async function showConfirm() {
         // more authoritative source.
         if (data.diff && data.diff.length) {
             summary.innerHTML = data.diff.map(function(d) {
-                return '<div><span style="color:var(--text-muted);">' + d.field + ':</span> '
-                    + '<span style="text-decoration:line-through;opacity:.5;">' + d.old + '</span>'
-                    + ' → <span style="color:var(--primary);">' + d.new + '</span></div>';
+                return '<div><span class="u-5872de">' + d.field + ':</span> '
+                    + '<span class="u-3c9b03">' + d.old + '</span>'
+                    + ' → <span class="u-dc2e42">' + d.new + '</span></div>';
             }).join('');
         }
 
         if (!data.servers || data.servers.length === 0) {
-            valDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured to validate against.</span>';
+            valDiv.innerHTML = '<span class="u-5872de">No Kea servers with SSH configured to validate against.</span>';
             applyBtn.disabled = false;
             return;
         }
@@ -328,15 +328,15 @@ async function showConfirm() {
         valDiv.innerHTML = data.servers.map(function(s) {
             var icon = s.ok ? '<svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg>' : '<svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg>';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
-            return '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+            return '<div class="u-999e54">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
         }).join('');
 
         applyBtn.disabled = !data.all_passed;
         if (!data.all_passed) {
-            valDiv.innerHTML += '<div style="margin-top:8px;color:var(--text-muted);">Fix the error(s) above before applying — Kea would reject this configuration.</div>';
+            valDiv.innerHTML += '<div class="u-a43081">Fix the error(s) above before applying — Kea would reject this configuration.</div>';
         }
     } catch (e) {
-        valDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Could not reach the server to validate: ' + e.message + '</div>';
+        valDiv.innerHTML = '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Could not reach the server to validate: ' + e.message + '</div>';
         applyBtn.disabled = true;
     }
 }

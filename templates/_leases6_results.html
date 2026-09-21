@@ -1,6 +1,6 @@
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
 <div class="table-wrap">
-<table class="sortable mobile-cards">
+<table class="sortable rowlist">
     <thead><tr>
         <th>Type</th>
         <th>Address / Prefix</th>
@@ -13,16 +13,16 @@
     <tbody>
     {% for l in leases6 %}
     <tr>
-        <td><span class="badge {{ 'badge-dynamic' if l.lease_type == 0 else 'badge-reserved' }}">{{ l.lease_type_name }}</span></td>
-        <td style="font-family:monospace;">{{ l.address }}{% if l.lease_type == 2 %}/{{ l.prefix_len }}{% endif %}</td>
-        <td>{{ l.hostname or '—' }}</td>
-        <td class="hide-mobile" style="font-family:monospace;font-size:12px;">{{ l.duid_hex or '—' }}</td>
-        <td class="hide-mobile">{{ l.iaid }}</td>
-        <td>{{ l.subnet_name or l.subnet_id }}</td>
-        <td class="hide-tablet">{{ l.expire }}</td>
+        <td data-m="badge"><span class="badge {{ 'badge-dynamic' if l.lease_type == 0 else 'badge-reserved' }}">{{ l.lease_type_name }}</span></td>
+        <td class="u-72126d" data-m="primary">{{ l.address }}{% if l.lease_type == 2 %}/{{ l.prefix_len }}{% endif %}</td>
+        <td data-m="secondary">{{ l.hostname or '—' }}</td>
+        <td class="hide-mobile u-bca09b"  data-m="hide">{{ l.duid_hex or '—' }}</td>
+        <td class="hide-mobile" data-m="hide">{{ l.iaid }}</td>
+        <td data-m="secondary">{{ l.subnet_name or l.subnet_id }}</td>
+        <td class="hide-tablet" data-m="secondary">{{ l.expire }}</td>
     </tr>
     {% else %}
-    <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">No IPv6 leases found.</td></tr>
+    <tr><td colspan="7" data-m="full" class="u-f23e59">No IPv6 leases found.</td></tr>
     {% endfor %}
     </tbody>
 </table>

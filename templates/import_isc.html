@@ -6,9 +6,9 @@
     <p>Migrate subnets, reservations and classes from an ISC <code>dhcpd.conf</code>.</p>
 </div>
 
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><h3>Step 1 — Upload dhcpd.conf</h3></div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+    <p class="u-f0aa70">
         Copy <code>/etc/dhcp/dhcpd.conf</code> from the ISC DHCP server (and, if it uses <code>include</code>,
         paste the included files into it first — includes are not followed). Optionally add
         <code>/var/lib/dhcp/dhcpd.leases</code>: it is read only to tell you how many active leases sit in the
@@ -18,12 +18,12 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>dhcpd.conf</label>
-            <input type="file" name="conf_file" accept=".conf,text/plain" required style="width:100%;">
+            <input type="file" name="conf_file" accept=".conf,text/plain" required class="u-046678">
             <div class="form-hint">IPv4 (<code>dhcpd.conf</code>), up to 5 MB. A <code>dhcpd6.conf</code> is not imported.</div>
         </div>
         <div class="form-group">
             <label>dhcpd.leases (optional)</label>
-            <input type="file" name="leases_file" accept=".leases,text/plain" style="width:100%;">
+            <input type="file" name="leases_file" accept=".leases,text/plain" class="u-046678">
             <div class="form-hint">Only counted on the review page. Kea starts with an empty lease database.</div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("upload") }} Upload &amp; Review</button>

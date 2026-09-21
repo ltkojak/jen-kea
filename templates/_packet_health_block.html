@@ -5,9 +5,9 @@
    every server, same pattern as reports.html's HISTORY). #}
 {% if s.packet_health %}
 {% set ph = s.packet_health %}
-<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
+<div class="u-a05e95">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div style="font-weight:600;">{{ icon("package") }} Packet health (last {{ ph.window_minutes }} min)</div>
+        <div class="u-eed0f8">{{ icon("package") }} Packet health (last {{ ph.window_minutes }} min)</div>
         <span class="badge {% if ph.status == 'fail' %}badge-danger{% elif ph.status == 'warn' %}badge-dynamic{% else %}badge-reserved{% endif %}">
             {{ ph.status|replace('_',' ')|title }}
         </span>
@@ -22,8 +22,8 @@
         {% endfor %}
     </div>
     {% if ph.other_counters %}
-    <details style="margin-top:6px;">
-        <summary style="cursor:pointer;color:var(--text-muted);">All counters ({{ ph.other_counters|length }})</summary>
+    <details class="u-fe7b49">
+        <summary class="u-c5c798">All counters ({{ ph.other_counters|length }})</summary>
         <table style="width:100%;font-size:11px;margin-top:4px;">
         {% for key, value in ph.other_counters %}
             <tr><td class="mono">{{ key }}</td><td class="mono" style="text-align:right;">{{ value }}</td></tr>

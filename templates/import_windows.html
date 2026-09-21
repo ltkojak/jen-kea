@@ -6,9 +6,9 @@
     <p>Migrate scopes, reservations, and policies from a Windows DHCP server export.</p>
 </div>
 
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><h3>Step 1 — Upload the export</h3></div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+    <p class="u-f0aa70">
         On the Windows DHCP server, run:
     </p>
     <pre class="mono" style="padding:10px;background:var(--surface2);border-radius:var(--radius);font-size:12px;overflow-x:auto;">Export-DhcpServer -ComputerName &lt;server&gt; -Leases:$False -File C:\dhcp-export.xml</pre>
@@ -20,7 +20,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Export File</label>
-            <input type="file" name="xml_file" accept=".xml" required style="width:100%;">
+            <input type="file" name="xml_file" accept=".xml" required class="u-046678">
             <div class="form-hint">The raw XML from Export-DhcpServer, up to 5 MB.</div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("upload") }} Upload &amp; Review</button>

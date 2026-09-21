@@ -8,7 +8,7 @@
        · <span class="mono">{{ rev.sha256[:16] if rev.sha256 else '—' }}</span></p>
 </div>
 
-<div style="margin-bottom:16px;">
+<div class="u-87c136">
     <a href="{{ url_for('servers.config_history', server_id=server.id, service=rev.service) }}" class="btn btn-secondary btn-sm">← Back to History</a>
     <a href="{{ url_for('servers.config_history_download', server_id=server.id, rev_id=rev.id) }}" class="btn btn-secondary btn-sm">{{ icon("download") }} Download (masked)</a>
     {% if can_download_raw %}
@@ -25,17 +25,17 @@
 <div class="card">
     <div class="card-header"><span class="card-title">Unified diff — {{ rev.summary or 'no summary' }}</span></div>
     {% if not rows %}
-    <p style="color:var(--text-muted);padding:12px;">No difference from the previous revision.</p>
+    <p class="u-41e804">No difference from the previous revision.</p>
     {% else %}
-    <pre style="overflow-x:auto;font-size:12px;line-height:1.5;margin:0;padding:12px;background:var(--surface2);border-radius:var(--radius);"><code>{% for row in rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
+    <pre class="u-6dc1d1"><code>{% for row in rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
     <p style="color:var(--text-muted);font-size:12px;padding:8px 12px 0;margin:0;">Secrets are masked; a change to a masked value does not show here.</p>
     {% endif %}
 </div>
 
 {% if can_restore %}
-<div class="card" style="border-color:var(--warning);">
+<div class="card u-fd6601">
     <div class="card-header"><span class="card-title">{{ icon("zap") }} Restore this revision</span></div>
-    <p style="font-size:13px;color:var(--text-muted);">
+    <p class="u-58b17f">
         Re-applies this exact config to {{ server.name }} and restarts Kea{{ ' dhcp6' if rev.service == 'dhcp6' else '' }}.
         It is validated with <code>kea-{{ rev.service }} -t</code> first, and refused if the live config changed
         since this page loaded.

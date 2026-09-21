@@ -5,7 +5,7 @@
     <h1>{{ icon("pencil", "ico-lg") }} Edit Reservation</h1>
     <p>{{ host.ip }} — {{ host.mac }}</p>
 </div>
-<div class="card" style="max-width:600px;">
+<div class="card u-cd90f7">
     <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:20px;font-size:12px;color:var(--text-muted);">
         IP address and MAC cannot be changed. Delete and recreate the reservation to change these.
     </div>
@@ -13,11 +13,11 @@
         <div class="form-row">
             <div class="form-group">
                 <label>IP Address</label>
-                <input type="text" value="{{ host.ip }}" disabled style="opacity:0.5;">
+                <input type="text" value="{{ host.ip }}" disabled class="u-e1549f">
             </div>
             <div class="form-group">
                 <label>MAC Address</label>
-                <input type="text" value="{{ host.mac }}" disabled style="opacity:0.5;">
+                <input type="text" value="{{ host.mac }}" disabled class="u-e1549f">
             </div>
         </div>
         <div class="form-group">
@@ -32,7 +32,7 @@
             <label>Notes</label>
             <textarea name="notes" rows="2">{{ host.notes or '' }}</textarea>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div class="u-a76d59">
             <button type="submit" class="btn btn-primary">Save Changes</button>
             <a href="/reservations" class="btn btn-secondary">Cancel</a>
         </div>

@@ -7,10 +7,10 @@
 </div>
 
 {% if not state %}
-<div class="card" style="margin-bottom:16px;">
+<div class="card u-87c136">
     <div class="card-header"><h3>Which server are you taking down?</h3></div>
     {% if servers|length < 2 or not ha_mode %}
-    <p style="font-size:13px;color:var(--text-muted);">This needs two Kea servers under Settings → Kea with HA mode set. {% if servers|length < 2 %}Only {{ servers|length }} configured.{% else %}HA mode is not set.{% endif %}</p>
+    <p class="u-58b17f">This needs two Kea servers under Settings → Kea with HA mode set. {% if servers|length < 2 %}Only {{ servers|length }} configured.{% else %}HA mode is not set.{% endif %}</p>
     {% else %}
     <form method="POST" action="{{ url_for('servers.ha_maintenance_begin') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -30,7 +30,7 @@
 </div>
 {% else %}
 
-<div class="card" style="margin-bottom:16px;">
+<div class="card u-87c136">
     <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:12px;margin-bottom:12px;">
         {% for st in steps %}
         {% set i = loop.index0 %}
@@ -39,7 +39,7 @@
     </div>
     <p style="font-size:13px;margin:0 0 12px;">
         Taking down <strong>{{ state.down_name }}</strong>; <strong>{{ state.up_name }}</strong> keeps serving.
-        {% if state.leases_shared %}<span style="color:var(--text-muted);">The pair shares one lease database — nothing to sync afterwards.</span>{% endif %}
+        {% if state.leases_shared %}<span class="u-5872de">The pair shares one lease database — nothing to sync afterwards.</span>{% endif %}
     </p>
 
     {% if state.step == 'preflight' %}
@@ -50,7 +50,7 @@
         <tr>
             <td>{{ p.title }}</td>
             <td><span class="badge {% if p.status == 'ok' %}badge-reserved{% elif p.status == 'fail' %}badge-danger{% elif p.status == 'warn' %}badge-dynamic{% else %}badge-muted{% endif %}">{{ p.status }}</span></td>
-            <td style="color:var(--text-muted);">{{ p.detail }}</td>
+            <td class="u-5872de">{{ p.detail }}</td>
         </tr>
         {% endfor %}
         </tbody>

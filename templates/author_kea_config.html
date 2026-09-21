@@ -38,18 +38,18 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 <div class="alert alert-warning">{{ icon("triangle-alert") }} No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
 {% endif %}
 
-<div class="card" style="max-width:680px;">
+<div class="card u-48a0d2">
     <form method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Interfaces</label>
             <input type="text" name="interfaces" id="f-interfaces"
                    value="{{ (detected.interfaces or autodetected_interfaces)|join(', ') }}"
-                   placeholder="eth0" style="font-family:monospace;">
+                   placeholder="eth0" class="u-72126d">
             <div class="form-hint">Comma-separated interface names Kea should listen on.</div>
         </div>
         <div class="form-group">
             <label>{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
-            <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" style="font-family:monospace;">
+            <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" class="u-72126d">
             <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the control socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
         </div>
         {% if direct_mode %}
@@ -63,14 +63,14 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
                 {% for a in c.options %}<option value="{{ a }}" {% if a == c.preselect %}selected{% endif %}>{{ a }}{% if a == c.endpoint_host %} — Jen connects here{% endif %}</option>{% endfor %}
                 <option value="0.0.0.0" {% if not c.preselect %}selected{% endif %}>0.0.0.0 — all interfaces (not recommended)</option>
             </select>
-            <input type="text" name="bind_address_custom_{{ c.id }}" placeholder="or type an address" style="font-family:monospace;margin-top:6px;">
+            <input type="text" name="bind_address_custom_{{ c.id }}" placeholder="or type an address" class="u-12c424">
             <div class="form-hint f-bind-hint">
                 Jen dials <code>{{ c.endpoint_scheme }}://{{ c.endpoint_host or '(its API URL)' }}</code>.
                 {% if c.endpoint_host and not c.options %}That's a hostname and no global addresses were detected — type the IP this daemon should bind.
                 {% else %}The IP Kea's control API should listen on. Prefer a management address firewalled to the Jen host.{% endif %}
             </div>
             {% if bind_candidates|length > 1 %}
-            <input type="text" name="interfaces_{{ c.id }}" placeholder="same as above" style="font-family:monospace;margin-top:6px;">
+            <input type="text" name="interfaces_{{ c.id }}" placeholder="same as above" class="u-12c424">
             <div class="form-hint">Interfaces on this server (blank = the list above). Set this when an HA pair uses different NIC names, e.g. <code>ens18</code> on one node and <code>eth0</code> on the other.</div>
             {% endif %}
             {% endif %}
@@ -80,18 +80,18 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         <div class="form-row">
             <div class="form-group">
                 <label>TLS certificate file</label>
-                <input type="text" name="tls_cert_file" id="f-tls-cert" value="/etc/kea/tls/server.crt" style="font-family:monospace;">
+                <input type="text" name="tls_cert_file" id="f-tls-cert" value="/etc/kea/tls/server.crt" class="u-72126d">
             </div>
             <div class="form-group">
                 <label>TLS key file</label>
-                <input type="text" name="tls_key_file" id="f-tls-key" value="/etc/kea/tls/server.key" style="font-family:monospace;">
+                <input type="text" name="tls_key_file" id="f-tls-key" value="/etc/kea/tls/server.key" class="u-72126d">
             </div>
             <div class="form-group">
                 <label>Trust anchor (CA file or directory)</label>
-                <input type="text" name="tls_trust_anchor" id="f-tls-ca" value="/etc/kea/tls/ca.crt" style="font-family:monospace;">
+                <input type="text" name="tls_trust_anchor" id="f-tls-ca" value="/etc/kea/tls/ca.crt" class="u-72126d">
             </div>
         </div>
-        <div class="form-hint" style="margin-bottom:14px;">Paths on the Kea host — Kea's own server certificate + key, and the CA that signed Jen's client certificate (trust-anchor). See the Admin Guide → Direct control sockets → TLS. <code>cert-required</code> will be <strong>{{ 'true (Jen presents /etc/jen/ssl/…)' if cert_required else 'false (no client certificate configured in Settings → Kea)' }}</strong>.</div>
+        <div class="form-hint u-2b583d">Paths on the Kea host — Kea's own server certificate + key, and the CA that signed Jen's client certificate (trust-anchor). See the Admin Guide → Direct control sockets → TLS. <code>cert-required</code> will be <strong>{{ 'true (Jen presents /etc/jen/ssl/…)' if cert_required else 'false (no client certificate configured in Settings → Kea)' }}</strong>.</div>
         {% endif %}
         {% endif %}
         <div class="form-row">
@@ -108,11 +108,11 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
                 <input type="text" name="db_name" id="f-db-name" value="{{ detected.lease_db_name or default_db.name }}">
             </div>
         </div>
-        <div class="form-hint" style="margin-bottom:14px;">Database password is taken from Jen's own {{ 'Kea' if service == 'dhcp4' else 'Kea6' }} API settings — not re-entered here.</div>
+        <div class="form-hint u-2b583d">Database password is taken from Jen's own {{ 'Kea' if service == 'dhcp4' else 'Kea6' }} API settings — not re-entered here.</div>
 
         <div class="form-group">
             <label>Subnets to include</label>
-            <textarea name="subnets" id="f-subnets" rows="5" style="font-family:monospace;font-size:12px;" placeholder="1 = LAN, 192.168.1.0/24">{{ subnet_lines }}</textarea>
+            <textarea name="subnets" id="f-subnets" rows="5" class="u-bca09b" placeholder="1 = LAN, 192.168.1.0/24">{{ subnet_lines }}</textarea>
             <div class="form-hint">
                 One per line: <code>id = name, cidr{{ ', paired_v4_subnet_id' if service == 'dhcp6' else '' }}</code>{% if service == 'dhcp6' %} — the paired id is optional{% endif %}.
                 {% if has_existing_subnets %}Pre-filled from Jen's existing subnets — edit or add more below.{% else %}Nothing in Jen yet for this protocol — define at least one here; it'll be saved to Jen automatically once the config is written.{% endif %}
@@ -125,17 +125,17 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
             Overwrite if a config already exists at this path (a backup is taken first)
         </label>
 
-        <div style="display:flex;gap:8px;">
+        <div class="u-a76d59">
             <button type="button" class="btn btn-danger" id="preview-btn" {% if endpoint_error %}disabled{% endif %}>{{ icon("search") }} Preview &amp; Validate</button>
             <a href="/settings/kea" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
 
     <div id="preview-panel" style="display:none;margin-top:16px;background:var(--surface2);border:1px solid var(--warning);border-radius:var(--radius);padding:16px;">
-        <div style="font-weight:600;margin-bottom:8px;">Generated config &amp; validation result</div>
+        <div class="u-d77151">Generated config &amp; validation result</div>
         <div id="preview-json" style="font-size:11px;background:var(--surface);border-radius:var(--radius);padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;font-family:monospace;margin-bottom:10px;"></div>
-        <div id="preview-servers" style="font-size:12px;margin-bottom:14px;"></div>
-        <div style="display:flex;gap:8px;">
+        <div id="preview-servers" class="u-2e04ad"></div>
+        <div class="u-a76d59">
             <button type="button" class="btn btn-danger" id="apply-btn" disabled>{{ icon("circle-check") }} Write this config</button>
             <button type="button" class="btn btn-secondary" id="preview-cancel-btn">✕ Cancel</button>
         </div>
@@ -164,24 +164,24 @@ async function showPreview() {
         var data = await resp.json();
         if (!resp.ok || !data.ok) {
             jsonDiv.textContent = '';
-            serversDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + (data.error || 'Could not validate.') + '</div>';
+            serversDiv.innerHTML = '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + (data.error || 'Could not validate.') + '</div>';
             return;
         }
         jsonDiv.textContent = data.config ? JSON.stringify(data.config, null, 2) : '(no config generated — see per-server results)';
         if (!data.servers || data.servers.length === 0) {
-            serversDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured.</span>';
+            serversDiv.innerHTML = '<span class="u-5872de">No Kea servers with SSH configured.</span>';
             return;
         }
         var multi = data.servers.length > 1;
         serversDiv.innerHTML = data.servers.map(function(s) {
             var icon = s.ok ? '<svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg>' : '<svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg>';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
-            var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
+            var line = '<div class="u-999e54">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
             if (s.bind_address) {
-                line += '<div style="color:var(--text-muted);margin-left:20px;font-size:11px;">binds ' + escapeHtml(s.bind_address) + '</div>';
+                line += '<div class="u-cf10f6">binds ' + escapeHtml(s.bind_address) + '</div>';
             }
             if (s.interfaces && s.interfaces.length) {
-                line += '<div style="color:var(--text-muted);margin-left:20px;font-size:11px;">interfaces: ' + escapeHtml(s.interfaces.join(', ')) + '</div>';
+                line += '<div class="u-cf10f6">interfaces: ' + escapeHtml(s.interfaces.join(', ')) + '</div>';
             }
             if (s.warning) {
                 line += '<div style="color:var(--warning);margin-left:20px;"><svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> ' + escapeHtml(s.warning) + '</div>';
@@ -195,7 +195,7 @@ async function showPreview() {
                 line += '<div style="margin:4px 0 8px 20px;">' +
                     '<button type="button" class="btn btn-sm btn-secondary install-binary-btn" data-missing-binary="' +
                     escapeHtml(s.missing_binary) + '"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg> Install ' + escapeHtml(s.missing_binary) + ' now</button>' +
-                    '<span class="install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span>' +
+                    '<span class="install-status u-1c96c5"></span>' +
                     '</div>';
             }
             if (multi && s.config) {
@@ -207,11 +207,11 @@ async function showPreview() {
         }).join('');
         applyBtn.disabled = !data.all_passed;
         if (!data.all_passed) {
-            serversDiv.innerHTML += '<div style="margin-top:8px;color:var(--text-muted);">Fix the error(s) above before writing — Kea would reject this configuration.</div>';
+            serversDiv.innerHTML += '<div class="u-a43081">Fix the error(s) above before writing — Kea would reject this configuration.</div>';
         }
     } catch (e) {
         jsonDiv.textContent = '';
-        serversDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Could not reach the server: ' + e.message + '</div>';
+        serversDiv.innerHTML = '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Could not reach the server: ' + e.message + '</div>';
     }
 }
 

@@ -19,7 +19,7 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("search") }} Reconcile</span></div>
-    <div class="form-hint" style="margin-bottom:12px;">
+    <div class="form-hint u-da12f2">
         Every reservation, then every active lease with a hostname, up to the limit below — each one's forward
         (name → IP) and reverse (IP → name) lookup, run through the Jen host's own resolver, the same one the
         Verify tab uses one name at a time.
@@ -29,10 +29,10 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Limit</label>
-                <input type="number" name="limit" value="{{ limit }}" min="1" max="1000" style="max-width:120px;">
+                <input type="number" name="limit" value="{{ limit }}" min="1" max="1000" class="u-bbc1fe">
                 <div class="form-hint">Max 1000 — each name is a live DNS lookup.</div>
             </div>
-            <div class="form-group" style="align-self:flex-end;">
+            <div class="form-group u-ffd20f">
                 <button type="submit" class="btn btn-primary">Run</button>
             </div>
         </div>
@@ -50,17 +50,17 @@
             {{ v }} ({{ counts.get(v, 0) }})
         </a>
         {% endfor %}
-        <a href="/ddns/reconcile?format=csv&limit={{ limit }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}" class="btn btn-secondary btn-sm" style="margin-left:auto;">{{ icon("download") }} Export CSV</a>
+        <a href="/ddns/reconcile?format=csv&limit={{ limit }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}" class="btn btn-secondary btn-sm u-6d0006">{{ icon("download") }} Export CSV</a>
     </div>
 
     {% if not results %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">
+    <div class="u-c92bea">
         {% if total == 0 %}No reservations or active leases with a hostname to check.
         {% else %}No rows match the "{{ verdict_filter }}" filter.{% endif %}
     </div>
     {% else %}
     <div class="table-wrap">
-    <table class="sortable mobile-cards">
+    <table class="sortable rowlist">
         <thead><tr>
             <th>Name</th>
             <th class="hide-mobile">Source</th>
@@ -74,22 +74,22 @@
         <tbody>
         {% for r in results %}
         <tr>
-            <td data-label="Name" class="mono">{{ r.name }}</td>
-            <td data-label="Source" class="hide-mobile">{{ r.source }}</td>
-            <td data-label="Expected A" class="mono">{{ r.expected_a }}</td>
-            <td data-label="Observed A" class="mono">{{ r.observed_a or '—' }}</td>
-            <td data-label="Expected PTR" class="mono hide-tablet">{{ r.expected_ptr }}</td>
-            <td data-label="Observed PTR" class="mono hide-tablet">{{ r.observed_ptr or '—' }}</td>
-            <td data-label="Verdict">
+            <td class="mono" data-m="primary">{{ r.name }}</td>
+            <td class="hide-mobile" data-m="hide">{{ r.source }}</td>
+            <td class="mono" data-m="secondary"><span class="phone-only">expected </span>{{ r.expected_a }}</td>
+            <td class="mono" data-m="secondary"><span class="phone-only">observed </span>{{ r.observed_a or '—' }}</td>
+            <td class="mono hide-tablet" data-m="hide">{{ r.expected_ptr }}</td>
+            <td class="mono hide-tablet" data-m="hide">{{ r.observed_ptr or '—' }}</td>
+            <td data-m="badge">
                 {% if r.verdict == 'ok' %}<span class="badge" style="background:#1a2a1a;color:var(--success);">✓ ok</span>
-                {% elif r.verdict == 'multiple-a' %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);" title="Several A records can be intentional — review, don't assume it's wrong">{{ r.verdict }}</span>
-                {% else %}<span class="badge" style="background:#2a1a1a;color:var(--warning);">{{ r.verdict }}</span>{% endif %}
+                {% elif r.verdict == 'multiple-a' %}<span class="badge u-d6f005"  title="Several A records can be intentional — review, don't assume it's wrong">{{ r.verdict }}</span>
+                {% else %}<span class="badge u-fb2b30">{{ r.verdict }}</span>{% endif %}
             </td>
-            <td data-label="">
+            <td data-m="secondary">
                 {% if r.verdict != 'ok' %}
-                <a href="/reservations?search={{ r.ip }}" style="font-size:12px;">Fix in Kea</a>
+                <a href="/reservations?search={{ r.ip }}" class="u-6cb285">Fix in Kea</a>
                 &nbsp;·&nbsp;
-                <a href="/ddns?tab=verify&hostname={{ r.name }}&ip={{ r.ip }}" style="font-size:12px;">re-verify</a>
+                <a href="/ddns?tab=verify&hostname={{ r.name }}&ip={{ r.ip }}" class="u-6cb285">re-verify</a>
                 {% endif %}
             </td>
         </tr>

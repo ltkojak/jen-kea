@@ -387,3 +387,11 @@ class TestListPagesOnThePhone:
             expect(desktop.locator("table.rowlist thead").first).to_be_visible()
             expect(desktop.locator(".fs-filter-toggle")).to_be_hidden()
             expect(desktop.locator('select[name="sort"]')).to_be_hidden()
+
+
+class TestGeneratedStylesheetLoads:
+    def test_the_extracted_stylesheet_is_served_and_applied(self, phone, base_url):
+        resp = phone.request.get(f"{base_url}/static/css/ui-classes.css")
+        assert resp.status == 200 and ".u-" in resp.text()
+        _visit(phone, base_url, "/ddns")
+        expect(phone.locator("link[href*='ui-classes.css']")).to_have_count(1, timeout=5000)

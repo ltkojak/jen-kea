@@ -12,33 +12,33 @@
 {% if error %}
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Could not read the Kea config: {{ error }}</div>
 {% elif not findings %}
-<div class="card" style="text-align:center;padding:40px;color:var(--text-muted);">
-    <div style="font-size:36px;margin-bottom:12px;">{{ icon("circle-check") }}</div>
+<div class="card u-9e5b2e">
+    <div class="u-4228e6">{{ icon("circle-check") }}</div>
     <div>No findings — nothing here looks contradictory or unused.</div>
 </div>
 {% else %}
-<div class="hc-summary" style="margin-bottom:14px;">
+<div class="hc-summary u-2b583d">
     <span><strong>{{ counts.fail }}</strong> fail</span>
     <span><strong>{{ counts.warn }}</strong> warn</span>
     <span><strong>{{ counts.info }}</strong> info</span>
 </div>
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
     {% for f in groups %}
     <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 20px;{% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}">
         <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;border-radius:4px;white-space:nowrap;margin-top:2px;
             {% if f.severity == 'fail' %}background:rgba(220,53,69,.15);color:var(--danger);
             {% elif f.severity == 'warn' %}background:rgba(255,193,7,.15);color:var(--warning);
             {% else %}background:rgba(255,255,255,.08);color:var(--text-muted);{% endif %}">{{ f.severity }}</span>
-        <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;">
+        <div class="u-59eddc">
+            <div class="u-eed0f8">
                 {{ f.title }}{% if f.count > 1 %} <span style="font-weight:400;color:var(--text-muted);">· {{ f.count }}</span>{% endif %}
                 {% if f.count == 1 %}<span style="font-weight:400;color:var(--text-muted);font-size:12px;">— {{ f.entries[0].where }}</span>{% endif %}
             </div>
             {% if f.count == 1 %}
             <div style="font-size:13px;margin-top:2px;">{{ f.entries[0].detail }}</div>
             {% else %}
-            <details style="margin-top:4px;">
-                <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">Show all {{ f.count }}</summary>
+            <details class="u-96ad60">
+                <summary class="u-91cb28">Show all {{ f.count }}</summary>
                 <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;">
                     {% for it in f.entries %}<li><span class="mono">{{ it.where }}</span> — {{ it.detail }}</li>{% endfor %}
                 </ul>

@@ -15,7 +15,7 @@
         </select>
     </form>
     {% if pool_blocks %}
-    <span style="font-size:12px;color:var(--text-muted);">
+    <span class="u-865c33">
         Pool{{ 's' if pool_blocks|length > 1 else '' }}:
         {% for pb in pool_blocks %}{{ pb.start }} — {{ pb.end }}{% if not loop.last %}, {% endif %}{% endfor %}
     </span>
@@ -28,9 +28,9 @@
 
 <div class="card">
     <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;">
-        <span><span style="display:inline-block;width:12px;height:12px;background:var(--surface2);border:1px solid var(--border);border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--text-muted);">Free</span></span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:var(--surface2);border:1px solid var(--border);border-radius:2px;margin-right:6px;"></span><span class="u-865c33">Free</span></span>
         <span><span style="display:inline-block;width:12px;height:12px;background:#1a2a3a;border:1px solid #00b4d833;border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--primary);">Dynamic Lease</span></span>
-        <span><span style="display:inline-block;width:12px;height:12px;background:#1a3a1a;border:1px solid #2ecc7133;border-radius:2px;margin-right:6px;"></span><span style="font-size:12px;color:var(--success);">Reserved</span></span>
+        <span><span style="display:inline-block;width:12px;height:12px;background:#1a3a1a;border:1px solid #2ecc7133;border-radius:2px;margin-right:6px;"></span><span class="u-d92d40">Reserved</span></span>
     </div>
 
     {% if pool_blocks %}
@@ -53,7 +53,7 @@
     </div>
     {% endfor %}
     {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">Could not determine pool range from Kea config.</div>
+    <div class="u-c92bea">Could not determine pool range from Kea config.</div>
     {% endif %}
 </div>
 {% endblock %}

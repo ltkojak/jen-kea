@@ -18,7 +18,7 @@
 {% endif %}
 
 {% if leases %}
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><span class="card-title">{{ icon("clipboard-list") }} dhcpd.leases</span></div>
     <p style="font-size:13px;margin:0;">
         <strong>{{ leases.active }}</strong> active lease(s) in the file — <strong>{{ leases.in_ranges }}</strong> inside
@@ -33,9 +33,9 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     {% if plan.server_options %}
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card u-87c136">
         <div class="card-header"><h3>Server-level options</h3></div>
-        <label style="font-size:13px;cursor:pointer;">
+        <label class="u-fcdcd0">
             <input type="checkbox" name="server_options" value="1"{% if src.key == 'isc' %} checked{% endif %}>
             Import {{ server_options_count }} server-level option(s) as global options
         </label>
@@ -44,9 +44,9 @@
     {% endif %}
 
     {% if plan.global_classes %}
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card u-87c136">
         <div class="card-header"><h3>Client classes</h3></div>
-        <label style="font-size:13px;cursor:pointer;">
+        <label class="u-fcdcd0">
             <input type="checkbox" name="classes" value="1" checked>
             Create {{ global_class_count }} client class(es) declared in the {{ src.file }}
             ({% for c in plan.global_classes %}{{ c.name }}{% if not loop.last %}, {% endif %}{% endfor %})
@@ -98,7 +98,7 @@
         </table>
     </div>
 
-    <div style="display:flex;gap:10px;">
+    <div class="u-3efc98">
         <button type="submit" class="btn btn-primary">{{ icon("eye") }} Preview Changes</button>
         <a href="{{ url_for(src.upload_endpoint) }}" class="btn btn-secondary">Cancel</a>
     </div>

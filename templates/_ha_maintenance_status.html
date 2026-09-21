@@ -1,11 +1,11 @@
 {% if not view %}
-<p style="font-size:13px;color:var(--text-muted);">No maintenance flow is running.</p>
+<p class="u-58b17f">No maintenance flow is running.</p>
 {% else %}
 <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;margin-bottom:10px;">
     <div><strong>{{ view.down.name }}</strong> (going down): <span class="badge {% if view.down_state in ('in-maintenance',) %}badge-dynamic{% elif view.down_state in ('hot-standby','load-balancing') %}badge-reserved{% elif view.down_state %}badge-danger{% else %}badge-muted{% endif %}">{{ view.down_state or 'unreachable' }}</span></div>
     <div><strong>{{ view.up.name }}</strong> (serving): <span class="badge {% if view.up_state in ('partner-in-maintenance','partner-down','hot-standby','load-balancing') %}badge-reserved{% elif view.up_state %}badge-danger{% else %}badge-muted{% endif %}">{{ view.up_state or 'unreachable' }}</span></div>
 </div>
-<div class="alert {% if view.tone == 'fail' %}alert-danger{% elif view.tone == 'warn' %}alert-warning{% else %}alert-info{% endif %}" style="margin-bottom:12px;">{{ view.message }}</div>
+<div class="alert {% if view.tone == 'fail' %}alert-danger{% elif view.tone == 'warn' %}alert-warning{% else %}alert-info{% endif %} u-da12f2">{{ view.message }}</div>
 
 {% if view.step == 'work' %}
 <ul style="font-size:13px;margin:0 0 12px 18px;color:var(--text-muted);">

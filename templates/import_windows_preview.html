@@ -6,9 +6,9 @@
     <p>This is exactly what would be applied to the primary Kea server. Nothing has been written yet.</p>
 </div>
 
-<div class="card" style="margin-bottom:16px;">
+<div class="card u-87c136">
     <div class="card-header"><h3>Summary</h3></div>
-    <ul style="margin:0;padding-left:20px;font-size:13px;">
+    <ul class="u-6be502">
         {% for line in report %}
         <li>{{ line }}</li>
         {% endfor %}
@@ -18,30 +18,30 @@
     </p>
 </div>
 
-<div class="card" style="margin-bottom:16px;">
+<div class="card u-87c136">
     <div class="card-header"><h3>kea-dhcp4 -t result</h3></div>
     {% if test_result.ok %}
-    <div style="color:var(--success);">{{ icon("circle-check") }} Kea accepted this config.</div>
+    <div class="u-5a4529">{{ icon("circle-check") }} Kea accepted this config.</div>
     {% elif test_result.ok is none %}
-    <div style="color:var(--text-muted);">{{ icon("info") }} {{ test_result.detail }}</div>
+    <div class="u-5872de">{{ icon("info") }} {{ test_result.detail }}</div>
     {% else %}
-    <div style="color:var(--danger);">{{ icon("circle-x") }} Kea rejected this config: {{ test_result.detail }}</div>
+    <div class="u-497726">{{ icon("circle-x") }} Kea rejected this config: {{ test_result.detail }}</div>
     {% endif %}
 </div>
 
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><span class="card-title">Unified diff</span></div>
     {% if not diff_rows %}
-    <p style="color:var(--text-muted);padding:12px;">No difference from the current config.</p>
+    <p class="u-41e804">No difference from the current config.</p>
     {% else %}
-    <pre style="overflow-x:auto;font-size:12px;line-height:1.5;margin:0;padding:12px;background:var(--surface2);border-radius:var(--radius);"><code>{% for row in diff_rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
+    <pre class="u-6dc1d1"><code>{% for row in diff_rows %}<span style="display:block;{% if row.cls == 'add' %}background:rgba(60,180,90,0.15);color:var(--success);{% elif row.cls == 'del' %}background:rgba(200,60,60,0.15);color:var(--danger);{% elif row.cls == 'hunk' %}color:var(--primary);{% elif row.cls == 'meta' %}color:var(--text-muted);{% endif %}">{{ row.text }}</span>{% endfor %}</code></pre>
     {% endif %}
 </div>
 
 <form method="POST" action="{{ url_for('subnets.import_windows_apply', source=src.key) }}"
       data-confirm="Apply this import to the primary Kea server, restart it, and add {{ reservation_count }} reservation(s)? This is a live change.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div style="display:flex;gap:10px;">
+    <div class="u-3efc98">
         {% if test_result.ok %}
         <button type="submit" class="btn btn-danger">{{ icon("zap") }} Confirm &amp; Apply</button>
         {% else %}

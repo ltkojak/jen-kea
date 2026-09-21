@@ -535,6 +535,9 @@
             .filter-bar .btn-sm { width: auto; }
         }
     </style>
+    <!-- v5.53.0 (Q60): the static inline styles, extracted (tools/extract_inline_styles.py). After the
+         inline block so its equal-precedence rules win. -->
+    <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
 </head>
 <body class="{% if current_user.is_authenticated %}has-tabbar{% endif %}" hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
 {% include "_icon_sprite.html" %}

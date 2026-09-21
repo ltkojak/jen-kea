@@ -20,7 +20,7 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("pencil") }} DDNS Naming</span></div>
-    <div class="form-hint" style="margin-bottom:12px;">
+    <div class="form-hint u-da12f2">
         Whether dhcp4 tells D2 about a lease, and how the hostname it sends is built.
         Saved here and pushed to every SSH-configured Kea server, then each one restarts.
     </div>
@@ -147,18 +147,18 @@
 <div class="alert alert-error">Could not read kea-dhcp-ddns.conf from the active server — check SSH configuration in Settings → Kea.</div>
 {% else %}
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+<div class="u-911b26">
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("arrow-right") }} Forward Domains</span></div>
-    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+    <table class="u-80496c">
         <thead><tr><th>Zone</th><th>Key</th><th>DNS servers</th><th></th></tr></thead>
         <tbody>
         {% for d in forward_domains %}
         <tr>
             <td class="mono">{{ d.name }}</td>
             <td class="mono">{{ d.get('key-name', '—') }}</td>
-            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td class="mono u-6cb285">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td>
                 <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove forward zone {{ d.name }}?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -169,7 +169,7 @@
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" style="color:var(--text-muted);text-align:center;padding:12px;">No forward domains.</td></tr>
+        <tr><td colspan="4" class="u-138602">No forward domains.</td></tr>
         {% endfor %}
         </tbody>
     </table>
@@ -200,14 +200,14 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("arrow-left") }} Reverse Domains</span></div>
-    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+    <table class="u-80496c">
         <thead><tr><th>Zone</th><th>Key</th><th>DNS servers</th><th></th></tr></thead>
         <tbody>
         {% for d in reverse_domains %}
         <tr>
             <td class="mono">{{ d.name }}</td>
             <td class="mono">{{ d.get('key-name', '—') }}</td>
-            <td class="mono" style="font-size:12px;">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td class="mono u-6cb285">{% for s in d.get('dns-servers', []) %}{% if ':' in (s.get('ip-address') or '') %}[{{ s.get('ip-address') }}]{% else %}{{ s.get('ip-address') }}{% endif %}:{{ s.get('port', 53) }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td>
                 <form method="POST" action="/ddns/d2config/domain/remove" data-confirm="Remove reverse zone {{ d.name }}?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -218,7 +218,7 @@
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" style="color:var(--text-muted);text-align:center;padding:12px;">No reverse domains.</td></tr>
+        <tr><td colspan="4" class="u-138602">No reverse domains.</td></tr>
         {% endfor %}
         </tbody>
     </table>
@@ -254,7 +254,7 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("key-round") }} TSIG Keys</span></div>
-    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+    <table class="u-80496c">
         <thead><tr><th>Name</th><th>Algorithm</th><th></th></tr></thead>
         <tbody>
         {% for k in tsig_keys %}
@@ -270,7 +270,7 @@
             </td>
         </tr>
         {% else %}
-        <tr><td colspan="3" style="color:var(--text-muted);text-align:center;padding:12px;">No TSIG keys.</td></tr>
+        <tr><td colspan="3" class="u-138602">No TSIG keys.</td></tr>
         {% endfor %}
         </tbody>
     </table>
@@ -303,7 +303,7 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("circle-check") }} Verify DNS</span></div>
-    <div class="form-hint" style="margin-bottom:12px;">
+    <div class="form-hint u-da12f2">
         Looks up a hostname and/or IP through the Jen host's own system resolver — whatever put the record
         there, D2 or a provider. Forward zone: <span class="mono">{{ forward_zone or '(none configured)' }}</span> ·
         Qualifying suffix: <span class="mono">{{ qualifying_suffix or '(none configured)' }}</span>.
@@ -319,51 +319,51 @@
                 <label>IP address</label>
                 <input type="text" name="ip" value="{{ verify_ip }}" placeholder="10.0.0.50">
             </div>
-            <div class="form-group" style="align-self:flex-end;">
+            <div class="form-group u-ffd20f">
                 <button type="submit" class="btn btn-primary">Verify</button>
             </div>
         </div>
     </form>
     {% if verify_error %}
-    <div class="alert alert-error" style="margin-top:12px;">{{ verify_error }}</div>
+    <div class="alert alert-error u-56f435">{{ verify_error }}</div>
     {% elif verify_result %}
     <table style="margin-top:16px;width:100%;font-size:13px;">
         {% if verify_result.forward_ips is defined %}
-        <tr><td class="stat-label" style="width:160px;">Forward lookup</td><td class="mono">{{ verify_result.forward_ips | join(', ') }}</td></tr>
+        <tr><td class="stat-label u-28c0f6">Forward lookup</td><td class="mono">{{ verify_result.forward_ips | join(', ') }}</td></tr>
         {% if verify_result.forward_ok is defined %}
-        <tr><td class="stat-label">Matches given IP</td><td>{% if verify_result.forward_ok %}<span style="color:var(--success);">✓ Yes</span>{% else %}<span style="color:var(--danger);">✗ No</span>{% endif %}</td></tr>
+        <tr><td class="stat-label">Matches given IP</td><td>{% if verify_result.forward_ok %}<span class="u-5a4529">✓ Yes</span>{% else %}<span class="u-497726">✗ No</span>{% endif %}</td></tr>
         {% endif %}
         {% elif verify_result.forward_error is defined %}
-        <tr><td class="stat-label">Forward lookup</td><td style="color:var(--danger);">✗ {{ verify_result.forward_error }}</td></tr>
+        <tr><td class="stat-label">Forward lookup</td><td class="u-497726">✗ {{ verify_result.forward_error }}</td></tr>
         {% endif %}
         {% if verify_result.reverse_name is defined %}
         <tr><td class="stat-label">Reverse lookup</td><td class="mono">{{ verify_result.reverse_name }}</td></tr>
         {% if verify_result.reverse_ok is defined %}
-        <tr><td class="stat-label">Matches given hostname</td><td>{% if verify_result.reverse_ok %}<span style="color:var(--success);">✓ Yes</span>{% else %}<span style="color:var(--danger);">✗ No</span>{% endif %}</td></tr>
+        <tr><td class="stat-label">Matches given hostname</td><td>{% if verify_result.reverse_ok %}<span class="u-5a4529">✓ Yes</span>{% else %}<span class="u-497726">✗ No</span>{% endif %}</td></tr>
         {% endif %}
         {% elif verify_result.reverse_error is defined %}
-        <tr><td class="stat-label">Reverse lookup</td><td style="color:var(--danger);">✗ {{ verify_result.reverse_error }}</td></tr>
+        <tr><td class="stat-label">Reverse lookup</td><td class="u-497726">✗ {{ verify_result.reverse_error }}</td></tr>
         {% endif %}
     </table>
-    <div class="form-hint" style="margin-top:8px;">This is the system resolver on the Jen host — a stale record here means DNS actually is wrong for real clients, not just for Jen.</div>
+    <div class="form-hint u-8a77e5">This is the system resolver on the Jen host — a stale record here means DNS actually is wrong for real clients, not just for Jen.</div>
     {% endif %}
 </div>
 
 {% else %}
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+<div class="u-911b26">
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("search") }} Hostname Lookup</span></div>
     <form method="GET">
         <input type="hidden" name="tab" value="status">
-        <div style="display:flex;gap:8px;">
-            <input type="text" name="host" value="{{ lookup_host }}" placeholder="hostname.domain.com" style="flex:1;">
+        <div class="u-a76d59">
+            <input type="text" name="host" value="{{ lookup_host }}" placeholder="hostname.domain.com" class="u-97445a">
             <button type="submit" class="btn btn-primary">Lookup</button>
         </div>
     </form>
     {% if lookup_host %}
-    <div style="margin-top:16px;">
+    <div class="u-1b0f49">
         {% if lookup_result is string %}
         <div class="alert alert-error">{{ lookup_result }}</div>
         {% elif lookup_result %}
@@ -372,16 +372,16 @@
             <tbody>
             {% for r in lookup_result %}
             <tr>
-                <td class="mono" style="font-size:12px;">{{ r.get('name','') }}</td>
+                <td class="mono u-6cb285">{{ r.get('name','') }}</td>
                 <td><span class="badge badge-dynamic">{{ r.get('type','') }}</span></td>
-                <td class="mono" style="font-size:12px;">{{ r.get('rData',{}).get('ipAddress','') or r.get('rData','') }}</td>
-                <td class="mono" style="font-size:12px;color:var(--text-muted);">{{ r.get('ttl','') }}</td>
+                <td class="mono u-6cb285">{{ r.get('rData',{}).get('ipAddress','') or r.get('rData','') }}</td>
+                <td class="mono u-865c33">{{ r.get('ttl','') }}</td>
             </tr>
             {% endfor %}
             </tbody>
         </table>
         {% else %}
-        <div style="color:var(--text-muted);font-size:13px;">No records found for <strong>{{ lookup_host }}</strong>.</div>
+        <div class="u-aad8e6">No records found for <strong>{{ lookup_host }}</strong>.</div>
         {% endif %}
     </div>
     {% endif %}
@@ -395,14 +395,14 @@
             {% elif mode == 'd2' %}<span class="badge badge-dynamic">D2</span>
             {% else %}<span class="badge badge-dynamic">Provider ({{ dns_provider }})</span>{% endif %}
         </td></tr>
-        <tr><td class="stat-label">Log File</td><td class="mono" style="font-size:12px;">{{ ddns_log }}</td></tr>
+        <tr><td class="stat-label">Log File</td><td class="mono u-6cb285">{{ ddns_log }}</td></tr>
         <tr><td class="stat-label">Status</td><td>
-            {% if log_status == 'ok' %}<span style="color:var(--success);">✓ Reading</span>
-            {% elif log_status == 'empty' %}<span style="color:var(--warning);">{{ icon("triangle-alert") }} Empty</span>
-            {% elif log_status == 'missing' %}<span style="color:var(--danger);">✗ File not found</span>
-            {% else %}<span style="color:var(--danger);">✗ Error</span>{% endif %}
+            {% if log_status == 'ok' %}<span class="u-5a4529">✓ Reading</span>
+            {% elif log_status == 'empty' %}<span class="u-52df2b">{{ icon("triangle-alert") }} Empty</span>
+            {% elif log_status == 'missing' %}<span class="u-497726">✗ File not found</span>
+            {% else %}<span class="u-497726">✗ Error</span>{% endif %}
         </td></tr>
-        {% if log_message %}<tr><td class="stat-label">Detail</td><td style="color:var(--text-muted);font-size:12px;">{{ log_message }}</td></tr>{% endif %}
+        {% if log_message %}<tr><td class="stat-label">Detail</td><td class="u-2bb516">{{ log_message }}</td></tr>{% endif %}
         <tr><td class="stat-label">Showing</td><td>Last 200 lines</td></tr>
         <tr><td class="stat-label">Entries</td><td>{{ lines|length }}</td></tr>
     </table>
@@ -412,16 +412,16 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("radio-tower") }} dhcp4 → D2</span></div>
-    <table style="width:100%;font-size:13px;margin-bottom:12px;">
+    <table class="u-80496c">
         <thead><tr><th>Server</th><th>Sends updates</th></tr></thead>
         <tbody>
         {% for s in server_updates %}
         <tr>
             <td>{{ s.name }}</td>
             <td>
-                {% if s.enabled is none %}<span style="color:var(--text-muted);">— (no SSH)</span>
-                {% elif s.enabled %}<span style="color:var(--success);">✓ Enabled</span>
-                {% else %}<span style="color:var(--text-muted);">Disabled</span>{% endif %}
+                {% if s.enabled is none %}<span class="u-5872de">— (no SSH)</span>
+                {% elif s.enabled %}<span class="u-5a4529">✓ Enabled</span>
+                {% else %}<span class="u-5872de">Disabled</span>{% endif %}
             </td>
         </tr>
         {% endfor %}
@@ -430,9 +430,9 @@
     <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;">
         <div>
             <span class="stat-label">D2</span>
-            {% if d2_status == 'ok' %}<span style="color:var(--success);">● {{ d2_detail }}</span>
-            {% elif d2_status == 'warn' %}<span style="color:var(--warning);">● {{ d2_detail }}</span>
-            {% else %}<span style="color:var(--text-muted);">● {{ d2_detail }}</span>{% endif %}
+            {% if d2_status == 'ok' %}<span class="u-5a4529">● {{ d2_detail }}</span>
+            {% elif d2_status == 'warn' %}<span class="u-52df2b">● {{ d2_detail }}</span>
+            {% else %}<span class="u-5872de">● {{ d2_detail }}</span>{% endif %}
         </div>
         <a href="/health-center" class="btn btn-sm btn-secondary">{{ icon("stethoscope") }} Health Center</a>
     </div>
@@ -454,7 +454,7 @@
     {% endfor %}
     </div>
     {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No log data available. Check that the DDNS log path is configured correctly.</div>
+    <div class="u-c92bea">No log data available. Check that the DDNS log path is configured correctly.</div>
     {% endif %}
 </div>
 

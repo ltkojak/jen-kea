@@ -2,14 +2,14 @@
 {% for l in recent %}
 <tr>
     <td class="mono">{{ l.ip }}</td>
-    <td style="white-space:nowrap;">
+    <td class="u-86abda">
         {{ l.hostname | hostname or '—' }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
     <td class="mono">{{ l.mac }}</td>
     <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-    <td class="mono" style="color:var(--text-muted);">{{ l.obtained|utctime }}</td>
+    <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
 </tr>
 {% else %}
-<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text-muted);">No leases issued in this time window.</td></tr>
+<tr><td colspan="5" class="u-c92bea">No leases issued in this time window.</td></tr>
 {% endfor %}

@@ -22,8 +22,8 @@ function saveNote(id) {
         if (data.ok) {
             const display = document.getElementById('note-display-' + id);
             display.innerHTML = notes
-                ? '<span style="font-size:13px;color:var(--text-muted);">' + escapeHtml(notes) + '</span>'
-                : '<span style="font-size:12px;color:var(--text-muted);font-style:italic;">No notes — click to add</span>';
+                ? '<span class="u-58b17f">' + escapeHtml(notes) + '</span>'
+                : '<span class="u-ae0c30">No notes — click to add</span>';
             cancelNote(id);
         } else {
             alert('Error saving note: ' + data.error);
@@ -42,7 +42,7 @@ document.addEventListener('click', function(e) {
 });
 {% endblock %}
 {% block content %}
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+<div class="page-header u-1bcfaf">
     <div>
         <h1>{{ icon("network", "ico-lg") }} Subnets & Scope Options</h1>
         <p>Subnet configuration pulled live from Kea</p>
@@ -77,10 +77,10 @@ document.addEventListener('click', function(e) {
     <h2 style="margin:24px 0 8px;font-size:16px;">
         Shared network: {{ s.shared_network }}{% for n in shared_networks if n.name == s.shared_network and n.interface %} · {{ n.interface }}{% endfor %}
         {% if can_manage_networks and ssh_ready %}
-        <form method="POST" action="/subnets/shared-networks/delete" style="display:inline;margin-left:8px;" data-confirm="Delete shared network '{{ s.shared_network }}'? It must have no subnets left. Kea restarts.">
+        <form method="POST" action="/subnets/shared-networks/delete" class="u-2d191d" data-confirm="Delete shared network '{{ s.shared_network }}'? It must have no subnets left. Kea restarts.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="name" value="{{ s.shared_network }}">
-            <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">{{ icon("trash") }} Delete network</button>
+            <button type="submit" class="btn btn-sm u-be83f6">{{ icon("trash") }} Delete network</button>
         </form>
         {% endif %}
     </h2>
@@ -90,18 +90,18 @@ document.addEventListener('click', function(e) {
 {% endif %}
 <div class="card">
     <div class="card-header">
-        <div style="display:flex;align-items:center;gap:12px;">
+        <div class="u-95fd83">
             <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
-            <span class="mono" style="font-size:15px;">{{ s.cidr }}</span>
-            {% if s.shared_network %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);" title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
+            <span class="mono u-de0080">{{ s.cidr }}</span>
+            {% if s.shared_network %}<span class="badge u-d6f005"  title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
             {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
             <span class="badge badge-production" title="Paired IPv6 subnet">IPv6</span>
             {% endfor %}
         </div>
         {% if current_user.role in ('superadmin','admin') and ssh_ready %}
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div class="u-01ef7f">
             {% if can_manage_networks and (shared_networks or s.shared_network) %}
-            <form method="POST" action="/subnets/move/{{ s.id }}" style="display:inline;">
+            <form method="POST" action="/subnets/move/{{ s.id }}" class="u-cccfa4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <select name="shared_network" data-submit title="Move this subnet" style="font-size:12px;padding:2px 4px;">
                     <option value="" {% if not s.shared_network %}selected{% endif %}>— top level —</option>
@@ -110,9 +110,9 @@ document.addEventListener('click', function(e) {
             </form>
             {% endif %}
             <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
-            <form method="POST" action="/subnets/delete/{{ s.id }}" style="display:inline;"
+            <form method="POST" action="/subnets/delete/{{ s.id }}" class="u-cccfa4"
                   data-confirm="Delete subnet '{{ s.name }}' ({{ s.cidr }})? This removes it from Kea's config and restarts Kea. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">{{ icon("trash") }} Delete</button>
+                <button type="submit" class="btn btn-sm u-be83f6">{{ icon("trash") }} Delete</button>
             </form>
         </div>
         {% endif %}
@@ -120,7 +120,7 @@ document.addEventListener('click', function(e) {
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:16px;">
         <div>
             <div class="stat-label">Lease Duration</div>
-            <div style="font-size:20px;font-weight:700;color:var(--primary);">
+            <div class="u-9aa3cd">
                 {% if s.valid_lifetime %}
                     {% set days = (s.valid_lifetime / 86400)|int %}
                     {% set hours = ((s.valid_lifetime % 86400) / 3600)|round(1) %}
@@ -130,15 +130,15 @@ document.addEventListener('click', function(e) {
         </div>
         <div>
             <div class="stat-label">Renew Timer (T1)</div>
-            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ ((s.renew_timer or 0) / 3600)|round(1) }}h</div>
+            <div class="u-9aa3cd">{{ ((s.renew_timer or 0) / 3600)|round(1) }}h</div>
         </div>
         <div>
             <div class="stat-label">Rebind Timer (T2)</div>
-            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ ((s.rebind_timer or 0) / 3600)|round(1) }}h</div>
+            <div class="u-9aa3cd">{{ ((s.rebind_timer or 0) / 3600)|round(1) }}h</div>
         </div>
     </div>
-    <div style="margin-bottom:12px;">
-        <div class="stat-label" style="margin-bottom:6px;">Address Pools</div>
+    <div class="u-da12f2">
+        <div class="stat-label u-4e420a">Address Pools</div>
         {% for pool in s.pools %}
         <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;margin-right:6px;">{{ pool }}</span>
         {% endfor %}
@@ -147,13 +147,13 @@ document.addEventListener('click', function(e) {
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:12px;">
         {% if s.routers %}
         <div>
-            <div class="stat-label" style="margin-bottom:4px;">Router / Gateway</div>
+            <div class="stat-label u-c81ce4">Router / Gateway</div>
             <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;">{{ s.routers }}</span>
         </div>
         {% endif %}
         {% if s.dns_servers %}
         <div>
-            <div class="stat-label" style="margin-bottom:4px;">DNS Servers</div>
+            <div class="stat-label u-c81ce4">DNS Servers</div>
             {% for dns in s.dns_servers.split(',') %}
             <span class="mono" style="background:var(--surface2);padding:4px 10px;border-radius:4px;font-size:12px;display:inline-block;margin-right:4px;margin-bottom:4px;">{{ dns.strip() }}</span>
             {% endfor %}
@@ -163,13 +163,13 @@ document.addEventListener('click', function(e) {
     {% endif %}
     {% if s.options %}
     <div>
-        <div class="stat-label" style="margin-bottom:8px;">Scope Options</div>
-        <table style="width:auto;">
+        <div class="stat-label u-fdf33f">Scope Options</div>
+        <table class="u-30e741">
             <thead><tr><th>Option</th><th>Value</th></tr></thead>
             <tbody>
             {% for opt in s.options %}
             <tr>
-                <td style="color:var(--text-muted);">{{ opt.code }} <strong>{{ opt.name }}</strong></td>
+                <td class="u-5872de">{{ opt.code }} <strong>{{ opt.name }}</strong></td>
                 <td class="mono">{{ opt.data }}</td>
             </tr>
             {% endfor %}
@@ -178,24 +178,24 @@ document.addEventListener('click', function(e) {
     </div>
     {% endif %}
     <div style="margin-bottom:12px;font-size:12px;">
-        <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" style="color:var(--text-muted);">
+        <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" class="u-5872de">
             {{ icon("wrench") }} Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
         </a>
         {% if s.classes %}
         <br>
-        <a href="{{ url_for('subnets.dhcp_classes_page') }}" style="color:var(--text-muted);">
+        <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="u-5872de">
             {{ icon("tag") }} Classes: {{ s.classes|join(', ') }}
         </a>
         {% endif %}
     </div>
-    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <div class="stat-label" style="margin-bottom:6px;">Notes</div>
+    <div class="u-10a65a">
+        <div class="stat-label u-4e420a">Notes</div>
         <div id="note-display-{{ s.id }}"
-             {% if current_user.role in ('superadmin','admin') %}class="note-display-btn" data-subnet-id="{{ s.id }}" style="cursor:pointer;"{% endif %}>
+             {% if current_user.role in ('superadmin','admin') %}class="note-display-btn" data-subnet-id="{{ s.id }}" class="u-3b6a3a"{% endif %}>
             {% if subnet_notes.get(s.id) %}
-            <span style="font-size:13px;color:var(--text-muted);">{{ subnet_notes.get(s.id) }}</span>
+            <span class="u-58b17f">{{ subnet_notes.get(s.id) }}</span>
             {% else %}
-            <span style="font-size:12px;color:var(--text-muted);font-style:italic;">{% if current_user.role in ('superadmin','admin') %}No notes — click to add{% else %}No notes{% endif %}</span>
+            <span class="u-ae0c30">{% if current_user.role in ('superadmin','admin') %}No notes — click to add{% else %}No notes{% endif %}</span>
             {% endif %}
         </div>
         {% if current_user.role in ('superadmin','admin') %}
@@ -212,22 +212,22 @@ document.addEventListener('click', function(e) {
     {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
-            <div style="display:flex;align-items:center;gap:12px;">
+            <div class="u-95fd83">
                 <span class="badge badge-production">IPv6</span>
-                <span class="mono" style="font-size:14px;">{{ s6.cidr }}</span>
+                <span class="mono u-433de3">{{ s6.cidr }}</span>
             </div>
             {% if current_user.role in ('superadmin','admin') %}
             <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
             {% endif %}
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">
+        <div class="u-b62e37">
             <div>
                 <div class="stat-label">Active Leases</div>
-                <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.active }}</div>
+                <div class="u-9aa3cd">{{ s6.active }}</div>
             </div>
             <div>
                 <div class="stat-label">Reservations</div>
-                <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.reserved }}</div>
+                <div class="u-9aa3cd">{{ s6.reserved }}</div>
             </div>
         </div>
     </div>
@@ -252,40 +252,40 @@ document.addEventListener('click', function(e) {
     <div class="card-header"><span class="card-title">{{ icon("plus") }} New shared network</span></div>
     <form method="POST" action="/subnets/shared-networks/add" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group" style="margin:0;">
+        <div class="form-group u-116966">
             <label>Name</label>
             <input type="text" name="name" required pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" placeholder="e.g. guest-wifi">
         </div>
-        <div class="form-group" style="margin:0;">
+        <div class="form-group u-116966">
             <label>Interface</label>
             <input type="text" name="interface" placeholder="optional, e.g. eth1">
         </div>
         <button type="submit" class="btn btn-sm btn-primary">Create</button>
     </form>
-    <p class="form-hint" style="margin-top:8px;">Empty to start — add subnets to it from the Add Subnet form, or move existing ones in with the dropdown on each card.</p>
+    <p class="form-hint u-8a77e5">Empty to start — add subnets to it from the Add Subnet form, or move existing ones in with the dropdown on each card.</p>
 </div>
 {% endif %}
 
 {% for s6 in subnets6 if not s6.paired_subnet4_id %}
 <div class="card">
     <div class="card-header">
-        <div style="display:flex;align-items:center;gap:12px;">
+        <div class="u-95fd83">
             <span class="badge badge-production">IPv6</span>
-            <span class="mono" style="font-size:15px;">{{ s6.cidr }}</span>
-            <span style="color:var(--text-muted);font-size:13px;">{{ s6.name }}</span>
+            <span class="mono u-de0080">{{ s6.cidr }}</span>
+            <span class="u-aad8e6">{{ s6.name }}</span>
         </div>
         {% if current_user.role in ('superadmin','admin') %}
         <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
         {% endif %}
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">
+    <div class="u-b62e37">
         <div>
             <div class="stat-label">Active Leases</div>
-            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.active }}</div>
+            <div class="u-9aa3cd">{{ s6.active }}</div>
         </div>
         <div>
             <div class="stat-label">Reservations</div>
-            <div style="font-size:20px;font-weight:700;color:var(--primary);">{{ s6.reserved }}</div>
+            <div class="u-9aa3cd">{{ s6.reserved }}</div>
         </div>
     </div>
 </div>

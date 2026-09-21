@@ -129,8 +129,8 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
 <!-- Edit Modal -->
 <div id="editModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:460px;max-width:95vw;">
-        <h3 style="margin-bottom:4px;">Edit Device</h3>
-        <div id="editMac" class="mono" style="color:var(--text-muted);font-size:12px;margin-bottom:20px;"></div>
+        <h3 class="u-c81ce4">Edit Device</h3>
+        <div id="editMac" class="mono u-abf201"></div>
         <div class="form-group">
             <label>Device Name</label>
             <input type="text" id="editDeviceName" placeholder="e.g. Living Room TV, Work Laptop" maxlength="200">
@@ -140,7 +140,7 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
             <input type="text" id="editOwner" placeholder="e.g. Admin, Guest, John" maxlength="200">
         </div>
         <div class="form-group">
-            <label>Device Type <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(overrides auto-detection)</span></label>
+            <label>Device Type <span class="u-dd1085">(overrides auto-detection)</span></label>
             <select id="editTypeOverride">
                 <option value="auto">Auto-detect (use OUI / hostname)</option>
                 <option value="apple">Apple</option>
@@ -164,33 +164,29 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
             </div>
         </div>
         <div class="form-group">
-            <label>Icon Override <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(optional — use a specific brand icon)</span></label>
+            <label>Icon Override <span class="u-dd1085">(optional — use a specific brand icon)</span></label>
             <input type="hidden" id="editIconOverride" value="">
             <div id="iconPickerSelected" style="display:flex;align-items:center;gap:8px;padding:8px 10px;
                  background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
                  cursor:pointer;margin-bottom:6px;">
-                <span id="iconPickerPreview" style="font-size:18px;">—</span>
-                <span id="iconPickerLabel" style="font-size:13px;color:var(--text-muted);">Default for device type</span>
+                <span id="iconPickerPreview" class="u-4ff818">—</span>
+                <span id="iconPickerLabel" class="u-58b17f">Default for device type</span>
                 <span style="margin-left:auto;color:var(--text-muted);font-size:11px;">▾ click to change</span>
             </div>
             <div id="iconPickerDropdown" style="display:none;background:var(--surface2);border:1px solid var(--border);
                  border-radius:var(--radius);padding:10px;max-height:200px;overflow-y:auto;">
                 <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                    <div class="icon-picker-option" data-icon-value="" data-icon-label="Default"
-                         style="display:flex;flex-direction:column;align-items:center;gap:3px;
-                                padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
-                                border:1px solid var(--border);">
+                    <div class="icon-picker-option u-d7df59" data-icon-value="" data-icon-label="Default"
+>
                         <span style="font-size:16px;">—</span>
-                        <span style="font-size:9px;color:var(--text-muted);">default</span>
+                        <span class="u-400bbf">default</span>
                     </div>
                     {% for icon in bundled_icons %}
-                    <div class="icon-picker-option" data-icon-value="{{ icon }}" data-icon-label="{{ icon }}"
-                         style="display:flex;flex-direction:column;align-items:center;gap:3px;
-                                padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
-                                border:1px solid var(--border);">
+                    <div class="icon-picker-option u-d7df59" data-icon-value="{{ icon }}" data-icon-label="{{ icon }}"
+>
                         <img src="/static/icons/brands/{{ icon }}.svg" alt="{{ icon }}"
-                             style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">
-                        <span style="font-size:9px;color:var(--text-muted);">{{ icon }}</span>
+                             class="u-c088cd">
+                        <span class="u-400bbf">{{ icon }}</span>
                     </div>
                     {% endfor %}
                     {% for icon in custom_icons %}
@@ -199,7 +195,7 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
                                 padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
                                 border:1px solid var(--primary)44;">
                         <img src="/content/icons/{{ icon }}.svg" alt="{{ icon }}"
-                             style="width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8);">
+                             class="u-c088cd">
                         <span style="font-size:9px;color:var(--primary);">{{ icon }}</span>
                     </div>
                     {% endfor %}

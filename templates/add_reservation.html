@@ -4,7 +4,7 @@
 <div class="page-header">
     <h1>{{ icon("pin", "ico-lg") }} Add Reservation</h1>
 </div>
-<div class="card" style="max-width:600px;">
+<div class="card u-cd90f7">
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -31,14 +31,14 @@
             </div>
         </div>
         <div class="form-group">
-            <label>DNS Override <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
+            <label>DNS Override <span class="u-5d8d64">(optional)</span></label>
             <input type="text" name="dns_override" placeholder="Leave blank for subnet default, e.g. 1.1.1.1, 8.8.8.8">
         </div>
         <div class="form-group">
-            <label>Notes <span style="color:var(--text-muted);font-weight:400;">(optional)</span></label>
+            <label>Notes <span class="u-5d8d64">(optional)</span></label>
             <textarea name="notes" rows="2" placeholder="Optional notes about this device..."></textarea>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div class="u-a76d59">
             <button type="submit" class="btn btn-primary">Add Reservation</button>
             <a href="/reservations" class="btn btn-secondary">Cancel</a>
         </div>

@@ -21,8 +21,8 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645.
-MAX_INLINE_STYLES = 1645
+# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645; Q60 step 1 (Management + Network) to 1,015.
+MAX_INLINE_STYLES = 1015
 MAX_EMOJI_ALLOWLIST = 2
 
 

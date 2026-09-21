@@ -6,62 +6,62 @@
     <p>Kea evaluates classes in this order. Guards decide which subnet/pool/shared-network a client is eligible for; additional classes just attach options without gating eligibility.</p>
 </div>
 
-<div style="margin-bottom:16px;">
+<div class="u-87c136">
     <a href="/subnets" class="btn btn-secondary btn-sm">← Back to Subnets</a>
     <a href="{{ url_for('subnets.dhcp_class_new_page') }}" class="btn btn-primary btn-sm">+ New class</a>
 </div>
 
-<div class="card" style="padding:0;overflow:hidden;">
+<div class="card u-22a267">
     {% if rows %}
-    <table style="width:100%;font-size:13px;">
+    <table class="u-95cc13">
         <thead>
-            <tr style="text-align:left;color:var(--text-muted);">
-                <th style="padding:8px;">Name</th>
-                <th style="padding:8px;">Mode</th>
-                <th style="padding:8px;">Expression</th>
-                <th style="padding:8px;">Options</th>
-                <th style="padding:8px;">Boot fields</th>
-                <th style="padding:8px;">Only additional</th>
-                <th style="padding:8px;">Referenced by</th>
-                <th style="padding:8px;"></th>
+            <tr class="u-7cd699">
+                <th class="u-e2c960">Name</th>
+                <th class="u-e2c960">Mode</th>
+                <th class="u-e2c960">Expression</th>
+                <th class="u-e2c960">Options</th>
+                <th class="u-e2c960">Boot fields</th>
+                <th class="u-e2c960">Only additional</th>
+                <th class="u-e2c960">Referenced by</th>
+                <th class="u-e2c960"></th>
             </tr>
         </thead>
         <tbody>
         {% for r in rows %}
         <tr style="border-top:1px solid var(--border);{% if r.builtin %}color:var(--text-muted);{% endif %}">
-            <td style="padding:8px;" class="mono">
+            <td  class="mono u-e2c960">
                 {{ r.name }}
-                {% if r.builtin %}<span class="badge" style="background:var(--surface2);">built-in</span>{% endif %}
+                {% if r.builtin %}<span class="badge u-851d78">built-in</span>{% endif %}
             </td>
-            <td style="padding:8px;">
+            <td class="u-e2c960">
                 {% if r.builtin %}—
                 {% elif r.guided %}<span class="badge" style="background:var(--surface2);color:var(--primary);">guided</span>
-                {% else %}<span class="badge" style="background:var(--surface2);">advanced</span>
+                {% else %}<span class="badge u-851d78">advanced</span>
                 {% endif %}
             </td>
             <td style="padding:8px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" class="mono" title="{{ r.test }}">
                 {{ r.test or '—' }}
             </td>
-            <td style="padding:8px;">{{ r.options_count }}</td>
+            <td class="u-e2c960">{{ r.options_count }}</td>
             <td style="padding:8px;font-size:12px;color:var(--text-muted);">
                 {% if r.next_server or r.server_hostname or r.boot_file_name %}
                     {{ r.next_server or '' }}{% if r.server_hostname %} · {{ r.server_hostname }}{% endif %}{% if r.boot_file_name %} · {{ r.boot_file_name }}{% endif %}
                 {% else %}—{% endif %}
             </td>
-            <td style="padding:8px;">{{ '✓' if r.only_additional else '' }}</td>
-            <td style="padding:8px;">
+            <td class="u-e2c960">{{ '✓' if r.only_additional else '' }}</td>
+            <td class="u-e2c960">
                 {% if r.references %}
                 <span title="{{ r.references|join(', ') }}">{{ r.references|length }}</span>
                 {% else %}0{% endif %}
             </td>
             <td style="padding:8px;white-space:nowrap;text-align:right;">
-                <form method="POST" action="{{ url_for('subnets.dhcp_class_reorder') }}" style="display:inline;">
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_reorder') }}" class="u-cccfa4">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ r.name }}">
                     <input type="hidden" name="direction" value="up">
                     <button type="submit" class="btn btn-sm btn-secondary" title="Move up" {% if loop.first %}disabled{% endif %}>↑</button>
                 </form>
-                <form method="POST" action="{{ url_for('subnets.dhcp_class_reorder') }}" style="display:inline;">
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_reorder') }}" class="u-cccfa4">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ r.name }}">
                     <input type="hidden" name="direction" value="down">
@@ -69,7 +69,7 @@
                 </form>
                 {% if not r.builtin %}
                 <a href="{{ url_for('subnets.dhcp_class_edit_page', name=r.name) }}" class="btn btn-sm btn-secondary">Edit</a>
-                <form method="POST" action="{{ url_for('subnets.dhcp_class_delete') }}" style="display:inline;"
+                <form method="POST" action="{{ url_for('subnets.dhcp_class_delete') }}" class="u-cccfa4"
                       data-confirm="Delete class &quot;{{ r.name }}&quot;? Kea restarts.">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="name" value="{{ r.name }}">

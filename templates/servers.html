@@ -21,7 +21,7 @@
             <span style="color:var(--text-muted);margin-left:12px;">Active node commands are routed automatically</span>
         </div>
         {% for s in statuses %}{% if s.is_active %}
-        <span class="badge badge-reserved" style="margin-left:auto;">{{ icon("zap") }} Active: {{ s.server.name }}</span>
+        <span class="badge badge-reserved u-6d0006">{{ icon("zap") }} Active: {{ s.server.name }}</span>
         {% endif %}{% endfor %}
         {% if current_user.role == 'superadmin' %}
         <a href="{{ url_for('servers.ha_maintenance') }}" class="btn btn-sm btn-secondary" title="Take one node down for patching with a guided, HA-aware handover">{{ icon("hammer") }} Planned maintenance</a>
@@ -45,22 +45,22 @@
         {% if s.up %}
         <span class="badge badge-reserved">● Online</span>
         {% else %}
-        <span class="badge" style="background:#3a1a1a;color:var(--danger);">● Offline</span>
+        <span class="badge u-d4bab1">● Offline</span>
         {% endif %}
     </div>
-    <table style="width:100%;">
+    <table class="u-046678">
         <tr><td class="stat-label" style="width:160px;padding:8px 0;">API URL</td>
-            <td class="mono" style="font-size:12px;">{{ s.server.api_url }}</td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Role</td>
+            <td class="mono u-6cb285">{{ s.server.api_url }}</td></tr>
+        <tr><td class="stat-label u-d8c022">Role</td>
             <td><span class="badge badge-production">{{ s.server.role|title }}</span></td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Version</td>
-            <td class="mono" style="font-size:12px;">{{ s.version or '—' }}</td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">SSH Host</td>
-            <td class="mono" style="font-size:12px;">{{ s.server.ssh_host or '—' }}</td></tr>
+        <tr><td class="stat-label u-d8c022">Version</td>
+            <td class="mono u-6cb285">{{ s.version or '—' }}</td></tr>
+        <tr><td class="stat-label u-d8c022">SSH Host</td>
+            <td class="mono u-6cb285">{{ s.server.ssh_host or '—' }}</td></tr>
     </table>
     {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
     <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
+        <form method="POST" action="/servers/restart/{{ s.server.id }}" class="u-cccfa4"
               data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary">{{ icon("refresh-cw") }} Restart Kea</button>
         </form>
@@ -72,11 +72,11 @@
     {% include "_packet_health_block.html" %}
 </div>
 
-<div class="card" style="background:var(--surface2);border-style:dashed;">
+<div class="card u-32e230">
     <div style="text-align:center;padding:16px;color:var(--text-muted);">
         <div style="font-size:24px;margin-bottom:8px;">{{ icon("refresh-cw") }}</div>
-        <div style="font-weight:600;margin-bottom:4px;">Running a Kea HA setup?</div>
-        <div style="font-size:13px;">Configure HA mode and add additional servers in
+        <div class="u-a27006">Running a Kea HA setup?</div>
+        <div class="u-5e0faa">Configure HA mode and add additional servers in
         <a href="/settings/kea#kea-servers">Settings → Kea</a>.</div>
     </div>
 </div>
@@ -98,15 +98,15 @@
         {% if s.up %}
         <span class="badge badge-reserved">● Online</span>
         {% else %}
-        <span class="badge" style="background:#3a1a1a;color:var(--danger);">● Offline</span>
+        <span class="badge u-d4bab1">● Offline</span>
         {% endif %}
     </div>
-    <table style="width:100%;font-size:12px;">
-        <tr><td class="stat-label" style="width:90px;">API</td>
-            <td class="mono" style="font-size:11px;">{{ s.server.api_url }}</td></tr>
+    <table class="u-a1fa25">
+        <tr><td class="stat-label u-581be4">API</td>
+            <td class="mono u-11a508">{{ s.server.api_url }}</td></tr>
         {% if s.version %}
         <tr><td class="stat-label">Version</td>
-            <td class="mono" style="font-size:11px;">{{ s.version }}</td></tr>
+            <td class="mono u-11a508">{{ s.version }}</td></tr>
         {% endif %}
         {% if s.ha_state %}
         <tr><td class="stat-label">HA State</td>
@@ -119,15 +119,15 @@
             </td></tr>
         {% if s.ha_partner %}
         <tr><td class="stat-label">Partner</td>
-            <td class="mono" style="font-size:11px;">{{ s.ha_partner }}</td></tr>
+            <td class="mono u-11a508">{{ s.ha_partner }}</td></tr>
         {% endif %}
         {% endif %}
         <tr><td class="stat-label">SSH</td>
-            <td class="mono" style="font-size:11px;">{{ s.server.ssh_host or '—' }}</td></tr>
+            <td class="mono u-11a508">{{ s.server.ssh_host or '—' }}</td></tr>
     </table>
     {% if current_user.role in ('superadmin','admin') and s.server.ssh_host %}
-    <div style="margin-top:12px;">
-        <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
+    <div class="u-56f435">
+        <form method="POST" action="/servers/restart/{{ s.server.id }}" class="u-cccfa4"
               data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("refresh-cw") }} Restart</button>
         </form>
@@ -138,16 +138,16 @@
     {% endif %}
     {% if s.ha_status %}
     <!-- HA console (v5.21.0 — Q16) -->
-    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
-        <div style="font-weight:600;margin-bottom:6px;">{{ icon("git-branch") }} HA Status</div>
-        <table style="width:100%;font-size:12px;">
-            <tr><td class="stat-label" style="width:90px;">Local</td>
+    <div class="u-a05e95">
+        <div class="u-85c718">{{ icon("git-branch") }} HA Status</div>
+        <table class="u-a1fa25">
+            <tr><td class="stat-label u-581be4">Local</td>
                 <td>{{ (s.ha_status.local.role or '—')|title }} · {{ s.ha_status.local.state or '—' }}
-                    {% if s.ha_status.local.scopes %}<span style="color:var(--text-muted);">(scopes: {{ s.ha_status.local.scopes|join(', ') }})</span>{% endif %}
+                    {% if s.ha_status.local.scopes %}<span class="u-5872de">(scopes: {{ s.ha_status.local.scopes|join(', ') }})</span>{% endif %}
                 </td></tr>
             <tr><td class="stat-label">Remote</td>
                 <td>{{ (s.ha_status.remote.role or '—')|title }} · {{ s.ha_status.remote.state or '—' }}
-                    <span style="color:var(--text-muted);">({{ s.ha_status.remote.age if s.ha_status.remote.age is not none else '—' }}s ago, in touch: {{ '✓' if s.ha_status.remote.in_touch else '✗' }})</span>
+                    <span class="u-5872de">({{ s.ha_status.remote.age if s.ha_status.remote.age is not none else '—' }}s ago, in touch: {{ '✓' if s.ha_status.remote.in_touch else '✗' }})</span>
                 </td></tr>
             <tr><td class="stat-label">Unacked</td>
                 <td>
@@ -163,8 +163,8 @@
         </table>
 
         {% if s.ha_config %}
-        <details style="margin-top:8px;">
-            <summary style="cursor:pointer;color:var(--text-muted);">Config summary</summary>
+        <details class="u-8a77e5">
+            <summary class="u-c5c798">Config summary</summary>
             <div style="margin-top:6px;color:var(--text-muted);">
                 Mode: {{ s.ha_config.mode }} · Heartbeat: {{ s.ha_config.heartbeat_delay }}ms ·
                 Max response delay: {{ s.ha_config.max_response_delay }}ms ·
@@ -220,7 +220,7 @@
                   style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 {% for p in s.ha_config.peers %}
-                <label style="font-size:11px;color:var(--text-muted);"><input type="checkbox" name="scopes" value="{{ p.name }}"> {{ p.name }}</label>
+                <label class="u-749148"><input type="checkbox" name="scopes" value="{{ p.name }}"> {{ p.name }}</label>
                 {% endfor %}
                 <button type="submit" class="btn btn-sm btn-secondary">{{ icon("target") }} Set Scopes</button>
             </form>
@@ -239,17 +239,17 @@
 <!-- Compare leases (v5.21.0 — Q16) -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("chart-bar") }} Compare Leases</span></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Assigned addresses per subnet, as reported by each server right now. A small transient difference is normal for a moment under load-balancing; a persistent one may mean lease sync has fallen behind.</p>
+    <p class="u-054de4">Assigned addresses per subnet, as reported by each server right now. A small transient difference is normal for a moment under load-balancing; a persistent one may mean lease sync has fallen behind.</p>
     <div style="overflow-x:auto;">
-    <table style="width:100%;font-size:13px;">
+    <table class="u-95cc13">
         <tr>
-            <th style="text-align:left;padding:4px 8px;">Subnet</th>
-            {% for s in statuses %}{% if s.up %}<th style="text-align:right;padding:4px 8px;">{{ s.server.name }}</th>{% endif %}{% endfor %}
+            <th class="u-b7efde">Subnet</th>
+            {% for s in statuses %}{% if s.up %}<th class="u-150502">{{ s.server.name }}</th>{% endif %}{% endfor %}
         </tr>
         {% for row in compare_rows %}
         <tr {% if row.mismatch %}style="background:rgba(200,50,50,0.08);"{% endif %}>
-            <td style="padding:4px 8px;">{{ row.name }}{% if row.mismatch %} <span class="badge badge-danger" style="font-size:10px;">mismatch</span>{% endif %}</td>
-            {% for s in statuses %}{% if s.up %}<td style="text-align:right;padding:4px 8px;" class="mono">{{ row.counts.get(s.server.name, 0) }}</td>{% endif %}{% endfor %}
+            <td class="u-f26165">{{ row.name }}{% if row.mismatch %} <span class="badge badge-danger" style="font-size:10px;">mismatch</span>{% endif %}</td>
+            {% for s in statuses %}{% if s.up %}<td  class="mono u-150502">{{ row.counts.get(s.server.name, 0) }}</td>{% endif %}{% endfor %}
         </tr>
         {% endfor %}
     </table>
@@ -261,12 +261,12 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("info") }} HA State Reference</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;font-size:13px;">
-        <div><span class="badge badge-reserved">hot-standby</span><br><span style="color:var(--text-muted);font-size:12px;">Normal HA — primary active, standby ready to take over</span></div>
-        <div><span class="badge badge-production">load-balancing</span><br><span style="color:var(--text-muted);font-size:12px;">Both servers actively handling leases</span></div>
-        <div><span class="badge badge-dynamic">partner-down</span><br><span style="color:var(--text-muted);font-size:12px;">Partner unreachable — this server operating alone</span></div>
-        <div><span class="badge badge-dynamic">waiting</span><br><span style="color:var(--text-muted);font-size:12px;">Starting up, waiting for partner sync</span></div>
-        <div><span class="badge badge-dynamic">syncing</span><br><span style="color:var(--text-muted);font-size:12px;">Synchronizing lease database with partner</span></div>
-        <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span style="color:var(--text-muted);font-size:12px;">HA terminated — manual intervention required</span></div>
+        <div><span class="badge badge-reserved">hot-standby</span><br><span class="u-2bb516">Normal HA — primary active, standby ready to take over</span></div>
+        <div><span class="badge badge-production">load-balancing</span><br><span class="u-2bb516">Both servers actively handling leases</span></div>
+        <div><span class="badge badge-dynamic">partner-down</span><br><span class="u-2bb516">Partner unreachable — this server operating alone</span></div>
+        <div><span class="badge badge-dynamic">waiting</span><br><span class="u-2bb516">Starting up, waiting for partner sync</span></div>
+        <div><span class="badge badge-dynamic">syncing</span><br><span class="u-2bb516">Synchronizing lease database with partner</span></div>
+        <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span class="u-2bb516">HA terminated — manual intervention required</span></div>
     </div>
 </div>
 {% endif %}

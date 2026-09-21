@@ -6,7 +6,7 @@
     <p>{{ server.name }} — every Kea <code>{{ service }}</code> config Jen has written to this host, plus changes it noticed on disk.</p>
 </div>
 
-<div style="margin-bottom:16px;">
+<div class="u-87c136">
     <a href="{{ url_for('servers.servers') }}" class="btn btn-secondary btn-sm">← Back to Servers</a>
     {% if ipv6_enabled %}
     <span style="margin-left:12px;">
@@ -20,38 +20,38 @@
 
 <div class="card">
     {% if not revisions %}
-    <p style="color:var(--text-muted);padding:12px;">No revisions recorded yet for <code>{{ service }}</code> on this server. The first one is written the next time Jen applies a config change here.</p>
+    <p class="u-41e804">No revisions recorded yet for <code>{{ service }}</code> on this server. The first one is written the next time Jen applies a config change here.</p>
     {% else %}
-    <table style="width:100%;font-size:13px;">
+    <table class="u-95cc13">
         <thead>
-            <tr style="text-align:left;color:var(--text-muted);">
-                <th style="padding:8px;">When</th>
-                <th style="padding:8px;">Who</th>
-                <th style="padding:8px;">Source</th>
-                <th style="padding:8px;">Summary</th>
-                <th style="padding:8px;">SHA</th>
-                <th style="padding:8px;"></th>
+            <tr class="u-7cd699">
+                <th class="u-e2c960">When</th>
+                <th class="u-e2c960">Who</th>
+                <th class="u-e2c960">Source</th>
+                <th class="u-e2c960">Summary</th>
+                <th class="u-e2c960">SHA</th>
+                <th class="u-e2c960"></th>
             </tr>
         </thead>
         <tbody>
             {% for r in revisions %}
-            <tr style="border-top:1px solid var(--border);">
-                <td style="padding:8px;white-space:nowrap;">{{ r.created_at }}</td>
-                <td style="padding:8px;">{{ r.username or '—' }}</td>
-                <td style="padding:8px;">
+            <tr class="u-2eea7e">
+                <td class="u-18b307">{{ r.created_at }}</td>
+                <td class="u-e2c960">{{ r.username or '—' }}</td>
+                <td class="u-e2c960">
                     {% if r.source == 'external' %}
                     <span class="badge badge-dynamic" title="changed on the host outside Jen">external</span>
                     {% elif r.source == 'restore' %}
                     <span class="badge badge-production">restore</span>
                     {% elif r.source == 'baseline' %}
-                    <span class="badge" style="background:var(--surface2);" title="the first config Jen saw on this host">baseline</span>
+                    <span class="badge u-851d78"  title="the first config Jen saw on this host">baseline</span>
                     {% else %}
                     <span class="badge badge-reserved">jen</span>
                     {% endif %}
                 </td>
-                <td style="padding:8px;">{{ r.summary or '—' }}</td>
-                <td style="padding:8px;" class="mono">{{ r.sha256[:12] if r.sha256 else '—' }}</td>
-                <td style="padding:8px;white-space:nowrap;">
+                <td class="u-e2c960">{{ r.summary or '—' }}</td>
+                <td  class="mono u-e2c960">{{ r.sha256[:12] if r.sha256 else '—' }}</td>
+                <td class="u-18b307">
                     <a href="{{ url_for('servers.config_history_detail', server_id=server.id, rev_id=r.id) }}">View diff →</a>
                 </td>
             </tr>

@@ -9,33 +9,33 @@
 
 <div class="card">
     <form method="GET" action="/timeline" autocomplete="off">
-        <div class="form-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;">
-            <div class="form-group" style="margin:0;">
+        <div class="form-row u-f0e9d3">
+            <div class="form-group u-116966">
                 <label>MAC address</label>
                 <input type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff">
             </div>
-            <div class="form-group" style="margin:0;">
+            <div class="form-group u-116966">
                 <label>IP address</label>
                 <input type="text" name="ip" class="mono" value="{{ ip }}" placeholder="10.0.0.50">
             </div>
         </div>
-        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+        <div class="u-012c80">
             <button type="submit" class="btn btn-primary">{{ icon("clock") }} Show timeline</button>
-            <span class="form-hint" style="margin:0;">Either field is enough — an IP resolves to its current lease's MAC when one exists.</span>
+            <span class="form-hint u-116966">Either field is enough — an IP resolves to its current lease's MAC when one exists.</span>
         </div>
     </form>
 </div>
 
 {% if result %}
-<div class="card" style="border-color:rgba(0,180,216,0.3);">
+<div class="card u-e25041">
     <div class="card-header">
         <span class="card-title">{{ result.mac or result.ip or 'Client' }}</span>
-        <span style="font-size:12px;color:var(--text-muted);">
+        <span class="u-865c33">
             {% if result.mac %}<a href="/tools/explain?mac={{ result.mac }}" class="mono">{{ icon("compass") }} Explain</a>{% endif %}
             {% if result.mac %} · <a href="/reservations?search={{ result.mac }}">{{ icon("pin") }} Reservations</a>{% endif %}
         </span>
     </div>
-    <div style="display:flex;gap:28px;flex-wrap:wrap;">
+    <div class="u-260fab">
         {% if result.mac %}<div><div class="stat-label">MAC</div><div class="mono">{{ result.mac }}</div></div>{% endif %}
         {% if result.ip %}<div><div class="stat-label">Current / last IP</div><div class="mono">{{ result.ip }}</div></div>{% endif %}
         {% if result.device %}
@@ -45,13 +45,13 @@
         {% if result.lease %}
         <div><div class="stat-label">Active lease</div><div class="mono">{{ result.lease.ip }} — expires {{ result.lease.expire|utcfmt }}</div></div>
         {% else %}
-        <div><div class="stat-label">Active lease</div><div style="color:var(--text-muted);">none</div></div>
+        <div><div class="stat-label">Active lease</div><div class="u-5872de">none</div></div>
         {% endif %}
         {% if result.reservation %}
         <div><div class="stat-label">Reservation</div><div class="mono">{{ result.reservation.ip }}</div></div>
         {% endif %}
         {% if result.v6_addresses %}
-        <div><div class="stat-label">IPv6 <span class="badge badge-production" style="font-size:9px;padding:1px 5px;">v6</span></div><div class="mono">{% for a in result.v6_addresses %}{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
+        <div><div class="stat-label">IPv6 <span class="badge badge-production u-41ccf8">v6</span></div><div class="mono">{% for a in result.v6_addresses %}{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</div></div>
         {% endif %}
     </div>
 </div>
@@ -59,7 +59,7 @@
 {% if kinds|length > 1 %}
 <div class="card" style="padding:10px 16px;">
     <div id="tl-filters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;">
-        <span style="color:var(--text-muted);">Filter:</span>
+        <span class="u-5872de">Filter:</span>
         <button type="button" class="badge badge-reserved tl-filter-btn" data-kind="">all</button>
         {% for k in kinds %}
         <button type="button" class="badge badge-dynamic tl-filter-btn" data-kind="{{ k }}">{{ k }}</button>
@@ -70,7 +70,7 @@
 
 <div class="card">
     <div class="card-header"><span class="card-title">History</span>
-        <span style="font-size:12px;color:var(--text-muted);">{{ result.rows|length }} entr{{ 'y' if result.rows|length == 1 else 'ies' }}</span>
+        <span class="u-865c33">{{ result.rows|length }} entr{{ 'y' if result.rows|length == 1 else 'ies' }}</span>
     </div>
     {% if result.rows %}
     <div id="tl-rows" style="display:flex;flex-direction:column;gap:2px;">
@@ -80,9 +80,9 @@
             <div style="min-width:170px;">
                 <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{{ r.kind }}</span>
             </div>
-            <div style="color:var(--text-muted);">{{ r.detail }}
-                {% if r.related == 'address' %}<div style="font-size:11px;font-style:italic;">possibly related — same address, client unknown</div>{% endif %}
-                {% if r.previous_holder %}<div style="font-size:11px;font-style:italic;">previous holder <span class="mono">{{ r.previous_holder }}</span></div>{% endif %}
+            <div class="u-5872de">{{ r.detail }}
+                {% if r.related == 'address' %}<div class="u-42e3b5">possibly related — same address, client unknown</div>{% endif %}
+                {% if r.previous_holder %}<div class="u-42e3b5">previous holder <span class="mono">{{ r.previous_holder }}</span></div>{% endif %}
             </div>
         </div>
         {% endfor %}
@@ -94,7 +94,7 @@
 </div>
 {% elif mac or ip %}
 <div class="card">
-    <p style="color:var(--text-muted);">No client matched that MAC or IP, or you don't have access to it.</p>
+    <p class="u-5872de">No client matched that MAC or IP, or you don't have access to it.</p>
 </div>
 {% endif %}
 

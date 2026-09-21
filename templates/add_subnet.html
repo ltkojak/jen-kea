@@ -8,14 +8,14 @@
 
 <div class="alert alert-warning">{{ icon("triangle-alert") }} This creates a brand new subnet in <code>kea-dhcp4.conf</code> and restarts the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.</div>
 
-<div class="card" style="max-width:680px;">
+<div class="card u-48a0d2">
     <form method="POST" id="add-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
         <div class="form-row">
             <div class="form-group">
                 <label>Subnet ID</label>
-                <input type="number" name="subnet_id" id="f-id" value="{{ suggested_id }}" min="1" style="font-family:monospace;">
-                <div class="form-hint">Next available: <code style="color:var(--text);">{{ suggested_id }}</code> &nbsp;·&nbsp; Must be unique across all subnets in Kea</div>
+                <input type="number" name="subnet_id" id="f-id" value="{{ suggested_id }}" min="1" class="u-72126d">
+                <div class="form-hint">Next available: <code class="u-f045bb">{{ suggested_id }}</code> &nbsp;·&nbsp; Must be unique across all subnets in Kea</div>
             </div>
             <div class="form-group">
                 <label>Friendly Name</label>
@@ -26,13 +26,13 @@
 
         <div class="form-group">
             <label>CIDR</label>
-            <input type="text" name="cidr" id="f-cidr" placeholder="e.g. 10.10.80.0/24" style="font-family:monospace;">
+            <input type="text" name="cidr" id="f-cidr" placeholder="e.g. 10.10.80.0/24" class="u-72126d">
             <div class="form-hint">The full network range for this subnet</div>
         </div>
 
         <div class="form-group">
             <label>Address Pool</label>
-            <input type="text" name="pool" id="f-pool" placeholder="e.g. 10.10.80.50-10.10.80.250" style="font-family:monospace;">
+            <input type="text" name="pool" id="f-pool" placeholder="e.g. 10.10.80.50-10.10.80.250" class="u-72126d">
             <div class="form-hint">Must fall within the CIDR above &nbsp;·&nbsp; Format: start–end</div>
         </div>
 
@@ -57,12 +57,12 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Router / Gateway</label>
-                <input type="text" name="routers" id="f-routers" placeholder="e.g. 10.10.80.1" style="font-family:monospace;">
+                <input type="text" name="routers" id="f-routers" placeholder="e.g. 10.10.80.1" class="u-72126d">
                 <div class="form-hint">Optional</div>
             </div>
             <div class="form-group">
                 <label>DNS Servers</label>
-                <input type="text" name="dns_servers" id="f-dns" placeholder="e.g. 9.9.9.9,1.1.1.1" style="font-family:monospace;">
+                <input type="text" name="dns_servers" id="f-dns" placeholder="e.g. 9.9.9.9,1.1.1.1" class="u-72126d">
                 <div class="form-hint">Optional &nbsp;·&nbsp; Comma-separated</div>
             </div>
         </div>
@@ -76,7 +76,7 @@
             <div class="form-hint">Optional. Subnets in one shared network share pool space and client classification.</div>
         </div>
 
-        <div style="display:flex;gap:8px;margin-top:16px;">
+        <div class="u-acb4b5">
             <button type="button" class="btn btn-primary" id="create-subnet-btn">{{ icon("plus") }} Create Subnet</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
@@ -86,11 +86,11 @@
     <div id="confirm-panel" style="display:none;margin-top:16px;
          background:var(--surface2);border:1px solid var(--warning);
          border-radius:var(--radius);padding:16px;">
-        <div style="display:flex;align-items:flex-start;gap:12px;">
-            <span style="font-size:22px;line-height:1;">{{ icon("triangle-alert") }}</span>
-            <div style="flex:1;">
-                <div style="font-weight:600;margin-bottom:4px;">Create this subnet and restart Kea?</div>
-                <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+        <div class="u-bae250">
+            <span class="u-6745f5">{{ icon("triangle-alert") }}</span>
+            <div class="u-97445a">
+                <div class="u-a27006">Create this subnet and restart Kea?</div>
+                <div class="u-c0a2eb">
                     Kea DHCP will be briefly unavailable while it restarts.
                     Existing leases on other subnets are not affected.
                 </div>
@@ -98,7 +98,7 @@
                      background:var(--surface);border-radius:var(--radius);
                      padding:10px 12px;margin-bottom:14px;font-family:monospace;
                      line-height:1.8;"></div>
-                <div style="display:flex;gap:8px;">
+                <div class="u-a76d59">
                     <button type="button" class="btn btn-primary" id="confirm-create-btn">{{ icon("circle-check") }} Yes, create it</button>
                     <button type="button" class="btn btn-secondary" id="confirm-cancel-btn">✕ Cancel</button>
                 </div>
@@ -131,17 +131,17 @@ function showConfirm() {
 
     var summary = document.getElementById('change-summary');
     if (errs.length) {
-        summary.innerHTML = '<span style="color:var(--danger);">' + errs.join('<br>') + '</span>';
+        summary.innerHTML = '<span class="u-497726">' + errs.join('<br>') + '</span>';
         var okBtn = document.querySelector('#confirm-panel .btn-primary');
         if (okBtn) okBtn.disabled = true;
     } else {
         var net = document.getElementById('f-network').value;
         summary.innerHTML =
-            '<div><span style="color:var(--text-muted);">Subnet ID:</span> <span style="color:var(--primary);">' + id + '</span></div>' +
-            '<div><span style="color:var(--text-muted);">Name:</span> <span style="color:var(--primary);">' + name + '</span></div>' +
-            '<div><span style="color:var(--text-muted);">CIDR:</span> <span style="color:var(--primary);">' + cidr + '</span></div>' +
-            '<div><span style="color:var(--text-muted);">Pool:</span> <span style="color:var(--primary);">' + pool + '</span></div>' +
-            (net ? '<div><span style="color:var(--text-muted);">Shared network:</span> <span style="color:var(--primary);">' + net + '</span></div>' : '');
+            '<div><span class="u-5872de">Subnet ID:</span> <span class="u-dc2e42">' + id + '</span></div>' +
+            '<div><span class="u-5872de">Name:</span> <span class="u-dc2e42">' + name + '</span></div>' +
+            '<div><span class="u-5872de">CIDR:</span> <span class="u-dc2e42">' + cidr + '</span></div>' +
+            '<div><span class="u-5872de">Pool:</span> <span class="u-dc2e42">' + pool + '</span></div>' +
+            (net ? '<div><span class="u-5872de">Shared network:</span> <span class="u-dc2e42">' + net + '</span></div>' : '');
         var okBtn2 = document.querySelector('#confirm-panel .btn-primary');
         if (okBtn2) okBtn2.disabled = false;
     }

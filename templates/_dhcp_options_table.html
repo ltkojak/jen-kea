@@ -15,30 +15,30 @@
         </span>
     </div>
     {% if rows %}
-    <table style="width:100%;font-size:13px;">
+    <table class="u-95cc13">
         <thead>
-            <tr style="text-align:left;color:var(--text-muted);">
-                <th style="padding:6px;">Code</th>
-                <th style="padding:6px;">Name</th>
-                <th style="padding:6px;">Value</th>
-                <th style="padding:6px;"></th>
+            <tr class="u-7cd699">
+                <th class="u-492c8f">Code</th>
+                <th class="u-492c8f">Name</th>
+                <th class="u-492c8f">Value</th>
+                <th class="u-492c8f"></th>
             </tr>
         </thead>
         <tbody>
         {% for r in rows %}
-        <tr style="border-top:1px solid var(--border);">
-            <td style="padding:6px;" class="mono">{{ r.code if r.code is not none else '—' }}</td>
-            <td style="padding:6px;">
+        <tr class="u-2eea7e">
+            <td  class="mono u-492c8f">{{ r.code if r.code is not none else '—' }}</td>
+            <td class="u-492c8f">
                 {{ r.name }}
-                {% if r.custom %}<span class="badge" style="background:var(--surface2);color:var(--text-muted);">custom</span>{% endif %}
-                {% if r.managed %}<span class="badge" style="background:var(--surface2);color:var(--warning);" title="Owned by the Edit Subnet form">managed by Edit form</span>{% endif %}
+                {% if r.custom %}<span class="badge u-d6f005">custom</span>{% endif %}
+                {% if r.managed %}<span class="badge u-5fdac8"  title="Owned by the Edit Subnet form">managed by Edit form</span>{% endif %}
             </td>
-            <td style="padding:6px;word-break:break-all;" class="mono">{{ r.data }}</td>
+            <td  class="mono u-6259b6">{{ r.data }}</td>
             <td style="padding:6px;white-space:nowrap;">
                 {% if r.managed %}
                 <a href="/subnets/edit/{{ key }}" class="btn btn-sm btn-secondary">Edit form →</a>
                 {% else %}
-                <form method="POST" action="{{ url_for('subnets.dhcp_options_remove') }}" style="display:inline;"
+                <form method="POST" action="{{ url_for('subnets.dhcp_options_remove') }}" class="u-cccfa4"
                       data-confirm="Remove {{ r.name }} (code {{ r.code }}) from this level? Kea restarts.">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="level" value="{{ level }}">
@@ -53,7 +53,7 @@
         </tbody>
     </table>
     {% else %}
-    <p style="color:var(--text-muted);padding:8px;">No options set at this level.</p>
+    <p class="u-d19057">No options set at this level.</p>
     {% endif %}
 </div>
 

@@ -6,14 +6,14 @@
     <p>Global, shared-network, subnet, and pool-level option-data. Routers (3) and DNS servers (6) at the subnet level stay on the <a href="/subnets">Edit Subnet</a> form.</p>
 </div>
 
-<div style="margin-bottom:16px;">
+<div class="u-87c136">
     <a href="/subnets" class="btn btn-secondary btn-sm">← Back to Subnets</a>
 </div>
 
 <div style="display:grid;grid-template-columns:260px 1fr;gap:16px;align-items:start;">
 
     <!-- Level picker -->
-    <div class="card" style="padding:0;overflow:hidden;">
+    <div class="card u-22a267">
         <div class="card-header"><span class="card-title">Levels</span></div>
         <div style="padding:6px;max-height:70vh;overflow-y:auto;">
             {% for item in picker %}
@@ -28,10 +28,10 @@
                     {{ icon("link") }} {{ item.name }}
                 </a>
                 {% elif item.kind == 'subnet' %}
-                <div style="margin-top:4px;">
+                <div class="u-96ad60">
                     <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=item.id) }}"
                        style="display:block;padding:6px 8px;border-radius:var(--radius);font-size:13px;{% if level=='subnet' and key==item.id|string %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
-                        {{ item.name }} <span class="mono" style="color:var(--text-muted);font-size:11px;">{{ item.cidr }}</span>
+                        {{ item.name }} <span class="mono u-5694e6">{{ item.cidr }}</span>
                     </a>
                     {% for pool in item.pools %}
                     {% set pool_key = item.id|string ~ ':' ~ pool %}
@@ -57,23 +57,23 @@
         <div class="card">
             <div class="card-header"><span class="card-title">{{ icon("clipboard-list") }} Effective options</span></div>
             {% if effective %}
-            <table style="width:100%;font-size:13px;">
+            <table class="u-95cc13">
                 <thead>
-                    <tr style="text-align:left;color:var(--text-muted);">
-                        <th style="padding:6px;">Code</th>
-                        <th style="padding:6px;">Name</th>
-                        <th style="padding:6px;">Value</th>
-                        <th style="padding:6px;">Source</th>
-                        <th style="padding:6px;">Overridden</th>
+                    <tr class="u-7cd699">
+                        <th class="u-492c8f">Code</th>
+                        <th class="u-492c8f">Name</th>
+                        <th class="u-492c8f">Value</th>
+                        <th class="u-492c8f">Source</th>
+                        <th class="u-492c8f">Overridden</th>
                     </tr>
                 </thead>
                 <tbody>
                 {% for r in effective %}
                 <tr style="border-top:1px solid var(--border);{% if r.is_here %}font-weight:600;{% endif %}">
-                    <td style="padding:6px;" class="mono">{{ r.code if r.code is not none else '—' }}</td>
-                    <td style="padding:6px;">{{ r.name }}</td>
-                    <td style="padding:6px;word-break:break-all;" class="mono">{{ r.data }}</td>
-                    <td style="padding:6px;"><span class="badge" style="background:var(--surface2);">{{ r.source }}</span></td>
+                    <td  class="mono u-492c8f">{{ r.code if r.code is not none else '—' }}</td>
+                    <td class="u-492c8f">{{ r.name }}</td>
+                    <td  class="mono u-6259b6">{{ r.data }}</td>
+                    <td class="u-492c8f"><span class="badge u-851d78">{{ r.source }}</span></td>
                     <td style="padding:6px;font-size:12px;color:var(--text-muted);">
                         {% for o in r.overridden %}<span style="text-decoration:line-through;">{{ o }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
                     </td>
@@ -82,7 +82,7 @@
                 </tbody>
             </table>
             {% else %}
-            <p style="color:var(--text-muted);padding:8px;">No options apply to this {{ level }} — global, shared-network, subnet, and pool are all empty.</p>
+            <p class="u-d19057">No options apply to this {{ level }} — global, shared-network, subnet, and pool are all empty.</p>
             {% endif %}
         </div>
         {% endif %}
@@ -90,22 +90,22 @@
         {% if option_defs %}
         <div class="card">
             <div class="card-header"><span class="card-title">{{ icon("book-open") }} Option definitions (read-only)</span></div>
-            <table style="width:100%;font-size:13px;">
+            <table class="u-95cc13">
                 <thead>
-                    <tr style="text-align:left;color:var(--text-muted);">
-                        <th style="padding:6px;">Code</th>
-                        <th style="padding:6px;">Name</th>
-                        <th style="padding:6px;">Type</th>
-                        <th style="padding:6px;">Space</th>
+                    <tr class="u-7cd699">
+                        <th class="u-492c8f">Code</th>
+                        <th class="u-492c8f">Name</th>
+                        <th class="u-492c8f">Type</th>
+                        <th class="u-492c8f">Space</th>
                     </tr>
                 </thead>
                 <tbody>
                 {% for d in option_defs %}
-                <tr style="border-top:1px solid var(--border);">
-                    <td style="padding:6px;" class="mono">{{ d.code }}</td>
-                    <td style="padding:6px;">{{ d.name }}</td>
-                    <td style="padding:6px;">{{ d.type }}</td>
-                    <td style="padding:6px;">{{ d.space or 'dhcp4' }}</td>
+                <tr class="u-2eea7e">
+                    <td  class="mono u-492c8f">{{ d.code }}</td>
+                    <td class="u-492c8f">{{ d.name }}</td>
+                    <td class="u-492c8f">{{ d.type }}</td>
+                    <td class="u-492c8f">{{ d.space or 'dhcp4' }}</td>
                 </tr>
                 {% endfor %}
                 </tbody>

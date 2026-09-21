@@ -9,17 +9,17 @@
 <div class="card">
     <form method="GET" action="/tools/trace" autocomplete="off">
         <div class="form-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
-            <div class="form-group" style="margin:0;">
+            <div class="form-group u-116966">
                 <label>MAC address</label>
                 <input type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff">
             </div>
-            <div class="form-group" style="margin:0;">
+            <div class="form-group u-116966">
                 <label>Kea server</label>
                 <select name="server">
                     {% for s in servers %}<option value="{{ s.id }}" {% if server_id == s.id|string %}selected{% endif %}>{{ s.name or s.id }}</option>{% endfor %}
                 </select>
             </div>
-            <div class="form-group" style="margin:0;">
+            <div class="form-group u-116966">
                 <label>Log lines to scan</label>
                 <input type="number" name="lines" value="{{ lines }}" min="50" max="1000">
                 <div class="form-hint">Max 1000 — the helper's tail limit.</div>
@@ -28,7 +28,7 @@
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             <button type="submit" class="btn btn-primary">{{ icon("search-code") }} Show trace</button>
             <button type="submit" name="watch" value="1" class="btn btn-secondary">{{ icon("eye") }} Watch for 60 s</button>
-            <span class="form-hint" style="margin:0;">Reads <span class="mono">{{ log_path }}</span> on the server.</span>
+            <span class="form-hint u-116966">Reads <span class="mono">{{ log_path }}</span> on the server.</span>
         </div>
     </form>
 </div>

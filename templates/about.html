@@ -6,22 +6,22 @@
     <p>System information and credits</p>
 </div>
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+<div class="u-911b26">
 
 <!-- System Info -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("server") }} System</span></div>
-    <table style="width:100%;">
-        <tr><td class="stat-label" style="width:140px;padding:8px 0;">Jen Version</td>
-            <td><span style="color:var(--primary);font-weight:600;">v{{ jen_version }}</span></td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Kea Version</td>
-            <td class="mono" style="font-size:12px;">{{ kea_version or 'Unknown' }}</td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Kea Status</td>
+    <table class="u-046678">
+        <tr><td class="stat-label u-806d91">Jen Version</td>
+            <td><span class="u-01f649">v{{ jen_version }}</span></td></tr>
+        <tr><td class="stat-label u-d8c022">Kea Version</td>
+            <td class="mono u-6cb285">{{ kea_version or 'Unknown' }}</td></tr>
+        <tr><td class="stat-label u-d8c022">Kea Status</td>
             <td>
                 {% if kea_up %}
-                <span style="color:var(--success);">● Online</span>
+                <span class="u-5a4529">● Online</span>
                 {% else %}
-                <span style="color:var(--danger);">● Unreachable</span>
+                <span class="u-497726">● Unreachable</span>
                 {% endif %}
             </td></tr>
         {# v5.10.4 — ports, on-disk paths and the Kea SSH host are
@@ -30,18 +30,18 @@
            any viewer-visible prose on this page (an absence assertion
            guards it). #}
         {% if current_user.is_admin_or_above %}
-        <tr><td class="stat-label" style="padding:8px 0;">HTTP Port</td>
-            <td>{{ http_port }} <span style="color:var(--text-muted);font-size:11px;">(redirects to HTTPS)</span></td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">HTTPS Port</td>
+        <tr><td class="stat-label u-d8c022">HTTP Port</td>
+            <td>{{ http_port }} <span class="u-5694e6">(redirects to HTTPS)</span></td></tr>
+        <tr><td class="stat-label u-d8c022">HTTPS Port</td>
             <td>{{ https_port }}
-                {% if ssl_on %}<span style="color:var(--success);font-size:12px;"> ✓ Active</span>{% endif %}
+                {% if ssl_on %}<span class="u-d5881b"> ✓ Active</span>{% endif %}
             </td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Config File</td>
-            <td class="mono" style="font-size:12px;">/etc/jen/jen.config</td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">App Directory</td>
-            <td class="mono" style="font-size:12px;">/opt/jen</td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Kea SSH Host</td>
-            <td class="mono" style="font-size:12px;">{{ kea_ssh_host or '—' }}</td></tr>
+        <tr><td class="stat-label u-d8c022">Config File</td>
+            <td class="mono u-6cb285">/etc/jen/jen.config</td></tr>
+        <tr><td class="stat-label u-d8c022">App Directory</td>
+            <td class="mono u-6cb285">/opt/jen</td></tr>
+        <tr><td class="stat-label u-d8c022">Kea SSH Host</td>
+            <td class="mono u-6cb285">{{ kea_ssh_host or '—' }}</td></tr>
         {% endif %}
     </table>
 </div>
@@ -61,9 +61,9 @@
         Jen provides lease management, static reservations, subnet editing, Telegram alerts, audit logging, and more — all from a browser-based UI.
     </p>
     <div style="border-top:1px solid var(--border);padding-top:16px;">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">CREATED BY</div>
+        <div class="u-760160">CREATED BY</div>
         <div style="font-size:15px;font-weight:600;color:var(--text);">Matthew Thibodeau</div>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">with the assistance of Claude (Anthropic)</div>
+        <div class="u-1f394a">with the assistance of Claude (Anthropic)</div>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px;display:flex;gap:12px;">
         <a href="https://github.com/ltkojak/jen-kea" target="_blank" class="btn btn-secondary btn-sm">{{ icon("star") }} GitHub</a>
@@ -86,7 +86,7 @@
     <div style="{% if not loop.first %}margin-top:16px;padding-top:16px;border-top:1px solid var(--border);{% endif %}">
         <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px;">
             <span style="font-weight:600;color:var(--primary);font-size:14px;">v{{ entry.version }}</span>
-            <span style="font-size:12px;color:var(--text-muted);">{{ entry.date }}</span>
+            <span class="u-865c33">{{ entry.date }}</span>
         </div>
         {% if loop.first %}
         <div class="changelog-body" style="font-size:13px;line-height:1.6;color:var(--text-muted);">
@@ -94,7 +94,7 @@
         </div>
         {% else %}
         <details>
-            <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">Show details</summary>
+            <summary class="u-91cb28">Show details</summary>
             <div class="changelog-body" style="font-size:13px;line-height:1.6;color:var(--text-muted);margin-top:8px;">
                 {{ entry.html|safe }}
             </div>
@@ -106,7 +106,7 @@
         <a href="https://github.com/ltkojak/jen-kea/blob/main/CHANGELOG.md" target="_blank" class="btn btn-secondary btn-sm">{{ icon("scroll-text") }} Full Changelog</a>
     </div>
     {% else %}
-    <p style="color:var(--text-muted);font-size:13px;">Changelog not available.</p>
+    <p class="u-aad8e6">Changelog not available.</p>
     {% endif %}
 </div>
 
@@ -123,11 +123,11 @@
 <!-- Subnet Summary -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("network") }} Configured Subnets</span></div>
-    <table style="width:100%;">
+    <table class="u-046678">
         <thead><tr>
-            <th style="text-align:left;padding:8px 12px;">Subnet ID</th>
-            <th style="text-align:left;padding:8px 12px;">Name</th>
-            <th style="text-align:left;padding:8px 12px;">CIDR</th>
+            <th class="u-9cc60a">Subnet ID</th>
+            <th class="u-9cc60a">Name</th>
+            <th class="u-9cc60a">CIDR</th>
             <th style="text-align:right;padding:8px 12px;">Active Leases</th>
         </tr></thead>
         <tbody>
