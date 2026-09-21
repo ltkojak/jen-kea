@@ -2,40 +2,40 @@
 {% block title %}Author {{ 'kea-dhcp4.conf' if service == 'dhcp4' else 'kea-dhcp6.conf' }}{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📝 Author a starting {{ 'kea-dhcp4.conf' if service == 'dhcp4' else 'kea-dhcp6.conf' }}</h1>
+    <h1>{{ icon("file-pen", "ico-lg") }} Author a starting {{ 'kea-dhcp4.conf' if service == 'dhcp4' else 'kea-dhcp6.conf' }}</h1>
     <p>For a Kea install with no config yet on <strong>{{ target_server.name or target_server.ssh_host }}</strong>. This is not for editing an existing subnet — use Subnets → Edit for that. Replacing a Windows DHCP or ISC dhcpd server? Author the starting config here first, then bring its scopes across with <a href="{{ url_for('subnets.import_windows') }}">Import from Windows DHCP</a> or <a href="{{ url_for('subnets.import_isc') }}">Import from ISC DHCP</a>.</p>
 </div>
 
-<div class="alert alert-warning">⚠️ This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} This writes a whole new Kea config file — a bigger change than a normal subnet edit. It will not touch HA peer setup, and only includes the <code>host_cmds</code> and <code>lease_cmds</code> hooks Jen itself relies on. Review the generated config in the preview step before applying.</div>
 
 {% if direct_mode %}
 {% if endpoint_error %}
-<div class="alert alert-danger">🛑 Direct mode: no kea-dhcp6 control-socket URL is configured for
+<div class="alert alert-danger">{{ icon("octagon-alert") }} Direct mode: no kea-dhcp6 control-socket URL is configured for
 <strong>{{ target_server.name or target_server.ssh_host }}</strong> — set <code>[kea6] api_url</code>
 (Settings → Kea → IPv6) or this server's IPv6 API URL (Servers &amp; HA) first. Authoring will refuse.
 <br><span class="form-hint">{{ endpoint_error }}</span></div>
 {% else %}
-<div class="alert alert-info">🔌 Jen is in <strong>direct</strong> connection mode, so each generated config gets a
+<div class="alert alert-info">{{ icon("plug") }} Jen is in <strong>direct</strong> connection mode, so each generated config gets a
 control socket alongside the unix socket — the exact endpoint Jen will dial for that server, with the
 bind address you choose for it below. <code>cert-required</code> will be
 {% if cert_required %}<strong>true</strong> — Jen presents its client certificate (Settings → Kea){% else %}<strong>false</strong> — no client certificate is configured in Settings → Kea, so Kea will accept any client that has the password{% endif %}.
 Each server is authored from its <em>own</em> API settings and binds its <em>own</em> address.</div>
 {% endif %}
 {% if any_http %}
-<div class="alert alert-warning">⚠️ The endpoint is plain <code>http</code> for: {{ any_http|join(', ') }}.
+<div class="alert alert-warning">{{ icon("triangle-alert") }} The endpoint is plain <code>http</code> for: {{ any_http|join(', ') }}.
 <strong>Credentials are transmitted without encryption.</strong> Restrict this port to the Jen host or use HTTPS.</div>
 {% endif %}
 {% endif %}
 
 {% if detected.found %}
 <div class="alert alert-info">
-    ℹ️ Found an existing <code>{{ 'kea-dhcp6.conf' if service == 'dhcp4' else 'kea-dhcp4.conf' }}</code> on this server — interfaces and database info below were pulled from it rather than guessed. Review and adjust if needed.
+    {{ icon("info") }} Found an existing <code>{{ 'kea-dhcp6.conf' if service == 'dhcp4' else 'kea-dhcp4.conf' }}</code> on this server — interfaces and database info below were pulled from it rather than guessed. Review and adjust if needed.
     {% if detected.hooks %}<br>Hooks already loaded there: {{ detected.hooks|join(', ') }} (not automatically carried over — only host_cmds/lease_cmds are added here).{% endif %}
 </div>
 {% elif autodetected_interfaces %}
-<div class="alert alert-info">ℹ️ No sibling Kea config found to pull settings from — interfaces below were autodetected from this server's live network config. Review before continuing.</div>
+<div class="alert alert-info">{{ icon("info") }} No sibling Kea config found to pull settings from — interfaces below were autodetected from this server's live network config. Review before continuing.</div>
 {% else %}
-<div class="alert alert-warning">⚠️ No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} No sibling Kea config found and no interfaces could be autodetected — fill in the interface name(s) manually below.</div>
 {% endif %}
 
 <div class="card" style="max-width:680px;">
@@ -126,7 +126,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         </label>
 
         <div style="display:flex;gap:8px;">
-            <button type="button" class="btn btn-danger" id="preview-btn" {% if endpoint_error %}disabled{% endif %}>🔍 Preview &amp; Validate</button>
+            <button type="button" class="btn btn-danger" id="preview-btn" {% if endpoint_error %}disabled{% endif %}>{{ icon("search") }} Preview &amp; Validate</button>
             <a href="/settings/kea" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -136,7 +136,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         <div id="preview-json" style="font-size:11px;background:var(--surface);border-radius:var(--radius);padding:10px;max-height:300px;overflow:auto;white-space:pre-wrap;font-family:monospace;margin-bottom:10px;"></div>
         <div id="preview-servers" style="font-size:12px;margin-bottom:14px;"></div>
         <div style="display:flex;gap:8px;">
-            <button type="button" class="btn btn-danger" id="apply-btn" disabled>✅ Write this config</button>
+            <button type="button" class="btn btn-danger" id="apply-btn" disabled>{{ icon("circle-check") }} Write this config</button>
             <button type="button" class="btn btn-secondary" id="preview-cancel-btn">✕ Cancel</button>
         </div>
     </div>
@@ -164,7 +164,7 @@ async function showPreview() {
         var data = await resp.json();
         if (!resp.ok || !data.ok) {
             jsonDiv.textContent = '';
-            serversDiv.innerHTML = '<div style="color:var(--danger);">❌ ' + (data.error || 'Could not validate.') + '</div>';
+            serversDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + (data.error || 'Could not validate.') + '</div>';
             return;
         }
         jsonDiv.textContent = data.config ? JSON.stringify(data.config, null, 2) : '(no config generated — see per-server results)';
@@ -174,7 +174,7 @@ async function showPreview() {
         }
         var multi = data.servers.length > 1;
         serversDiv.innerHTML = data.servers.map(function(s) {
-            var icon = s.ok ? '✅' : '❌';
+            var icon = s.ok ? '<svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg>' : '<svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg>';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
             var line = '<div style="color:' + color + ';">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
             if (s.bind_address) {
@@ -184,7 +184,7 @@ async function showPreview() {
                 line += '<div style="color:var(--text-muted);margin-left:20px;font-size:11px;">interfaces: ' + escapeHtml(s.interfaces.join(', ')) + '</div>';
             }
             if (s.warning) {
-                line += '<div style="color:var(--warning);margin-left:20px;">⚠️ ' + escapeHtml(s.warning) + '</div>';
+                line += '<div style="color:var(--warning);margin-left:20px;"><svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> ' + escapeHtml(s.warning) + '</div>';
             }
             if (s.missing_binary) {
                 // v5.22.0 (Q18) — data-missing-binary + the delegated
@@ -194,7 +194,7 @@ async function showPreview() {
                 // they're inserted into the DOM.
                 line += '<div style="margin:4px 0 8px 20px;">' +
                     '<button type="button" class="btn btn-sm btn-secondary install-binary-btn" data-missing-binary="' +
-                    escapeHtml(s.missing_binary) + '">📦 Install ' + escapeHtml(s.missing_binary) + ' now</button>' +
+                    escapeHtml(s.missing_binary) + '"><svg class="ico" aria-hidden="true"><use href="#i-package"></use></svg> Install ' + escapeHtml(s.missing_binary) + ' now</button>' +
                     '<span class="install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span>' +
                     '</div>';
             }
@@ -211,7 +211,7 @@ async function showPreview() {
         }
     } catch (e) {
         jsonDiv.textContent = '';
-        serversDiv.innerHTML = '<div style="color:var(--danger);">❌ Could not reach the server: ' + e.message + '</div>';
+        serversDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Could not reach the server: ' + e.message + '</div>';
     }
 }
 
@@ -227,17 +227,17 @@ async function installBinary(btn, binary) {
         var data = await resp.json();
         if (data.ok) {
             statusEl.style.color = 'var(--success)';
-            statusEl.textContent = '✅ Installed — re-running Preview & Validate…';
+            statusEl.textContent = 'Installed — re-running Preview & Validate…';
             await showPreview();
         } else {
             statusEl.style.color = 'var(--danger)';
             var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
-            statusEl.textContent = '❌ ' + (msg || 'Install failed.');
+            statusEl.textContent = (msg || 'Install failed.');
             btn.disabled = false;
         }
     } catch (e) {
         statusEl.style.color = 'var(--danger)';
-        statusEl.textContent = '❌ ' + e.message;
+        statusEl.textContent = e.message;
         btn.disabled = false;
     }
 }

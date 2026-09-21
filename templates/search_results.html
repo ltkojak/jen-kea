@@ -2,13 +2,13 @@
 {% block title %}Search Results{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🔍 Search Results</h1>
+    <h1>{{ icon("search", "ico-lg") }} Search Results</h1>
     <p>{{ total }} result{{ 's' if total != 1 else '' }} for <strong>{{ q }}</strong></p>
 </div>
 
 <form action="/search" method="GET" style="display:flex;gap:8px;margin-bottom:24px;">
     <input type="text" name="q" value="{{ q }}" placeholder="Search IP, hostname, MAC..." style="max-width:320px;">
-    <button type="submit" class="btn btn-primary">🔍 Search</button>
+    <button type="submit" class="btn btn-primary">{{ icon("search") }} Search</button>
 </form>
 
 {% if q and total == 0 %}
@@ -17,7 +17,7 @@
 
 {% if results.leases %}
 <div class="card">
-    <div class="card-header"><span class="card-title">📋 Leases ({{ results.leases|length }})</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("list") }} Leases ({{ results.leases|length }})</span></div>
     <div class="table-wrap">
     <table>
         <thead><tr>
@@ -46,7 +46,7 @@
 
 {% if results.reservations %}
 <div class="card">
-    <div class="card-header"><span class="card-title">📌 Reservations ({{ results.reservations|length }})</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("pin") }} Reservations ({{ results.reservations|length }})</span></div>
     <div class="table-wrap">
     <table>
         <thead><tr>
@@ -75,7 +75,7 @@
 
 {% if results.devices %}
 <div class="card">
-    <div class="card-header"><span class="card-title">📱 Devices ({{ results.devices|length }})</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("monitor-smartphone") }} Devices ({{ results.devices|length }})</span></div>
     <div class="table-wrap">
     <table>
         <thead><tr>
@@ -103,7 +103,7 @@
 
 {% if results.leases6 %}
 <div class="card">
-    <div class="card-header"><span class="card-title">📋 IPv6 Leases ({{ results.leases6|length }})</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("list") }} IPv6 Leases ({{ results.leases6|length }})</span></div>
     <div class="table-wrap">
     <table>
         <thead><tr>
@@ -131,7 +131,7 @@
 
 {% if results.reservations6 %}
 <div class="card">
-    <div class="card-header"><span class="card-title">📌 IPv6 Reservations ({{ results.reservations6|length }})</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("pin") }} IPv6 Reservations ({{ results.reservations6|length }})</span></div>
     <div class="table-wrap">
     <table>
         <thead><tr>

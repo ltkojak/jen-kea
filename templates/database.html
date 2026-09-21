@@ -6,7 +6,7 @@
 {% from '_settings_subtabs.html' import subtabs %}
 
 <div class="page-header">
-    <h1>🗄️ Databases</h1>
+    <h1>{{ icon("database", "ico-lg") }} Databases</h1>
     <p>Where Jen's own data and Kea's data live{% if current_user.role == 'superadmin' %} — and export, import, backups and migration for both. Tools are superadmin-only and fully logged.{% else %}. Export, import, backups and migration are superadmin tools.{% endif %}</p>
 </div>
 
@@ -14,7 +14,7 @@
 
 {% if active_tab == 'connections' %}
 <div class="card">
-    <div class="card-header"><span class="card-title">🟢 Jen MySQL Database</span>
+    <div class="card-header"><span class="card-title">{{ icon("circle", "ico-dot ico-success") }} Jen MySQL Database</span>
         <span style="font-size:12px;color:var(--text-muted);">Users, devices, settings, alerts, audit log, API keys</span>
     </div>
     <form method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -28,7 +28,7 @@
     </form>
 </div>
 <div class="card">
-    <div class="card-header"><span class="card-title">🟡 Kea MySQL Database</span>
+    <div class="card-header"><span class="card-title">{{ icon("circle", "ico-dot ico-warning") }} Kea MySQL Database</span>
         <span style="font-size:12px;color:var(--text-muted);">Reservations (hosts), DHCP options, active leases — Kea owns this schema</span>
     </div>
     <form method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -50,7 +50,7 @@
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
     <div class="card" style="border-left:4px solid var(--primary);">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-            <span style="font-size:22px;">🟢</span>
+            <span style="font-size:22px;"></span>
             <span style="font-size:16px;font-weight:700;color:var(--primary);">Jen Database</span>
         </div>
         <div style="font-family:monospace;font-size:13px;color:var(--text-muted);">
@@ -61,7 +61,7 @@
     </div>
     <div class="card" style="border-left:4px solid var(--warning);">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-            <span style="font-size:22px;">🟡</span>
+            <span style="font-size:22px;"></span>
             <span style="font-size:16px;font-weight:700;color:var(--warning);">Kea Database</span>
         </div>
         <div style="font-family:monospace;font-size:13px;color:var(--text-muted);">
@@ -81,7 +81,7 @@
     <!-- Jen Export -->
     <div class="card">
         <div class="card-header">
-            <h3>📤 Export <span style="color:var(--primary);font-weight:800;">Jen Database</span></h3>
+            <h3>Export <span style="color:var(--primary);font-weight:800;">Jen Database</span></h3>
         </div>
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
             Exports data from <strong>{{ jen_db_host }} / {{ jen_db_name }}</strong> to a compressed JSON file you can download, restore, or archive.
@@ -101,14 +101,14 @@
                     {% endfor %}
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%;">⬇️ Download Jen Export</button>
+            <button type="submit" class="btn btn-primary" style="width:100%;">Download Jen Export</button>
         </form>
     </div>
 
     <!-- Kea Export -->
     <div class="card">
         <div class="card-header">
-            <h3>📤 Export <span style="color:var(--warning);font-weight:800;">Kea Database</span></h3>
+            <h3>Export <span style="color:var(--warning);font-weight:800;">Kea Database</span></h3>
         </div>
         <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
             Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong>. Choose what to export — reservations and leases are different things.
@@ -130,9 +130,9 @@
             </div>
             {% endfor %}
             <div class="alert alert-warning" style="font-size:12px;margin-bottom:12px;">
-                ⚠️ Kea exports may contain MAC addresses, IP assignments, and hostnames for your entire network. Store securely.
+                Kea exports may contain MAC addresses, IP assignments, and hostnames for your entire network. Store securely.
             </div>
-            <button type="submit" class="btn btn-warning" style="width:100%;color:#000;">⬇️ Download Kea Export</button>
+            <button type="submit" class="btn btn-warning" style="width:100%;color:#000;">Download Kea Export</button>
         </form>
     </div>
 </div>
@@ -144,10 +144,10 @@
 {% if active_tab == 'import' %}
 <div class="card">
     <div class="card-header">
-        <h3>📥 Import / Restore</h3>
+        <h3>Import / Restore</h3>
     </div>
     <div class="alert alert-danger" style="margin-bottom:18px;">
-        ⛔ <strong>Destructive operation.</strong> Importing will replace existing data in the selected tables. This cannot be undone. Make a backup first.
+        <strong>Destructive operation.</strong> Importing will replace existing data in the selected tables. This cannot be undone. Make a backup first.
     </div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
         Upload a Jen export file (<code>.json.gz</code>). Jen will read the file, show you exactly what's in it, and ask you to confirm before touching any data.
@@ -159,7 +159,7 @@
             <input type="file" name="file" accept=".json,.json.gz,.gz" required style="width:100%;">
             <div class="form-hint">Must be a file exported from Jen's Database page. Files from other tools are not supported.</div>
         </div>
-        <button type="submit" class="btn btn-secondary" style="margin-top:8px;">🔍 Inspect File &amp; Continue</button>
+        <button type="submit" class="btn btn-secondary" style="margin-top:8px;">{{ icon("search") }} Inspect File &amp; Continue</button>
     </form>
 </div>
 {% endif %}
@@ -170,18 +170,18 @@
 {% if active_tab == 'backups' %}
 <!-- Manual backup -->
 <div class="card" style="margin-bottom:20px;">
-    <div class="card-header"><h3>💾 Run Backup Now</h3></div>
+    <div class="card-header"><h3>{{ icon("save") }} Run Backup Now</h3></div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Saves a backup to <code>/opt/jen/backups/</code> immediately. Files are compressed and readable only by the jen service user.</p>
     <form method="POST" action="/database/backup/now" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="jen" checked> <span style="color:var(--primary);font-weight:600;">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
         <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="kea" checked> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
-        <button type="submit" class="btn btn-primary">💾 Back Up Now</button>
+        <button type="submit" class="btn btn-primary">{{ icon("save") }} Back Up Now</button>
     </form>
 </div>
 
 <!-- Backup list -->
 <div class="card">
-    <div class="card-header"><h3>📁 Stored Backups <span style="font-weight:400;font-size:13px;color:var(--text-muted);">— /opt/jen/backups/</span></h3></div>
+    <div class="card-header"><h3>{{ icon("folder") }} Stored Backups <span style="font-weight:400;font-size:13px;color:var(--text-muted);">— /opt/jen/backups/</span></h3></div>
     {% if backups %}
     <table class="table">
         <thead><tr>
@@ -197,9 +197,9 @@
         <tr>
             <td>
                 {% if b.db == 'JEN' %}
-                <span style="color:var(--primary);font-weight:700;">🟢 Jen</span>
+                <span style="color:var(--primary);font-weight:700;">{{ icon("circle", "ico-dot ico-success") }} Jen</span>
                 {% elif b.db == 'KEA' %}
-                <span style="color:var(--warning);font-weight:700;">🟡 Kea</span>
+                <span style="color:var(--warning);font-weight:700;">{{ icon("circle", "ico-dot ico-warning") }} Kea</span>
                 {% else %}
                 <span style="color:var(--text-muted);">{{ b.db }}</span>
                 {% endif %}
@@ -236,7 +236,7 @@
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 {% if active_tab == 'schedule' %}
 <div class="card" style="max-width:560px;">
-    <div class="card-header"><h3>🕐 Scheduled Backups</h3></div>
+    <div class="card-header"><h3>{{ icon("clock") }} Scheduled Backups</h3></div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
         Automatic backups are saved to <code>/opt/jen/backups/</code> and rotated by retention count.
         {% if schedule and schedule.last_run %}
@@ -278,7 +278,7 @@
                 <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include_kea" {% if not schedule or schedule.include_kea %}checked{% endif %}> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">💾 Save Schedule</button>
+        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Schedule</button>
     </form>
 </div>
 {% endif %}
@@ -288,22 +288,22 @@
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 {% if active_tab == 'migrate' %}
 <div class="card">
-    <div class="card-header"><h3>🔀 Migrate to New Server</h3></div>
+    <div class="card-header"><h3>{{ icon("shuffle") }} Migrate to New Server</h3></div>
     <div class="alert alert-warning" style="margin-bottom:18px;">
-        ⚠️ Migration copies data to a new database server. The source is never modified. If migration fails at any point, the target is rolled back and left clean. Progress is shown in real-time below.
+        {{ icon("triangle-alert") }} Migration copies data to a new database server. The source is never modified. If migration fails at any point, the target is rolled back and left clean. Progress is shown in real-time below.
     </div>
-    <a href="/settings/databases/migrate" class="btn btn-primary">🔀 Open Migration Wizard</a>
+    <a href="/settings/databases/migrate" class="btn btn-primary">{{ icon("shuffle") }} Open Migration Wizard</a>
 </div>
 {% endif %}
 
 {% if active_tab == 'recovery' %}
 <div class="card" style="border:2px solid var(--danger);">
-    <div class="card-header"><h3 style="color:var(--danger);">🧳 Recovery bundle — contains secrets</h3></div>
+    <div class="card-header"><h3 style="color:var(--danger);">{{ icon("box") }} Recovery bundle — contains secrets</h3></div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
         One encrypted file to stand Jen back up on a new machine: <code>jen.config</code>, the MFA encryption key, TLS/SSH keys, a fresh export of every Jen database table, uploaded content (icons, branding), and the latest Kea config Jen has seen for each server.
     </p>
     <div class="alert alert-warning" style="margin-bottom:18px;">
-        ⚠️ <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file. For a file to attach to a bug report, use the redacted <em>support bundle</em> (Settings → System) instead.
+        {{ icon("triangle-alert") }} <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file. For a file to attach to a bug report, use the redacted <em>support bundle</em> (Settings → System) instead.
     </div>
     <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -320,7 +320,7 @@
         <div class="form-hint" style="margin-bottom:12px;">
             Write this passphrase down somewhere safe — Jen never stores it, and there is no recovery if you lose it.
         </div>
-        <button type="submit" class="btn btn-primary">🧳 Download recovery bundle</button>
+        <button type="submit" class="btn btn-primary">{{ icon("box") }} Download recovery bundle</button>
     </form>
 </div>
 <div class="card" style="background:var(--surface2);border-style:dashed;">

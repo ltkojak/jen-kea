@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
     <div>
-        <h1>📱 Device Inventory</h1>
+        <h1>{{ icon("monitor-smartphone", "ico-lg") }} Device Inventory</h1>
         <p>All MAC addresses seen on your network — {{ total }} device{{ 's' if total != 1 else '' }} total</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
@@ -146,25 +146,25 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
         <div class="form-group">
             <label>Device Type <span style="font-size:11px;color:var(--text-muted);font-weight:400;">(overrides auto-detection)</span></label>
             <select id="editTypeOverride">
-                <option value="auto">🔄 Auto-detect (use OUI / hostname)</option>
-                <option value="apple">🍎 Apple</option>
-                <option value="android">📱 Android</option>
-                <option value="windows">🖥️ Windows PC</option>
-                <option value="linux">🐧 Linux</option>
-                <option value="amazon">📦 Amazon</option>
-                <option value="google">🔍 Google</option>
-                <option value="iot">🔌 IoT Device</option>
-                <option value="tv">📺 Smart TV</option>
-                <option value="printer">🖨️ Printer</option>
-                <option value="nas">🗄️ NAS</option>
-                <option value="network">🌐 Network Device</option>
-                <option value="gaming">🎮 Gaming</option>
-                <option value="raspberry_pi">🥧 Raspberry Pi</option>
-                <option value="pc">🖥️ PC / Computer</option>
-                <option value="unknown">❓ Unknown</option>
+                <option value="auto">Auto-detect (use OUI / hostname)</option>
+                <option value="apple">Apple</option>
+                <option value="android">Android</option>
+                <option value="windows">Windows PC</option>
+                <option value="linux">Linux</option>
+                <option value="amazon">Amazon</option>
+                <option value="google">Google</option>
+                <option value="iot">IoT Device</option>
+                <option value="tv">Smart TV</option>
+                <option value="printer">Printer</option>
+                <option value="nas">NAS</option>
+                <option value="network">Network Device</option>
+                <option value="gaming">Gaming</option>
+                <option value="raspberry_pi">Raspberry Pi</option>
+                <option value="pc">PC / Computer</option>
+                <option value="unknown">Unknown</option>
             </select>
             <div id="editTypeHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;display:none;">
-                🔒 Manual override active — auto-detection is disabled for this device.
+                {{ icon("lock") }} Manual override active — auto-detection is disabled for this device.
             </div>
         </div>
         <div class="form-group">
@@ -198,7 +198,7 @@ document.getElementById('type-filter-bar').addEventListener('click', function(e)
                     </div>
                     {% endfor %}
                     {% for icon in custom_icons %}
-                    <div class="icon-picker-option" data-icon-value="{{ icon }}" data-icon-label="{{ icon }} ★"
+                    <div class="icon-picker-option" data-icon-value="{{ icon }}" data-icon-label="{{ icon }}"
                          style="display:flex;flex-direction:column;align-items:center;gap:3px;
                                 padding:8px;border-radius:6px;cursor:pointer;min-width:52px;
                                 border:1px solid var(--primary)44;">

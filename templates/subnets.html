@@ -44,29 +44,29 @@ document.addEventListener('click', function(e) {
 {% block content %}
 <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
     <div>
-        <h1>🌐 Subnets & Scope Options</h1>
+        <h1>{{ icon("network", "ico-lg") }} Subnets & Scope Options</h1>
         <p>Subnet configuration pulled live from Kea</p>
     </div>
     {% if current_user.role in ('superadmin','admin') %}
     <div style="display:flex;gap:8px;">
         {% if can_manage_networks %}
-        <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary">🏷️ Client Classes</a>
+        <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary">{{ icon("tag") }} Client Classes</a>
         {% endif %}
         {% if current_user.role == 'superadmin' %}
-        <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">🪟 Import from Windows DHCP</a>
-        <a href="{{ url_for('subnets.import_isc') }}" class="btn btn-secondary">📄 Import from ISC DHCP</a>
+        <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">{{ icon("app-window") }} Import from Windows DHCP</a>
+        <a href="{{ url_for('subnets.import_isc') }}" class="btn btn-secondary">{{ icon("file-text") }} Import from ISC DHCP</a>
         {% endif %}
-        <a href="/subnets/add" class="btn btn-primary">➕ Add Subnet</a>
+        <a href="/subnets/add" class="btn btn-primary">{{ icon("plus") }} Add Subnet</a>
     </div>
     {% endif %}
 </div>
 
 {% if not ssh_ready %}
-<div class="alert alert-warning">💡 Subnet editing requires SSH to be configured. Go to <a href="/settings/kea#kea-ssh">Settings → Kea → SSH Key Management</a> to set it up.</div>
+<div class="alert alert-warning">{{ icon("lightbulb") }} Subnet editing requires SSH to be configured. Go to <a href="/settings/kea#kea-ssh">Settings → Kea → SSH Key Management</a> to set it up.</div>
 {% endif %}
 
 {% if kea_config_error %}
-<div class="alert alert-warning">⚠️ Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
 {% endif %}
 
 {% set grp = namespace(cur=false) %}
@@ -80,7 +80,7 @@ document.addEventListener('click', function(e) {
         <form method="POST" action="/subnets/shared-networks/delete" style="display:inline;margin-left:8px;" data-confirm="Delete shared network '{{ s.shared_network }}'? It must have no subnets left. Kea restarts.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="name" value="{{ s.shared_network }}">
-            <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️ Delete network</button>
+            <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">{{ icon("trash") }} Delete network</button>
         </form>
         {% endif %}
     </h2>
@@ -109,10 +109,10 @@ document.addEventListener('click', function(e) {
                 </select>
             </form>
             {% endif %}
-            <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+            <a href="/subnets/edit/{{ s.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
             <form method="POST" action="/subnets/delete/{{ s.id }}" style="display:inline;"
                   data-confirm="Delete subnet '{{ s.name }}' ({{ s.cidr }})? This removes it from Kea's config and restarts Kea. This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️ Delete</button>
+                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">{{ icon("trash") }} Delete</button>
             </form>
         </div>
         {% endif %}
@@ -179,12 +179,12 @@ document.addEventListener('click', function(e) {
     {% endif %}
     <div style="margin-bottom:12px;font-size:12px;">
         <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" style="color:var(--text-muted);">
-            🔧 Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
+            {{ icon("wrench") }} Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
         </a>
         {% if s.classes %}
         <br>
         <a href="{{ url_for('subnets.dhcp_classes_page') }}" style="color:var(--text-muted);">
-            🏷️ Classes: {{ s.classes|join(', ') }}
+            {{ icon("tag") }} Classes: {{ s.classes|join(', ') }}
         </a>
         {% endif %}
     </div>
@@ -217,7 +217,7 @@ document.addEventListener('click', function(e) {
                 <span class="mono" style="font-size:14px;">{{ s6.cidr }}</span>
             </div>
             {% if current_user.role in ('superadmin','admin') %}
-            <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+            <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
             {% endif %}
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">
@@ -237,19 +237,19 @@ document.addEventListener('click', function(e) {
 {% from '_empty.html' import empty_state %}
 {% set sb = namespace(buttons=[]) %}
 {% if current_user.role in ('superadmin','admin') %}
-    {% set sb.buttons = sb.buttons + [('➕ Add Subnet', '/subnets/add')] %}
+    {% set sb.buttons = sb.buttons + [((icon('plus') ~ ' Add Subnet'), '/subnets/add')] %}
 {% endif %}
 {% if current_user.role == 'superadmin' %}
-    {% set sb.buttons = sb.buttons + [('🪟 Import from Windows', url_for('subnets.import_windows')), ('📄 Import from ISC', url_for('subnets.import_isc'))] %}
+    {% set sb.buttons = sb.buttons + [((icon('app-window') ~ ' Import from Windows'), url_for('subnets.import_windows')), ((icon('file-text') ~ ' Import from ISC'), url_for('subnets.import_isc'))] %}
 {% endif %}
 <div class="card">
-    {{ empty_state('🌐', 'No subnets declared yet — add one, or import from Windows / ISC DHCP.', sb.buttons) }}
+    {{ empty_state(icon('globe'), 'No subnets declared yet — add one, or import from Windows / ISC DHCP.', sb.buttons) }}
 </div>
 {% endfor %}
 
 {% if can_manage_networks and ssh_ready %}
 <div class="card">
-    <div class="card-header"><span class="card-title">➕ New shared network</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("plus") }} New shared network</span></div>
     <form method="POST" action="/subnets/shared-networks/add" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group" style="margin:0;">
@@ -275,7 +275,7 @@ document.addEventListener('click', function(e) {
             <span style="color:var(--text-muted);font-size:13px;">{{ s6.name }}</span>
         </div>
         {% if current_user.role in ('superadmin','admin') %}
-        <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">✏️ Edit</a>
+        <a href="/subnets/edit6/{{ s6.id }}" class="btn btn-sm btn-secondary">{{ icon("pencil") }} Edit</a>
         {% endif %}
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;">

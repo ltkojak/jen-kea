@@ -1221,7 +1221,7 @@ def setup_direct_socket(server_id, service):
         pushed = __host.install_tls(server, service, files)
         if not pushed.get("ok"):
             flash(
-                f"❌ {name}: {pushed.get('detail', 'the helper refused the TLS material')} — nothing was changed.",
+                f"{name}: {pushed.get('detail', 'the helper refused the TLS material')} — nothing was changed.",
                 "error",
             )
             return back
@@ -1291,7 +1291,7 @@ def setup_direct_socket(server_id, service):
     was_ca = extensions.KEA_CONNECTION_MODE == "ca"
     written = _write_direct_socket_config(server, service, new_url, user, password, tls=(scheme == "https"))
     __user.set_global_setting("restart_pending", "true")
-    flash(f"✅ {daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
+    flash(f"{daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
     if service != "dhcp4" and extensions.KEA_CONNECTION_MODE == "ca":
         flash(
             "Jen is still in Control Agent mode — set up kea-dhcp4's direct socket to switch it over; "
@@ -1419,13 +1419,13 @@ def rotate_kea_ca():
                 r1, r2 = {"ok": False}, {"ok": False}
             (rolled if r1.get("ok") and r2.get("ok") else rollback_failed).append(label)
         __tls.discard_rotation(staged)
-        msg = f"❌ Rotate stopped at {failure}. Jen still trusts the previous CA; nothing in Jen's settings changed."
+        msg = f"Rotate stopped at {failure}. Jen still trusts the previous CA; nothing in Jen's settings changed."
         if rolled:
             msg += f" Rolled back to the previous CA: {', '.join(rolled)}."
         flash(msg, "error")
         if rollback_failed:
             flash(
-                f"🛑 ROLLBACK FAILED on {', '.join(rollback_failed)} — they hold certificates from a CA Jen never "
+                f"ROLLBACK FAILED on {', '.join(rollback_failed)} — they hold certificates from a CA Jen never "
                 "adopted and won't answer Jen until fixed: run Set up direct socket (https) again for each.",
                 "error",
             )
@@ -1448,7 +1448,7 @@ def rotate_kea_ca():
         f"{s.get('name') or 'Kea Server ' + str(s.get('id'))} {_DAEMON_NAME[svc]}" for s, svc, _b in targets
     )
     flash(
-        "✅ Kea CA rotated — new CA and client certificate issued"
+        "Kea CA rotated — new CA and client certificate issued"
         + (f"; new server certificates pushed to {names}, each daemon restarted and answering." if targets else ".")
         + " The previous CA is kept beside the new one as kea-ca.crt.prev.",
         "success",
@@ -1602,7 +1602,7 @@ def toggle_ipv6():
     all_ok = bool(results) and all(r["ok"] for r in results)
 
     for r in results:
-        flash(f"{'✅' if r['ok'] else '❌'} {r['name']}: {r['message']}", "success" if r["ok"] else "error")
+        flash(f"{r['name']}: {r['message']}", "success" if r["ok"] else "error")
 
     if enable:
         if all_ok:

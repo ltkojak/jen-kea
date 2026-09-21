@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>📝 Logs</h1>
+    <h1>{{ icon("scroll-text", "ico-lg") }} Logs</h1>
     <p>{% if tab == 'alerts' %}Alert deliveries — status and any errors from each channel.{% else %}{{ total }} audit event(s) recorded.{% endif %}</p>
 </div>
 
@@ -12,7 +12,7 @@
 {% if tab == 'alerts' %}
 <div class="card" style="padding:0;">
     <div class="card-header" style="padding:16px 20px 12px;">
-        <span class="card-title">📋 Alert Log</span>
+        <span class="card-title">{{ icon("clipboard-list") }} Alert Log</span>
         <span style="font-size:12px;color:var(--text-muted);">Last {{ recent_alerts|length }} — channels and templates are under <a href="/settings/alerts">Alerts &amp; Integrations</a></span>
     </div>
     {% if recent_alerts %}

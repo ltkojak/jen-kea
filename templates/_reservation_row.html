@@ -15,7 +15,7 @@
     <td data-label="Subnet"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
     <td data-label="Status">
         {% if h.is_conflict %}
-        <span style="color:var(--warning);font-size:12px;" title="Reserved IP is currently leased to a different MAC than this reservation">⚠️ Conflict</span>
+        <span style="color:var(--warning);font-size:12px;" title="Reserved IP is currently leased to a different MAC than this reservation">{{ icon("triangle-alert") }} Conflict</span>
         {% elif h.is_active %}
         <span style="color:var(--success);font-size:12px;">● Active</span>
         {% else %}
@@ -37,9 +37,9 @@
             <label for="am-res-{{ h.host_id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
                 <a href="/reservations/edit/{{ h.host_id }}" class="action-menu-item">{{ icon_edit() }}Edit reservation</a>
-                <a href="/tools/explain?mac={{ h.mac }}&subnet={{ h.subnet_id }}&hostname={{ h.hostname|urlencode }}" class="action-menu-item">🧭 Why this address?</a>
-                <a href="/timeline?mac={{ h.mac }}" class="action-menu-item">🕐 Timeline</a>
-                {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ h.mac }}" class="action-menu-item">📜 Trace in Kea log</a>{% endif %}
+                <a href="/tools/explain?mac={{ h.mac }}&subnet={{ h.subnet_id }}&hostname={{ h.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>
+                <a href="/timeline?mac={{ h.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
+                {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ h.mac }}" class="action-menu-item">{{ icon("search-code") }} Trace in Kea log</a>{% endif %}
                 <div class="action-menu-divider"></div>
                 <button type="button" class="action-menu-item danger"
                         hx-post="/reservations/delete/{{ h.host_id }}"

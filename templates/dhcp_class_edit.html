@@ -2,7 +2,7 @@
 {% block title %}{{ 'New class' if is_new else name }} — Client Class{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🏷️ {{ 'New client class' if is_new else name }}</h1>
+    <h1>{{ icon("tag", "ico-lg") }} {{ 'New client class' if is_new else name }}</h1>
     <p>Kea's <span class="mono">Dhcp4.client-classes</span> — a guided rule builder, or a raw expression for anything the builder can't express.</p>
 </div>
 
@@ -110,7 +110,7 @@
 {% include "_dhcp_options_table.html" %}
 
 {% if only_additional_warning %}
-<div class="alert alert-warning">⚠️ {{ only_additional_warning }}</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} {{ only_additional_warning }}</div>
 {% endif %}
 
 <div class="card">

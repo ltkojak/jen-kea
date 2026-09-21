@@ -3,17 +3,17 @@
 {% block content %}
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;">
     <div>
-        <h1>🩻 Configuration Doctor</h1>
+        <h1>{{ icon("activity", "ico-lg") }} Configuration Doctor</h1>
         <p>Semantic checks on the live Kea config — contradictions and dead configuration that <code>kea-dhcp4 -t</code> can't see, because they're valid syntax and valid types. This is not a syntax/type check; use "Test config" in Settings → Kea for that.</p>
     </div>
-    <a href="/tools/doctor" class="btn btn-secondary">🔄 Re-run</a>
+    <a href="/tools/doctor" class="btn btn-secondary">{{ icon("refresh-cw") }} Re-run</a>
 </div>
 
 {% if error %}
-<div class="alert alert-warning">⚠️ Could not read the Kea config: {{ error }}</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Could not read the Kea config: {{ error }}</div>
 {% elif not findings %}
 <div class="card" style="text-align:center;padding:40px;color:var(--text-muted);">
-    <div style="font-size:36px;margin-bottom:12px;">✅</div>
+    <div style="font-size:36px;margin-bottom:12px;">{{ icon("circle-check") }}</div>
     <div>No findings — nothing here looks contradictory or unused.</div>
 </div>
 {% else %}
@@ -39,7 +39,7 @@
             <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
                 {% if f.fix_url %}<a class="btn btn-sm" href="{{ f.fix_url }}">Fix →</a>{% endif %}
                 {% if f.where.startswith('class ') %}
-                <a class="btn btn-sm btn-secondary" href="/tools/explain">🧭 Explain a client against this class</a>
+                <a class="btn btn-sm btn-secondary" href="/tools/explain">{{ icon("compass") }} Explain a client against this class</a>
                 {% endif %}
             </div>
         </div>

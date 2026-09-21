@@ -2,11 +2,11 @@
 {% block title %}Add Subnet{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>➕ Add Subnet</h1>
+    <h1>{{ icon("plus", "ico-lg") }} Add Subnet</h1>
     <p>Create a new DHCP scope in Kea</p>
 </div>
 
-<div class="alert alert-warning">⚠️ This creates a brand new subnet in <code>kea-dhcp4.conf</code> and restarts the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} This creates a brand new subnet in <code>kea-dhcp4.conf</code> and restarts the Kea service. Kea will be briefly unavailable during restart. If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.</div>
 
 <div class="card" style="max-width:680px;">
     <form method="POST" id="add-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -77,7 +77,7 @@
         </div>
 
         <div style="display:flex;gap:8px;margin-top:16px;">
-            <button type="button" class="btn btn-primary" id="create-subnet-btn">➕ Create Subnet</button>
+            <button type="button" class="btn btn-primary" id="create-subnet-btn">{{ icon("plus") }} Create Subnet</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -87,7 +87,7 @@
          background:var(--surface2);border:1px solid var(--warning);
          border-radius:var(--radius);padding:16px;">
         <div style="display:flex;align-items:flex-start;gap:12px;">
-            <span style="font-size:22px;line-height:1;">⚠️</span>
+            <span style="font-size:22px;line-height:1;">{{ icon("triangle-alert") }}</span>
             <div style="flex:1;">
                 <div style="font-weight:600;margin-bottom:4px;">Create this subnet and restart Kea?</div>
                 <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
@@ -99,7 +99,7 @@
                      padding:10px 12px;margin-bottom:14px;font-family:monospace;
                      line-height:1.8;"></div>
                 <div style="display:flex;gap:8px;">
-                    <button type="button" class="btn btn-primary" id="confirm-create-btn">✅ Yes, create it</button>
+                    <button type="button" class="btn btn-primary" id="confirm-create-btn">{{ icon("circle-check") }} Yes, create it</button>
                     <button type="button" class="btn btn-secondary" id="confirm-cancel-btn">✕ Cancel</button>
                 </div>
             </div>

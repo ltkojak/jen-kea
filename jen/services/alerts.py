@@ -120,6 +120,36 @@ def __drift_issue_key(*a, **kw):
     return issue_key(*a, **kw)
 
 
+# v5.50.0 (Q57) — the Lucide icon (jen/services/icons.py) the dashboard's Alert
+# Summary shows for each alert type. The API returns the NAME; the page builds
+# <svg><use> from a fixed whitelist of names (never from server-supplied HTML).
+# tests/test_icons.py keeps this, the sprite and the dashboard's whitelist in step.
+ALERT_TYPE_ICONS = {
+    "kea_down": "circle-x",
+    "kea_up": "circle-check",
+    "ha_failover": "zap",
+    "new_lease": "clipboard-list",
+    "new_device": "badge-question-mark",
+    "unknown_device": "badge-question-mark",
+    "new_reserved_lease": "pin",
+    "utilization_high": "triangle-alert",
+    "utilization_ok": "circle-check",
+    "pool_exhaustion": "circle-x",
+    "pool_forecast": "trending-up",
+    "packet_health": "triangle-alert",
+    "packet_health_ok": "circle-check",
+    "reservation_added": "plus",
+    "reservation_deleted": "trash",
+    "stale_reservation": "clock",
+    "kea_config_changed": "info",
+    "config_drift_detected": "triangle-alert",
+    "config_drift_resolved": "circle-check",
+    "cert_expiring": "lock",
+    "daily_summary": "chart-bar",
+    "rogue_device": "siren",
+}
+DEFAULT_ALERT_ICON = "bell"
+
 DEFAULT_TEMPLATES = {
     "kea_down": "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
     "kea_up": "✅ <b>Kea Alert</b>\n{server_name} is back <b>UP</b>.",

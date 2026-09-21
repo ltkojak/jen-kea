@@ -2,35 +2,35 @@
 {% block title %}Kea Servers{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🖥️ Kea Servers</h1>
+    <h1>{{ icon("server", "ico-lg") }} Kea Servers</h1>
     <p>{% if single_server %}Single server deployment{% else %}Multi-server / HA deployment — {{ statuses|length }} servers configured{% endif %}</p>
 </div>
 
 {% if not single_server and ha_mode %}
 {% if ha_degraded %}
 <div class="alert alert-warning" style="border-color:var(--danger);background:rgba(200,50,50,0.08);">
-    🚨 <strong>This HA pair currently has no working backup.</strong>
+    {{ icon("siren") }} <strong>This HA pair currently has no working backup.</strong>
     {{ ha_degraded_reason|capitalize }}. If the active server fails right now, there is nothing to fail over to.
 </div>
 {% endif %}
 <div class="card" style="border-color:rgba(0,180,216,0.4);padding:12px 16px;">
     <div style="display:flex;align-items:center;gap:12px;font-size:13px;">
-        <span style="font-size:20px;">🔄</span>
+        <span style="font-size:20px;">{{ icon("refresh-cw") }}</span>
         <div>
             <strong>HA Mode: {{ ha_mode|replace('-',' ')|title }}</strong>
             <span style="color:var(--text-muted);margin-left:12px;">Active node commands are routed automatically</span>
         </div>
         {% for s in statuses %}{% if s.is_active %}
-        <span class="badge badge-reserved" style="margin-left:auto;">⚡ Active: {{ s.server.name }}</span>
+        <span class="badge badge-reserved" style="margin-left:auto;">{{ icon("zap") }} Active: {{ s.server.name }}</span>
         {% endif %}{% endfor %}
         {% if current_user.role == 'superadmin' %}
-        <a href="{{ url_for('servers.ha_maintenance') }}" class="btn btn-sm btn-secondary" title="Take one node down for patching with a guided, HA-aware handover">🛠️ Planned maintenance</a>
+        <a href="{{ url_for('servers.ha_maintenance') }}" class="btn btn-sm btn-secondary" title="Take one node down for patching with a guided, HA-aware handover">{{ icon("hammer") }} Planned maintenance</a>
         {% endif %}
     </div>
 </div>
 {% elif not single_server and not ha_mode %}
 <div class="alert alert-warning">
-    ⚠️ <strong>HA mode not configured.</strong>
+    {{ icon("triangle-alert") }} <strong>HA mode not configured.</strong>
     Multiple servers are defined but HA mode is not set — Jen will always use Server 1 for config and subnet editing.
     <a href="/settings/kea#kea-servers" style="color:var(--warning);text-decoration:underline;margin-left:8px;">Configure HA →</a>
 </div>
@@ -62,10 +62,10 @@
     <div style="margin-top:16px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
               data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-secondary">🔄 Restart Kea</button>
+            <button type="submit" class="btn btn-secondary">{{ icon("refresh-cw") }} Restart Kea</button>
         </form>
         {% if history_allowed %}
-        <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-secondary" style="margin-left:8px;">🗂️ Config history ({{ history_counts.get(s.server.id, 0) }})</a>
+        <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-secondary" style="margin-left:8px;">{{ icon("file-clock") }} Config history ({{ history_counts.get(s.server.id, 0) }})</a>
         {% endif %}
     </div>
     {% endif %}
@@ -74,7 +74,7 @@
 
 <div class="card" style="background:var(--surface2);border-style:dashed;">
     <div style="text-align:center;padding:16px;color:var(--text-muted);">
-        <div style="font-size:24px;margin-bottom:8px;">🔄</div>
+        <div style="font-size:24px;margin-bottom:8px;">{{ icon("refresh-cw") }}</div>
         <div style="font-weight:600;margin-bottom:4px;">Running a Kea HA setup?</div>
         <div style="font-size:13px;">Configure HA mode and add additional servers in
         <a href="/settings/kea#kea-servers">Settings → Kea</a>.</div>
@@ -90,7 +90,7 @@
         <div>
             <div class="stat-label">{{ s.server.role|upper }}
                 {% if s.is_active %}
-                <span style="color:var(--primary);margin-left:6px;">⚡ ACTIVE</span>
+                <span style="color:var(--primary);margin-left:6px;">{{ icon("zap") }} ACTIVE</span>
                 {% endif %}
             </div>
             <div style="font-size:18px;font-weight:700;margin-top:2px;">{{ s.server.name }}</div>
@@ -129,17 +129,17 @@
     <div style="margin-top:12px;">
         <form method="POST" action="/servers/restart/{{ s.server.id }}" style="display:inline;"
               data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-secondary">🔄 Restart</button>
+            <button type="submit" class="btn btn-sm btn-secondary">{{ icon("refresh-cw") }} Restart</button>
         </form>
         {% if history_allowed %}
-        <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-sm btn-secondary" style="margin-left:6px;">🗂️ History ({{ history_counts.get(s.server.id, 0) }})</a>
+        <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-sm btn-secondary" style="margin-left:6px;">{{ icon("file-clock") }} History ({{ history_counts.get(s.server.id, 0) }})</a>
         {% endif %}
     </div>
     {% endif %}
     {% if s.ha_status %}
     <!-- HA console (v5.21.0 — Q16) -->
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
-        <div style="font-weight:600;margin-bottom:6px;">🔀 HA Status</div>
+        <div style="font-weight:600;margin-bottom:6px;">{{ icon("git-branch") }} HA Status</div>
         <table style="width:100%;font-size:12px;">
             <tr><td class="stat-label" style="width:90px;">Local</td>
                 <td>{{ (s.ha_status.local.role or '—')|title }} · {{ s.ha_status.local.state or '—' }}
@@ -184,35 +184,35 @@
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='heartbeat') }}"
                   data-confirm="{{ ha_actions['heartbeat'].confirm }}" title="{{ ha_actions['heartbeat'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">💓 Heartbeat</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("heart-pulse") }} Heartbeat</button>
             </form>
             {% if current_user.role == 'superadmin' %}
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='sync') }}"
                   data-confirm="{{ ha_actions['sync'].confirm }}" title="{{ ha_actions['sync'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">🔁 Sync</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("repeat") }} Sync</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='continue') }}"
                   data-confirm="{{ ha_actions['continue'].confirm }}" title="{{ ha_actions['continue'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">▶️ Continue</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("play") }} Continue</button>
             </form>
             {# v5.32.1 — Kea's ha-maintenance-start is sent to the server that KEEPS serving; the PARTNER goes into maintenance. #}
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-start') }}"
                   data-confirm="Put {{ s.ha_partner or 'the partner' }} into maintenance? {{ s.server.name }} will answer all DHCP traffic while {{ s.ha_partner or 'the partner' }} is taken down — shut it down only once its state shows in-maintenance."
                   title="{{ ha_actions['maintenance-start'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">🛠️ Take over for {{ s.ha_partner or 'partner' }}</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("hammer") }} Take over for {{ s.ha_partner or 'partner' }}</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='maintenance-cancel') }}"
                   data-confirm="{{ ha_actions['maintenance-cancel'].confirm }}" title="{{ ha_actions['maintenance-cancel'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">✖️ Cancel Handover</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("x") }} Cancel Handover</button>
             </form>
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='reset') }}"
                   data-confirm="{{ ha_actions['reset'].confirm }}" title="{{ ha_actions['reset'].help }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-sm btn-secondary">♻️ Reset</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("rotate-ccw") }} Reset</button>
             </form>
             {% if s.ha_config and s.ha_config.peers %}
             <form method="POST" action="{{ url_for('servers.ha_action', server_id=s.server.id, action='scopes') }}"
@@ -222,7 +222,7 @@
                 {% for p in s.ha_config.peers %}
                 <label style="font-size:11px;color:var(--text-muted);"><input type="checkbox" name="scopes" value="{{ p.name }}"> {{ p.name }}</label>
                 {% endfor %}
-                <button type="submit" class="btn btn-sm btn-secondary">🎯 Set Scopes</button>
+                <button type="submit" class="btn btn-sm btn-secondary">{{ icon("target") }} Set Scopes</button>
             </form>
             {% endif %}
             {% endif %}
@@ -238,7 +238,7 @@
 {% if compare_rows %}
 <!-- Compare leases (v5.21.0 — Q16) -->
 <div class="card">
-    <div class="card-header"><span class="card-title">📊 Compare Leases</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("chart-bar") }} Compare Leases</span></div>
     <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Assigned addresses per subnet, as reported by each server right now. A small transient difference is normal for a moment under load-balancing; a persistent one may mean lease sync has fallen behind.</p>
     <div style="overflow-x:auto;">
     <table style="width:100%;font-size:13px;">
@@ -259,7 +259,7 @@
 
 <!-- HA State guide -->
 <div class="card">
-    <div class="card-header"><span class="card-title">ℹ️ HA State Reference</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("info") }} HA State Reference</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;font-size:13px;">
         <div><span class="badge badge-reserved">hot-standby</span><br><span style="color:var(--text-muted);font-size:12px;">Normal HA — primary active, standby ready to take over</span></div>
         <div><span class="badge badge-production">load-balancing</span><br><span style="color:var(--text-muted);font-size:12px;">Both servers actively handling leases</span></div>

@@ -13,6 +13,7 @@ from flask import Blueprint, Response, jsonify, render_template, request
 from flask_login import current_user, login_required
 
 import jen.models.db as __db
+import jen.services.alerts as __alerts
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
@@ -610,6 +611,7 @@ def api_alert_summary():
             alerts.append(
                 {
                     "type": row["alert_type"],
+                    "icon": __alerts.ALERT_TYPE_ICONS.get(row["alert_type"], __alerts.DEFAULT_ALERT_ICON),
                     "channel": row["channel_type"],
                     "message": row["message"] if show_message else "",
                     "status": row["status"],

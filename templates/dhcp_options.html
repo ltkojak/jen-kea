@@ -2,7 +2,7 @@
 {% block title %}DHCP Options{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🔧 DHCP Options</h1>
+    <h1>{{ icon("wrench", "ico-lg") }} DHCP Options</h1>
     <p>Global, shared-network, subnet, and pool-level option-data. Routers (3) and DNS servers (6) at the subnet level stay on the <a href="/subnets">Edit Subnet</a> form.</p>
 </div>
 
@@ -20,12 +20,12 @@
                 {% if item.kind == 'global' %}
                 <a href="{{ url_for('subnets.dhcp_options_page', level='global') }}"
                    style="display:block;padding:6px 8px;border-radius:var(--radius);font-size:13px;{% if level=='global' %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
-                    🌐 Global
+                    {{ icon("globe") }} Global
                 </a>
                 {% elif item.kind == 'shared-network' %}
                 <a href="{{ url_for('subnets.dhcp_options_page', level='shared-network', key=item.name) }}"
                    style="display:block;padding:6px 8px;border-radius:var(--radius);font-size:13px;{% if level=='shared-network' and key==item.name %}background:var(--surface2);color:var(--primary);font-weight:600;{% endif %}">
-                    🔗 {{ item.name }}
+                    {{ icon("link") }} {{ item.name }}
                 </a>
                 {% elif item.kind == 'subnet' %}
                 <div style="margin-top:4px;">
@@ -55,7 +55,7 @@
 
         {% if show_effective %}
         <div class="card">
-            <div class="card-header"><span class="card-title">📋 Effective options</span></div>
+            <div class="card-header"><span class="card-title">{{ icon("clipboard-list") }} Effective options</span></div>
             {% if effective %}
             <table style="width:100%;font-size:13px;">
                 <thead>
@@ -89,7 +89,7 @@
 
         {% if option_defs %}
         <div class="card">
-            <div class="card-header"><span class="card-title">📖 Option definitions (read-only)</span></div>
+            <div class="card-header"><span class="card-title">{{ icon("book-open") }} Option definitions (read-only)</span></div>
             <table style="width:100%;font-size:13px;">
                 <thead>
                     <tr style="text-align:left;color:var(--text-muted);">

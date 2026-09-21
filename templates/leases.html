@@ -40,7 +40,7 @@ document.addEventListener('change', function(e) {
 {% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📋 Leases</h1>
+    <h1>{{ icon("list", "ico-lg") }} Leases</h1>
     <p>{{ total }} lease(s) found</p>
 </div>
 
@@ -72,7 +72,7 @@ document.addEventListener('change', function(e) {
         <input type="hidden" name="expired" value="{{ '1' if show_expired else '0' }}">
     </form>
     <a href="/leases?view=v6&expired={{ '0' if show_expired else '1' }}" class="btn btn-secondary">
-        {{ '📋 Show Active' if show_expired else '🕐 Show History' }}
+        {{ (icon('list') ~ ' Show Active') if show_expired else (icon('clock') ~ ' Show History') }}
     </a>
 </div>
 <div id="leases-results">
@@ -114,17 +114,17 @@ document.addEventListener('change', function(e) {
         <input type="hidden" name="expired" value="{{ '1' if show_expired else '0' }}">
     </form>
     <a href="/leases?expired={{ '0' if show_expired else '1' }}" class="btn btn-secondary">
-        {{ '📋 Show Active' if show_expired else '🕐 Show History' }}
+        {{ (icon('list') ~ ' Show Active') if show_expired else (icon('clock') ~ ' Show History') }}
     </a>
-    <a href="/ipmap" class="btn btn-secondary">🗺️ IP Map</a>
+    <a href="/ipmap" class="btn btn-secondary">{{ icon("map") }} IP Map</a>
     {% if current_user.role in ('superadmin','admin') %}
     <form method="POST" action="/leases/delete-stale" style="display:inline;" data-confirm="Delete all expired/stale leases from the database?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-danger btn-sm">🗑️ Delete Stale</button>
+        <button type="submit" class="btn btn-danger btn-sm">{{ icon("trash") }} Delete Stale</button>
     </form>
     {% endif %}
     <!-- Saved filters -->
     <div style="display:flex;gap:6px;align-items:center;">
-        <button class="btn btn-secondary btn-sm" id="save-filter-btn">🔖 Save Filter</button>
+        <button class="btn btn-secondary btn-sm" id="save-filter-btn">{{ icon("bookmark") }} Save Filter</button>
         <select id="saved-filter-select" style="min-width:130px;font-size:12px;">
             <option value="">Saved filters...</option>
         </select>

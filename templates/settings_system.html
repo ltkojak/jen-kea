@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>⚙️ System</h1>
+    <h1>{{ icon("cog", "ico-lg") }} System</h1>
     <p>Updates for Jen and its plugins, the ports Jen listens on, restart, and log retention.</p>
 </div>
 
@@ -15,7 +15,7 @@
 <!-- Jen Update -->
 <div class="card" id="sys-updates">
     <div class="card-header">
-        <span class="card-title">⬆ Jen Updates</span>
+        <span class="card-title">{{ icon("upload") }} Jen Updates</span>
         <span style="font-size:12px;color:var(--text-muted);">Running v{{ jen_version }} · {{ update_channel }} channel</span>
     </div>
     <div id="update-status" style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
@@ -39,7 +39,7 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="check-btn">
-            🔍 Check for Updates
+            {{ icon("search") }} Check for Updates
         </button>
         {% if current_user.role == 'superadmin' %}
         <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
@@ -52,7 +52,7 @@
                 </label>
             </div>
             <button type="submit" class="btn btn-primary" id="update-btn">
-                ⬆ Update Now
+                {{ icon("upload") }} Update Now
             </button>
         </form>
         {% else %}
@@ -60,7 +60,7 @@
         {% endif %}
         <a id="release-notes-link" href="#" target="_blank"
            style="display:none;font-size:12px;color:var(--primary);">
-            📋 Release notes
+            {{ icon("file-text") }} Release notes
         </a>
     </div>
     <div class="form-hint" style="margin-top:10px;">The updater stages the release, installs its dependencies into <code>/opt/jen/venv</code>, validates it, snapshots the current install, swaps, restarts, and rolls back on any failure. Progress: <code>sudo journalctl -u jen-update.service -f</code>.</div>
@@ -90,7 +90,7 @@
 <!-- Plugins summary -->
 <div class="card" id="sys-plugins">
     <div class="card-header">
-        <span class="card-title">🧩 Plugins</span>
+        <span class="card-title">{{ icon("puzzle") }} Plugins</span>
         {% if current_user.role == 'superadmin' %}
         <a href="/settings/plugins" class="btn btn-sm btn-secondary">Open plugin manager →</a>
         {% endif %}
@@ -105,7 +105,7 @@
             <td><strong>{{ p.name }}</strong><div style="font-size:12px;color:var(--text-muted);">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div></td>
             <td style="white-space:nowrap;">v{{ p.version }}</td>
             <td>
-                {% if not p.version_ok %}<span style="color:var(--warning);font-size:12px;">⚠ Jen version mismatch</span>
+                {% if not p.version_ok %}<span style="color:var(--warning);font-size:12px;">{{ icon("triangle-alert") }} Jen version mismatch</span>
                 {% elif p.enabled %}<span style="color:var(--success);font-size:12px;">● Enabled</span>
                 {% else %}<span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>{% endif %}
             </td>
@@ -123,7 +123,7 @@
 <!-- Server Ports & Performance — the ONE ports card (was on two tabs before v5.9.0) -->
 <div class="card" id="sys-ports">
     <div class="card-header">
-        <span class="card-title">🔌 Ports &amp; Threads</span>
+        <span class="card-title">{{ icon("plug") }} Ports &amp; Threads</span>
         <span class="badge badge-dynamic">Restart on save</span>
     </div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
@@ -167,18 +167,18 @@
 <!-- Restart -->
 <div class="card" id="sys-restart">
     <div class="card-header">
-        <span class="card-title">🔄 Restart Jen</span>
+        <span class="card-title">{{ icon("refresh-cw") }} Restart Jen</span>
         {% if restart_pending %}<span class="badge" style="background:#2a1f00;color:var(--warning);">Restart pending</span>{% endif %}
     </div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">Restarts the <code>jen</code> service. Takes a few seconds; in-flight requests finish first.</p>
     <form method="POST" action="/settings/infrastructure/restart" data-confirm="Restart Jen now?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn {% if restart_pending %}btn-warning{% else %}btn-secondary{% endif %}">🔄 Restart Jen</button>
+        <button type="submit" class="btn {% if restart_pending %}btn-warning{% else %}btn-secondary{% endif %}">{{ icon("refresh-cw") }} Restart Jen</button>
     </form>
 </div>
 
 <!-- Support bundle (v5.33.0) -->
 <div class="card" id="sys-support">
-    <div class="card-header"><span class="card-title">🧰 Support bundle</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("life-buoy") }} Support bundle</span></div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
         One zip to attach to a bug report: Jen and Kea versions, Health Center results, HA state, subnet drift,
         each server's latest Kea config, plugin state, schema versions, recent audit and alert rows, and a tail of the
@@ -187,8 +187,8 @@
         This is the <strong>redacted</strong> one, safe to attach to a bug report — the recovery bundle (Settings → Databases) is not.
     </p>
     {% if current_user.role == 'superadmin' %}
-    <a href="/settings/system/support-bundle" class="btn btn-secondary">🧰 Download support bundle</a>
-    <a href="https://github.com/ltkojak/jen-kea/issues/new?title={{ ('v' ~ jen_version ~ ': ') | urlencode }}" target="_blank" rel="noopener" class="btn btn-secondary">🐛 Report an issue</a>
+    <a href="/settings/system/support-bundle" class="btn btn-secondary">{{ icon("life-buoy") }} Download support bundle</a>
+    <a href="https://github.com/ltkojak/jen-kea/issues/new?title={{ ('v' ~ jen_version ~ ': ') | urlencode }}" target="_blank" rel="noopener" class="btn btn-secondary">{{ icon("bug") }} Report an issue</a>
     {% else %}
     <span style="font-size:12px;color:var(--text-muted);">A superadmin can download it from here.</span>
     {% endif %}
@@ -196,19 +196,19 @@
 
 <!-- Grafana dashboard (v5.43.0, Q44) -->
 <div class="card" id="sys-grafana">
-    <div class="card-header"><span class="card-title">📊 Grafana dashboard</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("chart-bar") }} Grafana dashboard</span></div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
         A ready-made dashboard for the metrics at <code>/metrics</code> — Kea reachability, pool utilization,
         active leases, the pool exhaustion forecast, and packet health rates. Import it into Grafana and point
         its Prometheus datasource variable at whatever scrapes Jen.
     </p>
-    <a href="/settings/system/grafana-dashboard.json" class="btn btn-secondary">📊 Download Grafana dashboard</a>
+    <a href="/settings/system/grafana-dashboard.json" class="btn btn-secondary">{{ icon("chart-bar") }} Download Grafana dashboard</a>
 </div>
 
 <!-- Audit Log Retention -->
 <div class="card" id="sys-retention">
     <div class="card-header">
-        <span class="card-title">📋 Audit Log Retention</span>
+        <span class="card-title">{{ icon("clipboard-list") }} Audit Log Retention</span>
     </div>
     <form method="POST" action="/settings/save-audit-retention"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row" style="max-width:320px;">
@@ -219,14 +219,14 @@
                 <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries — <a href="/settings/logs">view</a>.</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">💾 Save</button>
+        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>
     </form>
 </div>
 
 <!-- Kea Config History -->
 <div class="card" id="sys-config-history">
     <div class="card-header">
-        <span class="card-title">🗂️ Kea Config History</span>
+        <span class="card-title">{{ icon("file-clock") }} Kea Config History</span>
     </div>
     <form method="POST" action="/settings/save-config-revision-keep"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row" style="max-width:320px;">
@@ -237,7 +237,7 @@
                 <div class="form-hint">Every Kea config Jen writes is saved so you can diff and restore it (Servers → Config history). Older revisions beyond this count are pruned.</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary">💾 Save</button>
+        <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>
     </form>
 </div>
 
@@ -246,7 +246,7 @@ function checkForUpdates() {
     var btn = document.getElementById('check-btn');
     var status = document.getElementById('update-status');
     btn.disabled = true;
-    btn.textContent = '⏳ Checking…';
+    btn.textContent = 'Checking…';
     status.textContent = 'Contacting GitHub…';
     status.style.color = 'var(--text-muted)';
 
@@ -254,7 +254,7 @@ function checkForUpdates() {
         .then(function(r) { return r.json(); })
         .then(function(d) {
             btn.disabled = false;
-            btn.textContent = '🔍 Check for Updates';
+            btn.textContent = 'Check for Updates';
 
             var channel = d.channel ? ' on the ' + d.channel + ' channel' : '';
             if (d.status === 'up_to_date') {
@@ -265,7 +265,7 @@ function checkForUpdates() {
 
             } else if (d.status === 'update_available') {
                 status.style.color = 'var(--warning)';
-                status.textContent = '⬆ Jen v' + d.latest + (d.prerelease ? ' (pre-release)' : '') + ' is available' + channel + ' (published ' + d.published + '). You are running v' + d.current + '.';
+                status.textContent = 'Jen v' + d.latest + (d.prerelease ? ' (pre-release)' : '') + ' is available' + channel + ' (published ' + d.published + '). You are running v' + d.current + '.';
                 var uv = document.getElementById('update-version');
                 if (uv) uv.value = d.latest;
                 document.getElementById('update-form').style.display = '';
@@ -284,7 +284,7 @@ function checkForUpdates() {
         })
         .catch(function(e) {
             btn.disabled = false;
-            btn.textContent = '🔍 Check for Updates';
+            btn.textContent = 'Check for Updates';
             status.style.color = 'var(--danger)';
             status.textContent = '✗ Network error: ' + e.message;
         });

@@ -8,6 +8,8 @@ tables. Before this every strip was a hand-maintained list of endpoint
 names repeated three times in base.html (desktop links, drawer, strip);
 adding a page meant editing all three, and the lists quietly drifted.
 
+Item icons are Lucide sprite names (templates/_icons.html; `nav_icon()` also passes a plugin's own emoji through as text).
+
 Pure data plus tiny helpers — nothing here imports Flask or the app, so
 the factory's context processor can import it without a cycle.
 
@@ -23,41 +25,53 @@ ADMIN_ROLES = ("admin", "superadmin")
 # *content* is gated per card on the page, not by hiding the nav — that's
 # what made the old nav differ between admin and superadmin.
 TOP_NAV = [
-    {"id": "dashboard", "label": "Dashboard", "icon": "📊", "url": "/", "match": ("dashboard.dashboard",)},
+    {
+        "id": "dashboard",
+        "label": "Dashboard",
+        "icon": "layout-dashboard",
+        "url": "/",
+        "match": ("dashboard.dashboard",),
+    },
     {
         "id": "management",
         "label": "Management",
-        "icon": "📋",
+        "icon": "list",
         "url": "/leases",
         "match": ("leases.", "reservations.", "devices.", "reports."),
     },
     {
         "id": "network",
         "label": "Network",
-        "icon": "🌐",
+        "icon": "network",
         "url": "/subnets",
         "match": ("subnets.", "servers.", "ddns.", "health.", "timeline."),
     },
-    {"id": "settings", "label": "Settings", "icon": "⚙️", "url": "/settings", "roles": ADMIN_ROLES, "match": ()},
-    {"id": "about", "label": "About", "icon": "ℹ️", "url": "/about", "match": ("users.about",)},
+    {"id": "settings", "label": "Settings", "icon": "settings", "url": "/settings", "roles": ADMIN_ROLES, "match": ()},
+    {"id": "about", "label": "About", "icon": "info", "url": "/about", "match": ("users.about",)},
 ]
 
 # ── Section tab strips (Management / Network) ────────────────────────────────
 SECTION_STRIPS = {
     "management": [
-        {"icon": "📋", "label": "Leases", "url": "/leases", "match": ("leases.",)},
-        {"icon": "📌", "label": "Reservations", "url": "/reservations", "match": ("reservations.",)},
-        {"icon": "📱", "label": "Devices", "url": "/devices", "match": ("devices.",)},
-        {"icon": "📈", "label": "Reports", "url": "/reports", "match": ("reports.",)},
+        {"icon": "list", "label": "Leases", "url": "/leases", "match": ("leases.",)},
+        {"icon": "pin", "label": "Reservations", "url": "/reservations", "match": ("reservations.",)},
+        {"icon": "monitor-smartphone", "label": "Devices", "url": "/devices", "match": ("devices.",)},
+        {"icon": "chart-line", "label": "Reports", "url": "/reports", "match": ("reports.",)},
     ],
     "network": [
-        {"icon": "🌐", "label": "Subnets", "url": "/subnets", "match": ("subnets.",)},
-        {"icon": "🖥️", "label": "Servers", "url": "/servers", "match": ("servers.",)},
-        {"icon": "🔗", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
-        {"icon": "🩺", "label": "Health", "url": "/health-center", "match": ("health.",)},
-        {"icon": "🧭", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
-        {"icon": "🩻", "label": "Doctor", "url": "/tools/doctor", "match": ("doctor.",), "requires_all_subnets": True},
-        {"icon": "🕐", "label": "Timeline", "url": "/timeline", "match": ("timeline.",)},
+        {"icon": "network", "label": "Subnets", "url": "/subnets", "match": ("subnets.",)},
+        {"icon": "server", "label": "Servers", "url": "/servers", "match": ("servers.",)},
+        {"icon": "link", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
+        {"icon": "stethoscope", "label": "Health", "url": "/health-center", "match": ("health.",)},
+        {"icon": "compass", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
+        {
+            "icon": "activity",
+            "label": "Doctor",
+            "url": "/tools/doctor",
+            "match": ("doctor.",),
+            "requires_all_subnets": True,
+        },
+        {"icon": "clock", "label": "Timeline", "url": "/timeline", "match": ("timeline.",)},
         # plugin nav items with section == "network" are appended at render time
     ],
 }
@@ -68,7 +82,7 @@ SETTINGS_GROUPS = [
     {
         "id": "kea",
         "label": "Kea",
-        "icon": "🔌",
+        "icon": "plug",
         "url": "/settings/kea",
         "blurb": "Control Agent, servers & HA, SSH, packages, config drift",
         "match": ("settings.settings_kea", "settings.author_kea_config", "settings.settings_infrastructure"),
@@ -76,7 +90,7 @@ SETTINGS_GROUPS = [
     {
         "id": "databases",
         "label": "Databases",
-        "icon": "🗄️",
+        "icon": "database",
         "url": "/settings/databases",
         "blurb": "Jen & Kea connections, export, import, backups, migrate",
         "match": ("database.",),
@@ -84,7 +98,7 @@ SETTINGS_GROUPS = [
     {
         "id": "security",
         "label": "Access & Security",
-        "icon": "🔐",
+        "icon": "lock",
         "url": "/settings/security",
         "blurb": "Users, API keys, MFA policy, sessions, rate limiting, SSL",
         "match": ("settings.settings_security", "users.users", "api.api_keys", "api.api_docs"),
@@ -92,7 +106,7 @@ SETTINGS_GROUPS = [
     {
         "id": "alerts",
         "label": "Alerts & Integrations",
-        "icon": "🔔",
+        "icon": "bell",
         "url": "/settings/alerts",
         "blurb": "Channels, templates, thresholds, DDNS/DNS provider, Prometheus",
         "match": ("settings.settings_alerts",),
@@ -100,7 +114,7 @@ SETTINGS_GROUPS = [
     {
         "id": "appearance",
         "label": "Appearance",
-        "icon": "🎨",
+        "icon": "palette",
         "url": "/settings/appearance",
         "blurb": "Logo, nav color, favicon, brand icons",
         "match": ("settings.settings_appearance", "settings.settings_icons"),
@@ -108,7 +122,7 @@ SETTINGS_GROUPS = [
     {
         "id": "system",
         "label": "System",
-        "icon": "⚙️",
+        "icon": "cog",
         "url": "/settings/system",
         "blurb": "Jen & plugin updates, ports, restart, retention",
         "match": ("settings.settings_system", "plugins."),
@@ -116,7 +130,7 @@ SETTINGS_GROUPS = [
     {
         "id": "logs",
         "label": "Logs",
-        "icon": "📝",
+        "icon": "scroll-text",
         "url": "/settings/logs",
         "blurb": "Audit log and alert delivery log",
         "match": ("users.audit_log",),

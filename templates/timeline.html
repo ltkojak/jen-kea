@@ -3,7 +3,7 @@
 {% block content %}
 
 <div class="page-header">
-    <h1>🕐 Timeline</h1>
+    <h1>{{ icon("clock", "ico-lg") }} Timeline</h1>
     <p>Everything Jen has recorded about one client — events, config changes, alerts sent, and its current lease and reservation — newest first.</p>
 </div>
 
@@ -20,7 +20,7 @@
             </div>
         </div>
         <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
-            <button type="submit" class="btn btn-primary">🕐 Show timeline</button>
+            <button type="submit" class="btn btn-primary">{{ icon("clock") }} Show timeline</button>
             <span class="form-hint" style="margin:0;">Either field is enough — an IP resolves to its current lease's MAC when one exists.</span>
         </div>
     </form>
@@ -31,8 +31,8 @@
     <div class="card-header">
         <span class="card-title">{{ result.mac or result.ip or 'Client' }}</span>
         <span style="font-size:12px;color:var(--text-muted);">
-            {% if result.mac %}<a href="/tools/explain?mac={{ result.mac }}" class="mono">🧭 Explain</a>{% endif %}
-            {% if result.mac %} · <a href="/reservations?search={{ result.mac }}">📌 Reservations</a>{% endif %}
+            {% if result.mac %}<a href="/tools/explain?mac={{ result.mac }}" class="mono">{{ icon("compass") }} Explain</a>{% endif %}
+            {% if result.mac %} · <a href="/reservations?search={{ result.mac }}">{{ icon("pin") }} Reservations</a>{% endif %}
         </span>
     </div>
     <div style="display:flex;gap:28px;flex-wrap:wrap;">
@@ -89,7 +89,7 @@
     </div>
     {% else %}
     {% from '_empty.html' import empty_state %}
-    {{ empty_state('🕐', 'Nothing recorded for this client yet.') }}
+    {{ empty_state(icon('clock'), 'Nothing recorded for this client yet.') }}
     {% endif %}
 </div>
 {% elif mac or ip %}

@@ -3,11 +3,11 @@
 {% block title %}Edit {{ 'IPv6 ' if family == 'v6' else '' }}Subnet{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>✏️ Edit {{ 'IPv6 ' if family == 'v6' else '' }}Subnet</h1>
+    <h1>{{ icon("pencil", "ico-lg") }} Edit {{ 'IPv6 ' if family == 'v6' else '' }}Subnet</h1>
     <p>{{ subnet.name }} — {{ subnet.cidr if family == 'v6' else subnet.subnet }}</p>
 </div>
 
-<div class="alert alert-warning">⚠️ Changes will modify <code>{{ 'kea-dhcp6.conf' if family == 'v6' else 'kea-dhcp4.conf' }}</code> on your Kea server and restart the Kea{{ ' IPv6' if family == 'v6' else '' }} service. Kea will be briefly unavailable during restart.{% if family != 'v6' %} If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.{% endif %} <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Changes will modify <code>{{ 'kea-dhcp6.conf' if family == 'v6' else 'kea-dhcp4.conf' }}</code> on your Kea server and restart the Kea{{ ' IPv6' if family == 'v6' else '' }} service. Kea will be briefly unavailable during restart.{% if family != 'v6' %} If Jen runs on the same host as Kea, the Jen web UI may also briefly drop.{% endif %} <strong>Leave any field at its current value or blank to leave it unchanged.</strong></div>
 
 <div class="card" style="max-width:680px;">
     <form method="POST" id="edit-subnet-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for sid, sha in kea.base_shas.items() %}<input type="hidden" name="base_sha_{{ sid }}" value="{{ sha or '' }}">{% endfor %}
@@ -25,7 +25,7 @@
             {% endif %}
             {% if kea.pools|length > 1 %}
             <div class="form-hint" style="color:var(--warning);">
-                ⚠️ This subnet has {{ kea.pools|length }} pools in Kea. Only the first
+                {{ icon("triangle-alert") }} This subnet has {{ kea.pools|length }} pools in Kea. Only the first
                 ({{ kea.pools[0] }}) is editable here — the rest
                 ({{ kea.pools[1:]|join(', ') }}) will be preserved as-is when you save.
             </div>
@@ -126,7 +126,7 @@
         </div>
 
         <div style="display:flex;gap:8px;margin-top:16px;">
-            <button type="button" class="btn btn-danger" id="show-confirm-btn">⚡ Apply &amp; Restart Kea{{ ' IPv6' if family == 'v6' else '' }}</button>
+            <button type="button" class="btn btn-danger" id="show-confirm-btn">{{ icon("zap") }} Apply &amp; Restart Kea{{ ' IPv6' if family == 'v6' else '' }}</button>
             <a href="/subnets" class="btn btn-secondary">Cancel</a>
         </div>
     </form>
@@ -136,7 +136,7 @@
          background:var(--surface2);border:1px solid var(--warning);
          border-radius:var(--radius);padding:16px;">
         <div style="display:flex;align-items:flex-start;gap:12px;">
-            <span style="font-size:22px;line-height:1;">⚠️</span>
+            <span style="font-size:22px;line-height:1;">{{ icon("triangle-alert") }}</span>
             <div style="flex:1;">
                 <div style="font-weight:600;margin-bottom:4px;">Apply changes and restart Kea{{ ' IPv6' if family == 'v6' else '' }}?</div>
                 <div style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
@@ -149,7 +149,7 @@
                      line-height:1.8;"></div>
                 <div id="validation-summary" style="font-size:12px;margin-bottom:14px;"></div>
                 <div style="display:flex;gap:8px;">
-                    <button type="button" class="btn btn-danger" id="apply-btn">✅ Yes, apply and restart</button>
+                    <button type="button" class="btn btn-danger" id="apply-btn">{{ icon("circle-check") }} Yes, apply and restart</button>
                     <button type="button" class="btn btn-secondary" id="confirm-cancel-btn">✕ Cancel</button>
                 </div>
             </div>
@@ -273,7 +273,7 @@ async function showConfirm() {
     // while the real preview call is in flight.
     var clientChanges = getChanges();
     renderChangeSummary(clientChanges);
-    valDiv.innerHTML = '<span style="color:var(--text-muted);">⏳ Checking configuration against Kea…</span>';
+    valDiv.innerHTML = '<span style="color:var(--text-muted);"><svg class="ico" aria-hidden="true"><use href="#i-hourglass"></use></svg> Checking configuration against Kea…</span>';
     applyBtn.disabled = true;
     panel.style.display = '';
     panel.scrollIntoView({behavior:'smooth', block:'nearest'});
@@ -294,7 +294,7 @@ async function showConfirm() {
         var data = await resp.json();
 
         if (!resp.ok || !data.ok) {
-            valDiv.innerHTML = '<div style="color:var(--danger);">❌ ' +
+            valDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' +
                 (data.error || 'Could not validate the configuration.') + '</div>';
             applyBtn.disabled = true;
             return;
@@ -326,7 +326,7 @@ async function showConfirm() {
         }
 
         valDiv.innerHTML = data.servers.map(function(s) {
-            var icon = s.ok ? '✅' : '❌';
+            var icon = s.ok ? '<svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg>' : '<svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg>';
             var color = s.ok ? 'var(--success)' : 'var(--danger)';
             return '<div style="color:' + color + ';">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
         }).join('');
@@ -336,7 +336,7 @@ async function showConfirm() {
             valDiv.innerHTML += '<div style="margin-top:8px;color:var(--text-muted);">Fix the error(s) above before applying — Kea would reject this configuration.</div>';
         }
     } catch (e) {
-        valDiv.innerHTML = '<div style="color:var(--danger);">❌ Could not reach the server to validate: ' + e.message + '</div>';
+        valDiv.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Could not reach the server to validate: ' + e.message + '</div>';
         applyBtn.disabled = true;
     }
 }

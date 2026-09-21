@@ -30,15 +30,17 @@
         .tab { flex:1; padding:8px; text-align:center; border-radius:6px; font-size:12px; cursor:pointer; border:1px solid rgba(0,180,216,0.15); color:#666; background:transparent; }
         .tab.active { background:rgba(0,180,216,0.1); color:#00b4d8; border-color:rgba(0,180,216,0.4); }
         .user-badge { background:rgba(0,180,216,0.08); border:1px solid rgba(0,180,216,0.12); border-radius:20px; padding:4px 14px; font-size:12px; color:#4a8fa0; text-align:center; margin-bottom:20px; }
+            .ico { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.125em; flex: none; }
     </style>
     <script nonce="{{ csp_nonce }}">(function(){document.documentElement.setAttribute('data-theme',localStorage.getItem('jen-theme')||'dark');})();</script>
 </head>
 <body>
+{% include "_icons.html" %}
 <div class="bg-grid"></div>
 <div class="card">
     <img src="/static/icons/jen-logo-wide.png" alt="Jen" class="logo-img">
     <div class="subtitle">The Kea DHCP Management Console</div>
-    <div class="user-badge">🔐 Verifying: {{ username }}</div>
+    <div class="user-badge">{{ icon("lock") }} Verifying: {{ username }}</div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}{% for cat, msg in messages %}<div class="alert">{{ msg }}</div>{% endfor %}{% endif %}
@@ -46,12 +48,12 @@
 
     <div class="tab-bar">
         {% if has_passkey %}
-        <button class="tab active" data-tab="passkey">🔑 Passkey</button>
+        <button class="tab active" data-tab="passkey">{{ icon("fingerprint-pattern") }} Passkey</button>
         {% endif %}
         {% if has_totp %}
-        <button class="tab {% if not has_passkey %}active{% endif %}" data-tab="totp">🔢 Authenticator</button>
+        <button class="tab {% if not has_passkey %}active{% endif %}" data-tab="totp">{{ icon("hash") }} Authenticator</button>
         {% endif %}
-        <button class="tab {% if not has_totp and not has_passkey %}active{% endif %}" data-tab="backup">🔐 Backup Code</button>
+        <button class="tab {% if not has_totp and not has_passkey %}active{% endif %}" data-tab="backup">{{ icon("lock") }} Backup Code</button>
     </div>
 
     {% if has_passkey %}
@@ -79,7 +81,7 @@
                 </label>
             </div>
         </div>
-        <button type="button" class="btn" id="passkey-login-btn"{% if locked %} disabled{% endif %}>🔑 Use passkey →</button>
+        <button type="button" class="btn" id="passkey-login-btn"{% if locked %} disabled{% endif %}>{{ icon("fingerprint-pattern") }} Use passkey →</button>
         <div id="passkey-status" style="font-size:13px;color:#888;margin-top:10px;min-height:18px;"></div>
     </div>
     {% endif %}

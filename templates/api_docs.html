@@ -2,13 +2,13 @@
 {% block title %}API Documentation{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📖 REST API Documentation</h1>
+    <h1>{{ icon("book-open", "ico-lg") }} REST API Documentation</h1>
     <p>Jen v{{ jen_version }} — integration API for Home Assistant, Zabbix, and custom scripts. Reads with any key; writes (v5.34.0) with a key that has <em>Allow writes</em>. Machine-readable: <a href="/api/v1/openapi.json">OpenAPI 3.0 document</a>.</p>
 </div>
 
 {% if keys %}
 <div class="card" style="border-color:rgba(0,180,216,0.3);">
-    <div class="card-header"><span class="card-title">🔑 Your API Keys</span><a href="/settings/api-keys" class="btn btn-sm btn-secondary">Manage Keys</a></div>
+    <div class="card-header"><span class="card-title">{{ icon("key-round") }} Your API Keys</span><a href="/settings/api-keys" class="btn btn-sm btn-secondary">Manage Keys</a></div>
     <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Select a key to pre-fill examples below:</p>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
         {% for k in keys %}
@@ -269,7 +269,7 @@
 
 <!-- Home Assistant section -->
 <div class="card" style="border-color:rgba(0,180,216,0.3);">
-    <div class="card-header"><span class="card-title">🏠 Home Assistant Integration</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("house") }} Home Assistant Integration</span></div>
 
     <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">
         Add these to your <code class="mono-box">configuration.yaml</code>. Replace <code class="mono-box">YOUR_KEY</code> with your API key and <code class="mono-box">{{ base_url }}</code> with your Jen URL.
@@ -317,7 +317,7 @@ rest:
 
 <!-- Zabbix section -->
 <div class="card" style="border-color:rgba(0,180,216,0.3);">
-    <div class="card-header"><span class="card-title">📊 Zabbix Integration</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("chart-bar") }} Zabbix Integration</span></div>
 
     <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">
         Use Zabbix HTTP Agent items to poll the Jen API. Create an item for each metric you want to track.

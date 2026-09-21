@@ -2,13 +2,13 @@
 {% block title %}Review {{ src.label }} Import{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>{{ src.icon }} Review Import</h1>
+    <h1>{{ icon(src.icon, "ico-lg") }} Review Import</h1>
     <p>Nothing has been written to Kea yet. Uncheck anything you don't want, adjust the subnet ID or name if needed, then continue.</p>
 </div>
 
 {% if plan.warnings %}
 <div class="card" style="border-color:var(--warning);margin-bottom:20px;">
-    <div class="card-header"><span class="card-title">⚠️ {{ plan.warnings|length }} warning(s) from the {{ src.file }}</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("triangle-alert") }} {{ plan.warnings|length }} warning(s) from the {{ src.file }}</span></div>
     <ul style="margin:0;padding-left:20px;font-size:13px;color:var(--text-muted);">
         {% for w in plan.warnings %}
         <li>{{ w }}</li>
@@ -19,7 +19,7 @@
 
 {% if leases %}
 <div class="card" style="margin-bottom:20px;">
-    <div class="card-header"><span class="card-title">📋 dhcpd.leases</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("clipboard-list") }} dhcpd.leases</span></div>
     <p style="font-size:13px;margin:0;">
         <strong>{{ leases.active }}</strong> active lease(s) in the file — <strong>{{ leases.in_ranges }}</strong> inside
         the ranges being imported, <strong>{{ leases.reserved }}</strong> on an address that becomes a reservation.
@@ -99,7 +99,7 @@
     </div>
 
     <div style="display:flex;gap:10px;">
-        <button type="submit" class="btn btn-primary">👁️ Preview Changes</button>
+        <button type="submit" class="btn btn-primary">{{ icon("eye") }} Preview Changes</button>
         <a href="{{ url_for(src.upload_endpoint) }}" class="btn btn-secondary">Cancel</a>
     </div>
 </form>

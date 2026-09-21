@@ -37,8 +37,8 @@
     <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">{{ d.first_seen|utcdate }}</td>
     <td data-label="Last Seen" class="mono hide-tablet" style="{% if d.is_stale %}color:var(--warning);{% endif %}">{{ d.last_seen|utcfmt }}</td>
     <td data-label="Status" class="hide-mobile">
-        {% if d.is_stale %}<span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">⚠ Stale</span>
-        {% elif d.has_reservation %}<span class="badge badge-reserved" title="Has static reservation: {{ d.reservation_ip }}">📌 Reserved</span>
+        {% if d.is_stale %}<span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">{{ icon("triangle-alert") }} Stale</span>
+        {% elif d.has_reservation %}<span class="badge badge-reserved" title="Has static reservation: {{ d.reservation_ip }}">{{ icon("pin") }} Reserved</span>
         {% else %}<span class="badge badge-dynamic">● Dynamic</span>{% endif %}
     </td>
     <td data-label="">
@@ -60,7 +60,7 @@
                 {% else %}
                 <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 {% endif %}
-                <a href="/timeline?mac={{ d.mac }}" class="action-menu-item">🕐 Timeline</a>
+                <a href="/timeline?mac={{ d.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
                 {% if current_user.role in ('superadmin','admin') %}
                 <div class="action-menu-divider"></div>
                 <form method="POST" action="/devices/delete/{{ d.id }}" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -79,7 +79,7 @@
     {% elif search %}
     <div style="text-align:center;padding:32px;color:var(--text-muted);">No devices matching "{{ search }}".</div>
     {% else %}
-    {{ empty_state('📱', 'Devices appear as leases are seen; the inventory fills itself.', [('📋 Leases', '/leases')]) }}
+    {{ empty_state(icon('smartphone'), 'Devices appear as leases are seen; the inventory fills itself.', [((icon('list') ~ ' Leases'), '/leases')]) }}
     {% endif %}
 </td></tr>
 {% endif %}

@@ -4,7 +4,7 @@
 {% from '_icons.html' import icon_trash, icon_pause, icon_dots %}
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>🔑 API Keys</h1>
+    <h1>{{ icon("key-round", "ico-lg") }} API Keys</h1>
     <p>Manage read-only API keys for integrations with Home Assistant, Zabbix, and similar tools.</p>
 </div>
 
@@ -12,10 +12,10 @@
 
 {% if session.get('new_api_key') %}
 <div class="alert alert-success" style="font-family:monospace;word-break:break-all;">
-    <strong>🔑 New API Key — copy this now, it won't be shown again:</strong><br><br>
+    <strong>{{ icon("key-round") }} New API Key — copy this now, it won't be shown again:</strong><br><br>
     <span id="newKeyVal" style="font-size:15px;letter-spacing:1px;">{{ session.pop('new_api_key') }}</span>
     <br><br>
-    <button id="copy-new-key-btn" class="btn btn-sm btn-secondary">📋 Copy to Clipboard</button>
+    <button id="copy-new-key-btn" class="btn btn-sm btn-secondary">{{ icon("copy") }} Copy to Clipboard</button>
     <script nonce="{{ csp_nonce }}">
     document.getElementById('copy-new-key-btn').addEventListener('click', function() {
         navigator.clipboard.writeText(document.getElementById('newKeyVal').textContent);
@@ -61,14 +61,14 @@
                 {% endif %}
             </div>
         </div>
-        <button type="submit" class="btn btn-primary" style="margin-bottom:20px;">🔑 Generate Key</button>
+        <button type="submit" class="btn btn-primary" style="margin-bottom:20px;">{{ icon("key-round") }} Generate Key</button>
     </form>
 </div>
 
 <div class="card">
     <div class="card-header">
         <span class="card-title">Active & Revoked Keys</span>
-        <a href="/settings/api-docs" class="btn btn-sm btn-secondary">📖 View API Docs</a>
+        <a href="/settings/api-docs" class="btn btn-sm btn-secondary">{{ icon("book-open") }} View API Docs</a>
     </div>
     {% if keys %}
     <div class="table-wrap">
@@ -96,7 +96,7 @@
                 {% endif %}
             </td>
             <td style="font-size:12px;">
-                {% if k.can_write %}<span style="color:var(--warning);">✎ read/write</span>{% else %}<span style="color:var(--text-muted);">read-only</span>{% endif %}
+                {% if k.can_write %}<span style="color:var(--warning);">{{ icon("pencil") }} read/write</span>{% else %}<span style="color:var(--text-muted);">read-only</span>{% endif %}
             </td>
             <td style="color:var(--text-muted);font-size:12px;">
                 {{ k.created_at|utcdate }}
@@ -138,7 +138,7 @@
 </div>
 
 <div class="card" style="border-style:dashed;opacity:0.8;">
-    <div class="card-header"><span class="card-title">ℹ️ About API Keys</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("info") }} About API Keys</span></div>
     <p style="font-size:13px;color:var(--text-muted);line-height:1.6;">
         All API keys are <strong>read-only</strong> — they can query leases, devices, reservations, and subnet stats but cannot make any changes to your network.<br><br>
         Keys are passed in the <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">Authorization: Bearer &lt;key&gt;</code> HTTP header.<br><br>

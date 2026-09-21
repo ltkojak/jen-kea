@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_icons.html' import icon_trash %}
 <div class="page-header">
-    <h1>🔖 Saved Searches & Filters</h1>
+    <h1>{{ icon("bookmark", "ico-lg") }} Saved Searches & Filters</h1>
     <p>Your saved page filters — accessible from the filter bar on Leases and Reservations pages</p>
 </div>
 
@@ -27,7 +27,7 @@
         <td class="mono hide-mobile" style="font-size:11px;color:var(--text-muted);">{{ s.params[:80] }}{% if s.params|length > 80 %}…{% endif %}</td>
         <td style="color:var(--text-muted);font-size:12px;">{{ s.created_at|utcdate }}</td>
         <td style="display:flex;gap:6px;">
-            <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">▶ Load</a>
+            <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">{{ icon("play") }} Load</a>
             <form method="POST" action="/saved-searches/delete/{{ s.id }}" style="display:inline;"
                   data-confirm="Delete this saved filter?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del" title="Delete">{{ icon_trash() }}</button>
@@ -36,7 +36,7 @@
     </tr>
     {% else %}
     <tr><td colspan="5">
-        {{ empty_state('🔖', 'No saved searches yet — save a filter from any list page and it shows up here.', []) }}
+        {{ empty_state(icon('bookmark'), 'No saved searches yet — save a filter from any list page and it shows up here.', []) }}
     </td></tr>
     {% endfor %}
     </tbody>
@@ -45,7 +45,7 @@
 </div>
 {% else %}
 <div class="alert alert-info">
-    No saved searches yet. Use the <strong>🔖 Save Filter</strong> button on the Leases or Reservations page to save your current filter.
+    No saved searches yet. Use the <strong>{{ icon("bookmark") }} Save Filter</strong> button on the Leases or Reservations page to save your current filter.
 </div>
 {% endif %}
 {% endblock %}

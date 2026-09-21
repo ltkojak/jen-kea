@@ -57,7 +57,7 @@ function confirmBulk(action) {
 {% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📌 Reservations</h1>
+    <h1>{{ icon("pin", "ico-lg") }} Reservations</h1>
     <p>{{ total }} reservation(s)</p>
 </div>
 
@@ -127,15 +127,15 @@ function confirmBulk(action) {
     </form>
     {% if current_user.role in ('superadmin','admin') %}
     <a href="/reservations/add" class="btn btn-primary">+ Add Reservation</a>
-    <a href="/reservations/export" class="btn btn-secondary">⬇ Export CSV</a>
+    <a href="/reservations/export" class="btn btn-secondary">{{ icon("download") }} Export CSV</a>
     <label class="btn btn-secondary" style="cursor:pointer;">
-        ⬆ Import CSV
+        {{ icon("upload") }} Import CSV
         <form id="import-form" method="POST" action="/reservations/import" enctype="multipart/form-data" style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="file" name="csv_file" accept=".csv" data-submit>
         </form>
     </label>
     <label class="btn btn-secondary" style="cursor:pointer;" title="Preview what would be imported without making changes">
-        🔍 Dry-run Import
+        {{ icon("search") }} Dry-run Import
         <form id="dryrun-form" method="POST" action="/reservations/import?dry_run=1" enctype="multipart/form-data" style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="file" name="csv_file" accept=".csv" data-submit>
         </form>
@@ -143,7 +143,7 @@ function confirmBulk(action) {
     {% endif %}
     <!-- Saved filters -->
     <div style="display:flex;gap:6px;align-items:center;">
-        <button class="btn btn-secondary btn-sm" id="save-filter-btn">🔖 Save Filter</button>
+        <button class="btn btn-secondary btn-sm" id="save-filter-btn">{{ icon("bookmark") }} Save Filter</button>
         <select id="saved-filter-select" style="min-width:130px;font-size:12px;">
             <option value="">Saved filters...</option>
         </select>

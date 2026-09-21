@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
     <div>
-        <h1>📈 Reports</h1>
+        <h1>{{ icon("chart-line", "ico-lg") }} Reports</h1>
         <p>Lease utilization history and network trends</p>
     </div>
     <div style="display:flex;gap:8px;align-items:center;">
@@ -56,7 +56,7 @@
 
 {% if data_points == 0 %}
 <div class="card" style="text-align:center;padding:48px;">
-    <div style="font-size:48px;margin-bottom:16px;">📊</div>
+    <div style="font-size:48px;margin-bottom:16px;">{{ icon("chart-bar") }}</div>
     <div style="font-size:16px;font-weight:600;margin-bottom:8px;">No history data yet</div>
     <div style="color:var(--text-muted);font-size:13px;">
         Jen collects a snapshot every <strong>{{ snapshot_interval }} minutes</strong>.
@@ -70,7 +70,7 @@
 {% if h.data %}
 <div class="card">
     <div class="card-header">
-        <span class="card-title">📊 {{ h.name }} — {{ h.cidr }}</span>
+        <span class="card-title">{{ icon("chart-bar") }} {{ h.name }} — {{ h.cidr }}</span>
         <span style="font-size:12px;color:var(--text-muted);">{{ h.data|length }} data points</span>
     </div>
     <canvas id="chart-{{ subnet_id }}" height="80"></canvas>
@@ -83,7 +83,7 @@
 <!-- Settings -->
 {% if current_user.role in ('superadmin','admin') %}
 <div class="card">
-    <div class="card-header"><span class="card-title">⚙️ History Settings</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("settings") }} History Settings</span></div>
     <form method="POST" action="/reports/settings"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">

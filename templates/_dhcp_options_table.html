@@ -6,11 +6,11 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">
-            {% if level == 'global' %}🌐 Global options
-            {% elif level == 'shared-network' %}🔗 Shared network: {{ key }}
+            {% if level == 'global' %}{{ icon("globe") }} Global options
+            {% elif level == 'shared-network' %}{{ icon("link") }} Shared network: {{ key }}
             {% elif level == 'subnet' %}{{ subnet_label }} — subnet options
             {% elif level == 'pool' %}{{ subnet_label }} — pool <span class="mono">{{ pool_str }}</span>
-            {% elif level == 'class' %}⚙️ Class options
+            {% elif level == 'class' %}{{ icon("settings") }} Class options
             {% endif %}
         </span>
     </div>
@@ -58,7 +58,7 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">➕ Add option</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("plus") }} Add option</span></div>
     <form method="POST" action="{{ url_for('subnets.dhcp_options_set') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="level" value="{{ level }}">

@@ -5,7 +5,7 @@
 
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>🧩 Plugin Manager</h1>
+    <h1>{{ icon("puzzle", "ico-lg") }} Plugin Manager</h1>
     <p>Extend Jen with optional add-ins. Changes take effect after restarting Jen. Jen's own updates are on <a href="/settings/system#sys-updates">System → Jen Updates</a>.</p>
 </div>
 
@@ -42,7 +42,7 @@
                 {% if p.changelog_url %}
                 <div style="margin-top:3px;">
                     <a href="{{ p.changelog_url }}" target="_blank"
-                       style="font-size:11px;color:var(--primary);">📋 Changelog</a>
+                       style="font-size:11px;color:var(--primary);">{{ icon("file-text") }} Changelog</a>
                 </div>
                 {% endif %}
             </td>
@@ -52,7 +52,7 @@
             <td style="font-size:13px;white-space:nowrap;">
                 {% if p.registry_version %}
                     {% if p.update_available %}
-                    <span style="color:var(--warning);">v{{ p.registry_version }} ⬆</span>
+                    <span style="color:var(--warning);">v{{ p.registry_version }} {{ icon("arrow-up") }}</span>
                     {% else %}
                     <span style="color:var(--success);">v{{ p.registry_version }} ✓</span>
                     {% endif %}
@@ -62,9 +62,9 @@
             </td>
             <td>
                 {% if not p.version_ok %}
-                <span style="color:var(--warning);font-size:12px;">⚠ Jen version mismatch</span>
+                <span style="color:var(--warning);font-size:12px;">{{ icon("triangle-alert") }} Jen version mismatch</span>
                 {% elif p.get('api_ok', True) == false %}
-                <span style="color:var(--warning);font-size:12px;" title="This plugin is written against a newer plugin API than this Jen offers — upgrade Jen.">⚠ needs plugin API v{{ p.plugin_api }}</span>
+                <span style="color:var(--warning);font-size:12px;" title="This plugin is written against a newer plugin API than this Jen offers — upgrade Jen.">{{ icon("triangle-alert") }} needs plugin API v{{ p.plugin_api }}</span>
                 {% elif p.enabled %}
                 <span style="color:var(--success);font-size:12px;">● Enabled</span>
                 {% else %}
@@ -78,7 +78,7 @@
                 {% endif %}
                 {% if is_systemd_host and not p.bundled %}
                 {% if p.root_owned %}
-                <div style="margin-top:4px;font-size:10px;color:var(--success);">🔒 root-owned</div>
+                <div style="margin-top:4px;font-size:10px;color:var(--success);">{{ icon("lock") }} root-owned</div>
                 {% else %}
                 <div style="margin-top:4px;font-size:10px;color:var(--warning);">writable — reinstall to harden</div>
                 {% endif %}
@@ -89,13 +89,13 @@
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     {% if p.update_available %}
                     <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn btn-sm btn-primary">⬆ Update</button>
+                        <button type="submit" class="btn btn-sm btn-primary">{{ icon("upload") }} Update</button>
                     </form>
                     {% endif %}
                     {% if p.missing_os_packages %}
                     {% if is_systemd_host %}
                     <form method="POST" action="/settings/plugins/deps/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn btn-sm btn-primary" title="Installs {{ p.missing_os_packages|join(', ') }} on the Jen host through the root-run plugin service">⬇ Install {{ p.missing_os_packages|join(', ') }}</button>
+                        <button type="submit" class="btn btn-sm btn-primary" title="Installs {{ p.missing_os_packages|join(', ') }} on the Jen host through the root-run plugin service">{{ icon("download") }} Install {{ p.missing_os_packages|join(', ') }}</button>
                     </form>
                     {% else %}
                     <code style="font-size:11px;">sudo apt install {{ p.missing_os_packages|join(' ') }}</code>
@@ -130,7 +130,7 @@
 </div>
 {% else %}
 <div class="card" style="text-align:center;padding:40px;color:var(--text-muted);">
-    <div style="font-size:36px;margin-bottom:12px;">🧩</div>
+    <div style="font-size:36px;margin-bottom:12px;">{{ icon("puzzle") }}</div>
     <div style="font-size:14px;margin-bottom:6px;">No plugins installed yet.</div>
     <div style="font-size:12px;">Browse the registry below to find add-ins.</div>
 </div>
@@ -146,7 +146,7 @@
     {% if fetch_error %}
     <div style="background:#2a1a0a;border:1px solid var(--warning);border-radius:var(--radius);
                 padding:12px 16px;margin-bottom:16px;font-size:13px;">
-        ⚠️ Could not reach the plugin registry: <strong>{{ fetch_error }}</strong><br>
+        {{ icon("triangle-alert") }} Could not reach the plugin registry: <strong>{{ fetch_error }}</strong><br>
         <span style="font-size:12px;color:var(--text-muted);">
             Check internet connectivity on the Jen host, or try again later.
             Installed plugins continue to work normally.
@@ -194,7 +194,7 @@
             {% if entry.changelog_url %}
             <span>·</span>
             <a href="{{ entry.changelog_url }}" target="_blank"
-               style="color:var(--primary);">📋 Changelog</a>
+               style="color:var(--primary);">{{ icon("file-text") }} Changelog</a>
             {% endif %}
         </div>
 
@@ -202,11 +202,11 @@
         <span style="font-size:12px;color:var(--success);">✓ Installed &amp; up to date</span>
         {% elif entry.installed and entry.update_available %}
         <form method="POST" action="/settings/plugins/update/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-primary">⬆ Update to v{{ entry.version }}</button>
+            <button type="submit" class="btn btn-sm btn-primary">{{ icon("upload") }} Update to v{{ entry.version }}</button>
         </form>
         {% elif entry.version_ok %}
         <form method="POST" action="/settings/plugins/install/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-primary">⬇ Install</button>
+            <button type="submit" class="btn btn-sm btn-primary">{{ icon("download") }} Install</button>
         </form>
         {% else %}
         <span style="font-size:12px;color:var(--text-muted);">Upgrade Jen to v{{ entry.requires_jen }} to install</span>

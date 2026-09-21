@@ -98,6 +98,14 @@ def create_app() -> Flask:
 
     # ── Flask app ─────────────────────────────────────────────────────────────
     app = Flask(__name__, static_folder=extensions.STATIC_DIR, template_folder=extensions.TEMPLATE_DIR)
+
+    # v5.50.0 (Q57) — the inline Lucide sprite: `{{ icon("pencil") }}` in any template,
+    # including HTMX partials rendered on their own (jen/services/icons.py).
+    from jen.services.icons import icon as _icon
+    from jen.services.icons import nav_icon as _nav_icon
+
+    app.jinja_env.globals["icon"] = _icon
+    app.jinja_env.globals["nav_icon"] = _nav_icon
     app.secret_key = _load_secret_key()
 
     # ── Session cookie hardening (v4.4.2) ─────────────────────────────────────

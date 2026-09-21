@@ -2,13 +2,13 @@
 {% block title %}Backup Codes{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🔑 Backup Recovery Codes</h1>
+    <h1>{{ icon("key-round", "ico-lg") }} Backup Recovery Codes</h1>
     <p>Save these codes somewhere safe — they can be used if you lose access to your authenticator</p>
 </div>
 
 <div class="card">
     <div style="background:rgba(243,156,18,0.1);border:1px solid rgba(243,156,18,0.3);border-radius:var(--radius);padding:12px 16px;margin-bottom:20px;color:var(--warning);font-size:13px;">
-        ⚠️ <strong>Save these codes now.</strong> They will only be shown once. Each code can only be used one time.
+        {{ icon("triangle-alert") }} <strong>Save these codes now.</strong> They will only be shown once. Each code can only be used one time.
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px;">
@@ -18,8 +18,8 @@
     </div>
 
     <div style="display:flex;gap:8px;">
-        <button id="copy-codes-btn" class="btn btn-secondary">📋 Copy All</button>
-        <button id="print-codes-btn" class="btn btn-secondary">🖨️ Print</button>
+        <button id="copy-codes-btn" class="btn btn-secondary">{{ icon("copy") }} Copy All</button>
+        <button id="print-codes-btn" class="btn btn-secondary">{{ icon("printer") }} Print</button>
         <a href="/mfa/enroll" class="btn btn-primary">✓ I've saved these codes</a>
     </div>
 </div>

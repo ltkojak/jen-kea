@@ -9,7 +9,7 @@
 
 {% if explained %}
 <div class="card" style="border-color:rgba(0,180,216,0.3);">
-    <div class="card-header"><span class="card-title">🧭 What Jen expects</span>
+    <div class="card-header"><span class="card-title">{{ icon("compass") }} What Jen expects</span>
         <a href="/tools/explain?mac={{ mac }}&subnet={{ subnet_id }}" style="font-size:12px;">full explanation</a></div>
     <div style="display:flex;gap:28px;flex-wrap:wrap;">
         <div><div class="stat-label">Subnet</div><div class="mono">{{ explained.subnet.id }} · {{ explained.subnet.cidr }}</div></div>
@@ -19,7 +19,7 @@
 {% endif %}
 
 <div class="card">
-    <div class="card-header"><span class="card-title">📜 What Kea logged — {{ total_events }} line{{ '' if total_events == 1 else 's' }}</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("search-code") }} What Kea logged — {{ total_events }} line{{ '' if total_events == 1 else 's' }}</span></div>
     {% if not groups %}
     <div style="text-align:center;padding:24px;color:var(--text-muted);">No lines in the scanned window name {{ mac }}. The client may not have talked to this server recently, or the lines are older than the window.</div>
     {% endif %}

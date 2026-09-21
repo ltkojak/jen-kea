@@ -94,6 +94,16 @@ def migrate_legacy():
     return redirect(url_for("database.migrate_page"), code=301)
 
 
+_OK_MARK = "\u2705"  # the ok/warning glyph dbexport prefixes its per-table result lines with
+
+
+def _split_mark(line: str) -> tuple[bool, str]:
+    """(is_ok, text without the leading status glyph) — the glyph is a service-layer
+    convention; the UI shows plain text (icons are the SVG sprite, Q57)."""
+    ok = line.startswith(_OK_MARK)
+    return ok, line.lstrip(_OK_MARK + "\u26a0\u274c\ufe0f ").strip()
+
+
 # ── Export ────────────────────────────────────────────────────────────────────
 @bp.route("/database/export/jen", methods=["POST"])
 @login_required
@@ -396,21 +406,21 @@ def backup_now():
             content, _ = dbexport.export_jen()
             payload = json.loads(content.decode("utf-8"))
             path = dbexport._write_backup(payload, f"jen-manual-{ts}.json.gz")
-            results.append(f"✅ Jen backup saved: {os.path.basename(path)}")
+            results.append((True, f"Jen backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "jen", path)
         except Exception as e:
-            results.append(f"❌ Jen backup failed: {e}")
+            results.append((False, f"Jen backup failed: {e}"))
     if "kea" in include:
         try:
             content, _ = dbexport.export_kea("reservations")
             payload = json.loads(content.decode("utf-8"))
             path = dbexport._write_backup(payload, f"kea-manual-{ts}.json.gz")
-            results.append(f"✅ Kea backup saved: {os.path.basename(path)}")
+            results.append((True, f"Kea backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "kea", path)
         except Exception as e:
-            results.append(f"❌ Kea backup failed: {e}")
-    for r in results:
-        flash(r, "success" if r.startswith("✅") else "error")
+            results.append((False, f"Kea backup failed: {e}"))
+    for ok, msg in results:
+        flash(msg, "success" if ok else "error")
     return redirect(url_for("database.database", tab="backups"))
 
 
@@ -479,7 +489,8 @@ def import_confirm():
             flash(f"Unknown database type '{db}' in export file.", "error")
             return redirect(url_for("database.database", tab="import"))
         for r in results:
-            flash(r, "success" if r.startswith("✅") else "warning")
+            ok, msg = _split_mark(r)
+            flash(msg, "success" if ok else "warning")
     except Exception as e:
         logger.error(f"DB import failed: {e}")
         flash("Import failed. Check server logs for details.", "error")

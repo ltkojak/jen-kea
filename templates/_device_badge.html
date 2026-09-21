@@ -20,7 +20,7 @@
     {% else %}
     {{ info.device_icon or '' }}
     {% endif %}
-    {{ info.manufacturer }}{% if info.is_manual %} 🔒{% endif %}
+    {{ info.manufacturer }}{% if info.is_manual %} {{ icon("lock") }}{% endif %}
 </span>
 {% endif %}
 {% endmacro %}

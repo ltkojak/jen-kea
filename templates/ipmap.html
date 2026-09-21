@@ -2,7 +2,7 @@
 {% block title %}IP Map{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🗺️ IP Address Map</h1>
+    <h1>{{ icon("map", "ico-lg") }} IP Address Map</h1>
     <p>Visual layout of address space usage</p>
 </div>
 
@@ -23,7 +23,7 @@
 </div>
 
 {% if pool_truncated %}
-<div style="font-size:12px;color:var(--warning);margin-bottom:12px;">⚠ Pool is larger than the display limit ({{ max_ipmap_addresses }} addresses) — showing a truncated view.</div>
+<div style="font-size:12px;color:var(--warning);margin-bottom:12px;">{{ icon("triangle-alert") }} Pool is larger than the display limit ({{ max_ipmap_addresses }} addresses) — showing a truncated view.</div>
 {% endif %}
 
 <div class="card">

@@ -545,26 +545,26 @@ def author_kea_config_post(service):
         name = server.get("name", server["ssh_host"])
         config, tls_paths, _warning, cfg_err = _author_kea_config_for(service, server, common, subnets)
         if cfg_err:
-            errors.append(f"❌ {name}: {cfg_err}")
+            errors.append(f"{name}: {cfg_err}")
             continue
         try:
             res, conf_path = _run_author_script(
                 server, service, config, tls_paths, dry_run=False, allow_overwrite=allow_overwrite
             )
             if res["code"] == "ok":
-                results.append(f"✅ {name}: {conf_path} written. Enable/restart the service to use it.")
+                results.append(f"{name}: {conf_path} written. Enable/restart the service to use it.")
             elif res["code"] == "exists":
-                errors.append(f'❌ {name}: {conf_path} already exists — check "overwrite" to replace it.')
+                errors.append(f'{name}: {conf_path} already exists — check "overwrite" to replace it.')
             elif res["code"] == "missingbinary":
-                errors.append(f"❌ {name}: {res['binary']} is not installed on this server — install it and try again.")
+                errors.append(f"{name}: {res['binary']} is not installed on this server — install it and try again.")
             elif res["code"] == "tlsmissing":
-                errors.append(f"❌ {name}: TLS file not found on this server: {res['path']}")
+                errors.append(f"{name}: TLS file not found on this server: {res['path']}")
             elif res["code"] == "testerror":
-                errors.append(f"❌ {name}: config test failed, nothing written. Error: {res['detail']}")
+                errors.append(f"{name}: config test failed, nothing written. Error: {res['detail']}")
             else:
-                errors.append(f"❌ {name}: {res['detail']}")
+                errors.append(f"{name}: {res['detail']}")
         except Exception as e:
-            errors.append(f"❌ {name}: {str(e)}")
+            errors.append(f"{name}: {str(e)}")
 
     # Persist the subnets used to author this config into Jen's own
     # [subnets]/[subnets6] — only when at least one server genuinely

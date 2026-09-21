@@ -7,7 +7,7 @@
 {% set ph = s.packet_health %}
 <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <div style="font-weight:600;">📦 Packet health (last {{ ph.window_minutes }} min)</div>
+        <div style="font-weight:600;">{{ icon("package") }} Packet health (last {{ ph.window_minutes }} min)</div>
         <span class="badge {% if ph.status == 'fail' %}badge-danger{% elif ph.status == 'warn' %}badge-dynamic{% else %}badge-reserved{% endif %}">
             {{ ph.status|replace('_',' ')|title }}
         </span>
@@ -41,6 +41,6 @@
 </div>
 {% elif s.up %}
 <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
-    📦 Packet health: collecting — needs a second snapshot before it can show a rate.
+    {{ icon("package") }} Packet health: collecting — needs a second snapshot before it can show a rate.
 </div>
 {% endif %}

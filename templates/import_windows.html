@@ -2,7 +2,7 @@
 {% block title %}Import from Windows DHCP{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🪟 Import from Windows DHCP</h1>
+    <h1>{{ icon("app-window", "ico-lg") }} Import from Windows DHCP</h1>
     <p>Migrate scopes, reservations, and policies from a Windows DHCP server export.</p>
 </div>
 
@@ -23,17 +23,17 @@
             <input type="file" name="xml_file" accept=".xml" required style="width:100%;">
             <div class="form-hint">The raw XML from Export-DhcpServer, up to 5 MB.</div>
         </div>
-        <button type="submit" class="btn btn-primary">📤 Upload &amp; Review</button>
+        <button type="submit" class="btn btn-primary">{{ icon("upload") }} Upload &amp; Review</button>
     </form>
 </div>
 
 <div class="alert alert-info">
-    ℹ️ This only ever touches the <strong>primary</strong> Kea server's config. If you run an HA pair,
+    {{ icon("info") }} This only ever touches the <strong>primary</strong> Kea server's config. If you run an HA pair,
     sync the change to the partner the same way you already do for any other config edit.
 </div>
 
 <div class="alert alert-warning">
-    ⚠️ Validated against a real <code>Export-DhcpServer</code> file (two scopes, 57 reservations,
+    {{ icon("triangle-alert") }} Validated against a real <code>Export-DhcpServer</code> file (two scopes, 57 reservations,
     per-reservation options). Exclusions, superscopes, policies and options 121/249 are still only
     exercised by a hand-authored fixture — read the preview diff before you apply.
 </div>

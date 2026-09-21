@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_icons.html' import icon_trash %}
 <div class="page-header">
-    <h1>🎨 Appearance</h1>
+    <h1>{{ icon("palette", "ico-lg") }} Appearance</h1>
     <p>Logo, nav color, favicon, and the brand icons shown in the device inventory.</p>
 </div>
 
@@ -13,7 +13,7 @@
 <!-- Custom Branding -->
 <div class="card" id="app-branding">
     <div class="card-header">
-        <span class="card-title">🎨 Branding</span>
+        <span class="card-title">{{ icon("palette") }} Branding</span>
     </div>
     <p style="color:var(--text-muted);font-size:12px;margin-bottom:20px;">
         Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar color to distinguish environments.
@@ -32,7 +32,7 @@
             <form method="POST" action="/settings/upload-nav-logo" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div style="display:flex;gap:8px;align-items:center;">
                     <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" style="flex:1;">
-                    <button type="submit" class="btn btn-primary btn-sm">⬆ Upload</button>
+                    <button type="submit" class="btn btn-primary btn-sm">{{ icon("upload") }} Upload</button>
                 </div>
                 <div class="form-hint">PNG, SVG, JPG, or WebP — max 200KB. SVGs with scripts or event handlers are refused. Recommended height: 28–36px.</div>
             </form>
@@ -43,7 +43,7 @@
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                     <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">
                     <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" style="flex:1;">
-                    <button type="submit" class="btn btn-primary btn-sm">💾 Save</button>
+                    <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save</button>
                 </div>
                 <div class="form-hint">Useful for distinguishing prod vs dev environments. Leave blank for default.</div>
             </form>
@@ -59,7 +59,7 @@
 <!-- Favicon -->
 <div class="card" id="app-favicon">
     <div class="card-header">
-        <span class="card-title">🖼️ Favicon</span>
+        <span class="card-title">{{ icon("image") }} Favicon</span>
         {% if has_favicon %}<span class="badge badge-reserved">Custom</span>{% endif %}
     </div>
     {% if has_favicon %}
@@ -82,7 +82,7 @@
 
 <!-- Brand icons -->
 <div class="card" id="app-icons">
-    <div class="card-header"><span class="card-title">🏷️ Brand Icons</span>
+    <div class="card-header"><span class="card-title">{{ icon("tag") }} Brand Icons</span>
         <span style="font-size:12px;color:var(--text-muted);">Used in the Device Inventory</span>
     </div>
     <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
@@ -102,7 +102,7 @@
             <label>SVG File</label>
             <input type="file" name="icon" accept=".svg" required>
         </div>
-        <button type="submit" class="btn btn-primary">⬆ Upload</button>
+        <button type="submit" class="btn btn-primary">{{ icon("upload") }} Upload</button>
     </form>
 
     {% if custom %}

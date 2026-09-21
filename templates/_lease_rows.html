@@ -29,9 +29,9 @@
                 <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
                 {% else %}
                 <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
-                <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item">🧭 Why this address?</a>
-                <a href="/timeline?mac={{ l.mac }}" class="action-menu-item">🕐 Timeline</a>
-                {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ l.mac }}" class="action-menu-item">📜 Trace in Kea log</a>{% endif %}
+                <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>
+                <a href="/timeline?mac={{ l.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
+                {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ l.mac }}" class="action-menu-item">{{ icon("search-code") }} Trace in Kea log</a>{% endif %}
                 <div class="action-menu-divider"></div>
                 <form method="POST" action="/leases/release" data-confirm="Release lease for {{ l.ip }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="ip" value="{{ l.ip }}">
@@ -45,6 +45,6 @@
 </tr>
 {% else %}
 <tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}">
-    {{ empty_state('📭', 'No active leases yet — Kea hands out leases as clients ask; check Health if you expected some.', [('🩺 Health', '/health-center')]) }}
+    {{ empty_state(icon('inbox'), 'No active leases yet — Kea hands out leases as clients ask; check Health if you expected some.', [((icon('stethoscope') ~ ' Health'), '/health-center')]) }}
 </td></tr>
 {% endfor %}

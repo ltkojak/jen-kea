@@ -2,23 +2,23 @@
 {% block title %}MFA Enrollment{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🔐 Two-Factor Authentication</h1>
+    <h1>{{ icon("lock", "ico-lg") }} Two-Factor Authentication</h1>
     <p>Secure your account with an additional verification step</p>
 </div>
 
 {% if oidc_managed %}
 <div class="card">
-    <p>🪪 Multi-factor authentication for this account is managed by your identity provider — Jen doesn't enroll or store a second factor for single sign-on accounts.</p>
+    <p>{{ icon("id-card") }} Multi-factor authentication for this account is managed by your identity provider — Jen doesn't enroll or store a second factor for single sign-on accounts.</p>
 </div>
 {% else %}
 <!-- Current methods -->
 {% if totp_methods or passkeys %}
 <div class="card">
-    <div class="card-header"><span class="card-title">✅ Enrolled Methods</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("circle-check") }} Enrolled Methods</span></div>
     {% for m in totp_methods %}
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
         <div>
-            <strong>🔢 {{ m.name }}</strong>
+            <strong>{{ icon("hash") }} {{ m.name }}</strong>
             <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ m.created_at|utcdate if m.created_at else '' }} · Last used {{ m.last_used|utcdate if m.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_totp"><input type="hidden" name="mfa_id" value="{{ m.id }}">
@@ -29,7 +29,7 @@
     {% for p in passkeys %}
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
         <div>
-            <strong>🔑 {{ p.name }}</strong>
+            <strong>{{ icon("key-round") }} {{ p.name }}</strong>
             <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ p.created_at|utcdate if p.created_at else '' }} · Last used {{ p.last_used|utcdate if p.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_passkey"><input type="hidden" name="cred_id" value="{{ p.id }}">
@@ -38,12 +38,12 @@
     </div>
     {% endfor %}
     <div style="margin-top:16px;display:flex;gap:8px;">
-        <a href="/mfa/trusted-devices" class="btn btn-secondary btn-sm">📱 Manage Trusted Devices</a>
+        <a href="/mfa/trusted-devices" class="btn btn-secondary btn-sm">{{ icon("monitor-smartphone") }} Manage Trusted Devices</a>
         {% if backup_count > 0 %}
         <span style="font-size:13px;color:var(--text-muted);align-self:center;">{{ backup_count }} backup codes remaining</span>
         {% endif %}
         <form method="POST" action="/mfa/regenerate-backup-codes" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Regenerate backup codes? Your old codes will be invalidated.">🔄 New Backup Codes</button>
+            <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Regenerate backup codes? Your old codes will be invalidated.">{{ icon("refresh-cw") }} New Backup Codes</button>
         </form>
     </div>
 </div>
@@ -51,7 +51,7 @@
 
 <!-- Enroll TOTP -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🔢 Enroll Authenticator App (TOTP)</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("hash") }} Enroll Authenticator App (TOTP)</span></div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Works with Google Authenticator, Authy, 1Password, Bitwarden, and any TOTP app.</p>
     <div style="display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start;">
         <div>
@@ -83,7 +83,7 @@
 
 <!-- Enroll a passkey (v5.31.0) -->
 <div class="card" id="passkey-card">
-    <div class="card-header"><span class="card-title">🔑 Add a Passkey</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("fingerprint-pattern") }} Add a Passkey</span></div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">A passkey is a second factor stored on this device or in your password manager — Windows Hello, Touch ID / iCloud Keychain, Android, 1Password, Bitwarden, Keeper, or a hardware key such as a YubiKey. You confirm it with a fingerprint, face, PIN, or touch instead of typing a code.</p>
     <div id="passkey-unsupported" class="alert alert-warning" style="display:none;">
         This browser can't create a passkey here. Passkeys need a browser with WebAuthn support <em>and</em> a secure page — https, or http on localhost. If you reached Jen over plain http on a LAN address, set up HTTPS under Settings → Security first.
@@ -93,7 +93,7 @@
             <label>Passkey name (optional)</label>
             <input type="text" id="passkey-name" maxlength="100" placeholder="Work laptop, YubiKey 5C…" style="min-width:220px;">
         </div>
-        <button type="button" id="passkey-add-btn" class="btn btn-primary">🔑 Add passkey</button>
+        <button type="button" id="passkey-add-btn" class="btn btn-primary">{{ icon("fingerprint-pattern") }} Add passkey</button>
     </div>
     <div id="passkey-status" style="font-size:13px;margin-top:10px;display:none;"></div>
 </div>

@@ -2,14 +2,14 @@
 {% block title %}Confirm Import{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📥 Confirm Import</h1>
+    <h1>{{ icon("upload", "ico-lg") }} Confirm Import</h1>
     <p>Review what's in this file before anything is changed.</p>
 </div>
 
 <!-- Big clear DB label -->
 <div class="card" style="border-left:6px solid {% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};margin-bottom:20px;">
     <div style="display:flex;align-items:center;gap:12px;">
-        <span style="font-size:32px;">{% if meta.database == 'jen' %}🟢{% else %}🟡{% endif %}</span>
+        <span style="font-size:32px;">{% if meta.database == 'jen' %}{{ icon("circle", "ico-dot ico-success") }}{% else %}{{ icon("circle", "ico-dot ico-warning") }}{% endif %}</span>
         <div>
             <div style="font-size:18px;font-weight:700;color:{% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};">
                 This is a <strong>{{ meta.database | upper }} DATABASE</strong> export
@@ -24,7 +24,7 @@
 <!-- Schema version check -->
 {% if meta.jen_export_version and meta.jen_export_version > 1 %}
 <div class="alert alert-danger" style="margin-bottom:16px;">
-    ⚠️ This export was created with a newer schema version ({{ meta.jen_export_version }}). Importing may cause data issues. Upgrade Jen before importing.
+    {{ icon("triangle-alert") }} This export was created with a newer schema version ({{ meta.jen_export_version }}). Importing may cause data issues. Upgrade Jen before importing.
 </div>
 {% endif %}
 
@@ -60,7 +60,7 @@
     {% if meta.database == 'jen' %}
     <!-- Jen options -->
     <div class="card" style="margin-bottom:16px;">
-        <div class="card-header"><h3>🟢 Jen Import Options</h3></div>
+        <div class="card-header"><h3>{{ icon("circle", "ico-dot ico-success") }} Jen Import Options</h3></div>
         <div class="form-group">
             <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Tables to Restore</label>
             <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
@@ -68,7 +68,7 @@
                 <label style="font-size:12px;cursor:pointer;">
                     <input type="checkbox" name="tables" value="{{ tbl }}" checked>
                     <code>{{ tbl }}</code>
-                    {% if tbl == 'users' %}<span style="color:var(--danger);font-size:10px;"> ⚠️ will overwrite accounts</span>{% endif %}
+                    {% if tbl == 'users' %}<span style="color:var(--danger);font-size:10px;"> {{ icon("triangle-alert") }} will overwrite accounts</span>{% endif %}
                 </label>
                 {% endfor %}
             </div>
@@ -86,7 +86,7 @@
     {% else %}
     <!-- Kea options -->
     <div class="card" style="margin-bottom:16px;">
-        <div class="card-header"><h3>🟡 Kea Import Options</h3></div>
+        <div class="card-header"><h3>{{ icon("circle", "ico-dot ico-warning") }} Kea Import Options</h3></div>
         <div class="form-group">
             <label>Duplicate Handling</label>
             <select name="duplicate_mode">
@@ -99,13 +99,13 @@
     {% endif %}
 
     <div class="alert alert-danger" style="margin-bottom:16px;">
-        ⛔ <strong>Final warning:</strong> Importing will modify live data. The operation runs in a transaction — if anything fails it rolls back completely. But if it succeeds, the change is permanent. Make sure you have a backup.
+        {{ icon("ban") }} <strong>Final warning:</strong> Importing will modify live data. The operation runs in a transaction — if anything fails it rolls back completely. But if it succeeds, the change is permanent. Make sure you have a backup.
     </div>
 
     <div style="display:flex;gap:10px;">
         <button type="submit" class="btn btn-danger"
                 data-confirm="Proceed with import into the {{ meta.database | upper }} database? This will modify live data.">
-            ⚡ Confirm Import into {{ meta.database | upper }} Database
+            {{ icon("zap") }} Confirm Import into {{ meta.database | upper }} Database
         </button>
         <a href="/settings/databases?tab=import" class="btn btn-secondary">Cancel</a>
     </div>

@@ -2,9 +2,9 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="action-bar" id="reservations-bulk-bar" style="display:none;margin-bottom:12px;">
         <span id="selectedCount" style="font-size:13px;color:var(--text-muted);">0 selected</span>
-        <button type="button" id="reservations-bulk-export-btn" class="btn btn-sm btn-secondary">⬇ Export Selected</button>
+        <button type="button" id="reservations-bulk-export-btn" class="btn btn-sm btn-secondary">{{ icon("download") }} Export Selected</button>
         {% if current_user.role in ('superadmin','admin') %}
-        <button type="button" id="reservations-bulk-delete-btn" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️ Delete Selected</button>
+        <button type="button" id="reservations-bulk-delete-btn" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">{{ icon("trash") }} Delete Selected</button>
         {% endif %}
     </div>
 <div class="card" style="padding:0;">
@@ -27,8 +27,8 @@
     {% else %}
     {% from '_empty.html' import empty_state %}
     <tr id="no-reservations"><td colspan="9">
-        {% set res_buttons = [('➕ Add reservation', '/reservations/add')] if current_user.role in ('superadmin','admin') else [] %}
-        {{ empty_state('📌', 'No reservations. Convert a lease or add one.', res_buttons) }}
+        {% set res_buttons = [((icon('plus') ~ ' Add reservation'), '/reservations/add')] if current_user.role in ('superadmin','admin') else [] %}
+        {{ empty_state(icon('pin'), 'No reservations. Convert a lease or add one.', res_buttons) }}
     </td></tr>
     {% endfor %}
     </tbody>

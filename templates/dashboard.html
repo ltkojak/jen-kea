@@ -4,12 +4,12 @@
 {% block content %}
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
     <div>
-        <h1>📊 Dashboard</h1>
+        <h1>{{ icon("layout-dashboard", "ico-lg") }} Dashboard</h1>
         <p>Live overview of your DHCP infrastructure</p>
     </div>
     <div class="page-header-controls" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         <span id="last-updated" style="font-size:11px;color:var(--text-muted);"></span>
-        <button class="btn btn-secondary btn-sm" id="customize-btn">⚙️ Customize</button>
+        <button class="btn btn-secondary btn-sm" id="customize-btn">{{ icon("settings") }} Customize</button>
         <span style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
         <select id="refreshInterval" style="width:auto;font-size:12px;padding:4px 8px;">
             <option value="0">Off</option>
@@ -25,7 +25,7 @@
 
 <!-- Customize panel -->
 <div id="dash-customize" style="display:none;" class="card">
-    <div class="card-header"><span class="card-title">⚙️ Customize Dashboard</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("settings") }} Customize Dashboard</span></div>
     <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Choose which widgets to show. Changes are saved to your account.</p>
     <div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:16px;">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-subnet_stats"> Subnet Statistics</label>
@@ -37,11 +37,11 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-server_status"> Server Status</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
     </div>
-    <button class="btn btn-primary btn-sm" id="save-dash-prefs-btn">💾 Save Layout</button>
+    <button class="btn btn-primary btn-sm" id="save-dash-prefs-btn">{{ icon("save") }} Save Layout</button>
 </div>
 
 {% if kea_config_error %}
-<div class="alert alert-warning">⚠️ Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea config unavailable — gateway, DNS and pool usage can't be shown: {{ kea_config_error }}</div>
 {% endif %}
 
 <!-- Subnet statistics widget -->
@@ -150,7 +150,7 @@
 <div id="dash-lease_history_chart" style="display:none;">
     <div class="card">
         <div class="card-header">
-            <span class="card-title">📈 Utilization History</span>
+            <span class="card-title">{{ icon("trending-up") }} Utilization History</span>
             <div style="display:flex;gap:8px;align-items:center;">
                 <select id="history-days" style="width:auto;font-size:12px;padding:4px 8px;">
                     <option value="1">Last 24h</option>
@@ -176,7 +176,7 @@
 <div id="dash-lease_sparklines" style="display:none;">
 <div class="card">
     <div class="card-header">
-        <span class="card-title">📈 Lease Trends — 30 Days</span>
+        <span class="card-title">{{ icon("trending-up") }} Lease Trends — 30 Days</span>
         <span style="font-size:11px;color:var(--text-muted);">Active leases per subnet, hourly snapshots</span>
     </div>
     <div id="sparklines-container" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;padding:4px 0;">
@@ -189,7 +189,7 @@
 <div id="dash-top_devices" style="display:none;">
 <div class="card">
     <div class="card-header">
-        <span class="card-title">📱 Top Active Devices <span style="font-size:11px;font-weight:400;color:var(--text-muted);">— last 30 days</span></span>
+        <span class="card-title">{{ icon("monitor-smartphone") }} Top Active Devices <span style="font-size:11px;font-weight:400;color:var(--text-muted);">— last 30 days</span></span>
     </div>
     <div id="top-devices-container">
         <p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">Loading...</p>
@@ -201,7 +201,7 @@
 <div id="dash-recent_leases">
     <div class="card">
         <div class="card-header">
-            <span class="card-title">🕐 Recently Issued Leases</span>
+            <span class="card-title">{{ icon("clock") }} Recently Issued Leases</span>
             <div style="display:flex;gap:8px;align-items:center;">
                 <select id="recent-hours" style="width:auto;">
                     <option value="0.5">Last 30 min</option>
@@ -252,7 +252,7 @@
 <div id="dash-server_status" style="display:none;">
     <div class="card">
         <div class="card-header">
-            <span class="card-title">🖥️ Server Status</span>
+            <span class="card-title">{{ icon("server") }} Server Status</span>
             <a href="/servers" class="btn btn-sm btn-secondary">View Details</a>
         </div>
         {% if server_statuses %}
@@ -294,7 +294,7 @@
 <div id="dash-alert_summary" style="display:none;">
     <div class="card">
         <div class="card-header">
-            <span class="card-title">🔔 Alert Summary</span>
+            <span class="card-title">{{ icon("bell") }} Alert Summary</span>
             <a href="/settings/alerts" class="btn btn-sm btn-secondary">Configure</a>
         </div>
         <div id="alert-summary-body">
@@ -476,7 +476,7 @@ function loadTopDevices() {
                 var icon = d.device_icon ? '<span style="margin-right:4px;">' + escapeHtml(d.device_icon) + '</span>' : '';
                 var name = d.name || d.mac;
                 var badge = d.has_reservation
-                    ? '<span class="badge badge-reserved" style="font-size:10px;margin-left:4px;padding:1px 5px;">📌</span>'
+                    ? '<span class="badge badge-reserved" style="font-size:10px;margin-left:4px;padding:1px 5px;"><svg class="ico" aria-hidden="true"><use href="#i-pin"></use></svg></span>'
                     : '';
                 var lastSeen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
                 var mfr = d.manufacturer ? '<span style="color:var(--text-muted);">' + escapeHtml(d.manufacturer) + '</span>' : '—';
@@ -567,22 +567,25 @@ function loadAlertSummary() {
                 body.innerHTML = '<p style="color:var(--text-muted);font-size:13px;text-align:center;padding:16px;">No alerts in the log yet.</p>';
                 return;
             }
-            var icons = {
-                'kea_down': '🔴', 'kea_up': '🟢',
-                'new_lease': '📋', 'utilization_high': '⚠️',
-                'daily_summary': '📊', 'unknown_device': '❓',
-                'new_device': '🆕'
-            };
+            // The API returns an icon NAME per alert; the SVG is built from this fixed list
+            // (never from server-supplied HTML). tests/test_icons.py keeps it in step with
+            // jen/services/alerts.py::ALERT_TYPE_ICONS and the sprite.
+            var ALERT_ICONS = ['circle-x', 'circle-check', 'zap', 'clipboard-list', 'badge-question-mark', 'pin',
+                'triangle-alert', 'trending-up', 'plus', 'trash', 'clock', 'info', 'lock', 'chart-bar', 'siren', 'bell'];
+            function alertIcon(name) {
+                if (ALERT_ICONS.indexOf(name) === -1) name = 'bell';
+                return '<svg class="ico" aria-hidden="true"><use href="#i-' + name + '"></use></svg>';
+            }
             var allFailed = data.alerts.length > 0 && data.alerts.every(function(a) { return a.status !== 'ok'; });
             var html = '';
             if (allFailed) {
                 html += '<div style="background:var(--surface2);border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--warning);">' +
-                        '⚠️ All recent alerts failed to send — check your notification channel configuration. ' +
+                        '<svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> All recent alerts failed to send — check your notification channel configuration. ' +
                         '<a href="/settings/alerts" style="color:var(--primary);">Configure →</a></div>';
             }
             html += '<table style="width:100%;">';
             data.alerts.forEach(function(a) {
-                var icon = icons[a.type] || '🔔';
+                var icon = alertIcon(a.icon);
                 var ok = a.status === 'ok';
                 var statusColor = ok ? 'var(--success)' : 'var(--danger)';
                 var errorTip = a.error ? ' title="' + a.error.replace(/"/g, '&quot;') + '"' : '';

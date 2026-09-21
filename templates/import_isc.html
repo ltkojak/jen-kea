@@ -2,7 +2,7 @@
 {% block title %}Import from ISC DHCP{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📄 Import from ISC DHCP</h1>
+    <h1>{{ icon("file-text", "ico-lg") }} Import from ISC DHCP</h1>
     <p>Migrate subnets, reservations and classes from an ISC <code>dhcpd.conf</code>.</p>
 </div>
 
@@ -26,19 +26,19 @@
             <input type="file" name="leases_file" accept=".leases,text/plain" style="width:100%;">
             <div class="form-hint">Only counted on the review page. Kea starts with an empty lease database.</div>
         </div>
-        <button type="submit" class="btn btn-primary">📤 Upload &amp; Review</button>
+        <button type="submit" class="btn btn-primary">{{ icon("upload") }} Upload &amp; Review</button>
     </form>
 </div>
 
 <div class="alert alert-info">
-    ℹ️ Nothing is written to Kea at upload. The review step lists every subnet, reservation and class Jen
+    {{ icon("info") }} Nothing is written to Kea at upload. The review step lists every subnet, reservation and class Jen
     would create — and every directive it cannot map, with its line number — then Preview runs
     <code>kea-dhcp4 -t</code> and shows a diff before anything changes. This only ever touches the
     <strong>primary</strong> Kea server's config; an HA partner gets it the way you already sync config.
 </div>
 
 <div class="alert alert-warning">
-    ⚠️ What maps: global and per-subnet options, <code>default-lease-time</code>, <code>subnet</code>/<code>range</code>
+    {{ icon("triangle-alert") }} What maps: global and per-subnet options, <code>default-lease-time</code>, <code>subnet</code>/<code>range</code>
     (several ranges become several pools), <code>shared-network</code>, <code>host</code> reservations
     (<code>hardware ethernet</code> + <code>fixed-address</code>), <code>class … match if</code> on vendor/user class,
     hostname, MAC/OUI, client id and relay ids, pool <code>allow</code>/<code>deny members of</code>,

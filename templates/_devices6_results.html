@@ -15,7 +15,7 @@
         <td>
             {% if d.manufacturer %}
             <span style="display:flex;align-items:center;gap:6px;">
-                <span>{{ d.icon or '📶' }}</span>
+                <span>{{ d.icon or icon('wifi') }}</span>
                 <span>{{ d.manufacturer }}</span>
             </span>
             {% else %}

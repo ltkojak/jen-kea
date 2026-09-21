@@ -2,7 +2,7 @@
 {% block title %}Database Migration Wizard{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>🔀 Database Migration Wizard</h1>
+    <h1>{{ icon("shuffle", "ico-lg") }} Database Migration Wizard</h1>
     <p>Copy a database to a new server. Source is never modified. Target is rolled back if anything fails.</p>
 </div>
 
@@ -14,7 +14,7 @@
             <div style="display:flex;align-items:center;gap:10px;">
                 <input type="radio" name="which" value="jen" id="radio-jen">
                 <div>
-                    <div style="font-weight:700;color:var(--primary);font-size:15px;">🟢 Jen Database</div>
+                    <div style="font-weight:700;color:var(--primary);font-size:15px;">{{ icon("circle", "ico-dot ico-success") }} Jen Database</div>
                     <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
                         Source: <code>{{ jen_db_host }} / {{ jen_db_name }}</code>
                     </div>
@@ -26,7 +26,7 @@
             <div style="display:flex;align-items:center;gap:10px;">
                 <input type="radio" name="which" value="kea" id="radio-kea">
                 <div>
-                    <div style="font-weight:700;color:var(--warning);font-size:15px;">🟡 Kea Database</div>
+                    <div style="font-weight:700;color:var(--warning);font-size:15px;">{{ icon("circle", "ico-dot ico-warning") }} Kea Database</div>
                     <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
                         Source: <code>{{ kea_db_host }} / {{ kea_db_name }}</code>
                     </div>
@@ -100,7 +100,7 @@
         </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="btn btn-secondary" id="test-conn-btn">🔌 Test Connection</button>
+        <button class="btn btn-secondary" id="test-conn-btn">{{ icon("plug") }} Test Connection</button>
         <span id="conn-result" style="font-size:13px;"></span>
     </div>
     <div id="conn-info" style="display:none;margin-top:12px;" class="card" style="background:var(--surface2);"></div>
@@ -115,12 +115,12 @@
     <div class="card-header"><h3>Step 3 — Confirm &amp; Run Migration</h3></div>
     <div id="migration-summary" style="margin-bottom:16px;"></div>
     <div class="alert alert-warning" style="margin-bottom:16px;">
-        ⚠️ This will copy data to the target database. The source (<strong>{{ jen_db_host }}</strong> / <strong>{{ kea_db_host }}</strong>) is never touched.
+        {{ icon("triangle-alert") }} This will copy data to the target database. The source (<strong>{{ jen_db_host }}</strong> / <strong>{{ kea_db_host }}</strong>) is never touched.
         If the migration fails at any point, the target is rolled back and left completely clean.
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;">
         <button class="btn btn-secondary" id="step3-back-btn">← Back</button>
-        <button class="btn btn-danger" id="btn-run">⚡ Start Migration</button>
+        <button class="btn btn-danger" id="btn-run">{{ icon("zap") }} Start Migration</button>
     </div>
 
     <!-- Progress output -->
@@ -153,14 +153,14 @@ function showStep(n) {
         var db = _which==='jen' ? '{{ jen_db_name }}' : '{{ kea_db_name }}';
         document.getElementById('target-db-label').innerHTML =
             'Migrating <strong style="color:var(--'+((_which==='jen')?'primary':'warning')+');">'
-            + (_which==='jen'?'🟢 Jen':'🟡 Kea') + ' Database</strong> to a new server. '
+            + (_which==='jen'?'<svg class="ico ico-dot ico-success" aria-hidden="true"><use href="#i-circle"></use></svg> Jen':'<svg class="ico ico-dot ico-warning" aria-hidden="true"><use href="#i-circle"></use></svg> Kea') + ' Database</strong> to a new server. '
             + 'The source database on <code>' + (_which==='jen'?'{{ jen_db_host }}':'{{ kea_db_host }}') + '</code> is never modified.';
         if (!document.getElementById('t-db').value) document.getElementById('t-db').value = db;
     }
     if (n===3) {
         var host = document.getElementById('t-host').value;
         var db   = document.getElementById('t-db').value;
-        var which = _which==='jen' ? '🟢 Jen Database' : '🟡 Kea Database';
+        var which = _which==='jen' ? '<svg class="ico ico-dot ico-success" aria-hidden="true"><use href="#i-circle"></use></svg> Jen Database' : '<svg class="ico ico-dot ico-warning" aria-hidden="true"><use href="#i-circle"></use></svg> Kea Database';
         var src  = _which==='jen' ? '{{ jen_db_host }}/{{ jen_db_name }}' : '{{ kea_db_host }}/{{ kea_db_name }}';
         document.getElementById('migration-summary').innerHTML =
             '<div class="card" style="background:var(--surface2);">'
@@ -179,7 +179,7 @@ function testConn() {
     var db   = document.getElementById('t-db').value.trim();
     if (!host || !user || !db) { alert('Fill in host, user, and database name.'); return; }
     var el = document.getElementById('conn-result');
-    el.textContent = '⏳ Testing…'; el.style.color = 'var(--text-muted)';
+    el.textContent = 'Testing…'; el.style.color = 'var(--text-muted)';
     var fd = new FormData();
     fd.append('host',host); fd.append('port',port); fd.append('user',user);
     fd.append('password',pw); fd.append('database',db);
@@ -187,18 +187,18 @@ function testConn() {
         .then(function(r){return r.json();})
         .then(function(d){
             if (d.ok) {
-                el.textContent = '✅ Connected — MySQL ' + d.info.version + ' — ' + d.info.table_count + ' existing tables';
+                el.textContent = 'Connected — MySQL ' + d.info.version + ' — ' + d.info.table_count + ' existing tables';
                 el.style.color = 'var(--success)';
                 _connOk = true;
                 document.getElementById('btn-step3').disabled = false;
             } else {
-                el.textContent = '❌ ' + d.error;
+                el.textContent = d.error;
                 el.style.color = 'var(--danger)';
                 _connOk = false;
                 document.getElementById('btn-step3').disabled = true;
             }
         })
-        .catch(function(e){ el.textContent = '❌ ' + e; el.style.color='var(--danger)'; });
+        .catch(function(e){ el.textContent = e; el.style.color='var(--danger)'; });
 }
 
 function runMigration() {
@@ -243,12 +243,12 @@ function runMigration() {
                         if (line.startsWith('event: done')) {
                             document.getElementById('migration-result').style.display = '';
                             document.getElementById('migration-result').innerHTML =
-                                '<div class="alert alert-success">✅ Migration completed successfully. Verify your data on the new server before decommissioning the source.</div>';
+                                '<div class="alert alert-success"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> Migration completed successfully. Verify your data on the new server before decommissioning the source.</div>';
                         }
                         if (line.startsWith('event: error')) {
                             document.getElementById('migration-result').style.display = '';
                             document.getElementById('migration-result').innerHTML =
-                                '<div class="alert alert-danger">❌ Migration failed — target database was rolled back and left clean. See log above.</div>';
+                                '<div class="alert alert-danger"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Migration failed — target database was rolled back and left clean. See log above.</div>';
                         }
                     });
                     return pump();

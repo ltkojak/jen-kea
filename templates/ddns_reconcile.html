@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>🔗 DDNS</h1>
+    <h1>{{ icon("link", "ico-lg") }} DDNS</h1>
     <p>Read-only: reservations and active leases with a hostname, checked against what your resolver actually
        returns for them — nothing here is ever written to Kea.</p>
 </div>
@@ -18,7 +18,7 @@
 {{ subtabs(ddns_tabs, tab) }}
 
 <div class="card">
-    <div class="card-header"><span class="card-title">🔎 Reconcile</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("search") }} Reconcile</span></div>
     <div class="form-hint" style="margin-bottom:12px;">
         Every reservation, then every active lease with a hostname, up to the limit below — each one's forward
         (name → IP) and reverse (IP → name) lookup, run through the Jen host's own resolver, the same one the
@@ -50,7 +50,7 @@
             {{ v }} ({{ counts.get(v, 0) }})
         </a>
         {% endfor %}
-        <a href="/ddns/reconcile?format=csv&limit={{ limit }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}" class="btn btn-secondary btn-sm" style="margin-left:auto;">⬇️ Export CSV</a>
+        <a href="/ddns/reconcile?format=csv&limit={{ limit }}{% if verdict_filter %}&verdict={{ verdict_filter }}{% endif %}" class="btn btn-secondary btn-sm" style="margin-left:auto;">{{ icon("download") }} Export CSV</a>
     </div>
 
     {% if not results %}

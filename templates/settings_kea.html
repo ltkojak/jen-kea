@@ -8,7 +8,7 @@
 {% macro direct_socket_setup(server_id, service, daemon, conf, ssh_host, bind_default, api_user, default_port, current_url, ssh_hint, tls_ok=False) %}
 {% if current_user.role == 'superadmin' and direct_socket_supported %}
 <details class="direct-socket-setup" style="margin-top:10px;">
-    <summary class="btn btn-sm btn-secondary" style="display:inline-block;cursor:pointer;list-style:none;">⚡ Set up direct socket for {{ daemon }}…</summary>
+    <summary class="btn btn-sm btn-secondary" style="display:inline-block;cursor:pointer;list-style:none;">{{ icon("zap") }} Set up direct socket for {{ daemon }}…</summary>
     {% if not ssh_host %}
     <div class="form-hint" style="margin-top:6px;">Needs an SSH host for this server — Jen edits <code>{{ conf }}</code> over SSH. Set it under {{ ssh_hint }} first, then come back here.</div>
     {% else %}
@@ -50,7 +50,7 @@
         {% if infra.kea_connection_mode == 'direct' and (service == 'dhcp4' or current_url) %}
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" style="display:inline;margin-left:8px;" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-secondary">↩ Switch back to the Control Agent</button>
+            <button type="submit" class="btn btn-sm btn-secondary">{{ icon("undo-2") }} Switch back to the Control Agent</button>
         </form>
         {% endif %}
     </div>
@@ -59,12 +59,12 @@
 {% endif %}
 {% endmacro %}
 <div class="page-header">
-    <h1>🔌 Kea</h1>
+    <h1>{{ icon("plug", "ico-lg") }} Kea</h1>
     <p>How Jen reaches your Kea servers — the Control Agent API, SSH for config pushes, extra servers and HA.</p>
 </div>
 
 {% if restart_pending %}
-<div class="alert alert-warning">⚠️ Kea connection changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
 {% endif %}
 
 {% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
@@ -72,17 +72,17 @@
 {% include '_card_toc.html' %}
 
 {% if ca_removed %}
-<div class="alert alert-danger">🛑 This Kea server is <strong>{{ kea_version }}</strong>, which <strong>removed the Control Agent</strong> (ISC dropped it in Kea 3.2). Jen is set to <code>ca</code> mode and cannot talk to it. Switch Connection Mode to <strong>Direct to daemons</strong> below and point the URLs at each daemon's own HTTP control socket.</div>
+<div class="alert alert-danger">{{ icon("octagon-alert") }} This Kea server is <strong>{{ kea_version }}</strong>, which <strong>removed the Control Agent</strong> (ISC dropped it in Kea 3.2). Jen is set to <code>ca</code> mode and cannot talk to it. Switch Connection Mode to <strong>Direct to daemons</strong> below and point the URLs at each daemon's own HTTP control socket.</div>
 {% elif ca_deprecation_warning %}
-<div class="alert alert-warning">⚠️ This Kea server is <strong>{{ kea_version }}</strong>. ISC <strong>deprecated the Control Agent in Kea 3.0</strong> and removes it in 3.2. Jen is still using <code>ca</code> mode — plan the switch to <strong>Direct to daemons</strong> before you upgrade Kea past 3.1.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} This Kea server is <strong>{{ kea_version }}</strong>. ISC <strong>deprecated the Control Agent in Kea 3.0</strong> and removes it in 3.2. Jen is still using <code>ca</code> mode — plan the switch to <strong>Direct to daemons</strong> before you upgrade Kea past 3.1.</div>
 {% endif %}
 {% if direct_port_warnings %}
-<div class="alert alert-warning">⚠️ Direct mode needs an explicit port on every API URL — missing on: {{ direct_port_warnings | join('; ') }}. Add <code>:8004</code> (dhcp4) / <code>:8006</code> (dhcp6) and re-save.</div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Direct mode needs an explicit port on every API URL — missing on: {{ direct_port_warnings | join('; ') }}. Add <code>:8004</code> (dhcp4) / <code>:8006</code> (dhcp6) and re-save.</div>
 {% endif %}
 
 <!-- Kea control plane -->
 <div class="card" id="kea-api">
-    <div class="card-header"><span class="card-title">🔌 Kea Control Plane</span>
+    <div class="card-header"><span class="card-title">{{ icon("plug") }} Kea Control Plane</span>
         {% if kea_up %}<span style="color:var(--success);font-size:12px;">● Connected{% if kea_version %} · Kea {{ kea_version }}{% endif %}</span>
         {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
     </div>
@@ -139,7 +139,7 @@
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save Kea API</button>
-        <button type="button" class="btn btn-secondary" id="probe-kea-btn">🔍 Probe</button>
+        <button type="button" class="btn btn-secondary" id="probe-kea-btn">{{ icon("search") }} Probe</button>
         {% if kea_servers|length > 1 %}
         <select id="probe-server" style="display:inline-block;width:auto;margin-left:8px;font-size:12px;">
             {% for s in kea_servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
@@ -164,7 +164,7 @@
         <div class="form-hint" style="margin-bottom:8px;"><code>{{ kea_ca.subject }}</code> — expires in {{ kea_ca.days_left }} day(s). Jen's client certificate: {% if kea_ca.client_ok %}<span style="color:var(--success);">valid, signed by this CA</span>{% else %}<span style="color:var(--warning);">missing or not signed by this CA</span>{% endif %}. Server certificates issued: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({{ d }} d){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.</div>
         <form method="POST" action="/settings/infrastructure/kea-ca/rotate" style="display:inline;" data-confirm="Rotate the Kea CA? Jen issues a new CA and client certificate and pushes a new server certificate to: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }}{% if not loop.last %}, {% endif %}{% else %}(no servers yet){% endfor %}. Each daemon restarts. If any push fails, everything is rolled back to the current CA.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-sm btn-warning">🔄 Rotate Kea CA</button>
+            <button type="submit" class="btn btn-sm btn-warning">{{ icon("refresh-cw") }} Rotate Kea CA</button>
         </form>
         <span class="form-hint" style="margin-left:8px;">Re-issues everything — 10-year CA, 5-year certificates. Asks for your password again if it has been a while.</span>
         {% else %}
@@ -172,7 +172,7 @@
         {% endif %}
     </div>
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <a href="/settings/infrastructure/author-kea/dhcp4" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp4.conf</a>
+        <a href="/settings/infrastructure/author-kea/dhcp4" class="btn btn-sm btn-secondary">{{ icon("file-pen") }} Author a starting kea-dhcp4.conf</a>
         <span class="form-hint" style="display:block;margin-top:4px;">For a fresh Kea install with no config yet — not for editing an existing one (use Network → Subnets → Edit for that).</span>
     </div>
     {% endif %}
@@ -181,7 +181,7 @@
 <!-- SSH — host/user/path AND the key, one card (was split across two tabs before v5.9.0) -->
 <div class="card" id="kea-ssh">
     <div class="card-header">
-        <span class="card-title">🔑 SSH to the Kea host</span>
+        <span class="card-title">{{ icon("key-round") }} SSH to the Kea host</span>
         {% if ssh_configured %}<span style="color:var(--success);font-size:12px;">● Key present</span>
         {% else %}<span style="color:var(--warning);font-size:12px;">● No key generated</span>{% endif %}
     </div>
@@ -210,7 +210,7 @@
     </div>
     {% endif %}
     <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-secondary">{% if ssh_configured %}🔄 Regenerate SSH Key{% else %}🔑 Generate SSH Key{% endif %}</button>
+        <button type="submit" class="btn btn-secondary">{% if ssh_configured %}{{ icon("refresh-cw") }} Regenerate SSH Key{% else %}{{ icon("key-round") }} Generate SSH Key{% endif %}</button>
     </form>
 
     {% set ssh_servers = kea_servers | selectattr('ssh_host') | list %}
@@ -281,12 +281,12 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
 <!-- Servers & HA -->
 <div class="card" id="kea-servers">
     <div class="card-header">
-        <span class="card-title">🖥️ Servers &amp; High Availability</span>
+        <span class="card-title">{{ icon("server") }} Servers &amp; High Availability</span>
         <span style="font-size:12px;color:var(--text-muted);">Server 1 is the Control Agent above</span>
     </div>
     {% if readiness %}
     <div class="form-hint" style="margin-bottom:12px;">
-        {% if readiness.ready %}✅ Ready for Kea 3.2{% elif readiness.actions %}⚠️ {{ readiness.actions }} action(s) before upgrading to Kea 3.2{% else %}Kea 3.2 readiness: nothing to check on this install{% endif %}
+        {% if readiness.ready %}{{ icon("circle-check") }} Ready for Kea 3.2{% elif readiness.actions %}{{ icon("triangle-alert") }} {{ readiness.actions }} action(s) before upgrading to Kea 3.2{% else %}Kea 3.2 readiness: nothing to check on this install{% endif %}
         — <a href="/health-center">Health Center → Kea 3.2 readiness</a>
     </div>
     {% endif %}
@@ -399,7 +399,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
 {% if current_user.role == 'superadmin' %}
 <!-- Kea6 API / IPv6 toggle (v5.0 Phase 1) -->
 <div class="card" id="kea6">
-    <div class="card-header"><span class="card-title">🌐 Kea6 Control Plane</span>
+    <div class="card-header"><span class="card-title">{{ icon("globe") }} Kea6 Control Plane</span>
         {% if ipv6_enabled %}<span style="color:var(--success);font-size:12px;">● IPv6 Enabled</span>
         {% else %}<span style="color:var(--text-muted);font-size:12px;">● IPv6 Disabled</span>{% endif %}
     </div>
@@ -443,7 +443,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
         Passwords are kept unless you tick Inherit.
     </div>
     {% if infra.kea_connection_mode == 'direct' and ipv6_enabled and not infra.kea6_api_url %}
-    <div class="alert alert-warning">⚠️ IPv6 is enabled and Jen is in <code>direct</code> mode, but no kea-dhcp6 control socket URL is set. v6 API calls will fail until you set the API URL below.</div>
+    <div class="alert alert-warning">{{ icon("triangle-alert") }} IPv6 is enabled and Jen is in <code>direct</code> mode, but no kea-dhcp6 control socket URL is set. v6 API calls will fail until you set the API URL below.</div>
     {% endif %}
     <form method="POST" action="/settings/infrastructure/save-kea6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -490,14 +490,14 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
     </form>
     {{ direct_socket_setup(1, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', infra.ssh_host, infra.bind_default, infra.kea6_api_user or infra.kea_api_user, 8006, infra.kea6_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
     <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">📝 Author a starting kea-dhcp6.conf</a>
+        <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">{{ icon("file-pen") }} Author a starting kea-dhcp6.conf</a>
         <span class="form-hint" style="display:block;margin-top:4px;">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
     </div>
 </div>
 
 <!-- D2 (kea-dhcp-ddns) control socket (v5.23.0, Q19) -->
 <div class="card" id="kea-d2">
-    <div class="card-header"><span class="card-title">🔗 D2 Control Socket</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
     <div class="form-hint" style="margin-bottom:10px;">
         {% if infra.kea_connection_mode == 'direct' %}
         <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp-ddns's own</strong> HTTP control
@@ -511,7 +511,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
         Passwords are kept unless you tick Inherit.
     </div>
     {% if infra.kea_connection_mode == 'direct' and not infra.d2_api_url %}
-    <div class="alert alert-warning">⚠️ Jen is in <code>direct</code> mode, but no D2 control socket URL is set — D2 status/config on the DDNS page will show errors until you set the API URL below.</div>
+    <div class="alert alert-warning">{{ icon("triangle-alert") }} Jen is in <code>direct</code> mode, but no D2 control socket URL is set — D2 status/config on the DDNS page will show errors until you set the API URL below.</div>
     {% endif %}
     <form method="POST" action="/settings/infrastructure/save-d2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -539,17 +539,17 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
 
 <!-- Kea package install status (v5.1.2) -->
 <div class="card" id="kea-packages">
-    <div class="card-header"><span class="card-title">📦 Kea Package Status</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("package") }} Kea Package Status</span></div>
     <div class="form-hint" style="margin-bottom:12px;">Confirms the kea-dhcp4-server / kea-dhcp6-server packages are actually installed on each configured server — separate from whether Jen can reach the Control Agent API.</div>
-    <button type="button" class="btn btn-sm btn-secondary" id="check-kea-pkgs-btn">🔍 Check Installation</button>
+    <button type="button" class="btn btn-sm btn-secondary" id="check-kea-pkgs-btn">{{ icon("search") }} Check Installation</button>
     <div id="kea-pkgs-results" style="margin-top:12px;font-size:13px;"></div>
 </div>
 
 <!-- Config Drift Check (v5.2.0) -->
 <div class="card" id="kea-drift">
-    <div class="card-header"><span class="card-title">🔀 Config Drift Check</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("shuffle") }} Config Drift Check</span></div>
     <div class="form-hint" style="margin-bottom:12px;">Compares Jen's own subnet id/name/CIDR mapping (Network → Subnets) against Kea's live config-get — catches Jen's config silently falling out of sync with what Kea actually has, before it causes a filter, alert, or API key to silently affect the wrong subnet.</div>
-    <button type="button" class="btn btn-sm btn-secondary" id="check-drift-btn">🔍 Check Now</button>
+    <button type="button" class="btn btn-sm btn-secondary" id="check-drift-btn">{{ icon("search") }} Check Now</button>
     <div id="config-drift-results" style="margin-top:12px;font-size:13px;"></div>
 </div>
 {% endif %}
@@ -681,14 +681,14 @@ async function probeKea() {
         var colors = {ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)'};
         var html = '';
         if (data.error) {
-            out.innerHTML = '<div style="color:var(--danger);">❌ ' + escapeHtml(data.error) + '</div>';
+            out.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(data.error) + '</div>';
             btn.disabled = false;
             return;
         }
         var prefix = data.candidate ? 'Candidate: ' : '';
         var where = data.server ? ' on <strong>' + escapeHtml(data.server) + '</strong> (' + escapeHtml(data.service || 'dhcp4') + ')' : '';
         if (data.ok) {
-            html += '<div>✅ ' + prefix + 'Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong>' +
+            html += '<div><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> ' + prefix + 'Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong>' +
                 where + ' via <strong>' + escapeHtml(data.answered_mode) + '</strong> mode';
             if (!data.candidate && data.answered_mode !== data.configured_mode) {
                 html += ' <span style="color:var(--warning);">(you have <code>' + escapeHtml(data.configured_mode) +
@@ -696,7 +696,7 @@ async function probeKea() {
             }
             html += '</div>';
         } else {
-            html += '<div style="color:var(--danger);">❌ ' + prefix + 'No endpoint answered.</div>';
+            html += '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + prefix + 'No endpoint answered.</div>';
         }
         var rec = data.recommendation || {};
         html += '<div style="margin-top:6px;color:' + (colors[rec.level] || 'var(--text-muted)') + ';">' +
@@ -709,7 +709,7 @@ async function probeKea() {
         }
         out.innerHTML = html;
     } catch (e) {
-        out.innerHTML = '<span style="color:var(--danger);">❌ ' + escapeHtml(e.message) + '</span>';
+        out.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
     }
     btn.disabled = false;
 }
@@ -733,19 +733,19 @@ async function checkKeaPackages() {
         }
         resultsDiv.innerHTML = data.servers.map(function(s) {
             if (!s.ok) {
-                return '<div style="color:var(--danger);">❌ <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.error) + '</div>';
+                return '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.error) + '</div>';
             }
             var row = '<div style="margin-bottom:6px;"><strong>' + escapeHtml(s.name) + ':</strong> ';
-            row += s.dhcp4 ? '<span style="color:var(--success);">✅ kea-dhcp4</span>' :
-                '<span style="color:var(--danger);">❌ kea-dhcp4 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn" style="margin-left:4px;" data-service="dhcp4">Install</button></span>';
+            row += s.dhcp4 ? '<span style="color:var(--success);"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> kea-dhcp4</span>' :
+                '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> kea-dhcp4 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn" style="margin-left:4px;" data-service="dhcp4">Install</button></span>';
             row += '&nbsp;&nbsp;';
-            row += s.dhcp6 ? '<span style="color:var(--success);">✅ kea-dhcp6</span>' :
-                '<span style="color:var(--danger);">❌ kea-dhcp6 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn" style="margin-left:4px;" data-service="dhcp6">Install</button></span>';
+            row += s.dhcp6 ? '<span style="color:var(--success);"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> kea-dhcp6</span>' :
+                '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> kea-dhcp6 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn" style="margin-left:4px;" data-service="dhcp6">Install</button></span>';
             row += '<span class="pkg-install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span></div>';
             return row;
         }).join('');
     } catch (e) {
-        resultsDiv.innerHTML = '<span style="color:var(--danger);">❌ ' + escapeHtml(e.message) + '</span>';
+        resultsDiv.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
     }
     btn.disabled = false;
 }
@@ -762,17 +762,17 @@ async function installKeaPkg(btn, service) {
         var data = await resp.json();
         if (data.ok) {
             statusEl.style.color = 'var(--success)';
-            statusEl.textContent = '✅ Installed';
+            statusEl.textContent = ' Installed';
             await checkKeaPackages();
         } else {
             statusEl.style.color = 'var(--danger)';
             var msg = (data.servers || []).map(function(s) { return s.name + ': ' + (s.output || 'failed'); }).join(' | ');
-            statusEl.textContent = '❌ ' + (msg || 'Install failed.');
+            statusEl.textContent = (msg || 'Install failed.');
             btn.disabled = false;
         }
     } catch (e) {
         statusEl.style.color = 'var(--danger)';
-        statusEl.textContent = '❌ ' + e.message;
+        statusEl.textContent = e.message;
         btn.disabled = false;
     }
 }
@@ -789,12 +789,12 @@ async function checkConfigDrift() {
         });
         var data = await resp.json();
         if (!data.ok) {
-            resultsDiv.innerHTML = '<span style="color:var(--danger);">❌ ' + escapeHtml(data.error || 'Check failed.') + '</span>';
+            resultsDiv.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(data.error || 'Check failed.') + '</span>';
             btn.disabled = false;
             return;
         }
         if (data.issues.length === 0) {
-            resultsDiv.innerHTML = '<span style="color:var(--success);">✅ No drift detected — Jen\'s subnet map agrees with Kea\'s live config.</span>';
+            resultsDiv.innerHTML = '<span style="color:var(--success);"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> No drift detected — Jen\'s subnet map agrees with Kea\'s live config.</span>';
             btn.disabled = false;
             return;
         }
@@ -804,7 +804,7 @@ async function checkConfigDrift() {
                  + '<div style="margin-top:4px;color:var(--text);">' + escapeHtml(i.message) + '</div></div>';
         }).join('');
     } catch (e) {
-        resultsDiv.innerHTML = '<span style="color:var(--danger);">❌ ' + escapeHtml(e.message) + '</span>';
+        resultsDiv.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
     }
     btn.disabled = false;
 }

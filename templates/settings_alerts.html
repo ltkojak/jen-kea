@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots, icon_test %}
 <div class="page-header">
-    <h1>🔔 Alerts &amp; Integrations</h1>
+    <h1>{{ icon("bell", "ico-lg") }} Alerts &amp; Integrations</h1>
     <p>Notification channels, thresholds and templates — plus the DNS provider and Prometheus hooks. Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.</p>
 </div>
 
@@ -12,7 +12,7 @@
 
 <!-- Global alert settings -->
 <div class="card" id="al-global">
-    <div class="card-header"><span class="card-title">⚙️ Global Alert Settings</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("settings") }} Global Alert Settings</span></div>
     <form method="POST" action="/settings/alerts/save-global"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -46,7 +46,7 @@
 <!-- Alert Channels -->
 <div class="card" id="al-channels">
     <div class="card-header">
-        <span class="card-title">📡 Alert Channels</span>
+        <span class="card-title">{{ icon("radio-tower") }} Alert Channels</span>
         <button class="btn btn-sm btn-primary" id="add-channel-btn">+ Add Channel</button>
     </div>
 
@@ -64,14 +64,14 @@ var JEN_CHANNELS = {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <div style="display:flex;align-items:center;gap:10px;">
                 <span style="font-size:18px;">
-                    {% if ch.channel_type == 'telegram' %}📱
-                    {% elif ch.channel_type == 'email' %}📧
-                    {% elif ch.channel_type == 'slack' %}💬
-                    {% elif ch.channel_type == 'discord' %}🎮
-                    {% elif ch.channel_type == 'ntfy' %}🔔
-                    {% elif ch.channel_type == 'pushover' %}📲
-                    {% elif ch.channel_type == 'webhook' %}🔗
-                    {% else %}📣
+                    {% if ch.channel_type == 'telegram' %}{{ icon("send") }}
+                    {% elif ch.channel_type == 'email' %}{{ icon("mail") }}
+                    {% elif ch.channel_type == 'slack' %}{{ icon("message-square") }}
+                    {% elif ch.channel_type == 'discord' %}{{ icon("message-square") }}
+                    {% elif ch.channel_type == 'ntfy' %}{{ icon("bell") }}
+                    {% elif ch.channel_type == 'pushover' %}{{ icon("smartphone") }}
+                    {% elif ch.channel_type == 'webhook' %}{{ icon("link") }}
+                    {% else %}{{ icon("megaphone") }}
                     {% endif %}
                 </span>
                 <div>
@@ -110,7 +110,7 @@ var JEN_CHANNELS = {
         </div>
         {% if ch.subnet_scope %}
         <div style="margin-top:8px;font-size:11px;color:var(--text-muted);">
-            📍 Subnet-specific alerts limited to:
+            {{ icon("map-pin") }} Subnet-specific alerts limited to:
             {% for sid in ch.subnet_scope %}{{ subnet_map.get(sid, {}).get('name', 'Subnet ' + sid|string) }}{% if not loop.last %}, {% endif %}{% endfor %}
         </div>
         {% endif %}
@@ -126,7 +126,7 @@ var JEN_CHANNELS = {
 
 <!-- Message Templates -->
 <div class="card" id="al-templates">
-    <div class="card-header"><span class="card-title">✏️ Message Templates</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("pencil") }} Message Templates</span></div>
     <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
         Customize alert messages. Available variables: <code>{ip}</code> <code>{mac}</code> <code>{hostname}</code> <code>{subnet}</code> <code>{cidr}</code> <code>{pct}</code> <code>{used}</code> <code>{total}</code> <code>{free}</code> <code>{days}</code> <code>{details}</code> <code>{summary}</code>
         Supports HTML: <code>&lt;b&gt;</code> <code>&lt;code&gt;</code> <code>\n</code> for newlines.
@@ -166,13 +166,13 @@ var JEN_CHANNELS = {
                 <div class="form-group">
                     <label>Channel Type</label>
                     <select name="channel_type" id="channelType">
-                        <option value="telegram">📱 Telegram</option>
-                        <option value="email">📧 Email (SMTP)</option>
-                        <option value="slack">💬 Slack Webhook</option>
-                        <option value="discord">🎮 Discord Webhook</option>
-                        <option value="ntfy">🔔 ntfy</option>
-                        <option value="pushover">📲 Pushover</option>
-                        <option value="webhook">🔗 Generic Webhook</option>
+                        <option value="telegram">Telegram</option>
+                        <option value="email">Email (SMTP)</option>
+                        <option value="slack">Slack Webhook</option>
+                        <option value="discord">Discord Webhook</option>
+                        <option value="ntfy">ntfy</option>
+                        <option value="pushover">Pushover</option>
+                        <option value="webhook">Generic Webhook</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -375,7 +375,7 @@ var JEN_CHANNELS = {
 
 <!-- DDNS / DNS provider (moved from Infrastructure in v5.9.0) -->
 <div class="card" id="al-ddns">
-    <div class="card-header"><span class="card-title">🔗 DDNS &amp; DNS Provider</span>
+    <div class="card-header"><span class="card-title">{{ icon("link") }} DDNS &amp; DNS Provider</span>
         <span style="font-size:12px;color:var(--text-muted);">Powers the <a href="/ddns">Network → DDNS</a> page</span>
     </div>
     <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -450,7 +450,7 @@ var JEN_CHANNELS = {
 
         <div id="dns-fields-ssh" style="display:none;">
             <div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius);font-size:13px;color:var(--text-muted);">
-                ℹ️ Uses the SSH connection configured under <a href="/settings/kea#kea-ssh">Kea → SSH</a> to run <code>dig</code> on your Kea server.
+                {{ icon("info") }} Uses the SSH connection configured under <a href="/settings/kea#kea-ssh">Kea → SSH</a> to run <code>dig</code> on your Kea server.
                 No additional configuration required.
             </div>
         </div>
@@ -462,7 +462,7 @@ var JEN_CHANNELS = {
 <!-- Prometheus Metrics (moved from Infrastructure in v5.9.0) -->
 <div class="card" id="al-metrics">
     <div class="card-header">
-        <span class="card-title">📊 Prometheus Metrics</span>
+        <span class="card-title">{{ icon("chart-bar") }} Prometheus Metrics</span>
     </div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
         The <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">/metrics</code>

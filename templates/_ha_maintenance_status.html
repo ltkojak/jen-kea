@@ -20,24 +20,24 @@
     <form method="POST" action="{{ url_for('servers.ha_maintenance_handover') }}"
           data-confirm="Put {{ view.down.name }} into maintenance so it can be shut down? {{ view.up.name }} will serve everything in the meantime.">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-primary" {% if not view.state.preflight_ok %}disabled title="A preflight check failed."{% endif %}>⚡ Start handover</button>
+        <button type="submit" class="btn btn-primary" {% if not view.state.preflight_ok %}disabled title="A preflight check failed."{% endif %}>{{ icon("zap") }} Start handover</button>
     </form>
     {% endif %}
     {% if view.can_cancel and view.step in ('handover', 'work') %}
     <form method="POST" action="{{ url_for('servers.ha_maintenance_cancel') }}"
           data-confirm="Cancel the handover and return {{ view.down.name }} and {{ view.up.name }} to their previous states?">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-secondary">✖️ Cancel handover</button>
+        <button type="submit" class="btn btn-secondary">{{ icon("x") }} Cancel handover</button>
     </form>
     {% endif %}
     {% if view.step == 'work' %}
     <form method="POST" action="{{ url_for('servers.ha_maintenance_back') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn btn-primary">↩️ {{ view.down.name }} is back — watch it rejoin</button>
+        <button type="submit" class="btn btn-primary">{{ icon("undo-2") }} {{ view.down.name }} is back — watch it rejoin</button>
     </form>
     {% endif %}
     {% if view.step == 'done' %}
-    <a href="{{ url_for('servers.ha_maintenance') }}?down={{ view.up.id }}" class="btn btn-primary" hx-boost="false">🔁 Repeat for {{ view.up.name }}</a>
+    <a href="{{ url_for('servers.ha_maintenance') }}?down={{ view.up.id }}" class="btn btn-primary" hx-boost="false">{{ icon("repeat") }} Repeat for {{ view.up.name }}</a>
     {% endif %}
     <form method="POST" action="{{ url_for('servers.ha_maintenance_finish') }}"
           {% if view.step in ('handover', 'work', 'back') %}data-confirm="Leave the flow? Kea keeps whatever state it is in — this only forgets the stepper."{% endif %}>

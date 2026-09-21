@@ -3,7 +3,7 @@
 {% block content %}
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
-    <h1>🔗 DDNS</h1>
+    <h1>{{ icon("link", "ico-lg") }} DDNS</h1>
     <p>Kea's DNS-update pipeline — provider integrations and D2 (kea-dhcp-ddns), side by side.</p>
 </div>
 
@@ -19,7 +19,7 @@
 {% if tab == 'naming' %}
 
 <div class="card">
-    <div class="card-header"><span class="card-title">✏️ DDNS Naming</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("pencil") }} DDNS Naming</span></div>
     <div class="form-hint" style="margin-bottom:12px;">
         Whether dhcp4 tells D2 about a lease, and how the hostname it sends is built.
         Saved here and pushed to every SSH-configured Kea server, then each one restarts.
@@ -150,7 +150,7 @@
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
 
 <div class="card">
-    <div class="card-header"><span class="card-title">➡️ Forward Domains</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("arrow-right") }} Forward Domains</span></div>
     <table style="width:100%;font-size:13px;margin-bottom:12px;">
         <thead><tr><th>Zone</th><th>Key</th><th>DNS servers</th><th></th></tr></thead>
         <tbody>
@@ -199,7 +199,7 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">⬅️ Reverse Domains</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("arrow-left") }} Reverse Domains</span></div>
     <table style="width:100%;font-size:13px;margin-bottom:12px;">
         <thead><tr><th>Zone</th><th>Key</th><th>DNS servers</th><th></th></tr></thead>
         <tbody>
@@ -253,7 +253,7 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">🔑 TSIG Keys</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("key-round") }} TSIG Keys</span></div>
     <table style="width:100%;font-size:13px;margin-bottom:12px;">
         <thead><tr><th>Name</th><th>Algorithm</th><th></th></tr></thead>
         <tbody>
@@ -302,7 +302,7 @@
 {% elif tab == 'verify' %}
 
 <div class="card">
-    <div class="card-header"><span class="card-title">✅ Verify DNS</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("circle-check") }} Verify DNS</span></div>
     <div class="form-hint" style="margin-bottom:12px;">
         Looks up a hostname and/or IP through the Jen host's own system resolver — whatever put the record
         there, D2 or a provider. Forward zone: <span class="mono">{{ forward_zone or '(none configured)' }}</span> ·
@@ -354,7 +354,7 @@
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
 
 <div class="card">
-    <div class="card-header"><span class="card-title">🔍 Hostname Lookup</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("search") }} Hostname Lookup</span></div>
     <form method="GET">
         <input type="hidden" name="tab" value="status">
         <div style="display:flex;gap:8px;">
@@ -388,7 +388,7 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">ℹ️ Mode &amp; Log Info</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("info") }} Mode &amp; Log Info</span></div>
     <table>
         <tr><td class="stat-label" style="width:120px;">Mode</td><td>
             {% if mode == 'both' %}<span class="badge badge-dynamic">Provider + D2</span>
@@ -398,7 +398,7 @@
         <tr><td class="stat-label">Log File</td><td class="mono" style="font-size:12px;">{{ ddns_log }}</td></tr>
         <tr><td class="stat-label">Status</td><td>
             {% if log_status == 'ok' %}<span style="color:var(--success);">✓ Reading</span>
-            {% elif log_status == 'empty' %}<span style="color:var(--warning);">⚠ Empty</span>
+            {% elif log_status == 'empty' %}<span style="color:var(--warning);">{{ icon("triangle-alert") }} Empty</span>
             {% elif log_status == 'missing' %}<span style="color:var(--danger);">✗ File not found</span>
             {% else %}<span style="color:var(--danger);">✗ Error</span>{% endif %}
         </td></tr>
@@ -411,7 +411,7 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">📡 dhcp4 → D2</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("radio-tower") }} dhcp4 → D2</span></div>
     <table style="width:100%;font-size:13px;margin-bottom:12px;">
         <thead><tr><th>Server</th><th>Sends updates</th></tr></thead>
         <tbody>
@@ -434,7 +434,7 @@
             {% elif d2_status == 'warn' %}<span style="color:var(--warning);">● {{ d2_detail }}</span>
             {% else %}<span style="color:var(--text-muted);">● {{ d2_detail }}</span>{% endif %}
         </div>
-        <a href="/health-center" class="btn btn-sm btn-secondary">🩺 Health Center</a>
+        <a href="/health-center" class="btn btn-sm btn-secondary">{{ icon("stethoscope") }} Health Center</a>
     </div>
     {% if d2_stats %}
     <table style="width:100%;font-size:12px;margin-top:12px;">
@@ -445,7 +445,7 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><span class="card-title">📄 Recent Log Activity</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("file-text") }} Recent Log Activity</span></div>
     {% if lines %}
     <div style="background:var(--surface2);border-radius:var(--radius);padding:14px;max-height:500px;overflow-y:auto;">
     {% for line in lines %}

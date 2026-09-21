@@ -134,7 +134,7 @@ ALLOWED_RAW_EXCEPTION_LINES = [
     ),
     (
         "jen/routes/settings/authoring.py",
-        'errors.append(f"❌ {name}: {str(e)}")',
+        'errors.append(f"{name}: {str(e)}")',
         "SSH config-write failure against an admin-configured server.",
     ),
     (

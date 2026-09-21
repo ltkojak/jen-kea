@@ -102,7 +102,7 @@ def _reword_edit_restart_lines(lines, summary, daemon_label="Kea"):
     line. Rewrite just those two known shapes back to the original text
     rather than teaching the shared module a per-caller template.
     v5.28.1 (Q26, A4) — kea_changeset's own manual-restart-needed line
-    changed shape (now "did NOT restart", a warning, not a ✅
+    changed shape (now "did NOT restart", a warning, not a success
     "success" line reading "restart … manually") — `manual_old` tracks
     that; `style` is left alone, so a manual-restart line correctly
     stays a warning here too."""
@@ -1949,7 +1949,7 @@ _IMPORT_SOURCES = {
     "windows": {
         "key": "windows",
         "label": "Windows DHCP",
-        "icon": "🪟",
+        "icon": "app-window",
         "file": "export",
         "thing": "scope",
         "classes_label": "Policies",
@@ -1960,7 +1960,7 @@ _IMPORT_SOURCES = {
     "isc": {
         "key": "isc",
         "label": "ISC DHCP",
-        "icon": "📄",
+        "icon": "file-text",
         "file": "dhcpd.conf",
         "thing": "subnet",
         "classes_label": "Pool classes",
@@ -2265,7 +2265,7 @@ def _finish_windows_import(token, entry):
                 f"{res['ip-address']} / {res['hw-address']}: {result.get('text', 'unknown error')}"
             )
     report.append(f"Reservations: {reservation_results['added']} added, {len(reservation_results['errors'])} failed.")
-    report.extend(f"❌ reservation {e}" for e in reservation_results["errors"])
+    report.extend(f"Reservation {e}" for e in reservation_results["errors"])
 
     if subnets_to_declare:
         new_map = dict(extensions.SUBNET_MAP)
@@ -2361,7 +2361,7 @@ def import_windows_apply(source):
         entry["state"] = "config_applied_restart_failed"
         entry["applied_sha"] = apply_result.get("sha256")
         entry["expires"] = time.time() + _WIN_IMPORT_TTL_SECONDS
-        report.append(f"⚠️ Config applied, but Kea did not restart cleanly: {restart['detail']}")
+        report.append(f"Config applied, but Kea did not restart cleanly: {restart['detail']}")
         report.append(
             f"You have 30 minutes to add the reservations below. Re-importing the {src['file']} after that is "
             "not a recovery path — the subnet's CIDR would already exist in Kea, so its reservations "
@@ -2373,7 +2373,7 @@ def import_windows_apply(source):
             "error",
         )
         return render_template("import_windows_result.html", report=report, restart_failed=True, src=src)
-    report.append("✅ Kea restarted on the primary server.")
+    report.append("Kea restarted on the primary server.")
 
     report = _finish_windows_import(token, entry)
     return render_template("import_windows_result.html", report=report, src=src)

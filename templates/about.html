@@ -2,7 +2,7 @@
 {% block title %}About{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>ℹ️ About Jen</h1>
+    <h1>{{ icon("info", "ico-lg") }} About Jen</h1>
     <p>System information and credits</p>
 </div>
 
@@ -10,7 +10,7 @@
 
 <!-- System Info -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🖥️ System</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("server") }} System</span></div>
     <table style="width:100%;">
         <tr><td class="stat-label" style="width:140px;padding:8px 0;">Jen Version</td>
             <td><span style="color:var(--primary);font-weight:600;">v{{ jen_version }}</span></td></tr>
@@ -48,7 +48,7 @@
 
 <!-- About -->
 <div class="card">
-    <div class="card-header"><span class="card-title">📖 About</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("book-open") }} About</span></div>
     <div style="text-align:center;padding:20px 0 10px;">
         <img src="/static/icons/jen-logo-wide.png" alt="Jen" style="height:56px;width:auto;filter:drop-shadow(0 0 16px rgba(0,180,216,0.25));">
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:2px;margin-top:4px;">The Kea DHCP Management Console</div>
@@ -66,10 +66,10 @@
         <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">with the assistance of Claude (Anthropic)</div>
     </div>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px;display:flex;gap:12px;">
-        <a href="https://github.com/ltkojak/jen-kea" target="_blank" class="btn btn-secondary btn-sm">⭐ GitHub</a>
-        <a href="https://github.com/ltkojak/jen-kea/issues" target="_blank" class="btn btn-secondary btn-sm">🐛 Report Issue</a>
-        <a href="https://github.com/ltkojak/jen-kea/releases" target="_blank" class="btn btn-secondary btn-sm">📦 Releases</a>
-        <a href="https://github.com/ltkojak/jen-kea/blob/main/docs/admin-guide.md#runbooks" target="_blank" class="btn btn-secondary btn-sm">📚 Docs → Runbooks</a>
+        <a href="https://github.com/ltkojak/jen-kea" target="_blank" class="btn btn-secondary btn-sm">{{ icon("star") }} GitHub</a>
+        <a href="https://github.com/ltkojak/jen-kea/issues" target="_blank" class="btn btn-secondary btn-sm">{{ icon("bug") }} Report Issue</a>
+        <a href="https://github.com/ltkojak/jen-kea/releases" target="_blank" class="btn btn-secondary btn-sm">{{ icon("package") }} Releases</a>
+        <a href="https://github.com/ltkojak/jen-kea/blob/main/docs/admin-guide.md#runbooks" target="_blank" class="btn btn-secondary btn-sm">{{ icon("library") }} Docs → Runbooks</a>
     </div>
 </div>
 
@@ -80,7 +80,7 @@
      actually deployed. Collapsed by default past the first entry to
      keep the page from becoming a wall of text on every visit. -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🆕 What's New</span></div>
+    <div class="card-header"><span class="card-title">What's New</span></div>
     {% if changelog_entries %}
     {% for entry in changelog_entries %}
     <div style="{% if not loop.first %}margin-top:16px;padding-top:16px;border-top:1px solid var(--border);{% endif %}">
@@ -103,7 +103,7 @@
     </div>
     {% endfor %}
     <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:16px;">
-        <a href="https://github.com/ltkojak/jen-kea/blob/main/CHANGELOG.md" target="_blank" class="btn btn-secondary btn-sm">📜 Full Changelog</a>
+        <a href="https://github.com/ltkojak/jen-kea/blob/main/CHANGELOG.md" target="_blank" class="btn btn-secondary btn-sm">{{ icon("scroll-text") }} Full Changelog</a>
     </div>
     {% else %}
     <p style="color:var(--text-muted);font-size:13px;">Changelog not available.</p>
@@ -122,7 +122,7 @@
 
 <!-- Subnet Summary -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🌐 Configured Subnets</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("network") }} Configured Subnets</span></div>
     <table style="width:100%;">
         <thead><tr>
             <th style="text-align:left;padding:8px 12px;">Subnet ID</th>

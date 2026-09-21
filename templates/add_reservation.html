@@ -2,7 +2,7 @@
 {% block title %}Add Reservation{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📌 Add Reservation</h1>
+    <h1>{{ icon("pin", "ico-lg") }} Add Reservation</h1>
 </div>
 <div class="card" style="max-width:600px;">
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

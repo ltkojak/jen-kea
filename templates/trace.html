@@ -2,7 +2,7 @@
 {% block title %}Client Trace{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>📜 Client trace</h1>
+    <h1>{{ icon("search-code", "ico-lg") }} Client trace</h1>
     <p>What Kea's own log says happened to one client — no packet capture, nothing installed. Compare it with what Jen predicts.</p>
 </div>
 
@@ -26,8 +26,8 @@
             </div>
         </div>
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <button type="submit" class="btn btn-primary">📜 Show trace</button>
-            <button type="submit" name="watch" value="1" class="btn btn-secondary">👁 Watch for 60 s</button>
+            <button type="submit" class="btn btn-primary">{{ icon("search-code") }} Show trace</button>
+            <button type="submit" name="watch" value="1" class="btn btn-secondary">{{ icon("eye") }} Watch for 60 s</button>
             <span class="form-hint" style="margin:0;">Reads <span class="mono">{{ log_path }}</span> on the server.</span>
         </div>
     </form>

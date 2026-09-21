@@ -5,7 +5,7 @@
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
     <div>
-        <h1>👤 Users</h1>
+        <h1>{{ icon("user", "ico-lg") }} Users</h1>
         <p>User management is restricted to SuperAdmins.</p>
     </div>
     <button class="btn btn-primary" id="add-user-btn">＋ Add User</button>
@@ -34,16 +34,16 @@
             <span style="font-size:11px;color:var(--text-muted);"> (you)</span>
             {% endif %}
             {% if u.auth_provider == 'oidc' %}
-            <span class="badge" style="background:rgba(0,180,216,0.12);color:var(--primary);font-size:10px;" title="Managed by single sign-on">🪪 SSO</span>
+            <span class="badge" style="background:rgba(0,180,216,0.12);color:var(--primary);font-size:10px;" title="Managed by single sign-on">{{ icon("id-card") }} SSO</span>
             {% endif %}
         </td>
         <td>
             {% if u.role == 'superadmin' %}
-            <span style="color:var(--warning);font-weight:600;font-size:12px;">⭐ SuperAdmin</span>
+            <span style="color:var(--warning);font-weight:600;font-size:12px;">{{ icon("star") }} SuperAdmin</span>
             {% elif u.role == 'admin' %}
-            <span style="color:var(--primary);font-weight:600;font-size:12px;">🔧 Admin</span>
+            <span style="color:var(--primary);font-weight:600;font-size:12px;">{{ icon("wrench") }} Admin</span>
             {% else %}
-            <span style="color:var(--text-muted);font-weight:600;font-size:12px;">👁️ Viewer</span>
+            <span style="color:var(--text-muted);font-weight:600;font-size:12px;">{{ icon("eye") }} Viewer</span>
             {% endif %}
         </td>
         <td style="font-size:12px;color:var(--text-muted);">
@@ -71,7 +71,7 @@
         </td>
         <td>
             <button class="btn btn-sm btn-secondary edit-user-btn"
-                data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id), "is_oidc": (u.auth_provider == "oidc"), "external_id": (u.external_id or "")} | tojson }}'>✏️ Edit</button>
+                data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id), "is_oidc": (u.auth_provider == "oidc"), "external_id": (u.external_id or "")} | tojson }}'>{{ icon("pencil") }} Edit</button>
         </td>
     </tr>
     {% endfor %}
@@ -84,9 +84,9 @@
 <div class="card" style="margin-top:16px;background:var(--surface2);font-size:12px;color:var(--text-muted);">
     <div style="font-weight:600;margin-bottom:8px;color:var(--text);">Role Reference</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-        <div><strong style="color:var(--warning);">⭐ SuperAdmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
-        <div><strong style="color:var(--primary);">🔧 Admin</strong><br>Full management on assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
-        <div><strong style="color:var(--text);">👁️ Viewer</strong><br>Read-only access to assigned subnets. Cannot access Settings or Database.</div>
+        <div><strong style="color:var(--warning);">{{ icon("star") }} SuperAdmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
+        <div><strong style="color:var(--primary);">{{ icon("wrench") }} Admin</strong><br>Full management on assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
+        <div><strong style="color:var(--text);">{{ icon("eye") }} Viewer</strong><br>Read-only access to assigned subnets. Cannot access Settings or Database.</div>
     </div>
 </div>
 
@@ -110,9 +110,9 @@
         <div class="form-group">
             <label>Role</label>
             <select name="role" id="add-role" style="width:100%;">
-                <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
-                <option value="admin">🔧 Admin — manage assigned subnets</option>
-                <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
+                <option value="viewer">Viewer — read-only on assigned subnets</option>
+                <option value="admin">Admin — manage assigned subnets</option>
+                <option value="superadmin">SuperAdmin — full access, all subnets</option>
             </select>
         </div>
         <div class="form-group" id="add-subnet-group">
@@ -142,7 +142,7 @@
 <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(520px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h3 style="margin:0;">✏️ Edit User: <span id="edit-username-label" style="color:var(--primary);"></span></h3>
+        <h3 style="margin:0;">{{ icon("pencil") }} Edit User: <span id="edit-username-label" style="color:var(--primary);"></span></h3>
         <button data-close-modal="edit-modal" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
     </div>
 
@@ -152,9 +152,9 @@
         <div class="form-group">
             <label>Role</label>
             <select name="role" id="edit-role" style="width:100%;">
-                <option value="viewer">👁️ Viewer — read-only on assigned subnets</option>
-                <option value="admin">🔧 Admin — manage assigned subnets</option>
-                <option value="superadmin">⭐ SuperAdmin — full access, all subnets</option>
+                <option value="viewer">Viewer — read-only on assigned subnets</option>
+                <option value="admin">Admin — manage assigned subnets</option>
+                <option value="superadmin">SuperAdmin — full access, all subnets</option>
             </select>
             <div class="form-hint" id="edit-role-oidc-hint" style="display:none;color:var(--warning);">Role is managed by the identity provider — it's recomputed from group membership on every SSO login.</div>
         </div>
@@ -215,7 +215,7 @@
         <div class="form-group" style="margin-bottom:8px;">
             <input type="text" name="external_id" placeholder="External ID (the identity provider's sub claim)" style="width:100%;">
         </div>
-        <button type="submit" class="btn btn-sm btn-secondary">🪪 Link to SSO</button>
+        <button type="submit" class="btn btn-sm btn-secondary">{{ icon("id-card") }} Link to SSO</button>
     </form>
 
     <hr style="border-color:var(--border);margin:18px 0;">
@@ -227,7 +227,7 @@
     <div id="edit-mfa-status" style="font-size:13px;margin-bottom:10px;"></div>
     <form id="reset-mfa-form" method="POST" action=""
           data-confirm="Reset MFA for this user? They will need to re-enroll on next login."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">🔐 Reset MFA Enrollment</button>
+        <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">{{ icon("lock") }} Reset MFA Enrollment</button>
     </form>
 
     <hr style="border-color:var(--border);margin:18px 0;">
@@ -238,7 +238,7 @@
         <div style="margin-top:10px;">
             <form id="delete-form" method="POST" action=""
                   data-confirm="Delete this user? This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-danger">🗑️ Delete User</button>
+                <button type="submit" class="btn btn-danger">{{ icon("trash") }} Delete User</button>
             </form>
         </div>
     </div>
@@ -273,7 +273,7 @@ function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSe
     var ssoLinked = document.getElementById('edit-sso-linked');
     var ssoForm = document.getElementById('link-sso-form');
     if (isOidc) {
-        ssoLinked.textContent = '🪪 Linked to SSO (external ID: ' + externalId + ')';
+        ssoLinked.textContent = 'Linked to SSO (external ID: ' + externalId + ')';
         ssoLinked.style.display = '';
         ssoForm.style.display = 'none';
     } else {

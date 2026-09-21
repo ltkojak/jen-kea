@@ -3,7 +3,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="action-bar" id="leases-bulk-bar" style="display:none;margin-bottom:12px;">
         <span id="selectedCount" style="font-size:13px;color:var(--text-muted);">0 selected</span>
-        <button type="button" id="leases-bulk-release-btn" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🔓 Release Selected</button>
+        <button type="button" id="leases-bulk-release-btn" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">{{ icon("lock-open") }} Release Selected</button>
     </div>
 {% endif %}
 <div class="card" style="padding:0;">

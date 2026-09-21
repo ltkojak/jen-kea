@@ -31,7 +31,7 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="subnet_id" value="{{ h.subnet_id }}">
                 <input type="hidden" name="duid" value="{{ h.duid_hex }}">
-                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;">🗑️</button>
+                <button type="submit" class="btn btn-sm" style="border:1px solid var(--danger);color:var(--danger);background:transparent;" title="Delete" aria-label="Delete">{{ icon("trash") }}</button>
             </form>
         </td>
         {% endif %}

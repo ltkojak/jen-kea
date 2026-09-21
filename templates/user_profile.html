@@ -2,7 +2,7 @@
 {% block title %}My Profile{% endblock %}
 {% block content %}
 <div class="page-header">
-    <h1>👤 My Profile</h1>
+    <h1>{{ icon("user", "ico-lg") }} My Profile</h1>
     <p>Account settings and security for {{ current_user.username }}</p>
 </div>
 
@@ -10,7 +10,7 @@
 
 <!-- Avatar Upload -->
 <div class="card" style="margin-bottom:16px;">
-    <div class="card-header"><span class="card-title">🖼️ Profile Picture</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("image") }} Profile Picture</span></div>
     <div style="display:flex;align-items:center;gap:24px;padding:8px 0;">
         <div id="avatar-preview" style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,#0077b6,#00b4d8);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;overflow:hidden;flex-shrink:0;">
             {% if current_user_avatar %}
@@ -25,10 +25,10 @@
                 <input type="hidden" name="avatar_data_url" id="avatar-data-input">
                 <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                    <button type="button" class="btn btn-secondary" id="choose-image-btn">📁 Choose Image</button>
-                    <button type="submit" id="avatar-save-btn" class="btn btn-primary" style="display:none;">💾 Save Picture</button>
+                    <button type="button" class="btn btn-secondary" id="choose-image-btn">{{ icon("folder") }} Choose Image</button>
+                    <button type="submit" id="avatar-save-btn" class="btn btn-primary" style="display:none;">{{ icon("save") }} Save Picture</button>
                     {% if current_user_avatar %}
-                    <button type="submit" class="btn btn-danger btn-sm" id="remove-avatar-btn">🗑️ Remove</button>
+                    <button type="submit" class="btn btn-danger btn-sm" id="remove-avatar-btn">{{ icon("trash") }} Remove</button>
                     {% endif %}
                 </div>
             </form>
@@ -72,7 +72,7 @@ if (removeAvatarBtn) {
 
 <!-- Account info -->
 <div class="card">
-    <div class="card-header"><span class="card-title">👤 Account</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("user") }} Account</span></div>
     <table style="width:100%;">
         <tr><td class="stat-label" style="width:140px;padding:8px 0;">Username</td>
             <td><strong>{{ current_user.username }}</strong></td></tr>
@@ -85,22 +85,22 @@ if (removeAvatarBtn) {
 
 <!-- Security summary -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🔐 Security</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("lock") }} Security</span></div>
     <table style="width:100%;">
         <tr><td class="stat-label" style="width:140px;padding:8px 0;">MFA Status</td>
             <td>
                 {% if mfa_enrolled %}
                 <span class="badge badge-reserved">✓ Enrolled</span>
                 {% else %}
-                <span class="badge" style="background:#2a1a1a;color:var(--warning);">⚠ Not enrolled</span>
+                <span class="badge" style="background:#2a1a1a;color:var(--warning);">{{ icon("triangle-alert") }} Not enrolled</span>
                 {% endif %}
             </td></tr>
         <tr><td class="stat-label" style="padding:8px 0;">Trusted Devices</td>
             <td>{{ device_count }} device{{ 's' if device_count != 1 else '' }}</td></tr>
     </table>
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">
-        <a href="/mfa/enroll" class="btn btn-sm btn-secondary">🔐 MFA Settings</a>
-        <a href="/mfa/trusted-devices" class="btn btn-sm btn-secondary">📱 Trusted Devices</a>
+        <a href="/mfa/enroll" class="btn btn-sm btn-secondary">{{ icon("lock") }} MFA Settings</a>
+        <a href="/mfa/trusted-devices" class="btn btn-sm btn-secondary">{{ icon("monitor-smartphone") }} Trusted Devices</a>
     </div>
 </div>
 
@@ -108,7 +108,7 @@ if (removeAvatarBtn) {
 
 <!-- Change password -->
 <div class="card">
-    <div class="card-header"><span class="card-title">🔑 Change Password</span></div>
+    <div class="card-header"><span class="card-title">{{ icon("key-round") }} Change Password</span></div>
     <form method="POST" action="/users/change-password" style="max-width:400px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Current Password</label>
