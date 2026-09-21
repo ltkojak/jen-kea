@@ -508,7 +508,7 @@ class TestSettingsPage:
         assert b'name="address" value="10.0.0.6"' in body
         # a plain <details>, no script of its own (tests/test_csp.py covers
         # the inline-handler rule page-wide)
-        assert b'<details class="direct-socket-setup"' in body
+        assert b'<details class="direct-socket-setup' in body
 
     def test_switch_back_only_in_direct_mode(self, logged_in_client, db, isolated_config, mock_kea):
         body = logged_in_client.get("/settings/kea").data
