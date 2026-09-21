@@ -106,7 +106,7 @@ def export_jen():
         return Response(
             gzip.compress(content),
             mimetype="application/gzip",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
+            headers={"Content-Disposition": f"attachment; filename={filename}", "Cache-Control": "no-store"},
         )
     except Exception as e:
         logger.error(f"Jen DB export failed: {e}")
@@ -128,7 +128,7 @@ def export_kea():
         return Response(
             gzip.compress(content),
             mimetype="application/gzip",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
+            headers={"Content-Disposition": f"attachment; filename={filename}", "Cache-Control": "no-store"},
         )
     except Exception as e:
         logger.error(f"Kea DB export failed: {e}")
@@ -305,9 +305,10 @@ def recovery_bundle():
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
     filename = f"jen-recovery-{hostname}-{ts}.tar.enc"
 
-    os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".tar.enc")
+    tmp_path = None
     try:
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".tar.enc")
         with os.fdopen(fd, "wb") as f:
             f.write(blob)
         __user.audit("RECOVERY_BUNDLE_EXPORT", "settings", f"{filename} ({len(blob)} bytes, {len(members)} members)")
@@ -324,12 +325,20 @@ def recovery_bundle():
         return Response(
             stream_with_context(_stream()),
             mimetype="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename={filename}", "Content-Length": str(len(blob))},
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Length": str(len(blob)),
+                "Cache-Control": "no-store",  # a secrets file: never cached by a browser or proxy
+            },
         )
-    except Exception:
-        with contextlib.suppress(OSError):
-            os.remove(tmp_path)
-        raise
+    except Exception as e:
+        # anything that fails BEFORE streaming starts leaves no file behind
+        if tmp_path:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
+        logger.error(f"recovery bundle write failed: {e}")
+        flash("Could not build the recovery bundle — see server logs.", "error")
+        return redirect(url_for("database.database", tab="recovery"))
 
 
 # ── Backup download / delete ───────────────────────────────────────────────────

@@ -269,3 +269,71 @@ class TestRecoveryBundleKeys:
         assert names.count("mfa_key") == 1 and names.count("secret_key") == 1
         assert not any(n.startswith("content/keys") for n in names)
         assert "content/logo.png" in names
+
+
+class TestBundleDownloadsAreNoStore:
+    """v5.49.0-beta.5 (Q55-M) - the recovery bundle and the database exports
+    are secrets/PII: never cached; a failure before streaming leaves no file."""
+
+    PASSPHRASE = "correct horse battery staple"
+
+    def _post_recovery(self, client):
+        return client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+
+    def test_recovery_bundle_is_no_store(self, logged_in_client, db, mock_kea):
+        r = self._post_recovery(logged_in_client)
+        assert r.status_code == 200
+        assert r.headers["Cache-Control"] == "no-store"
+
+    def test_jen_export_is_no_store(self, logged_in_client, db):
+        r = logged_in_client.post("/database/export/jen", data={"tables": ["settings"]})
+        assert r.status_code == 200
+        assert r.headers["Cache-Control"] == "no-store"
+
+    def test_kea_export_is_no_store(self, logged_in_client, db):
+        r = logged_in_client.post("/database/export/kea", data={"group": "reservations"})
+        assert r.status_code == 200
+        assert r.headers["Cache-Control"] == "no-store"
+
+    def test_a_failing_build_leaves_no_file_in_the_tmp_dir(self, logged_in_client, db, mock_kea, monkeypatch, tmp_path):
+        from jen import extensions
+        from jen.services import recovery
+
+        monkeypatch.setattr(extensions, "CONTENT_TMP_DIR", str(tmp_path))
+
+        def boom(*a, **k):
+            raise RuntimeError("build failed")
+
+        monkeypatch.setattr(recovery, "build", boom)
+        r = self._post_recovery(logged_in_client)
+        assert r.status_code in (200, 302)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_failure_after_the_file_is_written_removes_it(
+        self, logged_in_client, db, mock_kea, monkeypatch, tmp_path
+    ):
+        from jen import extensions
+        from jen.models import user as user_module
+
+        monkeypatch.setattr(extensions, "CONTENT_TMP_DIR", str(tmp_path))
+        real_audit = user_module.audit
+
+        def failing_audit(action, *a, **k):
+            if action == "RECOVERY_BUNDLE_EXPORT":
+                raise RuntimeError("audit down")
+            return real_audit(action, *a, **k)
+
+        monkeypatch.setattr(user_module, "audit", failing_audit)
+        r = self._post_recovery(logged_in_client)
+        assert r.status_code in (200, 302)  # a flash and a redirect, not a 500
+        assert list(tmp_path.iterdir()) == []  # the half-made secrets file is gone
+
+    def test_recovery_card_is_visibly_different_from_the_support_bundle(self, logged_in_client, db):
+        recovery_page = logged_in_client.get("/settings/databases?tab=recovery").data.decode()
+        assert "Recovery bundle — contains secrets" in recovery_page
+        assert "NOT redacted" in recovery_page and "support bundle" in recovery_page
+        system_page = logged_in_client.get("/settings/system").data.decode()
+        assert "redacted</strong> one" in system_page

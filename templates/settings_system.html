@@ -184,6 +184,7 @@
         each server's latest Kea config, plugin state, schema versions, recent audit and alert rows, and a tail of the
         Jen log. Every password, key, token and secret is masked before it goes in — a test asserts none can survive —
         and nothing is stored on this server; the zip is built when you click and sent to your browser.
+        This is the <strong>redacted</strong> one, safe to attach to a bug report — the recovery bundle (Settings → Databases) is not.
     </p>
     {% if current_user.role == 'superadmin' %}
     <a href="/settings/system/support-bundle" class="btn btn-secondary">🧰 Download support bundle</a>

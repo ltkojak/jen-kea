@@ -1619,7 +1619,7 @@ Each Add/Remove pushes to every SSH-configured server, guarded by that server's 
 
 ### Reconcile (v5.47.0)
 
-Verify checks one name at a time; **Reconcile** (Network → DDNS → Reconcile) runs the same forward/reverse check over the whole fleet at once — every reservation, then every active lease with a hostname, up to the limit you set (max 1000; each one is a live lookup, and the whole run is bounded — lookups that haven't answered within a couple of seconds are abandoned and shown as `lookup-failed`, so one hung resolver can't hold the page). Nothing is written anywhere, to Jen's database or to Kea — this is a read-only report, subnet-restricted the same way every other subnet-scoped page in Jen is.
+Verify checks one name at a time; **Reconcile** (Network → DDNS → Reconcile) runs the same forward/reverse check over the whole fleet at once — every reservation, then every active lease with a hostname, up to the limit you set (max 1000; each one is a live lookup, and the whole run is bounded — at most 8 lookups run at once and the whole run is capped at 10 seconds; a lookup that has not answered by then is abandoned and shown as `lookup-failed`, so one hung resolver can't hold the page). Runs are single-flight: a second click while one is running gets "a reconciliation is already running" instead of starting more work — you wait, Jen does not. Nothing is written anywhere, to Jen's database or to Kea — this is a read-only report, subnet-restricted the same way every other subnet-scoped page in Jen is.
 
 Each row gets one verdict:
 

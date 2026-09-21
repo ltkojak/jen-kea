@@ -736,6 +736,13 @@ def _update_channel(config_file=None):
     return value if value in CHANNELS else "stable"
 
 
+def _is_downgrade(installed, candidate):
+    """True when `candidate` is a strictly older release than `installed`.
+    An unreadable/unparsable installed version is never treated as newer."""
+    have = parse_version(installed)
+    return have != (0, 0, 0, 0, 0) and parse_version(candidate) < have
+
+
 def _installed_version():
     """JEN_VERSION out of the on-disk jen/__init__.py — the versioned
     layout's `current/app/jen/__init__.py` first (v5.14.0), the flat
@@ -1629,6 +1636,13 @@ def main():
     installed = _installed_version()
     if installed == version:
         log(f"Already running v{version} — nothing to do.")
+        return 0
+    if _is_downgrade(installed, version):
+        # e.g. a 5.49.0-beta.4 box whose channel was switched to stable while
+        # stable is 5.32.0: the UI offers nothing, but this unit re-derives
+        # "latest" on its own, so a stale button or a second click would
+        # otherwise install the OLDER release. Never downgrade.
+        log(f"Installed v{installed} is newer than the {channel} channel's v{version} — not downgrading.")
         return 0
 
     assets = data.get("assets", [])

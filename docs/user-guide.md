@@ -158,6 +158,8 @@ Only the last 1000 lines are scanned (the helper's own limit), so on a busy serv
 
 An IP with no MAC given resolves to its current lease's MAC automatically. Filter chips narrow the list to one kind of event at a time. Only subnets you can access are shown — a client whose subnet you can't see, or one with no resolvable subnet at all, isn't shown to a subnet-restricted user.
 
+Addresses get reused, so a timeline about a **MAC** shows only that client's own rows: events recorded for the same address under a different MAC are left out, and a row that names only the address (an audit or alert entry, or an event with no MAC) is kept but shown muted as *possibly related — same address, client unknown*. A timeline about an **IP** shows everyone who held it, and marks rows from an earlier holder *previous holder <mac>*.
+
 Jen keeps events for 90 days by default — the same retention job that prunes lease history.
 
 ## Subnets & Scope Options

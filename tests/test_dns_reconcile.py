@@ -306,3 +306,34 @@ class TestBoundedPoolAndSingleFlight:
             n = sum(1 for t in threading.enumerate() if t.name.startswith("dns-reconcile"))
             assert n <= dr.POOL_WORKERS, n
         time.sleep(0.8)  # let the abandoned lookups drain before other tests run
+
+
+class TestReconcileAtTheCap:
+    """v5.49.0-beta.5 (Q55-D extended) - 1000 rows and a resolver that hangs:
+    returns within the total budget, every row lookup-failed, and the shared
+    pool is still exactly eight threads."""
+
+    def test_limit_1000_with_a_hung_resolver(self, monkeypatch):
+        import threading
+
+        budget = 1.5  # TOTAL_BUDGET_SECONDS is 10; shrunk so the suite stays quick
+        monkeypatch.setattr(dr, "TOTAL_BUDGET_SECONDS", budget)
+        gate = threading.Event()  # the "5 s sleep": released at the end so no slot stays wedged
+
+        def hung(name, ip):
+            gate.wait(5)
+            return {"forward_ips": [ip], "reverse_name": name}
+
+        rows = [{"name": f"h{i}", "ip": f"10.1.{i // 250}.{i % 250 + 1}", "source": "lease"} for i in range(1000)]
+        t0 = time.monotonic()
+        try:
+            results = dr.reconcile(rows, hung, limit=1000)
+            elapsed = time.monotonic() - t0
+            assert elapsed < budget + 1, elapsed
+            assert len(results) == 1000
+            assert all(r["verdict"] == "lookup-failed" for r in results)
+            n = sum(1 for t in threading.enumerate() if t.name.startswith("dns-reconcile"))
+            assert n == dr.POOL_WORKERS == 8
+        finally:
+            gate.set()
+            time.sleep(0.3)  # let the released workers drain before the next test

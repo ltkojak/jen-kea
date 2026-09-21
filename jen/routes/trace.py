@@ -37,6 +37,8 @@ MAX_LINES = 1000
 DEFAULT_LINES = 1000
 WATCH_STEP_S = 5
 WATCH_MAX_S = 60
+# One tail must not hold a worker for the helper's 60 s default when the host hangs.
+TAIL_TIMEOUT_S = 15
 
 
 def _pick_server(raw: str) -> dict | None:
@@ -107,7 +109,7 @@ def trace_page():
             elif not current_user.all_subnets:
                 abort(403)
 
-            res = __host.tail_log(server, extensions.DHCP4_LOG, lines)
+            res = __host.tail_log(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S)
             if res["code"] == "missing":
                 ctx["error"] = (
                     f"Log file not found on the Kea server: {extensions.DHCP4_LOG}. "

@@ -199,3 +199,113 @@ class TestRootScriptReadsTheSameKey:
         assert jen_update_root.pick_release(LISTING, "stable")["tag_name"] == "v5.31.3"
         assert jen_update_root.pick_release(LISTING, "beta")["tag_name"] == "v5.32.0-beta.2"
         assert json.dumps(jen_update_root.parse_version("5.32.0-beta.2")) == json.dumps([5, 32, 0, 0, 2])
+
+
+# ── v5.49.0-beta.5 (Q55-N): the transitions Q53 will exercise for real ──
+
+
+def _rel(tag, pre):
+    return {
+        "tag_name": f"v{tag}",
+        "prerelease": pre,
+        "draft": False,
+        "html_url": f"https://x/{tag}",
+        "published_at": "2026-09-20T00:00:00Z",
+        "assets": [
+            {
+                "name": f"jen-v{tag}.tar.gz",
+                "browser_download_url": f"https://github.com/ltkojak/jen-kea/releases/download/v{tag}/jen-v{tag}.tar.gz",
+            }
+        ],
+    }
+
+
+B4, STABLE_32, FINAL_49, B50 = (
+    _rel("5.49.0-beta.4", True),
+    _rel("5.32.0", False),
+    _rel("5.49.0", False),
+    _rel("5.50.0-beta.1", True),
+)
+
+# (label, installed, channel, releases, expected status, expected latest)
+PAIRS = [
+    ("5.32.0 on stable, beta.4 exists", "5.32.0", "stable", [B4, STABLE_32], "up_to_date", "5.32.0"),
+    ("the same box switches to beta", "5.32.0", "beta", [B4, STABLE_32], "update_available", "5.49.0-beta.4"),
+    (
+        "5.49.0-beta.4 on beta, 5.49.0 final appears",
+        "5.49.0-beta.4",
+        "beta",
+        [FINAL_49, B4, STABLE_32],
+        "update_available",
+        "5.49.0",
+    ),
+    (
+        "5.32.0 stays on stable while 5.49.0-beta.4 exists",
+        "5.32.0",
+        "stable",
+        [B4, STABLE_32, _rel("5.31.3", False)],
+        "up_to_date",
+        "5.32.0",
+    ),
+    (
+        "5.49.0-beta.4 switches to stable (stable is 5.32.0)",
+        "5.49.0-beta.4",
+        "stable",
+        [B4, STABLE_32],
+        "up_to_date",
+        "5.32.0",
+    ),
+    (
+        "5.49.0 on beta, a later 5.50.0-beta.1",
+        "5.49.0",
+        "beta",
+        [B50, FINAL_49, B4],
+        "update_available",
+        "5.50.0-beta.1",
+    ),
+]
+
+
+class TestRealTransitionPairs:
+    @pytest.mark.parametrize("label,installed,channel,releases,status,latest", PAIRS, ids=[p[0] for p in PAIRS])
+    def test_web_side_route(self, logged_in_client, monkeypatch, label, installed, channel, releases, status, latest):
+        import requests
+
+        monkeypatch.setattr(requests, "get", _fake_get(releases))
+        monkeypatch.setattr(extensions, "UPDATE_CHANNEL", channel)
+        monkeypatch.setattr("jen.JEN_VERSION", installed)
+        d = logged_in_client.get("/settings/infrastructure/check-update").get_json()
+        assert d["status"] == status and d["latest"] == latest, (label, d)
+
+    @pytest.mark.parametrize("label,installed,channel,releases,status,latest", PAIRS, ids=[p[0] for p in PAIRS])
+    def test_root_updater_picks_the_same_release_and_never_downgrades(
+        self,
+        jen_update_root,  # noqa: F811
+        label,
+        installed,
+        channel,
+        releases,
+        status,
+        latest,
+    ):
+        picked = jen_update_root.pick_release(releases, channel)["tag_name"].lstrip("v")
+        assert picked == latest, label
+        offered = jen_update_root.parse_version(picked) > jen_update_root.parse_version(installed)
+        assert offered == (status == "update_available"), label
+        # the root unit re-derives "latest" itself: whenever the route offers nothing it must not INSTALL
+        # an older release either (a stale button, a second click)
+        if status == "up_to_date" and picked != installed:
+            assert jen_update_root._is_downgrade(installed, picked), label
+
+    def test_the_unit_stops_before_installing_an_older_release(self, jen_update_root):  # noqa: F811
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen-update-root.py").read_text(encoding="utf-8")
+        assert "_is_downgrade(installed, version)" in src
+        assert src.index("_is_downgrade(installed, version)") < src.index("asset_url = asset[")
+
+    def test_downgrade_guard_edges(self, jen_update_root):  # noqa: F811
+        d = jen_update_root._is_downgrade
+        assert d("5.49.0-beta.4", "5.32.0") is True
+        assert d("5.49.0", "5.49.0-beta.4") is True  # a final never "downgrades" to its own beta
+        assert d("5.49.0-beta.4", "5.49.0") is False
+        assert d("5.32.0", "5.49.0-beta.4") is False
+        assert d("?", "5.32.0") is False  # an unreadable installed version is never "newer"

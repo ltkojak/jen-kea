@@ -14,10 +14,15 @@ MAC_HEX = "AABBCCDDEE01"
 def _stub_tail(monkeypatch, result):
     from jen.services import kea_host
 
-    calls = []
+    class _Calls(list):
+        kwargs: list
 
-    def fake(server, path, lines=200):
+    calls = _Calls()
+    calls.kwargs = []
+
+    def fake(server, path, lines=200, **kw):
         calls.append((path, lines))
+        calls.kwargs.append(kw)
         return result
 
     monkeypatch.setattr(kea_host, "tail_log", fake)
@@ -190,3 +195,31 @@ class TestTraceFailsClosedAcrossSubnets:
                 cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (MAC_HEX,))
             db.commit()
             _clean(db)
+
+
+class TestTraceTimeout:
+    """v5.49.0-beta.5 (Q55-L) - a hung SSH must not hold a worker for the
+    helper's 60 s default: Trace asks for 15."""
+
+    def test_trace_passes_a_short_timeout(self, logged_in_client, db, monkeypatch):
+        _servers(monkeypatch)
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _clean(db)
+        logged_in_client.get("/tools/trace", query_string={"mac": MAC})
+        assert calls.kwargs and calls.kwargs[-1] == {"timeout": 15}
+
+    def test_tail_log_hands_the_timeout_to_helper_call(self, monkeypatch):
+        from jen.services import kea_host
+
+        seen = {}
+
+        def fake_helper_call(server, op, payload=None, timeout=60):
+            seen["timeout"] = timeout
+            return {"ok": True, "lines": []}
+
+        monkeypatch.setattr(kea_host, "helper_call", fake_helper_call)
+        monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a, **k: None)
+        kea_host.tail_log({"id": 1}, "/var/log/kea/x.log", 100, timeout=15)
+        assert seen["timeout"] == 15
+        kea_host.tail_log({"id": 1}, "/var/log/kea/x.log", 100)
+        assert seen["timeout"] == 60  # unchanged default for every other caller

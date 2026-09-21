@@ -297,13 +297,13 @@
 {% endif %}
 
 {% if active_tab == 'recovery' %}
-<div class="card">
-    <div class="card-header"><h3>🧳 Recovery Bundle</h3></div>
+<div class="card" style="border:2px solid var(--danger);">
+    <div class="card-header"><h3 style="color:var(--danger);">🧳 Recovery bundle — contains secrets</h3></div>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
         One encrypted file to stand Jen back up on a new machine: <code>jen.config</code>, the MFA encryption key, TLS/SSH keys, a fresh export of every Jen database table, uploaded content (icons, branding), and the latest Kea config Jen has seen for each server.
     </p>
     <div class="alert alert-warning" style="margin-bottom:18px;">
-        ⚠️ <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file.
+        ⚠️ <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file. For a file to attach to a bug report, use the redacted <em>support bundle</em> (Settings → System) instead.
     </div>
     <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

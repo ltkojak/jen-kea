@@ -786,9 +786,12 @@ def install_tls(server: dict, service: str, files: dict) -> dict:
         return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
 
 
-def tail_log(server: dict, path: str, lines: int = 200) -> dict:
+def tail_log(server: dict, path: str, lines: int = 200, timeout: int | None = None) -> dict:
+    """Last `lines` of a log on the Kea host. `timeout` bounds the SSH round trip (default: the
+    helper's 60 s / the legacy path's 30 s) — Trace passes a short one so a hung host
+    cannot hold a request worker."""
     try:
-        resp = helper_call(server, "tail-log", {"path": path, "lines": lines})
+        resp = helper_call(server, "tail-log", {"path": path, "lines": lines}, timeout=timeout or 60)
         _record_from_resp(server.get("id"), resp)
         if resp.get("ok"):
             return {"ok": True, "code": "ok", "lines": resp.get("lines", []), "via": "helper"}
@@ -799,7 +802,7 @@ def tail_log(server: dict, path: str, lines: int = 200) -> dict:
         _flag_legacy(server)
         # v5.28.0 (Q24, B1) — rc replaces the old "err and not out"
         # stdout/stderr-shape guess.
-        out, err, rc = _legacy_ssh(server, f"sudo tail -{int(lines)} {shlex.quote(path)}")
+        out, err, rc = _legacy_ssh(server, f"sudo tail -{int(lines)} {shlex.quote(path)}", timeout=timeout or 30)
         if rc != 0:
             if "No such file" in err or "No such file" in out:
                 return {"ok": False, "code": "missing", "detail": "log file not found", "via": "legacy"}
