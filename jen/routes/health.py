@@ -27,7 +27,9 @@ bp = Blueprint("health", __name__)
 def _run():
     """Run the checks scoped to what the current user may see, and return
     everything the page/partial/JSON need."""
-    checks = __health.run_checks({"subnet_filter": current_user.can_access_subnet})
+    checks = __health.run_checks(
+        {"subnet_filter": current_user.can_access_subnet, "unrestricted": current_user.all_subnets}
+    )
     return {
         "checks": checks,
         "grouped": __health.group_checks(checks),

@@ -135,10 +135,10 @@ masked diff a superadmin does — the step-up boundary is specifically
 
 **Whole-config surfaces vs per-object surfaces (v5.49.0-beta.2).** Surfaces
 that render the whole Kea config — config history, Doctor, Kea authoring, the
-Servers config views — require unrestricted subnet access
-(`current_user.all_subnets`), because the config names every subnet. Every
-per-object surface — leases, reservations, devices, Explain, Timeline, Trace,
-Reconcile — filters by subnet instead: a restricted user (or a subnet-scoped
+Servers config views — and **Trace**, whose source (Kea's log) has no per-line
+subnet boundary Jen can trust — require unrestricted subnet access
+(`current_user.all_subnets`). Every per-object surface — leases, reservations,
+devices, Explain, Timeline, Reconcile — filters by subnet instead: a restricted user (or a subnet-scoped
 API key) sees an object only when every subnet it belongs to is one they can
 access, and rows that carry no subnet at all (audit and alert matches) are for
 unrestricted callers only.

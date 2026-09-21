@@ -12,6 +12,7 @@ hardened auth.ssh_cli_opts() (StrictHostKeyChecking=accept-new) rather
 than the old inline StrictHostKeyChecking=no flags fixed in v4.4.8.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 
@@ -877,3 +878,69 @@ class TestDdnsReconcileBusy:
         r = logged_in_client.get("/ddns/reconcile")
         assert r.status_code == 200
         assert b"already running" in r.data
+
+
+class TestReconcileHealthCacheIsFleetWide:
+    """v5.49.0-beta.6 (Q56-2) - the cached Health summary is fleet-wide: only an
+    unrestricted run writes it, and expired names are scoped like the rest."""
+
+    SEEDED = json.dumps({"ts": "2026-09-20T00:00:00+00:00", "total": 4242, "verdicts": {"ok": 4242}})
+
+    def _stub_verify(self, monkeypatch):
+        from jen.routes import ddns
+
+        monkeypatch.setattr(ddns, "_run_verify", lambda h, ip: {"forward_ips": [ip], "reverse_name": h})
+
+    def test_a_scoped_run_does_not_overwrite_the_cache_and_says_so(self, client, db, mock_kea, monkeypatch):
+        from jen import extensions
+        from jen.models.user import get_global_setting, set_global_setting
+        from tests.conftest import restricted_client
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "A", "cidr": "10.0.0.0/24"}})
+        self._stub_verify(monkeypatch)
+        set_global_setting("dns_reconcile_last", self.SEEDED)
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="admin", username="recon_scoped1")
+        r = c.get("/ddns/reconcile", query_string={"limit": 5})
+        assert r.status_code == 200
+        assert b"Not cached for the Health Center" in r.data
+        assert get_global_setting("dns_reconcile_last", "") == self.SEEDED
+
+    def test_an_unrestricted_run_still_writes_it(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.models.user import get_global_setting, set_global_setting
+
+        self._stub_verify(monkeypatch)
+        set_global_setting("dns_reconcile_last", self.SEEDED)
+        logged_in_client.get("/ddns/reconcile", query_string={"limit": 5})
+        assert get_global_setting("dns_reconcile_last", "") != self.SEEDED
+
+    def test_expired_names_are_scoped_to_the_callers_subnets(self, client, db, mock_kea, monkeypatch):
+        from jen import extensions
+        from jen.services import dns_reconcile
+        from tests.conftest import restricted_client
+
+        monkeypatch.setattr(
+            extensions, "SUBNET_MAP", {1: {"name": "A", "cidr": "10.0.0.0/24"}, 2: {"name": "B", "cidr": "10.1.0.0/24"}}
+        )
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE hostname IN ('expired-a-host','expired-b-host')")
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) VALUES "
+                "(INET_ATON('10.0.0.201'), UNHEX('AABBCC000A01'), 3600, NOW(), 1, 2, 'expired-a-host'), "
+                "(INET_ATON('10.1.0.201'), UNHEX('AABBCC000B01'), 3600, NOW(), 2, 2, 'expired-b-host')"
+            )
+        db.commit()
+        seen = {}
+
+        def capture(rows, resolve, **kw):
+            seen["expired"] = kw.get("expired_names")
+            return []
+
+        monkeypatch.setattr(dns_reconcile, "reconcile", capture)
+        try:
+            c, _ = restricted_client(client, db, allowed_subnets=[1], role="admin", username="recon_scoped2")
+            c.get("/ddns/reconcile")
+            assert "expired-a-host" in seen["expired"] and "expired-b-host" not in seen["expired"]
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE hostname IN ('expired-a-host','expired-b-host')")
+            db.commit()

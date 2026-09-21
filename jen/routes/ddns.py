@@ -405,9 +405,13 @@ def _reconcile_rows():
         for row in cur.fetchall():
             rows.append({"name": row["hostname"], "ip": row["ip"], "source": "lease"})
 
-        cur.execute("SELECT DISTINCT hostname FROM lease4 WHERE state != 0 AND hostname != ''")
+        # Expired names are scoped like the two queries above: a restricted user
+        # must not learn hostnames from subnets they cannot see. A fixed
+        # statement (bandit B608), filtered per row.
+        cur.execute("SELECT DISTINCT subnet_id, hostname FROM lease4 WHERE state != 0 AND hostname != ''")
         for row in cur.fetchall():
-            expired_names.add(row["hostname"].lower())
+            if current_user.all_subnets or current_user.can_access_subnet(row["subnet_id"]):
+                expired_names.add(row["hostname"].lower())
     return rows, expired_names
 
 
@@ -458,11 +462,17 @@ def ddns_reconcile():
     counts = __reconcile.summarize(results)
 
     # Cached for the Health Center check — that check must stay cheap
-    # (never resolves at render), so it reads this instead.
-    __user.set_global_setting(
-        "dns_reconcile_last",
-        json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "total": len(results), "verdicts": counts}),
-    )
+    # (never resolves at render), so it reads this instead. It is a FLEET-WIDE
+    # summary, so only a run by an unrestricted account may write it: a
+    # subnet-scoped run would otherwise overwrite it with counts for a subset
+    # and show that subset's numbers to everyone.
+    if current_user.all_subnets:
+        __user.set_global_setting(
+            "dns_reconcile_last",
+            json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "total": len(results), "verdicts": counts}),
+        )
+    elif request.args.get("format") != "csv":
+        flash("Not cached for the Health Center — this run was limited to your subnets.", "info")
 
     filtered = [r for r in results if not verdict_filter or r["verdict"] == verdict_filter]
 

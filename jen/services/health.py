@@ -87,6 +87,9 @@ def _fetch_dhcp4_config(server) -> dict | None:
 def _build_ctx(ctx: dict | None) -> dict:
     ctx = dict(ctx or {})
     ctx.setdefault("subnet_filter", lambda _sid: True)
+    # False for a subnet-restricted caller: fleet-wide summaries (which cannot be
+    # filtered per subnet) are then skipped rather than shown.
+    ctx.setdefault("unrestricted", True)
     if "server_status" not in ctx:
         try:
             ctx["server_status"] = __kea.get_all_server_status()
@@ -630,6 +633,9 @@ def _dns_reconcile(ctx) -> Check:
     import json
 
     c = Check("dns_reconcile", "DNS/DHCP names match", "ddns", fix_url="/ddns/reconcile")
+    if not ctx.get("unrestricted", True):
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
     if ctx["dhcp4_config"] is None or not _ddns_updates_enabled(ctx):
         c.status, c.detail = "skip", "DDNS updates disabled"
         return c

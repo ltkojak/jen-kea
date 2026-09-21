@@ -54,6 +54,12 @@ def _pick_server(raw: str) -> dict | None:
 @login_required
 @_admin_required
 def trace_page():
+    # Kea's log has no per-line subnet boundary Jen can trust: the last 1000
+    # lines can carry a MAC's EARLIER activity in a subnet the caller cannot
+    # access, whatever its current lease says. So, like config history and
+    # Doctor, Trace needs unrestricted subnet access (docs/ARCHITECTURE.md §2).
+    if not current_user.all_subnets:
+        abort(403, description="Trace needs access to all subnets.")
     mac_raw = (request.args.get("mac") or "").strip().lower()
     server = _pick_server((request.args.get("server") or "").strip())
     try:
@@ -99,16 +105,6 @@ def trace_page():
             subnet_map = get_accessible_subnet_map()
             known_subnets = {int(lease["subnet_id"])} if lease and lease.get("subnet_id") else set()
             known_subnets |= {int(r["subnet_id"]) for r in reservations if r["subnet_id"]}
-            # Fail closed: the log lines are not filtered per subnet, so EVERY
-            # subnet this client is known in (lease + reservations) must be one
-            # the user can access — a MAC that spans an allowed and a denied
-            # subnet is refused, not half-shown.
-            if known_subnets:
-                if not all(current_user.can_access_subnet(s) for s in known_subnets):
-                    abort(403, description="This client has activity in a subnet you cannot access.")
-            elif not current_user.all_subnets:
-                abort(403)
-
             res = __host.tail_log(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S)
             if res["code"] == "missing":
                 ctx["error"] = (

@@ -938,7 +938,7 @@ def api_v1_health_checks():
     scope = _api_key_subnet_ids(key)
     subnet_filter = (lambda _sid: True) if scope is None else (lambda sid: sid in scope)
     try:
-        checks = _health.run_checks({"subnet_filter": subnet_filter})
+        checks = _health.run_checks({"subnet_filter": subnet_filter, "unrestricted": scope is None})
     except Exception as e:
         logger.error(f"api_v1_health_checks error: {e}")
         return api_error("Internal error. Check server logs for details.", 500)

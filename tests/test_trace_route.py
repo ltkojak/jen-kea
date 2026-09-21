@@ -223,3 +223,68 @@ class TestTraceTimeout:
         assert seen["timeout"] == 15
         kea_host.tail_log({"id": 1}, "/var/log/kea/x.log", 100)
         assert seen["timeout"] == 60  # unchanged default for every other caller
+
+
+class TestTraceNeedsUnrestrictedAccess:
+    """v5.49.0-beta.6 (Q56-1) - Kea's log has no per-line subnet boundary Jen
+    can trust, so Trace joins config history and Doctor: unrestricted subnet
+    access only."""
+
+    def test_scoped_admin_is_refused_even_for_a_mac_in_their_own_subnet(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        _servers(monkeypatch)
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _lease(db, subnet_id=1)
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="trace_scoped_own")
+        try:
+            assert client.get("/tools/trace", query_string={"mac": MAC}).status_code == 403
+            assert calls == []
+        finally:
+            _clean(db)
+
+    def test_scoped_admin_is_refused_the_blank_form_too(self, client, db, monkeypatch):
+        from tests.conftest import restricted_client
+
+        _servers(monkeypatch)
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="trace_scoped_blank")
+        assert client.get("/tools/trace").status_code == 403
+
+    def test_a_client_that_moved_out_of_a_denied_subnet_shows_none_of_its_old_lines(self, client, db, monkeypatch):
+        """The regression named in the review: the MAC's CURRENT lease is in A
+        (allowed), but the tail of the log still carries its earlier activity in
+        B (denied)."""
+        from tests.conftest import restricted_client
+
+        _servers(monkeypatch)
+        old_b_lines = [
+            "2026-09-20 09:00:00.100 INFO  [kea-dhcp4.leases/1] DHCP4_LEASE_ALLOC "
+            f"[hwtype=1 {MAC}]: lease 10.77.0.77 has been allocated for 3600 seconds (zz-secret-b-host)"
+        ]
+        calls = _stub_tail(monkeypatch, _ok(old_b_lines))
+        _lease(db, subnet_id=1)
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="trace_scoped_moved")
+        try:
+            r = client.get("/tools/trace", query_string={"mac": MAC})
+            assert r.status_code == 403
+            assert b"zz-secret-b-host" not in r.data and b"10.77.0.77" not in r.data
+            assert calls == []  # the log is never even read for a scoped caller
+        finally:
+            _clean(db)
+
+    def test_unrestricted_admin_still_traces(self, logged_in_client, db, monkeypatch):
+        _servers(monkeypatch)
+        _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _lease(db, subnet_id=1)
+        try:
+            assert logged_in_client.get("/tools/trace", query_string={"mac": MAC}).status_code == 200
+        finally:
+            _clean(db)
+
+    def test_trace_links_are_hidden_from_scoped_users(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "templates"
+        for name in ("explain.html", "_lease_rows.html", "_reservation_row.html"):
+            lines = [ln for ln in (root / name).read_text(encoding="utf-8").splitlines() if "/tools/trace" in ln]
+            assert lines and all("current_user.all_subnets" in ln for ln in lines), name

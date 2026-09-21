@@ -35,7 +35,9 @@ B_LEASE_IP = "10.77.0.77"
 B_RES_IP = "10.77.0.88"
 A_MAC = "de:ad:be:ef:00:aa"
 A_MAC_HEX = "DEADBEEF00AA"
-MARKERS = (B_NAME, B_HOST, B_MAC, B_MAC_HEX, "10.77.0.", "deadbeef00bb")
+# "4242 name": the fleet-wide reconcile summary seeded below — a distinctive AGGREGATE count
+# that must never reach a subnet-scoped caller (Q56-2)
+MARKERS = (B_NAME, B_HOST, B_MAC, B_MAC_HEX, "10.77.0.", "deadbeef00bb", "4242 name")
 
 RAW_READ = "jen_authz_read_key"
 RAW_WRITE = "jen_authz_write_key"
@@ -104,6 +106,12 @@ def seeded(db, mock_kea, monkeypatch):
         )
     db.commit()
 
+    from jen.models.user import set_global_setting
+
+    set_global_setting(
+        "dns_reconcile_last",
+        json.dumps({"ts": "2026-09-20T00:00:00+00:00", "total": 4242, "verdicts": {"ok": 4200, "wrong-ptr": 42}}),
+    )
     monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
     log = [
         f"2026-09-20 10:00:00.100 INFO  [kea-dhcp4.leases/1] DHCP4_LEASE_ALLOC [hwtype=1 {B_MAC}]: "
@@ -167,6 +175,14 @@ SURFACES = [
         None,
         {"viewer_A": _ANY, "admin_A": _ANY, "admin_all": {200}, "superadmin": {200}},
         (B_MAC,),
+    ),
+    (
+        "trace by A mac (own subnet: Trace still needs unrestricted access)",
+        "GET",
+        f"/tools/trace?mac={A_MAC}",
+        None,
+        {"viewer_A": {302, 403}, "admin_A": {403}, "admin_all": {200}, "superadmin": {200}},
+        (A_MAC,),
     ),
     (
         "trace by B mac",

@@ -143,19 +143,24 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
     # an IP subject is an address, whoever held it. This decides what the
     # address-matched rows below mean (recycled addresses).
     subject_is_mac = bool(mac)
-    if not mac and ip:
-        mac = _mac_from_ip(ip)
+    # `mac` stays the SUBJECT's MAC ('' for an IP subject). The current holder
+    # of an address is looked up separately and used only to describe the
+    # header (device, reservation) and to label earlier holders — never to
+    # widen which rows are matched: an IP timeline is about the ADDRESS, so it
+    # must not pull in the holder's activity on other addresses.
+    holder_mac = _mac_from_ip(ip) if (not mac and ip) else ""
+    ctx_mac = mac or holder_mac
 
-    device = _device(mac)
+    device = _device(ctx_mac)
     lease = _current_lease(mac, ip)
-    reservation = _current_reservation(mac)
+    reservation = _current_reservation(ctx_mac)
     if not ip and lease:
         ip = lease["ip"]
     elif not ip and device:
         ip = device.get("last_ip") or ""
 
     rows: list[dict] = []
-    mac_hex = mac.replace(":", "").upper() if mac else ""
+    mac_hex = ctx_mac.replace(":", "").upper() if ctx_mac else ""
 
     if mac or ip:
         # Fixed statements throughout (bandit B608) — mac/ip are always
@@ -178,7 +183,7 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
                             if ev_mac:
                                 continue  # another client's row: a recycled address
                             related = "address"  # no MAC of its own: kept, marked
-                    elif mac and ev_mac and ev_mac != mac:
+                    elif holder_mac and ev_mac and ev_mac != holder_mac:
                         previous = ev_mac  # an IP timeline: an earlier holder
                     rows.append(
                         {
@@ -269,7 +274,7 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
             ip = (lease["ip"] if lease else "") or ((device or {}).get("last_ip") or "")
 
     return {
-        "mac": mac,
+        "mac": ctx_mac,
         "ip": ip,
         "mac_hex": mac_hex,
         "device": device,

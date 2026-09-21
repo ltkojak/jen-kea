@@ -665,6 +665,22 @@ class TestDnsReconcileCheck:
         c = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
         assert c.status == "skip"
 
+    def test_a_restricted_caller_never_sees_the_fleet_wide_summary(self, db):
+        """v5.49.0-beta.6 (Q56-2) - the cached summary cannot be filtered per
+        subnet, so a subnet-restricted caller gets a skip, not the counts."""
+        from jen.models.user import set_global_setting
+
+        set_global_setting(
+            "dns_reconcile_last",
+            json.dumps(
+                {"ts": datetime.now(timezone.utc).isoformat(), "total": 4242, "verdicts": {"ok": 4200, "wrong-ptr": 42}}
+            ),
+        )
+        scoped = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True), unrestricted=False))
+        assert scoped.status == "skip" and "4242" not in scoped.detail and "mismatched" not in scoped.detail
+        full = health._dns_reconcile(_ctx(dhcp4_config=self._cfg(True)))
+        assert "42/4242" in full.detail  # the unrestricted view is unchanged
+
     def test_unparseable_summary_skips_not_raises(self, db):
         from jen.models.user import set_global_setting
 

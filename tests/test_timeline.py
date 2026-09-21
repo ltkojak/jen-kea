@@ -544,3 +544,67 @@ class TestRecycledAddressIdentity:
             assert all(r["related"] is None for r in rows if r["source"] == "event")
         finally:
             _clean(db)
+
+
+class TestIpTimelineMatchesTheAddressOnly:
+    """v5.49.0-beta.6 (Q56-4) - an IP timeline is about the ADDRESS. It must not
+    pull in the current holder's activity on other addresses."""
+
+    HOLDER = "aa:bb:cc:dd:ee:0c"
+    IP_A = "10.99.0.50"
+    IP_B = "10.99.0.73"
+
+    def _seed(self, db):
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE0C'")
+            cur.execute("DELETE FROM audit_log WHERE details LIKE '%%ipsubject-probe%%'")
+            cur.execute(
+                "INSERT INTO events (ts, kind, mac, ip, subnet_id, detail) VALUES "
+                "(DATE_SUB(NOW(), INTERVAL 2 HOUR), 'lease.new', %s, %s, 1, 'at-50'), "
+                "(DATE_SUB(NOW(), INTERVAL 1 HOUR), 'lease.new', %s, %s, 1, 'at-73-elsewhere')",
+                (self.HOLDER, self.IP_A, self.HOLDER, self.IP_B),
+            )
+            cur.execute(
+                "INSERT INTO audit_log (action, entity, details, username) VALUES "
+                "('NOTE', %s, 'ipsubject-probe holder note about ' , 'admin')",
+                (self.HOLDER,),
+            )
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
+                "VALUES (INET_ATON(%s), UNHEX('AABBCCDDEE0C'), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0)",
+                (self.IP_A,),
+            )
+        db.commit()
+
+    def _teardown(self, db):
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE0C'")
+            cur.execute("DELETE FROM audit_log WHERE details LIKE '%%ipsubject-probe%%'")
+        db.commit()
+
+    def test_holders_activity_on_another_address_is_not_shown(self, db):
+        from jen.services.timeline import build_timeline
+
+        self._seed(db)
+        try:
+            result = build_timeline(ip=self.IP_A)
+            details = {r["detail"] for r in result["rows"]}
+            assert "at-50" in details
+            assert "at-73-elsewhere" not in details  # the holder's row at .73
+            assert not any(r["source"] == "audit" for r in result["rows"])  # matched the MAC, not the address
+            assert result["mac"] == self.HOLDER  # the header still names the current holder
+            assert result["lease"]["ip"] == self.IP_A
+        finally:
+            self._teardown(db)
+
+    def test_the_mac_timeline_still_shows_both_addresses(self, db):
+        from jen.services.timeline import build_timeline
+
+        self._seed(db)
+        try:
+            details = {r["detail"] for r in build_timeline(mac=self.HOLDER)["rows"]}
+            assert {"at-50", "at-73-elsewhere"} <= details
+        finally:
+            self._teardown(db)
