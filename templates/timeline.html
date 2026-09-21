@@ -75,12 +75,15 @@
     {% if result.rows %}
     <div id="tl-rows" style="display:flex;flex-direction:column;gap:2px;">
         {% for r in result.rows %}
-        <div class="tl-row" data-kind="{{ r.kind }}" style="display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:13px;align-items:baseline;">
+        <div class="tl-row" data-kind="{{ r.kind }}" style="display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:13px;align-items:baseline;{% if r.related %}opacity:.6;{% endif %}">
             <div class="mono" style="color:var(--text-muted);white-space:nowrap;min-width:150px;">{{ r.ts|utcfmt }}</div>
             <div style="min-width:170px;">
                 <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{{ r.kind }}</span>
             </div>
-            <div style="color:var(--text-muted);">{{ r.detail }}</div>
+            <div style="color:var(--text-muted);">{{ r.detail }}
+                {% if r.related == 'address' %}<div style="font-size:11px;font-style:italic;">possibly related — same address, client unknown</div>{% endif %}
+                {% if r.previous_holder %}<div style="font-size:11px;font-style:italic;">previous holder <span class="mono">{{ r.previous_holder }}</span></div>{% endif %}
+            </div>
         </div>
         {% endfor %}
     </div>

@@ -105,6 +105,15 @@ def subnet_id_for(device, lease, reservation) -> int | None:
     return None
 
 
+def _address_only(subject_is_mac: bool, mac: str, text: str):
+    """For a free-text row (audit/alert) on a MAC timeline: `"address"` when the
+    text does not name the MAC (it matched on the IP alone, so it may concern
+    whoever held that address), else None."""
+    if subject_is_mac and mac and mac not in text:
+        return "address"
+    return None
+
+
 def _v6_visible(addr: dict, accessible_v4_ids) -> bool:
     """Devices-page rule for a restricted caller: a v6 address shows only when
     its v6 subnet is paired to a v4 subnet the caller can access; an unpaired
@@ -130,6 +139,10 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
     mac = (mac or "").strip().lower()
     ip = (ip or "").strip()
     supplied_ip = ip
+    # v5.49.0-beta.5 — who is this timeline ABOUT? A MAC subject is one client;
+    # an IP subject is an address, whoever held it. This decides what the
+    # address-matched rows below mean (recycled addresses).
+    subject_is_mac = bool(mac)
     if not mac and ip:
         mac = _mac_from_ip(ip)
 
@@ -154,10 +167,19 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
         try:
             with __db.jen_db() as db, db.cursor() as cur:
                 cur.execute(
-                    "SELECT ts, kind, subnet_id, detail FROM events WHERE mac=%s OR ip=%s ORDER BY ts DESC LIMIT %s",
+                    "SELECT ts, kind, mac, subnet_id, detail FROM events WHERE mac=%s OR ip=%s ORDER BY ts DESC LIMIT %s",
                     (mac, ip, limit),
                 )
                 for r in cur.fetchall():
+                    ev_mac = (r["mac"] or "").lower()
+                    related = previous = None
+                    if subject_is_mac:
+                        if ev_mac != mac:  # matched by ADDRESS only
+                            if ev_mac:
+                                continue  # another client's row: a recycled address
+                            related = "address"  # no MAC of its own: kept, marked
+                    elif mac and ev_mac and ev_mac != mac:
+                        previous = ev_mac  # an IP timeline: an earlier holder
                     rows.append(
                         {
                             "ts": r["ts"],
@@ -165,17 +187,21 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
                             "source": "event",
                             "detail": r["detail"] or "",
                             "subnet_id": r["subnet_id"],
+                            "mac": ev_mac or None,
+                            "related": related,
+                            "previous_holder": previous,
                         }
                     )
 
                 cur.execute(
-                    "SELECT created_at AS ts, action, details, username FROM audit_log "
+                    "SELECT created_at AS ts, action, entity, details, username FROM audit_log "
                     "WHERE entity LIKE %s OR details LIKE %s OR entity LIKE %s OR details LIKE %s "
                     "ORDER BY created_at DESC LIMIT %s",
                     (mac_pat, mac_pat, ip_pat, ip_pat, limit),
                 )
                 for r in cur.fetchall():
                     who = f" by {r['username']}" if r["username"] else ""
+                    text = f"{r['entity'] or ''} {r['details'] or ''}".lower()
                     rows.append(
                         {
                             "ts": r["ts"],
@@ -183,11 +209,14 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
                             "source": "audit",
                             "detail": f"{r['details'] or ''}{who}",
                             "subnet_id": None,
+                            "mac": None,
+                            "related": _address_only(subject_is_mac, mac, text),
+                            "previous_holder": None,
                         }
                     )
 
                 cur.execute(
-                    "SELECT sent_at AS ts, alert_type, channel_type, status FROM alert_log "
+                    "SELECT sent_at AS ts, alert_type, channel_type, status, message FROM alert_log "
                     "WHERE message LIKE %s OR message LIKE %s ORDER BY sent_at DESC LIMIT %s",
                     (mac_pat, ip_pat, limit),
                 )
@@ -199,6 +228,9 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
                             "source": "alert",
                             "detail": f"via {r['channel_type']} — {r['status']}",
                             "subnet_id": None,
+                            "mac": None,
+                            "related": _address_only(subject_is_mac, mac, (r["message"] or "").lower()),
+                            "previous_holder": None,
                         }
                     )
         except Exception as e:

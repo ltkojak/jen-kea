@@ -406,3 +406,141 @@ class TestTimelineApi:
         assert data["mac"] == "aa:bb:cc:dd:ee:01"
         assert len(data["rows"]) == 1
         assert data["rows"][0]["kind"] == "lease.new"
+
+
+class TestRecycledAddressIdentity:
+    """v5.49.0-beta.5 (Q55-K) - a MAC's timeline must not merge the history of
+    whoever held its address before; an IP's timeline shows both, labelled."""
+
+    OLD = "aa:bb:cc:dd:ee:0a"
+    NEW = "aa:bb:cc:dd:ee:0b"
+    IP = "10.99.0.171"
+
+    def _seed(self, db):
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN ('AABBCCDDEE0A','AABBCCDDEE0B')")
+            cur.execute("DELETE FROM audit_log WHERE details LIKE '%%recycled-probe%%'")
+            cur.execute(
+                "INSERT INTO events (ts, kind, mac, ip, subnet_id, detail) VALUES "
+                "(DATE_SUB(NOW(), INTERVAL 2 DAY), 'lease.new', %s, %s, 1, 'old-holder-new'), "
+                "(DATE_SUB(NOW(), INTERVAL 1 DAY), 'lease.expired', %s, %s, 1, 'old-holder-expired'), "
+                "(DATE_SUB(NOW(), INTERVAL 1 HOUR), 'lease.new', %s, %s, 1, 'new-holder-new'), "
+                "(DATE_SUB(NOW(), INTERVAL 30 MINUTE), 'drift.detected', NULL, %s, 1, 'no-mac-event')",
+                (self.OLD, self.IP, self.OLD, self.IP, self.NEW, self.IP, self.IP),
+            )
+            cur.execute(
+                "INSERT INTO audit_log (action, entity, details, username) VALUES "
+                "('NOTE', %s, 'recycled-probe: address released', 'admin')",
+                (self.IP,),
+            )
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
+                "VALUES (INET_ATON(%s), UNHEX('AABBCCDDEE0B'), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0)",
+                (self.IP,),
+            )
+        db.commit()
+
+    def _teardown(self, db):
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN ('AABBCCDDEE0A','AABBCCDDEE0B')")
+            cur.execute("DELETE FROM audit_log WHERE details LIKE '%%recycled-probe%%'")
+        db.commit()
+
+    def test_mac_timeline_shows_only_its_own_rows_and_marks_address_only_ones(self, db):
+        from jen.services.timeline import build_timeline
+
+        self._seed(db)
+        try:
+            rows = build_timeline(mac=self.NEW)["rows"]
+            details = {r["detail"] for r in rows}
+            assert "new-holder-new" in details
+            assert "old-holder-new" not in details and "old-holder-expired" not in details  # the previous holder
+            by_detail = {r["detail"]: r for r in rows}
+            assert by_detail["new-holder-new"]["related"] is None
+            assert by_detail["no-mac-event"]["related"] == "address"  # kept, marked
+            audit = next(r for r in rows if r["source"] == "audit")
+            assert audit["related"] == "address"
+        finally:
+            self._teardown(db)
+
+    def test_the_previous_holders_own_timeline_does_not_show_the_new_holder(self, db):
+        from jen.services.timeline import build_timeline
+
+        self._seed(db)
+        try:
+            details = {r["detail"] for r in build_timeline(mac=self.OLD)["rows"]}
+            assert {"old-holder-new", "old-holder-expired"} <= details
+            assert "new-holder-new" not in details
+        finally:
+            self._teardown(db)
+
+    def test_ip_timeline_shows_both_labelled(self, db):
+        from jen.services.timeline import build_timeline
+
+        self._seed(db)
+        try:
+            rows = build_timeline(ip=self.IP)["rows"]
+            by_detail = {r["detail"]: r for r in rows if r["source"] == "event"}
+            assert {"old-holder-new", "old-holder-expired", "new-holder-new"} <= set(by_detail)
+            assert by_detail["old-holder-new"]["previous_holder"] == self.OLD
+            assert by_detail["old-holder-expired"]["previous_holder"] == self.OLD
+            assert by_detail["new-holder-new"]["previous_holder"] is None  # the current holder
+            assert all(r["mac"] in (self.OLD, self.NEW, None) for r in rows)  # every row keeps its MAC
+        finally:
+            self._teardown(db)
+
+    def test_timeline_page_renders_the_labels(self, logged_in_client, db):
+        self._seed(db)
+        try:
+            ip_page = logged_in_client.get(f"/timeline?ip={self.IP}").data.decode()
+            assert "previous holder" in ip_page and self.OLD in ip_page
+            mac_page = logged_in_client.get(f"/timeline?mac={self.NEW}").data.decode()
+            assert "possibly related" in mac_page
+            assert "old-holder-new" not in mac_page
+        finally:
+            self._teardown(db)
+
+    def test_duid_only_v6_lease_is_never_merged_into_a_mac_timeline(self, db, monkeypatch):
+        import jen.services.kea6 as kea6_module
+        from jen.models.user import set_global_setting
+        from jen.services.timeline import build_timeline
+
+        set_global_setting("ipv6_enabled", "true")
+        try:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease6")
+                cur.execute(
+                    "INSERT INTO lease6 (address, duid, valid_lifetime, expire, subnet_id, pref_lifetime, "
+                    "lease_type, iaid, prefix_len, hostname, hwaddr, state) VALUES "
+                    "('2001:db8::77', %s, 3600, '2026-08-15 00:00:00', 1, 1800, 0, 1, 128, '', NULL, 0)",
+                    (bytes.fromhex("00030001001a2b3c4d99"),),
+                )
+            db.commit()
+            assert kea6_module.list_lease6()[0]["mac_source"] != "hwaddr"  # DUID guess, not a real MAC
+            assert build_timeline(mac=self.NEW)["v6_addresses"] == []
+        finally:
+            set_global_setting("ipv6_enabled", "false")
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease6")
+            db.commit()
+
+    def test_randomised_mac_with_a_renamed_hostname_stays_one_history(self, db):
+        from jen.services.timeline import build_timeline
+
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO events (ts, kind, mac, ip, hostname, subnet_id, detail) VALUES "
+                "(DATE_SUB(NOW(), INTERVAL 2 HOUR), 'lease.new', %s, '10.99.0.180', 'iPhone', 1, 'first'), "
+                "(DATE_SUB(NOW(), INTERVAL 1 HOUR), 'lease.hostname_changed', %s, '10.99.0.180', 'Sarahs-iPhone', 1, 'renamed')",
+                (self.NEW, self.NEW),
+            )
+        db.commit()
+        try:
+            rows = build_timeline(mac=self.NEW)["rows"]
+            assert {r["detail"] for r in rows} >= {"first", "renamed"}
+            assert all(r["related"] is None for r in rows if r["source"] == "event")
+        finally:
+            _clean(db)
