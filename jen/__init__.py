@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.51.0-beta.1"
+JEN_VERSION = "5.52.0-beta.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -135,6 +135,13 @@ def create_app() -> Flask:
             return value.strftime(fmt) + " UTC"
         except Exception:
             return str(value)
+
+    @app.template_filter("relfmt")
+    def relfmt_filter(value):
+        """A datetime as a short relative time for a phone row ("in 3 d", "2 h ago")."""
+        from jen.services.reltime import relative_time
+
+        return relative_time(value)
 
     @app.template_filter("utcdate")
     def utcdate_filter(value):

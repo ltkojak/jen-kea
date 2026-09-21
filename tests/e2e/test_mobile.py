@@ -345,3 +345,45 @@ class TestDesktopIsUntouched:
         expect(desktop.locator("#demo-actions .btn", has_text="Export")).to_be_visible()
         expect(desktop.locator("#demo-rows .row-checkbox").first).to_be_visible()
         expect(desktop.locator("#demo-chips")).to_have_css("flex-wrap", "wrap")
+
+
+class TestListPagesOnThePhone:
+    """v5.52.0 (Q59): the real Leases / Reservations / Devices pages use the vocabulary."""
+
+    def test_leases_filters_collapse_into_a_labelled_sheet(self, phone, base_url):
+        _visit(phone, base_url, "/leases")
+        bar = phone.locator(".filter-bar").first
+        expect(bar.locator(".fs-filter-toggle")).to_be_visible()
+        expect(bar.locator('input[name="search"]')).to_be_visible()
+        expect(bar.locator('select[name="subnet"]')).to_be_hidden()
+        bar.locator(".fs-filter-toggle").click()
+        for label in ("Subnet", "Time", "Rows per page", "Sort", "Order"):
+            expect(bar.locator(".fs-label", has_text=label).first).to_be_visible()
+        phone.screenshot(path=str(MOBILE_DIR / "leases-filter-sheet.png"))
+        bar.locator(".fs-head .btn").click()
+        expect(bar.locator('select[name="subnet"]')).to_be_hidden()
+
+    def test_reservations_keep_add_and_fold_the_csv_actions(self, phone, base_url):
+        _visit(phone, base_url, "/reservations")
+        bar = phone.locator(".action-bar").first
+        expect(bar.locator(".btn-primary")).to_contain_text("Add Reservation")
+        expect(bar.get_by_text("Export CSV")).to_be_hidden()
+        bar.locator(".fs-actions-toggle").click()
+        expect(bar.get_by_text("Export CSV")).to_be_visible()
+        expect(bar.get_by_text("Dry-run Import")).to_be_visible()
+        phone.keyboard.press("Escape")
+
+    def test_devices_type_chips_are_one_row_and_stale_days_is_in_the_sheet(self, phone, base_url):
+        _visit(phone, base_url, "/devices")
+        expect(phone.locator("#type-filter-bar")).to_have_css("flex-wrap", "nowrap")
+        bar = phone.locator(".filter-bar").first
+        bar.locator(".fs-filter-toggle").click()
+        expect(bar.locator(".fs-label", has_text="Stale after (days)")).to_be_visible()
+        expect(bar.locator('input[name="stale_days"]')).to_be_visible()
+
+    def test_the_desktop_keeps_its_columns_and_hides_the_phone_controls(self, desktop, base_url):
+        for path in ("/leases", "/reservations", "/devices"):
+            _visit(desktop, base_url, path)
+            expect(desktop.locator("table.rowlist thead").first).to_be_visible()
+            expect(desktop.locator(".fs-filter-toggle")).to_be_hidden()
+            expect(desktop.locator('select[name="sort"]')).to_be_hidden()

@@ -21,8 +21,8 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Measured at v5.51.0-beta.1 (Q58) across templates/**: 1,739 in 78 files.
-MAX_INLINE_STYLES = 1739
+# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645.
+MAX_INLINE_STYLES = 1645
 MAX_EMOJI_ALLOWLIST = 2
 
 

@@ -4,48 +4,49 @@
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
     {% if current_user.role in ('superadmin','admin') %}
-    <td data-label="" class="no-label">
+    <td>
         <input type="checkbox" class="row-checkbox" name="device_ids[]" value="{{ d.id }}">
     </td>
     {% endif %}
-    <td data-label="MAC" class="mono hide-mobile">{{ d.mac }}</td>
-    <td data-label="Name"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
-    <td data-label="Owner" class="hide-tablet"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
-    <td data-label="IP" class="mono">{{ d.last_ip or '—' }}</td>
+    <td class="mono hide-mobile" data-m="hide">{{ d.mac }}</td>
+    <td data-m="primary"><span id="dname-{{ d.id }}">{{ d.device_name or '—' }}</span></td>
+    <td class="hide-tablet" data-m="{{ 'secondary' if d.owner else 'hide' }}"><span id="downer-{{ d.id }}">{{ d.owner or '—' }}</span></td>
+    <td class="mono" data-m="secondary">{{ d.last_ip or '—' }}</td>
     {% if ipv6_enabled and subnet6_map %}
-    <td data-label="IPv6" class="mono hide-mobile" style="font-size:11px;">
+    <td class="mono xs hide-mobile" data-m="hide">
         {% if d.v6_addresses %}
         {% for a in d.v6_addresses %}<div title="{{ a.type_name }}">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</div>{% endfor %}
         {% else %}—{% endif %}
     </td>
     {% endif %}
-    <td data-label="Hostname" style="white-space:nowrap;">{{ d.last_hostname | hostname or '—' }}</td>
-    <td data-label="Subnet" class="hide-mobile">
+    <td class="nw-d" data-m="{{ 'hide' if d.device_name else 'primary' }}">{{ d.last_hostname | hostname or '—' }}</td>
+    <td class="hide-mobile" data-m="hide">
         {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
     </td>
-    <td style="white-space:nowrap;">
+    <td class="nw-d" data-m="badge">
         {% set icon_url = get_manufacturer_icon_url(d.manufacturer) if d.manufacturer else None %}
         {% set type_info = device_type_display.get(d.device_type, ('', '#555555')) %}
         {% if d.manufacturer and d.manufacturer != 'Unknown' %}
         <span title="{{ d.manufacturer }}" style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;background:{{ type_info[1] }}22;color:{{ type_info[1] }};border:1px solid {{ type_info[1] }}44;">
-            {% if icon_url %}<img src="{{ icon_url }}" alt="{{ d.manufacturer }}" style="width:13px;height:13px;object-fit:contain;filter:brightness(0) invert(1);opacity:0.85;">
+            {% if icon_url %}<img src="{{ icon_url }}" alt="{{ d.manufacturer }}" class="vendor-img">
             {% else %}{{ d.device_icon or '' }}{% endif %}
             {{ d.manufacturer }}
         </span>
-        {% else %}<span style="color:var(--text-muted);font-size:11px;">—</span>{% endif %}
+        {% else %}<span class="muted xs">—</span>{% endif %}
     </td>
-    <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">{{ d.first_seen|utcdate }}</td>
-    <td data-label="Last Seen" class="mono hide-tablet" style="{% if d.is_stale %}color:var(--warning);{% endif %}">{{ d.last_seen|utcfmt }}</td>
-    <td data-label="Status" class="hide-mobile">
-        {% if d.is_stale %}<span class="badge" style="background:#2a2a1a;color:var(--warning);" title="Not seen in {{ stale_days }}+ days">{{ icon("triangle-alert") }} Stale</span>
+    <td class="mono muted hide-mobile" data-m="hide">{{ d.first_seen|utcdate }}</td>
+    <td class="mono hide-tablet{% if d.is_stale %} warn{% endif %}" data-m="secondary"><span class="desk-only">{{ d.last_seen|utcfmt }}</span><span class="phone-only">{{ d.last_seen|relfmt }}</span></td>
+    <td class="hide-mobile" data-m="hide">
+        {% if d.is_stale %}<span class="badge badge-stale" title="Not seen in {{ stale_days }}+ days">{{ icon("triangle-alert") }} Stale</span>
         {% elif d.has_reservation %}<span class="badge badge-reserved" title="Has static reservation: {{ d.reservation_ip }}">{{ icon("pin") }} Reserved</span>
         {% else %}<span class="badge badge-dynamic">● Dynamic</span>{% endif %}
     </td>
-    <td data-label="">
+    <td data-m="trailing">
         <div class="action-menu">
             <input type="checkbox" id="am-dev-{{ d.id }}" class="action-menu-toggle">
             <label for="am-dev-{{ d.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
+                <div class="action-menu-item disabled mono">{{ d.mac }}</div>
                 {% if current_user.role in ('superadmin','admin') %}
                 <button type="button" class="action-menu-item edit-btn"
                     data-id="{{ d.id }}" data-mac="{{ d.mac }}"
@@ -73,11 +74,11 @@
 </tr>
 {% else %}
 {% if not v6_duid_only %}
-<tr><td colspan="{{ colspan }}">
+<tr><td colspan="{{ colspan }}" data-m="full">
     {% if show_stale %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No stale devices found (none inactive for {{ stale_days }}+ days).</div>
+    <div class="empty-note">No stale devices found (none inactive for {{ stale_days }}+ days).</div>
     {% elif search %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No devices matching "{{ search }}".</div>
+    <div class="empty-note">No devices matching "{{ search }}".</div>
     {% else %}
     {{ empty_state(icon('smartphone'), 'Devices appear as leases are seen; the inventory fills itself.', [((icon('list') ~ ' Leases'), '/leases')]) }}
     {% endif %}
@@ -87,25 +88,25 @@
 {% for d in v6_duid_only %}
 <tr>
     {% if current_user.role in ('superadmin','admin') %}
-    <td data-label="" class="no-label"></td>
+    <td></td>
     {% endif %}
-    <td data-label="MAC" class="mono hide-mobile"><span class="badge" style="font-size:10px;padding:1px 6px;background:var(--surface2);color:var(--text-muted);" title="No hwaddr captured — DUID: {{ d.duid_hex }}">DUID only</span></td>
-    <td data-label="Name">—</td>
-    <td data-label="Owner" class="hide-tablet">—</td>
-    <td data-label="IP" class="mono">—</td>
+    <td class="mono" data-m="badge"><span class="badge badge-duid" title="No hwaddr captured — DUID: {{ d.duid_hex }}">DUID only</span></td>
+    <td data-m="hide">—</td>
+    <td class="hide-tablet" data-m="hide">—</td>
+    <td class="mono" data-m="hide">—</td>
     {% if ipv6_enabled and subnet6_map %}
-    <td data-label="IPv6" class="mono hide-mobile" style="font-size:11px;">
+    <td class="mono xs" data-m="secondary">
         {% for a in d.addresses %}<div title="{{ a.type_name }}">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</div>{% endfor %}
     </td>
     {% endif %}
-    <td data-label="Hostname" style="white-space:nowrap;">{{ d.hostname | hostname or '—' }}</td>
-    <td data-label="Subnet" class="hide-mobile">
+    <td class="nw-d" data-m="primary">{{ d.hostname | hostname or '—' }}</td>
+    <td class="hide-mobile" data-m="hide">
         {% if d.subnet_name %}<span class="badge badge-{{ d.subnet_name|lower|replace(' ','') }}">{{ d.subnet_name }}</span>{% else %}—{% endif %}
     </td>
-    <td>—</td>
-    <td data-label="First Seen" class="mono hide-mobile" style="color:var(--text-muted);">—</td>
-    <td data-label="Last Seen" class="mono hide-tablet">{{ d.last_expire|utcfmt if d.last_expire else '—' }}</td>
-    <td data-label="Status" class="hide-mobile">—</td>
-    <td data-label=""></td>
+    <td data-m="hide">—</td>
+    <td class="mono muted hide-mobile" data-m="hide">—</td>
+    <td class="mono hide-tablet" data-m="secondary"><span class="desk-only">{{ d.last_expire|utcfmt if d.last_expire else '—' }}</span><span class="phone-only">{{ d.last_expire|relfmt if d.last_expire else '—' }}</span></td>
+    <td class="hide-mobile" data-m="hide">—</td>
+    <td data-m="hide"></td>
 </tr>
 {% endfor %}

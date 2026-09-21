@@ -3,39 +3,40 @@
 {% from '_device_badge.html' import device_badge %}
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots %}
 <tr id="reservation-{{ h.host_id }}">
-    <td data-label="" class="no-label">
+    <td>
         <input type="checkbox" class="row-checkbox" name="host_ids[]" value="{{ h.host_id }}">
     </td>
-    <td data-label="IP" class="mono">{{ h.ip }}</td>
-    <td data-label="Hostname" style="white-space:nowrap;">
+    <td class="mono" data-m="secondary">{{ h.ip }}</td>
+    <td class="nw-d" data-m="primary">
         {{ h.hostname | hostname or '—' }}
         {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
-    <td data-label="MAC" class="mono hide-mobile">{{ h.mac }}</td>
-    <td data-label="Subnet"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
-    <td data-label="Status">
+    <td class="mono hide-mobile" data-m="hide">{{ h.mac }}</td>
+    <td data-m="secondary"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>
+    <td data-m="secondary">
         {% if h.is_conflict %}
-        <span style="color:var(--warning);font-size:12px;" title="Reserved IP is currently leased to a different MAC than this reservation">{{ icon("triangle-alert") }} Conflict</span>
+        <span class="warn small" title="Reserved IP is currently leased to a different MAC than this reservation">{{ icon("triangle-alert") }} Conflict</span>
         {% elif h.is_active %}
-        <span style="color:var(--success);font-size:12px;">● Active</span>
+        <span class="ok small">● Active</span>
         {% else %}
-        <span style="color:var(--text-muted);font-size:12px;">○ Inactive</span>
+        <span class="muted small">○ Inactive</span>
         {% endif %}
     </td>
-    <td data-label="DNS" class="mono hide-tablet">
+    <td class="mono hide-tablet" data-m="{{ 'secondary' if h.dns_override else 'hide' }}">
         {% if h.dns_override %}
-        <span style="color:var(--success);font-size:11px;" title="{{ h.dns_override }}">● Override</span>
+        <span class="ok xs" title="{{ h.dns_override }}">● Override</span>
         {% else %}
-        <span style="color:var(--text-muted);font-size:11px;">default</span>
+        <span class="muted xs">default</span>
         {% endif %}
     </td>
-    <td data-label="Notes" class="hide-tablet" style="color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
+    <td class="hide-tablet muted notes-cell" data-m="{{ 'secondary' if h.notes else 'hide' }}" title="{{ h.notes }}">{{ h.notes or '—' }}</td>
     {% if current_user.role in ('superadmin','admin') %}
-    <td data-label="">
+    <td data-m="trailing">
         <div class="action-menu">
             <input type="checkbox" id="am-res-{{ h.host_id }}" class="action-menu-toggle">
             <label for="am-res-{{ h.host_id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
+                <div class="action-menu-item disabled mono">{{ h.mac }}</div>
                 <a href="/reservations/edit/{{ h.host_id }}" class="action-menu-item">{{ icon_edit() }}Edit reservation</a>
                 <a href="/tools/explain?mac={{ h.mac }}&subnet={{ h.subnet_id }}&hostname={{ h.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>
                 <a href="/timeline?mac={{ h.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>

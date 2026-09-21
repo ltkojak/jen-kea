@@ -307,6 +307,29 @@
         .items-center { align-items: center; }
         .between { justify-content: space-between; }
         .contents { display: contents; }
+        .inline { display: inline; }
+        .hidden { display: none; }
+        .pointer { cursor: pointer; }
+        .md { font-size: var(--fs-md); }
+        .phone-only { display: none; }
+        .card.flush { padding: 0; }
+        .col-check { width: 32px; }
+        .th-link { color: inherit; text-decoration: none; }
+        .w-70 { width: 70px; }
+        .sel-sm { min-width: 130px; font-size: var(--fs-sm); }
+        .search-w { min-width: 220px; }
+        .notes-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .empty-note { text-align: center; padding: var(--sp-6); color: var(--text-muted); }
+        .chip-label { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .vendor-img { width: 13px; height: 13px; object-fit: contain; filter: brightness(0) invert(1); opacity: 0.85; }
+        .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin-bottom: var(--sp-3); }
+        .segmented .btn { border-radius: 0; }
+        .bulk-bar { display: none; margin-bottom: var(--sp-3); }
+        .btn-danger-outline { border: 1px solid var(--danger); color: var(--danger); background: transparent; }
+        .badge-stale { background: #2a2a1a; color: var(--warning); }
+        .badge-duid { font-size: 10px; padding: 1px 6px; background: var(--surface2); color: var(--text-muted); }
+        .filter-bar input.w-70 { width: 70px; min-width: 0; }
+        @media (min-width: 769px) { .nw-d { white-space: nowrap; } }
 
         /* ── Bottom tab bar + sheets (v5.51.0, Q58) — phones only ── */
         .tabbar, .sheet, .sheet-backdrop { display: none; }
@@ -463,11 +486,14 @@
             table.rowlist tbody td[data-m="secondary"]:not(.rl-s1)::before, table.rowlist tbody td:not([data-m]):not(.rl-select):not(.rl-s1)::before { content: "·"; margin-right: var(--sp-2); }
             table.rowlist tbody td[data-m="hide"], table.rowlist tbody td.rl-empty { display: none; }
             table.rowlist tbody td.rl-select { display: none; order: 0; }
-            table.rowlist tbody tr[data-rl-href] { cursor: pointer; }
+            table.rowlist tbody tr[data-rl-href], table.rowlist tbody tr:has(.action-menu-toggle) { cursor: pointer; }
             table.rowlist tbody tr:hover td { background: none; }
             body.select-mode table.rowlist tbody td.rl-select { display: block; }
 
             /* select mode — checkboxes stay out of the way until asked for */
+            .phone-only { display: revert; }
+            .desk-only { display: none; }
+            table.rowlist tbody td[data-m="full"] { order: 1; flex: 1 1 100%; font-size: var(--fs-md); color: var(--text); }
             .row-checkbox, #selectAll { display: none; }
             body.select-mode .row-checkbox { display: inline-block; width: 22px; height: 22px; margin: 0; }
             .select-toggle { display: inline-flex; }
@@ -1046,7 +1072,7 @@ function sortTable(table, col, th) {
     }
     function filterCount(bar) {
         var n = 0;
-        bar.querySelectorAll('select').forEach(function(sel) { if (sel.selectedIndex > 0) n++; });
+        bar.querySelectorAll('select:not([data-nocount])').forEach(function(sel) { if (sel.selectedIndex > 0) n++; });
         bar.querySelectorAll('input').forEach(function(i) {
             if (i === bar._fsSearch || i.type === 'hidden' || i.type === 'submit' || i.type === 'button') return;
             if (i.type === 'checkbox' || i.type === 'radio') { if (i.checked) n++; } else if (i.value) n++;
@@ -1157,9 +1183,19 @@ function sortTable(table, col, th) {
         }
         // a row with a primary link opens it when tapped anywhere that is not itself a control
         if (window.matchMedia('(max-width: 768px)').matches) {
-            var tr = e.target.closest('table.rowlist tr[data-rl-href]');
+            var tr = e.target.closest('table.rowlist tr');
             if (tr && !e.target.closest('a, button, input, select, textarea, label, summary, .action-menu, [data-href], [data-confirm]')) {
-                window.location.href = tr.getAttribute('data-rl-href');
+                var box = tr.querySelector('.row-checkbox');
+                var menu = tr.querySelector('.action-menu-toggle');
+                if (document.body.classList.contains('select-mode') && box) {
+                    box.checked = !box.checked;
+                    box.dispatchEvent(new Event('change', { bubbles: true }));
+                } else if (menu) {
+                    menu.checked = !menu.checked;
+                    menu.dispatchEvent(new Event('change', { bubbles: true }));
+                } else if (tr.getAttribute('data-rl-href')) {
+                    window.location.href = tr.getAttribute('data-rl-href');
+                }
             }
         }
     });

@@ -69,12 +69,15 @@ Keep the `<table>`; add `class="rowlist"` and tag the cells:
 
 | `data-m` | On a phone |
 |---|---|
-| `primary` | line one, bold: the name (and its link — tapping the row opens it) |
+| `primary` | line one, bold: the name |
 | `badge` | line one, after the name: a vendor or status badge |
 | `secondary` | line two, joined with " · " (IP · subnet · expiry) |
 | `trailing` | right edge of line one: the kebab / action menu |
 | `hide` | not shown on a phone |
+| `full` | a single cell that spans the line (an empty-state row) |
 | *(none)* | treated as `secondary` |
+
+Tapping a row (anywhere that is not itself a control) opens the row's action menu — the same target as the kebab — or, when the row has no menu, its primary link; in Select mode it ticks the row. Pairs of `class="desk-only"` / `class="phone-only"` spans give a cell a full desktop value and a short phone value (Leases' expiry is a timestamp on a desktop and "in 3 d" on a phone, via the `relfmt` filter). `_sort_controls.html` renders the phone's Sort and Order selects for a list page's filter form.
 
 A cell whose text is empty or exactly "—" is dropped, so a row never shows
 "NOTES —". Rows are at least 56 px. The cell holding a `.row-checkbox` is

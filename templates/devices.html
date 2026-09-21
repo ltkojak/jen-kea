@@ -1,44 +1,35 @@
 {% extends "base.html" %}
 {% block title %}Device Inventory{% endblock %}
 {% block content %}
-<div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;">
-    <div>
-        <h1>{{ icon("monitor-smartphone", "ico-lg") }} Device Inventory</h1>
-        <p>All MAC addresses seen on your network — {{ total }} device{{ 's' if total != 1 else '' }} total</p>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;">
-        <form method="POST" action="/devices/settings" style="display:flex;align-items:center;gap:8px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <span style="font-size:12px;color:var(--text-muted);">Stale after</span>
-            <input type="number" name="stale_days" value="{{ stale_days }}" min="1" max="365" style="width:70px;">
-            <span style="font-size:12px;color:var(--text-muted);">days</span>
-            <button type="submit" class="btn btn-sm btn-secondary">Set</button>
-        </form>
-    </div>
+{% from '_sort_controls.html' import sort_controls %}
+<div class="page-header">
+    <h1>{{ icon("monitor-smartphone", "ico-lg") }} Device Inventory</h1>
+    <p>All MAC addresses seen on your network — {{ total }} device{{ 's' if total != 1 else '' }} total</p>
 </div>
 
 {% if ipv6_enabled and subnet6_map %}
-<div class="segmented-control" style="display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-bottom:12px;">
-    <a href="/devices?view=v4" class="btn btn-sm {{ 'btn-primary' if view_mode != 'v6' else 'btn-secondary' }}" style="border-radius:0;">IPv4</a>
-    <a href="/devices?view=v6" class="btn btn-sm {{ 'btn-primary' if view_mode == 'v6' else 'btn-secondary' }}" style="border-radius:0;">IPv6</a>
+<div class="segmented-control segmented">
+    <a href="/devices?view=v4" class="btn btn-sm {{ 'btn-primary' if view_mode != 'v6' else 'btn-secondary' }}">IPv4</a>
+    <a href="/devices?view=v6" class="btn btn-sm {{ 'btn-primary' if view_mode == 'v6' else 'btn-secondary' }}">IPv6</a>
 </div>
 {% endif %}
 
 {% if view_mode == 'v6' %}
 <div class="filter-bar">
-    <form method="GET" style="display:contents;"
+    <form method="GET" class="contents"
           hx-get="/devices"
           hx-target="#devices-results"
           hx-swap="innerHTML"
           hx-trigger="change from:select, input delay:400ms"
           hx-push-url="true">
         <input type="hidden" name="view" value="v6">
-        <select name="subnet">
+        <select name="subnet" aria-label="Subnet">
             <option value="all" {% if subnet_filter=='all' %}selected{% endif %}>All Subnets</option>
             {% for sid, info in subnet6_map.items() %}
             <option value="{{ sid }}" {% if subnet_filter==sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search address, hostname, DUID..." style="min-width:220px;">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search address, hostname, DUID..." class="search-w" data-m="primary">
         <button type="submit" class="btn btn-secondary">Filter</button>
         <a href="/devices?view=v6" class="btn btn-secondary">Clear</a>
     </form>
@@ -50,41 +41,46 @@
 
 <!-- Filter bar — HTMX live filtering -->
 <div class="filter-bar">
-    <form method="GET" style="display:contents;"
+    <form method="GET" class="contents"
           hx-get="/devices"
           hx-target="#devices-results"
           hx-swap="innerHTML"
           hx-trigger="change from:select, input delay:400ms"
           hx-push-url="true">
-        <select name="subnet">
+        <select name="subnet" aria-label="Subnet">
             <option value="all" {% if subnet_filter == 'all' %}selected{% endif %}>All Subnets</option>
             {% for sid, info in subnet_map.items() %}
             <option value="{{ sid }}" {% if subnet_filter|string == sid|string %}selected{% endif %}>{{ info.name }}</option>
             {% endfor %}
         </select>
-        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." style="min-width:200px;">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-muted);">
+        <input type="text" name="search" value="{{ search }}" placeholder="Search MAC, name, owner, IP..." class="search-w" data-m="primary">
+        <label class="flex items-center gap-2 muted md">
             <input type="checkbox" name="stale" value="1" {% if show_stale %}checked{% endif %}>
             Stale only
         </label>
-        <select name="per_page" title="Rows per page">
+        <select name="per_page" title="Rows per page" aria-label="Rows per page">
             <option value="all" {% if per_page == 'all' %}selected{% endif %}>Show all</option>
             <option value="50"  {% if per_page == '50'  %}selected{% endif %}>50 per page</option>
             <option value="100" {% if per_page == '100' %}selected{% endif %}>100 per page</option>
             <option value="250" {% if per_page == '250' %}selected{% endif %}>250 per page</option>
         </select>
-        <input type="hidden" name="sort"   value="{{ sort }}">
-        <input type="hidden" name="dir"    value="{{ direction }}">
+        {{ sort_controls([("last_seen","Last seen"),("first_seen","First seen"),("device_name","Device name"),("hostname","Hostname"),("owner","Owner"),("last_ip","Last IP"),("mac","MAC address"),("subnet","Subnet")], sort, direction) }}
         <input type="hidden" name="type"   value="{{ type_filter }}">
         {% if search or show_stale or subnet_filter != 'all' %}
         <a href="/devices" class="btn btn-sm btn-secondary">Clear</a>
         {% endif %}
     </form>
+    <form method="POST" action="/devices/settings" class="flex items-center gap-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <span class="muted small">Stale after</span>
+        <input type="number" name="stale_days" value="{{ stale_days }}" min="1" max="365" class="w-70" aria-label="Stale after (days)">
+        <span class="muted small">days</span>
+        <button type="submit" class="btn btn-sm btn-secondary">Set</button>
+    </form>
 </div>
 
 <!-- Device type filter badges — preserve all current filters -->
-<div id="type-filter-bar" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
-    <span style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Filter by type:</span>
+<div id="type-filter-bar" class="chip-row items-center mb-3">
+    <span class="chip-label">Filter by type:</span>
     <button type="button" data-type-filter=""
        class="btn btn-sm {% if not type_filter %}btn-primary{% else %}btn-secondary{% endif %}">All</button>
     {% for type_key, type_info in device_type_display.items() %}

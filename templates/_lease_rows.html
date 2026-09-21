@@ -4,27 +4,28 @@
 {% for l in leases %}
 <tr>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
-    <td data-label="" class="no-label">
+    <td>
         {% if not l.has_reservation %}
         <input type="checkbox" class="row-checkbox" name="ips[]" value="{{ l.ip }}">
         {% endif %}
     </td>
     {% endif %}
-    <td data-label="IP" class="mono"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
-    <td data-label="Hostname" style="white-space:nowrap;">
+    <td class="mono" data-m="secondary"><a href="/leases?search={{ l.ip }}">{{ l.ip }}</a></td>
+    <td class="nw-d" data-m="primary">
         {{ l.hostname | hostname or '—' }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
     </td>
-    <td data-label="MAC" class="mono hide-mobile">{{ l.mac }}</td>
-    <td data-label="Subnet"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
-    <td data-label="{{ 'Expired' if show_expired else 'Obtained' }}" class="mono hide-mobile" style="color:var(--text-muted);">{{ l.obtained|utcfmt }}</td>
-    <td data-label="{{ 'Expired At' if show_expired else 'Expires' }}" class="mono hide-tablet" style="color:var(--text-muted);">{{ l.expire|utcfmt }}</td>
+    <td class="mono hide-mobile" data-m="hide">{{ l.mac }}</td>
+    <td data-m="secondary"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
+    <td class="mono muted hide-mobile" data-m="hide">{{ l.obtained|utcfmt }}</td>
+    <td class="mono muted hide-tablet" data-m="secondary"><span class="desk-only">{{ l.expire|utcfmt }}</span><span class="phone-only">{{ l.expire|relfmt }}</span></td>
     {% if not show_expired and current_user.role in ('superadmin','admin') %}
-    <td data-label="">
+    <td data-m="trailing">
         <div class="action-menu">
             <input type="checkbox" id="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-toggle">
             <label for="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
+                <div class="action-menu-item disabled mono">{{ l.mac }}</div>
                 {% if l.has_reservation %}
                 <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
                 {% else %}
@@ -44,7 +45,7 @@
     {% endif %}
 </tr>
 {% else %}
-<tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}">
+<tr><td colspan="{{ 8 if not show_expired and current_user.role in ('superadmin','admin') else 6 }}" data-m="full">
     {{ empty_state(icon('inbox'), 'No active leases yet — Kea hands out leases as clients ask; check Health if you expected some.', [((icon('stethoscope') ~ ' Health'), '/health-center')]) }}
 </td></tr>
 {% endfor %}

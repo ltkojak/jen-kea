@@ -2,6 +2,43 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.52.0-beta.1] - 2026-09-21
+
+Beta channel. Stacked on 5.51.0-beta.1. Q59: Leases, Reservations and Devices on the
+phone, the first pages to use the vocabulary the foundation release added. On a phone
+each row used to be a seven-line label-and-value card, empty fields included, with a
+checkbox top-right and a kebab bottom-right, which made 128 leases about 12,000 pixels
+of scrolling. Each is now a two-line row of about 60 pixels.
+
+**Rows.** Every cell carries a `data-m`. On Leases the hostname and vendor badge are the
+first line and the address, subnet and expiry the second, with the expiry shown as
+relative time ("in 3 d") on a phone and as the full timestamp on a desktop; the MAC and
+the obtained time are not shown but the MAC is the first line of the row's menu. On
+Reservations the second line is address, subnet and status, and the DNS override and the
+notes appear only when they are set. On Devices the first line is the device name, or the
+hostname when it has none, and the second the address and the relative last-seen time (in
+the warning colour when the device is stale); the owner appears only when set. Tapping a
+row opens the same menu the kebab opens, one target, and in Select mode it ticks the row.
+The desktop tables keep every column.
+
+**Filters.** Every filter select now has a label (Subnet, Time, Status, Rows per page,
+Saved filters), which is what the Filters sheet shows in place of the two unlabelled
+dropdowns the screenshots exposed. A phone-only Sort and Order pair replaces the table
+header links the phone hides. They are part of the form on a desktop too, so changing a
+filter there now keeps the sort instead of resetting it. On Reservations the Add button
+is the primary action and the CSV export, import and dry-run fold into More actions; on
+Devices the stale-after setting moved from the page header into the Filters sheet and the
+device-type chips became one scrolling row.
+
+**Inline styles.** 94 inline style attributes were converted to classes and utilities across
+the three pages and their partials, so the count in the templates went from 1,739 to
+1,645 and `tests/test_ui_ratchet.py` now pins 1,645. What remains on these pages is the
+Edit Device dialog, whose script toggles its display, and the vendor badge colours, which are
+computed per device. The IPv6 views of these three pages are not converted yet.
+
+The `relfmt` template filter formats the relative times. No migration, no config change,
+no sudoers or helper change; the upgrade is `sudo ./install.sh` as usual.
+
 ## [5.51.0-beta.1] - 2026-09-21
 
 Beta channel. Stacked on 5.50.0-beta.1. Q58, the mobile foundation: the shared

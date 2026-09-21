@@ -1,0 +1,9 @@
+{# v5.52.0 (Q59) — the phone's Sort and Order selects for a list page's filter form.
+   The table header links sort on a desktop; a phone hides the header, so these give the
+   same two parameters (sort, dir) a control. They are display:none above 768px but still
+   part of the form, which also means a filter change on a desktop now keeps the sort.
+   options: [(value, label), ...] matching the route's sort_map keys. #}
+{% macro sort_controls(options, sort, direction) %}
+<select name="sort" class="phone-only" aria-label="Sort" data-nocount>{% for key, label in options %}<option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+<select name="dir" class="phone-only" aria-label="Order" data-nocount><option value="asc" {% if direction == 'asc' %}selected{% endif %}>Ascending</option><option value="desc" {% if direction == 'desc' %}selected{% endif %}>Descending</option></select>
+{% endmacro %}
