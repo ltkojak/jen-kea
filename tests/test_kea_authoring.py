@@ -1376,7 +1376,7 @@ class TestKeaHelperTableUpgradeHint:
         r = logged_in_client.get("/settings/kea")
         assert r.status_code == 200
         assert b"upgrade available" not in r.data
-        assert f"v{kea_host.JEN_HELPER_SHIPPED_VERSION} available (needed for https sockets)".encode() in r.data
+        assert f"(v{kea_host.JEN_HELPER_SHIPPED_VERSION} available)".encode() in r.data
         assert b"Update helper" in r.data
         assert b"Install helper" not in r.data
 
@@ -1394,7 +1394,7 @@ class TestKeaHelperTableUpgradeHint:
         r = logged_in_client.get("/settings/kea")
         assert r.status_code == 200
         assert b"upgrade available" not in r.data
-        assert b"available (needed for https sockets)" not in r.data
+        assert f"(v{kea_host.JEN_HELPER_SHIPPED_VERSION} available)".encode() not in r.data
         assert b"Update helper" not in r.data
         assert b"Install helper" not in r.data
 

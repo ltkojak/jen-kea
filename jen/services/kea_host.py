@@ -173,6 +173,37 @@ TLS_HELPER_MIN_VERSION = 4
 # at all. v5.29.0 gated the https socket option on v4 but the button only
 # appeared below WANT, so a v3 host had no way to get there from the UI.
 JEN_HELPER_SHIPPED_VERSION = 5  # v5 (v5.49.0): tail-log reads through a bounded deque
+
+
+def helper_version_label(version, shipped: int | None = None) -> str:
+    """One host's version as every page words it: "v4 (v5 available)", or "v5"
+    when it is current, "not recorded" when Jen has never seen it answer."""
+    shipped = JEN_HELPER_SHIPPED_VERSION if shipped is None else shipped
+    if not isinstance(version, int):
+        return "not recorded"
+    return f"v{version} (v{shipped} available)" if version < shipped else f"v{version}"
+
+
+def helper_version_phrase(versions, shipped: int | None = None) -> str:
+    """The fleet phrasing shared by the Health "helper installed" row, the Kea
+    3.2 readiness row and (per host, via helper_version_label) the Settings →
+    Kea → SSH card: "1/1 host(s) on helper v4 (v5 available)". Hosts group by
+    version; hosts Jen has never seen answer are counted apart."""
+    versions = list(versions)
+    total = len(versions)
+    if not total:
+        return ""
+    shipped = JEN_HELPER_SHIPPED_VERSION if shipped is None else shipped
+    parts = []
+    for v in sorted({v for v in versions if isinstance(v, int)}):
+        n = sum(1 for x in versions if x == v)
+        parts.append(f"{n}/{total} host(s) on helper {helper_version_label(v, shipped)}")
+    unknown = sum(1 for x in versions if not isinstance(x, int))
+    if unknown:
+        parts.append(f"{unknown}/{total} host(s) with no helper recorded")
+    return "; ".join(parts)
+
+
 _TLS_NEEDS_HELPER = (
     "https setup needs jen-kea-helper v4+ on this host — update it from Settings → Kea → SSH "
     "(the http option works with any helper version)."

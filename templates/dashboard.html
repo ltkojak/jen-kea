@@ -7,11 +7,11 @@
         <h1>{{ icon("layout-dashboard", "ico-lg") }} Dashboard</h1>
         <p>Live overview of your DHCP infrastructure</p>
     </div>
-    <div class="page-header-controls" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <div class="page-header-controls" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap;">
         <span id="last-updated" style="font-size:11px;color:var(--text-muted);"></span>
         <button class="btn btn-secondary btn-sm" id="customize-btn">{{ icon("settings") }} Customize</button>
-        <span style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
-        <select id="refreshInterval" style="width:auto;font-size:12px;padding:4px 8px;">
+        <span class="dash-refresh-label" style="font-size:12px;color:var(--text-muted);">Auto-refresh:</span>
+        <select id="refreshInterval" aria-label="Auto-refresh" title="Auto-refresh" style="width:auto;font-size:12px;padding:4px 8px;">
             <option value="0">Off</option>
             <option value="5000">5s</option>
             <option value="10000">10s</option>
@@ -249,6 +249,7 @@
 </div>
 
 <!-- Server status widget -->
+<style>@media (max-width: 767px) { .dash-refresh-label, #last-updated { display: none; } .page-header-controls { width: 100%; } }</style>
 <div id="dash-server_status" style="display:none;">
     <div class="card">
         <div class="card-header">
@@ -279,7 +280,7 @@
                 <td style="color:var(--text-muted);font-size:12px;" id="srv-ha-{{ s.server.get('id', loop.index) }}">
                     {% if s.ha_state %}{{ s.ha_state }}{% elif s.up is not none and s.up %}primary{% else %}—{% endif %}
                 </td>
-                <td style="color:var(--text-muted);font-size:12px;" id="srv-ver-{{ s.server.get('id', loop.index) }}">{{ s.version or '—' }}</td>
+                <td style="color:var(--text-muted);font-size:12px;" id="srv-ver-{{ s.server.get('id', loop.index) }}" title="{{ s.version or '' }}">{{ (s.version or '—').split()[0] }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -703,7 +704,7 @@ function updateStats() {
                             : '<span style="color:var(--danger);">● Offline</span>';
                     }
                     if (haEl)  haEl.textContent = srv.ha_state || (srv.up ? srv.role || '—' : '—');
-                    if (verEl) verEl.textContent = srv.version  || '—';
+                    if (verEl) { verEl.textContent = (srv.version || '—').split(' ')[0]; verEl.title = srv.version || ''; }
                 });
             }
         })

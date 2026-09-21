@@ -44,4 +44,6 @@ def doctor_page():
     for f in findings:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
 
-    return render_template("doctor.html", findings=findings, error=error, counts=counts)
+    return render_template(
+        "doctor.html", findings=findings, groups=__doctor.group_findings(findings), error=error, counts=counts
+    )

@@ -17,7 +17,7 @@ import jen.services.alerts as __alerts
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
-from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES
+from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES, GLYPH_LEGEND
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ def settings_alerts():
         templates=templates,
         default_templates=DEFAULT_TEMPLATES,
         alert_type_labels=ALERT_TYPE_LABELS,
+        glyph_legend=GLYPH_LEGEND,
         summary_time=summary_time,
         pool_exhaustion_free=pool_exhaustion_free,
         threshold_pct=threshold_pct,

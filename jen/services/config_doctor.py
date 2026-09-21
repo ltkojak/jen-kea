@@ -662,6 +662,33 @@ def _check_removed_keys(dhcp4_cfg) -> list[Finding]:
     return out
 
 
+def group_findings(findings: list[Finding]) -> list[dict]:
+    """Collapse findings that are the same KIND — same check id and severity — into
+    one group, in order of first appearance (diagnose() already sorts most severe
+    first). 68 identical "Reservation address is inside a dynamic pool" notes become
+    ONE row with a count and a list, sharing the `why` once. Pure; the API keeps
+    returning the flat findings.
+
+    Each group: {id, severity, title, why, fix_url, count, items: [{where, detail}]}."""
+    groups: dict[tuple, dict] = {}
+    for f in findings:
+        key = (f["id"], f["severity"])
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {
+                "id": f["id"],
+                "severity": f["severity"],
+                "title": f["title"],
+                "why": f.get("why", ""),
+                "fix_url": f.get("fix_url", ""),
+                "count": 0,
+                "items": [],
+            }
+        g["count"] += 1
+        g["items"].append({"where": f.get("where", ""), "detail": f.get("detail", "")})
+    return list(groups.values())
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 

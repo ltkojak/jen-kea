@@ -153,26 +153,37 @@ DEFAULT_ALERT_ICON = "bell"
 DEFAULT_TEMPLATES = {
     "kea_down": "🚨 <b>Kea Alert</b>\n{server_name} is <b>DOWN</b>!",
     "kea_up": "✅ <b>Kea Alert</b>\n{server_name} is back <b>UP</b>.",
-    "ha_failover": "⚡ <b>HA Failover</b>\n{server_name} state changed: <b>{old_state}</b> → <b>{new_state}</b>",
-    "new_lease": "🆕 <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
-    "new_device": "🔍 <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
-    "new_reserved_lease": "📌 <b>Reserved Device Online</b>\nA reserved device's IP just went active\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "ha_failover": "⚠️ <b>HA Failover</b>\n{server_name} state changed: <b>{old_state}</b> → <b>{new_state}</b>",
+    "new_lease": "ℹ️ <b>New DHCP Lease</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "new_device": "⚠️ <b>Unknown Device</b>\nNew MAC never seen before\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "new_reserved_lease": "ℹ️ <b>Reserved Device Online</b>\nA reserved device's IP just went active\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
     "utilization_high": "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
     "utilization_ok": "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
-    "pool_exhaustion": "🔴 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
-    "pool_forecast": "📈 <b>Pool Exhaustion Forecast</b>\nSubnet <b>{subnet}</b> ({cidr})\nTrend <b>{trend}/day</b> — on track to reach 90% in ~<b>{days}</b> days ({date})\nPeak so far: {peak}/{total}",
+    "pool_exhaustion": "🚨 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
+    "pool_forecast": "⚠️ <b>Pool Exhaustion Forecast</b>\nSubnet <b>{subnet}</b> ({cidr})\nTrend <b>{trend}/day</b> — on track to reach 90% in ~<b>{days}</b> days ({date})\nPeak so far: {peak}/{total}",
     "packet_health": "⚠️ <b>Packet Health Alert</b> ({status})\n{server_name}: {detail}",
     "packet_health_ok": "✅ <b>Packet Health Recovered</b>\n{server_name} is back to clean packet processing.",
-    "reservation_added": "📌 <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
-    "reservation_deleted": "🗑️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
-    "stale_reservation": "⏰ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
-    "kea_config_changed": "⚙️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
+    "reservation_added": "ℹ️ <b>Reservation Added</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nSubnet: {subnet}",
+    "reservation_deleted": "ℹ️ <b>Reservation Deleted</b>\nIP: {ip}\nMAC: {mac}\nSubnet: {subnet}",
+    "stale_reservation": "⚠️ <b>Stale Reservation</b>\nIP: {ip}\nMAC: {mac}\nHostname: {hostname}\nNot seen in {days} days",
+    "kea_config_changed": "ℹ️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
     "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
     "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
-    "cert_expiring": "🔒 <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate expires in <b>{days_left}</b> day(s).",
-    "daily_summary": "📊 <b>Daily Summary</b>\n{summary}",
+    "cert_expiring": "⚠️ <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate expires in <b>{days_left}</b> day(s).",
+    "daily_summary": "ℹ️ <b>Daily Summary</b>\n{summary}",
     "rogue_device": "🚨 <b>{subject}</b>\n{body}",
 }
+
+
+# One glyph, one meaning — the standard set every default alert message opens
+# with (the Settings → Alerts page shows this legend). Customised templates in
+# the database are never rewritten.
+GLYPH_LEGEND = [
+    ("🚨", "Critical", "something is down or about to run out"),
+    ("⚠️", "Warning", "needs attention soon"),
+    ("✅", "Recovered", "an earlier problem cleared"),
+    ("ℹ️", "Information", "something happened; no action needed"),
+]
 
 # ── v5.0 Phase 4 — IPv6 alerting: what generalizes, what doesn't ────────────
 #

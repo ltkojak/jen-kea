@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.50.0-beta.1] - 2026-09-21
+
+Beta channel. Q57 — one icon system across the whole interface, plus five small
+layout and wording fixes that were each too minor to release alone.
+
+**Icons.** Every emoji that acted as interface chrome (about 600 of them across 78
+files: nav items, card titles, buttons, status marks, empty states) is now a
+[Lucide](https://lucide.dev) icon drawn from a single inline SVG sprite. Emoji
+render differently on every operating system, ignore the light and dark themes,
+and cannot be sized or coloured; the icons inherit the surrounding text colour,
+scale with the font and look the same everywhere. The sprite is inlined into the
+page, so there is no extra request and no change to the Content-Security-Policy.
+Templates call `{{ icon("name") }}`; `tests/test_icons.py` fails on an unknown
+name, on a sprite that has drifted from its sources, and on any new emoji in a
+template, route or script, with a short reasoned allowlist for content that is
+genuinely not chrome (device-type badges, alert test messages). The two top-bar
+controls that had no words, the theme toggle and the shortcuts button, now carry
+a label. A plugin that supplies its own emoji as a nav icon still shows it as
+text. How to add an icon is written up in the admin guide.
+
+**Alert messages.** The default alert messages now open with one of four glyphs,
+one meaning each: critical, warning, recovered, information. Settings → Alerts
+shows the legend. Templates you customised are stored in the database and are
+never rewritten.
+
+**Quick wins.**
+
+- Doctor groups findings of the same kind: 68 reservations inside a dynamic pool
+  are one row with a count and a "Show all" list rather than 68 cards. The Health
+  Center row reads "N note(s) of K kind(s)".
+- The Kea host helper version is worded one way on the Health Center, the Kea 3.2
+  readiness row and the SSH card: "1/1 host(s) on helper v4 (v5 available)".
+- The Servers page packet counters wrap to the card width instead of overflowing
+  it, and the Config history and History buttons are evenly spaced.
+- The dashboard header keeps its controls on one row; the auto-refresh label
+  and last-updated text hide on narrow screens, and a long Kea version string is
+  shortened with the full text on hover.
+- The Subnets header buttons share one equal-height, wrapping action bar.
+
+No migration, no config change, no sudoers or helper change; the upgrade is
+`sudo ./install.sh` as usual.
+
 ## [5.49.0] - 2026-09-21
 
 Stable. The first promotion through the release channels; everything below

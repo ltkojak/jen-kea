@@ -131,6 +131,11 @@ var JEN_CHANNELS = {
         Customize alert messages. Available variables: <code>{ip}</code> <code>{mac}</code> <code>{hostname}</code> <code>{subnet}</code> <code>{cidr}</code> <code>{pct}</code> <code>{used}</code> <code>{total}</code> <code>{free}</code> <code>{days}</code> <code>{details}</code> <code>{summary}</code>
         Supports HTML: <code>&lt;b&gt;</code> <code>&lt;code&gt;</code> <code>\n</code> for newlines.
     </p>
+    <div id="al-glyph-legend" style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;margin-bottom:16px;">
+        {% for g, name, meaning in glyph_legend %}
+        <span title="{{ meaning }}"><span style="font-size:14px;">{{ g }}</span> <strong>{{ name }}</strong> — {{ meaning }}</span>
+        {% endfor %}
+    </div>
     <div style="display:flex;flex-direction:column;gap:8px;">
     {% for atype, label in alert_type_labels.items() %}
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;">

@@ -1303,6 +1303,12 @@ the config, or the affected part can never actually work),
 (harmless, flagged so you know it's there) and always says why, not
 just what.
 
+Findings of the same kind (v5.50.0) are grouped: 68 reservations that
+sit inside a dynamic pool show as **one** row with a count and a
+"Show all" list, sharing the explanation once, instead of 68 near
+identical cards. The Health Center row reads "N note(s) of K kind(s)",
+and the JSON API keeps returning the flat findings.
+
 | Check | What it means |
 |---|---|
 | Pools overlap | Two pool ranges intersect — Kea refuses to load a config with overlapping pools |
@@ -1990,3 +1996,33 @@ back in.
 
 SAML and LDAP providers, SCIM provisioning, RP-initiated logout, and
 API keys via OIDC are all out of scope for this release.
+
+
+## Icons (v5.50.0)
+
+The interface draws its icons from one inline SVG sprite of
+[Lucide](https://lucide.dev) icons (ISC licence, `static/icons/LICENSE`).
+They take their colour from the surrounding text, so they follow the
+light and dark themes, and they need no extra request and no change to
+the Content-Security-Policy.
+
+- In a template call `{{ icon("pencil") }}`; add a class with
+  `{{ icon("pencil", "ico-muted") }}` and a spoken label for an icon with no
+  text beside it with `{{ icon("pencil", label="Edit") }}`. A name that is not
+  in the sprite renders nothing, and `tests/test_icons.py` fails on any
+  such name before it ships. `icon` is a Jinja global
+  (`jen/services/icons.py`), so it also works inside HTMX partials.
+- Inside a `{% block scripts %}` region write the inline form instead:
+  `<svg class="ico" aria-hidden="true"><use href="#i-pencil"></use></svg>`.
+- **To add an icon:** save the Lucide SVG as `static/icons/src/<name>.svg`,
+  run `py tools/build_icon_sprite.py` to regenerate `templates/_icons.html`,
+  and commit both. A test refuses a sprite that differs from its sources.
+- `tools/replace_emoji_icons.py` with `tools/icon_map.json` is the one-off
+  emoji-to-icon converter used for the initial swap.
+- **No emoji in the UI.** `tests/test_icons.py` scans `templates/`,
+  `jen/routes/` and `static/js/` for pictographic characters. The allowlist
+  holds only content that is not chrome: device-type badges on the Devices
+  page and the alert channels' test messages.
+- Default alert messages open with one of four glyphs, each with one meaning
+  (shown as a legend on Settings → Alerts): critical, warning, recovered,
+  information. Templates an operator customised are never rewritten.

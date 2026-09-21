@@ -16,18 +16,11 @@
     <div style="color:var(--text-muted);margin-bottom:8px;">{{ ph.notes|join('; ') }}</div>
     {% endif %}
     <canvas id="ph-chart-{{ s.server.id }}" height="50"></canvas>
-    <table style="width:100%;font-size:11px;margin-top:8px;">
-        <tr>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px 8px;font-size:11px;margin-top:8px;">
         {% for n in ph.named %}
-            <td class="stat-label" style="padding:2px 4px;">{{ n.label }}</td>
+        <div><div class="stat-label">{{ n.label }}</div><div class="mono">{{ n.total }}</div></div>
         {% endfor %}
-        </tr>
-        <tr>
-        {% for n in ph.named %}
-            <td class="mono" style="padding:2px 4px;">{{ n.total }}</td>
-        {% endfor %}
-        </tr>
-    </table>
+    </div>
     {% if ph.other_counters %}
     <details style="margin-top:6px;">
         <summary style="cursor:pointer;color:var(--text-muted);">All counters ({{ ph.other_counters|length }})</summary>

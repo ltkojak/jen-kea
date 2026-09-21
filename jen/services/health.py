@@ -351,8 +351,11 @@ def _config_doctor(ctx) -> Check:
     else:
         c.status = "ok"
 
+    from jen.services.config_doctor import group_findings
+
     if c.status == "ok":
-        c.detail = f"{len(infos)} informational note(s) — see /tools/doctor"
+        kinds = len(group_findings(infos))
+        c.detail = f"{len(infos)} note(s) of {kinds} kind{'' if kinds == 1 else 's'} — see /tools/doctor"
     else:
         first = fails[0] if fails else warns[0]
         c.detail = f"{first['title']}: {first['detail']} — {len(findings)} finding(s), see /tools/doctor"
@@ -870,10 +873,8 @@ def _helper_installed(ctx) -> Check:
     if sentences:
         c.status, c.detail = "warn", "; ".join(sentences)
     else:
-        c.status, c.detail = (
-            "ok",
-            f"helper v{kea_host.JEN_HELPER_WANT_VERSION} on {len(ssh_servers)}/{len(ssh_servers)} host(s)",
-        )
+        recorded = [status.get(str(s.get("id")), {}).get("version") for s in ssh_servers]
+        c.status, c.detail = "ok", kea_host.helper_version_phrase(recorded)
     return c
 
 
@@ -1029,13 +1030,17 @@ def _kea32_helper_version(ctx) -> Check:
             parts.append(f"{', '.join(behind)} below helper v{want}")
         if unknown:
             parts.append(f"{', '.join(unknown)} never recorded a helper")
+        parts.append(
+            kea_host.helper_version_phrase([status.get(str(s.get("id")), {}).get("version") for s in ssh_servers])
+        )
         c.status = "warn"
         c.detail = (
             "; ".join(parts) + f" — helper v{want} carries the direct-socket and TLS ops the 3.2 move uses; "
             "update from Settings → Kea → SSH"
         )
         return c
-    c.status, c.detail = "ok", f"{len(ssh_servers)} host(s) on helper v{want}"
+    recorded = [status.get(str(s.get("id")), {}).get("version") for s in ssh_servers]
+    c.status, c.detail = "ok", kea_host.helper_version_phrase(recorded)
     return c
 
 

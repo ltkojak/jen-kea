@@ -23,7 +23,7 @@
     <span><strong>{{ counts.info }}</strong> info</span>
 </div>
 <div class="card" style="padding:0;">
-    {% for f in findings %}
+    {% for f in groups %}
     <div style="display:flex;gap:14px;align-items:flex-start;padding:14px 20px;{% if not loop.last %}border-bottom:1px solid var(--border);{% endif %}">
         <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:3px 8px;border-radius:4px;white-space:nowrap;margin-top:2px;
             {% if f.severity == 'fail' %}background:rgba(220,53,69,.15);color:var(--danger);
@@ -31,14 +31,23 @@
             {% else %}background:rgba(255,255,255,.08);color:var(--text-muted);{% endif %}">{{ f.severity }}</span>
         <div style="flex:1;min-width:0;">
             <div style="font-weight:600;">
-                {{ f.title }}
-                <span style="font-weight:400;color:var(--text-muted);font-size:12px;">— {{ f.where }}</span>
+                {{ f.title }}{% if f.count > 1 %} <span style="font-weight:400;color:var(--text-muted);">· {{ f.count }}</span>{% endif %}
+                {% if f.count == 1 %}<span style="font-weight:400;color:var(--text-muted);font-size:12px;">— {{ f.items[0].where }}</span>{% endif %}
             </div>
-            <div style="font-size:13px;margin-top:2px;">{{ f.detail }}</div>
+            {% if f.count == 1 %}
+            <div style="font-size:13px;margin-top:2px;">{{ f.items[0].detail }}</div>
+            {% else %}
+            <details style="margin-top:4px;">
+                <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">Show all {{ f.count }}</summary>
+                <ul style="margin:6px 0 0 18px;padding:0;font-size:13px;">
+                    {% for it in f.items %}<li><span class="mono">{{ it.where }}</span> — {{ it.detail }}</li>{% endfor %}
+                </ul>
+            </details>
+            {% endif %}
             <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">{{ f.why }}</div>
             <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
                 {% if f.fix_url %}<a class="btn btn-sm" href="{{ f.fix_url }}">Fix →</a>{% endif %}
-                {% if f.where.startswith('class ') %}
+                {% if f.items[0].where.startswith('class ') %}
                 <a class="btn btn-sm btn-secondary" href="/tools/explain">{{ icon("compass") }} Explain a client against this class</a>
                 {% endif %}
             </div>

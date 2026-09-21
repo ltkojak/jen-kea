@@ -48,7 +48,7 @@ document.addEventListener('click', function(e) {
         <p>Subnet configuration pulled live from Kea</p>
     </div>
     {% if current_user.role in ('superadmin','admin') %}
-    <div style="display:flex;gap:8px;">
+    <div class="action-bar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch;">
         {% if can_manage_networks %}
         <a href="{{ url_for('subnets.dhcp_classes_page') }}" class="btn btn-secondary">{{ icon("tag") }} Client Classes</a>
         {% endif %}
