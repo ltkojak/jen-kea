@@ -2,1011 +2,122 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.49.0-beta.6] - 2026-09-21
+## [5.49.0] - 2026-09-21
+
+Stable. The first promotion through the release channels; everything below
+shipped beta-first between 2026-09-14 and 2026-09-21.
+
+**Beta history:** 5.32.1-beta.1, 5.33.0-beta.1, 5.34.0-beta.1, 5.34.0-beta.2,
+5.35.0-beta.1, 5.36.0-beta.1, 5.37.0-beta.1, 5.38.0-beta.1, 5.39.0-beta.1,
+5.40.0-beta.1, 5.41.0-beta.1, 5.42.0-beta.1, 5.43.0-beta.1, 5.44.0-beta.1,
+5.45.0-beta.1, 5.46.0-beta.1, 5.47.0-beta.1, 5.48.0-beta.1, 5.49.0-beta.1,
+5.49.0-beta.2, 5.49.0-beta.3, 5.49.0-beta.4, 5.49.0-beta.5, 5.49.0-beta.6.
+Upgrading from 5.32.0 is automatic (`sudo ./install.sh`, or the in-app
+updater): migrations 25–27 (the API-key write flag, packet
+statistics, the event stream) run at startup, and nothing needs doing by hand.
+A Kea host's `jen-kea-helper` stays at whatever version it has until you press
+Update helper; nothing stops working without it (Settings → Kea → SSH offers
+v5, which bounds the memory Trace uses).
+
+### Release channels
+
+Every release since 5.32.0 ships beta first: a `-beta.N` tag is a GitHub
+prerelease that only boxes set to the beta channel (Settings → System →
+Updates) are offered, and the plain tag is a version-only promotion of the
+newest beta. This release is the first one promoted that way. The root updater
+also refuses to install a release older than the one on disk, so switching a
+beta box back to stable can never downgrade it.
+
+### Security and sign-in
+
+- **Support bundle** — one redacted zip (versions, Health results, HA state,
+  drift, configs, recent audit and alert rows, a log tail) to attach to a bug
+  report; a test asserts no secret survives redaction.
+- **OIDC group → subnet scope** — an SSO login can be scoped to subnets from
+  its groups; blank configuration stays unrestricted, and an unmatched login
+  gets no subnets unless a default says otherwise.
+- **The legacy root grant** — Settings → Kea → SSH has a Remove legacy grant
+  button (the grant deletes itself, refusing unless the helper's own sudoers
+  file is valid) and a by-hand box with the grant and revoke commands.
+  Jen never adds the grant back: handing itself root stays a manual act.
+- **Two rounds of audit fixes**, each checked against the code: a subnet-scoped
+  user or key can no longer reach a client's lease or reservation in a subnet
+  they cannot see (including a client that moved subnets, devices Jen has never
+  placed, and address-only rows), Trace and Doctor need access to all subnets,
+  the API's device writes and docs page respect scope, and one authorization
+  matrix test now drives every diagnostic page and API endpoint for every kind
+  of caller.
+
+### Migrate
+
+- **Import from ISC DHCP** — upload a `dhcpd.conf` (subnets, ranges, shared
+  networks, hosts, classes, pool allow/deny) through the same review → preview
+  → apply wizard the Windows importer uses; every directive it cannot map is
+  listed with its line number, and `dhcpd.leases` is counted, never imported.
+  A deterministic fuzz and a real-file fixture harness guard the parser.
+- **Dual-stack views** — the Dashboard and Devices pages show IPv4 and IPv6
+  together, and the IPv6 subnet edit page is folded into the IPv4 one.
+
+### Diagnose
+
+- **Explain** — "why did this client get this?": subnet, reservation, matched
+  classes, eligible pools, the answer address and every option with its source,
+  saying plainly what it cannot evaluate.
+- **Configuration Doctor** — contradictions, unused objects and risky settings
+  in the live Kea config that `kea-dhcp4 -t` cannot see.
+- **Timeline** — everything recorded about one client, newest first: events,
+  config changes, alerts, its lease and reservation. A MAC timeline shows only
+  that client's rows (a reused address never merges the previous holder's
+  history), and an IP timeline is about the address and labels earlier holders.
+- **Trace** — what Kea actually logged for one client, in plain English, read
+  through the helper's `tail-log` (no packet capture); admin-only, all-subnets
+  only, helper-only, with a 15-second bound.
+- **DNS ↔ DHCP Reconcile** — every reservation and lease name checked against
+  forward and reverse DNS, read-only, with a verdict per row (including
+  `lookup-failed` for a resolver that could not answer and an informational
+  `multiple-a`); one bounded worker pool, single-flight.
+- **Packet health** — drops, parse failures and NAKs per server from Kea's own
+  counters, restart-aware, with the eight extra drop reasons Kea 3.2 adds
+  (names read from a real 3.2 run), a Health check and an alert pair.
+- **Exhaustion forecast** — which pools run out and when, from lease history,
+  on Reports, in Health, and as an optional alert.
+
+### Operate
+
+- **Planned maintenance** — a guided stepper for taking one HA server down
+  and back; it also fixes the old "Start Maintenance" button, which named the
+  wrong server.
+- **Kea 3.2 readiness** — a Health group and a one-line Servers summary for
+  what to change before the Control Agent goes away.
+- **Recovery bundle** — one encrypted file with config, keys, content and the
+  Jen database (including which migrations ran); `install.sh --restore` is a
+  lifecycle: it stops Jen, snapshots what it replaces, applies, restarts, waits
+  for a real 200-with-JSON health answer, and rolls back on any failure.
+  `--rollback`, `--no-stop`, `--start` and `--force` are its flags.
+- **Grafana dashboard** and API health endpoints (`/api/v1/health/checks`,
+  `/api/v1/health/readiness`) for monitoring.
+- **`no-store` and clearer cards** — every database and bundle download is
+  never cached, and the Recovery card is visibly not the redacted support one.
+
+### Plugins and API
+
+- **`jen.plugin_api`** — the single versioned import surface for plugins (with
+  an event stream: `subscribe`, `unsubscribe`, run on one bounded worker), and
+  the bundled IPAM Lite 1.5.1 and Network Discovery 1.1.1 use only it.
+- **API v1 writes**, behind a per-key "Allow writes" flag (off by default),
+  plus `GET /api/v1/openapi.json`, servers, events and timeline endpoints.
 
-Beta channel. The release candidate. Stacked on the unpromoted 5.32.1-beta.1
-through 5.49.0-beta.5 chain — stable stays at v5.32.0 until the maintainer
-promotes. Anything found after this goes to a stable patch, not another beta.
+### First hour
 
-Seven edge cases from the review of beta.5, each inside a rule that already
-existed.
+- **Getting started** — a checklist with a nav reminder a superadmin can
+  dismiss, empty states on list pages, and an admin-guide Runbooks section.
 
-**Trace now needs access to all subnets.** Trace decided who could see a MAC's
-log lines from that MAC's current lease and reservations, but the last 1000
-lines of Kea's log can still carry the same MAC's earlier activity in a subnet
-the caller cannot access, and Kea's log has no per-line subnet boundary Jen can
-trust. So, like configuration history and Doctor, Trace is now for accounts with
-unrestricted subnet access: a subnet-scoped admin is refused for every MAC, and
-the "Trace in Kea log" links are hidden from them. The authorization matrix
-covers it, including a client that moved out of a denied subnet.
+### Tests and CI
 
-**Reconcile's Health summary is fleet-wide, so only unrestricted accounts write
-or see it.** A subnet-scoped reconcile used to overwrite the cached summary the
-Health Center shows to everyone with counts for its own subset. It now writes
-the cache only when run by an unrestricted account (and says so on the page when
-it does not), the Health check shows a scoped account "fleet-wide summary is for
-unrestricted accounts", and the expired hostnames used to tell a stale PTR from
-a wrong one are limited to the caller's subnets.
-
-**An IP timeline is about the address.** Looking up an address resolved its
-current holder's MAC and then matched events, audit rows and alerts on the MAC
-as well, so the timeline for 10.0.0.50 also showed that client's activity on
-10.0.0.73. An IP timeline now matches rows by the address only; the holder is
-used only to label earlier holders. A MAC timeline is unchanged.
-
-**Restore's health check is stricter.** After starting Jen the restore polled
-for any answer below 500, so a 404 from something else on the port, or a login
-page, counted as healthy. It now requires HTTP 200 with a JSON body containing
-`jen_version`; with HTTPS on, the plain port's redirect is followed only to
-Jen's own loopback HTTPS address (certificate not verified — loopback,
-self-signed) and must answer the same way. Anything else rolls the restore
-back.
-
-**Reconcile: a wrong address is not hidden by extra records.** Two records for a
-name, neither the address Jen expects, was reported as the informational
-`multiple-a`; the expected address is now checked first, so that case is a
-`wrong-forward`, and `multiple-a` means extra records that include the expected
-one.
-
-**The helper is version 5, and Trace needs it.** `tail-log` read the whole log
-into memory to return its last lines; it now keeps only the requested lines, so
-memory is bounded however large the log is. That is a change to the shipped
-helper, so every host reporting an older version now offers *"v5 available"*
-with the Update helper button (nothing stops working without it). Trace no
-longer falls back to the old `sudo tail` grant, which could not serve 1000 lines
-anyway: without the helper it says so instead of showing a partial log.
-
-**Two file details.** The scheduled-backup download is now sent with
-`Cache-Control: no-store` like the database exports, and the recovery
-bundle code now says plainly that the bundle is assembled in memory (roughly
-three times its size at peak, capped at 200 MB) before being streamed from a
-temporary file; a genuinely streaming format is a later, minor change.
-
-## [5.49.0-beta.5] - 2026-09-21
-
-Beta channel. The last beta before promotion — the second audit, part two.
-Stacked on the unpromoted 5.32.1-beta.1 through 5.49.0-beta.4 chain — stable
-stays at v5.32.0 until the maintainer promotes. (5.49.0-beta.4 had already
-been published when the audit's remaining items were added, so they ship as
-beta.5.)
-
-**Restore is tested against everything that can go wrong.** The restore
-lifecycle from beta.4 now has its failure cases pinned as tests with one
-invariant: after any failure the box is either exactly as it was — `/etc/jen`
-and content byte-identical, database rows equal to the snapshot — or the
-restored install is healthy. Covered: wrong passphrase, a truncated bundle and
-a corrupt one (all refused before Jen is stopped, no snapshot, no `systemctl`),
-a bundle from a newer Jen without `--force`, a full disk mid-apply, the
-database import dying after its first table, Jen never coming up healthy, and
-a clean machine. Two behaviours are now defined and stated in the output: files
-already on disk that the bundle does not carry are left in place, never
-deleted, and named; and a plugin the bundle recorded whose code is not on this
-machine is a warning, its database row kept.
-
-**One authorization matrix over every diagnostic surface.** A single table
-now drives every diagnostic page and API endpoint — Explain, Trace, Timeline
-by MAC and by IP, Doctor, Reconcile, Reports, Health, Servers, Search, Devices
-and the device, lease, timeline, events and health API — for a restricted
-viewer, an admin scoped to one subnet, an unrestricted admin, a superadmin and
-scoped read and write API keys. Each cell checks the status and that nothing
-belonging to the forbidden subnet appears anywhere in the response: names,
-addresses, hostnames, flashes, JSON. A new surface is one row.
-
-**Timeline no longer merges another client's history through a recycled
-address.** A MAC's timeline used to include every event, audit line and alert
-that mentioned the address it now holds, so it showed whoever had that address
-before. It now shows only rows that belong to that MAC: events recorded for
-the same address under a different MAC are dropped, and a row that names only
-the address (an audit or alert entry, or an event with no MAC) is kept but
-shown muted as "possibly related — same address, client unknown". A timeline
-about an IP shows every holder, and marks rows from an earlier holder
-"previous holder <mac>". A DUID-only IPv6 lease is never attributed to a MAC.
-
-**Smaller fixes.** Trace no longer holds a worker for the helper's 60-second
-default when the Kea host hangs; it waits 15. The recovery bundle and the
-database exports are sent `Cache-Control: no-store`, and a failure after the
-recovery file is written removes it and shows a message instead of a server
-error. The Recovery card is bordered in the danger colour and titled "Recovery
-bundle — contains secrets", and the support bundle card says it is the
-redacted one. The root updater now refuses to install a release older than the
-one on disk: a box on 5.49.0-beta.4 whose channel is switched to stable (still
-5.32.0) is offered nothing by the page, but the update unit re-derives the
-latest release itself, so a stale button or a second click could have
-installed the older version. The real release pairs — stable and beta boxes
-with beta, final and later-beta releases published — are now tests against
-both the page and the root updater. A reconcile of a thousand rows against a
-hung resolver is tested to return within its budget with the pool still at
-eight threads.
-
-## [5.49.0-beta.4] - 2026-09-20
-
-Beta channel. The last beta before promotion — the second audit. Stacked on
-the unpromoted 5.32.1-beta.1 through 5.49.0-beta.3 chain — stable stays at
-v5.32.0 until the maintainer promotes.
-
-A second review of the beta stack found nine more problems, of the same two
-families as the first: things that could hurt a running install, and places
-where a subnet-restricted user saw more than the access rules promise. Each
-was checked against the code before it was fixed.
-
-**Restore is now a lifecycle.** `install.sh --restore` used to replace
-`jen.config`, the keys, the content directory and the database underneath a
-running Jen, then tell you to restart it, with no way back if the restored
-install did not work. It now stops the service (when Jen is a running systemd
-unit), snapshots what it is about to replace to
-`<content>/backups/pre-restore-<timestamp>/`, applies the bundle, starts Jen,
-polls `/api/v1/health` for up to 60 seconds, and — if anything fails while
-applying or Jen does not come up — rolls the snapshot back and exits non-zero
-naming it. `--rollback <dir>` redoes that by hand from a finished restore,
-`--no-stop` skips the service control (Docker, or a Jen that is not a systemd
-unit) and `--start` starts Jen afterwards even if it was stopped. If the
-snapshot cannot be taken, nothing is changed. The admin guide's recovery
-runbooks carry the new sequence.
-
-**A client that moved subnets no longer leaks the new subnet through the old
-one.** A device Jen last saw in subnet A whose active lease and reservation
-are now in subnet B was authorised on A alone, and the Timeline, its API,
-the device API and the Devices page then showed the lease and reservation
-from B. Every object is now judged on its own subnet through one shared rule,
-`filter_client_view`: the device's placement fields are hidden when its own
-subnet is not yours, a lease or reservation in a subnet you cannot see is
-dropped, and the page or key is refused only when nothing remains. A regression
-fixture covers the moved client and its inverse for a restricted user, a
-scoped key and an unrestricted one.
-
-**Devices Jen has never placed in a subnet are for unrestricted users only.**
-Global Search listed every unplaced device's MAC, address, name, owner and
-notes to a restricted user, and to a user with no subnets at all; and the
-Devices page let a restricted user edit, delete or bulk-delete such a device.
-Both are now refused, the same rule the API applies since beta.2.
-
-**Reconcile bounds threads, not just time.** Each run created its own thread
-pool and abandoned hung lookups at the deadline, so repeated runs against a
-wedged resolver piled up threads. There is now one pool of eight threads, and
-a second reconciliation while one is running gets a notice instead of starting
-more work.
-
-Smaller fixes: stopping the event dispatcher could forget a worker it had not
-managed to stop, letting a second one start; the Health Center's D2 socket
-check put the socket's address in text a viewer can read, and now says only
-that D2 does or does not answer on its own control socket; and two examples in
-the plugin README imported from Jen's internals instead of `jen.plugin_api`,
-which a new test now prevents. The weekly real-Kea compatibility run was
-checked for a newer 3.0.x image — 3.0.3 is still the newest published — and
-passed by hand on 3.0.3, 3.2.0 and 3.3.1.
-
-## [5.49.0-beta.3] - 2026-09-20
-
-Beta channel. The last beta before promotion. Stacked on the unpromoted
-5.32.1-beta.1 through 5.49.0-beta.2 chain — stable stays at v5.32.0 until
-the maintainer promotes.
-
-Q52, polish from the pre-promotion audit. The audit found the routes' gates
-right; what it found wrong was the front door and a few loose ends, and
-they are fixed here.
-
-The **Getting started** page's "Dismiss the nav reminder" rendered as the
-browser's plain grey button: the `linkish` style it asked for only existed
-inside the account dropdown. It now has a global rule, and a browser
-journey checks the button is visible, not grey, and that dismissing clears
-the nav pill. The **README Features** list and the user guide had not
-followed the last dozen releases; both now cover Getting started, Explain,
-Trace, Timeline, Doctor, DNS Reconcile, the exhaustion forecast, Kea 3.2
-readiness, planned maintenance, packet health, the recovery bundle and the
-Grafana dashboard, and ARCHITECTURE gains paragraphs on the event stream and
-Timeline gating and on Doctor and Trace being read-only views.
-
-The **recovery bundle now carries `schema_migrations`** (and so do database
-exports and scheduled backups). Before, a restored database looked brand new
-to the migration runner and every migration re-ran on the next boot; now the
-restored database reports the bundle's schema version and the runner has
-nothing to do.
-
-**Kea 3.2 drop reasons are named.** Packet health used to name five classic
-counters and show everything else raw. The names of the eight drop counters
-Kea 3.2 adds (`pkt4-admin-filtered`, `pkt4-duplicate`, `pkt4-limit-exceeded`,
-`pkt4-not-for-us`, `pkt4-processing-failed`, `pkt4-queue-full`,
-`pkt4-rfc-violation`, `pkt4-service-disabled`) were read from the weekly
-real-Kea compatibility run's artifact for 3.2.0, not from documentation; they
-appear with plain-English labels on the Servers page (only for a server that
-reports them) and in the Health detail. They do not change the ok/warn/fail
-thresholds.
-
-Five new browser journeys cover Configuration Doctor, Timeline, Trace
-(including refusing a subnet-restricted user), DNS Reconcile and Getting
-started. The two reviewed SQL-construction findings in DNS Reconcile now carry
-their reasoning as a comment beside the queries.
-
-## [5.49.0-beta.2] - 2026-09-20
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.49.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-**Audit fixes before promotion.** An external review of the beta stack
-turned up twelve real problems, each checked against the code before it
-was fixed. Two sit on the recovery-restore path, which runs as root; the
-rest are places where a subnet-restricted user or API key saw a little
-more than the access rules promise. What each one allowed before, and
-what it allows now:
-
-*Recovery and restore.* The restore tool extracted the bundle with
-`extractall(filter="data")` and, on an interpreter without that argument,
-fell back to a bare `extractall()` that follows symlinks, hardlinks and
-`..` paths. It now walks the archive itself and refuses (naming the
-member, before writing anything) every entry that is not a plain file or
-directory with a relative, in-tree name. Separately, the fallback secret
-and MFA key files under `content/keys/` were carried as ordinary content
-and written back world-readable; they are now explicit `secret_key` and
-`mfa_key` members, restored `0600`, and never part of `content/` (a bundle
-made by an earlier beta has its `keys/` files restored `0600` too).
-Restore also used to compare only the MAJOR version: it now refuses a
-bundle from a newer Jen, or one whose database schema is ahead of this
-install's, unless `--force` is passed (`install.sh --restore … --force`
-passes it through); an older bundle into a newer Jen is unchanged.
-
-*Authorization.* Timeline kept rows with no subnet (audit and alert
-matches) for restricted users; it now drops them, as the API already
-did. Timeline listed every IPv6 address Kea knew for a MAC; a restricted
-user now sees one only when its v6 subnet is paired to a v4 subnet they
-can access, the Devices page's rule. Trace let a restricted user in when
-ANY subnet the client was known in was theirs and then returned the whole
-log unfiltered; it now requires all of them, and answers 403 if any is not.
-A subnet-scoped write API key could PATCH a device Jen had never placed
-in a subnet; it is now refused (an unscoped key still can). Doctor
-renders the whole Kea config, so it now requires unrestricted subnet
-access like config history, and its navigation entry is hidden from
-restricted users. The API Docs page listed every active key to any admin;
-it now lists only the keys the admin created (superadmins still see all).
-The policy is written down in ARCHITECTURE §2: surfaces that render the
-whole config need unrestricted access; per-object surfaces filter by
-subnet.
-
-*Behaviour.* DNS Reconcile scored any resolver error as
-`missing-forward` and any second A record as `duplicate-a`, and its
-"2 second budget" was joined back by the executor, so one hung lookup
-held the page. There is now a `lookup-failed` verdict for a resolver that
-could not answer (timeout, SERVFAIL) versus a definitive "no such
-record", `duplicate-a` is renamed `multiple-a` and shown as informational,
-and the run returns at its budget with the hung thread abandoned. Packet
-health scored 50 NAKs with 0 ACKs as green because it divided NAKs by
-ACKs; it now uses NAKs as a share of all replies and needs at least 10
-NAKs in the window before the ratio alone can warn or fail. Event
-subscribers used to run inline on whatever thread emitted the event;
-they now run on one shared bounded worker (a full queue drops deliveries
-and logs, the Timeline row is still written), and inline when the worker
-isn't running.
-
-Also: a deterministic fuzz and a real-file harness
-(`tests/fixtures/isc/`) for the ISC dhcpd.conf parser.
-
-## [5.49.0-beta.1] - 2026-09-20
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.48.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q51, the legacy root grant: revoke it from the GUI, and see the by-hand
-commands for both directions. A host on the helper still showed "legacy
-grant still present" with nothing to press, and because Update helper
-copies the file through that very grant, the honest life cycle is add
-it, install or update, remove it — repeatedly. Settings → Kea → SSH now
-has **Remove legacy grant** (superadmin, recent sign-in) beside the chip:
-over the grant itself, a fixed script deletes `/etc/sudoers.d/jen-kea`,
-refusing unless the helper's own sudoers file exists, holds the helper
-line for the SSH user and passes `visudo -c`, and Jen refuses up front
-unless the helper already answers, so a host is never left with no root
-path. Afterwards the host is re-checked so the chip and the Health row
-clear. The card also carries a collapsed box with the grant and revoke
-commands filled in per server. There is no helper change and no action
-that adds the grant: Jen handing itself root on a Kea host stays out of
-scope by design (ARCHITECTURE §3.3).
-
-## [5.48.0-beta.1] - 2026-09-19
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.47.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q49, client trace from Kea's own log: Explain predicts what Kea should
-do for a client; the new **Trace** page (`/tools/trace`, linked from
-Explain and from the action menu of any lease or reservation row)
-shows what it actually did. It reads the tail of a Kea server's
-kea-dhcp4 log through the helper's existing `tail-log` op — no packet
-capture, no new privilege, nothing installed on the Kea host — keeps
-the lines that name the client's MAC, translates each Kea message id
-into plain English (offered, allocated, reused, released, declined,
-NAK reasons, a failed DNS update request) and groups them into
-exchanges where the lines are less than two seconds apart, with
-Explain's prediction for the same client above it for comparison.
-"Watch for 60 s" re-reads every five seconds and stops by itself. The
-message ids were checked against ISC's own dhcp4_messages.mes and
-dhcp4_srv.cc at Kea 3.0.0 rather than written from memory, and doing
-that showed a few names the plan had assumed do not exist (there is no
-DHCP4_NAK, no DHCP4_LEASE_ADVERT, no DHCP4_NO_SUBNET_*, and no log line
-at all when a DDNS update is merely queued — only when sending one
-fails), and that DHCP4_PACKET_RECEIVED is an INFO line, not DEBUG; the
-page states honestly which lines a server at its default INFO level
-can and cannot show, since DISCOVER/REQUEST processing, subnet
-selection and most NAK reasons are DEBUG-only. The page scans at most
-the helper's own 1000-line tail limit. The log can hold other clients'
-data, so the page is admin-only, a subnet-restricted admin can only
-trace a client whose current lease or reservation is in a subnet they
-can access, and it is never part of the support bundle. New optional
-`[kea] dhcp4_log_path` (default `/var/log/kea/kea-dhcp4.log`).
-
-Docs: user guide "Trace a client"; admin guide config table.
-
-## [5.47.0-beta.1] - 2026-09-18
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.46.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q48, DNS ↔ DHCP reconciliation: the DDNS page's Verify tab checks one
-name at a time; a new **Reconcile** tab (Network → DDNS → Reconcile)
-runs the same forward/reverse check over the whole fleet at once —
-every reservation, then every active lease with a hostname, up to a
-configurable limit (max 1000). `jen/services/dns_reconcile.py::
-reconcile()` runs the lookups through a thread pool with a 2-second
-budget each (a resolver call past that is scored the same as a real
-timeout — the row just can't confirm a match, same as a genuine
-NXDOMAIN would), and classifies each row into one of seven verdicts:
-ok, missing-forward, wrong-forward, missing-ptr, wrong-ptr, stale-ptr
-(the PTR record names a host whose lease has since expired elsewhere —
-DNS wasn't cleaned up), or duplicate-a (more than one A record claims
-the name). Nothing is ever written, to Jen's database or to Kea — this
-is entirely read-only, and subnet-restricted the same way every other
-subnet-scoped page in Jen already is. The page shows totals per
-verdict as filter badges, exports the current filter to CSV, and links
-a mismatched row to Reservations (to fix it) or back to Verify (to
-re-check one). The Health Center's new **DNS/DHCP names match** check
-(group DDNS) reads the summary the page caches from its last real run
-rather than ever resolving anything itself, so it stays exactly as
-cheap as every other Health check — it shows skip until DDNS is on and
-at least one Reconcile run exists.
-
-Docs: admin guide DDNS section gets a new Reconcile subsection with
-the full verdict table.
-
-## [5.46.0-beta.1] - 2026-09-18
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.45.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q47, OIDC group → subnet scope mapping: an SSO login can now be scoped
-to specific subnets by IdP group, the same way role mapping already
-scopes it to a role. Settings → Access & Security → Single Sign-On
-gets a new **Subnet Mapping** field —
-`group:subnet-id[,subnet-id...]|*;...`, read from the same claim Role
-Mapping already reads — applied on every OIDC login, after role
-mapping: a user's allowed subnets become the union of every group that
-matches, a matching `*` group wins outright (unrestricted), and a
-login whose groups match nothing in a configured map gets no subnet
-access at all by default (deliberately fail closed, since the operator
-chose to start scoping access) unless **When no group matches** is set
-to leave it unrestricted instead. A live preview under the field shows
-what the current text resolves to against the real subnet list as you
-type, entirely client-side, no round trip. Leaving the field blank —
-the default — disables the feature outright: an existing SSO
-deployment's access does not narrow the moment it upgrades to a
-version carrying this field. Local accounts are untouched either way;
-the whole feature lives behind the OIDC login callback, which a local
-`/login` never reaches.
-
-Docs: the admin guide's Single Sign-On section gets a new Subnet
-Mapping subsection, and the "Not covered" list drops the line that
-used to say this wasn't possible yet.
-
-## [5.45.0-beta.1] - 2026-09-16
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.44.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q46, dual-stack that stops feeling like a toggle: the Dashboard and
-Devices pages now show IPv4 and IPv6 side by side instead of routing
-IPv6 to a separate section or page. The Dashboard's subnet grid tags
-each card **v4**/**v6**; an IPv6 subnet paired with an IPv4 one
-(config-driven `paired_subnet4_id`, the same pairing the Subnets page
-already uses) nests inside that card, and an unpaired one gets its own
-— both the initial render and the live 30-second poll are filtered to
-subnets the viewing user can actually access, matching the same rule
-the Devices page's IPv6 view already applies. The old boxed "IPv6"
-section in the Total Summary widget is gone; its active/reserved
-numbers now sit inline in the same row, tagged. The Devices page joins
-IPv6 addresses onto the matching IPv4 row by MAC — but only when Kea
-itself captured that MAC on the IPv6 lease (a raw socket capture,
-EUI-64, or a relay-agent option), never from Jen's own DUID-based
-guess; a lease with no captured hardware address can't be safely
-attributed to a device at all, so it becomes its own row at the
-bottom, badged "DUID only", never merged into an existing one. The
-device Timeline page picks up the same IPv6 addresses for whichever
-MAC you're looking at. Every one of these surfaces is a no-op with
-IPv6 turned off — extended the existing zero-behavior-change test to
-assert the new lookups aren't even called when disabled, not just that
-they come back empty.
-
-Also folded the IPv6 subnet edit page into the IPv4 one: they were two
-copies of the same ~275-line form and JS confirm-panel chrome with a
-handful of real differences (IPv6 has a preferred lifetime, no router
-option; IPv4 does have a router option, no preferred lifetime) that a
-`family` variable now threads through cleanly, at real routes still
-served from their original URLs. The v6-specific options/class editor
-templates the plan assumed existed turned out not to — that work
-hasn't been built yet, so there was nothing there to fold.
-
-## [5.44.0-beta.1] - 2026-09-15
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.43.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q45, a recovery bundle: move Jen from one box to another without
-rebuilding it by hand. Settings → Databases → Recovery (superadmin,
-step-up re-authentication) takes a passphrase (12 characters minimum,
-entered twice) and streams `jen-recovery-<host>-<timestamp>.tar.enc` —
-an AES-GCM-encrypted tar, key derived from the passphrase via Scrypt
-(`jen/services/recovery.py`, dependency-free from the rest of Jen so it
-can run before the app's own runtime is up). It bundles everything
-`/etc/jen` holds (`jen.config` and every credential in it, the MFA
-encryption key, TLS/SSH material, the Jen-managed Kea CA), a fresh
-export of every `jen_db` table, `/var/lib/jen` content, and the latest
-Kea config Jen has a record of per server — **not redacted**, and the
-export page says so. On a new machine, after a normal `sudo
-./install.sh`, `sudo ./install.sh --restore /path/to/bundle.tar.enc`
-prompts for the passphrase and hands off to a new standalone module
-(`jen/tools/restore.py`, `python3 -m jen.tools.restore`) that refuses
-outright — before writing anything — if the bundle's Jen version is a
-different MAJOR than the target install, or if a Kea server the bundle
-can reach is now running a different Kea MAJOR than what the manifest
-recorded at export time (an unreachable server only warns). It then
-writes `/etc/jen`, restores content, imports the database through the
-same code the Backups page's Import already uses, and prints a
-checklist: restart Jen, re-run "Update helper" on each Kea server (a
-version mismatch right after a restore is expected), and check Settings
-→ Plugins for anything that needs reinstalling from the registry (the
-bundle restores plugin database rows, not plugin code). Never touches a
-Kea host directly. Docs: a new "Recover Jen on a new machine" runbook
-in the admin guide, and ARCHITECTURE.md §6.2 on exactly what the bundle
-contains and why it's deliberately not redacted.
-
-Along the way, auditing the recovery bundle's database export against
-every table any migration actually creates turned up a real,
-pre-existing gap in `jen/services/dbexport.py`'s exportable-tables list
-— nine tables (including `webauthn_credentials`, `plugins`, and
-`kea_config_revisions`) were missing from it, silently absent from the
-regular Backups feature's "export everything" as well as the new
-recovery bundle. Fixed, with a regression test that diffs the exportable
-list against the migrations file so this can't drift back unnoticed.
-
-## [5.43.0-beta.1] - 2026-09-15
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.42.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q44, Grafana and two health endpoints for scripts: `/metrics` gains
-`jen_subnet_days_to_90pct` (the same pool-exhaustion forecast the
-Reports page and `/api/v1/subnets` already compute, as a gauge — `-1`
-when the trend is flat, falling, or there isn't enough history yet,
-since a Prometheus gauge has no native "unknown") and
-`jen_server_pkt4_<name>_total`, one metric family per DHCPv4 packet
-counter from the latest packet health snapshot (v5.41.0/Q42's
-`server_stats`) — absent entirely until a server has taken one. A
-ready-made dashboard for both, plus the existing pool/lease/reachability
-metrics, ships at `contrib/grafana/jen-kea.json` and is also served
-straight off disk (not `/static/`, so the tarball's own copy is always
-the one downloaded) from Settings → System → Download Grafana
-dashboard, `GET /settings/system/grafana-dashboard.json`. Two new read
-endpoints put the Health Center behind a script: `GET
-/api/v1/health/checks` is the full run as JSON, scoped to the calling
-key's subnet access exactly like a restricted viewer's page load;
-`GET /api/v1/health/readiness` is just the five-check Kea 3.2 readiness
-group and its `{ready, actions, checked}` summary, the same one
-Settings → Kea already shows as one line. Also fixed in passing: the
-admin guide's REST API table was missing the `/api/v1/events` and
-`/api/v1/timeline/{mac}` rows Q43 shipped two releases ago — added
-alongside this Q's own two rows.
-
-## [5.42.0-beta.1] - 2026-09-15
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.41.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q43, an event stream and the client timeline it makes possible: every
-alert Jen fires today throws away the reasoning behind it the moment
-the message is sent, and a support conversation about "what happened to
-this device last Tuesday" has always meant grepping the Jen log by
-hand. `jen/services/events.py` gives Jen a proper, best-effort event
-stream — one row per `emit()` call (migration 27's `events` table),
-notifying any subscriber registered through the plugin API without
-raising if a subscriber misbehaves. The alert thread's lease-tracking
-loop, previously a bare set of active IPs compared between polls, was
-factored into a pure `alerts.diff_leases(prev, cur)` first — unit
-tested without a database — which turns out to also make an IP change
-on the same MAC and a hostname change visible for the first time,
-alongside the lease.new/lease.expired the old comparison already
-implied. Every other natural emit point got wired in alongside its
-existing alert: HA state changes, config drift detected/resolved, one
-alert.sent per delivery attempt (not per alert), a reservation add/
-edit/delete from either the UI or the API, and a config push once every
-server in a change set commits. The Timeline page
-(`GET /timeline?mac=…` or `?ip=…`, linked from every lease, reservation
-and device row's menu, and from an Explain result) merges those events
-with matching audit log and alert entries and the client's current
-lease, reservation and device record into one newest-first view, with
-filter chips by kind; a subnet-restricted user only ever sees a client
-whose subnet they can access, including per-row for a client whose
-history spans more than one. Two new API endpoints, `GET /api/v1/events`
-and `GET /api/v1/timeline/{mac}`, expose the same data for scripting.
-The plugin API gains `subscribe`/`unsubscribe`/`event_kinds` and moves
-to version 2 — additive; a version-1 plugin still loads unchanged.
-
-## [5.41.0-beta.1] - 2026-09-15
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.40.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q42, packet health: Kea being reachable and having a valid config says
-nothing about whether the traffic hitting it is actually being served —
-a saturated pool, a misbehaving relay, or a bad ACL can drown a server in
-NAKs or drops while every existing check still reports green. Each
-snapshot pass now also records every server's `pkt4-*`/`v4-allocation-
-fail*`/`v4-lease-reuses` counters from `statistic-get-all` (migration 26,
-`server_stats`); a pure `jen/services/packet_health.py` turns two or more
-snapshots into deltas (restart-aware — a counter that drops between
-snapshots means Kea restarted, not a negative rate), per-minute rates
-over a trailing window, and a verdict: warn when drops and parse
-failures exceed 1% of received traffic or any allocation failure
-occurred, fail when NAKs exceed 10% of ACKs or drops exceed 10%, and a
-distinct "no traffic" reading (informational, not a fault) for a
-hot-standby peer that legitimately sees nothing. The Servers page shows
-each server's verdict, a received-packets sparkline, and a collapsed
-all-counters table — so a Kea 3.2 server's new drop-reason counters
-(verified against ISC's own ARM, since no 3.2 box was available to
-capture live) show up without Jen needing to know their names in
-advance. Health Center gained a `packet_health` check (skipped until a
-server has two snapshots), a new `packet_health`/`packet_health_ok` alert
-pair fires once per transition, and `GET /api/v1/servers` is a new
-endpoint carrying HA state and `packet_health` alongside it.
-
-## [5.40.0-beta.1] - 2026-09-15
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.39.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q41, the Configuration Doctor: `kea-dhcp4 -t` catches syntax and type
-errors, but has nothing to say about a config that's valid and still
-wrong — two overlapping pools, a reservation filed under a subnet it
-doesn't belong to, a client class nothing ever attaches, a pool whose
-guard can never be satisfied at the same time as its subnet's. Network
-→ Doctor (`/tools/doctor`) runs sixteen such checks against the live
-config and explains each finding rather than just naming it — pools
-overlapping or extending past their subnet, reservations outside their
-subnet or colliding with each other, unreferenced or unreachable
-client classes, a `member()` that points at nothing, lease timers out
-of order or oddly short or long, a global option every subnet
-overrides, shared-network members that disagree with each other, HA
-peers whose configuration doesn't match, and the same removed/renamed
-config keys the Health Center's Kea 3.2 readiness group already
-watches for. The checks that reason about class expressions reuse the
-Explain page's own parser rather than a second implementation, so what
-this page can and can't prove about a class always matches what
-Explain can. Health Center gained one new check, Configuration Doctor,
-summarizing the same findings with a link to the full page.
-
-## [5.39.0-beta.1] - 2026-09-15
-
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 through
-5.38.0-beta.1 chain — stable stays at v5.32.0 until the maintainer
-promotes.
-
-Q39, the first hour: a new admin or superadmin lands on `/getting-started`,
-which turns the Health Center's own check engine plus a handful of cheap
-settings reads (MFA enrollment, alert channels, backups, HA server count)
-into a ten-row checklist with a fix link on anything undone. A small pill
-in the top nav points at the page until every row is done or a superadmin
-dismisses it; the pill's count is cached for five minutes per process so
-it never adds a Kea round trip to a page load that doesn't need one, while
-the page itself always recomputes fresh. Two rows — HTTPS and MFA — only
-show for a superadmin, since a plain admin has no way to act on either.
-
-Several list pages that used to render a bare empty table now explain
-what they're waiting for and offer the obvious next step: Leases points
-at Health when nothing's there to check whether that's expected, Devices
-explains the inventory fills itself from leases, Reservations offers to
-add one, and Subnets offers to add a subnet or import one from Windows or
-ISC DHCP. The shared markup lives in `templates/_empty.html` so every one
-of these looks and behaves the same way.
-
-The admin guide gained a "Runbooks" section near the top — one link per
-procedure (install, first login, add the HA partner, direct sockets,
-rotate the Kea CA, planned maintenance, upgrading Kea, migrating from
-Windows or ISC DHCP, restoring from a backup, getting help) so a lost
-admin has one place to start instead of scrolling a 1,700-line document.
-Settings → System gained a "Report an issue" button next to the support
-bundle download, which opens a new GitHub issue with the running version
-pre-filled in the title.
-
-## [5.38.0-beta.1] - 2026-09-15
-
-*Beta channel. Stacked on the unpromoted 5.37.0-beta.1 and everything
-below it back to 5.32.1-beta.1. This completes the Q list; the whole
-stack is ready for promotion.*
-
-### Planned maintenance, guided
-
-5.32.1-beta.1 fixed the words on the HA maintenance buttons: Kea's
-`ha-maintenance-start` goes to the server that *keeps serving*, and it
-is the partner that goes quiet. The words were right; the operator
-still had to remember them at two in the morning. **Servers → Planned
-maintenance** (superadmin, with a password confirmation) is the same
-two commands as a stepper that cannot be pointed the wrong way.
-
-Pick the server to take down. Jen reads both servers' HA configs and
-finds the partner — the Jen server whose `this-server-name` is the one
-other peer the first server lists — and stops if that partner is not a
-server it knows. Preflight runs the Health checks that matter for a
-handover (both reachable, HA healthy, clocks in sync, subnet map not
-drifted, snapshots current); a fail blocks, a warn is shown. Start
-handover sends `ha-maintenance-start` to the partner and polls both
-every five seconds until Kea reports `partner-in-maintenance` on one
-side and `in-maintenance` on the other — or, after sixty seconds, says
-which side did not move. Then the page tells you the node is out of
-service, lists what to do on it, offers Cancel only while Kea can
-still honour it (once the node is actually down the partner is
-`partner-down` and the page says cancel no longer applies), and waits,
-when you click Back, for both to report normal again. Kea negotiates
-and syncs leases on its own; with a shared lease database the page
-says there is nothing to sync instead of pretending to watch for it.
-One click repeats the whole thing for the other node. State lives in
-your session, every transition is audited against both server names,
-and `GET /servers/ha/<id>/status.json` returns a server's normalised
-HA status for anything that wants to script around it.
-
-### Kea 3.2 readiness
-
-Kea 3.2 removes the Control Agent. The Health Center's existing *Kea
-version supported* check reports the status of what is running; a new
-**Kea 3.2 readiness** group at the bottom of the page reports the
-plan. Five checks, all read-only, all `skip` where an install has
-nothing to look at (a single Docker box with no helper, no HA and no
-DDNS skips most of them): the control transport (Control Agent mode
-fails once any server is on 3.0 and warns below that with the exact
-next step; direct mode warns for any server or daemon still without
-its own socket URL), the Kea host helper version, config keys Kea has
-removed or renamed — `require-client-classes`, `only-if-required`, the
-singular `client-class`, `reservation-mode`, and the DDNS parameters
-that moved out of the `dhcp-ddns` block — each named with its path and
-replacement, HA peers on matching Kea minors, and D2 answering on its
-own socket. Settings → Kea's servers card carries the same result as
-one line: *Ready for Kea 3.2* or *N action(s) before upgrading*. The
-admin guide's Health Center section gained "Upgrading Kea", the order
-to work through those actions in.
-
-## [5.37.0-beta.1] - 2026-09-15
-
-*Beta channel. Stacked on the unpromoted 5.36.0-beta.1 and everything
-below it back to 5.32.1-beta.1.*
-
-### Import from ISC DHCP (dhcpd.conf)
-
-Since 5.24.0 a Windows DHCP server could be brought into Kea through a
-review → preview → apply wizard. The other server people migrate from
-is ISC dhcpd, and its `dhcpd.conf` is a very different thing from an
-XML export: a free-form configuration language with nesting, inheritance,
-classes with expressions, and thirty years of directives. **Subnets →
-Import from ISC DHCP** reads one and runs it through the same wizard.
-
-**One wizard, two sources.** `jen/services/isc_dhcp_import.py` parses a
-dhcpd.conf into the exact `Plan` the Windows importer produces, so the
-review page, the `kea-dhcp4 -t` preview with its diff, the guarded apply
-and the 30-minute reservation retry are the same code, now registered
-under `/subnets/import-isc/…` as well and worded for whichever source
-the plan came from. The Windows importer gained three additive fields
-for this (pre-built class rules, `next-server`/`filename`, global
-classes) and none of its behaviour changed.
-
-**What the parser understands.** A hand-written tokenizer (`#` comments,
-quoted strings that may contain `;`) and a generic statement tree with
-line numbers, interpreted for the subset of dhcpd Jen can express in
-Kea: global options and `default-lease-time` (inherited down through
-`shared-network` and `group` the way dhcpd inherits them), `subnet …
-netmask …` with any number of `range`s (each a pool; adjacent ones
-merged), `shared-network` (a Kea shared network), `host` reservations
-by `hardware ethernet` + `fixed-address` — placed by address when
-declared outside a subnet, carrying the options of an enclosing
-`group` — and `class "C" { match if … }` for every form Jen's own class
-builder can express: equality or `substring(…, 0, n)` prefix on the
-vendor class, user class and hostname, `hardware` MAC and OUI, client
-id, relay circuit/remote id, joined by `and` or `or` and optionally
-negated. A pool's `allow members of "C"` guards that pool with C;
-`deny members of "C"` guards it with a generated `not_C` class; several
-allows become an `A_or_B` class. `next-server` and `filename` land on
-Kea's own subnet fields, and dhcpd's decimal-byte
-`rfc3442-classless-static-routes` decodes into option 121. The comment
-above a `subnet` becomes its name.
-
-**What it refuses, and how it says so.** Every directive outside that
-subset — option definitions and spaces, `include`, `failover peer`,
-`if`/`elsif`/`else`, `subclass`, `spawn with`, regex matches, OMAPI,
-DDNS keys and zones, pool-level options, `deny unknown-clients`,
-`max-lease-time`, hosts without a MAC or with a hostname for an
-address, `deny booting`, per-host `filename` — is one warning on the
-review page carrying its source line number. Nothing is silently
-dropped, nothing raises on a malformed file, and server tuning knobs
-with no Kea meaning collapse into a single summary line.
-
-**Leases are counted, never imported.** Upload `dhcpd.leases` alongside
-the config and the review page says how many active leases sit inside
-the ranges being imported and how many are on addresses that become
-reservations. Kea starts with an empty lease database; the admin guide
-explains what that means for clients at cutover and how to make it a
-non-event.
-
-## [5.36.0-beta.1] - 2026-09-15
-
-*Beta channel. Stacked on the unpromoted 5.35.0-beta.1, 5.34.0-beta.2,
-5.33.0-beta.1 and 5.32.1-beta.1.*
-
-### Where is this pool heading?
-
-Jen has taken a lease snapshot per subnet every half hour since 4.x and
-charted it on Reports, and it has warned when utilization crossed a
-threshold. What it never did was look at the direction of the line.
-A /24 at 70 % that has been at 70 % for a year is fine; a /24 at 70 %
-that was at 40 % last month is a problem in three weeks. This release
-adds the forecast, and puts it in the four places an operator would
-look for it.
-
-**How it is computed** (`jen/services/capacity.py`, pure and tested
-without a database): the highest active-lease count of each day over
-the last 30 days of snapshots, a least-squares line through those
-daily peaks, and the day that line crosses 90 % and 100 % of the pool.
-It refuses to guess: fewer than 7 distinct days of snapshots is
-reported as *not enough history*, a crossing more than 365 days out is
-*beyond the horizon* rather than a date, a flat or falling trend shows
-no date at all, and only snapshots taken since the pool was last
-resized are fitted, because a peak against the old pool size says
-nothing about the new one.
-
-**Reports.** Each subnet card now ends with the 30-day high-water mark
-and the day it happened, the trend in leases per day, and — when
-rising — roughly when 90 % arrives, with the date. The line is amber
-within 30 days and red within 7. The chart draws the trend forward as
-a dashed *Projected (trend)* line from the last snapshot to the day
-the pool would fill, at most 30 days ahead.
-
-**Health Center.** A new *Pool exhaustion forecast* check in the
-capacity group: warn when any subnet reaches 90 % within 30 days, fail
-within 7, and `skip` (saying how many days of snapshots it has so far)
-until a subnet has a week of history. Subnet-restricted viewers see
-only their own subnets, as with the utilization check.
-
-**Alerts.** A new *Pool exhaustion forecast* alert type, off until you
-enable it on a channel, fires when a subnet's trend reaches 90 % within
-30 days — at most once per subnet every 7 days, so a slowly filling
-pool is a weekly reminder rather than a daily one. The existing
-utilization alert says where you are; this one says where you are
-heading.
-
-**API.** `GET /api/v1/subnets` rows gain `peak_30d`, `trend_per_day`,
-`days_to_90pct` and `forecast` (`rising`, `flat`, `falling`,
-`insufficient`, `no-pool`), documented in the OpenAPI spec.
-
-## [5.35.0-beta.1] - 2026-09-15
-
-*Beta channel. Stacked on the unpromoted 5.34.0-beta.2, 5.33.0-beta.1
-and 5.32.1-beta.1.*
-
-### "Why did this client get this?"
-
-Plenty of tools show a DHCP configuration. Far fewer can take one
-client and say which subnet it lands in, whether a reservation caught
-it, which classes matched and why, which pools it may draw from, what
-address it gets, and where every option in the reply came from. That
-is what **Network → Explain** does, and what the new *Why this
-address?* item in every lease and reservation row's menu opens with
-the client filled in.
-
-Give it a MAC — and, if you have them, the vendor class (option 60),
-user class (77), hostname (12), client id (61), relay circuit and
-remote ids, or the relay's giaddr — and Jen walks Kea's decision in
-order: subnet selection (a giaddr is checked against the subnet's
-relay addresses and range), reservation by MAC or client id in the
-subnet or globally where the subnet allows it (which decides KNOWN /
-UNKNOWN), every client class in config order, subnet guards across a
-shared network, pool guards, and then the answer — the reserved
-address, else the current lease renewed, else the first pool whose
-guards are satisfied — with the reply's options merged reservation >
-pool > subnet > shared network > class > global, each one naming its
-source and what it overrode, and the lease lifetime with its source.
-
-**What it evaluates, and what it refuses to guess.** Kea has no
-dry-run command, so Jen evaluates class expressions itself — but only
-the grammar its own rule builder writes: equality against a string or
-hex literal, `substring(…,0,n)` prefixes, `member()`, `and` / `or` /
-`not`, over the option-60/77/12/61, MAC, OUI and relay-id accessors.
-The parser is round-tripped against the builder's output in the
-tests. A class written as a raw expression outside that grammar
-(`ifelse`, `concat`, vendor options, `pkt4.transid`, …) is reported
-as *not evaluable* and shown verbatim; a class whose input you didn't
-supply is *undecided* and the page names the input that would settle
-it. The answer states that it assumes those classes did not match.
-`only-in-additional-list` classes are evaluated only where the
-selected subnet, its pools, its shared network or the matched
-reservation lists them, exactly as Kea does. Subnet selection is the
-operator's or the lease's subnet: Kea's real choice depends on the
-receiving interface, which Jen cannot see, and the page says so.
-
-Subnet-restricted users can only explain subnets they can access — the
-decision reveals a subnet's pools and options. Nothing is sent to Kea
-beyond the cached `config-get` and reads of the host and lease tables.
-
-## [5.34.0-beta.2] - 2026-09-15
-
-### The bundled plugins move onto the surface
-
-IPAM Lite v1.5.1 and Network Discovery v1.1.1 import only
-`jen.plugin_api` and declare `"plugin_api": 1`; both require Jen
-5.34.0 (a 5.34.0 beta counts). The registry pins those releases and the
-bundled copies are resynced from their tags. With that, the transitional
-allowance in `tests/test_plugin_api.py` is gone: a bundled plugin that
-imports anything inside `jen` other than the surface fails CI.
-
-A box on the **stable** channel (5.32.0) will see these plugin versions
-offered on the Plugins page and refused with the usual "requires Jen
-5.34.0" message until it upgrades — the registry is fetched live and is
-not channel-aware. That is the existing behaviour for any plugin whose
-`requires_jen` runs ahead of the install.
-
-## [5.34.0-beta.1] - 2026-09-15
-
-*Beta channel. Stacked on the unpromoted 5.33.0-beta.1 (support
-bundle) and 5.32.1-beta.1 (HA maintenance wording).*
-
-### One import surface for plugins — `jen.plugin_api`
-
-Both bundled plugins reached into Jen's internals — the database
-module, the access service, the alert sender, the fingerprinter — and
-every rename inside Jen was a silent plugin break waiting to happen.
-`jen.plugin_api` is now the one module a plugin imports from: a thin,
-versioned re-export (`PLUGIN_API_VERSION = 1`) of exactly what plugins
-have needed so far — database context managers, audit and settings,
-the access checks and decorators, `subnet_map()` and the subnet
-context, alerts, periodic jobs, the CSV guard, device fingerprinting,
-plugin introspection. Nothing new lives behind it and importing it does
-no work. Adding a name is a MINOR Jen release; removing one or changing
-a signature moves the version and is a MAJOR. A manifest may declare
-`"plugin_api": N`, and Jen refuses to load a plugin written against a
-newer surface than it offers — the Plugins page says *needs plugin API
-vN* instead of the plugin dying with an ImportError at boot. A test
-pins that the bundled copies import only the surface (a short
-transitional list of internals is tolerated until IPAM Lite 1.5.1 and
-Network Discovery 1.1.1, the plugin releases that move over) and that
-everything they use is offered by it. `plugins/README.md` documents
-the surface.
-
-### API v1 writes, behind a per-key flag
-
-The REST API was read-only. It gains writes for exactly the things that
-are Jen's own tables or Kea's host database — never anything that edits
-a Kea configuration file, which needs the changeset engine and a human
-preview:
-
-- `POST /api/v1/reservations` and `DELETE /api/v1/reservations/{host_id}`
-  through Kea's `host_cmds` hook, the same path the Reservations page
-  uses; a Kea refusal (duplicate address, unknown subnet) comes back as
-  `502` with Kea's own message.
-- `PATCH /api/v1/devices/{mac}` — name, owner, notes; any subset, `null`
-  clears.
-- `POST /api/v1/subnets/{id}/notes`.
-
-Write access is per key and **off by default**: tick *Allow writes* when
-creating a key (migration 25 adds the flag; every key that existed
-before stays read-only and gets `403` on a write). Writes honour the
-key's subnet scope exactly as reads do, are limited to 60 a minute per
-key, and are audited with the key's name as the actor — an API request
-has no signed-in user. The API Keys page shows read-only or read/write
-per key.
-
-### OpenAPI
-
-`GET /api/v1/openapi.json` (no auth, like `/api/v1/health`) describes
-the whole surface as an OpenAPI 3.0 document generated from one Python
-dict — no new dependency, nothing introspected from Flask. A test
-walks the app's URL map and fails when a `/api/v1/` route and the
-document disagree in either direction, so the document can't drift.
-The API Docs page links it and documents the write endpoints.
-
-## [5.33.0-beta.1] - 2026-09-14
-
-*Beta channel. Carries the unpromoted 5.32.1-beta.1 (HA maintenance
-wording) beneath it.*
-
-### Support bundle: one zip instead of a description
-
-As Jen gets users beyond its maintainer, "the dashboard doesn't work"
-has to arrive as an attachment. Settings → System gains a **Support
-bundle** card; a superadmin (with a password confirmation, since the
-result describes the whole topology) clicks **Download** and gets
-`jen-support-<host>-<date>.zip`:
-
-- `jen.json` — version and channel, Python, serving mode, paths,
-  whether it's Docker, ports, proxy trust, Kea connection mode.
-- `config.ini.redacted` — `jen.config` with every secret value masked.
-  A key that names a *path* to a secret (`key_path`, `api_client_key`)
-  keeps its value: the path is diagnostic, the file is never opened.
-- `servers.json` — each Kea server's URLs, SSH target, recorded helper
-  version and the mTLS server-cert copies Jen holds.
-- `health.json`, `drift.json` — the Health Center run and subnet-map
-  drift, exactly as the pages show them.
-- `kea/<server>-<daemon>.json` — the *latest* config revision per
-  server and daemon, through the same redaction the config-history
-  page uses (control-socket credentials, database passwords, HA peer
-  passwords all masked). The revision history itself is not included.
-- `plugins.json`, `db.json` — installed plugins and their state;
-  schema versions, plugin migrations, row counts, the database
-  server's version string.
-- `audit-tail.json`, `alerts-tail.json`, `lease-history-7d.json` —
-  recent rows and a per-subnet utilization summary.
-- `logs/jen.log.tail` — the last 2,000 lines of the Jen log with
-  bearer tokens, passwords, and long hex or base64 runs scrubbed, or
-  a note telling you which `journalctl` line to attach when Jen logs
-  to journald.
-
-Nothing is stored on the server; the archive is built in memory and
-sent to the browser. A 20 MB cap drops the log and audit tails first
-and says so in the bundle's `README.txt`, as does every section that
-couldn't be collected — a failing Health check or an undecryptable
-revision becomes a line in the README, never a missing bundle.
-
-**The redaction is a test, not a promise.** `tests/test_support_bundle.py`
-seeds every secret-bearing input the bundle reads — both database
-passwords, the Kea API password, the OIDC client secret, the metrics
-token, a Kea basic-auth password and a hosts-database password and an
-HA peer password inside a config revision, a bearer token and a
-password and an API key in log lines — builds the archive from that
-raw data, unzips it, and asserts no sentinel appears in any member. A
-second test proves the collectors never open the private key the
-config points at. The member list is pinned too, so a table dump can't
-sneak in unnoticed.
-
-The troubleshooting guide now opens with "attach a support bundle".
-
-## [5.32.1-beta.1] - 2026-09-14
-
-*The first release through the beta channel. Set Settings → System →
-Updates to Beta to be offered it; stable boxes see nothing until it is
-promoted.*
-
-### The HA "Start Maintenance" button pointed the wrong way
-
-Found while writing up the planned HA maintenance flow (Q37), and
-confirmed against ISC's own HA hook documentation: Kea's
-`ha-maintenance-start` command is sent to the server that will **keep
-serving**. That server tells its partner to enter `in-maintenance` and
-takes over every scope itself. Jen's button, its confirmation text and
-the admin guide have said the opposite since v5.21.0 — that clicking
-on a server took *that* server down. An operator following the words
-would click the node they meant to patch and leave it answering all
-DHCP traffic while the healthy node went quiet.
-
-The command was always sent to the clicked server, which is the
-correct Kea semantics; only the words were wrong, so this is a wording
-fix with no change to what the route does. The button now reads **Take
-over for &lt;partner&gt;**, the confirmation names both servers and
-says which one goes quiet, the cancel button is **Cancel Handover**
-with help that says it only applies while the clicked server is still
-`partner-in-maintenance`, and the admin guide's HA section spells out
-the sequence: click on the node that stays, wait for the partner to
-show `in-maintenance`, shut the partner down, and let Kea
-re-synchronise on its own when it returns.
+- A Playwright suite of browser journeys (login, MFA and passkeys, subnet and
+  class editing, both import wizards, HA maintenance, API keys, support bundle,
+  Health, Doctor, Timeline, Trace, Reconcile, Getting started), and a weekly
+  real-Kea workflow that runs Jen's client against Kea 3.0.3, 3.2.0 and 3.3.1.
 
 ## [5.32.0] - 2026-09-14
 
