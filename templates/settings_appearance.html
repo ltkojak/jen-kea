@@ -15,7 +15,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("palette") }} Branding</span>
     </div>
-    <p style="color:var(--text-muted);font-size:12px;margin-bottom:20px;">
+    <p class="u-abf201">
         Upload a logo image to replace the "Jen" text in the nav bar, and optionally set a custom nav bar color to distinguish environments.
     </p>
     <div class="form-row">
@@ -24,14 +24,14 @@
             {% if branding.nav_logo %}
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
                 <img src="{{ branding.nav_logo }}" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
-                <form method="POST" action="/settings/remove-nav-logo" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <form method="POST" action="/settings/remove-nav-logo" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn-act btn-act-del" data-confirm="Remove logo?">{{ icon_trash() }}</button>
                 </form>
             </div>
             {% endif %}
             <form method="POST" action="/settings/upload-nav-logo" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" style="flex:1;">
+                <div class="u-01ef7f">
+                    <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp" class="u-97445a">
                     <button type="submit" class="btn btn-primary btn-sm">{{ icon("upload") }} Upload</button>
                 </div>
                 <div class="form-hint">PNG, SVG, JPG, or WebP — max 200KB. SVGs with scripts or event handlers are refused. Recommended height: 28–36px.</div>
@@ -42,12 +42,12 @@
             <form method="POST" action="/settings/save-nav-color"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                     <input type="color" name="nav_color" value="{{ branding.nav_color or '#141414' }}" style="width:48px;height:36px;padding:2px;cursor:pointer;">
-                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" style="flex:1;">
+                    <input type="text" name="nav_color_hex" value="{{ branding.nav_color or '' }}" placeholder="#141414 or leave blank for default" class="u-97445a">
                     <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save</button>
                 </div>
                 <div class="form-hint">Useful for distinguishing prod vs dev environments. Leave blank for default.</div>
             </form>
-            <form method="POST" action="/settings/save-nav-color" style="margin-top:8px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <form method="POST" action="/settings/save-nav-color" class="u-8a77e5"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="nav_color" value="">
                 <input type="hidden" name="nav_color_hex" value="">
                 <button type="submit" class="btn btn-sm btn-secondary" {% if not branding.nav_color %}disabled style="opacity:0.4;cursor:not-allowed;"{% endif %}>↺ Reset to Default</button>
@@ -65,7 +65,7 @@
     {% if has_favicon %}
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
         <img src="/favicon.ico" style="width:32px;height:32px;border-radius:4px;background:var(--surface2);padding:2px;">
-        <form method="POST" action="/settings/remove-favicon" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="POST" action="/settings/remove-favicon" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-danger btn-sm">Remove</button>
         </form>
     </div>
@@ -83,13 +83,13 @@
 <!-- Brand icons -->
 <div class="card" id="app-icons">
     <div class="card-header"><span class="card-title">{{ icon("tag") }} Brand Icons</span>
-        <span style="font-size:12px;color:var(--text-muted);">Used in the Device Inventory</span>
+        <span class="u-865c33">Used in the Device Inventory</span>
     </div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+    <p class="u-503124">
         Upload an SVG to override a bundled icon or add a new manufacturer. The icon name must match a key in the
-        manufacturer map (e.g. <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">amazon</code>,
-        <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">apple</code>,
-        <code style="background:var(--surface2);padding:1px 6px;border-radius:3px;">mydevice</code>).
+        manufacturer map (e.g. <code class="u-db4728">amazon</code>,
+        <code class="u-db4728">apple</code>,
+        <code class="u-db4728">mydevice</code>).
         Custom icons take priority over bundled ones. SVG only, max 100KB, no scripts or event handlers.
     </p>
     <form method="POST" action="/settings/icons/upload" enctype="multipart/form-data"
@@ -98,7 +98,7 @@
             <label>Icon Name</label>
             <input type="text" name="icon_name" placeholder="e.g. amazon, mydevice" maxlength="50" required>
         </div>
-        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+        <div class="form-group u-9e0402">
             <label>SVG File</label>
             <input type="file" name="icon" accept=".svg" required>
         </div>
@@ -113,9 +113,9 @@
                     background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);
                     padding:12px 16px;min-width:100px;">
             <img src="/content/icons/{{ icon.file }}" alt="{{ icon.name }}"
-                 style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
-            <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
-            <form method="POST" action="/settings/icons/delete/{{ icon.name }}" style="margin:0;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                 class="u-17bb92">
+            <span class="u-749148">{{ icon.name }}</span>
+            <form method="POST" action="/settings/icons/delete/{{ icon.name }}" class="u-116966"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del"
                         data-confirm="Delete custom icon {{ icon.name }}?">{{ icon_trash() }} Remove</button>
             </form>
@@ -139,8 +139,8 @@
                               padding:1px 5px;border-radius:3px;">overridden</span>
                 {% endif %}
                 <img src="/static/icons/brands/{{ icon.file }}" alt="{{ icon.name }}"
-                     style="width:32px;height:32px;object-fit:contain;filter:brightness(0) invert(0.8);">
-                <span style="font-size:11px;color:var(--text-muted);">{{ icon.name }}</span>
+                     class="u-17bb92">
+                <span class="u-749148">{{ icon.name }}</span>
             </div>
             {% endfor %}
         </div>

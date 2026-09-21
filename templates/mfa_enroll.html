@@ -16,10 +16,10 @@
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("circle-check") }} Enrolled Methods</span></div>
     {% for m in totp_methods %}
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+    <div class="u-f8809e">
         <div>
             <strong>{{ icon("hash") }} {{ m.name }}</strong>
-            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ m.created_at|utcdate if m.created_at else '' }} · Last used {{ m.last_used|utcdate if m.last_used else 'never' }}</div>
+            <div class="u-865c33">Enrolled {{ m.created_at|utcdate if m.created_at else '' }} · Last used {{ m.last_used|utcdate if m.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_totp"><input type="hidden" name="mfa_id" value="{{ m.id }}">
             <button type="submit" class="btn btn-sm btn-danger" data-confirm="Remove this authenticator?">Remove</button>
@@ -27,10 +27,10 @@
     </div>
     {% endfor %}
     {% for p in passkeys %}
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);">
+    <div class="u-f8809e">
         <div>
             <strong>{{ icon("key-round") }} {{ p.name }}</strong>
-            <div style="font-size:12px;color:var(--text-muted);">Enrolled {{ p.created_at|utcdate if p.created_at else '' }} · Last used {{ p.last_used|utcdate if p.last_used else 'never' }}</div>
+            <div class="u-865c33">Enrolled {{ p.created_at|utcdate if p.created_at else '' }} · Last used {{ p.last_used|utcdate if p.last_used else 'never' }}</div>
         </div>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_passkey"><input type="hidden" name="cred_id" value="{{ p.id }}">
             <button type="submit" class="btn btn-sm btn-danger" data-confirm="Remove this passkey?">Remove</button>
@@ -42,7 +42,7 @@
         {% if backup_count > 0 %}
         <span style="font-size:13px;color:var(--text-muted);align-self:center;">{{ backup_count }} backup codes remaining</span>
         {% endif %}
-        <form method="POST" action="/mfa/regenerate-backup-codes" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="POST" action="/mfa/regenerate-backup-codes" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary btn-sm" data-confirm="Regenerate backup codes? Your old codes will be invalidated.">{{ icon("refresh-cw") }} New Backup Codes</button>
         </form>
     </div>
@@ -52,15 +52,15 @@
 <!-- Enroll TOTP -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("hash") }} Enroll Authenticator App (TOTP)</span></div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">Works with Google Authenticator, Authy, 1Password, Bitwarden, and any TOTP app.</p>
+    <p class="u-42b3ef">Works with Google Authenticator, Authy, 1Password, Bitwarden, and any TOTP app.</p>
     <div style="display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start;">
         <div>
             <img src="data:image/png;base64,{{ qr_b64 }}" style="border:8px solid white;border-radius:4px;width:180px;height:180px;">
             <div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:6px;">Scan with your app</div>
         </div>
         <div>
-            <div style="margin-bottom:12px;">
-                <div class="stat-label" style="margin-bottom:4px;">Or enter manually:</div>
+            <div class="u-da12f2">
+                <div class="stat-label u-c81ce4">Or enter manually:</div>
                 <div class="mono" style="background:var(--surface2);padding:8px 12px;border-radius:var(--radius);font-size:13px;border:1px solid var(--border);word-break:break-all;">{{ secret }}</div>
             </div>
             <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -68,7 +68,7 @@
                 <input type="hidden" name="secret" value="{{ secret }}">
                 <div class="form-group">
                     <label>Device Name (optional)</label>
-                    <input type="text" name="device_name" placeholder="Work Phone, Home Authenticator..." style="margin-bottom:8px;">
+                    <input type="text" name="device_name" placeholder="Work Phone, Home Authenticator..." class="u-fdf33f">
                 </div>
                 <div class="form-group">
                     <label>Verification Code</label>
@@ -84,12 +84,12 @@
 <!-- Enroll a passkey (v5.31.0) -->
 <div class="card" id="passkey-card">
     <div class="card-header"><span class="card-title">{{ icon("fingerprint-pattern") }} Add a Passkey</span></div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">A passkey is a second factor stored on this device or in your password manager — Windows Hello, Touch ID / iCloud Keychain, Android, 1Password, Bitwarden, Keeper, or a hardware key such as a YubiKey. You confirm it with a fingerprint, face, PIN, or touch instead of typing a code.</p>
+    <p class="u-ec76a1">A passkey is a second factor stored on this device or in your password manager — Windows Hello, Touch ID / iCloud Keychain, Android, 1Password, Bitwarden, Keeper, or a hardware key such as a YubiKey. You confirm it with a fingerprint, face, PIN, or touch instead of typing a code.</p>
     <div id="passkey-unsupported" class="alert alert-warning" style="display:none;">
         This browser can't create a passkey here. Passkeys need a browser with WebAuthn support <em>and</em> a secure page — https, or http on localhost. If you reached Jen over plain http on a LAN address, set up HTTPS under Settings → Security first.
     </div>
-    <div id="passkey-form" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
-        <div class="form-group" style="margin:0;">
+    <div id="passkey-form" class="u-82d601">
+        <div class="form-group u-116966">
             <label>Passkey name (optional)</label>
             <input type="text" id="passkey-name" maxlength="100" placeholder="Work laptop, YubiKey 5C…" style="min-width:220px;">
         </div>

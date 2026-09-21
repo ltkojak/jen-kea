@@ -6,10 +6,10 @@
     <p>Account settings and security for {{ current_user.username }}</p>
 </div>
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+<div class="u-911b26">
 
 <!-- Avatar Upload -->
-<div class="card" style="margin-bottom:16px;">
+<div class="card u-87c136">
     <div class="card-header"><span class="card-title">{{ icon("image") }} Profile Picture</span></div>
     <div style="display:flex;align-items:center;gap:24px;padding:8px 0;">
         <div id="avatar-preview" style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,#0077b6,#00b4d8);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;overflow:hidden;flex-shrink:0;">
@@ -19,12 +19,12 @@
             {{ current_user.username[0].upper() }}
             {% endif %}
         </div>
-        <div style="flex:1;">
-            <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">Upload a profile picture (JPG, PNG, GIF, WebP — max 200KB). It will appear in the nav bar.</p>
+        <div class="u-97445a">
+            <p class="u-6d6af6">Upload a profile picture (JPG, PNG, GIF, WebP — max 200KB). It will appear in the nav bar.</p>
             <form method="POST" action="/users/upload-avatar" id="avatar-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="avatar_data_url" id="avatar-data-input">
                 <input type="file" id="avatar-file-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none;">
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <div class="u-3de8f9">
                     <button type="button" class="btn btn-secondary" id="choose-image-btn">{{ icon("folder") }} Choose Image</button>
                     <button type="submit" id="avatar-save-btn" class="btn btn-primary" style="display:none;">{{ icon("save") }} Save Picture</button>
                     {% if current_user_avatar %}
@@ -73,29 +73,29 @@ if (removeAvatarBtn) {
 <!-- Account info -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("user") }} Account</span></div>
-    <table style="width:100%;">
-        <tr><td class="stat-label" style="width:140px;padding:8px 0;">Username</td>
+    <table class="u-046678">
+        <tr><td class="stat-label u-806d91">Username</td>
             <td><strong>{{ current_user.username }}</strong></td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Role</td>
+        <tr><td class="stat-label u-d8c022">Role</td>
             <td><span class="badge {% if current_user.role in ('superadmin','admin') %}badge-admin{% else %}badge-viewer{% endif %}">{{ current_user.role|title }}</span></td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Jen Version</td>
-            <td class="mono" style="font-size:12px;">v{{ jen_version }}</td></tr>
+        <tr><td class="stat-label u-d8c022">Jen Version</td>
+            <td class="mono u-6cb285">v{{ jen_version }}</td></tr>
     </table>
 </div>
 
 <!-- Security summary -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("lock") }} Security</span></div>
-    <table style="width:100%;">
-        <tr><td class="stat-label" style="width:140px;padding:8px 0;">MFA Status</td>
+    <table class="u-046678">
+        <tr><td class="stat-label u-806d91">MFA Status</td>
             <td>
                 {% if mfa_enrolled %}
                 <span class="badge badge-reserved">✓ Enrolled</span>
                 {% else %}
-                <span class="badge" style="background:#2a1a1a;color:var(--warning);">{{ icon("triangle-alert") }} Not enrolled</span>
+                <span class="badge u-fb2b30">{{ icon("triangle-alert") }} Not enrolled</span>
                 {% endif %}
             </td></tr>
-        <tr><td class="stat-label" style="padding:8px 0;">Trusted Devices</td>
+        <tr><td class="stat-label u-d8c022">Trusted Devices</td>
             <td>{{ device_count }} device{{ 's' if device_count != 1 else '' }}</td></tr>
     </table>
     <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;">

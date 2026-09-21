@@ -330,6 +330,19 @@
         .badge-duid { font-size: 10px; padding: 1px 6px; background: var(--surface2); color: var(--text-muted); }
         .filter-bar input.w-70 { width: 70px; min-width: 0; }
         @media (min-width: 769px) { .nw-d { white-space: nowrap; } }
+        /* ── accordion rows (v5.53.0, Q60): the alert message templates ── */
+        .al-tpl-tools { display: flex; gap: var(--sp-2); justify-content: flex-end; margin-bottom: var(--sp-2); }
+        .al-tpl-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+        .al-tpl { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); }
+        .al-tpl > summary { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--tap); padding: var(--sp-2) var(--sp-3); cursor: pointer; list-style: none; }
+        .al-tpl > summary::-webkit-details-marker { display: none; }
+        .al-tpl > summary::before { content: "\25B8"; color: var(--text-muted); flex: none; }
+        .al-tpl[open] > summary::before { content: "\25BE"; }
+        .al-tpl-label { font-size: var(--fs-sm); font-weight: 600; flex: none; }
+        .al-tpl-first { font-size: var(--fs-sm); color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .al-tpl-body { padding: 0 var(--sp-3) var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-2); }
+        .al-tpl-text { width: 100%; font-family: monospace; font-size: var(--fs-sm); resize: vertical; }
+        .al-tpl-actions { margin-top: var(--sp-2); }
 
         /* ── Bottom tab bar + sheets (v5.51.0, Q58) — phones only ── */
         .tabbar, .sheet, .sheet-backdrop { display: none; }
@@ -492,6 +505,13 @@
 
             /* select mode — checkboxes stay out of the way until asked for */
             .phone-only { display: revert; }
+            /* a row of buttons wraps instead of pushing the page wider than the phone */
+            *:has(> .btn) { flex-wrap: wrap; }
+            .changelog-body, .card code { overflow-wrap: anywhere; }
+            .card pre { overflow-x: auto; max-width: 100%; }
+            .al-tpl > summary { flex-wrap: wrap; row-gap: 0; }
+            .al-tpl-first { flex: 1 1 100%; }
+            .al-tpl-text { font-size: 16px; }
             .desk-only { display: none; }
             table.rowlist tbody td[data-m="full"] { order: 1; flex: 1 1 100%; font-size: var(--fs-md); color: var(--text); }
             .row-checkbox, #selectAll { display: none; }

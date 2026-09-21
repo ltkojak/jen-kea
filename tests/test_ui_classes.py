@@ -32,29 +32,7 @@ CSS = (ROOT / "static" / "css" / "ui-classes.css").read_text(encoding="utf-8").r
 MAP = json.loads((ROOT / "tools" / "inline_style_map.json").read_text(encoding="utf-8"))
 TEMPLATES = sorted((ROOT / "templates").glob("*.html"))
 CLASS_USE = re.compile(r"\bu-[0-9a-f]{6}\b")
-# Templates the next step converts (Q60 step 2: the Settings pages); empty once it lands.
-PENDING = {
-    "api_docs.html",
-    "api_keys.html",
-    "user_profile.html",
-    "users.html",
-    "settings_kea.html",
-    "settings_alerts.html",
-    "settings_system.html",
-    "settings_security.html",
-    "settings_appearance.html",
-    "database.html",
-    "database_migrate.html",
-    "database_import_confirm.html",
-    "plugins.html",
-    "logs.html",
-    "saved_searches.html",
-    "mfa_enroll.html",
-    "mfa_trusted_devices.html",
-    "mfa_backup_codes.html",
-    "reauth.html",
-    "logout_confirm.html",
-}
+PENDING: set[str] = set()  # templates a later step still has to convert (none: Q60 converted them all)
 
 
 def _all_template_text():

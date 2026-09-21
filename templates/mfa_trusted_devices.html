@@ -9,7 +9,7 @@
 <div class="card">
     {% if devices %}
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>Device</th>
             <th>Trusted Since</th>
@@ -20,15 +20,15 @@
         <tbody>
         {% for d in devices %}
         <tr>
-            <td title="{{ d.user_agent or '' }}">
+            <td data-m="primary" title="{{ d.user_agent or '' }}">
                 <strong>{{ d.device_name or 'Unknown Device' }}</strong>
-                {% if d.ip_address %}<br><small class="mono" style="color:var(--text-muted);">{{ d.ip_address }}</small>{% endif %}
+                {% if d.ip_address %}<br><small class="mono u-5872de">{{ d.ip_address }}</small>{% endif %}
             </td>
-            <td class="mono" style="font-size:12px;">{{ d.created_at|utcdate }}</td>
-            <td class="mono" style="font-size:12px;">{{ d.last_used|utcfmt }}</td>
-            <td style="color:var(--text-muted);font-size:12px;">{{ d.expires_at|utcdate if d.expires_at else 'Never' }}</td>
-            <td>
-                <form method="POST" action="/mfa/revoke-device/{{ d.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <td data-m="hide" class="mono u-6cb285">{{ d.created_at|utcdate }}</td>
+            <td data-m="secondary" class="mono u-6cb285">{{ d.last_used|utcfmt }}</td>
+            <td data-m="secondary" class="u-2bb516">{{ d.expires_at|utcdate if d.expires_at else 'Never' }}</td>
+            <td data-m="trailing">
+                <form method="POST" action="/mfa/revoke-device/{{ d.id }}" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-sm btn-danger" data-confirm="Revoke this trusted device?">Revoke</button>
                 </form>
             </td>
@@ -37,13 +37,13 @@
         </tbody>
     </table>
     </div>
-    <div style="margin-top:16px;">
+    <div class="u-1b0f49">
         <form method="POST" action="/mfa/revoke-all-devices" data-confirm="Revoke ALL trusted devices? You will need to complete MFA on every device next login."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-danger">Revoke All Trusted Devices</button>
         </form>
     </div>
     {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No trusted devices. When you log in with MFA and choose to remember the device, it will appear here.</div>
+    <div class="u-c92bea">No trusted devices. When you log in with MFA and choose to remember the device, it will appear here.</div>
     {% endif %}
 </div>
 

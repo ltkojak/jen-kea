@@ -30,8 +30,8 @@
     <div class="card-header">
         <span class="card-title">Create New API Key</span>
     </div>
-    <form method="POST" action="/settings/api-keys/create" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+    <form method="POST" action="/settings/api-keys/create" class="u-82d601"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group u-9e0402">
             <label>Key Name</label>
             <input type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
             <div class="form-hint">A descriptive name so you know what this key is used for.</div>
@@ -43,9 +43,9 @@
             </label>
             <div class="form-hint">Off = read-only (every key before v5.34.0). On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
         </div>
-        <div class="form-group" style="margin:0;flex:1;min-width:200px;">
+        <div class="form-group u-9e0402">
             <label>Subnet Access</label>
-            <select name="subnet_ids" multiple style="width:100%;min-height:90px;">
+            <select name="subnet_ids" multiple class="u-ff2ba4">
                 {% if can_grant_all_subnets %}
                 <option value="all" selected>All Subnets</option>
                 {% endif %}
@@ -61,7 +61,7 @@
                 {% endif %}
             </div>
         </div>
-        <button type="submit" class="btn btn-primary" style="margin-bottom:20px;">{{ icon("key-round") }} Generate Key</button>
+        <button type="submit" class="btn btn-primary u-49f14f">{{ icon("key-round") }} Generate Key</button>
     </form>
 </div>
 
@@ -72,7 +72,7 @@
     </div>
     {% if keys %}
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>Name</th>
             <th>Key Prefix</th>
@@ -86,31 +86,31 @@
         <tbody>
         {% for k in keys %}
         <tr>
-            <td><strong>{{ k.name }}</strong></td>
-            <td class="mono" style="color:var(--text-muted);">{{ k.key_prefix }}…</td>
-            <td style="font-size:12px;">
+            <td data-m="primary"><strong>{{ k.name }}</strong></td>
+            <td data-m="secondary" class="mono u-5872de">{{ k.key_prefix }}…</td>
+            <td data-m="hide" class="u-6cb285">
                 {% if k.subnet_names %}
                 {{ k.subnet_names | join(', ') }}
                 {% else %}
-                <span style="color:var(--text-muted);">All subnets</span>
+                <span class="u-5872de">All subnets</span>
                 {% endif %}
             </td>
-            <td style="font-size:12px;">
-                {% if k.can_write %}<span style="color:var(--warning);">{{ icon("pencil") }} read/write</span>{% else %}<span style="color:var(--text-muted);">read-only</span>{% endif %}
+            <td data-m="secondary" class="u-6cb285">
+                {% if k.can_write %}<span class="u-52df2b">{{ icon("pencil") }} read/write</span>{% else %}<span class="u-5872de">read-only</span>{% endif %}
             </td>
-            <td style="color:var(--text-muted);font-size:12px;">
+            <td data-m="hide" class="u-2bb516">
                 {{ k.created_at|utcdate }}
-                {% if k.created_by_name %}<span style="color:var(--text-muted);"> by {{ k.created_by_name }}</span>{% endif %}
+                {% if k.created_by_name %}<span class="u-5872de"> by {{ k.created_by_name }}</span>{% endif %}
             </td>
-            <td style="color:var(--text-muted);font-size:12px;">{{ k.last_used|utcfmt if k.last_used else 'Never' }}</td>
-            <td>
+            <td data-m="secondary" class="u-2bb516">{{ k.last_used|utcfmt if k.last_used else 'Never' }}</td>
+            <td data-m="badge">
                 {% if k.active %}
-                <span style="color:var(--success);font-size:12px;">● Active</span>
+                <span class="u-d5881b">● Active</span>
                 {% else %}
-                <span style="color:var(--text-muted);font-size:12px;">● Revoked</span>
+                <span class="u-2bb516">● Revoked</span>
                 {% endif %}
             </td>
-            <td style="display:flex;gap:6px;">
+            <td data-m="trailing" class="u-49cd09">
                 <div class="action-menu">
                     <input type="checkbox" id="am-key-{{ k.id }}" class="action-menu-toggle">
                     <label for="am-key-{{ k.id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
@@ -133,7 +133,7 @@
     </table>
     </div>
     {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No API keys yet. Create one above to get started.</div>
+    <div class="u-c92bea">No API keys yet. Create one above to get started.</div>
     {% endif %}
 </div>
 
@@ -141,7 +141,7 @@
     <div class="card-header"><span class="card-title">{{ icon("info") }} About API Keys</span></div>
     <p style="font-size:13px;color:var(--text-muted);line-height:1.6;">
         All API keys are <strong>read-only</strong> — they can query leases, devices, reservations, and subnet stats but cannot make any changes to your network.<br><br>
-        Keys are passed in the <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">Authorization: Bearer &lt;key&gt;</code> HTTP header.<br><br>
+        Keys are passed in the <code class="u-5f0ff9">Authorization: Bearer &lt;key&gt;</code> HTTP header.<br><br>
         A key is shown only once at creation time. If you lose it, revoke it and generate a new one.
         {% if current_user.role != 'superadmin' %}<br><br>
         You can see and manage only the API keys you've created yourself. A superadmin can see and manage every key.{% endif %}

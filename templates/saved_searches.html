@@ -8,9 +8,9 @@
 </div>
 
 {% if searches %}
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
 <div class="table-wrap">
-<table>
+<table class="rowlist">
     <thead><tr>
         <th>Name</th>
         <th>Page</th>
@@ -22,20 +22,20 @@
     {% from '_empty.html' import empty_state %}
     {% for s in searches %}
     <tr>
-        <td><strong>{{ s.name }}</strong></td>
-        <td><span class="badge badge-dynamic">{{ s.page }}</span></td>
-        <td class="mono hide-mobile" style="font-size:11px;color:var(--text-muted);">{{ s.params[:80] }}{% if s.params|length > 80 %}…{% endif %}</td>
-        <td style="color:var(--text-muted);font-size:12px;">{{ s.created_at|utcdate }}</td>
-        <td style="display:flex;gap:6px;">
+        <td data-m="primary"><strong>{{ s.name }}</strong></td>
+        <td data-m="badge"><span class="badge badge-dynamic">{{ s.page }}</span></td>
+        <td data-m="hide" class="mono hide-mobile u-749148">{{ s.params[:80] }}{% if s.params|length > 80 %}…{% endif %}</td>
+        <td data-m="secondary" class="u-2bb516">{{ s.created_at|utcdate }}</td>
+        <td data-m="trailing" class="u-49cd09">
             <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">{{ icon("play") }} Load</a>
-            <form method="POST" action="/saved-searches/delete/{{ s.id }}" style="display:inline;"
+            <form method="POST" action="/saved-searches/delete/{{ s.id }}" class="u-cccfa4"
                   data-confirm="Delete this saved filter?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-act btn-act-del" title="Delete">{{ icon_trash() }}</button>
             </form>
         </td>
     </tr>
     {% else %}
-    <tr><td colspan="5">
+    <tr><td data-m="full" colspan="5">
         {{ empty_state(icon('bookmark'), 'No saved searches yet — save a filter from any list page and it shows up here.', []) }}
     </td></tr>
     {% endfor %}

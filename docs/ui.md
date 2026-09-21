@@ -82,7 +82,7 @@ Tapping a row (anywhere that is not itself a control) opens the row's action men
 A cell whose text is empty or exactly "—" is dropped, so a row never shows
 "NOTES —". Rows are at least 56 px. The cell holding a `.row-checkbox` is
 recognised automatically. The older `table.mobile-cards` / `data-label` pattern
-still works and stays until Q59/Q60 have converted the pages that use it.
+is no longer used by any page (Q59 and Q60 converted them); the CSS remains for a plugin that still has it.
 `window.jenUi.enhance(root)` re-runs the cell classification; it already runs at
 load and after every htmx swap.
 
@@ -115,6 +115,14 @@ button `data-m="keep"` to keep it visible. A bar with no `.btn-primary`, and any
 `.chip-row` (and the Settings `.card-toc`) is one horizontally scrolling line with
 a fade at the right edge instead of a wrapping block.
 
+### Accordion rows
+
+A long list of small editors (the Settings → Alerts message templates) is a list of
+`<details class="al-tpl">`: the summary is the name plus the first line, closed by default,
+open shows the editor. Expand all and Collapse all sit above it. Keep the two forms
+(Save, Reset) as siblings — a form inside a form is dropped by the browser.
+
+
 ## Making a new page phone-ready
 
 1. Build it from the shared classes — `.card`, `.filter-bar`, `.action-bar`,
@@ -130,7 +138,7 @@ a fade at the right edge instead of a wrapping block.
 opens every page in its `PAGES` list at 390 × 844 (device scale 2, Chromium with
 `bypass_csp` because it must call `page.evaluate`; the journey tests keep the CSP on),
 and fails on a server error, on horizontal overflow
-(`scrollWidth > innerWidth + 1`), or on a tab-bar item or `.btn` outside a table
+(the page wider than the 390px device; a phone browser widens `innerWidth` to fit overflow, so it is measured against the constant), or on a tab-bar item or `.btn` outside a table
 shorter than 44 px. It also drives each pattern above against a small synthetic
 page, and repeats the page list at 1440 × 900 to prove the desktop is unchanged.
 
@@ -146,3 +154,16 @@ fixes them; it only shrinks.
 inline `style="` attributes across `templates/` and the size of the emoji
 scanner's allowlist. A change that lowers the first lowers `MAX_INLINE_STYLES` in
 the same commit (a second test fails until it does) and says so in the CHANGELOG.
+
+## The extracted inline styles
+
+`static/css/ui-classes.css` (linked from `base.html`) is generated: `tools/extract_inline_styles.py`
+moves a static `style="…"` that appears at least twice into a class `u-<hash of the declarations>`
+and records it in `tools/inline_style_map.json`. Each rule doubles its selector (`.u-x.u-x`) so it
+keeps the precedence the inline style had; a script-set inline style still wins. Left as inline on
+purpose: any style containing Jinja, `display:none` and `position:fixed` (scripts toggle those), and
+one-offs. A fixed multi-column grid collapses to one column on a phone. Run
+`py tools/extract_inline_styles.py templates/your_page.html` after building a page and
+`py tools/extract_inline_styles.py --check` to regenerate the CSS; `tests/test_ui_classes.py` fails on
+drift, on an unused or missing class, and when a template still has extractable styles.
+For new markup prefer the tokens and utilities above.

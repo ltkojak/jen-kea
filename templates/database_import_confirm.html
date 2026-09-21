@@ -8,7 +8,7 @@
 
 <!-- Big clear DB label -->
 <div class="card" style="border-left:6px solid {% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};margin-bottom:20px;">
-    <div style="display:flex;align-items:center;gap:12px;">
+    <div class="u-95fd83">
         <span style="font-size:32px;">{% if meta.database == 'jen' %}{{ icon("circle", "ico-dot ico-success") }}{% else %}{{ icon("circle", "ico-dot ico-warning") }}{% endif %}</span>
         <div>
             <div style="font-size:18px;font-weight:700;color:{% if meta.database == 'jen' %}var(--primary){% else %}var(--warning){% endif %};">
@@ -23,13 +23,13 @@
 
 <!-- Schema version check -->
 {% if meta.jen_export_version and meta.jen_export_version > 1 %}
-<div class="alert alert-danger" style="margin-bottom:16px;">
+<div class="alert alert-danger u-87c136">
     {{ icon("triangle-alert") }} This export was created with a newer schema version ({{ meta.jen_export_version }}). Importing may cause data issues. Upgrade Jen before importing.
 </div>
 {% endif %}
 
 <!-- Contents -->
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><h3>File Contents</h3></div>
     <table class="table">
         <thead><tr><th>Table</th><th>Rows</th><th>Description</th></tr></thead>
@@ -38,7 +38,7 @@
         <tr>
             <td><code>{{ tbl }}</code></td>
             <td>{{ count }}</td>
-            <td style="font-size:12px;color:var(--text-muted);">
+            <td class="u-865c33">
                 {% if meta.database == 'jen' %}
                 {{ jen_tables.get(tbl, '') }}
                 {% else %}
@@ -59,13 +59,13 @@
 
     {% if meta.database == 'jen' %}
     <!-- Jen options -->
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card u-87c136">
         <div class="card-header"><h3>{{ icon("circle", "ico-dot ico-success") }} Jen Import Options</h3></div>
         <div class="form-group">
-            <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Tables to Restore</label>
-            <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+            <label class="u-b9037b">Tables to Restore</label>
+            <div class="u-fdc279">
                 {% for tbl in data_summary %}
-                <label style="font-size:12px;cursor:pointer;">
+                <label class="u-dbfa94">
                     <input type="checkbox" name="tables" value="{{ tbl }}" checked>
                     <code>{{ tbl }}</code>
                     {% if tbl == 'users' %}<span style="color:var(--danger);font-size:10px;"> {{ icon("triangle-alert") }} will overwrite accounts</span>{% endif %}
@@ -85,7 +85,7 @@
 
     {% else %}
     <!-- Kea options -->
-    <div class="card" style="margin-bottom:16px;">
+    <div class="card u-87c136">
         <div class="card-header"><h3>{{ icon("circle", "ico-dot ico-warning") }} Kea Import Options</h3></div>
         <div class="form-group">
             <label>Duplicate Handling</label>
@@ -98,11 +98,11 @@
     </div>
     {% endif %}
 
-    <div class="alert alert-danger" style="margin-bottom:16px;">
+    <div class="alert alert-danger u-87c136">
         {{ icon("ban") }} <strong>Final warning:</strong> Importing will modify live data. The operation runs in a transaction — if anything fails it rolls back completely. But if it succeeds, the change is permanent. Make sure you have a backup.
     </div>
 
-    <div style="display:flex;gap:10px;">
+    <div class="u-3efc98">
         <button type="submit" class="btn btn-danger"
                 data-confirm="Proceed with import into the {{ meta.database | upper }} database? This will modify live data.">
             {{ icon("zap") }} Confirm Import into {{ meta.database | upper }} Database

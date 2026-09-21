@@ -7,15 +7,15 @@
 </div>
 
 {% if keys %}
-<div class="card" style="border-color:rgba(0,180,216,0.3);">
+<div class="card u-e25041">
     <div class="card-header"><span class="card-title">{{ icon("key-round") }} Your API Keys</span><a href="/settings/api-keys" class="btn btn-sm btn-secondary">Manage Keys</a></div>
-    <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">Select a key to pre-fill examples below:</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <p class="u-b8b1bc">Select a key to pre-fill examples below:</p>
+    <div class="u-3de8f9">
         {% for k in keys %}
         <button class="btn btn-sm btn-secondary set-key-btn" id="keybtn-{{ k.id }}" data-key-prefix="{{ k.key_prefix }}…">{{ k.name }}</button>
         {% endfor %}
     </div>
-    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+    <div class="u-012c80">
         <input type="text" id="apiKeyInput" placeholder="Paste your full API key here to pre-fill examples"
                style="flex:1;font-family:monospace;font-size:12px;">
         <button id="clear-api-key-btn" class="btn btn-sm btn-secondary">Clear</button>
@@ -23,7 +23,7 @@
 </div>
 {% else %}
 <div class="card" style="border-style:dashed;">
-    <p style="color:var(--text-muted);font-size:13px;">No API keys yet. <a href="/settings/api-keys">Create one</a> to get started.</p>
+    <p class="u-aad8e6">No API keys yet. <a href="/settings/api-keys">Create one</a> to get started.</p>
 </div>
 {% endif %}
 
@@ -31,12 +31,12 @@
 <div class="card">
     <div class="card-header"><span class="card-title">Overview</span></div>
     <div style="font-size:13px;line-height:1.8;color:var(--text-muted);">
-        <p><strong style="color:var(--text);">Base URL:</strong> <code class="mono-box">{{ base_url }}</code></p>
-        <p style="margin-top:8px;"><strong style="color:var(--text);">Authentication:</strong> All endpoints (except <code class="mono-box">/api/v1/health</code>) require an API key in the request header:</p>
+        <p><strong class="u-f045bb">Base URL:</strong> <code class="mono-box">{{ base_url }}</code></p>
+        <p class="u-8a77e5"><strong class="u-f045bb">Authentication:</strong> All endpoints (except <code class="mono-box">/api/v1/health</code>) require an API key in the request header:</p>
         <pre class="code-block">Authorization: Bearer YOUR_API_KEY</pre>
-        <p style="margin-top:8px;"><strong style="color:var(--text);">Response format:</strong> All responses are JSON. Errors return <code class="mono-box">{"error": "message"}</code> with an appropriate HTTP status code.</p>
-        <p style="margin-top:8px;"><strong style="color:var(--text);">All keys are read-only.</strong> The API cannot modify your DHCP configuration or reservations.</p>
-        <p style="margin-top:8px;"><strong style="color:var(--text);">Subnet scope:</strong> each key has its own subnet access, set independently when the key is created (<a href="/settings/api-keys">manage keys</a>) — it is not tied to whoever created it. A key restricted to specific subnets returns empty results / 404s for anything outside its scope, the same as if that data didn't exist.</p>
+        <p class="u-8a77e5"><strong class="u-f045bb">Response format:</strong> All responses are JSON. Errors return <code class="mono-box">{"error": "message"}</code> with an appropriate HTTP status code.</p>
+        <p class="u-8a77e5"><strong class="u-f045bb">All keys are read-only.</strong> The API cannot modify your DHCP configuration or reservations.</p>
+        <p class="u-8a77e5"><strong class="u-f045bb">Subnet scope:</strong> each key has its own subnet access, set independently when the key is created (<a href="/settings/api-keys">manage keys</a>) — it is not tied to whoever created it. A key restricted to specific subnets returns empty results / 404s for anything outside its scope, the same as if that data didn't exist.</p>
     </div>
 </div>
 
@@ -226,26 +226,26 @@
     <div class="card-header">
         <span class="card-title">
             <span style="background:var(--primary);color:#000;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-right:8px;">{{ ep.method }}</span>
-            <code style="font-size:14px;">{{ ep.path }}</code>
+            <code class="u-433de3">{{ ep.path }}</code>
             {% if not ep.auth %}<span style="background:#2a3a1a;color:var(--success);padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">No auth required</span>{% endif %}
         </span>
-        <span style="font-size:13px;color:var(--text-muted);">{{ ep.title }}</span>
+        <span class="u-58b17f">{{ ep.title }}</span>
     </div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">{{ ep.desc }}</p>
+    <p class="u-503124">{{ ep.desc }}</p>
 
     {% if ep.params %}
-    <div style="margin-bottom:16px;">
+    <div class="u-87c136">
         <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Parameters</div>
-        <table style="width:100%;font-size:12px;">
+        <table class="u-a1fa25">
             <thead><tr>
-                <th style="width:160px;">Name</th>
+                <th class="u-28c0f6">Name</th>
                 <th>Description</th>
             </tr></thead>
             <tbody>
             {% for p in ep.params %}
             <tr>
-                <td><code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">{{ p.name }}</code></td>
-                <td style="color:var(--text-muted);">{{ p.desc }}</td>
+                <td><code class="u-5f0ff9">{{ p.name }}</code></td>
+                <td class="u-5872de">{{ p.desc }}</td>
             </tr>
             {% endfor %}
             </tbody>
@@ -253,14 +253,14 @@
     </div>
     {% endif %}
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+    <div class="u-911b26">
         <div>
-            <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Request</div>
+            <div class="u-eb9d61">Request</div>
             <pre class="code-block" id="req-{{ loop.index }}">curl -s {% if ep.auth %}-H "Authorization: Bearer YOUR_KEY" {% endif %}\
   {{ base_url }}{{ ep.example_path }}</pre>
         </div>
         <div>
-            <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Response</div>
+            <div class="u-eb9d61">Response</div>
             <pre class="code-block">{{ ep.example_response }}</pre>
         </div>
     </div>
@@ -268,16 +268,16 @@
 {% endfor %}
 
 <!-- Home Assistant section -->
-<div class="card" style="border-color:rgba(0,180,216,0.3);">
+<div class="card u-e25041">
     <div class="card-header"><span class="card-title">{{ icon("house") }} Home Assistant Integration</span></div>
 
-    <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">
+    <div class="u-292461">
         Add these to your <code class="mono-box">configuration.yaml</code>. Replace <code class="mono-box">YOUR_KEY</code> with your API key and <code class="mono-box">{{ base_url }}</code> with your Jen URL.
     </div>
 
-    <div style="margin-bottom:24px;">
-        <div style="font-weight:600;margin-bottom:8px;">Presence Detection (device tracker)</div>
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Detects if a device is home based on whether it has an active DHCP lease. Replace the MAC with your phone's MAC address.</div>
+    <div class="u-867774">
+        <div class="u-d77151">Presence Detection (device tracker)</div>
+        <div class="u-054de4">Detects if a device is home based on whether it has an active DHCP lease. Replace the MAC with your phone's MAC address.</div>
         <pre class="code-block"># configuration.yaml
 rest:
   - resource: "{{ base_url }}/api/v1/devices/aa:bb:cc:dd:ee:ff"
@@ -289,8 +289,8 @@ rest:
         icon: mdi:cellphone</pre>
     </div>
 
-    <div style="margin-bottom:24px;">
-        <div style="font-weight:600;margin-bottom:8px;">Subnet Utilization Sensor</div>
+    <div class="u-867774">
+        <div class="u-d77151">Subnet Utilization Sensor</div>
         <pre class="code-block"># configuration.yaml
 rest:
   - resource: "{{ base_url }}/api/v1/subnets"
@@ -304,7 +304,7 @@ rest:
     </div>
 
     <div>
-        <div style="font-weight:600;margin-bottom:8px;">Kea Health Check</div>
+        <div class="u-d77151">Kea Health Check</div>
         <pre class="code-block"># configuration.yaml
 rest:
   - resource: "{{ base_url }}/api/v1/health"
@@ -316,34 +316,34 @@ rest:
 </div>
 
 <!-- Zabbix section -->
-<div class="card" style="border-color:rgba(0,180,216,0.3);">
+<div class="card u-e25041">
     <div class="card-header"><span class="card-title">{{ icon("chart-bar") }} Zabbix Integration</span></div>
 
-    <div style="font-size:13px;color:var(--text-muted);margin-bottom:20px;">
+    <div class="u-292461">
         Use Zabbix HTTP Agent items to poll the Jen API. Create an item for each metric you want to track.
     </div>
 
-    <div style="margin-bottom:24px;">
-        <div style="font-weight:600;margin-bottom:8px;">HTTP Agent Item — Kea Health</div>
-        <table style="width:100%;font-size:12px;">
+    <div class="u-867774">
+        <div class="u-d77151">HTTP Agent Item — Kea Health</div>
+        <table class="u-a1fa25">
             <tbody>
-                <tr><td style="width:140px;color:var(--text-muted);">Type</td><td>HTTP agent</td></tr>
-                <tr><td style="color:var(--text-muted);">URL</td><td><code class="mono-box">{{ base_url }}/api/v1/health</code></td></tr>
-                <tr><td style="color:var(--text-muted);">Request headers</td><td><code class="mono-box">Authorization: Bearer YOUR_KEY</code></td></tr>
-                <tr><td style="color:var(--text-muted);">Type of info</td><td>Numeric (unsigned)</td></tr>
-                <tr><td style="color:var(--text-muted);">JSONPath</td><td><code class="mono-box">$.kea_up</code></td></tr>
+                <tr><td class="u-fce5f7">Type</td><td>HTTP agent</td></tr>
+                <tr><td class="u-5872de">URL</td><td><code class="mono-box">{{ base_url }}/api/v1/health</code></td></tr>
+                <tr><td class="u-5872de">Request headers</td><td><code class="mono-box">Authorization: Bearer YOUR_KEY</code></td></tr>
+                <tr><td class="u-5872de">Type of info</td><td>Numeric (unsigned)</td></tr>
+                <tr><td class="u-5872de">JSONPath</td><td><code class="mono-box">$.kea_up</code></td></tr>
             </tbody>
         </table>
     </div>
 
     <div>
-        <div style="font-weight:600;margin-bottom:8px;">HTTP Agent Item — Subnet Utilization</div>
-        <table style="width:100%;font-size:12px;">
+        <div class="u-d77151">HTTP Agent Item — Subnet Utilization</div>
+        <table class="u-a1fa25">
             <tbody>
-                <tr><td style="width:140px;color:var(--text-muted);">URL</td><td><code class="mono-box">{{ base_url }}/api/v1/subnets</code></td></tr>
-                <tr><td style="color:var(--text-muted);">Request headers</td><td><code class="mono-box">Authorization: Bearer YOUR_KEY</code></td></tr>
-                <tr><td style="color:var(--text-muted);">JSONPath (Production)</td><td><code class="mono-box">$.subnets[?(@.name=='Production')].utilization_pct</code></td></tr>
-                <tr><td style="color:var(--text-muted);">Trigger</td><td>Last value > 85 → High utilization warning</td></tr>
+                <tr><td class="u-fce5f7">URL</td><td><code class="mono-box">{{ base_url }}/api/v1/subnets</code></td></tr>
+                <tr><td class="u-5872de">Request headers</td><td><code class="mono-box">Authorization: Bearer YOUR_KEY</code></td></tr>
+                <tr><td class="u-5872de">JSONPath (Production)</td><td><code class="mono-box">$.subnets[?(@.name=='Production')].utilization_pct</code></td></tr>
+                <tr><td class="u-5872de">Trigger</td><td>Last value > 85 → High utilization warning</td></tr>
             </tbody>
         </table>
     </div>

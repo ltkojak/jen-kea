@@ -16,17 +16,17 @@
 <div class="card" id="sys-updates">
     <div class="card-header">
         <span class="card-title">{{ icon("upload") }} Jen Updates</span>
-        <span style="font-size:12px;color:var(--text-muted);">Running v{{ jen_version }} · {{ update_channel }} channel</span>
+        <span class="u-865c33">Running v{{ jen_version }} · {{ update_channel }} channel</span>
     </div>
-    <div id="update-status" style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+    <div id="update-status" class="u-f0aa70">
         Click "Check for Updates" to see if a newer version is available on the {{ update_channel }} channel.
     </div>
     <div id="update-channel" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px;">
         {% if current_user.role == 'superadmin' %}
-        <form method="POST" action="/settings/infrastructure/update-channel" style="display:flex;gap:8px;align-items:center;">
+        <form method="POST" action="/settings/infrastructure/update-channel" class="u-01ef7f">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label for="update-channel-select" style="margin:0;">Release channel</label>
-            <select name="channel" id="update-channel-select" style="width:auto;">
+            <label for="update-channel-select" class="u-116966">Release channel</label>
+            <select name="channel" id="update-channel-select" class="u-30e741">
                 <option value="stable" {% if update_channel == 'stable' %}selected{% endif %}>Stable</option>
                 <option value="beta" {% if update_channel == 'beta' %}selected{% endif %}>Beta</option>
             </select>
@@ -35,7 +35,7 @@
         {% else %}
         <span>Release channel: <strong>{{ update_channel }}</strong></span>
         {% endif %}
-        <span style="color:var(--text-muted);">Beta offers pre-release builds as they're published — they may carry bugs stable never sees. Same signed tarball, same install and rollback path. Switch back any time; the box keeps what it's running until the next stable release passes it.</span>
+        <span class="u-5872de">Beta offers pre-release builds as they're published — they may carry bugs stable never sees. Same signed tarball, same install and rollback path. Switch back any time; the box keeps what it's running until the next stable release passes it.</span>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="check-btn">
@@ -45,10 +45,10 @@
         <form id="update-form" method="POST" action="/settings/infrastructure/self-update"
               style="display:none;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" id="update-version">
-            <div style="margin-bottom:10px;">
+            <div class="u-761d3a">
                 <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
                     <input type="checkbox" name="db_backup" value="1" checked>
-                    Back up database before updating <span style="font-size:11px;color:var(--text-muted);">(recommended)</span>
+                    Back up database before updating <span class="u-749148">(recommended)</span>
                 </label>
             </div>
             <button type="submit" class="btn btn-primary" id="update-btn">
@@ -63,7 +63,7 @@
             {{ icon("file-text") }} Release notes
         </a>
     </div>
-    <div class="form-hint" style="margin-top:10px;">The updater stages the release, installs its dependencies into <code>/opt/jen/venv</code>, validates it, snapshots the current install, swaps, restarts, and rolls back on any failure. Progress: <code>sudo journalctl -u jen-update.service -f</code>.</div>
+    <div class="form-hint u-d2c171">The updater stages the release, installs its dependencies into <code>/opt/jen/venv</code>, validates it, snapshots the current install, swaps, restarts, and rolls back on any failure. Progress: <code>sudo journalctl -u jen-update.service -f</code>.</div>
 </div>
 
 <!-- Update progress overlay -->
@@ -78,7 +78,7 @@
         <div id="update-overlay-title" style="font-size:15px;font-weight:600;margin-bottom:6px;">
             Updating Jen…
         </div>
-        <div id="update-overlay-msg" style="font-size:13px;color:var(--text-muted);">
+        <div id="update-overlay-msg" class="u-58b17f">
             Downloading update package…
         </div>
     </div>
@@ -97,26 +97,26 @@
     </div>
     {% if plugins %}
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr><th>Plugin</th><th>Installed</th><th>Status</th></tr></thead>
         <tbody>
         {% for p in plugins %}
         <tr>
-            <td><strong>{{ p.name }}</strong><div style="font-size:12px;color:var(--text-muted);">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div></td>
-            <td style="white-space:nowrap;">v{{ p.version }}</td>
-            <td>
-                {% if not p.version_ok %}<span style="color:var(--warning);font-size:12px;">{{ icon("triangle-alert") }} Jen version mismatch</span>
-                {% elif p.enabled %}<span style="color:var(--success);font-size:12px;">● Enabled</span>
-                {% else %}<span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>{% endif %}
+            <td data-m="primary"><strong>{{ p.name }}</strong><div class="u-865c33">{{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}</div></td>
+            <td data-m="secondary" class="u-86abda">v{{ p.version }}</td>
+            <td data-m="badge">
+                {% if not p.version_ok %}<span class="u-0051c0">{{ icon("triangle-alert") }} Jen version mismatch</span>
+                {% elif p.enabled %}<span class="u-d5881b">● Enabled</span>
+                {% else %}<span class="u-2bb516">○ Disabled</span>{% endif %}
             </td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
     </div>
-    <div class="form-hint" style="margin-top:10px;">Plugin updates are checked against the registry in the plugin manager (it contacts GitHub, so it isn't done on every page load).</div>
+    <div class="form-hint u-d2c171">Plugin updates are checked against the registry in the plugin manager (it contacts GitHub, so it isn't done on every page load).</div>
     {% else %}
-    <p style="color:var(--text-muted);font-size:13px;">No plugins installed.{% if current_user.role == 'superadmin' %} Browse the registry in the plugin manager.{% endif %}</p>
+    <p class="u-aad8e6">No plugins installed.{% if current_user.role == 'superadmin' %} Browse the registry in the plugin manager.{% endif %}</p>
     {% endif %}
 </div>
 
@@ -126,7 +126,7 @@
         <span class="card-title">{{ icon("plug") }} Ports &amp; Threads</span>
         <span class="badge badge-dynamic">Restart on save</span>
     </div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+    <p class="u-42b3ef">
         Changing any of these restarts Jen automatically when you save.
         {% if ssl_configured %}
         HTTPS is active. HTTP requests on port {{ http_port }} are redirected to HTTPS on port {{ https_port }}.
@@ -137,30 +137,30 @@
     <form method="POST" action="{{ url_for('settings.save_ports') }}" data-confirm="Changing ports or threads will restart Jen. You may need to update bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>HTTP Port{% if ssl_configured %} <span style="color:var(--text-muted);font-weight:400;">(redirect only)</span>{% endif %}</label>
-                <input type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" style="max-width:160px;">
+                <label>HTTP Port{% if ssl_configured %} <span class="u-5d8d64">(redirect only)</span>{% endif %}</label>
+                <input type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" class="u-21e8bb">
                 <div class="form-hint">Default: 5050</div>
             </div>
             {% if ssl_configured %}
             <div class="form-group">
                 <label>HTTPS Port</label>
-                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" style="max-width:160px;">
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" class="u-21e8bb">
                 <div class="form-hint">Default: 8443</div>
             </div>
             {% else %}
             <div class="form-group">
-                <label>HTTPS Port <span style="color:var(--text-muted);font-weight:400;">(not active)</span></label>
-                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" style="max-width:160px;" disabled>
+                <label>HTTPS Port <span class="u-5d8d64">(not active)</span></label>
+                <input type="number" name="https_port" value="{{ https_port }}" min="1024" max="65535" class="u-21e8bb" disabled>
                 <div class="form-hint">Configure SSL first to enable HTTPS</div>
             </div>
             {% endif %}
             <div class="form-group">
                 <label>Worker Threads</label>
-                <input type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" style="max-width:160px;">
+                <input type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" class="u-21e8bb">
                 <div class="form-hint">Concurrent requests (gunicorn <code>--threads</code>). Default: 8.</div>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save &amp; Restart</button>
+        <button type="submit" class="btn btn-primary u-8a77e5">Save &amp; Restart</button>
     </form>
 </div>
 
@@ -170,7 +170,7 @@
         <span class="card-title">{{ icon("refresh-cw") }} Restart Jen</span>
         {% if restart_pending %}<span class="badge" style="background:#2a1f00;color:var(--warning);">Restart pending</span>{% endif %}
     </div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">Restarts the <code>jen</code> service. Takes a few seconds; in-flight requests finish first.</p>
+    <p class="u-ec76a1">Restarts the <code>jen</code> service. Takes a few seconds; in-flight requests finish first.</p>
     <form method="POST" action="/settings/infrastructure/restart" data-confirm="Restart Jen now?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn {% if restart_pending %}btn-warning{% else %}btn-secondary{% endif %}">{{ icon("refresh-cw") }} Restart Jen</button>
     </form>
@@ -179,7 +179,7 @@
 <!-- Support bundle (v5.33.0) -->
 <div class="card" id="sys-support">
     <div class="card-header"><span class="card-title">{{ icon("life-buoy") }} Support bundle</span></div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+    <p class="u-ec76a1">
         One zip to attach to a bug report: Jen and Kea versions, Health Center results, HA state, subnet drift,
         each server's latest Kea config, plugin state, schema versions, recent audit and alert rows, and a tail of the
         Jen log. Every password, key, token and secret is masked before it goes in — a test asserts none can survive —
@@ -190,14 +190,14 @@
     <a href="/settings/system/support-bundle" class="btn btn-secondary">{{ icon("life-buoy") }} Download support bundle</a>
     <a href="https://github.com/ltkojak/jen-kea/issues/new?title={{ ('v' ~ jen_version ~ ': ') | urlencode }}" target="_blank" rel="noopener" class="btn btn-secondary">{{ icon("bug") }} Report an issue</a>
     {% else %}
-    <span style="font-size:12px;color:var(--text-muted);">A superadmin can download it from here.</span>
+    <span class="u-865c33">A superadmin can download it from here.</span>
     {% endif %}
 </div>
 
 <!-- Grafana dashboard (v5.43.0, Q44) -->
 <div class="card" id="sys-grafana">
     <div class="card-header"><span class="card-title">{{ icon("chart-bar") }} Grafana dashboard</span></div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+    <p class="u-ec76a1">
         A ready-made dashboard for the metrics at <code>/metrics</code> — Kea reachability, pool utilization,
         active leases, the pool exhaustion forecast, and packet health rates. Import it into Grafana and point
         its Prometheus datasource variable at whatever scrapes Jen.
@@ -211,7 +211,7 @@
         <span class="card-title">{{ icon("clipboard-list") }} Audit Log Retention</span>
     </div>
     <form method="POST" action="/settings/save-audit-retention"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row" style="max-width:320px;">
+        <div class="form-row u-3521b3">
             <div class="form-group">
                 <label>Keep audit log entries for (days)</label>
                 <input type="number" name="audit_retention_days"
@@ -229,7 +229,7 @@
         <span class="card-title">{{ icon("file-clock") }} Kea Config History</span>
     </div>
     <form method="POST" action="/settings/save-config-revision-keep"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row" style="max-width:320px;">
+        <div class="form-row u-3521b3">
             <div class="form-group">
                 <label>Revisions to keep per server / service</label>
                 <input type="number" name="config_revision_keep"

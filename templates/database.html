@@ -15,7 +15,7 @@
 {% if active_tab == 'connections' %}
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("circle", "ico-dot ico-success") }} Jen MySQL Database</span>
-        <span style="font-size:12px;color:var(--text-muted);">Users, devices, settings, alerts, audit log, API keys</span>
+        <span class="u-865c33">Users, devices, settings, alerts, audit log, API keys</span>
     </div>
     <form method="POST" action="/settings/infrastructure/save-jen-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -29,7 +29,7 @@
 </div>
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("circle", "ico-dot ico-warning") }} Kea MySQL Database</span>
-        <span style="font-size:12px;color:var(--text-muted);">Reservations (hosts), DHCP options, active leases — Kea owns this schema</span>
+        <span class="u-865c33">Reservations (hosts), DHCP options, active leases — Kea owns this schema</span>
     </div>
     <form method="POST" action="/settings/infrastructure/save-kea-db"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -40,7 +40,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save Kea DB</button>
     </form>
-    <div class="form-hint" style="margin-top:10px;">A separate IPv6 lease database, if you run one, is configured under <a href="/settings/kea#kea6">Kea → Kea6</a>. Connection changes take effect after a restart.</div>
+    <div class="form-hint u-d2c171">A separate IPv6 lease database, if you run one, is configured under <a href="/settings/kea#kea6">Kea → Kea6</a>. Connection changes take effect after a restart.</div>
 </div>
 {% endif %}
 
@@ -49,26 +49,26 @@
 <!-- DB identity banner — always visible so user knows what they're working with -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
     <div class="card" style="border-left:4px solid var(--primary);">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-            <span style="font-size:22px;"></span>
+        <div class="u-6ccf13">
+            <span class="u-881f70"></span>
             <span style="font-size:16px;font-weight:700;color:var(--primary);">Jen Database</span>
         </div>
-        <div style="font-family:monospace;font-size:13px;color:var(--text-muted);">
-            <div>Host: <strong style="color:var(--text);">{{ jen_db_host }}</strong></div>
-            <div>DB:&nbsp;&nbsp;<strong style="color:var(--text);">{{ jen_db_name }}</strong></div>
+        <div class="u-1a27f0">
+            <div>Host: <strong class="u-f045bb">{{ jen_db_host }}</strong></div>
+            <div>DB:&nbsp;&nbsp;<strong class="u-f045bb">{{ jen_db_name }}</strong></div>
         </div>
-        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Users, devices, settings, alerts, audit log, API keys</div>
+        <div class="u-457f2b">Users, devices, settings, alerts, audit log, API keys</div>
     </div>
     <div class="card" style="border-left:4px solid var(--warning);">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-            <span style="font-size:22px;"></span>
+        <div class="u-6ccf13">
+            <span class="u-881f70"></span>
             <span style="font-size:16px;font-weight:700;color:var(--warning);">Kea Database</span>
         </div>
-        <div style="font-family:monospace;font-size:13px;color:var(--text-muted);">
-            <div>Host: <strong style="color:var(--text);">{{ kea_db_host }}</strong></div>
-            <div>DB:&nbsp;&nbsp;<strong style="color:var(--text);">{{ kea_db_name }}</strong></div>
+        <div class="u-1a27f0">
+            <div>Host: <strong class="u-f045bb">{{ kea_db_host }}</strong></div>
+            <div>DB:&nbsp;&nbsp;<strong class="u-f045bb">{{ kea_db_name }}</strong></div>
         </div>
-        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Reservations (hosts), DHCP options, active leases</div>
+        <div class="u-457f2b">Reservations (hosts), DHCP options, active leases</div>
     </div>
 </div>
 
@@ -83,25 +83,25 @@
         <div class="card-header">
             <h3>Export <span style="color:var(--primary);font-weight:800;">Jen Database</span></h3>
         </div>
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+        <p class="u-c0a2eb">
             Exports data from <strong>{{ jen_db_host }} / {{ jen_db_name }}</strong> to a compressed JSON file you can download, restore, or archive.
         </p>
         <form method="POST" action="/database/export/jen"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div style="margin-bottom:12px;">
+            <div class="u-da12f2">
                 <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Select Tables</label>
                 <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
-                    <label style="font-size:12px;cursor:pointer;"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-tables" checked> <strong>All</strong></label>
+                    <label class="u-dbfa94"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-tables" checked> <strong>All</strong></label>
                 </div>
-                <div id="jen-tables" style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+                <div id="jen-tables" class="u-fdc279">
                     {% for tbl, desc in jen_tables.items() %}
                     <label style="font-size:12px;cursor:pointer;display:flex;align-items:flex-start;gap:5px;" title="{{ desc }}">
-                        <input type="checkbox" name="tables" value="{{ tbl }}" checked style="margin-top:2px;">
-                        <span><code style="font-size:11px;">{{ tbl }}</code><br><span style="color:var(--text-muted);font-size:10px;">{{ desc[:45] }}{% if desc|length > 45 %}…{% endif %}</span></span>
+                        <input type="checkbox" name="tables" value="{{ tbl }}" checked class="u-7a21c6">
+                        <span><code class="u-11a508">{{ tbl }}</code><br><span style="color:var(--text-muted);font-size:10px;">{{ desc[:45] }}{% if desc|length > 45 %}…{% endif %}</span></span>
                     </label>
                     {% endfor %}
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary" style="width:100%;">Download Jen Export</button>
+            <button type="submit" class="btn btn-primary u-046678">Download Jen Export</button>
         </form>
     </div>
 
@@ -110,7 +110,7 @@
         <div class="card-header">
             <h3>Export <span style="color:var(--warning);font-weight:800;">Kea Database</span></h3>
         </div>
-        <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">
+        <p class="u-c0a2eb">
             Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong>. Choose what to export — reservations and leases are different things.
         </p>
         <form method="POST" action="/database/export/kea"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -118,10 +118,10 @@
             <div class="card kea-group-card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" data-kea-group="{{ grp_id }}" id="kea-card-{{ grp_id }}">
                 <label style="cursor:pointer;display:flex;align-items:flex-start;gap:10px;">
                     <input type="radio" name="group" value="{{ grp_id }}" id="kea-grp-{{ grp_id }}"
-                           {% if loop.first %}checked{% endif %} style="margin-top:3px;">
+                           {% if loop.first %}checked{% endif %} class="u-c00d39">
                     <div>
-                        <div style="font-weight:600;font-size:13px;">{{ grp.label }}</div>
-                        <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">{{ grp.description }}</div>
+                        <div class="u-160b06">{{ grp.label }}</div>
+                        <div class="u-f3ca1e">{{ grp.description }}</div>
                         <div style="margin-top:5px;">
                             {% for t in grp.tables %}<code style="font-size:11px;background:var(--surface);padding:1px 5px;border-radius:3px;margin-right:4px;">{{ t }}</code>{% endfor %}
                         </div>
@@ -146,20 +146,20 @@
     <div class="card-header">
         <h3>Import / Restore</h3>
     </div>
-    <div class="alert alert-danger" style="margin-bottom:18px;">
+    <div class="alert alert-danger u-905d8b">
         <strong>Destructive operation.</strong> Importing will replace existing data in the selected tables. This cannot be undone. Make a backup first.
     </div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+    <p class="u-503124">
         Upload a Jen export file (<code>.json.gz</code>). Jen will read the file, show you exactly what's in it, and ask you to confirm before touching any data.
-        The file header identifies whether it's a <strong style="color:var(--primary);">Jen</strong> or <strong style="color:var(--warning);">Kea</strong> export — you cannot accidentally import the wrong one.
+        The file header identifies whether it's a <strong class="u-dc2e42">Jen</strong> or <strong class="u-52df2b">Kea</strong> export — you cannot accidentally import the wrong one.
     </p>
     <form method="POST" action="/database/import/inspect" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Export File</label>
-            <input type="file" name="file" accept=".json,.json.gz,.gz" required style="width:100%;">
+            <input type="file" name="file" accept=".json,.json.gz,.gz" required class="u-046678">
             <div class="form-hint">Must be a file exported from Jen's Database page. Files from other tools are not supported.</div>
         </div>
-        <button type="submit" class="btn btn-secondary" style="margin-top:8px;">{{ icon("search") }} Inspect File &amp; Continue</button>
+        <button type="submit" class="btn btn-secondary u-8a77e5">{{ icon("search") }} Inspect File &amp; Continue</button>
     </form>
 </div>
 {% endif %}
@@ -169,12 +169,12 @@
 <!-- ══════════════════════════════════════════════════════════════════════════ -->
 {% if active_tab == 'backups' %}
 <!-- Manual backup -->
-<div class="card" style="margin-bottom:20px;">
+<div class="card u-49f14f">
     <div class="card-header"><h3>{{ icon("save") }} Run Backup Now</h3></div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;">Saves a backup to <code>/opt/jen/backups/</code> immediately. Files are compressed and readable only by the jen service user.</p>
+    <p class="u-c0a2eb">Saves a backup to <code>/opt/jen/backups/</code> immediately. Files are compressed and readable only by the jen service user.</p>
     <form method="POST" action="/database/backup/now" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="jen" checked> <span style="color:var(--primary);font-weight:600;">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
-        <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include" value="kea" checked> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
+        <label class="u-3928fa"><input type="checkbox" name="include" value="jen" checked> <span class="u-01f649">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
+        <label class="u-3928fa"><input type="checkbox" name="include" value="kea" checked> <span class="u-69cda4">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
         <button type="submit" class="btn btn-primary">{{ icon("save") }} Back Up Now</button>
     </form>
 </div>
@@ -183,7 +183,7 @@
 <div class="card">
     <div class="card-header"><h3>{{ icon("folder") }} Stored Backups <span style="font-weight:400;font-size:13px;color:var(--text-muted);">— /opt/jen/backups/</span></h3></div>
     {% if backups %}
-    <table class="table">
+    <table class="rowlist table">
         <thead><tr>
             <th>Database</th>
             <th>Filename</th>
@@ -195,20 +195,20 @@
         <tbody>
         {% for b in backups %}
         <tr>
-            <td>
+            <td data-m="badge">
                 {% if b.db == 'JEN' %}
                 <span style="color:var(--primary);font-weight:700;">{{ icon("circle", "ico-dot ico-success") }} Jen</span>
                 {% elif b.db == 'KEA' %}
                 <span style="color:var(--warning);font-weight:700;">{{ icon("circle", "ico-dot ico-warning") }} Kea</span>
                 {% else %}
-                <span style="color:var(--text-muted);">{{ b.db }}</span>
+                <span class="u-5872de">{{ b.db }}</span>
                 {% endif %}
             </td>
-            <td><code style="font-size:11px;">{{ b.filename }}</code></td>
-            <td style="color:var(--text-muted);font-size:12px;">{{ b.exported_at or b.modified }}</td>
-            <td style="color:var(--text-muted);font-size:12px;">{{ b.size_kb }} KB</td>
-            <td style="font-size:11px;color:var(--text-muted);">{{ b.tables | join(', ') if b.tables else '—' }}</td>
-            <td style="white-space:nowrap;">
+            <td data-m="primary"><code class="u-11a508">{{ b.filename }}</code></td>
+            <td data-m="secondary" class="u-2bb516">{{ b.exported_at or b.modified }}</td>
+            <td data-m="secondary" class="u-2bb516">{{ b.size_kb }} KB</td>
+            <td data-m="hide" class="u-749148">{{ b.tables | join(', ') if b.tables else '—' }}</td>
+            <td data-m="trailing" class="u-86abda">
                 <div class="action-menu">
                     <input type="checkbox" id="am-backup-{{ loop.index }}" class="action-menu-toggle">
                     <label for="am-backup-{{ loop.index }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
@@ -226,7 +226,7 @@
         </tbody>
     </table>
     {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">No backups yet. Run one manually above or configure a schedule.</div>
+    <div class="u-c92bea">No backups yet. Run one manually above or configure a schedule.</div>
     {% endif %}
 </div>
 {% endif %}
@@ -237,7 +237,7 @@
 {% if active_tab == 'schedule' %}
 <div class="card" style="max-width:560px;">
     <div class="card-header"><h3>{{ icon("clock") }} Scheduled Backups</h3></div>
-    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+    <p class="u-503124">
         Automatic backups are saved to <code>/opt/jen/backups/</code> and rotated by retention count.
         {% if schedule and schedule.last_run %}
         <br>Last run: <strong>{{ schedule.last_run }}</strong> — {{ schedule.last_status or 'no status' }}
@@ -272,10 +272,10 @@
             </div>
         </div>
         <div class="form-group">
-            <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Include</label>
+            <label class="u-b9037b">Include</label>
             <div style="display:flex;gap:20px;margin-top:6px;">
-                <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include_jen" {% if not schedule or schedule.include_jen %}checked{% endif %}> <span style="color:var(--primary);font-weight:600;">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
-                <label style="cursor:pointer;font-size:13px;"><input type="checkbox" name="include_kea" {% if not schedule or schedule.include_kea %}checked{% endif %}> <span style="color:var(--warning);font-weight:600;">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
+                <label class="u-3928fa"><input type="checkbox" name="include_jen" {% if not schedule or schedule.include_jen %}checked{% endif %}> <span class="u-01f649">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
+                <label class="u-3928fa"><input type="checkbox" name="include_kea" {% if not schedule or schedule.include_kea %}checked{% endif %}> <span class="u-69cda4">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
             </div>
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Schedule</button>
@@ -289,7 +289,7 @@
 {% if active_tab == 'migrate' %}
 <div class="card">
     <div class="card-header"><h3>{{ icon("shuffle") }} Migrate to New Server</h3></div>
-    <div class="alert alert-warning" style="margin-bottom:18px;">
+    <div class="alert alert-warning u-905d8b">
         {{ icon("triangle-alert") }} Migration copies data to a new database server. The source is never modified. If migration fails at any point, the target is rolled back and left clean. Progress is shown in real-time below.
     </div>
     <a href="/settings/databases/migrate" class="btn btn-primary">{{ icon("shuffle") }} Open Migration Wizard</a>
@@ -298,11 +298,11 @@
 
 {% if active_tab == 'recovery' %}
 <div class="card" style="border:2px solid var(--danger);">
-    <div class="card-header"><h3 style="color:var(--danger);">{{ icon("box") }} Recovery bundle — contains secrets</h3></div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:12px;">
+    <div class="card-header"><h3 class="u-497726">{{ icon("box") }} Recovery bundle — contains secrets</h3></div>
+    <p class="u-ec76a1">
         One encrypted file to stand Jen back up on a new machine: <code>jen.config</code>, the MFA encryption key, TLS/SSH keys, a fresh export of every Jen database table, uploaded content (icons, branding), and the latest Kea config Jen has seen for each server.
     </p>
-    <div class="alert alert-warning" style="margin-bottom:18px;">
+    <div class="alert alert-warning u-905d8b">
         {{ icon("triangle-alert") }} <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file. For a file to attach to a bug report, use the redacted <em>support bundle</em> (Settings → System) instead.
     </div>
     <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off">
@@ -317,13 +317,13 @@
                 <input type="password" name="passphrase_confirm" minlength="12" required>
             </div>
         </div>
-        <div class="form-hint" style="margin-bottom:12px;">
+        <div class="form-hint u-da12f2">
             Write this passphrase down somewhere safe — Jen never stores it, and there is no recovery if you lose it.
         </div>
         <button type="submit" class="btn btn-primary">{{ icon("box") }} Download recovery bundle</button>
     </form>
 </div>
-<div class="card" style="background:var(--surface2);border-style:dashed;">
+<div class="card u-32e230">
     <div style="padding:8px 4px;color:var(--text-muted);font-size:13px;">
         To restore onto a new machine, run <code class="mono-box">sudo ./install.sh --restore /path/to/bundle.tar.enc</code> — see the admin guide's "Recover Jen on a new machine" runbook for the full walkthrough.
     </div>

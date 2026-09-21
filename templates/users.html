@@ -3,7 +3,7 @@
 {% block content %}
 
 {% from '_settings_subtabs.html' import subtabs %}
-<div class="page-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+<div class="page-header u-1bcfaf">
     <div>
         <h1>{{ icon("user", "ico-lg") }} Users</h1>
         <p>User management is restricted to SuperAdmins.</p>
@@ -14,9 +14,9 @@
 {{ subtabs(nav.subtabs['security'], 'users') }}
 
 <!-- User table -->
-<div class="card" style="padding:0;">
+<div class="card u-41d7d7">
 <div class="table-wrap">
-<table>
+<table class="rowlist">
     <thead><tr>
         <th>Username</th>
         <th>Role</th>
@@ -28,16 +28,16 @@
     <tbody>
     {% for u in users %}
     <tr>
-        <td>
+        <td data-m="primary">
             <strong>{{ u.username }}</strong>
             {% if u.id == current_user.id %}
-            <span style="font-size:11px;color:var(--text-muted);"> (you)</span>
+            <span class="u-749148"> (you)</span>
             {% endif %}
             {% if u.auth_provider == 'oidc' %}
             <span class="badge" style="background:rgba(0,180,216,0.12);color:var(--primary);font-size:10px;" title="Managed by single sign-on">{{ icon("id-card") }} SSO</span>
             {% endif %}
         </td>
-        <td>
+        <td data-m="badge">
             {% if u.role == 'superadmin' %}
             <span style="color:var(--warning);font-weight:600;font-size:12px;">{{ icon("star") }} SuperAdmin</span>
             {% elif u.role == 'admin' %}
@@ -46,7 +46,7 @@
             <span style="color:var(--text-muted);font-weight:600;font-size:12px;">{{ icon("eye") }} Viewer</span>
             {% endif %}
         </td>
-        <td style="font-size:12px;color:var(--text-muted);">
+        <td data-m="secondary" class="u-865c33">
             {% if u.role == 'superadmin' or u.subnet_ids is none %}
                 All subnets
             {% else %}
@@ -59,17 +59,17 @@
                 {{ names | join(', ') or '—' }}
             {% endif %}
         </td>
-        <td style="font-size:12px;">
+        <td data-m="secondary" class="u-6cb285">
             {% if u.mfa_enrolled %}
-            <span style="color:var(--success);">✓ Enrolled</span>
+            <span class="u-5a4529">✓ Enrolled</span>
             {% else %}
-            <span style="color:var(--text-muted);">—</span>
+            <span class="u-5872de">—</span>
             {% endif %}
         </td>
-        <td style="font-size:12px;color:var(--text-muted);">
+        <td data-m="hide" class="u-865c33">
             {% if u.session_timeout %}{{ u.session_timeout }}m{% else %}{{ global_timeout }}m (global){% endif %}
         </td>
-        <td>
+        <td data-m="trailing">
             <button class="btn btn-sm btn-secondary edit-user-btn"
                 data-user='{{ {"id": u.id, "username": u.username, "role": u.role, "subnet_ids": u.subnet_ids, "timeout": u.session_timeout, "mfa": u.mfa_enrolled, "is_self": (u.id == current_user.id), "is_oidc": (u.auth_provider == "oidc"), "external_id": (u.external_id or "")} | tojson }}'>{{ icon("pencil") }} Edit</button>
         </td>
@@ -82,34 +82,34 @@
 
 <!-- Role reference -->
 <div class="card" style="margin-top:16px;background:var(--surface2);font-size:12px;color:var(--text-muted);">
-    <div style="font-weight:600;margin-bottom:8px;color:var(--text);">Role Reference</div>
+    <div class="u-6f3b9b">Role Reference</div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-        <div><strong style="color:var(--warning);">{{ icon("star") }} SuperAdmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
-        <div><strong style="color:var(--primary);">{{ icon("wrench") }} Admin</strong><br>Full management on assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
-        <div><strong style="color:var(--text);">{{ icon("eye") }} Viewer</strong><br>Read-only access to assigned subnets. Cannot access Settings or Database.</div>
+        <div><strong class="u-52df2b">{{ icon("star") }} SuperAdmin</strong><br>Full access to all subnets and all settings. Manages users and roles. Cannot be subnet-restricted.</div>
+        <div><strong class="u-dc2e42">{{ icon("wrench") }} Admin</strong><br>Full management on assigned subnets. Can access Settings and Database. Cannot manage other users.</div>
+        <div><strong class="u-f045bb">{{ icon("eye") }} Viewer</strong><br>Read-only access to assigned subnets. Cannot access Settings or Database.</div>
     </div>
 </div>
 
 <!-- ── ADD USER MODAL ─────────────────────────────────────────────────── -->
 <div id="add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(480px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h3 style="margin:0;">＋ Add User</h3>
-        <button data-close-modal="add-modal" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    <div class="u-24c1b8">
+        <h3 class="u-116966">＋ Add User</h3>
+        <button data-close-modal="add-modal" class="u-c4d0b1">✕</button>
     </div>
     <form method="POST" action="/users/add"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Username</label>
-            <input type="text" name="username" required autocomplete="off" style="width:100%;">
+            <input type="text" name="username" required autocomplete="off" class="u-046678">
         </div>
         <div class="form-group">
             <label>Password</label>
-            <input type="password" name="password" required autocomplete="new-password" style="width:100%;">
+            <input type="password" name="password" required autocomplete="new-password" class="u-046678">
             <div class="form-hint">Minimum 8 characters</div>
         </div>
         <div class="form-group">
             <label>Role</label>
-            <select name="role" id="add-role" style="width:100%;">
+            <select name="role" id="add-role" class="u-046678">
                 <option value="viewer">Viewer — read-only on assigned subnets</option>
                 <option value="admin">Admin — manage assigned subnets</option>
                 <option value="superadmin">SuperAdmin — full access, all subnets</option>
@@ -117,7 +117,7 @@
         </div>
         <div class="form-group" id="add-subnet-group">
             <label>Subnet Access</label>
-            <select name="subnet_ids" multiple style="width:100%;min-height:90px;">
+            <select name="subnet_ids" multiple class="u-ff2ba4">
                 <option value="all" selected>All Subnets</option>
                 {% for sid, info in subnet_map.items() %}
                 <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
@@ -127,7 +127,7 @@
         </div>
         <div class="form-group">
             <label>Session Timeout (minutes)</label>
-            <input type="number" name="timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" style="width:100%;">
+            <input type="number" name="timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678">
             <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
         </div>
         <div style="display:flex;gap:10px;margin-top:8px;">
@@ -141,9 +141,9 @@
 <!-- ── EDIT USER MODAL ────────────────────────────────────────────────── -->
 <div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;align-items:center;justify-content:center;">
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:min(520px,94vw);max-height:90vh;overflow-y:auto;padding:24px;box-shadow:0 16px 48px rgba(0,0,0,.5);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h3 style="margin:0;">{{ icon("pencil") }} Edit User: <span id="edit-username-label" style="color:var(--primary);"></span></h3>
-        <button data-close-modal="edit-modal" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    <div class="u-24c1b8">
+        <h3 class="u-116966">{{ icon("pencil") }} Edit User: <span id="edit-username-label" class="u-dc2e42"></span></h3>
+        <button data-close-modal="edit-modal" class="u-c4d0b1">✕</button>
     </div>
 
     <form id="edit-form" method="POST" action=""><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -151,7 +151,7 @@
         <!-- Role -->
         <div class="form-group">
             <label>Role</label>
-            <select name="role" id="edit-role" style="width:100%;">
+            <select name="role" id="edit-role" class="u-046678">
                 <option value="viewer">Viewer — read-only on assigned subnets</option>
                 <option value="admin">Admin — manage assigned subnets</option>
                 <option value="superadmin">SuperAdmin — full access, all subnets</option>
@@ -162,7 +162,7 @@
         <!-- Subnet Access -->
         <div class="form-group" id="edit-subnet-group">
             <label>Subnet Access</label>
-            <select name="subnet_ids" id="edit-subnets" multiple style="width:100%;min-height:90px;">
+            <select name="subnet_ids" id="edit-subnets" multiple class="u-ff2ba4">
                 <option value="all">All Subnets</option>
                 {% for sid, info in subnet_map.items() %}
                 <option value="{{ sid }}">{{ info.name }} ({{ info.cidr }})</option>
@@ -174,25 +174,25 @@
         <!-- Timeout -->
         <div class="form-group">
             <label>Session Timeout (minutes)</label>
-            <input type="number" name="timeout" id="edit-timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" style="width:100%;">
+            <input type="number" name="timeout" id="edit-timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678">
             <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
         </div>
 
-        <hr style="border-color:var(--border);margin:18px 0;">
+        <hr class="u-6caa47">
 
         <!-- Password reset -->
         <div id="edit-password-section">
-            <div style="margin-bottom:14px;">
-                <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Reset Password</label>
-                <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Leave blank to keep current password.</div>
+            <div class="u-2b583d">
+                <label class="u-b9037b">Reset Password</label>
+                <div class="u-054de4">Leave blank to keep current password.</div>
             </div>
             <div class="form-group">
                 <label>New Password</label>
-                <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" style="width:100%;">
+                <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" class="u-046678">
             </div>
             <div class="form-group">
                 <label>Confirm New Password</label>
-                <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" style="width:100%;">
+                <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" class="u-046678">
             </div>
         </div>
 
@@ -202,27 +202,27 @@
         </div>
     </form>
 
-    <hr style="border-color:var(--border);margin:18px 0;">
+    <hr class="u-6caa47">
 
     <!-- Single Sign-On (v5.25.0, Q21) -->
-    <div style="margin-bottom:12px;">
-        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Single Sign-On</label>
+    <div class="u-da12f2">
+        <label class="u-b9037b">Single Sign-On</label>
     </div>
     <div id="edit-sso-linked" style="font-size:13px;margin-bottom:10px;display:none;color:var(--text-muted);"></div>
     <form id="link-sso-form" method="POST" action=""
           data-confirm="Link this account to SSO? Local username/password login will be disabled for it immediately.">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-group" style="margin-bottom:8px;">
-            <input type="text" name="external_id" placeholder="External ID (the identity provider's sub claim)" style="width:100%;">
+        <div class="form-group u-fdf33f">
+            <input type="text" name="external_id" placeholder="External ID (the identity provider's sub claim)" class="u-046678">
         </div>
         <button type="submit" class="btn btn-sm btn-secondary">{{ icon("id-card") }} Link to SSO</button>
     </form>
 
-    <hr style="border-color:var(--border);margin:18px 0;">
+    <hr class="u-6caa47">
 
     <!-- MFA Reset -->
-    <div style="margin-bottom:12px;">
-        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">MFA Management</label>
+    <div class="u-da12f2">
+        <label class="u-b9037b">MFA Management</label>
     </div>
     <div id="edit-mfa-status" style="font-size:13px;margin-bottom:10px;"></div>
     <form id="reset-mfa-form" method="POST" action=""
@@ -230,12 +230,12 @@
         <button type="submit" id="reset-mfa-btn" class="btn btn-sm btn-secondary">{{ icon("lock") }} Reset MFA Enrollment</button>
     </form>
 
-    <hr style="border-color:var(--border);margin:18px 0;">
+    <hr class="u-6caa47">
 
     <!-- Delete -->
     <div id="delete-section">
         <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--danger);">Danger Zone</label>
-        <div style="margin-top:10px;">
+        <div class="u-d2c171">
             <form id="delete-form" method="POST" action=""
                   data-confirm="Delete this user? This cannot be undone."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger">{{ icon("trash") }} Delete User</button>
@@ -300,10 +300,10 @@ function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSe
     var mfaEl = document.getElementById('edit-mfa-status');
     var mfaBtn = document.getElementById('reset-mfa-btn');
     if (mfaEnrolled) {
-        mfaEl.innerHTML = '<span style="color:var(--success);">✓ MFA is enrolled.</span> Reset to force re-enrollment.';
+        mfaEl.innerHTML = '<span class="u-5a4529">✓ MFA is enrolled.</span> Reset to force re-enrollment.';
         mfaBtn.disabled = false;
     } else {
-        mfaEl.innerHTML = '<span style="color:var(--text-muted);">MFA is not enrolled.</span>';
+        mfaEl.innerHTML = '<span class="u-5872de">MFA is not enrolled.</span>';
         mfaBtn.disabled = true;
     }
 

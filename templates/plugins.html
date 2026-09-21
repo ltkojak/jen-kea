@@ -18,12 +18,12 @@
 
 <!-- Installed plugins -->
 {% if installed %}
-<div class="card" style="padding:0;">
-    <div class="card-header" style="padding:16px 20px 12px;">
+<div class="card u-41d7d7">
+    <div class="card-header u-69be76">
         <span class="card-title">Installed ({{ installed|length }})</span>
     </div>
     <div class="table-wrap">
-    <table>
+    <table class="rowlist">
         <thead><tr>
             <th>Plugin</th>
             <th>Installed</th>
@@ -34,58 +34,58 @@
         <tbody>
         {% for p in installed %}
         <tr>
-            <td>
+            <td data-m="primary">
                 <strong>{{ p.name }}</strong>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;">
+                <div class="u-1f394a">
                     {{ p.description[:80] }}{% if p.description|length > 80 %}…{% endif %}
                 </div>
                 {% if p.changelog_url %}
-                <div style="margin-top:3px;">
+                <div class="u-c00d39">
                     <a href="{{ p.changelog_url }}" target="_blank"
                        style="font-size:11px;color:var(--primary);">{{ icon("file-text") }} Changelog</a>
                 </div>
                 {% endif %}
             </td>
-            <td style="font-size:13px;white-space:nowrap;">
+            <td data-m="secondary" class="u-0131c8">
                 v{{ p.version }}
             </td>
-            <td style="font-size:13px;white-space:nowrap;">
+            <td data-m="secondary" class="u-0131c8">
                 {% if p.registry_version %}
                     {% if p.update_available %}
-                    <span style="color:var(--warning);">v{{ p.registry_version }} {{ icon("arrow-up") }}</span>
+                    <span class="u-52df2b">v{{ p.registry_version }} {{ icon("arrow-up") }}</span>
                     {% else %}
-                    <span style="color:var(--success);">v{{ p.registry_version }} ✓</span>
+                    <span class="u-5a4529">v{{ p.registry_version }} ✓</span>
                     {% endif %}
                 {% else %}
-                <span style="color:var(--text-muted);">—</span>
+                <span class="u-5872de">—</span>
                 {% endif %}
             </td>
-            <td>
+            <td data-m="badge">
                 {% if not p.version_ok %}
-                <span style="color:var(--warning);font-size:12px;">{{ icon("triangle-alert") }} Jen version mismatch</span>
+                <span class="u-0051c0">{{ icon("triangle-alert") }} Jen version mismatch</span>
                 {% elif p.get('api_ok', True) == false %}
-                <span style="color:var(--warning);font-size:12px;" title="This plugin is written against a newer plugin API than this Jen offers — upgrade Jen.">{{ icon("triangle-alert") }} needs plugin API v{{ p.plugin_api }}</span>
+                <span class="u-0051c0" title="This plugin is written against a newer plugin API than this Jen offers — upgrade Jen.">{{ icon("triangle-alert") }} needs plugin API v{{ p.plugin_api }}</span>
                 {% elif p.enabled %}
-                <span style="color:var(--success);font-size:12px;">● Enabled</span>
+                <span class="u-d5881b">● Enabled</span>
                 {% else %}
-                <span style="color:var(--text-muted);font-size:12px;">○ Disabled</span>
+                <span class="u-2bb516">○ Disabled</span>
                 {% endif %}
                 {% if p.migration_failed %}
                 <div style="margin-top:4px;font-size:10px;color:var(--danger);">migration failed — not enabled: {{ p.migration_failed[:120] }}</div>
                 {% endif %}
                 {% if p.missing_os_packages %}
-                <div style="margin-top:4px;font-size:10px;color:var(--warning);">needs on the Jen host: {{ p.missing_os_packages|join(', ') }}</div>
+                <div class="u-15f77e">needs on the Jen host: {{ p.missing_os_packages|join(', ') }}</div>
                 {% endif %}
                 {% if is_systemd_host and not p.bundled %}
                 {% if p.root_owned %}
                 <div style="margin-top:4px;font-size:10px;color:var(--success);">{{ icon("lock") }} root-owned</div>
                 {% else %}
-                <div style="margin-top:4px;font-size:10px;color:var(--warning);">writable — reinstall to harden</div>
+                <div class="u-15f77e">writable — reinstall to harden</div>
                 {% endif %}
                 {% endif %}
                 <div class="plugin-install-result" data-plugin-id="{{ p.id }}" style="margin-top:4px;font-size:11px;"></div>
             </td>
-            <td>
+            <td data-m="trailing">
                 <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                     {% if p.update_available %}
                     <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -98,7 +98,7 @@
                         <button type="submit" class="btn btn-sm btn-primary" title="Installs {{ p.missing_os_packages|join(', ') }} on the Jen host through the root-run plugin service">{{ icon("download") }} Install {{ p.missing_os_packages|join(', ') }}</button>
                     </form>
                     {% else %}
-                    <code style="font-size:11px;">sudo apt install {{ p.missing_os_packages|join(' ') }}</code>
+                    <code class="u-11a508">sudo apt install {{ p.missing_os_packages|join(' ') }}</code>
                     {% endif %}
                     {% endif %}
                     {% if is_systemd_host and not p.bundled and not p.root_owned %}
@@ -129,10 +129,10 @@
     </div>
 </div>
 {% else %}
-<div class="card" style="text-align:center;padding:40px;color:var(--text-muted);">
-    <div style="font-size:36px;margin-bottom:12px;">{{ icon("puzzle") }}</div>
+<div class="card u-9e5b2e">
+    <div class="u-4228e6">{{ icon("puzzle") }}</div>
     <div style="font-size:14px;margin-bottom:6px;">No plugins installed yet.</div>
-    <div style="font-size:12px;">Browse the registry below to find add-ins.</div>
+    <div class="u-6cb285">Browse the registry below to find add-ins.</div>
 </div>
 {% endif %}
 
@@ -140,14 +140,14 @@
 <div class="card">
     <div class="card-header">
         <span class="card-title">Available Plugins</span>
-        <span style="font-size:12px;color:var(--text-muted);">From the Jen plugin registry</span>
+        <span class="u-865c33">From the Jen plugin registry</span>
     </div>
 
     {% if fetch_error %}
     <div style="background:#2a1a0a;border:1px solid var(--warning);border-radius:var(--radius);
                 padding:12px 16px;margin-bottom:16px;font-size:13px;">
         {{ icon("triangle-alert") }} Could not reach the plugin registry: <strong>{{ fetch_error }}</strong><br>
-        <span style="font-size:12px;color:var(--text-muted);">
+        <span class="u-865c33">
             Check internet connectivity on the Jen host, or try again later.
             Installed plugins continue to work normally.
         </span>
@@ -168,8 +168,8 @@
         {% endif %}
 
         <div style="margin-bottom:6px;padding-right:{% if entry.update_available %}110px{% else %}0{% endif %};">
-            <strong style="font-size:14px;">{{ entry.name }}</strong>
-            <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">v{{ entry.version }}</span>
+            <strong class="u-433de3">{{ entry.name }}</strong>
+            <span class="u-954646">v{{ entry.version }}</span>
             {% if not entry.version_ok %}
             <span style="font-size:10px;background:var(--surface);color:var(--warning);
                          border:1px solid var(--warning);border-radius:3px;
@@ -194,12 +194,12 @@
             {% if entry.changelog_url %}
             <span>·</span>
             <a href="{{ entry.changelog_url }}" target="_blank"
-               style="color:var(--primary);">{{ icon("file-text") }} Changelog</a>
+               class="u-dc2e42">{{ icon("file-text") }} Changelog</a>
             {% endif %}
         </div>
 
         {% if entry.installed and not entry.update_available %}
-        <span style="font-size:12px;color:var(--success);">✓ Installed &amp; up to date</span>
+        <span class="u-d92d40">✓ Installed &amp; up to date</span>
         {% elif entry.installed and entry.update_available %}
         <form method="POST" action="/settings/plugins/update/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-primary">{{ icon("upload") }} Update to v{{ entry.version }}</button>
@@ -209,28 +209,28 @@
             <button type="submit" class="btn btn-sm btn-primary">{{ icon("download") }} Install</button>
         </form>
         {% else %}
-        <span style="font-size:12px;color:var(--text-muted);">Upgrade Jen to v{{ entry.requires_jen }} to install</span>
+        <span class="u-865c33">Upgrade Jen to v{{ entry.requires_jen }} to install</span>
         {% endif %}
     </div>
     {% endfor %}
     </div>
     {% elif not fetch_error %}
-    <p style="color:var(--text-muted);font-size:13px;">No plugins in the registry.</p>
+    <p class="u-aad8e6">No plugins in the registry.</p>
     {% endif %}
 </div>
 
 <!-- About -->
 <div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
-    <div style="font-weight:600;margin-bottom:8px;color:var(--text);">About Plugins</div>
-    <p style="margin-bottom:6px;">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. Your data is preserved when a plugin is uninstalled — only the plugin files are removed.</p>
-    <p style="margin-bottom:6px;">
+    <div class="u-6f3b9b">About Plugins</div>
+    <p class="u-4e420a">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. Your data is preserved when a plugin is uninstalled — only the plugin files are removed.</p>
+    <p class="u-4e420a">
     {% if is_systemd_host %}
     A newly installed plugin is fetched and verified by a dedicated root-privileged service and lands read-only under <code>/opt/jen/plugins-installed/</code> — the running Jen process itself can never write there. A plugin marked "writable" was installed before this existed; use Reinstall to move it there.
     {% else %}
     Installed plugins live in <code>/opt/jen/plugins/</code>.
     {% endif %}
     Enable/disable changes take effect after restarting Jen.</p>
-    <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" style="color:var(--primary);">plugin developer guide on GitHub</a>.</p>
+    <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" class="u-dc2e42">plugin developer guide on GitHub</a>.</p>
 </div>
 
 {% if is_systemd_host %}

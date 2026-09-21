@@ -77,7 +77,13 @@ PAGES = [
 # stops overflowing so it gets removed. Empty means every page fits.
 KNOWN_OVERFLOW = {}
 
-OVERFLOW_JS = "() => document.documentElement.scrollWidth - window.innerWidth"
+# A phone browser widens the layout viewport to fit overflowing content, so window.innerWidth
+# grows with it and "scrollWidth - innerWidth" reads 0 on a page that is 60px too wide (the
+# About and Profile pages did exactly that). Measure against the device width instead.
+OVERFLOW_JS = "(w) => Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - w"
+WIDEST_JS = """(w) => [...document.querySelectorAll('body *')].filter((e) => e.getBoundingClientRect().right > w + 1
+    && !e.closest('.table-wrap, .section-tabs, .chip-row, .card-toc, pre')).slice(0, 4)
+    .map((e) => e.tagName.toLowerCase() + '.' + String(e.className).split(' ').slice(0, 2).join('.'))"""
 SMALL_TAPS_JS = """(min) => {
     const out = [];
     const sel = '.tabbar a, .tabbar button, .btn';
@@ -138,9 +144,9 @@ class TestPhonePages:
             status = _visit(phone, base_url, path)
             if status >= 500:
                 broken.append(f"{name} ({path}) -> HTTP {status}")
-            over = phone.evaluate(OVERFLOW_JS)
+            over = phone.evaluate(OVERFLOW_JS, PHONE["width"])
             if over > 1 and name not in KNOWN_OVERFLOW:
-                overflow[name] = over
+                overflow[name] = f"{over} ({', '.join(phone.evaluate(WIDEST_JS, PHONE['width']))})"
             taps = phone.evaluate(SMALL_TAPS_JS, MIN_TAP)
             if taps:
                 small[name] = taps
@@ -164,7 +170,9 @@ class TestPhonePages:
         for name, path in PAGES:
             if name in KNOWN_OVERFLOW:
                 _visit(phone, base_url, path)
-                assert phone.evaluate(OVERFLOW_JS) > 1, f"{name} fits now: remove it from KNOWN_OVERFLOW"
+                assert phone.evaluate(OVERFLOW_JS, PHONE["width"]) > 1, (
+                    f"{name} fits now: remove it from KNOWN_OVERFLOW"
+                )
 
     def test_the_more_sheet_open_is_screenshotted(self, phone, base_url):
         _visit(phone, base_url, "/leases")

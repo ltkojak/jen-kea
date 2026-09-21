@@ -7,30 +7,30 @@
 </div>
 
 <!-- Step 1: Choose DB -->
-<div class="card" style="margin-bottom:20px;" id="step1">
+<div class="card u-49f14f"  id="step1">
     <div class="card-header"><h3>Step 1 — Choose Database to Migrate</h3></div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-jen">
-            <div style="display:flex;align-items:center;gap:10px;">
+    <div class="u-911b26">
+        <div class="card u-9eaad6"  id="card-jen">
+            <div class="u-b87ca3">
                 <input type="radio" name="which" value="jen" id="radio-jen">
                 <div>
                     <div style="font-weight:700;color:var(--primary);font-size:15px;">{{ icon("circle", "ico-dot ico-success") }} Jen Database</div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
+                    <div class="u-f3ca1e">
                         Source: <code>{{ jen_db_host }} / {{ jen_db_name }}</code>
                     </div>
-                    <div style="font-size:12px;color:var(--text-muted);">Users, devices, settings, audit log, API keys…</div>
+                    <div class="u-865c33">Users, devices, settings, audit log, API keys…</div>
                 </div>
             </div>
         </div>
-        <div class="card" style="background:var(--surface2);cursor:pointer;border:2px solid transparent;" id="card-kea">
-            <div style="display:flex;align-items:center;gap:10px;">
+        <div class="card u-9eaad6"  id="card-kea">
+            <div class="u-b87ca3">
                 <input type="radio" name="which" value="kea" id="radio-kea">
                 <div>
                     <div style="font-weight:700;color:var(--warning);font-size:15px;">{{ icon("circle", "ico-dot ico-warning") }} Kea Database</div>
-                    <div style="font-size:12px;color:var(--text-muted);margin-top:3px;">
+                    <div class="u-f3ca1e">
                         Source: <code>{{ kea_db_host }} / {{ kea_db_name }}</code>
                     </div>
-                    <div style="font-size:12px;color:var(--text-muted);">Reservations, DHCP options, active leases…</div>
+                    <div class="u-865c33">Reservations, DHCP options, active leases…</div>
                 </div>
             </div>
         </div>
@@ -38,13 +38,13 @@
 
     <!-- Jen table selection -->
     <div id="jen-options" style="display:none;margin-top:16px;">
-        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">Tables to Migrate</label>
+        <label class="u-b9037b">Tables to Migrate</label>
         <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;">
-            <label style="font-size:12px;cursor:pointer;"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-mig-tables" checked> <strong>All</strong></label>
+            <label class="u-dbfa94"><input type="checkbox" class="toggle-all-cb" data-toggle-group="jen-mig-tables" checked> <strong>All</strong></label>
         </div>
         <div id="jen-mig-tables" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-top:6px;">
             {% for tbl in jen_tables %}
-            <label style="font-size:12px;cursor:pointer;">
+            <label class="u-dbfa94">
                 <input type="checkbox" class="jen-tbl" name="tables" value="{{ tbl }}" checked>
                 <code>{{ tbl }}</code>
             </label>
@@ -54,31 +54,31 @@
 
     <!-- Kea group selection -->
     <div id="kea-options" style="display:none;margin-top:16px;">
-        <label style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);">What to Migrate</label>
+        <label class="u-b9037b">What to Migrate</label>
         <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
             {% for grp_id, grp in kea_groups.items() %}
             <label class="card" style="background:var(--surface2);cursor:pointer;">
                 <input type="radio" name="kea_group" value="{{ grp_id }}" {% if loop.first %}checked{% endif %}>
-                <div style="margin-left:8px;">
-                    <div style="font-weight:600;font-size:13px;">{{ grp.label }}</div>
-                    <div style="font-size:12px;color:var(--text-muted);">{{ grp.description }}</div>
+                <div class="u-5dd2a6">
+                    <div class="u-160b06">{{ grp.label }}</div>
+                    <div class="u-865c33">{{ grp.description }}</div>
                 </div>
             </label>
             {% endfor %}
         </div>
     </div>
 
-    <button class="btn btn-primary" id="step1-next-btn" style="margin-top:16px;">Next →</button>
+    <button class="btn btn-primary u-1b0f49" id="step1-next-btn">Next →</button>
 </div>
 
 <!-- Step 2: Target credentials -->
 <div class="card" style="margin-bottom:20px;display:none;" id="step2">
     <div class="card-header"><h3>Step 2 — Target Database Credentials</h3></div>
-    <div id="target-db-label" style="font-size:13px;color:var(--text-muted);margin-bottom:14px;"></div>
+    <div id="target-db-label" class="u-c0a2eb"></div>
     <div class="form-row">
         <div class="form-group">
             <label>Host</label>
-            <input type="text" id="t-host" placeholder="192.168.1.100" style="font-family:monospace;">
+            <input type="text" id="t-host" placeholder="192.168.1.100" class="u-72126d">
         </div>
         <div class="form-group">
             <label>Port</label>
@@ -88,7 +88,7 @@
     <div class="form-row">
         <div class="form-group">
             <label>Username</label>
-            <input type="text" id="t-user" placeholder="jen" style="font-family:monospace;">
+            <input type="text" id="t-user" placeholder="jen" class="u-72126d">
         </div>
         <div class="form-group">
             <label>Password</label>
@@ -96,14 +96,14 @@
         </div>
         <div class="form-group">
             <label>Database Name</label>
-            <input type="text" id="t-db" placeholder="jen" style="font-family:monospace;">
+            <input type="text" id="t-db" placeholder="jen" class="u-72126d">
         </div>
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="test-conn-btn">{{ icon("plug") }} Test Connection</button>
-        <span id="conn-result" style="font-size:13px;"></span>
+        <span id="conn-result" class="u-5e0faa"></span>
     </div>
-    <div id="conn-info" style="display:none;margin-top:12px;" class="card" style="background:var(--surface2);"></div>
+    <div id="conn-info" style="display:none;margin-top:12px;" class="card u-851d78"></div>
     <div style="display:flex;gap:10px;margin-top:16px;">
         <button class="btn btn-secondary" id="step2-back-btn">← Back</button>
         <button class="btn btn-primary" id="btn-step3" disabled>Next →</button>
@@ -113,8 +113,8 @@
 <!-- Step 3: Confirm & Run -->
 <div class="card" style="margin-bottom:20px;display:none;" id="step3">
     <div class="card-header"><h3>Step 3 — Confirm &amp; Run Migration</h3></div>
-    <div id="migration-summary" style="margin-bottom:16px;"></div>
-    <div class="alert alert-warning" style="margin-bottom:16px;">
+    <div id="migration-summary" class="u-87c136"></div>
+    <div class="alert alert-warning u-87c136">
         {{ icon("triangle-alert") }} This will copy data to the target database. The source (<strong>{{ jen_db_host }}</strong> / <strong>{{ kea_db_host }}</strong>) is never touched.
         If the migration fails at any point, the target is rolled back and left completely clean.
     </div>
@@ -163,7 +163,7 @@ function showStep(n) {
         var which = _which==='jen' ? '<svg class="ico ico-dot ico-success" aria-hidden="true"><use href="#i-circle"></use></svg> Jen Database' : '<svg class="ico ico-dot ico-warning" aria-hidden="true"><use href="#i-circle"></use></svg> Kea Database';
         var src  = _which==='jen' ? '{{ jen_db_host }}/{{ jen_db_name }}' : '{{ kea_db_host }}/{{ kea_db_name }}';
         document.getElementById('migration-summary').innerHTML =
-            '<div class="card" style="background:var(--surface2);">'
+            '<div class="card u-851d78">'
             + '<strong>Migrating:</strong> ' + which + '<br>'
             + '<strong>From:</strong> <code>' + src + '</code><br>'
             + '<strong>To:</strong> <code>' + host + '/' + db + '</code>'

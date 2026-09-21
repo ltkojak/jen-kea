@@ -7,15 +7,15 @@
     probes, and only then points itself at it. Plain <details>, no script. -#}
 {% macro direct_socket_setup(server_id, service, daemon, conf, ssh_host, bind_default, api_user, default_port, current_url, ssh_hint, tls_ok=False) %}
 {% if current_user.role == 'superadmin' and direct_socket_supported %}
-<details class="direct-socket-setup" style="margin-top:10px;">
+<details class="direct-socket-setup u-d2c171">
     <summary class="btn btn-sm btn-secondary" style="display:inline-block;cursor:pointer;list-style:none;">{{ icon("zap") }} Set up direct socket for {{ daemon }}…</summary>
     {% if not ssh_host %}
-    <div class="form-hint" style="margin-top:6px;">Needs an SSH host for this server — Jen edits <code>{{ conf }}</code> over SSH. Set it under {{ ssh_hint }} first, then come back here.</div>
+    <div class="form-hint u-fe7b49">Needs an SSH host for this server — Jen edits <code>{{ conf }}</code> over SSH. Set it under {{ ssh_hint }} first, then come back here.</div>
     {% else %}
     <div style="margin-top:8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;">
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}" data-confirm="Edit {{ conf }} on {{ ssh_host }}, restart {{ daemon }}, and probe the new socket? Jen only switches over if the socket answers as {{ daemon }}.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="form-hint" style="margin-bottom:10px;">Jen adds the socket entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
+            <div class="form-hint u-761d3a">Jen adds the socket entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
             <div class="form-row">
                 <div class="form-group">
                     <label>Scheme</label>
@@ -44,11 +44,11 @@
                     <input type="password" name="password" placeholder="(the password Jen already uses here)">
                 </div>
             </div>
-            <div class="form-hint" style="margin-bottom:10px;">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep such a socket on a management network reachable only from the Jen host. Your own CA instead of Jen's: add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
+            <div class="form-hint u-761d3a">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep such a socket on a management network reachable only from the Jen host. Your own CA instead of Jen's: add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
             <button type="submit" class="btn btn-sm btn-primary">Add socket, restart {{ daemon }} and probe</button>
         </form>
         {% if infra.kea_connection_mode == 'direct' and (service == 'dhcp4' or current_url) %}
-        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" style="display:inline;margin-left:8px;" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
+        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("undo-2") }} Switch back to the Control Agent</button>
         </form>
@@ -64,7 +64,7 @@
 </div>
 
 {% if restart_pending %}
-<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning" style="margin-left:8px;">Restart Now</button></form></div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form></div>
 {% endif %}
 
 {% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
@@ -83,7 +83,7 @@
 <!-- Kea control plane -->
 <div class="card" id="kea-api">
     <div class="card-header"><span class="card-title">{{ icon("plug") }} Kea Control Plane</span>
-        {% if kea_up %}<span style="color:var(--success);font-size:12px;">● Connected{% if kea_version %} · Kea {{ kea_version }}{% endif %}</span>
+        {% if kea_up %}<span class="u-d5881b">● Connected{% if kea_version %} · Kea {{ kea_version }}{% endif %}</span>
         {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
     </div>
     <form method="POST" action="/settings/infrastructure/save-kea" id="kea-api-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -121,7 +121,7 @@
             <div class="form-group">
                 <label>Verify TLS</label>
                 <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;">
-                    <input type="checkbox" name="api_tls_verify" value="1" {% if infra.kea_api_tls_verify %}checked{% endif %} style="width:auto;">
+                    <input type="checkbox" name="api_tls_verify" value="1" {% if infra.kea_api_tls_verify %}checked{% endif %} class="u-30e741">
                     Verify the control socket's certificate
                 </label>
                 <div class="form-hint">Ignored for <code>http://</code>. Uncheck only for a self-signed cert with no CA bundle.</div>
@@ -141,39 +141,39 @@
         <button type="submit" class="btn btn-primary">Save Kea API</button>
         <button type="button" class="btn btn-secondary" id="probe-kea-btn">{{ icon("search") }} Probe</button>
         {% if kea_servers|length > 1 %}
-        <select id="probe-server" style="display:inline-block;width:auto;margin-left:8px;font-size:12px;">
+        <select id="probe-server" class="u-c70577">
             {% for s in kea_servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
         </select>
         {% endif %}
         {% if ipv6_enabled %}
-        <select id="probe-service" style="display:inline-block;width:auto;margin-left:8px;font-size:12px;">
+        <select id="probe-service" class="u-c70577">
             <option value="dhcp4">dhcp4</option>
             <option value="dhcp6">dhcp6</option>
         </select>
         {% endif %}
         <input type="text" id="probe-candidate-url" placeholder="optional — probe a specific direct socket URL, e.g. https://kea:8004"
                style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
-        <div id="probe-kea-results" style="margin-top:12px;font-size:13px;"></div>
+        <div id="probe-kea-results" class="u-b20d1a"></div>
     </form>
     {{ direct_socket_setup(1, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', infra.ssh_host, infra.bind_default, infra.kea_api_user, 8004, infra.kea_api_url, 'SSH to the Kea host (below)', infra.tls_supported) }}
     {% if current_user.role == 'superadmin' %}
     <!-- v5.29.0 (Q29) — the Jen-managed Kea CA behind the https option above -->
-    <div id="kea-ca" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
-        <div class="stat-label" style="margin-bottom:4px;">Jen-managed Kea CA (for https sockets)</div>
+    <div id="kea-ca" class="u-10a65a">
+        <div class="stat-label u-c81ce4">Jen-managed Kea CA (for https sockets)</div>
         {% if kea_ca.present %}
-        <div class="form-hint" style="margin-bottom:8px;"><code>{{ kea_ca.subject }}</code> — expires in {{ kea_ca.days_left }} day(s). Jen's client certificate: {% if kea_ca.client_ok %}<span style="color:var(--success);">valid, signed by this CA</span>{% else %}<span style="color:var(--warning);">missing or not signed by this CA</span>{% endif %}. Server certificates issued: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({{ d }} d){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.</div>
-        <form method="POST" action="/settings/infrastructure/kea-ca/rotate" style="display:inline;" data-confirm="Rotate the Kea CA? Jen issues a new CA and client certificate and pushes a new server certificate to: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }}{% if not loop.last %}, {% endif %}{% else %}(no servers yet){% endfor %}. Each daemon restarts. If any push fails, everything is rolled back to the current CA.">
+        <div class="form-hint u-fdf33f"><code>{{ kea_ca.subject }}</code> — expires in {{ kea_ca.days_left }} day(s). Jen's client certificate: {% if kea_ca.client_ok %}<span class="u-5a4529">valid, signed by this CA</span>{% else %}<span class="u-52df2b">missing or not signed by this CA</span>{% endif %}. Server certificates issued: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({{ d }} d){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.</div>
+        <form method="POST" action="/settings/infrastructure/kea-ca/rotate" class="u-cccfa4" data-confirm="Rotate the Kea CA? Jen issues a new CA and client certificate and pushes a new server certificate to: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }}{% if not loop.last %}, {% endif %}{% else %}(no servers yet){% endfor %}. Each daemon restarts. If any push fails, everything is rolled back to the current CA.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-warning">{{ icon("refresh-cw") }} Rotate Kea CA</button>
         </form>
-        <span class="form-hint" style="margin-left:8px;">Re-issues everything — 10-year CA, 5-year certificates. Asks for your password again if it has been a while.</span>
+        <span class="form-hint u-5dd2a6">Re-issues everything — 10-year CA, 5-year certificates. Asks for your password again if it has been a while.</span>
         {% else %}
         <div class="form-hint">Not created yet — Jen creates it (EC P-256, 10 years, key at <code>/etc/jen/ssl/kea-ca.key</code>) the first time you set up an https socket.{% if kea_ca.external_ca %} The CA bundle above points at your own CA; clear it to use Jen's.{% endif %}</div>
         {% endif %}
     </div>
-    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+    <div class="u-10a65a">
         <a href="/settings/infrastructure/author-kea/dhcp4" class="btn btn-sm btn-secondary">{{ icon("file-pen") }} Author a starting kea-dhcp4.conf</a>
-        <span class="form-hint" style="display:block;margin-top:4px;">For a fresh Kea install with no config yet — not for editing an existing one (use Network → Subnets → Edit for that).</span>
+        <span class="form-hint u-6f28f3">For a fresh Kea install with no config yet — not for editing an existing one (use Network → Subnets → Edit for that).</span>
     </div>
     {% endif %}
 </div>
@@ -182,10 +182,10 @@
 <div class="card" id="kea-ssh">
     <div class="card-header">
         <span class="card-title">{{ icon("key-round") }} SSH to the Kea host</span>
-        {% if ssh_configured %}<span style="color:var(--success);font-size:12px;">● Key present</span>
-        {% else %}<span style="color:var(--warning);font-size:12px;">● No key generated</span>{% endif %}
+        {% if ssh_configured %}<span class="u-d5881b">● Key present</span>
+        {% else %}<span class="u-0051c0">● No key generated</span>{% endif %}
     </div>
-    <p class="form-hint" style="margin-bottom:12px;">Used for config pushes, restarts, the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
+    <p class="form-hint u-da12f2">Used for config pushes, restarts, the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
     <form method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -204,49 +204,49 @@
         <button type="submit" class="btn btn-primary">Save SSH Config</button>
     </form>
     {% if ssh_pub_key %}
-    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
-        <div class="stat-label" style="margin-bottom:6px;">Public Key — add to <code>~/.ssh/authorized_keys</code> for {{ infra.ssh_user or 'the SSH user' }}@{{ infra.ssh_host or 'the Kea host' }}</div>
+    <div class="u-9e4d95">
+        <div class="stat-label u-4e420a">Public Key — add to <code>~/.ssh/authorized_keys</code> for {{ infra.ssh_user or 'the SSH user' }}@{{ infra.ssh_host or 'the Kea host' }}</div>
         <div class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;word-break:break-all;border:1px solid var(--border);">{{ ssh_pub_key }}</div>
     </div>
     {% endif %}
-    <form method="POST" action="/settings/generate-ssh-key" style="margin-top:12px;" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/settings/generate-ssh-key" class="u-56f435" data-confirm="{% if ssh_configured %}Regenerate SSH key? The old key will need to be replaced in authorized_keys on the Kea server.{% else %}Generate SSH key pair for subnet editing?{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-secondary">{% if ssh_configured %}{{ icon("refresh-cw") }} Regenerate SSH Key{% else %}{{ icon("key-round") }} Generate SSH Key{% endif %}</button>
     </form>
 
     {% set ssh_servers = kea_servers | selectattr('ssh_host') | list %}
     {% if ssh_servers %}
-    <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;">
-        <div class="stat-label" style="margin-bottom:8px;">Kea host helper</div>
-        <table style="width:100%;font-size:13px;">
+    <div class="u-9e4d95">
+        <div class="stat-label u-fdf33f">Kea host helper</div>
+        <table  class="rowlist u-95cc13">
             <thead><tr>
-                <th style="text-align:left;padding:4px 8px;">Server</th>
-                <th style="text-align:left;padding:4px 8px;">SSH host</th>
-                <th style="text-align:left;padding:4px 8px;">Helper</th>
-                <th style="text-align:right;padding:4px 8px;"></th>
+                <th class="u-b7efde">Server</th>
+                <th class="u-b7efde">SSH host</th>
+                <th class="u-b7efde">Helper</th>
+                <th class="u-150502"></th>
             </tr></thead>
             <tbody>
             {% for s in ssh_servers %}
             <tr>
-                <td style="padding:4px 8px;">{{ s.name }}</td>
-                <td class="mono" style="padding:4px 8px;font-size:12px;">{{ s.ssh_host }}</td>
-                <td style="padding:4px 8px;">
-                    {% if s.helper_version and s.helper_version >= s.helper_want %}<span style="color:var(--success);">{{ s.helper_label }}</span>
-                    {% elif s.helper_version %}<span style="color:var(--warning);">v{{ s.helper_version }} — upgrade available (v{{ s.helper_want }})</span>
-                    {% elif s.helper_known %}<span style="color:var(--warning);">not installed — legacy path</span>
-                    {% else %}<span style="color:var(--text-muted);">unknown — check</span>{% endif %}
-                    {% if s.legacy_grant %}<br><span class="badge" style="background:var(--surface2);color:var(--warning);" title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
+                <td data-m="primary" class="u-f26165">{{ s.name }}</td>
+                <td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ s.ssh_host }}</td>
+                <td data-m="secondary" class="u-f26165">
+                    {% if s.helper_version and s.helper_version >= s.helper_want %}<span class="u-5a4529">{{ s.helper_label }}</span>
+                    {% elif s.helper_version %}<span class="u-52df2b">v{{ s.helper_version }} — upgrade available (v{{ s.helper_want }})</span>
+                    {% elif s.helper_known %}<span class="u-52df2b">not installed — legacy path</span>
+                    {% else %}<span class="u-5872de">unknown — check</span>{% endif %}
+                    {% if s.legacy_grant %}<br><span class="badge u-5fdac8"  title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
                 </td>
-                <td style="text-align:right;padding:4px 8px;white-space:nowrap;">
-                    <form method="POST" action="/settings/infrastructure/check-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <td data-m="trailing" style="text-align:right;padding:4px 8px;white-space:nowrap;">
+                    <form method="POST" action="/settings/infrastructure/check-kea-helper/{{ s.id }}" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Check</button>
                     </form>
                     {% if current_user.role == 'superadmin' and (not s.helper_version or s.helper_version < s.helper_shipped) %}
-                    <form method="POST" action="/settings/infrastructure/install-kea-helper/{{ s.id }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <form method="POST" action="/settings/infrastructure/install-kea-helper/{{ s.id }}" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">{% if s.helper_version %}Update helper{% else %}Install helper{% endif %}</button>
                     </form>
                     {% endif %}
                     {% if current_user.role == 'superadmin' and s.legacy_grant and s.helper_version is integer %}
-                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" style="display:inline;" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper. You will need to add it again, for one run, the next time you update the helper."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" class="u-cccfa4" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper. You will need to add it again, for one run, the next time you update the helper."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Remove legacy grant</button>
                     </form>
                     {% endif %}
@@ -255,12 +255,12 @@
             {% endfor %}
             </tbody>
         </table>
-        <details style="margin-top:12px;">
-            <summary style="cursor:pointer;font-size:13px;">Grant or revoke the legacy root path by hand</summary>
+        <details class="u-56f435">
+            <summary class="u-3928fa">Grant or revoke the legacy root path by hand</summary>
             <p style="font-size:12px;color:var(--text-muted);margin:8px 0;">Jen needs this grant for ONE run to install the helper, and for ONE run each time it updates the helper; remove it afterwards, with the button above or the command below. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>
             {% for s in ssh_servers %}
             <div class="stat-label" style="margin:8px 0 4px;">{{ s.name }} &mdash; SSH user <code>{{ s.ssh_user }}</code></div>
-            <div class="stat-label" style="margin:4px 0;font-weight:normal;">Grant</div>
+            <div class="stat-label u-239b88">Grant</div>
 <pre class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;border:1px solid var(--border);overflow-x:auto;">sudo tee /etc/sudoers.d/jen-kea &gt;/dev/null &lt;&lt;'EOF'
 {{ s.ssh_user }} ALL=(root) NOPASSWD: /usr/bin/python3
 {{ s.ssh_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart kea-dhcp4-server, /usr/bin/systemctl restart isc-kea-dhcp4-server
@@ -270,7 +270,7 @@
 EOF
 sudo chmod 440 /etc/sudoers.d/jen-kea
 sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
-            <div class="stat-label" style="margin:4px 0;font-weight:normal;">Revoke</div>
+            <div class="stat-label u-239b88">Revoke</div>
 <pre class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;border:1px solid var(--border);">sudo rm -f /etc/sudoers.d/jen-kea</pre>
             {% endfor %}
         </details>
@@ -282,10 +282,10 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
 <div class="card" id="kea-servers">
     <div class="card-header">
         <span class="card-title">{{ icon("server") }} Servers &amp; High Availability</span>
-        <span style="font-size:12px;color:var(--text-muted);">Server 1 is the Control Agent above</span>
+        <span class="u-865c33">Server 1 is the Control Agent above</span>
     </div>
     {% if readiness %}
-    <div class="form-hint" style="margin-bottom:12px;">
+    <div class="form-hint u-da12f2">
         {% if readiness.ready %}{{ icon("circle-check") }} Ready for Kea 3.2{% elif readiness.actions %}{{ icon("triangle-alert") }} {{ readiness.actions }} action(s) before upgrading to Kea 3.2{% else %}Kea 3.2 readiness: nothing to check on this install{% endif %}
         — <a href="/health-center">Health Center → Kea 3.2 readiness</a>
     </div>
@@ -312,13 +312,13 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
     </form>
 
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
-        <div style="font-weight:600;margin-bottom:6px;">Additional servers</div>
-        <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">For HA peers and multi-server setups. Each needs its own API credentials and SSH config.</p>
-        <p style="color:var(--text-muted);font-size:12px;margin-bottom:12px;">Listed in their own numeric order — each server's <code>[kea_server_N]</code> number is its permanent identity (config history, helper status, and URLs are keyed by it) and doesn't change when you add, remove, or re-save rows.</p>
+        <div class="u-85c718">Additional servers</div>
+        <p class="u-6d6af6">For HA peers and multi-server setups. Each needs its own API credentials and SSH config.</p>
+        <p class="u-6d6af6">Listed in their own numeric order — each server's <code>[kea_server_N]</code> number is its permanent identity (config history, helper status, and URLs are keyed by it) and doesn't change when you add, remove, or re-save rows.</p>
         <div id="extra-servers-list">
         {% for srv in infra.extra_servers %}
         <div class="extra-server-row" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div class="u-02dd14">
                 <strong>Server {{ loop.index + 1 }}</strong>
                 <input type="hidden" name="extra_id[]" value="{{ srv.id }}">
                 <button type="button" class="btn-act btn-act-del remove-server-row-btn" title="Remove">{{ icon_trash() }}</button>
@@ -365,7 +365,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
                     <input type="password" name="extra_api6_pass[]" placeholder="(unchanged)">
                 </div>
             </div>
-            <div class="form-hint" style="margin:-4px 0 10px;">Only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on (a kea-dhcp4 daemon can't answer v6 commands). Blank = this server's own API URL and credentials (ca mode); required in direct mode when IPv6 is on.</div>
+            <div class="form-hint u-27d304">Only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on (a kea-dhcp4 daemon can't answer v6 commands). Blank = this server's own API URL and credentials (ca mode); required in direct mode when IPv6 is on.</div>
             <div class="form-row">
                 <div class="form-group">
                     <label>SSH Host</label>
@@ -387,7 +387,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
         </div>
         {% endfor %}
         </div>
-        <button type="button" class="btn btn-sm btn-secondary" id="add-server-row-btn" style="margin-bottom:12px;">+ Add Server</button>
+        <button type="button" class="btn btn-sm btn-secondary u-da12f2" id="add-server-row-btn">+ Add Server</button>
         <br>
         <form method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div id="extra-servers-hidden"></div>
@@ -400,14 +400,14 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
 <!-- Kea6 API / IPv6 toggle (v5.0 Phase 1) -->
 <div class="card" id="kea6">
     <div class="card-header"><span class="card-title">{{ icon("globe") }} Kea6 Control Plane</span>
-        {% if ipv6_enabled %}<span style="color:var(--success);font-size:12px;">● IPv6 Enabled</span>
-        {% else %}<span style="color:var(--text-muted);font-size:12px;">● IPv6 Disabled</span>{% endif %}
+        {% if ipv6_enabled %}<span class="u-d5881b">● IPv6 Enabled</span>
+        {% else %}<span class="u-2bb516">● IPv6 Disabled</span>{% endif %}
     </div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:14px;">
         <div>
             <strong>Enable IPv6 support</strong>
-            <div class="form-hint" style="margin-top:2px;">
+            <div class="form-hint u-7a21c6">
                 Off by default. Flipping this SSHes into every Kea server with SSH
                 configured and starts/stops <code>kea-dhcp6-server</code> there —
                 it does not author a <code>kea-dhcp6.conf</code> for you; that must
@@ -426,7 +426,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
         </form>
     </div>
 
-    <div class="form-hint" style="margin-bottom:10px;">
+    <div class="form-hint u-761d3a">
         {% if infra.kea_connection_mode == 'direct' %}
         <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp6's own</strong> HTTP control
         socket and is <strong>required</strong> when IPv6 is on — a kea-dhcp4 daemon can't answer v6
@@ -458,8 +458,8 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
             <div class="form-group">
                 <label>API Password</label>
                 <input type="password" name="api_pass" placeholder="(kept unless changed)">
-                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;">
-                    <input type="checkbox" name="inherit_api_pass" value="1" style="width:auto;">
+                <label class="u-6125e5">
+                    <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
                     Inherit the Kea API password
                 </label>
             </div>
@@ -476,8 +476,8 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
             <div class="form-group">
                 <label>DB Password</label>
                 <input type="password" name="db_pass" placeholder="(kept unless changed)">
-                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;">
-                    <input type="checkbox" name="inherit_db_pass" value="1" style="width:auto;">
+                <label class="u-6125e5">
+                    <input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741">
                     Inherit the Kea DB password
                 </label>
             </div>
@@ -489,16 +489,16 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
         <button type="submit" class="btn btn-primary">Save Kea6 API</button>
     </form>
     {{ direct_socket_setup(1, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', infra.ssh_host, infra.bind_default, infra.kea6_api_user or infra.kea_api_user, 8006, infra.kea6_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
-    <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+    <div class="u-10a65a">
         <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">{{ icon("file-pen") }} Author a starting kea-dhcp6.conf</a>
-        <span class="form-hint" style="display:block;margin-top:4px;">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
+        <span class="form-hint u-6f28f3">If you already have kea-dhcp4.conf running, this pulls interfaces and database info from it automatically.</span>
     </div>
 </div>
 
 <!-- D2 (kea-dhcp-ddns) control socket (v5.23.0, Q19) -->
 <div class="card" id="kea-d2">
     <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
-    <div class="form-hint" style="margin-bottom:10px;">
+    <div class="form-hint u-761d3a">
         {% if infra.kea_connection_mode == 'direct' %}
         <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp-ddns's own</strong> HTTP control
         socket. D2 is only reachable once this is set — Kea's example port is <strong>53001</strong>.
@@ -526,8 +526,8 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
             <div class="form-group">
                 <label>API Password</label>
                 <input type="password" name="api_pass" placeholder="(kept unless changed)">
-                <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;">
-                    <input type="checkbox" name="inherit_api_pass" value="1" style="width:auto;">
+                <label class="u-6125e5">
+                    <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
                     Inherit the Kea API password
                 </label>
             </div>
@@ -540,17 +540,17 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
 <!-- Kea package install status (v5.1.2) -->
 <div class="card" id="kea-packages">
     <div class="card-header"><span class="card-title">{{ icon("package") }} Kea Package Status</span></div>
-    <div class="form-hint" style="margin-bottom:12px;">Confirms the kea-dhcp4-server / kea-dhcp6-server packages are actually installed on each configured server — separate from whether Jen can reach the Control Agent API.</div>
+    <div class="form-hint u-da12f2">Confirms the kea-dhcp4-server / kea-dhcp6-server packages are actually installed on each configured server — separate from whether Jen can reach the Control Agent API.</div>
     <button type="button" class="btn btn-sm btn-secondary" id="check-kea-pkgs-btn">{{ icon("search") }} Check Installation</button>
-    <div id="kea-pkgs-results" style="margin-top:12px;font-size:13px;"></div>
+    <div id="kea-pkgs-results" class="u-b20d1a"></div>
 </div>
 
 <!-- Config Drift Check (v5.2.0) -->
 <div class="card" id="kea-drift">
     <div class="card-header"><span class="card-title">{{ icon("shuffle") }} Config Drift Check</span></div>
-    <div class="form-hint" style="margin-bottom:12px;">Compares Jen's own subnet id/name/CIDR mapping (Network → Subnets) against Kea's live config-get — catches Jen's config silently falling out of sync with what Kea actually has, before it causes a filter, alert, or API key to silently affect the wrong subnet.</div>
+    <div class="form-hint u-da12f2">Compares Jen's own subnet id/name/CIDR mapping (Network → Subnets) against Kea's live config-get — catches Jen's config silently falling out of sync with what Kea actually has, before it causes a filter, alert, or API key to silently affect the wrong subnet.</div>
     <button type="button" class="btn btn-sm btn-secondary" id="check-drift-btn">{{ icon("search") }} Check Now</button>
-    <div id="config-drift-results" style="margin-top:12px;font-size:13px;"></div>
+    <div id="config-drift-results" class="u-b20d1a"></div>
 </div>
 {% endif %}
 
@@ -563,7 +563,7 @@ function addServerRow() {
     row.className = 'extra-server-row';
     row.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;';
     row.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div class="u-02dd14">
             <strong>Server ${count}</strong>
             <input type="hidden" name="extra_id[]" value="">
             <button type="button" class="btn-act btn-act-del remove-server-row-btn" title="Remove"><svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2m-7 0l1 11a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1l1-11"/><path d="M8.5 9v5M11.5 9v5"/></svg></button>
@@ -582,7 +582,7 @@ function addServerRow() {
             <div class="form-group"><label>IPv6 API Username</label><input type="text" name="extra_api6_user[]" placeholder="(same as API username)"></div>
             <div class="form-group"><label>IPv6 API Password</label><input type="password" name="extra_api6_pass[]" placeholder="(unchanged)"></div>
         </div>
-        <div class="form-hint" style="margin:-4px 0 10px;">IPv6 API fields are only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on.</div>
+        <div class="form-hint u-27d304">IPv6 API fields are only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on.</div>
         <div class="form-row">
             <div class="form-group"><label>SSH Host</label><input type="text" name="extra_ssh_host[]"></div>
             <div class="form-group"><label>SSH Username</label><input type="text" name="extra_ssh_user[]"></div>
@@ -663,7 +663,7 @@ async function probeKea() {
     var serverSel = document.getElementById('probe-server');
     var serviceSel = document.getElementById('probe-service');
     btn.disabled = true;
-    out.innerHTML = '<span style="color:var(--text-muted);">Probing…</span>';
+    out.innerHTML = '<span class="u-5872de">Probing…</span>';
     try {
         var resp = await fetch('/settings/infrastructure/probe-kea', {
             method: 'POST',
@@ -681,7 +681,7 @@ async function probeKea() {
         var colors = {ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)'};
         var html = '';
         if (data.error) {
-            out.innerHTML = '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(data.error) + '</div>';
+            out.innerHTML = '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(data.error) + '</div>';
             btn.disabled = false;
             return;
         }
@@ -691,12 +691,12 @@ async function probeKea() {
             html += '<div><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> ' + prefix + 'Reached Kea <strong>' + escapeHtml(data.version || '(version?)') + '</strong>' +
                 where + ' via <strong>' + escapeHtml(data.answered_mode) + '</strong> mode';
             if (!data.candidate && data.answered_mode !== data.configured_mode) {
-                html += ' <span style="color:var(--warning);">(you have <code>' + escapeHtml(data.configured_mode) +
+                html += ' <span class="u-52df2b">(you have <code>' + escapeHtml(data.configured_mode) +
                     '</code> configured)</span>';
             }
             html += '</div>';
         } else {
-            html += '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + prefix + 'No endpoint answered.</div>';
+            html += '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + prefix + 'No endpoint answered.</div>';
         }
         var rec = data.recommendation || {};
         html += '<div style="margin-top:6px;color:' + (colors[rec.level] || 'var(--text-muted)') + ';">' +
@@ -709,7 +709,7 @@ async function probeKea() {
         }
         out.innerHTML = html;
     } catch (e) {
-        out.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
+        out.innerHTML = '<span class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
     }
     btn.disabled = false;
 }
@@ -719,7 +719,7 @@ async function checkKeaPackages() {
     var btn = document.getElementById('check-kea-pkgs-btn');
     var resultsDiv = document.getElementById('kea-pkgs-results');
     btn.disabled = true;
-    resultsDiv.innerHTML = '<span style="color:var(--text-muted);">Checking…</span>';
+    resultsDiv.innerHTML = '<span class="u-5872de">Checking…</span>';
     try {
         var resp = await fetch('/settings/infrastructure/check-kea-binaries', {
             method: 'POST',
@@ -727,25 +727,25 @@ async function checkKeaPackages() {
         });
         var data = await resp.json();
         if (!data.servers || data.servers.length === 0) {
-            resultsDiv.innerHTML = '<span style="color:var(--text-muted);">No Kea servers with SSH configured.</span>';
+            resultsDiv.innerHTML = '<span class="u-5872de">No Kea servers with SSH configured.</span>';
             btn.disabled = false;
             return;
         }
         resultsDiv.innerHTML = data.servers.map(function(s) {
             if (!s.ok) {
-                return '<div style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.error) + '</div>';
+                return '<div class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.error) + '</div>';
             }
-            var row = '<div style="margin-bottom:6px;"><strong>' + escapeHtml(s.name) + ':</strong> ';
-            row += s.dhcp4 ? '<span style="color:var(--success);"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> kea-dhcp4</span>' :
-                '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> kea-dhcp4 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn" style="margin-left:4px;" data-service="dhcp4">Install</button></span>';
+            var row = '<div class="u-4e420a"><strong>' + escapeHtml(s.name) + ':</strong> ';
+            row += s.dhcp4 ? '<span class="u-5a4529"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> kea-dhcp4</span>' :
+                '<span class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> kea-dhcp4 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn u-46cec8"  data-service="dhcp4">Install</button></span>';
             row += '&nbsp;&nbsp;';
-            row += s.dhcp6 ? '<span style="color:var(--success);"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> kea-dhcp6</span>' :
-                '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> kea-dhcp6 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn" style="margin-left:4px;" data-service="dhcp6">Install</button></span>';
-            row += '<span class="pkg-install-status" style="margin-left:8px;font-size:12px;color:var(--text-muted);"></span></div>';
+            row += s.dhcp6 ? '<span class="u-5a4529"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> kea-dhcp6</span>' :
+                '<span class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> kea-dhcp6 <button type="button" class="btn btn-sm btn-secondary install-kea-pkg-btn u-46cec8"  data-service="dhcp6">Install</button></span>';
+            row += '<span class="pkg-install-status u-1c96c5"></span></div>';
             return row;
         }).join('');
     } catch (e) {
-        resultsDiv.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
+        resultsDiv.innerHTML = '<span class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
     }
     btn.disabled = false;
 }
@@ -781,7 +781,7 @@ async function checkConfigDrift() {
     var btn = document.getElementById('check-drift-btn');
     var resultsDiv = document.getElementById('config-drift-results');
     btn.disabled = true;
-    resultsDiv.innerHTML = '<span style="color:var(--text-muted);">Checking…</span>';
+    resultsDiv.innerHTML = '<span class="u-5872de">Checking…</span>';
     try {
         var resp = await fetch('/settings/infrastructure/check-config-drift', {
             method: 'POST',
@@ -789,22 +789,22 @@ async function checkConfigDrift() {
         });
         var data = await resp.json();
         if (!data.ok) {
-            resultsDiv.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(data.error || 'Check failed.') + '</span>';
+            resultsDiv.innerHTML = '<span class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(data.error || 'Check failed.') + '</span>';
             btn.disabled = false;
             return;
         }
         if (data.issues.length === 0) {
-            resultsDiv.innerHTML = '<span style="color:var(--success);"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> No drift detected — Jen\'s subnet map agrees with Kea\'s live config.</span>';
+            resultsDiv.innerHTML = '<span class="u-5a4529"><svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg> No drift detected — Jen\'s subnet map agrees with Kea\'s live config.</span>';
             btn.disabled = false;
             return;
         }
         resultsDiv.innerHTML = data.issues.map(function(i) {
             return '<div style="margin-bottom:8px;padding:8px 10px;background:var(--surface2);border-radius:var(--radius);border-left:3px solid var(--warning);">'
-                 + '<strong style="color:var(--warning);">[' + escapeHtml(i.family.toUpperCase()) + '] ' + escapeHtml(i.type.replace(/_/g, ' ')) + '</strong>'
+                 + '<strong class="u-52df2b">[' + escapeHtml(i.family.toUpperCase()) + '] ' + escapeHtml(i.type.replace(/_/g, ' ')) + '</strong>'
                  + '<div style="margin-top:4px;color:var(--text);">' + escapeHtml(i.message) + '</div></div>';
         }).join('');
     } catch (e) {
-        resultsDiv.innerHTML = '<span style="color:var(--danger);"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
+        resultsDiv.innerHTML = '<span class="u-497726"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> ' + escapeHtml(e.message) + '</span>';
     }
     btn.disabled = false;
 }

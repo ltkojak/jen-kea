@@ -2,6 +2,45 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.53.0-beta.1] - 2026-09-21
+
+Beta channel. Stacked on 5.52.0-beta.1. Q60: every remaining page on the phone, in two
+steps, and the inline styles that stood in the way. The templates carried 1,645 static
+`style="…"` attributes when this release began and 507 when it ends.
+
+**Inline styles.** Rewriting 1,100 attributes by hand across 60 templates would have been
+slow and error-prone, so `tools/extract_inline_styles.py` does it: a static style that
+appears at least twice across the templates becomes a class named for a hash of its
+declarations, and `static/css/ui-classes.css` is generated from the record of them (210
+classes). Each rule doubles its selector, so it keeps the precedence the inline style had
+over an ordinary one-class rule, and a style a script sets still wins. Anything with Jinja
+in it, `display:none` and `position:fixed` (scripts read and set those), and one-offs stay
+inline on purpose, as do the login, MFA challenge, forced-password and error pages, which
+do not load the stylesheet. A fixed multi-column grid also collapses to one column on a
+phone, which is what makes the forms single-column without editing each of them. The
+ratchet test now pins 507, and a new test fails on stylesheet drift, on an unused or
+missing class, or on a template with styles the tool could still extract.
+
+**Tables.** The IPv6 lease, reservation and device lists and the DNS reconcile table moved
+off the old label-and-value cards onto the dense rows from 5.52.0, and so did users, API
+keys, saved searches, trusted devices, plugins, the backups list, both logs, configuration
+history, DHCP classes and the SSH servers table, each with a `data-m` on every cell. The old
+card pattern is no longer used by any page. The reconcile table labels its two address cells
+("expected", "observed") on a phone, since the header row is not there to do it.
+
+**Alert templates.** The twenty message templates were twenty cards of about 90 pixels each.
+They are now an accordion: closed shows the alert type and the first line of the message,
+open shows the editor with Save and Reset, and Expand all and Collapse all sit above the
+list. Building it turned up that Reset was a form nested inside Save's form, which a browser
+drops, leaving Reset's button inside Save's form; they are sibling forms now.
+
+**Reports and the rest.** Charts are about 230 pixels tall on a phone instead of about 90,
+with the legend below them, and the IP map's subnet select has a label. The Settings
+chip tables of contents already scroll on one line from the foundation release.
+
+No migration, no config change, no sudoers or helper change; the upgrade is
+`sudo ./install.sh` as usual.
+
 ## [5.52.0-beta.1] - 2026-09-21
 
 Beta channel. Stacked on 5.51.0-beta.1. Q59: Leases, Reservations and Devices on the

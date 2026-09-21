@@ -6,7 +6,7 @@
     <p>This action changes your security settings, so re-enter your password{% if has_mfa %} and a current code{% endif %}.</p>
 </div>
 
-<div class="card" style="max-width:420px;">
+<div class="card u-0fd874">
     <form method="POST" action="{{ url_for('auth.reauth') }}" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">

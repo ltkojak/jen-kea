@@ -22,7 +22,7 @@
     {% if not revisions %}
     <p class="u-41e804">No revisions recorded yet for <code>{{ service }}</code> on this server. The first one is written the next time Jen applies a config change here.</p>
     {% else %}
-    <table class="u-95cc13">
+    <table class="rowlist u-95cc13">
         <thead>
             <tr class="u-7cd699">
                 <th class="u-e2c960">When</th>
@@ -36,9 +36,9 @@
         <tbody>
             {% for r in revisions %}
             <tr class="u-2eea7e">
-                <td class="u-18b307">{{ r.created_at }}</td>
-                <td class="u-e2c960">{{ r.username or '—' }}</td>
-                <td class="u-e2c960">
+                <td data-m="secondary" class="u-18b307">{{ r.created_at }}</td>
+                <td data-m="secondary" class="u-e2c960">{{ r.username or '—' }}</td>
+                <td data-m="badge" class="u-e2c960">
                     {% if r.source == 'external' %}
                     <span class="badge badge-dynamic" title="changed on the host outside Jen">external</span>
                     {% elif r.source == 'restore' %}
@@ -49,9 +49,9 @@
                     <span class="badge badge-reserved">jen</span>
                     {% endif %}
                 </td>
-                <td class="u-e2c960">{{ r.summary or '—' }}</td>
-                <td  class="mono u-e2c960">{{ r.sha256[:12] if r.sha256 else '—' }}</td>
-                <td class="u-18b307">
+                <td data-m="primary" class="u-e2c960">{{ r.summary or '—' }}</td>
+                <td data-m="hide"  class="mono u-e2c960">{{ r.sha256[:12] if r.sha256 else '—' }}</td>
+                <td data-m="trailing" class="u-18b307">
                     <a href="{{ url_for('servers.config_history_detail', server_id=server.id, rev_id=r.id) }}">View diff →</a>
                 </td>
             </tr>

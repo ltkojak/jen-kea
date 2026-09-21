@@ -17,17 +17,17 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Subnet Utilization Threshold %</label>
-                <input type="number" name="alert_threshold_pct" value="{{ threshold_pct }}" min="1" max="100" style="max-width:100px;">
+                <input type="number" name="alert_threshold_pct" value="{{ threshold_pct }}" min="1" max="100" class="u-d579dc">
                 <div class="form-hint">Alert when dynamic leases exceed this % of pool</div>
             </div>
             <div class="form-group">
                 <label>Pool Exhaustion Warning (free addresses)</label>
-                <input type="number" name="pool_exhaustion_free" value="{{ pool_exhaustion_free }}" min="1" style="max-width:100px;">
+                <input type="number" name="pool_exhaustion_free" value="{{ pool_exhaustion_free }}" min="1" class="u-d579dc">
                 <div class="form-hint">Alert when fewer than this many addresses remain free</div>
             </div>
             <div class="form-group">
                 <label>Daily Summary Time</label>
-                <input type="time" name="summary_time" value="{{ summary_time }}" style="max-width:140px;">
+                <input type="time" name="summary_time" value="{{ summary_time }}" class="u-7a96d9">
                 <div class="form-hint">Time to send daily summary (server local time)</div>
             </div>
             <div class="form-group">
@@ -61,9 +61,9 @@ var JEN_CHANNELS = {
     <div style="display:flex;flex-direction:column;gap:12px;">
     {% for ch in channels %}
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <div style="display:flex;align-items:center;gap:10px;">
-                <span style="font-size:18px;">
+        <div class="u-02dd14">
+            <div class="u-b87ca3">
+                <span class="u-4ff818">
                     {% if ch.channel_type == 'telegram' %}{{ icon("send") }}
                     {% elif ch.channel_type == 'email' %}{{ icon("mail") }}
                     {% elif ch.channel_type == 'slack' %}{{ icon("message-square") }}
@@ -76,12 +76,12 @@ var JEN_CHANNELS = {
                 </span>
                 <div>
                     <strong>{{ ch.channel_name }}</strong>
-                    <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">{{ ch.channel_type }}</span>
+                    <span class="u-954646">{{ ch.channel_type }}</span>
                 </div>
                 {% if ch.enabled %}
                 <span class="badge badge-reserved">Enabled</span>
                 {% else %}
-                <span class="badge" style="background:#2a1a1a;color:var(--warning);">Disabled</span>
+                <span class="badge u-fb2b30">Disabled</span>
                 {% endif %}
             </div>
             <div class="action-menu">
@@ -118,7 +118,7 @@ var JEN_CHANNELS = {
     {% endfor %}
     </div>
     {% else %}
-    <div style="text-align:center;padding:32px;color:var(--text-muted);">
+    <div class="u-c92bea">
         No alert channels configured yet. Click <strong>+ Add Channel</strong> to get started.
     </div>
     {% endif %}
@@ -133,29 +133,35 @@ var JEN_CHANNELS = {
     </p>
     <div id="al-glyph-legend" style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;margin-bottom:16px;">
         {% for g, name, meaning in glyph_legend %}
-        <span title="{{ meaning }}"><span style="font-size:14px;">{{ g }}</span> <strong>{{ name }}</strong> — {{ meaning }}</span>
+        <span title="{{ meaning }}"><span class="u-433de3">{{ g }}</span> <strong>{{ name }}</strong> — {{ meaning }}</span>
         {% endfor %}
     </div>
-    <div style="display:flex;flex-direction:column;gap:8px;">
-    {% for atype, label in alert_type_labels.items() %}
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">
-            <div style="flex:1;">
-                <div style="font-size:12px;font-weight:600;color:var(--text);margin-bottom:6px;">{{ label }}</div>
-                <form method="POST" action="/settings/alerts/save-template" style="display:flex;gap:8px;align-items:flex-start;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <input type="hidden" name="alert_type" value="{{ atype }}">
-                    <textarea name="template_text" rows="2" style="flex:1;font-family:monospace;font-size:12px;resize:vertical;">{{ templates.get(atype, default_templates.get(atype, '')) }}</textarea>
-                    <div style="display:flex;flex-direction:column;gap:4px;">
-                        <button type="submit" class="btn btn-sm btn-primary">Save</button>
-                        <form method="POST" action="/settings/alerts/reset-template" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <input type="hidden" name="alert_type" value="{{ atype }}">
-                            <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template?">Reset</button>
-                        </form>
-                    </div>
-                </form>
-            </div>
-        </div>
+    <div class="al-tpl-tools">
+        <button type="button" class="btn btn-sm btn-secondary" data-al-fold="open">Expand all</button>
+        <button type="button" class="btn btn-sm btn-secondary" data-al-fold="close">Collapse all</button>
     </div>
+    <div class="al-tpl-list">
+    {% for atype, label in alert_type_labels.items() %}
+    {% set tpl = templates.get(atype, default_templates.get(atype, '')) %}
+    <details class="al-tpl" id="al-tpl-{{ atype }}">
+        <summary>
+            <span class="al-tpl-label">{{ label }}</span>
+            <span class="al-tpl-first">{{ tpl.split('\\n')[0] | striptags }}</span>
+        </summary>
+        <div class="al-tpl-body">
+            <form method="POST" action="/settings/alerts/save-template"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="alert_type" value="{{ atype }}">
+                <textarea name="template_text" rows="3" aria-label="{{ label }} message template" class="al-tpl-text">{{ tpl }}</textarea>
+                <div class="al-tpl-actions">
+                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                </div>
+            </form>
+            <form method="POST" action="/settings/alerts/reset-template" class="al-tpl-reset"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="alert_type" value="{{ atype }}">
+                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template?">Reset to default</button>
+            </form>
+        </div>
+    </details>
     {% endfor %}
     </div>
 </div>
@@ -163,7 +169,7 @@ var JEN_CHANNELS = {
 <!-- Add/Edit Channel Modal -->
 <div id="channelModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 20px;">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:28px;width:560px;max-width:95vw;">
-        <h3 id="modalTitle" style="margin-bottom:20px;">Add Alert Channel</h3>
+        <h3 id="modalTitle" class="u-49f14f">Add Alert Channel</h3>
         <form method="POST" action="/settings/alerts/save-channel" id="channelForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="channel_id" id="channelId">
 
@@ -187,7 +193,7 @@ var JEN_CHANNELS = {
             </div>
 
             <div class="form-group">
-                <label style="display:flex;align-items:center;gap:8px;">
+                <label class="u-015a5e">
                     <input type="checkbox" name="enabled" id="channelEnabled"> Enable this channel
                 </label>
             </div>
@@ -215,7 +221,7 @@ var JEN_CHANNELS = {
                     </div>
                     <div class="form-group">
                         <label>SMTP Port</label>
-                        <input type="number" name="smtp_port" value="587" style="max-width:100px;">
+                        <input type="number" name="smtp_port" value="587" class="u-d579dc">
                     </div>
                 </div>
                 <div class="form-row">
@@ -239,7 +245,7 @@ var JEN_CHANNELS = {
                     </div>
                 </div>
                 <div class="form-group">
-                    <label style="display:flex;align-items:center;gap:8px;">
+                    <label class="u-015a5e">
                         <input type="checkbox" name="use_tls" checked> Use STARTTLS
                     </label>
                 </div>
@@ -322,7 +328,7 @@ var JEN_CHANNELS = {
             <!-- Pushover fields -->
             <div id="fields-pushover" style="display:none;">
                 <div class="alert" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text-muted);margin-bottom:12px;">
-                    Pushover requires a <strong>Pushover account</strong> ($5 one-time per platform). Get your User Key from <a href="https://pushover.net" target="_blank" style="color:var(--primary);">pushover.net</a>, then create an Application to get an API Token.
+                    Pushover requires a <strong>Pushover account</strong> ($5 one-time per platform). Get your User Key from <a href="https://pushover.net" target="_blank" class="u-dc2e42">pushover.net</a>, then create an Application to get an API Token.
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -339,7 +345,7 @@ var JEN_CHANNELS = {
             </div>
 
             <!-- Alert types -->
-            <div class="form-group" style="margin-top:16px;">
+            <div class="form-group u-1b0f49">
                 <label>Alert Types to Send</label>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;">
                 {% for atype, label in alert_type_labels.items() %}
@@ -351,7 +357,7 @@ var JEN_CHANNELS = {
             </div>
 
             <!-- Subnet scope -->
-            <div class="form-group" style="margin-top:16px;">
+            <div class="form-group u-1b0f49">
                 <label>Subnet Scope</label>
                 <select name="subnet_ids" id="channelSubnetIds" multiple style="width:100%;min-height:80px;">
                     {% if can_grant_all_subnets %}
@@ -381,7 +387,7 @@ var JEN_CHANNELS = {
 <!-- DDNS / DNS provider (moved from Infrastructure in v5.9.0) -->
 <div class="card" id="al-ddns">
     <div class="card-header"><span class="card-title">{{ icon("link") }} DDNS &amp; DNS Provider</span>
-        <span style="font-size:12px;color:var(--text-muted);">Powers the <a href="/ddns">Network → DDNS</a> page</span>
+        <span class="u-865c33">Powers the <a href="/ddns">Network → DDNS</a> page</span>
     </div>
     <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -460,7 +466,7 @@ var JEN_CHANNELS = {
             </div>
         </div>
 
-        <button type="submit" class="btn btn-primary" style="margin-top:16px;">Save DDNS</button>
+        <button type="submit" class="btn btn-primary u-1b0f49">Save DDNS</button>
     </form>
 </div>
 
@@ -469,24 +475,24 @@ var JEN_CHANNELS = {
     <div class="card-header">
         <span class="card-title">{{ icon("chart-bar") }} Prometheus Metrics</span>
     </div>
-    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
-        The <code style="background:var(--surface2);padding:2px 6px;border-radius:3px;">/metrics</code>
+    <p class="u-42b3ef">
+        The <code class="u-5f0ff9">/metrics</code>
         endpoint requires either a token or explicit open access —
         {% if metrics_token %}
-        currently <strong style="color:var(--success);">token-protected</strong>.
+        currently <strong class="u-5a4529">token-protected</strong>.
         {% elif metrics_open %}
-        currently <strong style="color:var(--warning);">open</strong> (no token required).
+        currently <strong class="u-52df2b">open</strong> (no token required).
         {% else %}
-        currently <strong style="color:var(--danger);">closed</strong> — scrapes get 401 until one of the options below is set.
+        currently <strong class="u-497726">closed</strong> — scrapes get 401 until one of the options below is set.
         {% endif %}
         Takes effect immediately on save, no restart needed.
     </p>
     <form method="POST" action="{{ url_for('settings.save_metrics_settings') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-            <label>Metrics Token <span style="color:var(--text-muted);font-weight:400;">(leave blank for no token)</span></label>
+            <label>Metrics Token <span class="u-5d8d64">(leave blank for no token)</span></label>
             <div style="display:flex;gap:8px;max-width:460px;">
                 <input type="text" name="metrics_token" id="metrics-token-input" value="{{ metrics_token }}"
-                       placeholder="e.g. a long random string" style="flex:1;" autocomplete="off">
+                       placeholder="e.g. a long random string" class="u-97445a" autocomplete="off">
                 <button type="button" class="btn" id="generate-metrics-token-btn">Generate</button>
             </div>
             <div class="form-hint">Scrape with: <code>curl -H "Authorization: Bearer &lt;token&gt;" https://.../metrics</code></div>
@@ -497,11 +503,19 @@ var JEN_CHANNELS = {
                 Allow open access (no token required) — only if <code>/metrics</code> is already restricted at the network or reverse-proxy level
             </label>
         </div>
-        <button type="submit" class="btn btn-primary" style="margin-top:8px;">Save Metrics Settings</button>
+        <button type="submit" class="btn btn-primary u-8a77e5">Save Metrics Settings</button>
     </form>
 </div>
 {% endblock %}
 {% block scripts %}
+// v5.53.0 (Q60): the message-template accordion's Expand all / Collapse all.
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-al-fold]');
+    if (!btn) return;
+    var open = btn.getAttribute('data-al-fold') === 'open';
+    document.querySelectorAll('details.al-tpl').forEach(function(d) { d.open = open; });
+});
+
 const ALERT_TYPE_LABELS = {{ alert_type_labels | tojson }};
 
 function generateMetricsToken() {
