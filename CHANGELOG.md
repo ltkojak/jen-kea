@@ -2,6 +2,60 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.51.0-beta.1] - 2026-09-21
+
+Beta channel. Stacked on 5.50.0-beta.1. Q58, the mobile foundation: the shared
+phone layer in `base.html` that Q59 and Q60 will move the pages onto. No page is
+converted in this release, so the screenshots after it should look the same as
+before except for the navigation, which is the point: the foundation has to land
+without breaking anything.
+
+**Navigation.** On a phone the hamburger and its drawer are gone. A bottom tab bar
+holds Dashboard, Leases, Reservations, Settings and More (a viewer, who has no
+Settings page, sees Devices in that slot), and More opens a sheet listing every
+destination grouped as the desktop nav is, with search, the theme toggle, the
+account links and Logout. The top bar keeps the logo, the Kea status dot and the
+avatar; the keyboard-shortcuts button and the Getting started pill moved off it
+because two of the five old controls could not be told apart by looking at them. The
+tab bar and the sheet are built by `nav_context()` with the same role and
+subnet-scope filtering as the strips, so a restricted account never sees Doctor in
+the sheet. The section strip scrolls its active tab into view. Content is padded so
+nothing hides behind the bar, and the bar and the sheets respect the iOS safe area
+and use `dvh` so the Safari address bar does not cover them.
+
+**Shared phone patterns.** Tables can opt in to a dense two-line row
+(`table.rowlist` with a `data-m` on each cell): the name and badge on the first
+line, the address, subnet and expiry joined with a middle dot on the second, the
+kebab at the right, empty and "—" cells dropped, and a tap anywhere on the row opens
+its link. Checkboxes stay hidden on a phone until a Select button turns on Select
+mode, which also pins the bulk-action bar above the tab bar. A filter bar collapses
+to its search box plus a Filters button showing how many values are not at their
+default, and the rest opens in a bottom sheet; a select's `aria-label` is shown as
+its label there, which is what tells two unlabeled dropdowns apart. An action bar
+keeps its first primary button at full width and folds the rest into a More actions
+sheet. Chip rows scroll sideways on one line with a fade instead of wrapping into
+four. All of it is inert above 768 px.
+
+**Tokens and utilities.** `base.html` gains a spacing scale (`--sp-1` to `--sp-6`),
+a type scale (`--fs-xs` to `--fs-2xl`), `--radius-sm`, `--surface3` and `--tap`,
+and the utility classes the templates repeat inline most often (`.muted`, `.small`,
+`.flex`, `.wrap`, `.gap-2`, `.mt-2`, `.mb-2`, `.grow`, `.right`, `.stack` and a few
+more). On a phone `.btn-sm` is now 44 px tall like `.btn`. `docs/ui.md` documents
+the tokens, every pattern and how to make a new page phone-ready.
+
+**The phone screenshot job.** The `e2e (Playwright)` CI job now opens every page at
+390 by 844 (and again at 1440 by 900), fails on a server error, horizontal overflow
+or a tap target under 44 px, exercises each pattern against a synthetic page, and
+uploads the screenshots as the `mobile-screenshots` and `desktop-screenshots`
+artifacts on every run, pass or fail, so the pages can be reviewed on a phone.
+
+**The ratchet.** `tests/test_ui_ratchet.py` pins the count of inline `style=`
+attributes in the templates (1,739 today) and the emoji scanner's allowlist (2). Each
+later change lowers the first and says so here.
+
+No migration, no config change, no sudoers or helper change; the upgrade is
+`sudo ./install.sh` as usual.
+
 ## [5.50.0-beta.1] - 2026-09-21
 
 Beta channel. Q57 — one icon system across the whole interface, plus five small

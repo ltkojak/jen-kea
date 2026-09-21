@@ -384,7 +384,7 @@ To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and sele
 Jen is fully usable on iPhone and iPad.
 
 ### iPhone
-The navigation bar collapses to a hamburger (☰) menu button. Tap it to open the navigation drawer showing Dashboard, Management, Network, Settings, and About. Tapping a section navigates there and reveals the section sub-tabs below the nav bar — the same sub-tabs you see on desktop. All table data reflows into per-row cards on iPhone so there is no horizontal scrolling.
+A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme toggle, your account links and Logout. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way.
 
 ### iPad
 The full desktop navigation is shown. Some lower-priority columns (MAC addresses, timestamps) are hidden on narrower iPad screens to keep tables readable — they are still available on desktop.

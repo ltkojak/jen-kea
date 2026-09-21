@@ -306,6 +306,7 @@
         .mb-2 { margin-bottom: var(--sp-2); } .mb-3 { margin-bottom: var(--sp-3); } .mb-4 { margin-bottom: var(--sp-4); }
         .items-center { align-items: center; }
         .between { justify-content: space-between; }
+        .contents { display: contents; }
 
         /* ── Bottom tab bar + sheets (v5.51.0, Q58) — phones only ── */
         .tabbar, .sheet, .sheet-backdrop { display: none; }
@@ -433,6 +434,63 @@
             table.mobile-cards tbody td.no-label::before { display: none; }
 
             .hide-mobile { display: none !important; }
+        }
+
+        /* ── Phone patterns (v5.51.0, Q58) ───────────────────────────────────────
+           Pages opt in with a class or a data attribute; docs/ui.md is the guide.
+             table.rowlist + td[data-m]  dense two-line rows
+             .filter-bar                  search + a Filters sheet (JS marks .fs-*)
+             .action-bar                  first .btn-primary + a More actions sheet
+             .chip-row / .card-toc        one scrolling row of chips
+             .row-checkbox                hidden until body.select-mode (Select button) */
+        .fs-toggle, .fs-head, .fs-label, .select-toggle, .fs-holder { display: none; }
+        .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+        @media (max-width: 768px) {
+            /* rowlist — one markup, two lines: primary/badge cells, then secondary cells joined with · */
+            table.rowlist, table.rowlist tbody { display: block; width: 100%; }
+            table.rowlist thead { display: none; }
+            table.rowlist tbody tr { display: flex; flex-wrap: wrap; align-items: center; column-gap: var(--sp-2); row-gap: 2px; min-height: 56px; padding: var(--sp-2) var(--sp-3); border: none; border-bottom: 1px solid var(--border); border-radius: 0; margin: 0; background: none; position: relative; }
+            table.rowlist tbody tr:last-child { border-bottom: none; }
+            table.rowlist tbody tr::after { content: ""; order: 3; flex-basis: 100%; height: 0; }
+            table.rowlist tbody td { display: block; width: auto; padding: 0; border: none; min-height: 0; font-size: var(--fs-md); justify-content: flex-start; }
+            table.rowlist tbody td::before { content: none; }
+            table.rowlist tbody td[data-m="primary"], table.rowlist tbody td[data-m="badge"] { order: 1; }
+            table.rowlist tbody td[data-m="primary"] { font-weight: 600; font-size: 14px; min-width: 0; overflow-wrap: anywhere; }
+            table.rowlist tbody td[data-m="trailing"] { order: 2; margin-left: auto; }
+            table.rowlist tbody td[data-m="secondary"], table.rowlist tbody td:not([data-m]) { order: 4; font-size: var(--fs-sm); color: var(--text-muted); }
+            table.rowlist tbody td[data-m="secondary"]:not(.rl-s1)::before, table.rowlist tbody td:not([data-m]):not(.rl-select):not(.rl-s1)::before { content: "·"; margin-right: var(--sp-2); }
+            table.rowlist tbody td[data-m="hide"], table.rowlist tbody td.rl-empty { display: none; }
+            table.rowlist tbody td.rl-select { display: none; order: 0; }
+            table.rowlist tbody tr[data-rl-href] { cursor: pointer; }
+            table.rowlist tbody tr:hover td { background: none; }
+            body.select-mode table.rowlist tbody td.rl-select { display: block; }
+
+            /* select mode — checkboxes stay out of the way until asked for */
+            .row-checkbox, #selectAll { display: none; }
+            body.select-mode .row-checkbox { display: inline-block; width: 22px; height: 22px; margin: 0; }
+            .select-toggle { display: inline-flex; }
+            body.select-mode [id$="-bulk-bar"] { position: fixed; left: 0; right: 0; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); z-index: 160; margin: 0 !important; padding: var(--sp-2) var(--sp-3); background: var(--surface); border-top: 1px solid var(--border); justify-content: space-between; }
+            body.select-mode.has-tabbar { padding-bottom: calc(var(--tabbar-h) + 64px + env(safe-area-inset-bottom)); }
+
+            /* filter sheet + action overflow — collapsed: the kept control(s) and one toggle */
+            .fs-toggle { display: inline-flex; }
+            .fs-ready .fs-keep { flex: 1; min-width: 0; }
+            .fs-ready:not(.open) .fs-rest { display: none !important; }
+            .fs-ready.open { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1101; margin: 0; display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: var(--sp-3); background: var(--surface); border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; max-height: 85vh; max-height: 85dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: var(--sp-3) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom)); box-shadow: 0 -8px 32px rgba(0,0,0,0.5); }
+            .fs-ready.open .fs-head { display: flex; align-items: center; justify-content: space-between; order: -2; font-size: var(--fs-lg); font-weight: 600; }
+            .fs-ready.open .fs-keep { order: -1; flex: none; }
+            .fs-ready.open .fs-toggle, .fs-ready.open .select-toggle { display: none; }
+            .fs-ready.open .fs-label { display: block; margin-bottom: calc(var(--sp-2) * -1); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
+            .fs-ready.open select, .fs-ready.open input:not([type=checkbox]):not([type=radio]):not([type=hidden]), .fs-ready.open .btn { width: 100%; min-width: 0; justify-content: center; }
+            .fs-ready.open form { display: contents; }
+            .fs-ready.open .fs-head .btn { width: auto; }
+            .fs-holder { display: block; }
+
+            /* chip rows — one scrolling line, faded at the right edge */
+            .chip-row, .card-toc { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+            .chip-row::-webkit-scrollbar, .card-toc::-webkit-scrollbar { display: none; }
+            .chip-row > *, .card-toc > a { flex: none; white-space: nowrap; }
         }
 
         @media (min-width: 769px) {
@@ -626,7 +684,7 @@
         <a href="/mfa/enroll">{{ icon("lock") }} Security &amp; MFA</a>
         <a href="/mfa/trusted-devices">{{ icon("monitor-smartphone") }} Trusted Devices</a>
         <button type="button" class="sheet-theme"><span class="theme-ico"></span> Theme</button>
-        <form method="POST" action="/logout" style="display:contents;">
+        <form method="POST" action="/logout" class="contents">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="danger">{{ icon("log-out") }} Logout</button>
         </form>
@@ -893,14 +951,17 @@ function sortTable(table, col, th) {
     var sheetBackdrop = document.getElementById('sheet-backdrop');
     var openSheetEl = null;
     function closeSheet() {
+        var was = openSheetEl;
         if (openSheetEl) { openSheetEl.classList.remove('open'); openSheetEl = null; }
         if (sheetBackdrop) sheetBackdrop.classList.remove('open');
         document.body.classList.remove('sheet-open');
+        if (was) document.dispatchEvent(new CustomEvent('jen:sheet', { detail: { id: was.id, open: false } }));
     }
     function showSheet(id) {
         var el = document.getElementById(id);
         if (!el || !sheetBackdrop) return;
         closeSheet();
+        document.dispatchEvent(new CustomEvent('jen:sheet', { detail: { id: id, open: true } }));
         el.classList.add('open');
         sheetBackdrop.classList.add('open');
         document.body.classList.add('sheet-open');
@@ -915,6 +976,210 @@ function sortTable(table, col, th) {
     document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeSheet(); });
     // Following a link inside a sheet closes it (bfcache can restore the page with it open).
     window.addEventListener('pageshow', closeSheet);
+
+    // ── Phone patterns (v5.51.0, Q58) — rowlist cells, filter sheet, action
+    // overflow, Select mode. Idempotent; runs at load and after every htmx swap.
+    // Desktop is untouched: the markup this adds is display:none above 768px and
+    // the .fs-* classes have no rules outside the phone media query.
+    var UID = 0;
+    var ICO_FILTER = '<svg class="ico" aria-hidden="true"><use href="#i-sliders-horizontal"></use></svg> ';
+    var ICO_MORE = '<svg class="ico" aria-hidden="true"><use href="#i-ellipsis"></use></svg> ';
+    function isEmptyCell(td) {
+        if (td.querySelector('input, select, textarea, button, a, img, svg, .badge, .action-menu')) return false;
+        var t = td.textContent.replace(/\s+/g, ' ').trim();
+        return t === '' || t === '\u2014' || t === '\u2013' || t === '-';
+    }
+    function enhanceRowlists(root) {
+        (root || document).querySelectorAll('table.rowlist').forEach(function(table) {
+            table.querySelectorAll('tbody tr').forEach(function(tr) {
+                var firstSecondary = true, href = null;
+                Array.prototype.forEach.call(tr.children, function(td) {
+                    if (td.tagName !== 'TD') return;
+                    var m = td.getAttribute('data-m');
+                    td.classList.remove('rl-empty', 'rl-s1', 'rl-select');
+                    if (td.querySelector('.row-checkbox')) { td.classList.add('rl-select'); return; }
+                    if (m === 'hide') return;
+                    if (isEmptyCell(td)) { td.classList.add('rl-empty'); return; }
+                    if (m === 'primary' && !href) {
+                        var a = td.querySelector('a[href]');
+                        if (a) href = a.getAttribute('href');
+                    }
+                    if (m === 'secondary' || !m) {
+                        if (firstSecondary) { td.classList.add('rl-s1'); firstSecondary = false; }
+                    }
+                });
+                if (href) tr.setAttribute('data-rl-href', href); else tr.removeAttribute('data-rl-href');
+            });
+        });
+    }
+    function makeToggle(bar, html, cls) {
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-secondary fs-toggle fs-inserted ' + cls;
+        b.setAttribute('data-fs-open', bar.id);
+        b.innerHTML = html;
+        return b;
+    }
+    function makeHead(bar, title) {
+        var h = document.createElement('div');
+        h.className = 'fs-head fs-inserted';
+        var t = document.createElement('span');
+        t.textContent = title;
+        var d = document.createElement('button');
+        d.type = 'button';
+        d.className = 'btn btn-sm btn-secondary';
+        d.setAttribute('data-sheet-close', '');
+        d.textContent = 'Done';
+        h.appendChild(t);
+        h.appendChild(d);
+        bar.insertBefore(h, bar.firstChild);
+    }
+    function markFilterControls(node, search) {
+        Array.prototype.forEach.call(node.children, function(ch) {
+            if (ch.classList.contains('fs-inserted')) return;
+            if (ch === search) { ch.classList.add('fs-keep'); return; }
+            if (ch.contains(search)) { markFilterControls(ch, search); return; }
+            if (ch.tagName === 'INPUT' && ch.type === 'hidden') return;
+            ch.classList.add('fs-rest');
+        });
+    }
+    function filterCount(bar) {
+        var n = 0;
+        bar.querySelectorAll('select').forEach(function(sel) { if (sel.selectedIndex > 0) n++; });
+        bar.querySelectorAll('input').forEach(function(i) {
+            if (i === bar._fsSearch || i.type === 'hidden' || i.type === 'submit' || i.type === 'button') return;
+            if (i.type === 'checkbox' || i.type === 'radio') { if (i.checked) n++; } else if (i.value) n++;
+        });
+        return n;
+    }
+    function refreshFilterLabel(bar) {
+        var span = bar.querySelector('.fs-count-label');
+        if (!span) return;
+        var n = filterCount(bar);
+        span.textContent = 'Filters' + (n ? ' (' + n + ')' : '');
+    }
+    function enhanceFilterBars(root) {
+        (root || document).querySelectorAll('.filter-bar').forEach(function(bar) {
+            if (bar.classList.contains('fs-ready')) return;
+            var search = bar.querySelector('input[data-m="primary"], input[name="search"], input[name="q"], input[type="search"], input[type="text"]');
+            if (!search) return;
+            if (!bar.id) bar.id = 'fs-' + (++UID);
+            bar._fsSearch = search;
+            markFilterControls(bar, search);
+            bar.querySelectorAll('select, input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=submit]):not([type=button])').forEach(function(c) {
+                if (c === search || c._fsLabeled) return;
+                c._fsLabeled = true;
+                var text = c.getAttribute('aria-label') || c.getAttribute('title') || c.getAttribute('placeholder');
+                if (!text) return;
+                var l = document.createElement('span');
+                l.className = 'fs-label fs-rest fs-inserted';
+                l.textContent = text;
+                c.parentNode.insertBefore(l, c);
+            });
+            var toggle = makeToggle(bar, ICO_FILTER + '<span class="fs-count-label">Filters</span>', 'fs-filter-toggle');
+            search.parentNode.insertBefore(toggle, search.nextSibling);
+            makeHead(bar, 'Filters');
+            bar.classList.add('fs-ready');
+            refreshFilterLabel(bar);
+            bar.addEventListener('change', function() { refreshFilterLabel(bar); });
+        });
+    }
+    function isActionUnit(ch) {
+        return ch.classList.contains('btn') || !!ch.querySelector('.btn');
+    }
+    function enhanceActionBars(root) {
+        (root || document).querySelectorAll('.action-bar').forEach(function(bar) {
+            if (bar.classList.contains('fs-ready') || bar.classList.contains('filter-bar')) return;
+            if (/-bulk-bar$/.test(bar.id) || bar.querySelector('#selectedCount')) return;
+            var units = Array.prototype.filter.call(bar.children, function(ch) {
+                return !ch.classList.contains('fs-inserted') && isActionUnit(ch);
+            });
+            var keepEl = units.filter(function(u) { return u.matches('.btn-primary') || !!u.querySelector('.btn-primary'); })[0];
+            var keeps = units.filter(function(u) { return u === keepEl || u.matches('[data-m="keep"]') || !!u.querySelector('[data-m="keep"]'); });
+            var rest = units.filter(function(u) { return keeps.indexOf(u) < 0; });
+            if (!keepEl || rest.length < 2) return;
+            if (!bar.id) bar.id = 'fs-' + (++UID);
+            keeps.forEach(function(u) { u.classList.add('fs-keep'); });
+            rest.forEach(function(u) { u.classList.add('fs-rest'); });
+            var toggle = makeToggle(bar, ICO_MORE + 'More actions', 'fs-actions-toggle');
+            bar.appendChild(toggle);
+            makeHead(bar, 'Actions');
+            bar.classList.add('fs-ready');
+        });
+    }
+    function ensureSelectToggle() {
+        var existing = document.querySelector('.select-toggle');
+        if (!document.querySelector('.row-checkbox')) {
+            if (existing) existing.remove();
+            document.body.classList.remove('select-mode');
+            return;
+        }
+        if (existing) return;
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'btn btn-secondary btn-sm select-toggle fs-inserted fs-keep';
+        b.textContent = 'Select';
+        var bar = document.querySelector('.filter-bar.fs-ready');
+        if (bar) { var t = bar.querySelector('.fs-filter-toggle'); t.parentNode.insertBefore(b, t.nextSibling); return; }
+        bar = Array.prototype.filter.call(document.querySelectorAll('.action-bar'), function(x) {
+            return !/-bulk-bar$/.test(x.id) && !x.querySelector('#selectedCount');
+        })[0];
+        if (bar) { bar.insertBefore(b, bar.firstChild); return; }
+        var header = document.querySelector('.container .page-header');
+        if (header) header.parentNode.insertBefore(b, header.nextSibling);
+    }
+    function enhancePhone(root) {
+        enhanceRowlists(root);
+        enhanceFilterBars(root);
+        enhanceActionBars(root);
+        ensureSelectToggle();
+    }
+    window.jenUi = { enhance: enhancePhone };
+    document.addEventListener('DOMContentLoaded', function() { enhancePhone(document); });
+    document.addEventListener('htmx:afterSwap', function(e) { enhancePhone(e.target && e.target.querySelectorAll ? e.target : document); });
+
+    document.addEventListener('click', function(e) {
+        var opener = e.target.closest('[data-fs-open]');
+        if (opener) { e.preventDefault(); showSheet(opener.getAttribute('data-fs-open')); return; }
+        var sel = e.target.closest('.select-toggle');
+        if (sel) {
+            var on = document.body.classList.toggle('select-mode');
+            sel.textContent = on ? 'Done' : 'Select';
+            if (!on) {
+                document.querySelectorAll('.row-checkbox:checked').forEach(function(c) { c.checked = false; });
+                var any = document.querySelector('.row-checkbox');
+                if (any) any.dispatchEvent(new Event('change', { bubbles: true }));
+                var all = document.getElementById('selectAll');
+                if (all) all.checked = false;
+            }
+            return;
+        }
+        // a row with a primary link opens it when tapped anywhere that is not itself a control
+        if (window.matchMedia('(max-width: 768px)').matches) {
+            var tr = e.target.closest('table.rowlist tr[data-rl-href]');
+            if (tr && !e.target.closest('a, button, input, select, textarea, label, summary, .action-menu, [data-href], [data-confirm]')) {
+                window.location.href = tr.getAttribute('data-rl-href');
+            }
+        }
+    });
+    // Applying a filter (or any submit inside an open bar) closes its sheet.
+    document.addEventListener('submit', function(e) {
+        if (e.target.closest && e.target.closest('.fs-ready.open')) setTimeout(closeSheet, 0);
+    });
+    document.addEventListener('jen:sheet', function(e) {
+        var el = document.getElementById(e.detail.id);
+        if (!el || !el.classList.contains('fs-ready')) return;
+        if (e.detail.open) {
+            var h = document.createElement('div');
+            h.className = 'fs-holder';
+            h.style.height = el.offsetHeight + 'px';
+            el.parentNode.insertBefore(h, el);
+            el._holder = h;
+        } else if (el._holder) {
+            el._holder.remove();
+            el._holder = null;
+        }
+    });
 
     // The section strip scrolls sideways on a phone: bring the active tab into view.
     var activeTab = document.querySelector('.section-tabs .section-tab.active');

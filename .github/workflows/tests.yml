@@ -153,6 +153,27 @@ jobs:
           JEN_DB_PASS: ci_jen_pw
         run: python -m pytest tests/e2e -m e2e -v --tracing=retain-on-failure
 
+      # v5.51.0 (Q58): the phone (390 x 844) and desktop (1440 x 900) screenshots
+      # tests/e2e/test_mobile.py writes. Uploaded on EVERY run — pass or fail — so
+      # the pages can be reviewed on a phone without reproducing anything locally.
+      - name: Upload mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mobile-screenshots
+          path: artifacts/mobile/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload desktop screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-screenshots
+          path: artifacts/desktop/
+          retention-days: 30
+          if-no-files-found: warn
+
       - name: Upload Playwright traces on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

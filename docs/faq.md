@@ -235,7 +235,7 @@ Yes. Go to **Settings → System → MFA Policy** and set it to "Required for Al
 ## Mobile
 
 ### Does Jen work on iPhone and iPad?
-Yes. On iPhone the navigation collapses to a hamburger menu and tables reflow into per-row cards. On iPad the full desktop layout is shown with some secondary columns hidden on narrower screens.
+Yes. On iPhone the navigation becomes a bottom tab bar with a More sheet, and tables reflow into compact rows or per-row cards. On iPad the full desktop layout is shown with some secondary columns hidden on narrower screens.
 
 ### Everything requires two taps on my iPhone
 This was a bug in versions before 2.5.7 caused by iOS's 300ms tap delay. Upgrade to v2.5.7 or later — all interactive elements now respond on the first tap.

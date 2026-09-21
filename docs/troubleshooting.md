@@ -731,9 +731,9 @@ The Verify tab queries the Jen host's own system resolver (`socket.getaddrinfo`/
 
 If tapping requires two taps or navigation is delayed, you are running a version before 2.5.7. Upgrade to v2.5.7 or later.
 
-### Hamburger menu not opening
+### The More sheet does not open
 
-Ensure JavaScript is enabled in Safari. The hamburger toggle requires JS.
+Ensure JavaScript is enabled in Safari. The bottom tab bar's More button, the Filters sheet and the More actions sheet all require JS; the tab bar's other four buttons are plain links and work without it.
 
 ### Table data is hard to read on iPhone
 
