@@ -97,7 +97,7 @@ def test_trace_renders_an_exchange_and_refuses_a_restricted_user(
     monkeypatch.setattr(
         kea_host,
         "tail_log",
-        lambda server, path, lines=200: {"ok": True, "code": "ok", "lines": EXCHANGE, "via": "helper"},
+        lambda server, path, lines=200, **kw: {"ok": True, "code": "ok", "lines": EXCHANGE, "via": "helper"},
     )
     page = logged_in_page
     page.goto(f"{base_url}/tools/trace?mac={MAC}")
