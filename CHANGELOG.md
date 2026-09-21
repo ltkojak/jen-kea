@@ -2,6 +2,66 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.49.0-beta.6] - 2026-09-21
+
+Beta channel. The release candidate. Stacked on the unpromoted 5.32.1-beta.1
+through 5.49.0-beta.5 chain — stable stays at v5.32.0 until the maintainer
+promotes. Anything found after this goes to a stable patch, not another beta.
+
+Seven edge cases from the review of beta.5, each inside a rule that already
+existed.
+
+**Trace now needs access to all subnets.** Trace decided who could see a MAC's
+log lines from that MAC's current lease and reservations, but the last 1000
+lines of Kea's log can still carry the same MAC's earlier activity in a subnet
+the caller cannot access, and Kea's log has no per-line subnet boundary Jen can
+trust. So, like configuration history and Doctor, Trace is now for accounts with
+unrestricted subnet access: a subnet-scoped admin is refused for every MAC, and
+the "Trace in Kea log" links are hidden from them. The authorization matrix
+covers it, including a client that moved out of a denied subnet.
+
+**Reconcile's Health summary is fleet-wide, so only unrestricted accounts write
+or see it.** A subnet-scoped reconcile used to overwrite the cached summary the
+Health Center shows to everyone with counts for its own subset. It now writes
+the cache only when run by an unrestricted account (and says so on the page when
+it does not), the Health check shows a scoped account "fleet-wide summary is for
+unrestricted accounts", and the expired hostnames used to tell a stale PTR from
+a wrong one are limited to the caller's subnets.
+
+**An IP timeline is about the address.** Looking up an address resolved its
+current holder's MAC and then matched events, audit rows and alerts on the MAC
+as well, so the timeline for 10.0.0.50 also showed that client's activity on
+10.0.0.73. An IP timeline now matches rows by the address only; the holder is
+used only to label earlier holders. A MAC timeline is unchanged.
+
+**Restore's health check is stricter.** After starting Jen the restore polled
+for any answer below 500, so a 404 from something else on the port, or a login
+page, counted as healthy. It now requires HTTP 200 with a JSON body containing
+`jen_version`; with HTTPS on, the plain port's redirect is followed only to
+Jen's own loopback HTTPS address (certificate not verified — loopback,
+self-signed) and must answer the same way. Anything else rolls the restore
+back.
+
+**Reconcile: a wrong address is not hidden by extra records.** Two records for a
+name, neither the address Jen expects, was reported as the informational
+`multiple-a`; the expected address is now checked first, so that case is a
+`wrong-forward`, and `multiple-a` means extra records that include the expected
+one.
+
+**The helper is version 5, and Trace needs it.** `tail-log` read the whole log
+into memory to return its last lines; it now keeps only the requested lines, so
+memory is bounded however large the log is. That is a change to the shipped
+helper, so every host reporting an older version now offers *"v5 available"*
+with the Update helper button (nothing stops working without it). Trace no
+longer falls back to the old `sudo tail` grant, which could not serve 1000 lines
+anyway: without the helper it says so instead of showing a partial log.
+
+**Two file details.** The scheduled-backup download is now sent with
+`Cache-Control: no-store` like the database exports, and the recovery
+bundle code now says plainly that the bundle is assembled in memory (roughly
+three times its size at peak, capped at 200 MB) before being streamed from a
+temporary file; a genuinely streaming format is a later, minor change.
+
 ## [5.49.0-beta.5] - 2026-09-21
 
 Beta channel. The last beta before promotion — the second audit, part two.
