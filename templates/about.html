@@ -123,7 +123,7 @@
 <!-- Subnet Summary -->
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("network") }} Configured Subnets</span></div>
-    <table class="u-046678">
+    <table class="rowlist u-046678">
         <thead><tr>
             <th class="u-9cc60a">Subnet ID</th>
             <th class="u-9cc60a">Name</th>
@@ -133,10 +133,10 @@
         <tbody>
         {% for sid, info in subnet_map.items() %}
         <tr>
-            <td class="mono">{{ sid }}</td>
-            <td><strong>{{ info.name }}</strong></td>
-            <td class="mono">{{ info.cidr }}</td>
-            <td style="text-align:right;color:var(--primary);font-weight:600;">{{ lease_counts.get(sid, 0) }}</td>
+            <td class="mono" data-m="secondary"><span class="phone-only">id </span>{{ sid }}</td>
+            <td data-m="primary"><strong>{{ info.name }}</strong></td>
+            <td class="mono" data-m="secondary">{{ info.cidr }}</td>
+            <td data-m="trailing" style="text-align:right;color:var(--primary);font-weight:600;">{{ lease_counts.get(sid, 0) }}</td>
         </tr>
         {% endfor %}
         </tbody>

@@ -36,6 +36,7 @@ ROWLIST_TABLES = [
     "config_history.html",
     "settings_kea.html",
     "dhcp_classes.html",
+    "about.html",
 ]
 
 
