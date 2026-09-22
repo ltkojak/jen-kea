@@ -2,6 +2,33 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.56.0-beta.1] - 2026-09-22
+
+Beta channel. Stacked on 5.55.3-beta.1. Q67 adds three more built-in themes
+alongside Dark, Light, High Contrast and Phosphor: Slate, a cool blue
+dark theme; Ember, a warm dark theme with an orange accent (red was kept
+off the accent role since it collides with red-as-danger on buttons,
+tabs and badges — Ember's danger stays a colder crimson); and Retro, a
+light theme meant to read as an early-90s desktop — a teal background
+behind grey panels, navy as the accent color. All three clear the same
+contrast floor every preset has always had to clear, with no warnings.
+
+Retro needed something beyond a palette to actually look like its era,
+so presets can now carry a small, fixed extra_css string alongside their
+tokens — CSS scoped to that preset's own theme selector, appended after
+its generated declarations. Retro's is a set of classic beveled borders
+on cards, buttons and sheets, and a navy title-bar look for the top nav.
+It's baked into the preset's source, never something a submitted custom
+palette can produce — the custom-palette form has no such field, and a
+value posted under that name is silently dropped.
+
+The theme picker, the phone theme sheet, the Install Default dropdown in
+Settings → Appearance, and the "Start from" row in the custom-palette
+editor all already listed every built-in preset generically, so the
+three new ones simply appeared there with no template changes. The
+install default and everyone's personal picks are unaffected — Dark
+stays the default look on every existing install.
+
 ## [5.55.3-beta.1] - 2026-09-22
 
 Beta channel. Stacked on 5.55.2-beta.1. Q66: the install default theme set
