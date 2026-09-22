@@ -137,3 +137,26 @@ def test_getting_started_dismiss_button_is_a_real_link_style_and_clears_the_pill
     dismiss.click()
     page.wait_for_url(f"{base_url}/getting-started")
     expect(page.locator("a", has_text="Getting started (")).to_have_count(0)
+
+
+def test_saving_the_install_default_theme_actually_works_with_csrf_on(logged_in_page, base_url):
+    # v5.55.2 (Q65) — this suite runs with CSRF enforcement ON (unlike the
+    # unit suite, WTF_CSRF_ENABLED=False there), so it's the only layer
+    # that could have caught the real bug: the theme-default form had no
+    # csrf_token field, and every save 403'd with "Your session security
+    # token is missing or expired." This proves the fix end to end, not
+    # just that the field is present in the markup.
+    page = logged_in_page
+    try:
+        page.goto(f"{base_url}/settings/appearance")
+        select = page.locator('select[name="theme_default"]')
+        expect(select).to_be_visible()
+        select.select_option("phosphor")
+        page.locator('form[action="/settings/theme/default"] button[type="submit"]').click()
+        expect(page.get_by_text("Install default theme updated.")).to_be_visible()
+        expect(page.locator('select[name="theme_default"]')).to_have_value("phosphor")
+    finally:
+        page.goto(f"{base_url}/settings/appearance")
+        page.locator('select[name="theme_default"]').select_option("dark")
+        page.locator('form[action="/settings/theme/default"] button[type="submit"]').click()
+        expect(page.get_by_text("Install default theme updated.")).to_be_visible()
