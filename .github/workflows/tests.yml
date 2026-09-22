@@ -153,6 +153,28 @@ jobs:
           JEN_DB_PASS: ci_jen_pw
         run: python -m pytest tests/e2e -m e2e -v --tracing=retain-on-failure
 
+      # Q62: a second pytest step, its own database (the live_server fixture's
+      # _reset_test_db() drops the journeys' tables first, as it always does),
+      # generating the README's screenshots from tests/e2e/demo_data.py's
+      # fictional dataset instead of a real install. tests/e2e/test_docs_screenshots.py
+      # skips itself unless JEN_E2E_DATASET=demo, so this is the only place that ever runs.
+      - name: Run docs screenshot suite
+        env:
+          JEN_DB_HOST: 127.0.0.1
+          JEN_DB_USER: jen
+          JEN_DB_PASS: ci_jen_pw
+          JEN_E2E_DATASET: demo
+        run: python -m pytest tests/e2e/test_docs_screenshots.py -m e2e -v
+
+      - name: Upload docs screenshots
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-screenshots
+          path: artifacts/docs/
+          retention-days: 30
+          if-no-files-found: warn
+
       # v5.51.0 (Q58): the phone (390 x 844) and desktop (1440 x 900) screenshots
       # tests/e2e/test_mobile.py writes. Uploaded on EVERY run — pass or fail — so
       # the pages can be reviewed on a phone without reproducing anything locally.

@@ -33,7 +33,7 @@ pytest.importorskip("playwright")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from tests.conftest import TEST_DB, _ensure_kea_schema, _patch_extensions
-from tests.e2e._fake_kea_server import FakeKeaServer
+from tests.e2e._fake_kea_server import FakeKeaServer, build_dhcp4_config
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "e2e-Sup3rSecret!1"
@@ -44,6 +44,21 @@ E2E_SUBNETS = {
     1: {"name": "Office", "cidr": "10.99.0.0/24"},
     2: {"name": "Guest", "cidr": "10.99.1.0/24"},
 }
+
+# v5.54.0-era (Q62) — JEN_E2E_DATASET=demo swaps the 22 journeys' two-subnet
+# fixture for tests/e2e/demo_data.py's fictional homelab, used only by
+# tests/e2e/test_docs_screenshots.py. The default (unset, or anything else)
+# is the existing dataset every other e2e test depends on by id and name —
+# this module never imports demo_data unless asked to.
+DATASET = os.environ.get("JEN_E2E_DATASET", "default")
+
+
+def _current_subnets() -> dict:
+    if DATASET == "demo":
+        from tests.e2e import demo_data
+
+        return demo_data.SUBNETS
+    return E2E_SUBNETS
 
 
 def _reset_test_db():
@@ -121,7 +136,18 @@ def clean_tables():
 
 @pytest.fixture(scope="session")
 def fake_kea():
-    server = FakeKeaServer()
+    dhcp4_config = None
+    if DATASET == "demo":
+        from tests.e2e import demo_data
+
+        dhcp4_config = build_dhcp4_config(
+            demo_data.SUBNETS,
+            demo_data.SUBNET_ROUTERS,
+            dns=demo_data.SUBNET_DNS,
+            pool_range=demo_data.SUBNET_POOL_RANGE,
+            valid_lifetime=demo_data.SUBNET_VALID_LIFETIME,
+        )
+    server = FakeKeaServer(dhcp4_config=dhcp4_config)
     server.start()
     yield server
     server.stop()
@@ -146,7 +172,7 @@ def live_server(fake_kea):
     # extensions.* assignment here would just get overwritten the moment
     # create_app() -> app_config.reload() re-reads the file from disk.
     app_config.write_value("kea", "api_url", f"http://127.0.0.1:{fake_kea.port}", reload=False)
-    app_config.write_subnets(E2E_SUBNETS, reload=False)
+    app_config.write_subnets(_current_subnets(), reload=False)
 
     import jen as jen_pkg
     import jen.config as jen_config
@@ -169,6 +195,12 @@ def live_server(fake_kea):
 
     init_jen_db()
     _seed_users()
+    if DATASET == "demo":
+        from jen.models.db import jen_db
+        from tests.e2e import demo_data
+
+        with jen_db() as db:
+            demo_data.seed(db)
 
     from werkzeug.serving import make_server
 
