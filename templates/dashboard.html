@@ -37,7 +37,20 @@
         <label class="u-fbdb05"><input type="checkbox" id="w-server_status"> Server Status</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
     </div>
-    <button class="btn btn-primary btn-sm" id="save-dash-prefs-btn">{{ icon("save") }} Save Layout</button>
+    <label class="u-fbdb05"><input type="checkbox" id="dash-compact-toggle"> Compact subnet cards</label>
+    <div class="flex gap-2 mt-3">
+        <button class="btn btn-primary btn-sm" id="save-dash-prefs-btn">{{ icon("save") }} Save Layout</button>
+        <button class="btn btn-secondary btn-sm" id="arrange-btn" type="button">{{ icon("move") }} Arrange…</button>
+    </div>
+</div>
+
+<!-- Arrange mode toolbar — shown only while body.arrange is set (toggleArrange()) -->
+<div id="dash-arrange-bar" class="card dash-arrange-toolbar" style="display:none;">
+    <span>{{ icon("move") }} <strong>Arranging</strong> — drag the grip (or use the arrows) to reorder; pick a width or pin/hide a subnet card.</span>
+    <div class="flex gap-2">
+        <button class="btn btn-secondary btn-sm" id="arrange-cancel-btn" type="button">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="arrange-save-btn" type="button">{{ icon("save") }} Save arrangement</button>
+    </div>
 </div>
 
 {% if kea_config_error %}
@@ -45,12 +58,12 @@
 {% endif %}
 
 <!-- Subnet statistics widget -->
-<div id="dash-widgets" style="display:flex;flex-direction:column;gap:16px;">
+<div id="dash-widgets" class="dash-widgets">
 
 <div id="dash-subnet_stats">
     <div class="stat-grid">
     {% for subnet_id, s in stats.items() %}
-    <div class="stat-card u-3b6a3a" data-href="/leases?subnet={{ subnet_id }}"  title="View leases for {{ s.name }}">
+    <div class="stat-card u-3b6a3a" data-subnet-id="{{ subnet_id }}" data-href="/leases?subnet={{ subnet_id }}"  title="View leases for {{ s.name }}">
         <div class="u-69957c">
             <div class="u-97445a">
                 <div class="stat-label">{% if subnets6 %}<span class="badge" style="font-size:9px;padding:1px 5px;background:var(--surface2);color:var(--text-muted);margin-right:4px;">v4</span>{% endif %}{{ s.name }} — {{ s.cidr }}</div>
@@ -92,7 +105,7 @@
     </div>
     {% endfor %}
     {% for s6 in subnets6 if not s6.paired_subnet4_id %}
-    <div class="stat-card u-3b6a3a" data-href="/devices?view=v6&subnet={{ s6.id }}"  title="View IPv6 devices for {{ s6.name }}">
+    <div class="stat-card u-3b6a3a" data-subnet-id="{{ s6.id }}" data-href="/devices?view=v6&subnet={{ s6.id }}"  title="View IPv6 devices for {{ s6.name }}">
         <div class="u-69957c">
             <div class="u-97445a">
                 <div class="stat-label"><span class="badge badge-production" style="font-size:9px;padding:1px 5px;margin-right:4px;">v6</span>{{ s6.name }} — {{ s6.cidr }}</div>
@@ -250,6 +263,31 @@
 
 <!-- Server status widget -->
 <style>@media (max-width: 767px) { .dash-refresh-label, #last-updated { display: none; } .page-header-controls { width: 100%; } }</style>
+<style>
+/* v5.54.0 (Q61) — panel widths + Arrange mode. Page-specific (dashboard.html only). */
+.dash-widgets { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.dash-widgets > div { flex: 1 1 100%; min-width: 0; }
+.dash-widgets > div.dw-half { flex: 1 1 calc(50% - 8px); }
+.dash-widgets > div.dw-third { flex: 1 1 calc(33.333% - 11px); }
+@media (max-width: 900px) { .dash-widgets > div.dw-third { flex: 1 1 calc(50% - 8px); } }
+@media (max-width: 640px) { .dash-widgets > div.dw-half, .dash-widgets > div.dw-third { flex: 1 1 100%; } }
+
+.dash-arrange-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; position: sticky; top: 56px; z-index: 90; }
+body.arrange .dash-arrange-toolbar { display: flex; }
+body.arrange #dash-customize, body.arrange #customize-btn { display: none; }
+
+/* the toolbar Arrange mode prepends to every panel / subnet card */
+.dash-arr-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 6px 10px; background: var(--surface2); border: 1px dashed var(--border); border-radius: var(--radius-sm); font-size: 12px; }
+.dash-arr-controls .grip { cursor: grab; color: var(--text-muted); font-size: 15px; line-height: 1; }
+.dash-arr-controls .dash-arr-label { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-arr-controls button { width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); cursor: pointer; }
+.dash-arr-controls button:hover { color: var(--text); }
+.dash-arr-controls button.on { color: var(--primary); border-color: var(--primary); }
+.dash-arr-controls select { width: auto; font-size: 12px; padding: 3px 6px; }
+body.arrange .dash-widgets > div, body.arrange .stat-card { outline: 1px dashed var(--border); outline-offset: 4px; }
+body.arrange .stat-card[data-hidden="1"] { opacity: 0.45; }
+@media (max-width: 768px) { .dash-arr-controls select.dash-width-picker { display: none; } }
+</style>
 <div id="dash-server_status" style="display:none;">
     <div class="card">
         <div class="card-header">
@@ -711,45 +749,245 @@ function updateStats() {
         .catch(function() { if (dot) dot.style.background = 'var(--danger)'; });
 }
 
-// ── Dashboard preferences ─────────────────────────────────────────────────────
-var ALL_WIDGETS = ['subnet_stats','totals','lease_history_chart','lease_sparklines','top_devices','recent_leases','server_status','alert_summary'];
+// ── Dashboard preferences (v5.54.0, Q61) ──────────────────────────────────────
+// Prefs v2: {v:2, panels:[{id,w}], subnets:{order,pinned,hidden}, compact}. The
+// server (jen/services/dashboard_prefs.py) is the only place that validates a
+// stored or posted value; this page just reflects whatever it returns.
+var WIDGET_CATALOG = {{ widget_catalog | tojson }};
+var CATALOG_LOADERS = {
+    lease_history_chart: loadHistory,
+    lease_sparklines: loadSparklines,
+    top_devices: loadTopDevices,
+    alert_summary: loadAlertSummary
+};
+var currentPrefs = null;   // the last prefs applied — what Cancel reverts to
+var SUBNET_BASELINE_ORDER = null;  // the server-rendered (Kea) order, captured once
+var ICO_GRIP = '<svg class="ico" aria-hidden="true"><use href="#i-grip-vertical"></use></svg>';
+var ICO_UP = '<svg class="ico" aria-hidden="true"><use href="#i-chevron-up"></use></svg>';
+var ICO_DOWN = '<svg class="ico" aria-hidden="true"><use href="#i-chevron-down"></use></svg>';
+var ICO_PIN = '<svg class="ico" aria-hidden="true"><use href="#i-pin"></use></svg>';
+var ICO_EYEOFF = '<svg class="ico" aria-hidden="true"><use href="#i-eye-off"></use></svg>';
 
 function toggleCustomize() {
     var p = document.getElementById('dash-customize');
     p.style.display = p.style.display === 'none' ? 'block' : 'none';
 }
 
-function applyDashPrefs(widgets) {
-    ALL_WIDGETS.forEach(function(w) {
-        var el = document.getElementById('dash-' + w);
-        if (el) el.style.display = widgets.includes(w) ? '' : 'none';
-        var cb = document.getElementById('w-' + w);
-        if (cb) cb.checked = widgets.includes(w);
+function widgetEl(id) { return document.getElementById('dash-' + id); }
+
+function reorderSubnetCards(subnetsPrefs) {
+    var grid = document.querySelector('#dash-subnet_stats .stat-grid');
+    if (!grid) return;
+    var cards = Array.prototype.slice.call(grid.querySelectorAll('.stat-card[data-subnet-id]'));
+    if (!cards.length) return;
+    if (!SUBNET_BASELINE_ORDER) SUBNET_BASELINE_ORDER = cards.map(function(c) { return c.getAttribute('data-subnet-id'); });
+    var byId = {};
+    cards.forEach(function(c) { byId[c.getAttribute('data-subnet-id')] = c; });
+    var base = SUBNET_BASELINE_ORDER.filter(function(id) { return byId[id]; });
+    var order = (subnetsPrefs.order || []).map(String).filter(function(id) { return byId[id]; });
+    var rest = base.filter(function(id) { return order.indexOf(id) === -1; });
+    var full = order.concat(rest);
+    var pinned = (subnetsPrefs.pinned || []).map(String).filter(function(id) { return full.indexOf(id) !== -1; });
+    var pinnedSet = {};
+    pinned.forEach(function(id) { pinnedSet[id] = 1; });
+    var finalOrder = pinned.concat(full.filter(function(id) { return !pinnedSet[id]; }));
+    var hidden = {};
+    (subnetsPrefs.hidden || []).map(String).forEach(function(id) { hidden[id] = 1; });
+    var arranging = document.body.classList.contains('arrange');
+    finalOrder.forEach(function(id) {
+        var el = byId[id];
+        grid.appendChild(el);
+        el.style.display = (hidden[id] && !arranging) ? 'none' : '';
+        el.dataset.pinned = pinnedSet[id] ? '1' : '0';
+        el.dataset.hidden = hidden[id] ? '1' : '0';
     });
-    // Load data for newly visible widgets
-    if (widgets.includes('lease_history_chart')) loadHistory();
-    if (widgets.includes('lease_sparklines'))    loadSparklines();
-    if (widgets.includes('top_devices'))         loadTopDevices();
-    if (widgets.includes('alert_summary'))       loadAlertSummary();
 }
 
-function saveDashPrefs() {
-    var widgets = ALL_WIDGETS.filter(function(w) {
-        var el = document.getElementById('w-' + w);
-        return el && el.checked;
+function applyDashPrefs(prefs) {
+    currentPrefs = prefs;
+    var visible = {};
+    prefs.panels.forEach(function(p) { visible[p.id] = p; });
+    prefs.panels.forEach(function(p) {
+        var el = widgetEl(p.id);
+        if (!el) return;
+        el.parentNode.appendChild(el);
+        el.style.display = '';
+        el.classList.remove('dw-half', 'dw-third');
+        if (p.w === 'half') el.classList.add('dw-half');
+        else if (p.w === 'third') el.classList.add('dw-third');
     });
+    Object.keys(WIDGET_CATALOG).forEach(function(id) {
+        var el = widgetEl(id);
+        if (el && !visible[id]) el.style.display = 'none';
+        var cb = document.getElementById('w-' + id);
+        if (cb) cb.checked = !!visible[id];
+    });
+    Object.keys(CATALOG_LOADERS).forEach(function(id) {
+        if (visible[id]) CATALOG_LOADERS[id]();
+    });
+    reorderSubnetCards(prefs.subnets || {});
+    var compactCb = document.getElementById('dash-compact-toggle');
+    if (compactCb) compactCb.checked = !!prefs.compact;
+    document.body.classList.toggle('dash-compact', !!prefs.compact);
+}
+
+// What the checklist + the current DOM order/widths/pin/hide state say right
+// now. Used by both "Save Layout" (visibility + compact only — order/widths/
+// subnet state stay whatever they already were) and "Save arrangement".
+function collectPrefsFromDom() {
+    var panels = [];
+    document.querySelectorAll('.dash-widgets > div[id^="dash-"]').forEach(function(el) {
+        var id = el.id.replace('dash-', '');
+        if (!WIDGET_CATALOG[id]) return;
+        var cb = document.getElementById('w-' + id);
+        if (cb && !cb.checked) return;
+        var w = el.classList.contains('dw-half') ? 'half' : el.classList.contains('dw-third') ? 'third' : 'full';
+        panels.push({id: id, w: w});
+    });
+    var order = [], pinned = [], hidden = [];
+    document.querySelectorAll('#dash-subnet_stats .stat-grid .stat-card[data-subnet-id]').forEach(function(el) {
+        var id = parseInt(el.getAttribute('data-subnet-id'), 10);
+        order.push(id);
+        if (el.dataset.pinned === '1') pinned.push(id);
+        if (el.dataset.hidden === '1') hidden.push(id);
+    });
+    var compactCb = document.getElementById('dash-compact-toggle');
+    return {v: 2, panels: panels, subnets: {order: order, pinned: pinned, hidden: hidden}, compact: !!(compactCb && compactCb.checked)};
+}
+
+function savePrefs(prefs, onDone) {
     fetch('/api/dashboard/save-prefs', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}'},
-        body: JSON.stringify({widgets: widgets})
+        body: JSON.stringify(prefs)
     }).then(function(r) { return r.json(); })
       .then(function(d) {
-        if (d.ok) {
-            applyDashPrefs(widgets);
-            document.getElementById('dash-customize').style.display = 'none';
-        }
+        if (d.ok) { applyDashPrefs(d); if (onDone) onDone(); }
     }).catch(function(e) { console.error('Save prefs failed:', e); });
 }
+
+function saveDashPrefs() {
+    savePrefs(collectPrefsFromDom(), function() {
+        document.getElementById('dash-customize').style.display = 'none';
+    });
+}
+
+// ── Arrange mode: drag (desktop) or the up/down arrows (phones — Safari's
+// drag-and-drop is unreliable there) reorder panels and, inside the subnet
+// widget, the subnet cards; a width picker (desktop only) sets a panel's
+// span; pin/hide toggle a subnet card. Nothing here writes until "Save
+// arrangement" — Cancel just re-applies currentPrefs. ─────────────────────────
+function panelWidth(el) { return el.classList.contains('dw-half') ? 'half' : el.classList.contains('dw-third') ? 'third' : 'full'; }
+
+function decoratePanel(el) {
+    var id = el.id.replace('dash-', '');
+    var meta = WIDGET_CATALOG[id];
+    if (!meta || el.querySelector(':scope > .dash-arr-controls')) return;
+    el.setAttribute('draggable', 'true');
+    var w = panelWidth(el);
+    var opts = ['full', 'half', 'third'].map(function(x) {
+        return '<option value="' + x + '"' + (x === w ? ' selected' : '') + '>' + x + '</option>';
+    }).join('');
+    var bar = document.createElement('div');
+    bar.className = 'dash-arr-controls';
+    bar.innerHTML = '<span class="grip" title="Drag to reorder">' + ICO_GRIP + '</span>' +
+        '<span class="dash-arr-label">' + escapeHtml(meta.label) + '</span>' +
+        '<button type="button" data-arr-move="up" title="Move up" aria-label="Move ' + escapeHtml(meta.label) + ' up">' + ICO_UP + '</button>' +
+        '<button type="button" data-arr-move="down" title="Move down" aria-label="Move ' + escapeHtml(meta.label) + ' down">' + ICO_DOWN + '</button>' +
+        '<select class="dash-width-picker" data-arr-width aria-label="Width for ' + escapeHtml(meta.label) + '">' + opts + '</select>';
+    el.insertBefore(bar, el.firstChild);
+}
+
+function decorateCard(el) {
+    if (el.querySelector(':scope > .dash-arr-controls')) return;
+    el.setAttribute('draggable', 'true');
+    var pinned = el.dataset.pinned === '1', hidden = el.dataset.hidden === '1';
+    var bar = document.createElement('div');
+    bar.className = 'dash-arr-controls';
+    bar.innerHTML = '<span class="grip" title="Drag to reorder">' + ICO_GRIP + '</span>' +
+        '<span class="dash-arr-label">Subnet card</span>' +
+        '<button type="button" data-arr-move="up" title="Move up" aria-label="Move card up">' + ICO_UP + '</button>' +
+        '<button type="button" data-arr-move="down" title="Move down" aria-label="Move card down">' + ICO_DOWN + '</button>' +
+        '<button type="button" data-arr-pin class="' + (pinned ? 'on' : '') + '" title="Pin to the top" aria-label="Pin this card to the top">' + ICO_PIN + '</button>' +
+        '<button type="button" data-arr-hide class="' + (hidden ? 'on' : '') + '" title="Hide on the dashboard" aria-label="Hide this card on the dashboard">' + ICO_EYEOFF + '</button>';
+    el.insertBefore(bar, el.firstChild);
+}
+
+function enterArrange() {
+    document.body.classList.add('arrange');
+    document.querySelectorAll('.dash-widgets > div[id^="dash-"]').forEach(decoratePanel);
+    document.querySelectorAll('#dash-subnet_stats .stat-card[data-subnet-id]').forEach(function(el) {
+        el.style.display = '';  // reveal hidden cards too, so they can be un-hidden
+        decorateCard(el);
+    });
+}
+
+function exitArrange(revert) {
+    document.body.classList.remove('arrange');
+    document.querySelectorAll('.dash-arr-controls').forEach(function(n) { n.remove(); });
+    document.querySelectorAll('.dash-widgets > div, .stat-card').forEach(function(n) { n.removeAttribute('draggable'); });
+    if (revert && currentPrefs) applyDashPrefs(currentPrefs);
+}
+
+function moveSibling(el, dir) {
+    var parent = el.parentNode;
+    if (dir === 'up') {
+        var prev = el.previousElementSibling;
+        if (prev) parent.insertBefore(el, prev);
+    } else {
+        var next = el.nextElementSibling;
+        if (next) parent.insertBefore(next, el);
+    }
+}
+
+var dragEl = null;
+document.addEventListener('dragstart', function(e) {
+    var el = e.target.closest('.dash-widgets > div, .stat-card');
+    if (!el || !document.body.classList.contains('arrange')) return;
+    dragEl = el;
+    e.dataTransfer.effectAllowed = 'move';
+});
+document.addEventListener('dragover', function(e) {
+    if (!dragEl) return;
+    var over = e.target.closest('.dash-widgets > div, .stat-card');
+    if (!over || over === dragEl || over.parentNode !== dragEl.parentNode) return;
+    e.preventDefault();
+    var rect = over.getBoundingClientRect();
+    var before = (e.clientY - rect.top) < rect.height / 2;
+    over.parentNode.insertBefore(dragEl, before ? over : over.nextSibling);
+});
+document.addEventListener('dragend', function() { dragEl = null; });
+
+document.addEventListener('click', function(e) {
+    var move = e.target.closest('[data-arr-move]');
+    if (move) {
+        var el = move.closest('.dash-widgets > div, .stat-card');
+        if (el) moveSibling(el, move.getAttribute('data-arr-move'));
+        return;
+    }
+    var pin = e.target.closest('[data-arr-pin]');
+    if (pin) {
+        var card = pin.closest('.stat-card');
+        card.dataset.pinned = card.dataset.pinned === '1' ? '0' : '1';
+        pin.classList.toggle('on');
+        return;
+    }
+    var hide = e.target.closest('[data-arr-hide]');
+    if (hide) {
+        var hcard = hide.closest('.stat-card');
+        hcard.dataset.hidden = hcard.dataset.hidden === '1' ? '0' : '1';
+        hide.classList.toggle('on');
+        return;
+    }
+});
+document.addEventListener('change', function(e) {
+    if (!e.target.matches('[data-arr-width]')) return;
+    var panel = e.target.closest('.dash-widgets > div');
+    if (!panel) return;
+    panel.classList.remove('dw-half', 'dw-third');
+    if (e.target.value === 'half') panel.classList.add('dw-half');
+    else if (e.target.value === 'third') panel.classList.add('dw-third');
+});
 
 // ── Auto-refresh ──────────────────────────────────────────────────────────────
 function setRefreshInterval(ms) {
@@ -769,9 +1007,9 @@ function setRefreshInterval(ms) {
     // Load preferences and apply
     fetch('/api/dashboard/get-prefs')
         .then(function(r) { return r.json(); })
-        .then(function(d) { applyDashPrefs(d.widgets); })
+        .then(function(d) { applyDashPrefs(d); })
         .catch(function() {
-            applyDashPrefs(['subnet_stats','recent_leases','server_status']);
+            applyDashPrefs({v: 2, panels: [{id: 'subnet_stats', w: 'full'}, {id: 'recent_leases', w: 'full'}, {id: 'server_status', w: 'half'}], subnets: {order: [], pinned: [], hidden: []}, compact: false});
         });
 
     // Restore refresh interval
@@ -787,6 +1025,10 @@ function setRefreshInterval(ms) {
 // v5.22.0 (Q18) — converted from inline on*= handlers.
 document.getElementById('customize-btn').addEventListener('click', toggleCustomize);
 document.getElementById('save-dash-prefs-btn').addEventListener('click', saveDashPrefs);
+document.getElementById('arrange-btn').addEventListener('click', enterArrange);
+document.getElementById('arrange-cancel-btn').addEventListener('click', function() { exitArrange(true); });
+document.getElementById('arrange-save-btn').addEventListener('click', function() { savePrefs(collectPrefsFromDom(), function() { exitArrange(false); }); });
+document.getElementById('dash-compact-toggle').addEventListener('change', function() { document.body.classList.toggle('dash-compact', this.checked); });
 document.getElementById('refreshInterval').addEventListener('change', function() { setRefreshInterval(this.value); });
 document.getElementById('history-days').addEventListener('change', loadHistory);
 document.getElementById('recent-hours').addEventListener('change', loadRecentLeases);

@@ -502,3 +502,49 @@ class TestMigration27Events:
         with jen_db() as db:
             _m027_events(db)  # must not raise when the table already exists
             db.commit()
+
+
+class TestMigration28DashboardPrefsWiden:
+    """v5.54.0 (Q61) — dashboard_prefs.widgets widened for the v2 prefs
+    shape (panel widths + subnet order/pinned/hidden), same VARCHAR-not-TEXT
+    reasoning as migration 19 (MySQL 8 forbids a literal DEFAULT on TEXT)."""
+
+    def test_migration_recorded(self):
+        assert 28 in applied_versions()
+
+    def test_column_widened(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM dashboard_prefs LIKE 'widgets'")
+            col = cur.fetchone()
+        assert "varchar(4000)" in col["Type"].lower()
+        assert col["Null"] == "NO"
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m028_dashboard_prefs_widgets_widen
+
+        with jen_db() as db:
+            _m028_dashboard_prefs_widgets_widen(db)  # must not raise once already widened
+            db.commit()
+
+    def test_a_v2_sized_value_fits(self):
+        import json
+
+        big = {
+            "v": 2,
+            "panels": [{"id": k, "w": "third"} for k in ("totals", "server_status", "alert_summary")],
+            "subnets": {"order": list(range(1, 80)), "pinned": [1, 2], "hidden": [3]},
+            "compact": False,
+        }
+        payload = json.dumps(big)
+        assert len(payload) < 4000
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO dashboard_prefs (user_id, widgets) VALUES (999999, %s) ON DUPLICATE KEY UPDATE widgets=%s",
+                (payload, payload),
+            )
+            db.commit()
+            cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=999999")
+            row = cur.fetchone()
+            cur.execute("DELETE FROM dashboard_prefs WHERE user_id=999999")
+            db.commit()
+        assert json.loads(row["widgets"]) == big

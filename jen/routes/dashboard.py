@@ -14,6 +14,7 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.services.alerts as __alerts
+import jen.services.dashboard_prefs as __dprefs
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
@@ -239,6 +240,7 @@ def dashboard():
         "ipv6_summary": _get_ipv6_dashboard_summary(),
         "subnets6": _get_subnets6_data(set(accessible_subnet_map.keys())),
         "kea_config_error": kea_config_error,
+        "widget_catalog": __dprefs.WIDGET_CATALOG,
     }
     # HTMX time window change — return just the recent leases rows
     if request.headers.get("HX-Request") == "true":
@@ -276,20 +278,16 @@ def api_saved_searches():
 @bp.route("/api/dashboard/save-prefs", methods=["POST"])
 @login_required
 def save_dashboard_prefs():
-    widgets = request.json.get("widgets", ["subnet_stats", "recent_leases"])
-    valid = {
-        "subnet_stats",
-        "recent_leases",
-        "top_devices",
-        "lease_sparklines",
-        "alert_summary",
-        "server_status",
-        "lease_history_chart",
-        "totals",
-    }
-    widgets = [w for w in widgets if w in valid]
-    if not widgets:
-        widgets = ["subnet_stats", "totals", "recent_leases", "server_status"]
+    """v5.54.0 (Q61) — accepts either the v1 body (`{"widgets": [...]}`, kept
+    for any older client-side cache still holding one) or the v2 body
+    (`{"v": 2, "panels": [...], "subnets": {...}, "compact": bool}`) and
+    validates it server-side either way — `dashboard_prefs.validate()` is the
+    only place a client value reaches storage, so an inaccessible subnet id
+    can never be pinned/ordered/hidden into a stored preference."""
+    body = request.json or {}
+    raw = body if "panels" in body or body.get("v") == 2 else body.get("widgets", [])
+    accessible_ids = set(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
+    prefs = __dprefs.validate(raw, accessible_ids)
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -297,10 +295,10 @@ def save_dashboard_prefs():
                     """INSERT INTO dashboard_prefs (user_id, widgets)
                                VALUES (%s, %s)
                                ON DUPLICATE KEY UPDATE widgets=%s, updated_at=NOW()""",
-                    (current_user.id, json.dumps(widgets), json.dumps(widgets)),
+                    (current_user.id, json.dumps(prefs), json.dumps(prefs)),
                 )
             db.commit()
-        return jsonify({"ok": True})
+        return jsonify({"ok": True, **prefs})
     except Exception as e:
         logger.error(f"Error saving dashboard prefs: {e}")
         return jsonify({"error": "Could not save preferences."}), 500
@@ -309,14 +307,18 @@ def save_dashboard_prefs():
 @bp.route("/api/dashboard/get-prefs")
 @login_required
 def get_dashboard_prefs():
+    accessible_ids = set(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=%s", (current_user.id,))
             row = cur.fetchone()
-        widgets = json.loads(row["widgets"]) if row else ["subnet_stats", "totals", "recent_leases", "server_status"]
-        return jsonify({"widgets": widgets})
+        raw = json.loads(row["widgets"]) if row else None
     except Exception:
-        return jsonify({"widgets": ["subnet_stats", "totals", "recent_leases", "server_status"]})
+        raw = None
+    prefs = __dprefs.validate(raw, accessible_ids)
+    # v1 shape too, for any cached client script that hasn't reloaded yet.
+    prefs["widgets"] = [p["id"] for p in prefs["panels"]]
+    return jsonify(prefs)
 
 
 # ─────────────────────────────────────────

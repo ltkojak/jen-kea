@@ -756,6 +756,26 @@ def _m019_dashboard_widgets_varchar(db):
             logger.info("Migration 19: dashboard_prefs.widgets TEXT → VARCHAR(512)")
 
 
+def _m028_dashboard_prefs_widgets_widen(db):
+    """
+    v5.54.0 (Q61) — dashboard_prefs.widgets held a short JSON array of widget
+    ids (migration 19's VARCHAR(512)). Q61's v2 shape adds panel widths and a
+    subnet order/pinned/hidden list, which for an account with many subnets
+    (or the full 15-widget catalog) can run past 512 characters. Widening to
+    VARCHAR(4000) (~16000 bytes at utf8mb4, well under InnoDB's per-row
+    limit for this two-other-column table) keeps the same VARCHAR-not-TEXT
+    reasoning migration 19 documented (MySQL 8 forbids a literal DEFAULT on
+    TEXT) while giving genuine headroom. Idempotent: skipped once widened.
+    """
+    with db.cursor() as cur:
+        if "varchar(4000)" not in _column_type(cur, "dashboard_prefs", "widgets"):
+            cur.execute(
+                "ALTER TABLE dashboard_prefs MODIFY widgets "
+                'VARCHAR(4000) NOT NULL DEFAULT \'["subnet_stats","recent_leases"]\''
+            )
+            logger.info("Migration 28: dashboard_prefs.widgets VARCHAR(512) -> VARCHAR(4000)")
+
+
 def _m020_kea_config_revisions(db):
     """
     v5.16.0 — `kea_config_revisions` records every Kea config Jen writes
@@ -1081,6 +1101,11 @@ MIGRATIONS = [
     (25, "api_keys.can_write flag for the API write endpoints (v5.34.0)", _m025_api_keys_can_write),
     (26, "server_stats table for packet health tracking (v5.41.0, Q42)", _m026_server_stats),
     (27, "events table for the event stream / timeline (v5.42.0, Q43)", _m027_events),
+    (
+        28,
+        "dashboard_prefs.widgets VARCHAR(512) -> VARCHAR(4000) for prefs v2 (v5.54.0, Q61)",
+        _m028_dashboard_prefs_widgets_widen,
+    ),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered
