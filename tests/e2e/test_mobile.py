@@ -447,8 +447,12 @@ class TestThemePicker:
                 "getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()"
             )
             assert font_ui != font_mono
+        # Phosphor's mono UI and Retro's 2px bevel borders (extra_css) are
+        # the two presets that add width beyond the shared layout — both get
+        # the phone overflow guard.
+        if preset_id in ("phosphor", "retro"):
             over = themed_page.evaluate(OVERFLOW_JS, PHONE["width"])
-            assert over <= 1, f"phosphor overflows the phone by {over}px"
+            assert over <= 1, f"{preset_id} overflows the phone by {over}px"
 
     def test_reports_chart_border_color_tracks_the_theme(self, themed_page, base_url, preset_id):
         _visit(themed_page, base_url, "/reports")

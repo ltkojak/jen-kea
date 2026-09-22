@@ -56,6 +56,7 @@ These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_
 - Alert summary feed
 - Auto-refresh with configurable interval
 - Customizable widget layout
+- Seven built-in color themes (Dark, Light, High contrast, Phosphor, Slate, Ember, Retro) or an install-defined custom palette — picked per person, independent of the install default (v5.55.0, more presets in v5.56.0)
 
 ### Lease & Reservation Management
 - Browse active leases with subnet, search, and time filters

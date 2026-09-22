@@ -160,12 +160,32 @@ class TestPresetsPinned:
         assert '@media (min-width:769px){:root[data-theme="phosphor"]{--font-ui:var(--font-mono);}}' in css
 
     def test_non_mono_presets_have_no_font_ui_override(self):
-        for tid in ("dark", "light", "contrast"):
+        for tid in ("dark", "light", "contrast", "slate", "ember", "retro"):
             css = theme.render_css(tid, **{k: v for k, v in theme.PRESETS[tid].items() if k != "name"})
             assert "--font-ui" not in css
 
-    def test_preset_ids_order_is_dark_light_contrast_phosphor(self):
-        assert theme.PRESET_IDS == ("dark", "light", "contrast", "phosphor")
+    def test_preset_ids_order_is_dark_light_contrast_phosphor_slate_ember_retro(self):
+        assert theme.PRESET_IDS == ("dark", "light", "contrast", "phosphor", "slate", "ember", "retro")
+
+    def test_retro_is_an_explicit_light_scheme_despite_its_teal_background(self):
+        # guess_color_scheme() would call this bg "dark" — retro pins it.
+        assert theme.PRESETS["retro"]["color_scheme"] == "light"
+        css = theme.render_css("retro", **{k: v for k, v in theme.PRESETS["retro"].items() if k != "name"})
+        assert "color-scheme:light" in css
+
+    def test_retro_css_carries_its_bevel_and_title_bar_rules(self):
+        css = theme.render_css("retro", **{k: v for k, v in theme.PRESETS["retro"].items() if k != "name"})
+        assert 'data-theme="retro"] .card' in css
+        assert 'data-theme="retro"] .btn:active' in css
+        assert 'data-theme="retro"] .nav{' in css
+        assert "background:#000080" in css
+
+    def test_extra_css_is_absent_from_every_other_presets_output(self):
+        for tid in ("dark", "light", "contrast", "phosphor", "slate", "ember"):
+            assert theme.PRESETS[tid].get("extra_css", "") == ""
+            css = theme.render_css(tid, **{k: v for k, v in theme.PRESETS[tid].items() if k != "name"})
+            assert "border-color:#ffffff #808080" not in css
+            assert "#000080" not in css
 
 
 class TestEveryPresetPassesItsOwnContrastFloor:
@@ -273,6 +293,14 @@ class TestValidatePalette:
         _, errors = theme.validate_palette({})
         # 11 tokens + radius; mono_ui has a safe falsy default so it never errors
         assert len(errors) == len(theme.TOKENS) + 1
+
+    def test_extra_css_in_the_form_is_ignored_not_stored(self):
+        # extra_css is a fixed, built-in-preset-only string (Retro's bevels) —
+        # the custom-palette form has no such field, and even a submitted one
+        # must never reach the saved palette.
+        result, errors = theme.validate_palette(self._valid_form(extra_css=":root{background:red}"))
+        assert errors == []
+        assert "extra_css" not in result
 
 
 class TestAllPresetsCss:

@@ -289,9 +289,9 @@ The log is paginated — 50 entries per page.
 
 ---
 
-## Theme (v5.55.0)
+## Theme (v5.56.0)
 
-Click the palette icon in the top right navigation bar (or **Theme** in the phone's More sheet) to pick a look: Dark, Light, High contrast, Phosphor, or Custom once an install has defined one. Your pick is saved in your browser and persists between sessions — it never affects what anyone else sees.
+Click the palette icon in the top right navigation bar (or **Theme** in the phone's More sheet) to pick a look: Dark, Light, High contrast, Phosphor, Slate (cool blue), Ember (warm), Retro (the early-nineties desktop), or Custom once an install has defined one. Your pick is saved in your browser and persists between sessions — it never affects what anyone else sees.
 
 At the top of the menu, **Install default (\<name\>)** switches back to whatever the install's superadmin has set as the default look (Settings → Appearance → Theme), for anyone who hasn't picked one for themselves. A checkmark shows which one is currently active — on a preset only if you've actually chosen it, on **Install default** otherwise.
 

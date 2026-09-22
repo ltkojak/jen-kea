@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+import jen.services.theme as thememod
 from tests.conftest import restricted_client
 
 
@@ -187,7 +188,15 @@ class TestThemeDefaultDrivesThePage:
 
     @pytest.mark.parametrize(
         "preset_id,name",
-        [("dark", "Dark"), ("light", "Light"), ("contrast", "High contrast"), ("phosphor", "Phosphor")],
+        [
+            ("dark", "Dark"),
+            ("light", "Light"),
+            ("contrast", "High contrast"),
+            ("phosphor", "Phosphor"),
+            ("slate", "Slate"),
+            ("ember", "Ember"),
+            ("retro", "Retro"),
+        ],
     )
     def test_the_picker_names_the_saved_default(self, logged_in_client, preset_id, name):
         # v5.55.3 (Q66) — the picker's own "Install default (<name>)"
@@ -199,6 +208,15 @@ class TestThemeDefaultDrivesThePage:
         assert page.data.count(expected) == 2, (
             f"expected 2 occurrences (nav + sheet), found {page.data.count(expected)}"
         )
+
+    def test_the_install_default_select_offers_every_built_in_preset(self, logged_in_client):
+        # v5.56.0 (Q67) — Slate, Ember and Retro joined the picker; the
+        # Settings select must offer all seven, not the pre-Q67 four.
+        page = logged_in_client.get("/settings/appearance").data.decode()
+        select_html = page.split('name="theme_default"')[1].split("</select>")[0]
+        assert select_html.count("<option") == len(thememod.PRESET_IDS)
+        for preset_id in thememod.PRESET_IDS:
+            assert f'value="{preset_id}"' in select_html
 
 
 class TestSettingsEndpointsRegistered:

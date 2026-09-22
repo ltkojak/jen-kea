@@ -21,10 +21,14 @@ in `base.html`. Use them instead of literal values in new CSS.
 `jen/services/theme.py` is the single source. `--bg`, `--surface`, `--surface2`,
 `--surface3`, `--border`, `--text`, `--text-muted`, `--primary`, `--success`,
 `--warning`, `--danger` and `--radius`/`--radius-sm` exist for every theme
-(the four built-in presets plus an install's own custom palette, if it has
+(the seven built-in presets plus an install's own custom palette, if it has
 one); never hard-code a color or radius that has to work across all of them.
 A new built-in preset is one entry in `theme.py`'s `PRESETS` dict — nothing
-in `base.html` changes.
+in `base.html` changes. A preset may also carry a fixed `extra_css` string
+(v5.56.0, Q67) — CSS scoped to its own `data-theme` selector, appended
+verbatim by `render_css()`. Retro's bevel borders and title-bar nav are the
+one example; the custom-palette form has no such field and can never
+produce one — `extra_css` only ever comes from a literal in `theme.py`.
 
 A **tint** (a color at partial opacity over the page background — a badge, an
 alert, a hover state) is `color-mix(in srgb, var(--token) N%, transparent)`,

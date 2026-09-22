@@ -2,7 +2,7 @@
 jen/services/theme.py
 ───────────────────────
 v5.55.0 (Q63) — the one source of truth for every colour token Jen's UI
-renders: the four built-in presets and the validated custom palette a
+renders: the seven built-in presets and the validated custom palette a
 superadmin can define for the whole install. Pure — no Flask, no DB, no
 Jinja — so the generated CSS, the contrast maths and the validator are all
 testable directly (tests/test_theme.py).
@@ -12,6 +12,10 @@ does not change. `contrast` (High Contrast) keeps every text/background
 pair at 7:1 or better (WCAG AAA); `phosphor` is the "for fun" terminal
 preset the maintainer asked for (amber-on-green, monospace UI on desktop,
 zero radius) — no animation, no typing effect, no scanline: just a palette.
+v5.56.0 (Q67) adds `slate` (blue), `ember` (warm) and `retro` (a light,
+Windows-3.1-era look) — `retro` is the one preset that carries `extra_css`,
+a fixed CSS string scoped to its own `data-theme` selector that a custom
+palette can never define; see `render_css()`.
 
 `render_css()` is the ONLY place a validated palette's values reach the
 page, through Jinja's `|safe` — `validate_palette()` is the injection
@@ -52,6 +56,30 @@ CSS_VARS = {
     "warning": "--warning",
     "danger": "--danger",
 }
+
+# Retro's only concession to its era: classic beveled borders and a
+# title-bar nav, scoped under its own data-theme so nothing else can see
+# it. Colours and borders, not animation — same "no gimmicks" rule Q63
+# set for Phosphor. Never exposed to the custom-palette form.
+_RETRO_EXTRA_CSS = (
+    ':root[data-theme="retro"] .card,'
+    ':root[data-theme="retro"] .stat-card,'
+    ':root[data-theme="retro"] .btn,'
+    ':root[data-theme="retro"] .tabbar,'
+    ':root[data-theme="retro"] .sheet{'
+    "border-style:solid;border-width:2px;"
+    "border-color:#ffffff #808080 #808080 #ffffff;"
+    "}"
+    ':root[data-theme="retro"] .btn:active{'
+    "border-color:#808080 #ffffff #ffffff #808080;"
+    "}"
+    ':root[data-theme="retro"] .nav{'
+    "background:#000080;color:#ffffff;"
+    "}"
+    ':root[data-theme="retro"] .nav a{'
+    "color:#ffffff;"
+    "}"
+)
 
 PRESETS = {
     "dark": {
@@ -130,6 +158,66 @@ PRESETS = {
         "mono_ui": True,
         "color_scheme": "dark",
     },
+    "slate": {
+        "name": "Slate",
+        "tokens": {
+            "bg": "#0f1520",
+            "surface": "#161e2c",
+            "surface2": "#1d2738",
+            "surface3": "#243147",
+            "border": "#2e3d55",
+            "text": "#dbe4f3",
+            "text_muted": "#7f90ab",
+            "primary": "#5aa9ff",
+            "success": "#3ddc97",
+            "warning": "#ffb454",
+            "danger": "#ff6b6b",
+        },
+        "radius": 6,
+        "mono_ui": False,
+        "color_scheme": "dark",
+    },
+    "ember": {
+        "name": "Ember",
+        "tokens": {
+            "bg": "#140d0b",
+            "surface": "#1c1310",
+            "surface2": "#251a15",
+            "surface3": "#2f221c",
+            "border": "#3f2d25",
+            "text": "#f1e4dc",
+            "text_muted": "#a08a7e",
+            "primary": "#ff8a3d",
+            "success": "#7fd67a",
+            "warning": "#ffc247",
+            "danger": "#ff4d5e",
+        },
+        "radius": 6,
+        "mono_ui": False,
+        "color_scheme": "dark",
+    },
+    "retro": {
+        "name": "Retro",
+        "tokens": {
+            "bg": "#20a0a0",
+            "surface": "#c0c0c0",
+            "surface2": "#d4d0c8",
+            "surface3": "#e6e6e6",
+            "border": "#404040",
+            "text": "#000000",
+            "text_muted": "#3c3c3c",
+            "primary": "#000080",
+            "success": "#004d00",
+            "warning": "#5c2e00",
+            "danger": "#8b0000",
+        },
+        "radius": 0,
+        "mono_ui": False,
+        # guess_color_scheme() would call the teal bg dark; form controls
+        # (and the rest of the "light desktop" reading) need it explicit.
+        "color_scheme": "light",
+        "extra_css": _RETRO_EXTRA_CSS,
+    },
 }
 
 PRESET_IDS = tuple(PRESETS)  # insertion order — the picker and the Settings select both use this order
@@ -150,15 +238,20 @@ def _normalize_hex(value: str) -> str | None:
     return v
 
 
-def render_css(theme_id: str, tokens: dict, radius: int, mono_ui: bool, color_scheme: str = "dark") -> str:
+def render_css(
+    theme_id: str, tokens: dict, radius: int, mono_ui: bool, color_scheme: str = "dark", extra_css: str = ""
+) -> str:
     """`:root[data-theme="<id>"]{...}` for one preset or the custom palette.
     When `mono_ui`, also emits the desktop-only rule that points `--font-ui`
     at `--font-mono` for that theme — phones never get the monospace UI (it
-    widens tables past the phone overflow guard)."""
+    widens tables past the phone overflow guard). `extra_css` is appended
+    verbatim after that — a built-in preset's own fixed string (e.g. Retro's
+    bevels); the custom palette never has one, so it never passes this."""
     decls = "".join(f"{CSS_VARS[name]}:{tokens[name]};" for name in TOKENS)
     css = f':root[data-theme="{theme_id}"]{{color-scheme:{color_scheme};{decls}--radius:{radius}px;}}'
     if mono_ui:
         css += f'@media (min-width:769px){{:root[data-theme="{theme_id}"]{{--font-ui:var(--font-mono);}}}}'
+    css += extra_css
     return css
 
 
@@ -166,7 +259,7 @@ def all_presets_css() -> str:
     """Every built-in preset's CSS, concatenated — what base.html's context
     processor hands the page in place of the old two hand-written blocks."""
     return "".join(
-        render_css(theme_id, p["tokens"], p["radius"], p["mono_ui"], p["color_scheme"])
+        render_css(theme_id, p["tokens"], p["radius"], p["mono_ui"], p["color_scheme"], p.get("extra_css", ""))
         for theme_id, p in PRESETS.items()
     )
 
