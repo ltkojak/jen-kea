@@ -280,3 +280,62 @@ class TestAllPresetsCss:
         css = theme.all_presets_css()
         for tid in theme.PRESET_IDS:
             assert f':root[data-theme="{tid}"]' in css
+
+
+class TestPickerNeverPersistsTheFallback:
+    """v5.55.3 (Q66) — applyTheme()'s `persist` argument is the whole fix.
+    v5.55.0 through v5.55.2 called applyTheme() unconditionally on every
+    page load, so the very first load on any browser silently pinned the
+    install default into localStorage as if it had been a deliberate
+    pick — after that, the install default could never win again for that
+    browser. Every applyTheme(...) call site outside the picker's own
+    click handler must pass persist=false; only the click handler may
+    ever pass true."""
+
+    def _base_html(self):
+        return pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+
+    def test_only_the_click_handler_may_persist(self):
+        src = self._base_html()
+        start = src.index(".theme-pick').forEach(function(btn) {")
+        # The inner addEventListener('click', ...) callback's own closing
+        # "});" — both applyTheme(...) calls inside the handler are well
+        # before it; the IIFE's own call (outside the handler entirely,
+        # in an earlier <script> block) is well before `start` itself.
+        end = src.index("});", start)
+        # Every real CALL to applyTheme(...) — not the `function applyTheme(id, persist) {` definition.
+        calls = [m.start() for m in re.finditer(r"(?<!function )applyTheme\(", src)]
+        assert len(calls) == 3, f"expected 3 applyTheme(...) calls (IIFE + 2 in the click handler), found {len(calls)}"
+        outside = [i for i in calls if not (start <= i <= end)]
+        assert len(outside) == 1, (
+            f"expected exactly one applyTheme(...) call outside the click handler, found {len(outside)}"
+        )
+        assert src[outside[0] :].startswith("applyTheme(initial, false)")
+
+    def test_the_click_handler_is_the_only_persist_true_call(self):
+        src = self._base_html()
+        assert src.count("applyTheme(id, true)") == 1
+        assert "applyTheme(THEME_DEFAULT, false)" in src
+
+    def test_the_pick_is_stored_under_the_new_key_never_the_old_one(self):
+        src = self._base_html()
+        assert "localStorage.setItem('jen-theme-pick'" in src
+        assert "localStorage.setItem('jen-theme'," not in src
+        assert "localStorage.setItem('jen-theme', " not in src
+        # The old key is actively cleaned up, not just abandoned.
+        assert "localStorage.removeItem('jen-theme')" in src
+
+    def test_the_check_mark_is_derived_from_stored_state_not_the_applied_id(self):
+        # v5.55.0-5.55.2's applyTheme() marked whichever button's
+        # data-theme-id matched the id just applied — including the
+        # install-default fallback, mislabelling it as a personal pick.
+        src = self._base_html()
+        assert "localStorage.getItem('jen-theme-pick')" in src
+        assert "bid === pick" in src and "bid === ''" in src
+
+
+class TestInstallDefaultPickerEntry:
+    def test_both_picker_surfaces_have_an_empty_data_theme_id_entry(self):
+        src = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+        assert src.count('data-theme-id=""') == 2  # nav dropdown + phone sheet
+        assert src.count("Install default (") == 2

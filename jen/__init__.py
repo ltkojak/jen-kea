@@ -599,10 +599,15 @@ def create_app() -> Flask:
             theme_meta_color = theme_custom["tokens"]["primary"]
         else:
             theme_meta_color = _theme.PRESETS.get(theme_default, _theme.PRESETS["dark"])["tokens"]["primary"]
+        # v5.55.3 (Q66) — the picker's own "Install default (<name>)" entry
+        # label, rendered server-side (Jinja, not |tojson'd into a script —
+        # it's never used as a JS value).
+        theme_default_name = dict(theme_presets).get(theme_default, theme_default)
         return {
             "theme_css": theme_css,
             "theme_presets": theme_presets,
             "theme_default": theme_default,
+            "theme_default_name": theme_default_name,
             "theme_custom": theme_custom,
             "theme_meta_color": theme_meta_color,
         }

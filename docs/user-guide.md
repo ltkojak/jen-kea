@@ -289,9 +289,11 @@ The log is paginated — 50 entries per page.
 
 ---
 
-## Dark / Light Mode
+## Theme (v5.55.0)
 
-Click the 🌙 / ☀️ button in the top right navigation bar to toggle between dark and light mode. Your preference is saved in your browser and persists between sessions.
+Click the palette icon in the top right navigation bar (or **Theme** in the phone's More sheet) to pick a look: Dark, Light, High contrast, Phosphor, or Custom once an install has defined one. Your pick is saved in your browser and persists between sessions — it never affects what anyone else sees.
+
+At the top of the menu, **Install default (\<name\>)** switches back to whatever the install's superadmin has set as the default look (Settings → Appearance → Theme), for anyone who hasn't picked one for themselves. A checkmark shows which one is currently active — on a preset only if you've actually chosen it, on **Install default** otherwise.
 
 ---
 
@@ -394,7 +396,7 @@ To upload a custom icon, enter an icon name (e.g. `amazon`, `mydevice`) and sele
 Jen is fully usable on iPhone and iPad.
 
 ### iPhone
-A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme toggle, your account links and Logout. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way.
+A tab bar along the bottom holds Dashboard, Leases, Reservations, Settings (a viewer, who has no Settings page, sees Devices there) and **More**. More opens a sheet that lists every page grouped as on desktop — Management, Network, Settings, plugins — with search, the theme picker, your account links and Logout. The top bar keeps the logo, the Kea status dot and your avatar. The section sub-tabs sit below it, scroll sideways, and start with the current page in view. Tables that have been converted show one two-line row per item; pages not yet converted still show per-row cards, so there is no horizontal scrolling either way.
 
 ### iPad
 The full desktop navigation is shown. Some lower-priority columns (MAC addresses, timestamps) are hidden on narrower iPad screens to keep tables readable — they are still available on desktop.

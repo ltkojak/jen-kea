@@ -419,7 +419,7 @@ class TestThemePicker:
     @pytest.fixture
     def themed_page(self, browser, base_url, preset_id):
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
-        ctx.add_init_script(f"localStorage.setItem('jen-theme', {preset_id!r})")
+        ctx.add_init_script(f"localStorage.setItem('jen-theme-pick', {preset_id!r})")
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
         yield page
@@ -467,7 +467,7 @@ class TestThemePickerSwitchesWithoutReload:
         expect(desktop.locator("html")).to_have_attribute("data-theme", "light")
         bg = desktop.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()")
         assert bg == thememod.PRESETS["light"]["tokens"]["bg"]
-        stored = desktop.evaluate("localStorage.getItem('jen-theme')")
+        stored = desktop.evaluate("localStorage.getItem('jen-theme-pick')")
         assert stored == "light"
         meta = desktop.get_attribute('meta[name="theme-color"]', "content")
         assert meta.lower() == thememod.PRESETS["light"]["tokens"]["primary"].lower()
@@ -589,3 +589,97 @@ class TestAlertSummaryStatusColumn:
             cur.execute("DELETE FROM dashboard_prefs WHERE user_id=1")
             cur.execute("DELETE FROM alert_log WHERE message IN ('ok test message', 'failed test message')")
             db.commit()
+
+
+class TestInstallDefaultPrecedence:
+    """v5.55.3 (Q66) — the install default silently never applied from
+    v5.55.0 through v5.55.2: applyTheme() wrote the fallback into
+    localStorage on every single page load, including the very first one
+    any browser ever made, pinning it as if it had been a deliberate pick
+    forever after. Fixed: applyTheme(id, persist) only writes when a real
+    pick happens (the picker's own click handler), under a new key
+    (jen-theme-pick) the old, permanently-polluted one (jen-theme) can
+    never leak into. Each test opens its own fresh context — the
+    module-scoped `phone`/`desktop` fixtures elsewhere in this file
+    already have an opinion about what's stored."""
+
+    @pytest.fixture(autouse=True)
+    def install_default_phosphor(self, logged_in_page, base_url):
+        page = logged_in_page
+        page.goto(f"{base_url}/settings/appearance")
+        page.locator('select[name="theme_default"]').select_option("phosphor")
+        page.locator('form[action="/settings/theme/default"] button[type="submit"]').click()
+        expect(page.get_by_text("Install default theme updated.")).to_be_visible()
+        yield
+        page.goto(f"{base_url}/settings/appearance")
+        page.locator('select[name="theme_default"]').select_option("dark")
+        page.locator('form[action="/settings/theme/default"] button[type="submit"]').click()
+        expect(page.get_by_text("Install default theme updated.")).to_be_visible()
+
+    def test_a_fresh_context_never_pins_the_fallback_into_storage(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        try:
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            for _ in range(2):
+                page.goto(f"{base_url}/")
+                assert page.evaluate("localStorage.getItem('jen-theme-pick')") is None
+                assert page.get_attribute("html", "data-theme") == "phosphor"
+        finally:
+            ctx.close()
+
+    def test_a_new_browser_gets_the_new_install_default_with_the_check_mark_on_it(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        try:
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            page.goto(f"{base_url}/")
+            expect(page.locator("html")).to_have_attribute("data-theme", "phosphor")
+            page.click("#dd-theme + label.theme-toggle")
+            install_default_btn = page.locator('.theme-pick[data-theme-id=""]')
+            expect(install_default_btn).to_contain_text("Install default (Phosphor)")
+            expect(install_default_btn).to_have_class(re.compile(r"\bactive\b"))
+        finally:
+            ctx.close()
+
+    def test_picking_light_stores_it_and_survives_reload_while_the_default_stays_phosphor(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        try:
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            page.goto(f"{base_url}/")
+            page.click("#dd-theme + label.theme-toggle")
+            page.click('.theme-pick[data-theme-id="light"]')
+            expect(page.locator("html")).to_have_attribute("data-theme", "light")
+            page.reload()
+            expect(page.locator("html")).to_have_attribute("data-theme", "light")
+            assert page.evaluate("localStorage.getItem('jen-theme-pick')") == "light"
+        finally:
+            ctx.close()
+
+    def test_picking_install_default_clears_the_stored_pick(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        ctx.add_init_script("localStorage.setItem('jen-theme-pick', 'light')")
+        try:
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            page.goto(f"{base_url}/")
+            expect(page.locator("html")).to_have_attribute("data-theme", "light")
+            page.click("#dd-theme + label.theme-toggle")
+            page.click('.theme-pick[data-theme-id=""]')
+            expect(page.locator("html")).to_have_attribute("data-theme", "phosphor")
+            assert page.evaluate("localStorage.getItem('jen-theme-pick')") is None
+        finally:
+            ctx.close()
+
+    def test_the_old_polluted_key_is_dropped_and_ignored(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        ctx.add_init_script("localStorage.setItem('jen-theme', 'light')")
+        try:
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            page.goto(f"{base_url}/")
+            expect(page.locator("html")).to_have_attribute("data-theme", "phosphor")
+            assert page.evaluate("localStorage.getItem('jen-theme')") is None
+        finally:
+            ctx.close()

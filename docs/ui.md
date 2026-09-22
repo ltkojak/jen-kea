@@ -36,6 +36,16 @@ badge palette, and hex-format example text). Chart.js/Canvas code can't use
 `var(--x)` directly; resolve it through `window.jenColor('var(--x)')`
 (`base.html`) instead, and rebuild on the `jen:theme` event a switch fires.
 
+**Which theme actually applies** (v5.55.3, Q66): a personal pick, stored in
+`localStorage['jen-theme-pick']` and written only by an actual click in the
+picker; else the install default (`theme_default`, Settings → Appearance →
+Theme); else Dark. `applyTheme(id, persist)`'s `persist` argument is the
+whole precedence guarantee — every call site outside the picker's own click
+handler passes `false`, so loading a page (including the very first one) can
+never itself write a pick. The pre-v5.55.3 key, `jen-theme`, was written on
+every load with no such guard and is actively removed on the next load
+rather than read.
+
 ### Utility classes
 
 `.muted` `.small` `.xs` `.mono` `.flex` `.wrap` `.stack` `.grow` `.right`

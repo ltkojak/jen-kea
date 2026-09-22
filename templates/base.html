@@ -627,6 +627,9 @@
             <div class="nav-dropdown-content">
                 <div class="nav-dropdown-header"><strong>Theme</strong></div>
                 <div class="nav-dropdown-divider"></div>
+                <button type="button" class="linkish theme-pick" data-theme-id="">
+                    <span class="theme-pick-check">{{ icon("circle-check") }}</span> Install default ({{ theme_default_name }})
+                </button>
                 {% for tid, tname in theme_presets %}
                 <button type="button" class="linkish theme-pick" data-theme-id="{{ tid }}">
                     <span class="theme-pick-check">{{ icon("circle-check") }}</span> {{ tname }}
@@ -795,6 +798,9 @@
     <div class="sheet-grab"></div>
     <div class="sheet-group-label">Theme</div>
     <div class="sheet-list">
+        <button type="button" class="full theme-pick" data-theme-id="" data-sheet-close>
+            <span class="theme-pick-check">{{ icon("circle-check") }}</span> Install default ({{ theme_default_name }})
+        </button>
         {% for tid, tname in theme_presets %}
         <button type="button" class="full theme-pick" data-theme-id="{{ tid }}" data-sheet-close>
             <span class="theme-pick-check">{{ icon("circle-check") }}</span> {{ tname }}
@@ -829,24 +835,37 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
-// Theme picker (v5.55.0, Q63) — jen-theme in localStorage holds a PRESET ID
-// now, not "dark"/"light" (an install's custom palette renders as "custom").
-// A saved id the page doesn't actually have a block for (an old install's
-// stale "dark"/"light" string still works since those ids didn't change;
-// anything else, e.g. a preset removed since) falls back to the install's
-// own default — THEME_DEFAULT, from theme_default (jen/__init__.py's
-// inject_theme), rendered here via |tojson so a value with a quote in it
-// can't break the script. This IIFE runs before paint (no FOUC); the
-// DOMContentLoaded listener below just marks the active picker button once
-// the nav exists.
+// Theme picker (v5.55.0, Q63; fixed in v5.55.3, Q66) — jen-theme-pick in
+// localStorage holds a PERSONAL preset id, only ever written by an actual
+// click on a preset in the picker (an install's custom palette renders as
+// "custom"). Nothing else writes it: applyTheme's `persist` argument is
+// false for the pre-paint IIFE's initial call and for applying the install
+// default, true only from the picker's own click handler below — v5.55.0
+// through v5.55.2 called applyTheme unconditionally, so the very
+// first page load on ANY browser silently pinned the fallback into
+// storage as if it had been chosen, and the install default could then
+// never win again for that browser. THEME_DEFAULT, from theme_default
+// (jen/__init__.py's inject_theme), rendered here via |tojson so a value
+// with a quote in it can't break the script. A saved id the page doesn't
+// have a block for (a preset removed since) falls back to THEME_DEFAULT.
+// This IIFE runs before paint (no FOUC); the DOMContentLoaded listener
+// below just marks the active picker button once the nav exists.
 var THEME_DEFAULT = {{ theme_default | tojson }};
 var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
-function applyTheme(id) {
+function applyTheme(id, persist) {
     var html = document.documentElement;
     html.setAttribute('data-theme', id);
-    try { localStorage.setItem('jen-theme', id); } catch (e) { /* private mode / blocked storage — theme still applies for this load */ }
+    if (persist) {
+        try { localStorage.setItem('jen-theme-pick', id); } catch (e) { /* private mode / blocked storage — theme still applies for this load */ }
+    }
+    // The check mark reflects whatever is ACTUALLY stored right now, not
+    // the id just applied — applying the install default (persist=false)
+    // must never mark a preset as "picked" when nothing was.
+    var pick = null;
+    try { pick = localStorage.getItem('jen-theme-pick'); } catch (e) { /* ignore */ }
     document.querySelectorAll('.theme-pick').forEach(function(b) {
-        b.classList.toggle('active', b.getAttribute('data-theme-id') === id);
+        var bid = b.getAttribute('data-theme-id');
+        b.classList.toggle('active', pick ? bid === pick : bid === '');
     });
     var primary = getComputedStyle(html).getPropertyValue('--primary').trim();
     var metaColor = document.querySelector('meta[name="theme-color"]');
@@ -855,10 +874,17 @@ function applyTheme(id) {
 }
 (function() {
     var saved = null;
-    try { saved = localStorage.getItem('jen-theme'); } catch (e) { /* ignore */ }
+    try {
+        saved = localStorage.getItem('jen-theme-pick');
+        // v5.55.3 (Q66) — the old key (jen-theme, written unconditionally
+        // through v5.55.2, and by the pre-v5.55 dark/light toggle before
+        // that) can never be trusted as a deliberate pick; drop it so it
+        // stops shadowing the install default forever.
+        localStorage.removeItem('jen-theme');
+    } catch (e) { /* ignore */ }
     var initial = (saved && THEME_IDS.indexOf(saved) !== -1) ? saved : THEME_DEFAULT;
     document.documentElement.setAttribute('data-theme', initial);
-    document.addEventListener('DOMContentLoaded', function() { applyTheme(initial); });
+    document.addEventListener('DOMContentLoaded', function() { applyTheme(initial, false); });
 })();
 
 // v5.55.0 (Q63) — resolve a CSS custom property to its actual computed value,
@@ -939,9 +965,18 @@ function sortTable(table, col, th) {
 
     // Theme picker — keyboard-shortcuts hint/modal, search box focus width —
     // all were inline on*= handlers before the CSP nonce conversion (v5.22.0).
+    // An empty data-theme-id is the "Install default" entry (v5.55.3, Q66):
+    // clear the personal pick and re-apply the install default, rather
+    // than picking a (nonexistent) preset with id "".
     document.querySelectorAll('.theme-pick').forEach(function(btn) {
         btn.addEventListener('click', function() {
-            applyTheme(btn.getAttribute('data-theme-id'));
+            var id = btn.getAttribute('data-theme-id');
+            if (id) {
+                applyTheme(id, true);
+            } else {
+                try { localStorage.removeItem('jen-theme-pick'); } catch (e) { /* ignore */ }
+                applyTheme(THEME_DEFAULT, false);
+            }
             var ddTheme = document.getElementById('dd-theme');
             if (ddTheme) ddTheme.checked = false;
         });
