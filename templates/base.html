@@ -402,11 +402,15 @@
 
         /* ── Mobile (≤768px) ── */
         @media (max-width: 768px) {
-            /* Dashboard page header — stack controls below title */
+            /* Dashboard page header — controls sit below the title (Q57) as
+               one row, not stacked (Q68c: dash-refresh-label/#last-updated
+               are already hidden at this width by dashboard.html's own
+               scoped style, so only Customize/select/dot remain). */
             .page-header-controls {
-                flex-direction: column;
-                align-items: flex-start !important;
-                gap: 8px;
+                flex-direction: row;
+                flex-wrap: nowrap;
+                align-items: center !important;
+                gap: var(--sp-2);
                 margin-top: 8px;
                 width: 100%;
             }

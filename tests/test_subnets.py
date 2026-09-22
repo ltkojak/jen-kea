@@ -174,6 +174,14 @@ class TestComputeSubnetEditDiff:
         assert diff[0]["old"] == "(unset)"
 
 
+class TestEditSubnetPage:
+    def test_subtitle_shows_the_cidr_not_a_blank_dash(self, logged_in_client):
+        # v5.56.1 (Q68b) — the v4 SUBNET_MAP entry has no "subnet" key
+        # (only "name"/"cidr"), so `subnet.subnet` rendered empty.
+        resp = logged_in_client.get("/subnets/edit/1")
+        assert b"Test Network \xe2\x80\x94 10.99.0.0/24" in resp.data
+
+
 class TestEditSubnetPreviewRoute:
     """Route-level tests using the real Flask test client. Paths that
     reach the per-server loop are covered with a FakeHelper (v5.11.0 —

@@ -564,7 +564,12 @@ def create_app() -> Flask:
         from jen.services import theme as _theme
 
         theme_css = [
-            (tid, _theme.render_css(tid, p["tokens"], p["radius"], p["mono_ui"], p["color_scheme"]))
+            (
+                tid,
+                _theme.render_css(
+                    tid, p["tokens"], p["radius"], p["mono_ui"], p["color_scheme"], p.get("extra_css", "")
+                ),
+            )
             for tid, p in _theme.PRESETS.items()
         ]
         theme_presets = [(tid, p["name"]) for tid, p in _theme.PRESETS.items()]

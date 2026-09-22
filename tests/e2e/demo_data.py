@@ -55,56 +55,73 @@ VENDOR_PREFIXES = {
     "Amazon": "00:bb:3a",
     "Roku": "b0:a7:37",
     "Intel": "00:02:b3",
+    # v5.56.1 (Q68e) — added so every hostname below can carry a vendor
+    # that actually makes sense for what it is (a printer badged Roku,
+    # an AP badged Amazon), instead of one picked independently at
+    # random. Every prefix re-verified present in oui_db.json (2026-09-22).
+    "Brother Printer": "00:1b:a9",
+    "Ubiquiti": "00:15:6d",
+    "Google": "00:1a:11",
+    "Sonos": "00:0e:58",
+    "Synology": "00:11:32",
+    "Nest": "18:b4:30",
+    "Dell": "00:06:5b",
+    "Lenovo": "04:7d:7b",
+    "VMware": "00:0c:29",
+    "TP-Link": "00:1d:0f",
 }
-_VENDOR_NAMES = list(VENDOR_PREFIXES)
 
-# Things, never people.
+# Things, never people. v5.56.1 (Q68e): each hostname is paired with the
+# vendor that plausibly made it — a printer's OUI badges as a printer
+# vendor, an access point as a networking vendor — rather than a vendor
+# picked independently at random (which produced "printer-office" badged
+# Roku, an AP badged Amazon).
 HOSTNAMES = [
-    "living-room-tv",
-    "kitchen-display",
-    "hallway-thermostat",
-    "printer-2f",
-    "nas-01",
-    "cam-driveway",
-    "esp-garage-01",
-    "pixel-guest",
-    "lab-pve-01",
-    "bedroom-speaker",
-    "office-desktop",
-    "kids-tablet",
-    "garage-door",
-    "doorbell-front",
-    "patio-cam",
-    "esp-mailbox",
-    "shop-vac-plug",
-    "guest-phone-1",
-    "guest-laptop",
-    "lab-switch-01",
-    "lab-nas-backup",
-    "office-laptop",
-    "upstairs-ap",
-    "downstairs-ap",
-    "media-server",
-    "printer-office",
-    "esp-sensor-attic",
-    "thermostat-upstairs",
-    "cam-backyard",
-    "roku-livingroom",
-    "sonos-kitchen",
-    "raspberrypi-dns",
-    "vpn-router",
-    "switch-core",
-    "ups-monitor",
-    "esp-plant-sensor",
-    "office-phone",
-    "lab-esxi-01",
-    "lab-truenas",
-    "kids-console",
-    "work-laptop",
-    "conference-cam",
-    "printer-lab",
-    "guest-tablet",
-    "esp-doorlock",
+    ("living-room-tv", "Roku"),
+    ("kitchen-display", "Google"),
+    ("hallway-thermostat", "Nest"),
+    ("printer-2f", "Brother Printer"),
+    ("nas-01", "Synology"),
+    ("cam-driveway", "TP-Link"),
+    ("esp-garage-01", "Espressif"),
+    ("pixel-guest", "Google"),
+    ("lab-pve-01", "VMware"),
+    ("bedroom-speaker", "Sonos"),
+    ("office-desktop", "Dell"),
+    ("kids-tablet", "Amazon"),
+    ("garage-door", "Espressif"),
+    ("doorbell-front", "Amazon"),
+    ("patio-cam", "TP-Link"),
+    ("esp-mailbox", "Espressif"),
+    ("shop-vac-plug", "Espressif"),
+    ("guest-phone-1", "Samsung"),
+    ("guest-laptop", "Lenovo"),
+    ("lab-switch-01", "Ubiquiti"),
+    ("lab-nas-backup", "Synology"),
+    ("office-laptop", "Dell"),
+    ("upstairs-ap", "Ubiquiti"),
+    ("downstairs-ap", "Ubiquiti"),
+    ("media-server", "Synology"),
+    ("printer-office", "Brother Printer"),
+    ("esp-sensor-attic", "Espressif"),
+    ("thermostat-upstairs", "Nest"),
+    ("cam-backyard", "TP-Link"),
+    ("roku-livingroom", "Roku"),
+    ("sonos-kitchen", "Sonos"),
+    ("raspberrypi-dns", "Raspberry Pi"),
+    ("vpn-router", "Ubiquiti"),
+    ("switch-core", "Ubiquiti"),
+    ("ups-monitor", "Intel"),
+    ("esp-plant-sensor", "Espressif"),
+    ("office-phone", "Apple"),
+    ("lab-esxi-01", "VMware"),
+    ("lab-truenas", "Intel"),
+    ("kids-console", "Samsung"),
+    ("work-laptop", "Lenovo"),
+    ("conference-cam", "TP-Link"),
+    ("printer-lab", "Brother Printer"),
+    ("guest-tablet", "Amazon"),
+    ("esp-doorlock", "Espressif"),
 ]
 
 RESERVATION_NOTES = [
@@ -155,8 +172,7 @@ def active_leases(rng: random.Random | None = None) -> list[dict]:
         base = SUBNETS[sid]["cidr"].rsplit(".", 1)[0]
         lifetime = SUBNET_VALID_LIFETIME[sid]
         for i in range(count):
-            vendor = _VENDOR_NAMES[rng.randrange(len(_VENDOR_NAMES))]
-            hostname = names[name_i % len(names)]
+            hostname, vendor = names[name_i % len(names)]
             name_i += 1
             age = rng.uniform(0.05, 0.9) * lifetime  # how far into its lease it already is
             rows.append(
@@ -177,7 +193,8 @@ def reservations(rng: random.Random | None = None, count: int = 30) -> list[dict
     """~30 reservations, spread across subnets in proportion to their lease
     counts, about a dozen carrying a `notes` value."""
     rng = rng or random.Random(20260921)
-    names = [n for n in HOSTNAMES if n not in {r["hostname"] for r in active_leases(rng=random.Random(20260921))}]
+    leased = {r["hostname"] for r in active_leases(rng=random.Random(20260921))}
+    names = [n for n in HOSTNAMES if n[0] not in leased]
     if not names:
         names = list(HOSTNAMES)
     weights = list(LEASE_COUNTS.values())
@@ -199,7 +216,7 @@ def reservations(rng: random.Random | None = None, count: int = 30) -> list[dict
         base = SUBNETS[sid]["cidr"].rsplit(".", 1)[0]
         # reservations live past the dynamic pool's low end, out of the active-lease range above
         offset = hi - (i % (hi - lo - LEASE_COUNTS[sid] - 5)) if hi - lo > LEASE_COUNTS[sid] + 5 else lo + 40 + i
-        vendor = _VENDOR_NAMES[rng.randrange(len(_VENDOR_NAMES))]
+        hostname, vendor = names[i % len(names)]
         has_notes = notes_left > 0 and rng.random() < 0.5
         if has_notes:
             notes_left -= 1
@@ -207,7 +224,7 @@ def reservations(rng: random.Random | None = None, count: int = 30) -> list[dict
             {
                 "ip": f"{base}.{max(lo, min(offset, 253))}",
                 "mac": _mac(rng, vendor),
-                "hostname": names[i % len(names)],
+                "hostname": hostname,
                 "subnet_id": sid,
                 "notes": RESERVATION_NOTES[i % len(RESERVATION_NOTES)] if has_notes else "",
             }
@@ -242,16 +259,16 @@ def devices(rng: random.Random | None = None) -> list[dict]:
     # a handful of "seen before, not leased right now" devices to round out to ~40
     extra_needed = max(0, 40 - len(seen))
     for i in range(extra_needed):
-        vendor = _VENDOR_NAMES[rng.randrange(len(_VENDOR_NAMES))]
+        hostname, vendor = HOSTNAMES[(i * 3 + 7) % len(HOSTNAMES)]
         mac = _mac(rng, vendor)
         sid = list(SUBNETS)[i % len(SUBNETS)]
         base = SUBNETS[sid]["cidr"].rsplit(".", 1)[0]
         mfr, dtype, dicon = lookup_oui(mac)
         seen[mac] = {
             "mac": mac,
-            "device_name": HOSTNAMES[(i * 3 + 7) % len(HOSTNAMES)],
+            "device_name": hostname,
             "last_ip": f"{base}.{50 + i}",
-            "last_hostname": HOSTNAMES[(i * 3 + 7) % len(HOSTNAMES)],
+            "last_hostname": hostname,
             "last_subnet_id": sid,
             "manufacturer": mfr,
             "device_type": dtype,

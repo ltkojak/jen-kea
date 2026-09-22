@@ -219,6 +219,27 @@ class TestThemeDefaultDrivesThePage:
             assert f'value="{preset_id}"' in select_html
 
 
+class TestRetroExtraCssReachesTheRenderedPage:
+    """v5.56.1 (Q68a) — Q67's own tests all called theme.render_css()/
+    all_presets_css() directly and passed, but the running app builds its
+    page CSS from inject_theme()'s own separate render_css() call, which
+    never passed extra_css — so Retro shipped without its bevels or title
+    bar in v5.56.0-beta.1. Assert on the actual rendered page, not the
+    helper the page doesn't call."""
+
+    def test_retros_bevel_and_title_bar_css_are_on_the_page(self, logged_in_client):
+        page = logged_in_client.get("/").data.decode()
+        assert page.count(':root[data-theme="retro"] .nav{background:#000080') == 1
+        assert page.count("border-color:#ffffff #808080 #808080 #ffffff") == 1
+
+    def test_a_saved_custom_palette_never_carries_retros_extra_css(self, logged_in_client, db):
+        logged_in_client.post("/settings/theme/custom", data=VALID_CUSTOM)
+        page = logged_in_client.get("/").data.decode()
+        custom_css = page.split(':root[data-theme="custom"]')[1].split("}")[0]
+        assert "background:#000080" not in custom_css
+        assert "border-color:#ffffff #808080" not in custom_css
+
+
 class TestSettingsEndpointsRegistered:
     def test_the_three_endpoints_exist(self, app):
         names = {r.endpoint for r in app.url_map.iter_rules()}

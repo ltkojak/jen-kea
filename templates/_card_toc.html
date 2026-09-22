@@ -3,9 +3,59 @@
   is (anchor id, label); the matching card has id="<anchor>". Usage:
       {% set toc = [('kea-api', 'Control Agent'), ('ssh', 'SSH')] %}
       {% include '_card_toc.html' %}
+
+  v5.56.1 (Q68d) — on the phone, the same `toc` list also drives making
+  every card it names collapsible: all but one start collapsed so a
+  Settings group page isn't one long scroll. Desktop is untouched — the
+  collapsing CSS only exists inside the ≤768px media query, so the JS
+  below can run unconditionally and just toggle a class.
 #}
 {% if toc and toc|length > 2 %}
 <div class="card-toc" aria-label="On this page">
   {% for anchor, label in toc %}<a href="#{{ anchor }}">{{ label }}</a>{% endfor %}
 </div>
+<style>
+@media (max-width: 768px) {
+  .card[data-collapsible] > .card-header {
+    cursor: pointer;
+    min-height: var(--tap);
+  }
+  .card[data-collapsible] > .card-header::after {
+    content: "\25BE";
+    color: var(--text-muted);
+    flex: none;
+  }
+  .card[data-collapsible].collapsed > .card-header::after { content: "\25B8"; }
+  .card[data-collapsible].collapsed > :not(.card-header) { display: none; }
+}
+</style>
+<script nonce="{{ csp_nonce }}">
+document.addEventListener('DOMContentLoaded', function() {
+    var toc = {{ toc | map(attribute=0) | list | tojson }};
+    var target = window.location.hash.slice(1);
+    var openId = toc.indexOf(target) !== -1 ? target : toc[0];
+    toc.forEach(function(anchor) {
+        var card = document.getElementById(anchor);
+        if (!card) return;
+        card.setAttribute('data-collapsible', '');
+        if (anchor !== openId) card.classList.add('collapsed');
+        var header = card.querySelector(':scope > .card-header');
+        if (header) {
+            header.addEventListener('click', function() {
+                card.classList.toggle('collapsed');
+            });
+        }
+    });
+    document.querySelectorAll('.card-toc a[href^="#"]').forEach(function(link) {
+        link.addEventListener('click', function() {
+            var card = document.getElementById(link.getAttribute('href').slice(1));
+            if (card) card.classList.remove('collapsed');
+        });
+    });
+    if (target) {
+        var targetCard = document.getElementById(target);
+        if (targetCard) targetCard.scrollIntoView();
+    }
+});
+</script>
 {% endif %}

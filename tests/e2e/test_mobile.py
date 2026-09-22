@@ -184,6 +184,53 @@ class TestPhonePages:
         expect(phone.locator("#more-sheet")).to_be_hidden()
 
 
+class TestDashboardHeaderRowOnPhone:
+    """v5.56.1 (Q68c) — the header controls stacked onto three lines at
+    phone width (Customize / select / a stray dot); they must share one
+    row instead."""
+
+    def test_customize_and_the_refresh_select_share_the_same_row(self, phone, base_url):
+        _visit(phone, base_url, "/dashboard")
+        customize_top = phone.eval_on_selector("#customize-btn", "el => el.getBoundingClientRect().top")
+        select_top = phone.eval_on_selector("#refreshInterval", "el => el.getBoundingClientRect().top")
+        assert abs(customize_top - select_top) < 2
+
+    def test_last_updated_and_the_auto_refresh_label_stay_hidden(self, phone, base_url):
+        _visit(phone, base_url, "/dashboard")
+        expect(phone.locator("#last-updated")).to_be_hidden()
+        expect(phone.locator(".dash-refresh-label")).to_be_hidden()
+
+
+class TestSettingsCardsCollapsibleOnPhone:
+    """v5.56.1 (Q68d) — settings-kea.png was 8,988px tall: seven cards,
+    all expanded, under a TOC. `_card_toc.html`'s own script collapses
+    every card it lists except one on the phone; desktop is untouched."""
+
+    def test_only_the_first_card_is_open_on_load(self, phone, base_url):
+        _visit(phone, base_url, "/settings/kea")
+        assert "collapsed" not in (phone.get_attribute("#kea-api", "class") or "")
+        for anchor in ("kea-ssh", "kea-servers", "kea6", "kea-d2", "kea-packages", "kea-drift"):
+            assert "collapsed" in (phone.get_attribute(f"#{anchor}", "class") or ""), anchor
+
+    def test_tapping_a_toc_chip_opens_its_card(self, phone, base_url):
+        _visit(phone, base_url, "/settings/kea")
+        phone.click('.card-toc a[href="#kea-d2"]')
+        assert "collapsed" not in (phone.get_attribute("#kea-d2", "class") or "")
+        expect(phone.locator("#kea-d2 form")).to_be_visible()
+
+    def test_the_screenshot_is_well_under_3000px(self, phone, base_url):
+        _visit(phone, base_url, "/settings/kea")
+        MOBILE_DIR.mkdir(parents=True, exist_ok=True)
+        phone.screenshot(path=str(MOBILE_DIR / "settings-kea.png"), full_page=True)
+        height = phone.evaluate("document.documentElement.scrollHeight")
+        assert height < 3000, f"settings-kea is {height}px tall"
+
+    def test_desktop_shows_every_card_open(self, desktop, base_url):
+        _visit(desktop, base_url, "/settings/kea")
+        for anchor in ("kea-api", "kea-ssh", "kea-servers", "kea6", "kea-d2", "kea-packages", "kea-drift"):
+            expect(desktop.locator(f"#{anchor} > :not(.card-header)").first).to_be_visible()
+
+
 class TestDesktopPass:
     def test_every_page_is_screenshotted_and_the_phone_chrome_is_absent(self, desktop, base_url):
         DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
