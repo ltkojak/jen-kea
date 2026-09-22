@@ -631,8 +631,12 @@ class TestSharedNetworks:
         r = logged_in_client.get("/subnets")
         body = r.data.decode()
         assert "<details" in body
+        # [\s\S]*? (not [^<]*) — the card-title span's content is
+        # {{ icon("plus") }} New shared network, and the icon() helper
+        # renders an <svg>...</svg> before the text, so a "no < allowed"
+        # class would stop at the icon's own opening tag.
         m = re.search(
-            r'<details class="card"[^>]*>\s*<summary class="card-header"><span class="card-title">[^<]*New shared network',
+            r'<details class="card"[^>]*>\s*<summary class="card-header"><span class="card-title">[\s\S]*?New shared network',
             body,
         )
         assert m, "New shared network card is not a <details><summary> accordion"
@@ -648,7 +652,7 @@ class TestSharedNetworks:
         r = logged_in_client.get("/subnets")
         body = r.data.decode()
         m = re.search(
-            r'<details class="card"[^>]*>\s*<summary class="card-header"><span class="card-title">[^<]*New shared network',
+            r'<details class="card"[^>]*>\s*<summary class="card-header"><span class="card-title">[\s\S]*?New shared network',
             body,
         )
         assert m, "New shared network card is not a <details><summary> accordion"

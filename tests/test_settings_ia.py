@@ -138,11 +138,16 @@ class TestGroupPagesRender:
         # v5.55.1 (Q64) — the section strip is redundant on the landing grid
         # (it shows the same destinations as cards below it) at phone width;
         # a group page still needs the strip visible, so it must never carry
-        # the hiding class.
+        # the hiding class. The CLASS being APPLIED to the wrap element, not
+        # bare substring presence — the class's own CSS rule (.section-tabs-
+        # wrap--landing { display: none; }) is in base.html's <style> block
+        # on every page regardless of nav.landing, so a naive substring check
+        # against the whole body always finds it and proves nothing.
+        applied = b'class="section-tabs-wrap section-tabs-wrap--landing"'
         landing = logged_in_client.get("/settings")
-        assert b"section-tabs-wrap--landing" in landing.data
+        assert applied in landing.data
         kea = logged_in_client.get("/settings/kea")
-        assert b"section-tabs-wrap--landing" not in kea.data
+        assert applied not in kea.data
 
     @pytest.mark.parametrize(
         "path",
