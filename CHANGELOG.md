@@ -2,6 +2,20 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.55.2-beta.1] - 2026-09-22
+
+Beta channel. Stacked on 5.55.1-beta.1. Q65: saving a theme under Settings →
+Appearance → Theme → "Install Default" returned Jen's own CSRF error page
+instead of actually saving, because that one form shipped without the
+hidden security-token field every submitting form needs — a plain
+oversight in the Q63 theme system, not a real security issue, since the
+app correctly refused a submission it couldn't verify rather than
+accepting a forged one. Fixed by adding the missing field. A new test now
+scans every POST form across Jen's own templates for that field, the same
+way an existing test already scanned every plugin template, so a form
+silently missing its token has a real test surface going forward instead
+of none.
+
 ## [5.55.1-beta.1] - 2026-09-22
 
 Beta channel. Stacked on 5.55.0-beta.1. Q64: a touch-navigation bug the maintainer
