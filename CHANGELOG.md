@@ -2,6 +2,40 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.55.1-beta.1] - 2026-09-22
+
+Beta channel. Stacked on 5.55.0-beta.1. Q64: a touch-navigation bug the maintainer
+hit on an iPhone, the orphan subnet card, and three small tidy-ups from the same
+round of screenshots.
+
+**The bug.** Since v2.5.10, every link on every page has listened for touchstart,
+touchmove and touchend, and navigated on touchend unless the finger's movement
+looked like a horizontal swipe. A vertical scroll never sets that flag, so lifting
+a finger after scrolling past any link navigated to it — the maintainer hit this on
+the Settings page, where the tiles are full-width links and dragging to scroll from
+inside one opened it. The same block also silently broke iOS's long-press link
+preview and Android's link context menu, everywhere, the whole time. The block is
+gone. Nothing replaces it: normal click handling was always correct here, and has
+been since the viewport meta tag and `touch-action: manipulation` made the old
+300ms tap delay this was working around moot. Scrolling now behaves like scrolling,
+tapping still behaves like tapping, and long-press previews work again.
+
+**The orphan card.** The Dashboard's subnet grid and the Reports page's per-subnet
+grid used to fit three cards per row at a typical desktop width, so a fourth subnet
+always rendered alone on its own row with empty space beside it. Four now share one
+row; three or fewer still lay out the same as before.
+
+**Three smaller fixes.** The Settings home page showed the same seven destinations
+twice — once as a horizontal strip, once as cards right below it — the strip is now
+hidden on a phone, where the duplication was most obvious (desktop keeps it,
+since there's room). The Subnets page's "create a shared network" form now starts
+collapsed once an install already has at least one, rather than always sitting
+expanded at the bottom of the page; it still opens by default the first time, when
+there isn't one yet. The Dashboard's Alert Summary widget used to print "check ok"
+on every single healthy row — the exact same text, every time; now a healthy row is
+simply quiet, and only a failure gets a marked, colored chip, which is the row that
+actually needed attention in the first place.
+
 ## [5.55.0-beta.1] - 2026-09-22
 
 Beta channel. Stacked on 5.54.0-beta.1. Q63: a real theme system, not just the
