@@ -69,6 +69,11 @@ class TestNonSuperadminRejected:
     def test_admin_post_is_redirected_away_and_changes_nothing(self, client, db, path, data):
         c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
         before = _get_setting(db, "theme_default")
+        # REPEATABLE READ (MySQL/MariaDB's default): `before`'s SELECT opened
+        # a transaction on this connection, and it would otherwise still be
+        # looking at that same snapshot below — a real write slipping past
+        # the decorator would go unnoticed. Close it out before the POST.
+        db.commit()
         resp = c.post(path, data=data, follow_redirects=False)
         assert resp.status_code == 302
         assert resp.headers["Location"] != path  # sent to the access-denied redirect, not back to itself
@@ -149,6 +154,10 @@ class TestRemoveThemeCustom:
         logged_in_client.post("/settings/theme/custom", data=VALID_CUSTOM)
         logged_in_client.post("/settings/theme/default", data={"theme_default": "custom"})
         assert _get_setting(db, "theme_default") == "custom"
+        # Same REPEATABLE READ gotcha as TestNonSuperadminRejected above —
+        # that assert's SELECT opened a transaction here; without closing it,
+        # every read below would still see this pre-remove snapshot.
+        db.commit()
 
         resp = logged_in_client.post("/settings/theme/custom/remove", follow_redirects=True)
         assert resp.status_code == 200
