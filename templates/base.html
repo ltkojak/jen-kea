@@ -1352,7 +1352,14 @@ function sortTable(table, col, th) {
         document.querySelectorAll('[data-href]').forEach(function(el) {
             if (el._jenWired) return;
             el._jenWired = true;
-            el.addEventListener('click', function() { window.location.href = el.getAttribute('data-href'); });
+            // v5.54.0 (Q61): the dashboard's Arrange-mode controls (grip, arrows, pin,
+            // hide) are the first interactive children a [data-href] container (a
+            // subnet stat-card) has ever had — without this guard, clicking any of
+            // them also fired the card's own "click to view leases" navigation.
+            el.addEventListener('click', function(e) {
+                if (e.target.closest('a, button, input, select, textarea, label, summary, .action-menu, [data-confirm]')) return;
+                window.location.href = el.getAttribute('data-href');
+            });
         });
         document.querySelectorAll('[data-submit]').forEach(function(el) {
             if (el._jenWired) return;

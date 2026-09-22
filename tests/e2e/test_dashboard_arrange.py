@@ -46,19 +46,20 @@ class TestArrangeOnDesktop:
         expect(page.locator("#dash-customize")).to_be_visible()
         page.check("#w-server_status")
         page.check("#w-alert_summary")
-        page.click("#save-dash-prefs-btn")
+        page.click("#save-dash-prefs-btn")  # closes the Customize panel on success
         page.wait_for_timeout(200)
 
         before = _panel_ids(page)
+        page.click("#customize-btn")
         page.click("#arrange-btn")
         expect(page.locator("body")).to_have_class(re.compile(r"\barrange\b"))
         last = before[-1]
         # move the last visible panel to the top with repeated "move up" clicks
         for _ in range(len(before) - 1):
-            page.locator("#" + last + " [data-arr-move='up']").click()
+            page.locator("#" + last + " > .dash-arr-controls [data-arr-move='up']").click()
         assert _panel_ids(page)[0] == last
 
-        page.locator("#" + last + " select[data-arr-width]").select_option("half")
+        page.locator("#" + last + " > .dash-arr-controls select[data-arr-width]").select_option("half")
         expect(page.locator("#" + last)).to_have_class(re.compile(r"\bdw-half\b"))
 
         page.click("#arrange-save-btn")
@@ -75,7 +76,11 @@ class TestArrangeOnDesktop:
         ids = _panel_ids(page)
         assert len(ids) >= 2
         first, second = ids[0], ids[1]
-        page.locator("#" + second + " .grip").drag_to(page.locator("#" + first + " .grip"))
+        # scoped to the panel's own arrange bar — #dash-subnet_stats also contains a
+        # per-card grip once its subnet cards are decorated for arrange mode.
+        page.locator("#" + second + " > .dash-arr-controls .grip").drag_to(
+            page.locator("#" + first + " > .dash-arr-controls .grip")
+        )
         page.wait_for_timeout(100)
         assert _panel_ids(page)[0] == second
         page.click("#arrange-cancel-btn")  # don't persist this one — the arrows test above already covers save
@@ -85,7 +90,7 @@ class TestArrangeOnDesktop:
         before = _panel_ids(page)
         page.click("#customize-btn")
         page.click("#arrange-btn")
-        page.locator("#" + before[-1] + " [data-arr-move='up']").click()
+        page.locator("#" + before[-1] + " > .dash-arr-controls [data-arr-move='up']").click()
         assert _panel_ids(page) != before
         page.click("#arrange-cancel-btn")
         assert _panel_ids(page) == before

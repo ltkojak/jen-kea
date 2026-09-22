@@ -146,3 +146,18 @@ class TestCatalogDataRoute:
         r = logged_in_client.get("/api/dashboard/catalog-data?widgets=forecast")
         assert r.status_code == 500
         assert b"boom" not in r.data
+
+
+class TestDataHrefGuardsInteractiveChildren:
+    """v5.54.0 (Q61) — Arrange mode was the first thing to put interactive
+    buttons inside a [data-href] container (a subnet stat-card); clicking one
+    used to also fire the card's own "navigate to /leases?subnet=N" listener."""
+
+    def test_base_html_skips_navigation_from_an_interactive_descendant(self):
+        base = (__import__("pathlib").Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(
+            encoding="utf-8"
+        )
+        anchor = "document.querySelectorAll('[data-href]').forEach(function(el) {"
+        assert anchor in base
+        block = base[base.index(anchor) : base.index("});", base.index(anchor)) + 3]
+        assert "e.target.closest(" in block
