@@ -2,6 +2,25 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.55.3-beta.1] - 2026-09-22
+
+Beta channel. Stacked on 5.55.2-beta.1. Q66: the install default theme set
+under Settings → Appearance → Theme silently never applied. Choosing a
+preset there and saving showed the success message, but the page — and
+every viewer who hadn't picked a theme for themselves — kept showing Dark
+regardless. The cause: the picker wrote its own fallback value into the
+browser's storage on every single page load, not just when someone actually
+clicked a preset, so the very first page any browser had loaded since 5.55.0
+quietly saved "dark" as if it had been a deliberate choice. From that point
+on, nothing could ever change what that browser showed, no matter what the
+install default was set to. Fixed at the root: only clicking a theme in the
+picker saves a personal choice now, and it's stored under a new key so the
+old, permanently tainted one can never be read again — every browser picks
+up the real install default the next time it loads, and anyone who wants
+their own look simply picks it once more. The picker also gains an "Install
+default" entry at the top of the menu, so returning to it is one click
+away.
+
 ## [5.55.2-beta.1] - 2026-09-22
 
 Beta channel. Stacked on 5.55.1-beta.1. Q65: saving a theme under Settings →
