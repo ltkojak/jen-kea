@@ -154,21 +154,29 @@ class TestDesktopScreenshots:
         # trend, so it's the only one with a dashed projection line to show.
         # (Production, first in subnet order, has a flat trend and never draws
         # one — framing on it would never satisfy "the dashed projection on IoT".)
-        # Chart.js keeps resizing/animating canvases for a bit after the "N data
-        # points" text is already correct, which shifts card heights below —
-        # scroll, wait, then scroll again immediately before capture so the
-        # second call corrects for anything that moved during the wait.
-        scroll_to_iot = (
-            "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT')); "
-            "if (t) t.closest('.card').scrollIntoView({block: 'start'}); }"
-        )
-        desktop.evaluate(scroll_to_iot)
-        desktop.wait_for_timeout(500)
-        desktop.evaluate(scroll_to_iot)
-        desktop.wait_for_timeout(150)
+        # Chart.js keeps resizing/animating canvases for a while after the "N
+        # data points" text this test already waited on is correct, which
+        # shifts every card's height below it — two earlier attempts here each
+        # scrolled correctly, then drifted by the time the screenshot was
+        # actually taken. A long settle wait, then a scroll that re-reads and
+        # re-corrects its own target in a tight synchronous loop (getBoundingClientRect
+        # forces a layout flush, so each iteration sees the scroll the previous
+        # one just made) immediately before the screenshot, with no Python
+        # round trip in between to leave a gap for another resize to land in.
+        desktop.wait_for_timeout(1500)
         in_view = desktop.evaluate(
-            "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT')); "
-            "const r = t.closest('.card').getBoundingClientRect(); return r.top >= 0 && r.top < 300; }"
+            "() => {"
+            "  const find = () => [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT'));"
+            "  let r = null;"
+            "  for (let i = 0; i < 8; i++) {"
+            "    const t = find();"
+            "    if (!t) return false;"
+            "    r = t.closest('.card').getBoundingClientRect();"
+            "    if (r.top >= 0 && r.top < 150) return true;"
+            "    window.scrollBy(0, r.top - 60);"
+            "  }"
+            "  return r ? (r.top >= 0 && r.top < 300) : false;"
+            "}"
         )
         assert in_view, "reports: IoT's chart card never settled near the top of the frame"
         _leak_guard(desktop, "reports")
