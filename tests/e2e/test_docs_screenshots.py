@@ -150,9 +150,14 @@ class TestDesktopScreenshots:
             f"return !!m && parseInt(m[1], 10) > 0 && ({NO_LOADING_JS}); }}",
             "reports",
         )
-        # scroll so the summary cards and the first chart share the frame, same
-        # framing the maintainer's own references used (not a full-page capture).
-        desktop.evaluate("window.scrollTo(0, 260)")
+        # Scroll to IoT's own chart card — the one demo_data.py gives a rising
+        # trend, so it's the only one with a dashed projection line to show.
+        # (Production, first in subnet order, has a flat trend and never draws
+        # one — framing on it would never satisfy "the dashed projection on IoT".)
+        desktop.evaluate(
+            "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT')); "
+            "if (t) t.closest('.card').scrollIntoView({block: 'start'}); }"
+        )
         desktop.wait_for_timeout(150)
         _leak_guard(desktop, "reports")
         _save(desktop, "reports")
