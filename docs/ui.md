@@ -167,3 +167,26 @@ one-offs. A fixed multi-column grid collapses to one column on a phone. Run
 `py tools/extract_inline_styles.py --check` to regenerate the CSS; `tests/test_ui_classes.py` fails on
 drift, on an unused or missing class, and when a template still has extractable styles.
 For new markup prefer the tokens and utilities above.
+
+## Refreshing the README screenshots
+
+**Screenshots in the README come only from this job, never from a real install.**
+Every one of them is generated in CI, on every `e2e` run, from
+`tests/e2e/demo_data.py`'s fictional homelab dataset
+(`tests/e2e/test_docs_screenshots.py`, `JEN_E2E_DATASET=demo`) — a real
+capture would carry real hostnames, real people's names in reservation
+notes, and the maintainer's own addresses, none of which belong on the
+project's front door.
+
+To pick up a new set after a UI change, download the latest run's artifact
+and commit it:
+
+```bash
+gh run list --limit 1 --json databaseId
+gh run download <id> -n docs-screenshots -D docs/images
+git add docs/images && git commit
+```
+
+`tests/test_readme_images.py` fails the build if a downloaded image is
+missing, over 500 KB, a `.jpg` (the old, hand-captured format — never bring
+one back), or left uncommitted while the README stops referencing it.

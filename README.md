@@ -16,19 +16,32 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 
 ---
 
-![Jen dashboard](docs/images/Dashboard.jpg)
+![Jen dashboard](docs/images/dashboard.png)
 
 <details>
 <summary>More screenshots</summary>
 
 **Leases**
-![Leases](docs/images/leases.jpg)
+![Leases](docs/images/leases.png)
+
+**Reservations**
+![Reservations](docs/images/reservations.png)
 
 **Subnets & scope options**
-![Subnets](docs/images/subnets.jpg)
+![Subnets](docs/images/subnets.png)
 
-**Settings**
-![Settings](docs/images/settings.jpg)
+**Reports**
+![Reports](docs/images/reports.png)
+
+**On a phone**
+
+<p align="center">
+  <img src="docs/images/phone-dashboard.png" width="30%" alt="Dashboard on a phone">
+  <img src="docs/images/phone-leases.png" width="30%" alt="Leases on a phone">
+  <img src="docs/images/phone-more.png" width="30%" alt="The More sheet on a phone">
+</p>
+
+These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_data.py`), so they never show a real network.
 
 </details>
 
