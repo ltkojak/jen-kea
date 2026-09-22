@@ -14,6 +14,7 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.services.alerts as __alerts
+import jen.services.dashboard_catalog as __dcatalog
 import jen.services.dashboard_prefs as __dprefs
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
@@ -323,6 +324,41 @@ def get_dashboard_prefs():
 
 # ─────────────────────────────────────────
 # Global Search
+
+
+@bp.route("/api/dashboard/catalog-data")
+@login_required
+def dashboard_catalog_data():
+    """v5.54.0 (Q61) — the seven catalog widgets are lazy, like the
+    pre-existing sparklines/top-devices/alert-summary widgets: nothing here
+    runs unless the caller names it (its widget must be enabled AND visible
+    for the page's own loadCatalogWidget() to ever call this)."""
+    requested = {w.strip() for w in request.args.get("widgets", "").split(",") if w.strip()}
+    accessible = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+    out = {}
+    try:
+        if "forecast" in requested:
+            out["forecast"] = __dcatalog.forecast_widget(accessible.keys())
+        if "packet_health" in requested:
+            servers = [
+                {"id": s["id"], "name": s.get("name") or s.get("ssh_host") or f"Server {s['id']}"}
+                for s in extensions.KEA_SERVERS
+            ]
+            out["packet_health"] = __dcatalog.packet_health_widget(servers)
+        if "readiness" in requested:
+            out["readiness"] = __dcatalog.readiness_widget()
+        if "events_feed" in requested:
+            out["events_feed"] = __dcatalog.events_feed_widget(accessible.keys(), current_user.all_subnets)
+        if "ha_state" in requested:
+            out["ha_state"] = __dcatalog.ha_state_widget(__kea.get_all_server_status())
+        if "ddns_errors" in requested:
+            out["ddns_errors"] = __dcatalog.ddns_errors_widget()
+        if "getting_started" in requested:
+            out["getting_started"] = __dcatalog.getting_started_widget(current_user, current_user.role == "superadmin")
+    except Exception as e:
+        logger.error(f"dashboard catalog-data error: {e}")
+        return jsonify({"error": "Could not load."}), 500
+    return jsonify(out)
 
 
 @bp.route("/api/stats")

@@ -529,6 +529,8 @@ class TestMigration28DashboardPrefsWiden:
     def test_a_v2_sized_value_fits(self):
         import json
 
+        # dashboard_prefs.user_id has a foreign key onto users(id) (migration 23) —
+        # use the seeded admin (id 1, always present) rather than a made-up id.
         big = {
             "v": 2,
             "panels": [{"id": k, "w": "third"} for k in ("totals", "server_status", "alert_summary")],
@@ -538,13 +540,20 @@ class TestMigration28DashboardPrefsWiden:
         payload = json.dumps(big)
         assert len(payload) < 4000
         with jen_db() as db, db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO dashboard_prefs (user_id, widgets) VALUES (999999, %s) ON DUPLICATE KEY UPDATE widgets=%s",
-                (payload, payload),
-            )
-            db.commit()
-            cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=999999")
-            row = cur.fetchone()
-            cur.execute("DELETE FROM dashboard_prefs WHERE user_id=999999")
-            db.commit()
+            cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=1")
+            original = cur.fetchone()
+            try:
+                cur.execute(
+                    "INSERT INTO dashboard_prefs (user_id, widgets) VALUES (1, %s) ON DUPLICATE KEY UPDATE widgets=%s",
+                    (payload, payload),
+                )
+                db.commit()
+                cur.execute("SELECT widgets FROM dashboard_prefs WHERE user_id=1")
+                row = cur.fetchone()
+            finally:
+                if original is None:
+                    cur.execute("DELETE FROM dashboard_prefs WHERE user_id=1")
+                else:
+                    cur.execute("UPDATE dashboard_prefs SET widgets=%s WHERE user_id=1", (original["widgets"],))
+                db.commit()
         assert json.loads(row["widgets"]) == big

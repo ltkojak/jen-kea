@@ -2,6 +2,55 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.54.0-beta.1] - 2026-09-21
+
+Beta channel. Stacked on 5.53.0-beta.1. Q61: the dashboard can be arranged, not just
+toggled, and grows a wider catalog of small widgets.
+
+**Prefs v2.** The dashboard's saved layout used to be a flat list of which widgets
+show. It now also carries each widget's width (full, half or third of the row) and
+its position, plus the subnet panel's own order, pinned subnets and hidden subnets.
+An old saved layout upgrades automatically to full-width panels in the order they
+were in; `jen/services/dashboard_prefs.py` validates every value on both save and
+read, so an unknown widget id, an invalid width, or a subnet id the account cannot
+(or can no longer) access is dropped rather than stored or shown — a subnet pinned
+before an account's access was narrowed does not linger in its layout afterward.
+`dashboard_prefs.widgets` is widened from 512 to 4,000 characters (migration 28) to
+hold the bigger value.
+
+**Arrange mode.** Customize gains an Arrange button. Every widget and every subnet
+card gets a grip handle and up/down arrows; widgets also get a width picker on a
+desktop screen. Dragging works with a real mouse; the arrows are there because
+dragging does not work reliably on a phone. A subnet card can also be pinned to the
+front or hidden from the dashboard without affecting it anywhere else in Jen. Save
+arrangement writes the new layout; Cancel puts everything back. A new "Compact
+subnet cards" option collapses each card to its name, active count and utilization
+bar.
+
+**Seven more widgets.** Pool Exhaustion Forecast, Packet Health, Kea 3.2 Readiness,
+Recent Events, HA State, DDNS Errors, and Getting Started, each reusing a read
+Reports, Servers, Health Center, Timeline, DDNS or the getting-started checklist
+already makes rather than a new one. Every one of them is lazy: a widget's data is
+only fetched once it is both turned on and actually visible, the same way the
+existing lease-history chart, sparklines, top-devices and alert-summary widgets
+already worked, so leaving one off costs nothing. A widget with nothing to say for
+a given install — HA State with one server, DDNS Errors with DDNS off — does not
+appear rather than showing an empty card. Enabling both Kea 3.2 Readiness and DDNS
+Errors at once currently repeats the same Health Center round trip for each; a
+shared per-request cache is a reasonable follow-up, not done here.
+
+**Along the way.** The thirteen widget wrappers that hide themselves until Customize
+turns them on moved off an inline `style="display:none;"` each onto the shared
+`.hidden` class the mobile foundation release added — one more than it removes,
+since Q61 adds seven new widgets, but the net change still lowers the ratchet from
+507 to 500. Building the Arrange toolbar's show/hide rule this way caught a bug in
+itself: the toolbar's own inline `display:none` would have permanently overridden
+the CSS rule meant to reveal it in Arrange mode, so it never would have appeared at
+all.
+
+No sudoers or helper change; the upgrade runs the new migration automatically as
+part of `sudo ./install.sh`.
+
 ## [5.53.0-beta.1] - 2026-09-21
 
 Beta channel. Stacked on 5.52.0-beta.1. Q60: every remaining page on the phone, in two

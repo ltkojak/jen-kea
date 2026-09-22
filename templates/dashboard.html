@@ -36,6 +36,13 @@
         <label class="u-fbdb05"><input type="checkbox" id="w-recent_leases"> Recently Issued Leases</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-server_status"> Server Status</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-alert_summary"> Alert Summary</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-forecast"> Pool Exhaustion Forecast</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-packet_health"> Packet Health</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-readiness"> Kea 3.2 Readiness</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-events_feed"> Recent Events</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-ha_state"> HA State</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-ddns_errors"> DDNS Errors</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-getting_started"> Getting Started</label>
     </div>
     <label class="u-fbdb05"><input type="checkbox" id="dash-compact-toggle"> Compact subnet cards</label>
     <div class="flex gap-2 mt-3">
@@ -45,7 +52,7 @@
 </div>
 
 <!-- Arrange mode toolbar — shown only while body.arrange is set (toggleArrange()) -->
-<div id="dash-arrange-bar" class="card dash-arrange-toolbar" style="display:none;">
+<div id="dash-arrange-bar" class="card dash-arrange-toolbar">
     <span>{{ icon("move") }} <strong>Arranging</strong> — drag the grip (or use the arrows) to reorder; pick a width or pin/hide a subnet card.</span>
     <div class="flex gap-2">
         <button class="btn btn-secondary btn-sm" id="arrange-cancel-btn" type="button">Cancel</button>
@@ -70,15 +77,15 @@
                 <div class="stat-value" id="stat-active-{{ subnet_id }}">{{ s.active }}</div>
             </div>
         </div>
-        <div class="stat-meta" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
+        <div class="stat-meta stat-detail" id="stat-meta-{{ subnet_id }}">Active leases &nbsp;·&nbsp; {{ s.dynamic }} dynamic &nbsp;·&nbsp; {{ s.reservations }} reserved</div>
         <div class="util-bar u-d2c171">
             <div class="util-fill" id="util-{{ subnet_id }}" style="background:var(--primary);width:0%;transition:width 0.5s ease;"></div>
         </div>
-        <div class="u-96ad60">
+        <div class="u-96ad60 stat-detail">
             <span class="u-749148" id="util-pct-{{ subnet_id }}"></span>
         </div>
         {% if s.routers or s.dns_servers %}
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;">
+        <div class="stat-extra" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;">
             {% if s.routers %}
             <div>
                 <span class="u-29d92f">Gateway</span>
@@ -94,7 +101,7 @@
         </div>
         {% endif %}
         {% for s6 in subnets6 if s6.paired_subnet4_id == subnet_id %}
-        <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+        <div class="stat-extra" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                 <span class="badge badge-production u-41ccf8">v6</span>
                 <span class="mono u-749148">{{ s6.cidr }}</span>
@@ -119,7 +126,7 @@
 </div>
 
 <!-- Total summary widget -->
-<div id="dash-totals" style="display:none;">
+<div id="dash-totals" class="hidden">
     <div class="card" style="padding:16px 20px;">
         <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:center;">
             <div>
@@ -160,7 +167,7 @@
 
 
 <!-- Utilization history chart widget -->
-<div id="dash-lease_history_chart" style="display:none;">
+<div id="dash-lease_history_chart" class="hidden">
     <div class="card">
         <div class="card-header">
             <span class="card-title">{{ icon("trending-up") }} Utilization History</span>
@@ -186,7 +193,7 @@
 </div>
 
 <!-- Lease sparklines per subnet — 30-day view, optional widget off by default -->
-<div id="dash-lease_sparklines" style="display:none;">
+<div id="dash-lease_sparklines" class="hidden">
 <div class="card">
     <div class="card-header">
         <span class="card-title">{{ icon("trending-up") }} Lease Trends — 30 Days</span>
@@ -199,7 +206,7 @@
 </div>
 
 <!-- Top active devices — 30-day, optional widget off by default -->
-<div id="dash-top_devices" style="display:none;">
+<div id="dash-top_devices" class="hidden">
 <div class="card">
     <div class="card-header">
         <span class="card-title">{{ icon("monitor-smartphone") }} Top Active Devices <span style="font-size:11px;font-weight:400;color:var(--text-muted);">— last 30 days</span></span>
@@ -272,7 +279,7 @@
 @media (max-width: 900px) { .dash-widgets > div.dw-third { flex: 1 1 calc(50% - 8px); } }
 @media (max-width: 640px) { .dash-widgets > div.dw-half, .dash-widgets > div.dw-third { flex: 1 1 100%; } }
 
-.dash-arrange-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; position: sticky; top: 56px; z-index: 90; }
+.dash-arrange-toolbar { display: none; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; position: sticky; top: 56px; z-index: 90; }
 body.arrange .dash-arrange-toolbar { display: flex; }
 body.arrange #dash-customize, body.arrange #customize-btn { display: none; }
 
@@ -287,8 +294,19 @@ body.arrange #dash-customize, body.arrange #customize-btn { display: none; }
 body.arrange .dash-widgets > div, body.arrange .stat-card { outline: 1px dashed var(--border); outline-offset: 4px; }
 body.arrange .stat-card[data-hidden="1"] { opacity: 0.45; }
 @media (max-width: 768px) { .dash-arr-controls select.dash-width-picker { display: none; } }
+
+/* Compact subnet cards: name + active count + the utilization bar; the
+   secondary detail line, the pct label and the gateway/DNS/v6 extras are
+   dropped. body.dash-compact is set from the "Compact subnet cards"
+   checkbox and, per the spec's "phone layout" framing, is most useful
+   narrow — but the toggle works at any width. */
+body.dash-compact #dash-subnet_stats .stat-card { padding: 12px 14px; }
+body.dash-compact #dash-subnet_stats .stat-detail,
+body.dash-compact #dash-subnet_stats .stat-extra { display: none; }
+body.dash-compact #dash-subnet_stats .stat-value { font-size: 22px; margin: 2px 0; }
+body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
 </style>
-<div id="dash-server_status" style="display:none;">
+<div id="dash-server_status" class="hidden">
     <div class="card">
         <div class="card-header">
             <span class="card-title">{{ icon("server") }} Server Status</span>
@@ -330,7 +348,7 @@ body.arrange .stat-card[data-hidden="1"] { opacity: 0.45; }
 </div>
 
 <!-- Alert summary widget -->
-<div id="dash-alert_summary" style="display:none;">
+<div id="dash-alert_summary" class="hidden">
     <div class="card">
         <div class="card-header">
             <span class="card-title">{{ icon("bell") }} Alert Summary</span>
@@ -341,6 +359,69 @@ body.arrange .stat-card[data-hidden="1"] { opacity: 0.45; }
         </div>
     </div>
 </div><!-- #dash-alert_summary -->
+
+<!-- v5.54.0 (Q61) catalog widgets — each lazy: loadCatalogWidget() only fetches
+     /api/dashboard/catalog-data for a widget that is both enabled and visible. -->
+<div id="dash-forecast" class="hidden">
+    <div class="card">
+        <div class="card-header"><span class="card-title">{{ icon("trending-up") }} Pool Exhaustion Forecast</span></div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-packet_health" class="hidden">
+    <div class="card">
+        <div class="card-header"><span class="card-title">{{ icon("activity") }} Packet Health</span></div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-readiness" class="hidden">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">{{ icon("compass") }} Kea 3.2 Readiness</span>
+            <a href="/health-center" class="btn btn-sm btn-secondary">Health Center</a>
+        </div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-events_feed" class="hidden">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">{{ icon("clock") }} Recent Events</span>
+            <a href="/timeline" class="btn btn-sm btn-secondary">Timeline</a>
+        </div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-ha_state" class="hidden">
+    <div class="card">
+        <div class="card-header"><span class="card-title">{{ icon("git-branch") }} HA State</span></div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-ddns_errors" class="hidden">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">{{ icon("link") }} DDNS Errors</span>
+            <a href="/ddns" class="btn btn-sm btn-secondary">DDNS</a>
+        </div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-getting_started" class="hidden">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">{{ icon("rocket") }} Getting Started</span>
+            <a href="/getting-started" class="btn btn-sm btn-secondary">Open</a>
+        </div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
 
 </div><!-- #dash-widgets -->
 
@@ -644,6 +725,96 @@ function loadAlertSummary() {
         });
 }
 
+// ── Catalog widgets (v5.54.0, Q61) ─────────────────────────────────────────────
+// One shared fetch: /api/dashboard/catalog-data?widgets=<id> only ever computes
+// the one widget named, so enabling one doesn't pay for the other six.
+var STATUS_ICO = {
+    ok: '<svg class="ico ok" aria-hidden="true"><use href="#i-circle-check"></use></svg>',
+    warn: '<svg class="ico warn" aria-hidden="true"><use href="#i-triangle-alert"></use></svg>',
+    fail: '<svg class="ico bad" aria-hidden="true"><use href="#i-circle-x"></use></svg>',
+    skip: '<svg class="ico muted" aria-hidden="true"><use href="#i-minus"></use></svg>'
+};
+
+function loadCatalogWidget(id, render) {
+    var el = widgetEl(id);
+    var body = el && el.querySelector('.dash-cat-body');
+    if (!body) return;
+    fetch('/api/dashboard/catalog-data?widgets=' + id)
+        .then(function(r) { return r.json(); })
+        .then(function(data) { body.innerHTML = render(data[id]); })
+        .catch(function() { body.innerHTML = '<p class="u-6f1339">Could not load.</p>'; });
+}
+
+function loadForecast() {
+    loadCatalogWidget('forecast', function(rows) {
+        if (!rows || !rows.length) return '<p class="u-6f1339">No subnet has enough history yet (a week of daily snapshots).</p>';
+        return '<table class="rowlist"><tbody>' + rows.map(function(r) {
+            return '<tr><td data-m="primary">' + escapeHtml(r.name) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(r.line) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    });
+}
+
+function loadPacketHealth() {
+    loadCatalogWidget('packet_health', function(rows) {
+        if (!rows || !rows.length) return '<p class="u-6f1339">No server has two packet-health snapshots yet.</p>';
+        return '<table class="rowlist"><tbody>' + rows.map(function(r) {
+            return '<tr><td data-m="primary">' + (STATUS_ICO[r.status] || '') + ' ' + escapeHtml(r.name) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(r.notes.join('; ')) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    });
+}
+
+function loadReadiness() {
+    loadCatalogWidget('readiness', function(d) {
+        if (!d) return '<p class="u-6f1339">No readiness checks to show.</p>';
+        var html = '<p class="small mb-2">' + (STATUS_ICO[d.status] || '') + ' ' + escapeHtml(d.line) + '</p>';
+        html += '<table class="rowlist"><tbody>' + d.rows.map(function(c) {
+            return '<tr><td data-m="primary">' + (STATUS_ICO[c.status] || '') + ' ' + escapeHtml(c.title) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(c.detail) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+        return html;
+    });
+}
+
+function loadEventsFeed() {
+    loadCatalogWidget('events_feed', function(rows) {
+        if (!rows || !rows.length) return '<p class="u-6f1339">No events yet.</p>';
+        return '<table class="rowlist"><tbody>' + rows.map(function(r) {
+            var who = r.hostname || r.mac || r.ip || r.server || '';
+            return '<tr><td data-m="primary">' + escapeHtml(r.kind) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(who) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(r.ts || '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    });
+}
+
+function loadHaState() {
+    loadCatalogWidget('ha_state', function(rows) {
+        if (!rows) return '<p class="u-6f1339">Only one server is configured — no HA state to show.</p>';
+        return '<table class="rowlist"><tbody>' + rows.map(function(r) {
+            var cls = r.is_active ? 'ok' : (r.healthy ? 'muted' : 'bad');
+            return '<tr><td data-m="primary">' + escapeHtml(r.name) + '</td>' +
+                '<td data-m="secondary" class="' + cls + '">' + escapeHtml(r.state || (r.up ? 'no HA state reported' : 'unreachable')) +
+                (r.is_active ? ' · active' : '') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    });
+}
+
+function loadDdnsErrors() {
+    loadCatalogWidget('ddns_errors', function(d) {
+        if (!d) return '<p class="u-6f1339">DDNS updates are off, or nothing to report.</p>';
+        return '<p class="small">' + (STATUS_ICO[d.status] || '') + ' ' + escapeHtml(d.detail) + '</p>';
+    });
+}
+
+function loadGettingStarted() {
+    loadCatalogWidget('getting_started', function(d) {
+        if (!d) return '<p class="u-6f1339">Nothing left to do, or dismissed. <a href="/getting-started">Open</a></p>';
+        return '<p class="small">' + d.done + ' of ' + d.total + ' done. <a href="/getting-started">Continue →</a></p>';
+    });
+}
+
 // ── Update stats (polls /api/stats) ──────────────────────────────────────────
 function updateStats() {
     var dot = document.getElementById('refreshDot');
@@ -758,7 +929,14 @@ var CATALOG_LOADERS = {
     lease_history_chart: loadHistory,
     lease_sparklines: loadSparklines,
     top_devices: loadTopDevices,
-    alert_summary: loadAlertSummary
+    alert_summary: loadAlertSummary,
+    forecast: loadForecast,
+    packet_health: loadPacketHealth,
+    readiness: loadReadiness,
+    events_feed: loadEventsFeed,
+    ha_state: loadHaState,
+    ddns_errors: loadDdnsErrors,
+    getting_started: loadGettingStarted
 };
 var currentPrefs = null;   // the last prefs applied — what Cancel reverts to
 var SUBNET_BASELINE_ORDER = null;  // the server-rendered (Kea) order, captured once
@@ -811,14 +989,14 @@ function applyDashPrefs(prefs) {
         var el = widgetEl(p.id);
         if (!el) return;
         el.parentNode.appendChild(el);
-        el.style.display = '';
+        el.classList.remove('hidden');
         el.classList.remove('dw-half', 'dw-third');
         if (p.w === 'half') el.classList.add('dw-half');
         else if (p.w === 'third') el.classList.add('dw-third');
     });
     Object.keys(WIDGET_CATALOG).forEach(function(id) {
         var el = widgetEl(id);
-        if (el && !visible[id]) el.style.display = 'none';
+        if (el && !visible[id]) el.classList.add('hidden');
         var cb = document.getElementById('w-' + id);
         if (cb) cb.checked = !!visible[id];
     });

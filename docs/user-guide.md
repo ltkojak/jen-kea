@@ -46,6 +46,16 @@ The small dot in the top right navigation bar shows whether Jen can reach the Ke
 
 With IPv6 enabled (Settings → Infrastructure), the subnet grid shows IPv6 alongside IPv4 rather than as a separate section: a small **v4**/**v6** tag on each card tells you which is which, and an IPv6 subnet that's paired with one of your IPv4 subnets (configured in `jen.config`'s `[subnets6]` section) nests inside that same card instead of getting a card of its own — an unpaired IPv6 subnet still gets its own card. IPv6 has no pool-size concept comparable to IPv4's, so its cards show active leases and reservations only, with no utilization bar. The Total Summary widget adds IPv6 active/reserved numbers to the same row, tagged the same way.
 
+### Customize and Arrange (v5.54.0)
+
+**Customize** (top right) is where you turn widgets on and off — the original eight plus seven more added in v5.54.0: Pool Exhaustion Forecast, Packet Health, Kea 3.2 Readiness, Recent Events, HA State, DDNS Errors, and Getting Started. Each of the new ones only loads its data once it is actually on the dashboard, the same way the existing sparklines, top-devices and alert-summary widgets already worked — turning one off costs nothing. A widget with nothing to say for your install (HA State on a single-server setup, DDNS Errors when DDNS updates are off) simply doesn't appear. **Save Layout** saves which widgets show; it doesn't touch their order, width or the subnet cards' arrangement.
+
+**Compact subnet cards** collapses each subnet card to its name, active count and utilization bar, dropping the dynamic/reserved detail line and the gateway/DNS/IPv6 extras — useful when you have many subnets and want to see more of them at once.
+
+**Arrange…** puts the page into arrange mode: every widget and every subnet card gets a grip handle, up/down arrows, and (for widgets, on a desktop screen) a width picker — full, half or third of the row. On a desktop you can drag a card by its grip to reorder it; on a phone, use the arrows instead (dragging doesn't work reliably there). Each subnet card also gets a pin button, which moves it to the front ahead of everything else, and a hide button, which removes it from the dashboard without affecting anything else — a hidden subnet is still fully visible and manageable everywhere else in Jen (Leases, Reservations, Subnets), just not shown as a dashboard card. **Save arrangement** writes the new order, widths, and subnet pin/hide state to your account; **Cancel** puts everything back the way it was.
+
+If your account's subnet access changes later, any pinned, hidden, or ordered subnet id you can no longer see is dropped automatically — it never lingers in your saved layout.
+
 ---
 
 ## Leases

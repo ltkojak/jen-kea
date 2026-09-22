@@ -75,7 +75,13 @@ class TestSubnetScopedPrefs:
         saved_before_narrowing = rc.get("/api/dashboard/get-prefs").get_json()
         assert saved_before_narrowing["subnets"]["pinned"] == [2]  # sanity: it really was accessible and stored
         with db.cursor() as cur:
-            cur.execute("UPDATE users SET subnet_access=%s WHERE username='restricted1'", (json.dumps([1]),))
+            # token_version+1 is what actually invalidates the session's cached
+            # subnet_access (jen/__init__.py::load_user) — the same UPDATE
+            # jen/routes/users.py's own subnet-access edit route runs.
+            cur.execute(
+                "UPDATE users SET subnet_access=%s, token_version=token_version+1 WHERE username='restricted1'",
+                (json.dumps([1]),),
+            )
         db.commit()
         got = rc.get("/api/dashboard/get-prefs").get_json()
         assert got["subnets"]["order"] == [1]
@@ -106,3 +112,37 @@ class TestDashboardPageMarkup:
 
         html = logged_in_client.get("/").data.decode()
         assert not re.search(r"<[^>]*\son(click|change)=", html)
+
+
+class TestCatalogDataRoute:
+    def test_only_the_requested_widgets_are_computed(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.services import dashboard_catalog as dc
+
+        calls = []
+        monkeypatch.setattr(
+            dc, "getting_started_widget", lambda *a, **k: calls.append("getting_started") or {"done": 1, "total": 2}
+        )
+        monkeypatch.setattr(dc, "forecast_widget", lambda *a, **k: calls.append("forecast") or [])
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=getting_started")
+        assert r.status_code == 200
+        assert calls == ["getting_started"]
+        assert r.get_json() == {"getting_started": {"done": 1, "total": 2}}
+
+    def test_an_unknown_widget_name_is_ignored(self, logged_in_client, db, mock_kea):
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=not-a-real-widget")
+        assert r.status_code == 200 and r.get_json() == {}
+
+    def test_no_login_is_refused(self, client):
+        r = client.get("/api/dashboard/catalog-data?widgets=forecast")
+        assert r.status_code in (302, 401)
+
+    def test_a_builder_exception_is_a_clean_500_not_a_traceback(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.services import dashboard_catalog as dc
+
+        def boom(*a, **k):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(dc, "forecast_widget", boom)
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=forecast")
+        assert r.status_code == 500
+        assert b"boom" not in r.data
