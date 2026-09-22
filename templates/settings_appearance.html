@@ -8,6 +8,7 @@
 </div>
 
 {% set toc = [('app-branding', 'Branding'), ('app-favicon', 'Favicon'), ('app-icons', 'Brand Icons')] %}
+{% if current_user.role == 'superadmin' %}{% set toc = toc[:1] + [('app-theme', 'Theme')] + toc[1:] %}{% endif %}
 {% include '_card_toc.html' %}
 
 <!-- Custom Branding -->
@@ -55,6 +56,125 @@
         </div>
     </div>
 </div>
+
+{% if current_user.role == 'superadmin' %}
+<!-- Theme (v5.55.0, Q63) — superadmin only: unlike nav color/logo, this
+     changes what every viewer sees, and a custom palette is CSS that
+     reaches every page unescaped once saved. -->
+<div class="card" id="app-theme">
+    <div class="card-header">
+        <span class="card-title">{{ icon("palette") }} Theme</span>
+    </div>
+    <p class="u-abf201">
+        The default look every viewer gets, unless they pick one for themselves from the {{ icon("palette") }}
+        button in the nav. The default look does not change on upgrade — Dark stays Dark.
+    </p>
+
+    <div class="form-group u-4a724c">
+        <label>Install Default</label>
+        <form method="POST" action="/settings/theme/default" class="u-a76d59">
+            <select name="theme_default" class="u-97445a">
+                {% for tid, tname in theme_presets %}
+                <option value="{{ tid }}" {% if tid == theme_default %}selected{% endif %}>{{ tname }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">{{ icon("save") }} Save</button>
+        </form>
+        <div class="form-hint">Only the built-in presets and "Custom" (once saved below) are offered.</div>
+    </div>
+
+    <div class="form-group mt-4">
+        <label class="u-761d3a">Custom Palette</label>
+        <p class="u-abf201">
+            Define the install's own colors. Every field takes a hex color (<code class="u-db4728">#1a1a2a</code>
+            or <code class="u-db4728">#fff</code>) — anything else is rejected. Saving does not change the
+            install default above; pick "Custom" there (or from the nav picker) to use it.
+        </p>
+
+        <div class="form-row" id="theme-custom-layout">
+            <form method="POST" action="/settings/theme/custom" id="theme-custom-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="form-row">
+                    {% set field_labels = {
+                        'bg': 'Background', 'surface': 'Surface', 'surface2': 'Surface 2', 'surface3': 'Surface 3',
+                        'border': 'Border', 'text': 'Text', 'text_muted': 'Muted Text', 'primary': 'Primary',
+                        'success': 'Success', 'warning': 'Warning', 'danger': 'Danger'
+                    } %}
+                    {% set start = theme_custom.tokens if theme_custom else theme_all_presets['dark'].tokens %}
+                    {% for name, label in field_labels.items() %}
+                    <div class="form-group" data-theme-field="{{ name }}">
+                        <label>{{ label }}</label>
+                        <div class="flex items-center gap-1">
+                            <input type="color" class="theme-color-picker" data-pairs="{{ name }}_hex"
+                                   value="{{ start[name] }}" style="width:36px;height:32px;padding:2px;cursor:pointer;flex-shrink:0;">
+                            <input type="text" name="{{ name }}" id="theme-field-{{ name }}_hex" class="theme-color-hex u-97445a"
+                                   value="{{ start[name] }}" maxlength="7" placeholder="#000000">
+                        </div>
+                    </div>
+                    {% endfor %}
+                    <div class="form-group">
+                        <label>Corner Radius</label>
+                        <input type="number" name="radius" id="theme-field-radius" min="0" max="16"
+                               value="{{ theme_custom.radius if theme_custom else theme_all_presets['dark'].radius }}" class="u-97445a">
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2 wrap mt-3">
+                    <label class="u-fbdb05">
+                        <input type="checkbox" name="mono_ui" id="theme-field-mono_ui" value="on"
+                               {% if (theme_custom.mono_ui if theme_custom else theme_all_presets['dark'].mono_ui) %}checked{% endif %}>
+                        Monospace UI on desktop
+                    </label>
+                    <span class="form-hint">Start from:</span>
+                    {% for tid, tname in theme_presets %}
+                    {% if tid != 'custom' %}
+                    <button type="button" class="btn btn-secondary btn-sm theme-start-from" data-preset-id="{{ tid }}">{{ tname }}</button>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+
+                <div id="theme-warnings"></div>
+
+                <div class="flex gap-2 mt-3">
+                    <button type="submit" class="btn btn-primary">{{ icon("save") }} Save Custom Palette</button>
+                    {% if theme_custom %}
+                    <button type="submit" formaction="/settings/theme/custom/remove" formnovalidate class="btn btn-danger" data-confirm="Remove the custom palette? Any install or viewer using it falls back to Dark.">{{ icon_trash() }} Remove</button>
+                    {% endif %}
+                </div>
+                {% if theme_custom %}
+                {% set saved_warnings = palette_warnings(theme_custom.tokens) %}
+                {% if saved_warnings %}
+                <div class="form-hint warn mt-3">
+                    Saved palette contrast notes: {{ saved_warnings | join(' ') }}
+                </div>
+                {% endif %}
+                {% endif %}
+            </form>
+
+            <div>
+                <div class="form-hint u-4e420a">Live preview</div>
+                <!-- No inline style here on purpose — updatePreview() (below)
+                     sets one immediately on load and on every edit; the
+                     template doesn't need to seed a starting value. -->
+                <div id="theme-preview">
+                    <div class="u-9b96ce">
+                        <button type="button" class="btn btn-primary btn-sm">Primary</button>
+                        <button type="button" class="btn btn-success btn-sm">Success</button>
+                        <button type="button" class="btn btn-warning btn-sm">Warning</button>
+                        <button type="button" class="btn btn-danger btn-sm">Danger</button>
+                    </div>
+                    <div class="u-9b96ce">
+                        <span class="badge badge-production">Dynamic</span>
+                        <span class="badge badge-reserved">Reserved</span>
+                        <span class="badge badge-admin">Alert</span>
+                    </div>
+                    <p>Body text. <span class="u-5872de">Muted text.</span></p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- Favicon -->
 <div class="card" id="app-favicon">
@@ -135,7 +255,7 @@
                         background:var(--surface2);border:1px solid {{ 'var(--primary)' if icon.custom_override else 'var(--border)' }};
                         border-radius:var(--radius);padding:12px 16px;min-width:100px;position:relative;">
                 {% if icon.custom_override %}
-                <span style="position:absolute;top:4px;right:4px;font-size:9px;background:var(--primary);color:#000;
+                <span style="position:absolute;top:4px;right:4px;font-size:9px;background:var(--primary);color:black;
                               padding:1px 5px;border-radius:3px;">overridden</span>
                 {% endif %}
                 <img src="/static/icons/brands/{{ icon.file }}" alt="{{ icon.name }}"
@@ -146,4 +266,127 @@
         </div>
     </details>
 </div>
+{% endblock %}
+{% block scripts %}
+// v5.55.0 (Q63) — Theme card: live preview + contrast warnings as the
+// custom-palette form is edited, and the "Start from…" preset-copy
+// buttons. This mirrors jen.services.theme's own contrast_ratio() /
+// palette_warnings() math (tests/test_theme.py pins the Python side;
+// there is no server round trip here to keep in sync against). The
+// form itself only exists for a superadmin (the card above is gated) —
+// the IIFE below no-ops for anyone else.
+const THEME_PRESET_TOKENS = {{ theme_all_presets | tojson }};
+const THEME_TOKEN_NAMES = {{ theme_token_names | tojson }};
+
+function themeNormalizeHex(v) {
+    v = (v || '').trim().toLowerCase();
+    if (/^#[0-9a-f]{3}$/.test(v)) v = '#' + v.slice(1).split('').map((c) => c + c).join('');
+    return /^#[0-9a-f]{6}$/.test(v) ? v : null;
+}
+function themeSrgbToLinear(c) {
+    c = c / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+function themeRelLuminance(hex) {
+    const norm = themeNormalizeHex(hex);
+    if (!norm) return null;
+    const r = parseInt(norm.slice(1, 3), 16), g = parseInt(norm.slice(3, 5), 16), b = parseInt(norm.slice(5, 7), 16);
+    return 0.2126 * themeSrgbToLinear(r) + 0.7152 * themeSrgbToLinear(g) + 0.0722 * themeSrgbToLinear(b);
+}
+function themeContrastRatio(a, b) {
+    const la = themeRelLuminance(a), lb = themeRelLuminance(b);
+    if (la === null || lb === null) return null;
+    const lighter = Math.max(la, lb), darker = Math.min(la, lb);
+    return (lighter + 0.05) / (darker + 0.05);
+}
+function themePaletteWarnings(tokens) {
+    const warnings = [];
+    const textBg = themeContrastRatio(tokens.text, tokens.bg);
+    if (textBg !== null && textBg < 4.5) {
+        warnings.push(`Text on background is only ${textBg.toFixed(1)}:1 — WCAG AA wants at least 4.5:1.`);
+    }
+    const mutedBg = themeContrastRatio(tokens.text_muted, tokens.bg);
+    if (mutedBg !== null && mutedBg < 3) {
+        warnings.push(`Muted text on background is only ${mutedBg.toFixed(1)}:1 — likely hard to read (aim for 3:1 or more).`);
+    }
+    const primaryBg = themeContrastRatio(tokens.primary, tokens.bg);
+    if (primaryBg !== null && primaryBg < 3) {
+        warnings.push(`The primary accent on background is only ${primaryBg.toFixed(1)}:1 — links and buttons may be hard to see (aim for 3:1 or more).`);
+    }
+    return warnings;
+}
+
+(function() {
+    const form = document.getElementById('theme-custom-form');
+    if (!form) return;
+    const preview = document.getElementById('theme-preview');
+    const warningsBox = document.getElementById('theme-warnings');
+
+    function hexField(name) {
+        return document.getElementById('theme-field-' + name + '_hex');
+    }
+    function currentTokens() {
+        const tokens = {};
+        THEME_TOKEN_NAMES.forEach((name) => { tokens[name] = hexField(name).value; });
+        return tokens;
+    }
+    function updatePreview() {
+        const tokens = currentTokens();
+        let style = 'padding:16px;border-radius:var(--radius);';
+        THEME_TOKEN_NAMES.forEach((name) => {
+            const norm = themeNormalizeHex(tokens[name]);
+            if (norm) style += '--' + name.replace('_', '-') + ':' + norm + ';';
+        });
+        const radius = document.getElementById('theme-field-radius').value;
+        if (radius !== '') style += '--radius:' + radius + 'px;';
+        preview.setAttribute('style', style);
+
+        const warnings = themePaletteWarnings(tokens);
+        warningsBox.innerHTML = '';
+        if (warnings.length) {
+            const div = document.createElement('div');
+            div.className = 'form-hint';
+            div.style.color = 'var(--warning)';
+            div.style.marginTop = '6px';
+            div.textContent = warnings.join(' ');
+            warningsBox.appendChild(div);
+        }
+    }
+
+    form.querySelectorAll('.theme-color-hex, #theme-field-radius, #theme-field-mono_ui').forEach((el) => {
+        el.addEventListener('input', updatePreview);
+    });
+    form.querySelectorAll('.theme-color-picker').forEach((picker) => {
+        picker.addEventListener('input', () => {
+            const hex = document.getElementById('theme-field-' + picker.dataset.pairs);
+            hex.value = picker.value;
+            updatePreview();
+        });
+    });
+    form.querySelectorAll('.theme-color-hex').forEach((hex) => {
+        hex.addEventListener('input', () => {
+            const norm = themeNormalizeHex(hex.value);
+            if (!norm) return;
+            const pairKey = hex.id.replace('theme-field-', '');
+            const picker = form.querySelector('.theme-color-picker[data-pairs="' + pairKey + '"]');
+            if (picker) picker.value = norm;
+        });
+    });
+    form.querySelectorAll('.theme-start-from').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const preset = THEME_PRESET_TOKENS[btn.dataset.presetId];
+            if (!preset) return;
+            THEME_TOKEN_NAMES.forEach((name) => {
+                hexField(name).value = preset.tokens[name];
+                const picker = form.querySelector('.theme-color-picker[data-pairs="' + name + '_hex"]');
+                if (picker) picker.value = preset.tokens[name];
+            });
+            document.getElementById('theme-field-radius').value = preset.radius;
+            document.getElementById('theme-field-mono_ui').checked = preset.mono_ui;
+            updatePreview();
+        });
+    });
+
+    updatePreview();
+})();
 {% endblock %}

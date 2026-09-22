@@ -70,6 +70,10 @@ EXPECTED_ENDPOINTS = {
     "settings.upload_nav_logo",
     "settings.remove_nav_logo",
     "settings.save_nav_color",
+    # v5.55.0 (Q63) — Appearance -> Theme: install default + custom palette.
+    "settings.save_theme_default",
+    "settings.save_theme_custom",
+    "settings.remove_theme_custom",
     "settings.check_update",
     "settings.update_status",
     "settings.self_update",

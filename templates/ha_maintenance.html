@@ -16,7 +16,7 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>Server to take down</label>
-            <select name="down" style="max-width:360px;">
+            <select name="down" class="u-4a724c">
                 {% for s in servers %}
                 <option value="{{ s.id }}" {% if s.id == preselect %}selected{% endif %}>{{ s.name }}{% if s.role %} ({{ s.role }}){% endif %}</option>
                 {% endfor %}

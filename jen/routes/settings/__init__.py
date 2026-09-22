@@ -11,6 +11,8 @@ and every existing `url_for("settings.…")` keeps resolving:
                     ports, metrics
   authoring       — "generate a Kea config over SSH" flow + binary checks
   branding        — icons, favicon, nav logo, nav color (Appearance page)
+  theme           — install default theme + custom palette (v5.55.0, Q63,
+                    also on the Appearance page)
   security        — session timeout, rate limiting, SSL certs
   updates         — check-for-update, update-status, self-update trigger
   nav             — the navigation model base.html renders (v5.9.0)
@@ -271,6 +273,7 @@ def settings_security():
 @_admin_required
 def settings_appearance():
     from jen.routes.settings.branding import icon_lists
+    from jen.services import theme as _theme
 
     nav_logo_url = None
     for ext in ("png", "svg", "jpg", "jpeg", "webp"):
@@ -286,6 +289,11 @@ def settings_appearance():
         has_favicon=os.path.exists(extensions.FAVICON_PATH),
         bundled=bundled,
         custom=custom,
+        # v5.55.0 (Q63) — the Theme card's "Start from…" buttons and its
+        # unsaved-state defaults need every preset's raw tokens, not just
+        # the (id, name) pairs inject_theme() hands every page.
+        theme_all_presets=_theme.PRESETS,
+        theme_token_names=list(_theme.TOKENS),
     )
 
 
@@ -366,6 +374,7 @@ import jen.routes.settings.authoring  # noqa: E402
 import jen.routes.settings.branding  # noqa: E402
 import jen.routes.settings.infrastructure  # noqa: E402
 import jen.routes.settings.security  # noqa: E402
+import jen.routes.settings.theme  # noqa: E402
 import jen.routes.settings.updates  # noqa: E402, F401
 
 # Re-exported for tests that import these helpers by their old path.

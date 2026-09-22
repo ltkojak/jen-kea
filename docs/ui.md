@@ -6,20 +6,35 @@ live in `base.html` so a page rarely needs either of its own.
 
 ## Tokens
 
-Defined once in `base.html`. Use them instead of literal values in new CSS.
+Layout tokens (spacing, type scale, radius, tap target) are hand-written once
+in `base.html`. Use them instead of literal values in new CSS.
 
 | Token | Value | Use |
 |---|---|---|
 | `--sp-1` … `--sp-6` | 4, 8, 12, 16, 24, 32 px | gaps, padding, margins |
 | `--fs-xs` … `--fs-2xl` | 11, 12, 13, 15, 20, 26 px | font sizes (`--fs-md` is body text) |
-| `--radius`, `--radius-sm` | 6 px, 4 px | corners |
-| `--surface`, `--surface2`, `--surface3` | theme colours | card, inset, deepest-inset backgrounds |
 | `--tap` | 44 px | minimum height of anything a thumb must hit |
 | `--tabbar-h` | 56 px | the phone tab bar |
+| `--font-ui`, `--font-mono` | system sans, mono stack | a preset can point `--font-ui` at `--font-mono` on desktop (Phosphor) |
 
-Colour tokens (`--bg`, `--text`, `--text-muted`, `--primary`, `--success`,
-`--warning`, `--danger`, `--border`) exist in both themes; never hard-code a
-colour that has to work in both.
+**Color and radius tokens are generated, not hand-written** (v5.55.0, Q63) —
+`jen/services/theme.py` is the single source. `--bg`, `--surface`, `--surface2`,
+`--surface3`, `--border`, `--text`, `--text-muted`, `--primary`, `--success`,
+`--warning`, `--danger` and `--radius`/`--radius-sm` exist for every theme
+(the four built-in presets plus an install's own custom palette, if it has
+one); never hard-code a color or radius that has to work across all of them.
+A new built-in preset is one entry in `theme.py`'s `PRESETS` dict — nothing
+in `base.html` changes.
+
+A **tint** (a color at partial opacity over the page background — a badge, an
+alert, a hover state) is `color-mix(in srgb, var(--token) N%, transparent)`,
+not a separate hard-coded hex per theme. `tests/test_theme.py`'s "hex wall"
+fails the build on a literal `#rrggbb`/`#rgb` in any template that extends
+`base.html` (a short, reasoned allow-list covers the handful of legitimate
+exceptions — the standalone auth pages, the categorical per-device-type
+badge palette, and hex-format example text). Chart.js/Canvas code can't use
+`var(--x)` directly; resolve it through `window.jenColor('var(--x)')`
+(`base.html`) instead, and rebuild on the `jen:theme` event a switch fires.
 
 ### Utility classes
 

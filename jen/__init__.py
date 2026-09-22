@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.54.0-beta.1"
+JEN_VERSION = "5.55.0-beta.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -106,6 +106,13 @@ def create_app() -> Flask:
 
     app.jinja_env.globals["icon"] = _icon
     app.jinja_env.globals["nav_icon"] = _nav_icon
+
+    # v5.55.0 (Q63) — lets the Settings -> Appearance Theme card show the
+    # same contrast warnings server-side (after a save) that its own JS
+    # computes live while the form is being edited, off the one function.
+    from jen.services.theme import palette_warnings as _palette_warnings
+
+    app.jinja_env.globals["palette_warnings"] = _palette_warnings
     app.secret_key = _load_secret_key()
 
     # ── Session cookie hardening (v4.4.2) ─────────────────────────────────────

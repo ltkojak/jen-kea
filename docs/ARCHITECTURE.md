@@ -1085,6 +1085,53 @@ management addresses are RFC 1918 IPs with no public name. Let's
 Encrypt for Jen's own web UI is a separate, legitimate feature and
 unrelated to this.
 
+### 3.13 The theme system: a superadmin-authored custom palette reaches every page as unescaped CSS (v5.55.0)
+
+`jen/services/theme.py` generates every color/radius token block
+`base.html` emits, via Jinja's `|safe` — including the install's own
+custom palette, when Settings → Appearance → Theme has one saved. `|safe`
+means Jinja's normal HTML autoescaping does not run on that string; it
+reaches every authenticated page's `<style>` block exactly as written.
+
+**The boundary is `validate_palette()`, not the render path.** Every one
+of the eleven color fields is checked against `^#([0-9a-f]{3}|[0-9a-f]{6})$`
+(case-insensitive) before it is ever written to the `settings` table —
+`url(`, `;`, `}`, `expression(`, a named color, an 8-digit alpha hex,
+anything that isn't exactly a 3- or 6-digit hex value, is rejected at
+save time, not sanitized. `render_css()` does not re-validate; it trusts
+that whatever is in the `theme_custom` setting already passed that
+check. This is the same shape as `jen_config_edit.py`'s pure edit
+functions and `kea_authoring.py`'s config generation elsewhere in this
+app: one narrow, well-tested function is the entire trust boundary, and
+everything downstream of it is allowed to trust its output completely.
+
+**Why `|safe` at all, rather than escaping and losing the CSS.**
+Autoescaping a CSS value would just print the literal string `--bg:
+%2523...` instead of coloring the page — HTML-escaping is the wrong
+tool for a value that has to remain CSS. The alternative (an inline
+`style=""` per element, or a `<style>` block built with string
+concatenation instead of Jinja) doesn't change the trust question:
+either way, a string a superadmin controls ends up as literal CSS on
+every page, and the only real question is whether that string was
+validated first. It was, at write time.
+
+**Why superadmin, not admin.** Unlike nav color/logo (Settings →
+Appearance → Branding, admin-accessible, pre-dates this), a custom
+theme palette is CSS every authenticated user's browser parses, and the
+install *default* theme changes what every viewer sees before they've
+chosen one for themselves — the same trust tier as the other
+install-wide, non-per-subnet settings in this blueprint
+(`jen/routes/settings/theme.py`'s three routes are all
+`@superadmin_required`).
+
+**What this does not protect against.** A malicious superadmin can
+already do far more damage through Settings → Kea, Database, or the
+Kea-host SSH surface than a color palette allows; this boundary exists
+to keep a *non*-malicious superadmin's typo (a stray `<` in a form
+field, a copy-pasted value with trailing garbage) from becoming a
+broken `<style>` block or, worse, closing it early — not to defend
+against a superadmin acting in bad faith.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:

@@ -610,6 +610,37 @@ Custom icons are stored in `/var/lib/jen/icons/` (v5.13.0; `/opt/jen/static/icon
 
 ---
 
+## Theming (v5.55.0)
+
+Every color in Jen's UI is a CSS token (`jen/services/theme.py`), not a hard-coded hex value — a theme is just a set of values for those tokens.
+
+### Choosing a theme
+
+Any logged-in user — any role — can pick their own look from the palette icon in the nav bar (desktop) or the **Theme** button in the phone's More sheet. The choice is per-browser (stored in `localStorage`), so it doesn't affect anyone else and doesn't need a page reload to take effect.
+
+Four presets ship with Jen:
+
+- **Dark** — the install default since day one. Byte-identical to what every prior version rendered; upgrading never changes anyone's look.
+- **Light**
+- **High contrast** — every text/background pairing is at least 7:1 (WCAG AAA)
+- **Phosphor** — amber-on-green terminal look, monospace UI on desktop only (a phone keeps the regular font — a mono table would overflow it)
+
+A user who hasn't picked one gets the install's default theme, below.
+
+### Install default
+
+Go to **Settings → Appearance → Theme** (superadmin only) to set which theme a viewer gets before they've picked one for themselves. Changing it doesn't affect anyone who has already made their own choice.
+
+### Custom palette
+
+A superadmin can also define the install's own palette: 11 colors (background, three surface shades, border, text, muted text, and the primary/success/warning/danger accents), a corner radius, and whether to use the monospace UI on desktop. The form shows a live preview and flags any pairing under WCAG AA (4.5:1 for body text, 3:1 for muted text and the primary accent) as you edit — these are warnings, not a block, in case the install has its own reason. "Start from…" copies a built-in preset's values into the form as a starting point.
+
+Every color is validated as a plain hex value (`#1a1a2a` or `#fff`) on save — nothing else is accepted, so a saved palette can never inject anything beyond a color into the page. Once saved, "Custom" appears as a choice both in the install-default dropdown above and in every user's own picker.
+
+Removing the custom palette falls the install default back to Dark if it had been set to Custom; anyone who had personally picked Custom falls back to Dark too, the next time they load a page.
+
+---
+
 ## HTTPS Configuration
 
 ### Uploading a Certificate

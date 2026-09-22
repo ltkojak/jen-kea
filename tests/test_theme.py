@@ -42,11 +42,15 @@ ALLOWED_HEX_FILES = {
     # is the shared "unknown type" fallback both files use.
     "_device_badge.html": "categorical device-type palette (DEVICE_TYPE_DISPLAY), not a theme token",
     "_device_rows.html": "same DEVICE_TYPE_DISPLAY fallback as _device_badge.html",
-    # An admin-chosen custom nav bar color (Settings → Appearance →
-    # Branding, pre-dates Q63) — the literal hex here is a form default /
-    # placeholder example, not a CSS declaration; the feature's whole
-    # point is storing an arbitrary hex the admin typed in.
-    "settings_appearance.html": "branding nav-color form default/placeholder, not a CSS declaration",
+    # Settings → Appearance: the pre-Q63 branding nav-color form's default/
+    # placeholder value (an admin-chosen arbitrary hex, not a theme token),
+    # and the Q63 Theme card's own hex-format examples (<code>#1a1a2a</code>
+    # in the help text, a placeholder="#000000" on a color field) — all
+    # data/text an admin reads or types, never a CSS declaration Jinja
+    # renders unescaped. The actual custom-palette values themselves never
+    # appear as source-file hex; they come from validate_palette()'d form
+    # data via Jinja variables, not literals in this file.
+    "settings_appearance.html": "branding nav-color default + Theme card's own hex-format examples/placeholders, never a CSS declaration",
     # theme.py itself is the one place hex is the actual point.
 }
 
