@@ -475,3 +475,117 @@ class TestThemePickerSwitchesWithoutReload:
         desktop.click("#dd-theme + label.theme-toggle")
         desktop.click('.theme-pick[data-theme-id="dark"]')
         expect(desktop.locator("html")).to_have_attribute("data-theme", "dark")
+
+
+class TestTouchNav:
+    """v5.55.1 (Q64) — base.html's old touchstart/touchmove/touchend block
+    (in the tree since v2.5.10) navigated on ANY touchend that started on a
+    link, including one that ended a vertical scroll — deleted. These prove
+    the property via a real touch drag through CDP (Input.dispatchTouchEvent,
+    the Q40 precedent), not just a source-guard absence check: a drag must
+    behave like a drag (scroll, no navigation), and a tap must still behave
+    like a tap (navigation, or the row-tap click handler)."""
+
+    def _touch_drag_up(self, page, x, y, steps=3, step_px=40):
+        cdp = page.context.new_cdp_session(page)
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x, "y": y}]})
+        for i in range(1, steps + 1):
+            cdp.send(
+                "Input.dispatchTouchEvent",
+                {"type": "touchMove", "touchPoints": [{"x": x, "y": y - i * step_px}]},
+            )
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
+    def test_a_vertical_drag_starting_on_a_settings_tile_scrolls_not_navigates(self, phone, base_url):
+        _visit(phone, base_url, "/settings")
+        start_url = phone.url
+        tile = phone.locator(".settings-tile").first
+        box = tile.bounding_box()
+        self._touch_drag_up(phone, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        phone.wait_for_timeout(200)
+        assert phone.url == start_url, "a scroll that started on a link navigated"
+        assert phone.evaluate("window.scrollY") > 0, "the drag did not actually scroll the page"
+
+    def test_a_tap_on_the_same_tile_still_navigates(self, phone, base_url):
+        _visit(phone, base_url, "/settings")
+        tile = phone.locator(".settings-tile").first
+        href = tile.get_attribute("href")
+        box = tile.bounding_box()
+        phone.touchscreen.tap(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        phone.wait_for_url(f"{base_url}{href}", timeout=5000)
+
+    def test_a_vertical_drag_starting_on_a_leases_row_does_not_open_its_action_menu(self, phone, base_url):
+        # The standard (non-demo) e2e dataset's fake Kea server reports zero
+        # leases (tests/e2e/_fake_kea_server.py's canned lease4-get-all) — the
+        # existing Leases journeys never needed an actual row, only this one
+        # does, so seed one directly (subnet 1 = "Office", 10.99.0.0/24, the
+        # standard E2E_SUBNETS fixture every other journey already assumes).
+        from jen.models.db import kea_db
+
+        with kea_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEEFF'")
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, state, expire, valid_lifetime, hostname) "
+                "VALUES (INET_ATON('10.99.0.222'), UNHEX('AABBCCDDEEFF'), 1, 0, "
+                "DATE_ADD(NOW(), INTERVAL 1 HOUR), 3600, 'touch-nav-probe')"
+            )
+            db.commit()
+        try:
+            _visit(phone, base_url, "/leases")
+            row = phone.locator("table.rowlist tbody tr").first
+            box = row.bounding_box()
+            self._touch_drag_up(phone, box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            phone.wait_for_timeout(200)
+            toggle = row.locator(".action-menu-toggle").first
+            if toggle.count():
+                assert not toggle.is_checked(), "a scroll that started on a row opened its action menu"
+        finally:
+            with kea_db() as db, db.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEEFF'")
+                db.commit()
+
+
+class TestAlertSummaryStatusColumn:
+    """v5.55.1 (Q64) — an "ok" row used to print "✓ ok" on every single
+    line; only a failure needs the reader's eye, so only a failure gets a
+    cell at all now."""
+
+    def test_one_failed_and_one_ok_row_shows_exactly_one_failed_chip(self, desktop, base_url):
+        from jen.models.db import jen_db
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO alert_log (channel_type, alert_type, message, status, error) "
+                "VALUES ('telegram', 'kea_up', 'ok test message', 'ok', NULL)"
+            )
+            cur.execute(
+                "INSERT INTO alert_log (channel_type, alert_type, message, status, error) "
+                "VALUES ('telegram', 'kea_down', 'failed test message', 'failed', 'Connection refused')"
+            )
+            db.commit()
+            # v1 shape (a plain list of widget ids) — dashboard_prefs.upgrade()
+            # reads it same as a v2 dict; simplest way to make an opt-in
+            # catalog widget visible without driving the Customize UI.
+            cur.execute(
+                "INSERT INTO dashboard_prefs (user_id, widgets) VALUES (1, %s) ON DUPLICATE KEY UPDATE widgets=%s",
+                (
+                    '["subnet_stats","recent_leases","alert_summary"]',
+                    '["subnet_stats","recent_leases","alert_summary"]',
+                ),
+            )
+            db.commit()
+
+        _visit(desktop, base_url, "/")
+        panel = desktop.locator("#alert-summary-body")
+        expect(panel.locator("table")).to_be_visible(timeout=5000)
+        text = panel.inner_text()
+        assert text.count("✗") == 1, f"expected exactly one failed chip, got: {text!r}"
+        assert "✓" not in text, f"an ok row still printed a checkmark: {text!r}"
+        assert panel.locator(".badge-danger").count() == 1
+
+        # Reset so this module-scoped `desktop` page's account doesn't carry
+        # alert_summary into later tests in this file.
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM dashboard_prefs WHERE user_id=1")
+            cur.execute("DELETE FROM alert_log WHERE message IN ('ok test message', 'failed test message')")
+            db.commit()

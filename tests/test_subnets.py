@@ -619,6 +619,41 @@ class TestSharedNetworks:
         assert ">shared<" in body  # the chip
         assert "New shared network" in body
 
+    def test_new_shared_network_card_is_a_collapsed_accordion_when_networks_exist(
+        self, logged_in_client, monkeypatch, mock_kea
+    ):
+        # v5.55.1 (Q64) — an install with shared networks already doesn't
+        # need the create form expanded by default.
+        import re
+
+        self._seed_map(monkeypatch)
+        self._wire(monkeypatch, self._NESTED)
+        r = logged_in_client.get("/subnets")
+        body = r.data.decode()
+        assert "<details" in body
+        m = re.search(
+            r'<details class="card"[^>]*>\s*<summary class="card-header"><span class="card-title">[^<]*New shared network',
+            body,
+        )
+        assert m, "New shared network card is not a <details><summary> accordion"
+        assert "open" not in m.group(0)
+
+    def test_new_shared_network_card_is_open_when_none_exist_yet(self, logged_in_client, monkeypatch, mock_kea):
+        # First-run case, where discoverability matters most.
+        import re
+
+        self._seed_map(monkeypatch)
+        empty = {"Dhcp4": {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}], "shared-networks": []}}
+        self._wire(monkeypatch, empty)
+        r = logged_in_client.get("/subnets")
+        body = r.data.decode()
+        m = re.search(
+            r'<details class="card"[^>]*>\s*<summary class="card-header"><span class="card-title">[^<]*New shared network',
+            body,
+        )
+        assert m, "New shared network card is not a <details><summary> accordion"
+        assert "open" in m.group(0)
+
     def test_edit_a_nested_subnet_applies_the_change(self, logged_in_client, monkeypatch, mock_kea):
         self._seed_map(monkeypatch)
         fake = self._wire(monkeypatch, self._NESTED)

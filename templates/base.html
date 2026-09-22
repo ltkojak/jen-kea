@@ -117,6 +117,14 @@
         #dash-widgets > div > .card, #dash-widgets > div { margin-bottom: 0; }
         .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
         .card-title { font-weight: 600; font-size: 14px; }
+        /* v5.55.1 (Q64) — a <details class="card"> accordion (e.g. Subnets'
+           "New shared network"): its <summary class="card-header"> keeps the
+           card's own header layout, just adds the click affordance and a
+           chevron, same disclosure-triangle idea as Q60's .al-tpl. */
+        details.card > summary.card-header { cursor: pointer; list-style: none; }
+        details.card > summary.card-header::-webkit-details-marker { display: none; }
+        details.card > summary.card-header::after { content: "\25B8"; color: var(--text-muted); flex: none; }
+        details.card[open] > summary.card-header::after { content: "\25BE"; }
 
         /* Tables */
         /* v5.1.18 attempted to fix .action-menu-dropdown clipping by
@@ -197,6 +205,17 @@
         .badge-reserved { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
         .badge-danger { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); }
 
+        /* v5.55.1 (Q64) — dashboard Alert Summary widget's JS-built rows
+           (loadAlertSummary() in dashboard.html). These were inline style=
+           strings concatenated into the row HTML; moved to classes so the
+           inline-style ratchet counts them going down, not up. */
+        .as-icon-cell { width: 28px; font-size: 16px; padding: 3px 0; }
+        .as-time-cell { font-size: 12px; color: var(--text-muted); padding: 3px 8px; white-space: nowrap; }
+        .as-type-cell { font-size: 12px; padding: 3px 8px; }
+        .as-status-cell { font-size: 11px; padding: 3px 0; }
+        .as-status-cell .badge[title] { cursor: help; }
+        .as-fail-banner { background: var(--surface2); border-radius: 4px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: var(--warning); }
+
         /* Alerts */
         .alert { padding: 12px 16px; border-radius: var(--radius); margin-bottom: 16px; font-size: 13px; }
         .alert-success { background: color-mix(in srgb, var(--success) 18%, transparent); border: 1px solid color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
@@ -219,7 +238,7 @@
         .mono { font-family: var(--font-mono); font-size: 12px; }
 
         /* Stat cards */
-        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
         
         
         .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
@@ -433,6 +452,10 @@
             /* Section tabs */
             .section-tabs { padding: 0 12px; }
             .section-tab { padding: 10px 12px; font-size: 12px; min-height: 44px; }
+            /* v5.55.1 (Q64) — a group *landing* page (today just /settings) already
+               shows these same destinations as cards below; the strip is a
+               redundant, unlabeled duplicate on a phone. Desktop keeps it. */
+            .section-tabs-wrap--landing { display: none; }
             /* Settings on a phone: the landing grid is the nav; group pages get a way back */
             .settings-back { display: block; }
             .settings-grid { grid-template-columns: 1fr; }
@@ -662,7 +685,7 @@
      nav.strip (jen/routes/settings/nav.py, v5.9.0). Scrolls horizontally on
      narrow screens rather than wrapping. -->
 {% if current_user.is_authenticated and nav.strip %}
-<div class="section-tabs-wrap">
+<div class="section-tabs-wrap{% if nav.landing %} section-tabs-wrap--landing{% endif %}">
 <div class="section-tabs">
     {% for t in nav.strip %}
     <a href="{{ t.url if t.url is defined else url_for(t.endpoint) }}" class="section-tab {% if t.active %}active{% endif %}">{{ nav_icon(t.icon) }} {{ t.label }}</a>
@@ -1314,30 +1337,6 @@ function sortTable(table, col, th) {
         var strip = activeTab.parentNode;
         strip.scrollLeft = activeTab.offsetLeft - (strip.clientWidth - activeTab.offsetWidth) / 2;
     }
-
-    // Instant navigation on touchstart for all anchor links — but NOT if the link is
-    // inside a horizontally-scrollable container AND the gesture is a horizontal swipe.
-    document.querySelectorAll('a[href]').forEach(function(a) {
-        var touchStartX = 0, touchStartY = 0, didScroll = false;
-        a.addEventListener('touchstart', function(e) {
-            touchStartX = e.touches[0].clientX;
-            touchStartY = e.touches[0].clientY;
-            didScroll = false;
-        }, { passive: true });
-        a.addEventListener('touchmove', function(e) {
-            var dx = Math.abs(e.touches[0].clientX - touchStartX);
-            var dy = Math.abs(e.touches[0].clientY - touchStartY);
-            if (dx > dy && dx > 6) { didScroll = true; } // horizontal swipe detected
-        }, { passive: true });
-        a.addEventListener('touchend', function(e) {
-            if (didScroll) return; // was a scroll, not a tap — don't navigate
-            var href = this.getAttribute('href');
-            if (href && href !== '#' && !href.startsWith('javascript') && !href.startsWith('mailto')) {
-                e.preventDefault();
-                window.location.href = href;
-            }
-        }, { passive: false });
-    });
 })();
 </script>
 

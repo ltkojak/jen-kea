@@ -77,6 +77,18 @@ class TestNavModel:
         assert ctx["in_settings"] and ctx["group"] is None
         assert [g["id"] for g in ctx["strip"]] == [g["id"] for g in navmod.SETTINGS_GROUPS]
 
+    def test_landing_flag_is_true_only_on_the_settings_landing_page(self):
+        # v5.55.1 (Q64) — base.html hides the section strip at phone width
+        # only when this is set; a group page (which shows the strip AND its
+        # own sub-page content) must never carry it, or every settings page
+        # would lose its strip on a phone, not just the landing grid.
+        assert navmod.nav_context("settings.settings", "admin")["landing"] is True
+        assert navmod.nav_context("settings.settings", "superadmin")["landing"] is True
+        for endpoint in ("settings.settings_kea", "settings.settings_security", "users.users", "database.database"):
+            assert navmod.nav_context(endpoint, "superadmin")["landing"] is False, endpoint
+        # Outside Settings entirely (in_settings False) is also not "the landing page".
+        assert navmod.nav_context("dashboard.dashboard", "admin")["landing"] is False
+
     def test_superadmin_only_subtabs_hidden_for_admin(self):
         admin = navmod.nav_context("settings.settings_security", "admin")["subtabs"]
         sup = navmod.nav_context("settings.settings_security", "superadmin")["subtabs"]
@@ -121,6 +133,16 @@ class TestGroupPagesRender:
         assert r.status_code == 200
         for g in navmod.SETTINGS_GROUPS:
             assert g["url"].encode() in r.data, g["id"]
+
+    def test_only_the_landing_page_carries_the_phone_hide_class(self, logged_in_client, mock_kea):
+        # v5.55.1 (Q64) — the section strip is redundant on the landing grid
+        # (it shows the same destinations as cards below it) at phone width;
+        # a group page still needs the strip visible, so it must never carry
+        # the hiding class.
+        landing = logged_in_client.get("/settings")
+        assert b"section-tabs-wrap--landing" in landing.data
+        kea = logged_in_client.get("/settings/kea")
+        assert b"section-tabs-wrap--landing" not in kea.data
 
     @pytest.mark.parametrize(
         "path",

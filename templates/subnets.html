@@ -248,8 +248,12 @@ document.addEventListener('click', function(e) {
 {% endfor %}
 
 {% if can_manage_networks and ssh_ready %}
-<div class="card">
-    <div class="card-header"><span class="card-title">{{ icon("plus") }} New shared network</span></div>
+{#- v5.55.1 (Q64) — a <details> accordion instead of always-expanded: open by
+    default only on first run (no shared network exists yet, where
+    discoverability matters most), collapsed once the install has at least
+    one. Same pattern as Q60's .al-tpl accordion. -#}
+<details class="card" {% if not shared_networks %}open{% endif %}>
+    <summary class="card-header"><span class="card-title">{{ icon("plus") }} New shared network</span></summary>
     <form method="POST" action="/subnets/shared-networks/add" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group u-116966">
@@ -263,7 +267,7 @@ document.addEventListener('click', function(e) {
         <button type="submit" class="btn btn-sm btn-primary">Create</button>
     </form>
     <p class="form-hint u-8a77e5">Empty to start — add subnets to it from the Add Subnet form, or move existing ones in with the dropdown on each card.</p>
-</div>
+</details>
 {% endif %}
 
 {% for s6 in subnets6 if not s6.paired_subnet4_id %}

@@ -695,7 +695,7 @@ function loadAlertSummary() {
             var allFailed = data.alerts.length > 0 && data.alerts.every(function(a) { return a.status !== 'ok'; });
             var html = '';
             if (allFailed) {
-                html += '<div style="background:var(--surface2);border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:var(--warning);">' +
+                html += '<div class="as-fail-banner">' +
                         '<svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> All recent alerts failed to send — check your notification channel configuration. ' +
                         '<a href="/settings/alerts" class="u-dc2e42">Configure →</a></div>';
             }
@@ -703,14 +703,18 @@ function loadAlertSummary() {
             data.alerts.forEach(function(a) {
                 var icon = alertIcon(a.icon);
                 var ok = a.status === 'ok';
-                var statusColor = ok ? 'var(--success)' : 'var(--danger)';
                 var errorTip = a.error ? ' title="' + a.error.replace(/"/g, '&quot;') + '"' : '';
+                var status = a.status || '';
+                var statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
+                // v5.55.1 (Q64) — an "ok" row said the same thing on every
+                // line ("✓ ok"); only a failure needs the reader's attention,
+                // so only a failure gets a cell at all.
+                var statusCell = ok ? '' : '<span class="badge badge-danger"' + errorTip + '>✗ ' + statusLabel + (a.error ? ' ⓘ' : '') + '</span>';
                 html += '<tr>' +
-                    '<td style="width:28px;font-size:16px;padding:3px 0;">' + icon + '</td>' +
-                    '<td style="font-size:12px;color:var(--text-muted);padding:3px 8px;white-space:nowrap;">' + (a.sent_at || '') + '</td>' +
-                    '<td style="font-size:12px;padding:3px 8px;">' + (a.type || '').replace(/_/g,' ') + '</td>' +
-                    '<td style="font-size:11px;color:' + statusColor + ';padding:3px 0;cursor:' + (a.error ? 'help' : 'default') + ';"' + errorTip + '>' +
-                    (ok ? '✓' : '✗') + ' ' + (a.status || '') + (a.error ? ' ⓘ' : '') + '</td>' +
+                    '<td class="as-icon-cell">' + icon + '</td>' +
+                    '<td class="as-time-cell">' + (a.sent_at || '') + '</td>' +
+                    '<td class="as-type-cell">' + (a.type || '').replace(/_/g,' ') + '</td>' +
+                    '<td class="as-status-cell">' + statusCell + '</td>' +
                     '</tr>';
             });
             html += '</table>';

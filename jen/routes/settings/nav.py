@@ -335,6 +335,14 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
         "sheet": _sheet_groups(endpoint, role, section_strips, plugin_nav_items),
         "strip": strip,
         "in_settings": in_settings,
+        # v5.55.1 (Q64) — True on a group *landing* page: inside Settings, but
+        # not matched by any group in SETTINGS_GROUPS (today only
+        # settings.settings itself). base.html hides the section strip there
+        # on a phone — the page already shows the same destinations as cards
+        # below it, so the strip is a redundant, unlabeled duplicate. Derived
+        # from the same group lookup every other decision here uses, not a
+        # hardcoded endpoint string.
+        "landing": in_settings and group is None,
         "group": group,
         "settings_groups": [g for g in SETTINGS_GROUPS if _allowed(g, role)],
         "subtabs": {k: [t for t in v if _allowed(t, role)] for k, v in SUBTABS.items()},
