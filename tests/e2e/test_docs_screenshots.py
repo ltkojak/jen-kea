@@ -154,11 +154,23 @@ class TestDesktopScreenshots:
         # trend, so it's the only one with a dashed projection line to show.
         # (Production, first in subnet order, has a flat trend and never draws
         # one — framing on it would never satisfy "the dashed projection on IoT".)
-        desktop.evaluate(
+        # Chart.js keeps resizing/animating canvases for a bit after the "N data
+        # points" text is already correct, which shifts card heights below —
+        # scroll, wait, then scroll again immediately before capture so the
+        # second call corrects for anything that moved during the wait.
+        scroll_to_iot = (
             "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT')); "
             "if (t) t.closest('.card').scrollIntoView({block: 'start'}); }"
         )
+        desktop.evaluate(scroll_to_iot)
+        desktop.wait_for_timeout(500)
+        desktop.evaluate(scroll_to_iot)
         desktop.wait_for_timeout(150)
+        in_view = desktop.evaluate(
+            "() => { const t = [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT')); "
+            "const r = t.closest('.card').getBoundingClientRect(); return r.top >= 0 && r.top < 300; }"
+        )
+        assert in_view, "reports: IoT's chart card never settled near the top of the frame"
         _leak_guard(desktop, "reports")
         _save(desktop, "reports")
 
