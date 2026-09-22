@@ -12,7 +12,7 @@
 <div class="card u-87c136">
     <div class="card-header"><span class="card-title">{{ icon("image") }} Profile Picture</span></div>
     <div style="display:flex;align-items:center;gap:24px;padding:8px 0;">
-        <div id="avatar-preview" style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,#0077b6,#00b4d8);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:#fff;overflow:hidden;flex-shrink:0;">
+        <div id="avatar-preview" style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg, color-mix(in srgb, var(--primary) 65%, black), var(--primary));display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:white;overflow:hidden;flex-shrink:0;">
             {% if current_user_avatar %}
             <img src="{{ current_user_avatar }}" style="width:100%;height:100%;object-fit:cover;">
             {% else %}
@@ -92,7 +92,7 @@ if (removeAvatarBtn) {
                 {% if mfa_enrolled %}
                 <span class="badge badge-reserved">✓ Enrolled</span>
                 {% else %}
-                <span class="badge u-fb2b30">{{ icon("triangle-alert") }} Not enrolled</span>
+                <span class="badge u-9741b3">{{ icon("triangle-alert") }} Not enrolled</span>
                 {% endif %}
             </td></tr>
         <tr><td class="stat-label u-d8c022">Trusted Devices</td>

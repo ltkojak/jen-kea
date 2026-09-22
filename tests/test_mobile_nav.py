@@ -15,6 +15,7 @@ import pytest
 from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader
 
 from jen.routes.settings import nav as navmod
+from jen.services import theme as thememod
 from jen.services.icons import icon, nav_icon
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -110,6 +111,15 @@ def _render(role="admin", endpoint="servers.servers", pill=None):
         endpoint = "servers.servers"
 
     U.role = role
+    # v5.55.0 (Q63) — base.html's token blocks and the theme picker now come
+    # from jen.services.theme via the app's inject_theme context processor;
+    # this stub render has no Flask app to supply it, so build the same
+    # "install default, no custom palette" values it would.
+    theme_css = [
+        (tid, thememod.render_css(tid, p["tokens"], p["radius"], p["mono_ui"], p["color_scheme"]))
+        for tid, p in thememod.PRESETS.items()
+    ]
+    theme_presets = [(tid, p["name"]) for tid, p in thememod.PRESETS.items()]
     return env.get_template("base.html").render(
         current_user=U,
         request=R,
@@ -118,6 +128,11 @@ def _render(role="admin", endpoint="servers.servers", pill=None):
         nav=navmod.nav_context(endpoint, role, PLUGIN_ITEMS),
         getting_started_pill=pill,
         plugin_nav_items=PLUGIN_ITEMS,
+        theme_css=theme_css,
+        theme_presets=theme_presets,
+        theme_default="dark",
+        theme_custom=None,
+        theme_meta_color=thememod.PRESETS["dark"]["tokens"]["primary"],
     )
 
 
@@ -177,14 +192,17 @@ class TestTokensAndUtilities:
             "--fs-xs: 11px",
             "--fs-2xl: 26px",
             "--radius-sm",
-            "--surface3",
             "--tap: 44px",
         ):
             assert tok in css, tok
+        # v5.55.0 (Q63) — --surface3 moved out of base.html's own source into
+        # the generated per-preset blocks (jen/services/theme.py); check it
+        # there instead of scanning raw template text for it.
+        assert "surface3" in thememod.TOKENS
+        assert thememod.CSS_VARS["surface3"] == "--surface3"
 
-    def test_surface3_is_defined_for_both_themes(self):
-        css = self._css()
-        assert css.count("--surface3:") == 2
+    def test_surface3_is_defined_for_every_built_in_preset(self):
+        assert thememod.all_presets_css().count("--surface3:") == len(thememod.PRESETS)
 
     def test_utilities_named_by_the_spec_exist(self):
         css = self._css()

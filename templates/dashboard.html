@@ -433,19 +433,15 @@ let refreshTimer = null;
 let historyCharts = {};
 
 // ── Sparkline renderer (no library — pure Canvas 2D) ─────────────────────────
-// Resolve CSS variable to actual color value for canvas use
-function resolveCssColor(cssVar) {
-    // cssVar may be 'var(--primary)' or already a hex like '#00b4d8'
-    if (!cssVar.startsWith('var(')) return cssVar;
-    var name = cssVar.replace('var(', '').replace(')', '').trim();
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#00b4d8';
-}
+// Resolving CSS variables to actual colors for canvas use is now
+// window.jenColor(), in base.html (v5.55.0, Q63) — shared with reports.html
+// and servers.html rather than three copies of the same lookup.
 
 // Map utilization % to a resolved canvas-ready color
 function utilColor(pct) {
-    if (pct >= 90) return resolveCssColor('var(--danger)')  || '#e74c3c';
-    if (pct >= 75) return resolveCssColor('var(--warning)') || '#f39c12';
-    return          resolveCssColor('var(--primary)')        || '#00b4d8';
+    if (pct >= 90) return jenColor('var(--danger)');
+    if (pct >= 75) return jenColor('var(--warning)');
+    return          jenColor('var(--primary)');
 }
 
 function drawSparkline(canvasId, points, _unused, _attempt) {
@@ -465,7 +461,7 @@ function drawSparkline(canvasId, points, _unused, _attempt) {
     ctx.clearRect(0, 0, w, h);
 
     if (!points || points.length < 2) {
-        ctx.fillStyle = resolveCssColor('var(--text-muted)') || '#666';
+        ctx.fillStyle = jenColor('var(--text-muted)');
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('No data yet', w/2, h/2 + 4);
@@ -1210,4 +1206,8 @@ document.getElementById('dash-compact-toggle').addEventListener('change', functi
 document.getElementById('refreshInterval').addEventListener('change', function() { setRefreshInterval(this.value); });
 document.getElementById('history-days').addEventListener('change', loadHistory);
 document.getElementById('recent-hours').addEventListener('change', loadRecentLeases);
+// v5.55.0 (Q63) — sparklines are plain Canvas 2D, drawn once with whatever
+// jenColor() resolved at the time; redraw on a theme switch so they don't
+// keep the old theme's colors until the next periodic refresh.
+document.addEventListener('jen:theme', loadHistory);
 {% endblock %}

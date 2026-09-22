@@ -46,7 +46,7 @@
         {% for v in verdicts %}
         <a href="?limit={{ limit }}&verdict={{ v }}"
            class="badge"
-           style="{% if verdict_filter == v %}background:var(--primary);{% elif v == 'ok' %}background:#1a2a1a;color:var(--success);{% elif v == 'multiple-a' %}background:var(--surface2);color:var(--text-muted);{% else %}background:#2a1a1a;color:var(--warning);{% endif %}">
+           style="{% if verdict_filter == v %}background:var(--primary);{% elif v == 'ok' %}background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);{% elif v == 'multiple-a' %}background:var(--surface2);color:var(--text-muted);{% else %}background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning);{% endif %}">
             {{ v }} ({{ counts.get(v, 0) }})
         </a>
         {% endfor %}
@@ -81,9 +81,9 @@
             <td class="mono hide-tablet" data-m="hide">{{ r.expected_ptr }}</td>
             <td class="mono hide-tablet" data-m="hide">{{ r.observed_ptr or '—' }}</td>
             <td data-m="badge">
-                {% if r.verdict == 'ok' %}<span class="badge" style="background:#1a2a1a;color:var(--success);">✓ ok</span>
+                {% if r.verdict == 'ok' %}<span class="badge" style="background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);">✓ ok</span>
                 {% elif r.verdict == 'multiple-a' %}<span class="badge u-d6f005"  title="Several A records can be intentional — review, don't assume it's wrong">{{ r.verdict }}</span>
-                {% else %}<span class="badge u-fb2b30">{{ r.verdict }}</span>{% endif %}
+                {% else %}<span class="badge u-9741b3">{{ r.verdict }}</span>{% endif %}
             </td>
             <td data-m="secondary">
                 {% if r.verdict != 'ok' %}

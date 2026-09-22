@@ -26,7 +26,7 @@
     {% for g in groups %}
     <div style="border-top:1px solid var(--border);padding:12px 0;">
         <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
-            <span class="badge" style="{% if g.outcome == 'nak' %}background:#2a1a1a;color:var(--danger);{% elif g.outcome in ('ack','offer') %}background:#1a2a1a;color:var(--success);{% else %}background:var(--surface2);color:var(--text-muted);{% endif %}">{{ g.outcome }}</span>
+            <span class="badge" style="{% if g.outcome == 'nak' %}background:color-mix(in srgb, var(--danger) 18%, transparent);color:var(--danger);{% elif g.outcome in ('ack','offer') %}background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);{% else %}background:var(--surface2);color:var(--text-muted);{% endif %}">{{ g.outcome }}</span>
             <span class="mono u-6cb285">{{ g.start.strftime('%Y-%m-%d %H:%M:%S') if g.start else '?' }}</span>
             {% if g.ip %}<span class="mono u-6cb285">{{ g.ip }}</span>{% endif %}
         </div>

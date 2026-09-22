@@ -1,7 +1,7 @@
 {
  "align-self:flex-end": "u-ffd20f",
- "background:#2a1a1a;color:var(--warning)": "u-fb2b30",
- "background:#3a1a1a;color:var(--danger)": "u-d4bab1",
+ "background:color-mix(in srgb, var(--danger) 18%, transparent);color:var(--danger)": "u-08a316",
+ "background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning)": "u-9741b3",
  "background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1": "u-c4d0b1",
  "background:var(--surface2)": "u-851d78",
  "background:var(--surface2);border-style:dashed": "u-32e230",

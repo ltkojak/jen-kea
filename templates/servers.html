@@ -45,7 +45,7 @@
         {% if s.up %}
         <span class="badge badge-reserved">● Online</span>
         {% else %}
-        <span class="badge u-d4bab1">● Offline</span>
+        <span class="badge u-08a316">● Offline</span>
         {% endif %}
     </div>
     <table class="u-046678">
@@ -98,7 +98,7 @@
         {% if s.up %}
         <span class="badge badge-reserved">● Online</span>
         {% else %}
-        <span class="badge u-d4bab1">● Offline</span>
+        <span class="badge u-08a316">● Offline</span>
         {% endif %}
     </div>
     <table class="u-a1fa25">
@@ -266,7 +266,7 @@
         <div><span class="badge badge-dynamic">partner-down</span><br><span class="u-2bb516">Partner unreachable — this server operating alone</span></div>
         <div><span class="badge badge-dynamic">waiting</span><br><span class="u-2bb516">Starting up, waiting for partner sync</span></div>
         <div><span class="badge badge-dynamic">syncing</span><br><span class="u-2bb516">Synchronizing lease database with partner</span></div>
-        <div><span class="badge" style="background:#2a1a1a;color:var(--danger);">terminated</span><br><span class="u-2bb516">HA terminated — manual intervention required</span></div>
+        <div><span class="badge" style="background:color-mix(in srgb, var(--danger) 18%, transparent);color:var(--danger);">terminated</span><br><span class="u-2bb516">HA terminated — manual intervention required</span></div>
     </div>
 </div>
 {% endif %}
@@ -280,35 +280,45 @@ setInterval(function() { location.reload(); }, 30000);
 <script src="/static/js/chart.umd.min.js"></script>
 <script nonce="{{ csp_nonce }}">
 const PACKET_HEALTH = {{ packet_health_sparklines | tojson }};
-const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
 
-Object.entries(PACKET_HEALTH).forEach(([serverId, points]) => {
-    const canvas = document.getElementById('ph-chart-' + serverId);
-    if (!canvas || !points.length) return;
-    new Chart(canvas, {
-        type: 'line',
-        data: {
-            labels: points.map(p => p.ts),
-            datasets: [{
-                label: 'pkt4-received',
-                data: points.map(p => p.received),
-                borderColor: '#00b4d8',
-                backgroundColor: 'rgba(0,180,216,0.15)',
-                fill: true,
-                tension: 0.4,
-                pointRadius: 0,
-                borderWidth: 2,
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: { legend: { display: false }, tooltip: { intersect: false, mode: 'index' } },
-            scales: {
-                x: { display: false },
-                y: { display: false, beginAtZero: true }
+// v5.55.0 (Q63) — colors resolved through window.jenColor() (base.html) so
+// the sparkline tracks the active theme rather than a hardcoded dark-only
+// hex; rebuilt wholesale on a theme switch, same as reports.html's charts.
+function buildPacketCharts() {
+    const primary = jenColor('var(--primary)');
+    Object.entries(PACKET_HEALTH).forEach(([serverId, points]) => {
+        const canvas = document.getElementById('ph-chart-' + serverId);
+        if (!canvas || !points.length) return;
+        new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: points.map(p => p.ts),
+                datasets: [{
+                    label: 'pkt4-received',
+                    data: points.map(p => p.received),
+                    borderColor: primary,
+                    backgroundColor: `color-mix(in srgb, ${primary} 15%, transparent)`,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { display: false }, tooltip: { intersect: false, mode: 'index' } },
+                scales: {
+                    x: { display: false },
+                    y: { display: false, beginAtZero: true }
+                }
             }
-        }
+        });
     });
+}
+buildPacketCharts();
+document.addEventListener('jen:theme', function() {
+    Object.values(Chart.instances).forEach(c => c.destroy());
+    buildPacketCharts();
 });
 {% endif %}
 {% endblock %}

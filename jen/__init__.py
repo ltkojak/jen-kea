@@ -542,6 +542,64 @@ def create_app() -> Flask:
             "csp_nonce": getattr(g, "csp_nonce", ""),
         }
 
+    # v5.55.0 (Q63) — the theme engine. base.html's token blocks are generated
+    # from here rather than hand-written: every built-in preset
+    # (jen.services.theme.PRESETS) plus the install's custom palette, if one
+    # is defined. theme_custom's tokens went through validate_palette() at
+    # save time (jen/routes/settings/theme.py) — the JSON in the settings
+    # table is never re-validated here, but render_css() only ever emits
+    # exactly the fields that call put there, so a corrupted row degrades to
+    # a broken *value*, never broken CSS syntax.
+    @app.context_processor
+    def inject_theme():
+        import json
+
+        from jen.services import theme as _theme
+
+        theme_css = [
+            (tid, _theme.render_css(tid, p["tokens"], p["radius"], p["mono_ui"], p["color_scheme"]))
+            for tid, p in _theme.PRESETS.items()
+        ]
+        theme_presets = [(tid, p["name"]) for tid, p in _theme.PRESETS.items()]
+        theme_custom = None
+        custom_raw = get_global_setting("theme_custom", "")
+        if custom_raw:
+            try:
+                parsed = json.loads(custom_raw)
+                theme_custom = parsed
+                theme_css.append(
+                    (
+                        "custom",
+                        _theme.render_css(
+                            "custom",
+                            parsed["tokens"],
+                            parsed["radius"],
+                            parsed["mono_ui"],
+                            _theme.guess_color_scheme(parsed["tokens"]),
+                        ),
+                    )
+                )
+                theme_presets.append(("custom", "Custom"))
+            except Exception:
+                theme_custom = None
+        theme_default = get_global_setting("theme_default", "dark")
+        if theme_default not in [tid for tid, _ in theme_presets]:
+            theme_default = "dark"
+        # SSR value for <meta name="theme-color"> — the JS picker overwrites
+        # it with the ACTIVE theme's --primary the moment it runs, but a
+        # browser can read the meta tag before any script executes.
+        if theme_default == "custom" and theme_custom:
+            theme_meta_color = theme_custom["tokens"]["primary"]
+        else:
+            theme_meta_color = _theme.PRESETS.get(theme_default, _theme.PRESETS["dark"])["tokens"]["primary"]
+        return {
+            "theme_css": theme_css,
+            "theme_presets": theme_presets,
+            "theme_default": theme_default,
+            "theme_custom": theme_custom,
+            "theme_meta_color": theme_meta_color,
+        }
+
     # ── Error handlers ────────────────────────────────────────────────────────
     @app.errorhandler(404)
     def not_found(e):

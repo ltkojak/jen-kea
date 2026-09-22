@@ -25,6 +25,7 @@ import re
 import pytest
 from playwright.sync_api import expect
 
+from jen.services import theme as thememod
 from tests.e2e.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, login
 
 pytestmark = pytest.mark.e2e
@@ -403,3 +404,74 @@ class TestGeneratedStylesheetLoads:
         assert resp.status == 200 and ".u-" in resp.text()
         _visit(phone, base_url, "/ddns")
         expect(phone.locator("link[href*='ui-classes.css']")).to_have_count(1, timeout=5000)
+
+
+class TestThemePicker:
+    """v5.55.0 (Q63) — the preset picker. One context per preset (an
+    add_init_script that seeds localStorage before any page load, same
+    trick the picker itself relies on to avoid FOUC) so each gets its own
+    screenshot pair and a real computed --bg to assert against."""
+
+    @pytest.fixture(params=list(thememod.PRESET_IDS))
+    def preset_id(self, request):
+        return request.param
+
+    @pytest.fixture
+    def themed_page(self, browser, base_url, preset_id):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        ctx.add_init_script(f"localStorage.setItem('jen-theme', {preset_id!r})")
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        yield page
+        ctx.close()
+
+    def test_computed_bg_matches_the_preset_and_is_screenshotted(self, themed_page, base_url, preset_id):
+        _visit(themed_page, base_url, "/")
+        assert themed_page.get_attribute("html", "data-theme") == preset_id
+        bg = themed_page.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()")
+        assert bg == thememod.PRESETS[preset_id]["tokens"]["bg"]
+        DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
+        themed_page.screenshot(path=str(DESKTOP_DIR / f"theme-{preset_id}.png"), full_page=True)
+
+        themed_page.set_viewport_size(PHONE)
+        _visit(themed_page, base_url, "/")
+        MOBILE_DIR.mkdir(parents=True, exist_ok=True)
+        themed_page.screenshot(path=str(MOBILE_DIR / f"theme-{preset_id}.png"), full_page=True)
+        # Phosphor's mono UI is desktop-only (widens tables past the phone
+        # overflow guard) — confirm it did NOT switch --font-ui on the phone.
+        if preset_id == "phosphor":
+            font_ui = themed_page.evaluate(
+                "getComputedStyle(document.documentElement).getPropertyValue('--font-ui').trim()"
+            )
+            font_mono = themed_page.evaluate(
+                "getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()"
+            )
+            assert font_ui != font_mono
+            over = themed_page.evaluate(OVERFLOW_JS, PHONE["width"])
+            assert over <= 1, f"phosphor overflows the phone by {over}px"
+
+    def test_reports_chart_border_color_tracks_the_theme(self, themed_page, base_url, preset_id):
+        _visit(themed_page, base_url, "/reports")
+        canvas = themed_page.locator("canvas").first
+        if canvas.count() == 0:
+            pytest.skip("no history data seeded for a chart canvas")
+        resolved = themed_page.evaluate("window.jenColor('var(--primary)')")
+        assert resolved.replace(" ", "").lower() == thememod.PRESETS[preset_id]["tokens"]["primary"].lower()
+
+
+class TestThemePickerSwitchesWithoutReload:
+    def test_picking_a_theme_in_the_nav_dropdown_applies_immediately(self, desktop, base_url):
+        _visit(desktop, base_url, "/leases")
+        desktop.click("#dd-theme + label.theme-toggle")
+        desktop.click('.theme-pick[data-theme-id="light"]')
+        expect(desktop.locator("html")).to_have_attribute("data-theme", "light")
+        bg = desktop.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--bg').trim()")
+        assert bg == thememod.PRESETS["light"]["tokens"]["bg"]
+        stored = desktop.evaluate("localStorage.getItem('jen-theme')")
+        assert stored == "light"
+        meta = desktop.get_attribute('meta[name="theme-color"]', "content")
+        assert meta.lower() == thememod.PRESETS["light"]["tokens"]["primary"].lower()
+        # Reset so this module-scoped `desktop` page doesn't leak into later tests.
+        desktop.click("#dd-theme + label.theme-toggle")
+        desktop.click('.theme-pick[data-theme-id="dark"]')
+        expect(desktop.locator("html")).to_have_attribute("data-theme", "dark")

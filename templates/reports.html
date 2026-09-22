@@ -117,14 +117,23 @@ document.getElementById('days-select').addEventListener('change', function() {
 <script nonce="{{ csp_nonce }}">
 const HISTORY = {{ history | tojson }};
 const FORECAST = {{ forecast | tojson }};
-const IS_DARK = document.documentElement.getAttribute('data-theme') !== 'light';
 // v5.53.0 (Q60): on a phone the canvas's 80px-tall default aspect (about 90px at 350 wide) is
 // unreadable; a 1.5:1 chart is ~230px tall there, and the legend moves below it.
 const PHONE = window.matchMedia('(max-width: 768px)').matches;
 
+// v5.55.0 (Q63) — every color below comes from window.jenColor() (base.html),
+// which resolves the theme's actual CSS custom properties: Canvas/Chart.js
+// can't take a bare var(--x), so a translucent tint is built by feeding the
+// RESOLVED color into color-mix() rather than the custom property itself.
 function buildCharts() {
-    const gridColor = IS_DARK ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
-    const textColor = IS_DARK ? '#666' : '#999';
+    const borderColor = jenColor('var(--border)');
+    const textColor = jenColor('var(--text-muted)');
+    const textStrong = jenColor('var(--text)');
+    const surface2 = jenColor('var(--surface2)');
+    const primary = jenColor('var(--primary)');
+    const success = jenColor('var(--success)');
+    const warning = jenColor('var(--warning)');
+    const gridColor = `color-mix(in srgb, ${textStrong} 8%, transparent)`;
 
     Object.entries(HISTORY).forEach(([subnetId, h]) => {
         const canvas = document.getElementById('chart-' + subnetId);
@@ -154,8 +163,8 @@ function buildCharts() {
                     {
                         label: 'Dynamic Leases',
                         data: dynamic,
-                        borderColor: '#00b4d8',
-                        backgroundColor: 'rgba(0,180,216,0.15)',
+                        borderColor: primary,
+                        backgroundColor: `color-mix(in srgb, ${primary} 15%, transparent)`,
                         fill: true,
                         tension: 0.4,
                         pointRadius: h.data.length > 100 ? 0 : 2,
@@ -164,8 +173,8 @@ function buildCharts() {
                     {
                         label: 'Reserved',
                         data: reserved,
-                        borderColor: '#2ecc71',
-                        backgroundColor: 'rgba(46,204,113,0.1)',
+                        borderColor: success,
+                        backgroundColor: `color-mix(in srgb, ${success} 10%, transparent)`,
                         fill: true,
                         tension: 0.4,
                         pointRadius: h.data.length > 100 ? 0 : 2,
@@ -174,7 +183,7 @@ function buildCharts() {
                     {
                         label: 'Pool Size',
                         data: poolSize,
-                        borderColor: 'rgba(255,255,255,0.1)',
+                        borderColor: `color-mix(in srgb, ${textStrong} 10%, transparent)`,
                         backgroundColor: 'transparent',
                         fill: false,
                         tension: 0,
@@ -185,7 +194,7 @@ function buildCharts() {
                     {
                         label: 'Projected (trend)',
                         data: projection,
-                        borderColor: '#f39c12',
+                        borderColor: warning,
                         backgroundColor: 'transparent',
                         fill: false,
                         tension: 0,
@@ -207,11 +216,11 @@ function buildCharts() {
                         labels: { color: textColor, boxWidth: 12, font: { size: 11 } }
                     },
                     tooltip: {
-                        backgroundColor: IS_DARK ? '#1c1c1c' : '#fff',
-                        borderColor: IS_DARK ? '#2a2a2a' : '#dee2e6',
+                        backgroundColor: surface2,
+                        borderColor: borderColor,
                         borderWidth: 1,
-                        titleColor: IS_DARK ? '#e0e0e0' : '#212529',
-                        bodyColor: IS_DARK ? '#999' : '#6c757d',
+                        titleColor: textStrong,
+                        bodyColor: textColor,
                         callbacks: {
                             afterBody: function(items) {
                                 const idx = items[0].dataIndex;
@@ -244,5 +253,11 @@ function buildCharts() {
     });
 }
 buildCharts();
+// v5.55.0 (Q63) — a theme switch changes every color above; destroy and
+// rebuild rather than trying to patch live Chart.js instances in place.
+document.addEventListener('jen:theme', function() {
+    Object.values(Chart.instances).forEach(c => c.destroy());
+    buildCharts();
+});
 {% endif %}
 {% endblock %}

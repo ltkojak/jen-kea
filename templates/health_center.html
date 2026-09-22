@@ -4,10 +4,10 @@
 <style>
     .hc-pill { display:inline-block; min-width:46px; text-align:center; padding:2px 8px; border-radius:20px;
                font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
-    .hc-ok   { background:#1a3a1a; color:var(--success); }
-    .hc-warn { background:#2a2a1a; color:var(--warning); }
-    .hc-fail { background:#3a1a1a; color:var(--danger); }
-    .hc-skip { background:#1f1f1f; color:var(--text-muted); }
+    .hc-ok   { background:color-mix(in srgb, var(--success) 18%, transparent); color:var(--success); }
+    .hc-warn { background:color-mix(in srgb, var(--warning) 18%, transparent); color:var(--warning); }
+    .hc-fail { background:color-mix(in srgb, var(--danger) 18%, transparent); color:var(--danger); }
+    .hc-skip { background:color-mix(in srgb, var(--text-muted) 18%, transparent); color:var(--text-muted); }
     .hc-row  { display:flex; gap:12px; align-items:baseline; padding:10px 0; border-top:1px solid var(--border); }
     .hc-row:first-child { border-top:0; }
     .hc-row .hc-body { flex:1; min-width:0; }

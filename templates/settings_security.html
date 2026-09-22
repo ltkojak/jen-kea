@@ -18,7 +18,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("lock") }} Multi-Factor Authentication</span>
         {% if mfa_mode == 'off' %}
-        <span class="badge u-fb2b30">Disabled</span>
+        <span class="badge u-9741b3">Disabled</span>
         {% elif mfa_mode == 'optional' %}
         <span class="badge badge-dynamic">Optional</span>
         {% elif mfa_mode == 'required_admins' %}
@@ -51,7 +51,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("id-card") }} Single Sign-On (OIDC)</span>
         {% if oidc.enabled %}<span class="badge badge-reserved">Enabled</span>
-        {% else %}<span class="badge u-fb2b30">Disabled</span>{% endif %}
+        {% else %}<span class="badge u-9741b3">Disabled</span>{% endif %}
     </div>
     <p class="u-c0a2eb">
         Let users log in through an external identity provider (Authentik, Keycloak, Entra ID, Okta…),
@@ -147,7 +147,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("timer") }} Session Timeout</span>
         {% if session.enabled == 'true' %}<span class="badge badge-reserved">Enabled</span>
-        {% else %}<span class="badge u-fb2b30">Disabled</span>{% endif %}
+        {% else %}<span class="badge u-9741b3">Disabled</span>{% endif %}
     </div>
     <form method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -174,7 +174,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("shield") }} Login Rate Limiting</span>
         {% if rl.mode == 'off' or rl.max_attempts == '0' %}
-        <span class="badge u-fb2b30">Disabled</span>
+        <span class="badge u-9741b3">Disabled</span>
         {% else %}
         <span class="badge badge-reserved">Enabled</span>
         {% endif %}
@@ -219,7 +219,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("lock") }} SSL Certificate</span>
         {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
-        {% else %}<span class="badge" style="background:#2a2a1a;color:var(--warning);">HTTP Only — port {{ http_port }}</span>{% endif %}
+        {% else %}<span class="badge" style="background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning);">HTTP Only — port {{ http_port }}</span>{% endif %}
     </div>
     {% if ssl_configured and cert_info %}
     <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
