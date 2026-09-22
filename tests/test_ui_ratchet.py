@@ -21,8 +21,8 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645; Q60 (extracted classes, Management + Network + Settings) to 507; Q61 (dashboard widget wrappers -> the shared .hidden class) to 500.
-MAX_INLINE_STYLES = 500
+# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645; Q60 (extracted classes, Management + Network + Settings) to 507; Q61 (dashboard widget wrappers -> the shared .hidden class) to 500; Q63 (tint colors converted to tokens, several newly-duplicate declarations picked up by the extractor) to 497.
+MAX_INLINE_STYLES = 497
 MAX_EMOJI_ALLOWLIST = 2
 
 

@@ -219,7 +219,7 @@
     <div class="card-header">
         <span class="card-title">{{ icon("lock") }} SSL Certificate</span>
         {% if ssl_configured %}<span class="badge badge-reserved">HTTPS Active — port {{ https_port }}</span>
-        {% else %}<span class="badge" style="background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning);">HTTP Only — port {{ http_port }}</span>{% endif %}
+        {% else %}<span class="badge u-9741b3">HTTP Only — port {{ http_port }}</span>{% endif %}
     </div>
     {% if ssl_configured and cert_info %}
     <div style="background:var(--surface2);border-radius:var(--radius);padding:12px;margin-bottom:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">

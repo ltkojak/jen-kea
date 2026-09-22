@@ -763,10 +763,11 @@
         </form>
     </div>
 </div>
-<!-- Theme sheet (v5.55.0, Q63) — opened from the More sheet's Theme button
-     (showSheet() closes More first, same nested-sheet pattern as any other
-     [data-sheet-open] inside a sheet). Same preset list as the desktop
-     dropdown; jenTheme.js marks the active one and picks it on click. -->
+{# Theme sheet (v5.55.0, Q63) — opened from the More sheet's Theme button
+   (showSheet() closes More first, the usual nested-sheet pattern for a
+   [data-sheet-open] control inside a sheet). Same preset list as the
+   desktop dropdown; the picker JS below marks the active one and picks
+   it on click. A Jinja comment, not an HTML one — never reaches resp.data. #}
 <div class="sheet" id="theme-sheet" role="dialog" aria-modal="true" aria-label="Theme">
     <div class="sheet-grab"></div>
     <div class="sheet-group-label">Theme</div>
