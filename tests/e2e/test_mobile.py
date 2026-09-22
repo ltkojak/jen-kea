@@ -636,7 +636,13 @@ class TestInstallDefaultPrecedence:
             page.goto(f"{base_url}/")
             expect(page.locator("html")).to_have_attribute("data-theme", "phosphor")
             page.click("#dd-theme + label.theme-toggle")
-            install_default_btn = page.locator('.theme-pick[data-theme-id=""]')
+            # Scoped to the nav dropdown specifically — the phone sheet has
+            # its own copy of the same data-theme-id="" button, always in
+            # the DOM (just CSS-hidden on desktop), so the bare selector
+            # matches two elements and Playwright's strict-mode Locator
+            # API (unlike the legacy page.click(selector) string form used
+            # elsewhere in this file) refuses to resolve it.
+            install_default_btn = page.locator('.nav-dropdown-content .theme-pick[data-theme-id=""]')
             expect(install_default_btn).to_contain_text("Install default (Phosphor)")
             expect(install_default_btn).to_have_class(re.compile(r"\bactive\b"))
         finally:
@@ -666,7 +672,7 @@ class TestInstallDefaultPrecedence:
             page.goto(f"{base_url}/")
             expect(page.locator("html")).to_have_attribute("data-theme", "light")
             page.click("#dd-theme + label.theme-toggle")
-            page.click('.theme-pick[data-theme-id=""]')
+            page.click('.nav-dropdown-content .theme-pick[data-theme-id=""]')
             expect(page.locator("html")).to_have_attribute("data-theme", "phosphor")
             assert page.evaluate("localStorage.getItem('jen-theme-pick')") is None
         finally:
