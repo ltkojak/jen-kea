@@ -2,6 +2,51 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.56.1-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.56.0-beta.1. A second look at that release, from
+its own CI screenshots and a review of the archive: fifteen fixes, no new
+features.
+
+The headline is Retro. Q67 shipped the preset's tokens correctly, but its
+bevel borders and navy title bar — the whole point of the preset reading as
+an early-90s desktop — never reached the page. The unit tests that were
+supposed to guard it all called a helper function directly; the running app
+builds its page CSS through a different, older code path that simply never
+learned about the new argument. Fixed with the one argument it was missing,
+and this time the test renders the actual page. Once Retro's nav genuinely
+turned navy, its own controls — the theme toggle, the version string, the
+keyboard-shortcut button — turned out to be unreadable against it, so that
+got a contrast fix in the same pass.
+
+The rest is a punch list of smaller things, verified one at a time against
+the code rather than assumed from the screenshots that found them: the Edit
+Subnet page's subtitle printing a bare dash for every IPv4 subnet; the phone
+dashboard header stacking three controls onto three lines instead of one;
+a Settings group page being one very long scroll on a phone, now collapsible
+per card with a jump list that expands and scrolls to the one you tapped;
+the README's own demo devices wearing implausible vendor badges (a printer
+tagged as a set-top box, an access point tagged as a shopping app); a
+subnet's name and CIDR reaching the dashboard's sparkline cards unescaped,
+inconsistent with how everywhere else in that file already handles it; the
+theme pick applying only after the page's own content had already painted,
+so a non-Dark pick flashed Dark first; a leftover pre-release script that
+enforced a README policy the project dropped two years ago; an installer
+script that couldn't read a beta's own version string off an upgrade
+candidate; two dashboard widgets each independently re-running the full
+Health Center check pass when both were enabled on the same dashboard; a
+restricted account's Recent Events widget that could report nothing when
+older, visible events existed past an internal over-fetch window; a sheet
+that claimed to be a modal dialog but never actually trapped keyboard focus
+inside itself or gave it back on close; a preferences value where the
+string "false" was silently treated as true; and a saved custom color
+palette that was trusted on every page load without ever being re-checked
+against the same rules it had to pass to be saved in the first place.
+
+Default behavior is unchanged for every existing install — Dark stays the
+default look, and nothing here is a new capability, only fixes to things
+that already shipped.
+
 ## [5.56.0-beta.1] - 2026-09-22
 
 Beta channel. Stacked on 5.55.3-beta.1. Q67 adds three more built-in themes
