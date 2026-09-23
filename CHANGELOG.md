@@ -2,476 +2,143 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.56.3-beta.1] - 2026-09-23
-
-Beta channel. Stacked on 5.56.2-beta.1. The bundled Network Discovery plugin
-let a viewer start scans and mark hosts known — both routes checked only
-subnet access, never the role, and since the known-hosts list has no
-subnet column by design, a viewer scoped to one subnet could silence or
-un-silence the rogue-device alert for a MAC seen anywhere.
-
-Network Discovery 1.1.2 fixes that, the same way IPAM Lite 1.5.2 did last
-release: a viewer is refused before either route even looks at the subnet
-or the submitted form. It also fixes a real duplicate-scan race — a
-scan's job row used to appear only once the background thread actually
-started running, so two clicks on different subnets while one scan held
-the shared lock could queue the same subnet twice. A scan is now recorded
-as queued the moment it's requested, before the lock is even reached, and
-the index card shows "Queued" while it waits its turn.
-
-The registry now offers 1.1.2 on every install's Settings → Plugins
-Update button, and the bundled copy shipped in this tarball is resynced
-to the same release.
-
-## [5.56.2-beta.1] - 2026-09-23
-
-Beta channel. Stacked on 5.56.1-beta.1. The bundled IPAM Lite plugin let a
-viewer change entries — every write route checked only subnet access,
-never the role, so the templates hid the buttons from viewers while the
-routes underneath them stayed open. A CSV import also read an uploaded
-file into memory before its row cap ever applied, with no size limit from
-Jen or the plugin.
-
-IPAM Lite 1.5.2 fixes both: a viewer is refused before any write route
-even looks at the subnet or the submitted form, and an import is capped
-at 2 MB. The registry now offers 1.5.2 on every install's Settings →
-Plugins Update button, and the bundled copy shipped in this tarball is
-resynced to the same release.
-
-## [5.56.1-beta.1] - 2026-09-23
-
-Beta channel. Stacked on 5.56.0-beta.1. A second look at that release, from
-its own CI screenshots and a review of the archive: fifteen fixes, no new
-features.
-
-The headline is Retro. Q67 shipped the preset's tokens correctly, but its
-bevel borders and navy title bar — the whole point of the preset reading as
-an early-90s desktop — never reached the page. The unit tests that were
-supposed to guard it all called a helper function directly; the running app
-builds its page CSS through a different, older code path that simply never
-learned about the new argument. Fixed with the one argument it was missing,
-and this time the test renders the actual page. Once Retro's nav genuinely
-turned navy, its own controls — the theme toggle, the version string, the
-keyboard-shortcut button — turned out to be unreadable against it, so that
-got a contrast fix in the same pass.
-
-The rest is a punch list of smaller things, verified one at a time against
-the code rather than assumed from the screenshots that found them: the Edit
-Subnet page's subtitle printing a bare dash for every IPv4 subnet; the phone
-dashboard header stacking three controls onto three lines instead of one;
-a Settings group page being one very long scroll on a phone, now collapsible
-per card with a jump list that expands and scrolls to the one you tapped;
-the README's own demo devices wearing implausible vendor badges (a printer
-tagged as a set-top box, an access point tagged as a shopping app); a
-subnet's name and CIDR reaching the dashboard's sparkline cards unescaped,
-inconsistent with how everywhere else in that file already handles it; the
-theme pick applying only after the page's own content had already painted,
-so a non-Dark pick flashed Dark first; a leftover pre-release script that
-enforced a README policy the project dropped two years ago; an installer
-script that couldn't read a beta's own version string off an upgrade
-candidate; two dashboard widgets each independently re-running the full
-Health Center check pass when both were enabled on the same dashboard; a
-restricted account's Recent Events widget that could report nothing when
-older, visible events existed past an internal over-fetch window; a sheet
-that claimed to be a modal dialog but never actually trapped keyboard focus
-inside itself or gave it back on close; a preferences value where the
-string "false" was silently treated as true; and a saved custom color
-palette that was trusted on every page load without ever being re-checked
-against the same rules it had to pass to be saved in the first place.
-
-Default behavior is unchanged for every existing install — Dark stays the
-default look, and nothing here is a new capability, only fixes to things
-that already shipped.
-
-## [5.56.0-beta.1] - 2026-09-22
-
-Beta channel. Stacked on 5.55.3-beta.1. Q67 adds three more built-in themes
-alongside Dark, Light, High Contrast and Phosphor: Slate, a cool blue
-dark theme; Ember, a warm dark theme with an orange accent (red was kept
-off the accent role since it collides with red-as-danger on buttons,
-tabs and badges — Ember's danger stays a colder crimson); and Retro, a
-light theme meant to read as an early-90s desktop — a teal background
-behind grey panels, navy as the accent color. All three clear the same
-contrast floor every preset has always had to clear, with no warnings.
-
-Retro needed something beyond a palette to actually look like its era,
-so presets can now carry a small, fixed extra_css string alongside their
-tokens — CSS scoped to that preset's own theme selector, appended after
-its generated declarations. Retro's is a set of classic beveled borders
-on cards, buttons and sheets, and a navy title-bar look for the top nav.
-It's baked into the preset's source, never something a submitted custom
-palette can produce — the custom-palette form has no such field, and a
-value posted under that name is silently dropped.
-
-The theme picker, the phone theme sheet, the Install Default dropdown in
-Settings → Appearance, and the "Start from" row in the custom-palette
-editor all already listed every built-in preset generically, so the
-three new ones simply appeared there with no template changes. The
-install default and everyone's personal picks are unaffected — Dark
-stays the default look on every existing install.
-
-## [5.55.3-beta.1] - 2026-09-22
-
-Beta channel. Stacked on 5.55.2-beta.1. Q66: the install default theme set
-under Settings → Appearance → Theme silently never applied. Choosing a
-preset there and saving showed the success message, but the page — and
-every viewer who hadn't picked a theme for themselves — kept showing Dark
-regardless. The cause: the picker wrote its own fallback value into the
-browser's storage on every single page load, not just when someone actually
-clicked a preset, so the very first page any browser had loaded since 5.55.0
-quietly saved "dark" as if it had been a deliberate choice. From that point
-on, nothing could ever change what that browser showed, no matter what the
-install default was set to. Fixed at the root: only clicking a theme in the
-picker saves a personal choice now, and it's stored under a new key so the
-old, permanently tainted one can never be read again — every browser picks
-up the real install default the next time it loads, and anyone who wants
-their own look simply picks it once more. The picker also gains an "Install
-default" entry at the top of the menu, so returning to it is one click
-away.
-
-## [5.55.2-beta.1] - 2026-09-22
-
-Beta channel. Stacked on 5.55.1-beta.1. Q65: saving a theme under Settings →
-Appearance → Theme → "Install Default" returned Jen's own CSRF error page
-instead of actually saving, because that one form shipped without the
-hidden security-token field every submitting form needs — a plain
-oversight in the Q63 theme system, not a real security issue, since the
-app correctly refused a submission it couldn't verify rather than
-accepting a forged one. Fixed by adding the missing field. A new test now
-scans every POST form across Jen's own templates for that field, the same
-way an existing test already scanned every plugin template, so a form
-silently missing its token has a real test surface going forward instead
-of none.
-
-## [5.55.1-beta.1] - 2026-09-22
-
-Beta channel. Stacked on 5.55.0-beta.1. Q64: a touch-navigation bug the maintainer
-hit on an iPhone, the orphan subnet card, and three small tidy-ups from the same
-round of screenshots.
-
-**The bug.** Since v2.5.10, every link on every page has listened for touchstart,
-touchmove and touchend, and navigated on touchend unless the finger's movement
-looked like a horizontal swipe. A vertical scroll never sets that flag, so lifting
-a finger after scrolling past any link navigated to it — the maintainer hit this on
-the Settings page, where the tiles are full-width links and dragging to scroll from
-inside one opened it. The same block also silently broke iOS's long-press link
-preview and Android's link context menu, everywhere, the whole time. The block is
-gone. Nothing replaces it: normal click handling was always correct here, and has
-been since the viewport meta tag and `touch-action: manipulation` made the old
-300ms tap delay this was working around moot. Scrolling now behaves like scrolling,
-tapping still behaves like tapping, and long-press previews work again.
-
-**The orphan card.** The Dashboard's subnet grid and the Reports page's per-subnet
-grid used to fit three cards per row at a typical desktop width, so a fourth subnet
-always rendered alone on its own row with empty space beside it. Four now share one
-row; three or fewer still lay out the same as before.
-
-**Three smaller fixes.** The Settings home page showed the same seven destinations
-twice — once as a horizontal strip, once as cards right below it — the strip is now
-hidden on a phone, where the duplication was most obvious (desktop keeps it,
-since there's room). The Subnets page's "create a shared network" form now starts
-collapsed once an install already has at least one, rather than always sitting
-expanded at the bottom of the page; it still opens by default the first time, when
-there isn't one yet. The Dashboard's Alert Summary widget used to print "check ok"
-on every single healthy row — the exact same text, every time; now a healthy row is
-simply quiet, and only a failure gets a marked, colored chip, which is the row that
-actually needed attention in the first place.
-
-## [5.55.0-beta.1] - 2026-09-22
-
-Beta channel. Stacked on 5.54.0-beta.1. Q63: a real theme system, not just the
-dark/light toggle that had been there since v4.4.5 — four presets, a per-user
-picker, and an install-wide custom palette. **The default look does not
-change.** Dark is still exactly what it always was;
-`tests/test_theme.py` pins every one of its eleven token values
-byte-for-byte against the pre-Q63 literals, and pins `render_css("dark", …)`'s
-output against the exact CSS rule `base.html` used to hand-write.
-
-**One source of truth.** `jen/services/theme.py` is a pure module (no Flask,
-no DB, no Jinja) defining every built-in preset — Dark, Light, High Contrast
-(every text/background pairing at 7:1 or better, WCAG AAA), and Phosphor (an
-amber-on-green terminal look with a desktop-only monospace UI — a phone would
-overflow with it) — plus `render_css()`, the WCAG contrast maths, and
-`validate_palette()`. `base.html`'s two hand-written `:root[data-theme=…]`
-blocks are now generated by a loop over `theme_css`
-(`jen/__init__.py`'s new `inject_theme` context processor) instead.
-
-**Every remaining hard-coded color became a token.** 193 literal hex colors
-across `templates/` are down to 81 — the entire remainder is the four
-standalone pages that never load the token system (login, error, the forced
-password change and MFA challenge screens), the categorical per-device-type
-badge palette (many distinct colors keyed by device type, not a themeable
-tint), and the Theme card's own hex-format example/placeholder text.
-`tests/test_theme.py`'s "hex wall" enforces this going forward with a short,
-reasoned allow-list for exactly those cases. Solid tint backgrounds (badges,
-alerts, hover states) are now `color-mix(in srgb, var(--token) N%,
-transparent)` rather than a separate hard-coded hex per theme; Chart.js/Canvas
-code in `dashboard.html`/`reports.html`/`servers.html` resolves colors
-through a new `window.jenColor()` (promoted out of `dashboard.html`'s old
-`resolveCssColor()`, hex fallbacks removed since the CSS vars now always
-resolve) and rebuilds itself on a new `jen:theme` event a switch fires,
-instead of keeping the old theme's colors until the next periodic refresh.
-
-**The picker.** The old moon/sun toggle button is now a proper preset picker
-— a nav dropdown on desktop, a nested sheet off the More sheet's Theme button
-on a phone — listing every built-in preset plus "Custom" once an install has
-saved one. `jen-theme` in `localStorage` holds a preset id now (not
-`"dark"`/`"light"`), falling back to the install's own default when unset or
-stale. Switching updates `<meta name="theme-color">` from the live
-`--primary` and fires `jen:theme` for anything listening — no reload.
-
-**Settings → Appearance → Theme** (new card, superadmin-only — unlike the
-nav-color/logo branding above it, this changes what every viewer sees before
-they've picked one for themselves, and a saved custom palette is CSS
-that reaches every page unescaped via Jinja's `|safe`; see
-`docs/ARCHITECTURE.md` §3.13). Two independent controls: an install-default
-select (`POST /settings/theme/default`), and a custom-palette form — eleven
-colors, corner radius, monospace-UI checkbox, a live client-side preview built
-by scoping CSS custom-property overrides to a preview box (so real component
-markup re-colors itself with zero extra CSS), contrast warnings mirroring
-`palette_warnings()`'s wording, and "Start from…" buttons that copy a
-built-in preset's values into the form — that `POST`s to
-`/settings/theme/custom` and can be removed with `/settings/theme/custom/remove`
-(falls the install default back to Dark if it had pointed at Custom). Every
-color is `validate_palette()`'d server-side regardless of what the client
-sent; the hex-only whitelist regex is the entire injection boundary, not a
-blocklist — `url(`, `;`, `}`, `expression(`, a named color, and 7-/8-digit
-hex are all rejected by construction. The three routes are added to
-`tests/test_settings_blueprint.py`'s `EXPECTED_ENDPOINTS`.
-
-**Testing.** `tests/test_theme.py` (pure, no DB): the hex wall, the pinned
-Dark/Light byte-identity, `validate_palette()`'s injection-attempt rejections,
-the WCAG contrast maths against reference pairs, and every built-in preset
-clearing its own contrast floor. `tests/test_theme_routes.py` (needs the CI
-database): card visibility by role, non-superadmin POSTs redirected away with
-no state change, a saved custom palette actually rendering as
-`:root[data-theme="custom"]`, and the remove/fallback behavior.
-`tests/e2e/test_mobile.py` gains per-preset desktop/mobile screenshots (a real
-computed `--bg` assertion against `theme.py`'s own values), Phosphor's phone
-overflow guard, a Reports-chart-color-tracks-the-theme check, and a
-switches-without-reload test. `docs/ui.md`'s Tokens section and
-`docs/admin-guide.md` gain a Theming write-up.
-
-## [5.54.0-beta.1] - 2026-09-21
-
-Beta channel. Stacked on 5.53.0-beta.1. Q61: the dashboard can be arranged, not just
-toggled, and grows a wider catalog of small widgets.
-
-**Prefs v2.** The dashboard's saved layout used to be a flat list of which widgets
-show. It now also carries each widget's width (full, half or third of the row) and
-its position, plus the subnet panel's own order, pinned subnets and hidden subnets.
-An old saved layout upgrades automatically to full-width panels in the order they
-were in; `jen/services/dashboard_prefs.py` validates every value on both save and
-read, so an unknown widget id, an invalid width, or a subnet id the account cannot
-(or can no longer) access is dropped rather than stored or shown — a subnet pinned
-before an account's access was narrowed does not linger in its layout afterward.
-`dashboard_prefs.widgets` is widened from 512 to 4,000 characters (migration 28) to
-hold the bigger value.
-
-**Arrange mode.** Customize gains an Arrange button. Every widget and every subnet
-card gets a grip handle and up/down arrows; widgets also get a width picker on a
-desktop screen. Dragging works with a real mouse; the arrows are there because
-dragging does not work reliably on a phone. A subnet card can also be pinned to the
-front or hidden from the dashboard without affecting it anywhere else in Jen. Save
-arrangement writes the new layout; Cancel puts everything back. A new "Compact
-subnet cards" option collapses each card to its name, active count and utilization
-bar.
-
-**Seven more widgets.** Pool Exhaustion Forecast, Packet Health, Kea 3.2 Readiness,
-Recent Events, HA State, DDNS Errors, and Getting Started, each reusing a read
-Reports, Servers, Health Center, Timeline, DDNS or the getting-started checklist
-already makes rather than a new one. Every one of them is lazy: a widget's data is
-only fetched once it is both turned on and actually visible, the same way the
-existing lease-history chart, sparklines, top-devices and alert-summary widgets
-already worked, so leaving one off costs nothing. A widget with nothing to say for
-a given install — HA State with one server, DDNS Errors with DDNS off — does not
-appear rather than showing an empty card. Enabling both Kea 3.2 Readiness and DDNS
-Errors at once currently repeats the same Health Center round trip for each; a
-shared per-request cache is a reasonable follow-up, not done here.
-
-**Along the way.** The thirteen widget wrappers that hide themselves until Customize
-turns them on moved off an inline `style="display:none;"` each onto the shared
-`.hidden` class the mobile foundation release added — one more than it removes,
-since Q61 adds seven new widgets, but the net change still lowers the ratchet from
-507 to 500. Building the Arrange toolbar's show/hide rule this way caught a bug in
-itself: the toolbar's own inline `display:none` would have permanently overridden
-the CSS rule meant to reveal it in Arrange mode, so it never would have appeared at
-all.
-
-No sudoers or helper change; the upgrade runs the new migration automatically as
-part of `sudo ./install.sh`.
-
-## [5.53.0-beta.1] - 2026-09-21
-
-Beta channel. Stacked on 5.52.0-beta.1. Q60: every remaining page on the phone, in two
-steps, and the inline styles that stood in the way. The templates carried 1,645 static
-`style="…"` attributes when this release began and 507 when it ends.
-
-**Inline styles.** Rewriting 1,100 attributes by hand across 60 templates would have been
-slow and error-prone, so `tools/extract_inline_styles.py` does it: a static style that
-appears at least twice across the templates becomes a class named for a hash of its
-declarations, and `static/css/ui-classes.css` is generated from the record of them (210
-classes). Each rule doubles its selector, so it keeps the precedence the inline style had
-over an ordinary one-class rule, and a style a script sets still wins. Anything with Jinja
-in it, `display:none` and `position:fixed` (scripts read and set those), and one-offs stay
-inline on purpose, as do the login, MFA challenge, forced-password and error pages, which
-do not load the stylesheet. A fixed multi-column grid also collapses to one column on a
-phone, which is what makes the forms single-column without editing each of them. The
-ratchet test now pins 507, and a new test fails on stylesheet drift, on an unused or
-missing class, or on a template with styles the tool could still extract.
-
-**Tables.** The IPv6 lease, reservation and device lists and the DNS reconcile table moved
-off the old label-and-value cards onto the dense rows from 5.52.0, and so did users, API
-keys, saved searches, trusted devices, plugins, the backups list, both logs, configuration
-history, DHCP classes and the SSH servers table, each with a `data-m` on every cell. The old
-card pattern is no longer used by any page. The reconcile table labels its two address cells
-("expected", "observed") on a phone, since the header row is not there to do it.
-
-**Alert templates.** The twenty message templates were twenty cards of about 90 pixels each.
-They are now an accordion: closed shows the alert type and the first line of the message,
-open shows the editor with Save and Reset, and Expand all and Collapse all sit above the
-list. Building it turned up that Reset was a form nested inside Save's form, which a browser
-drops, leaving Reset's button inside Save's form; they are sibling forms now.
-
-**Reports and the rest.** Charts are about 230 pixels tall on a phone instead of about 90,
-with the legend below them, and the IP map's subnet select has a label. The Settings
-chip tables of contents already scroll on one line from the foundation release.
-
-No migration, no config change, no sudoers or helper change; the upgrade is
-`sudo ./install.sh` as usual.
-
-## [5.52.0-beta.1] - 2026-09-21
-
-Beta channel. Stacked on 5.51.0-beta.1. Q59: Leases, Reservations and Devices on the
-phone, the first pages to use the vocabulary the foundation release added. On a phone
-each row used to be a seven-line label-and-value card, empty fields included, with a
-checkbox top-right and a kebab bottom-right, which made 128 leases about 12,000 pixels
-of scrolling. Each is now a two-line row of about 60 pixels.
-
-**Rows.** Every cell carries a `data-m`. On Leases the hostname and vendor badge are the
-first line and the address, subnet and expiry the second, with the expiry shown as
-relative time ("in 3 d") on a phone and as the full timestamp on a desktop; the MAC and
-the obtained time are not shown but the MAC is the first line of the row's menu. On
-Reservations the second line is address, subnet and status, and the DNS override and the
-notes appear only when they are set. On Devices the first line is the device name, or the
-hostname when it has none, and the second the address and the relative last-seen time (in
-the warning colour when the device is stale); the owner appears only when set. Tapping a
-row opens the same menu the kebab opens, one target, and in Select mode it ticks the row.
-The desktop tables keep every column.
-
-**Filters.** Every filter select now has a label (Subnet, Time, Status, Rows per page,
-Saved filters), which is what the Filters sheet shows in place of the two unlabelled
-dropdowns the screenshots exposed. A phone-only Sort and Order pair replaces the table
-header links the phone hides. They are part of the form on a desktop too, so changing a
-filter there now keeps the sort instead of resetting it. On Reservations the Add button
-is the primary action and the CSV export, import and dry-run fold into More actions; on
-Devices the stale-after setting moved from the page header into the Filters sheet and the
-device-type chips became one scrolling row.
-
-**Inline styles.** 94 inline style attributes were converted to classes and utilities across
-the three pages and their partials, so the count in the templates went from 1,739 to
-1,645 and `tests/test_ui_ratchet.py` now pins 1,645. What remains on these pages is the
-Edit Device dialog, whose script toggles its display, and the vendor badge colours, which are
-computed per device. The IPv6 views of these three pages are not converted yet.
-
-The `relfmt` template filter formats the relative times. No migration, no config change,
-no sudoers or helper change; the upgrade is `sudo ./install.sh` as usual.
-
-## [5.51.0-beta.1] - 2026-09-21
-
-Beta channel. Stacked on 5.50.0-beta.1. Q58, the mobile foundation: the shared
-phone layer in `base.html` that Q59 and Q60 will move the pages onto. No page is
-converted in this release, so the screenshots after it should look the same as
-before except for the navigation, which is the point: the foundation has to land
-without breaking anything.
-
-**Navigation.** On a phone the hamburger and its drawer are gone. A bottom tab bar
-holds Dashboard, Leases, Reservations, Settings and More (a viewer, who has no
-Settings page, sees Devices in that slot), and More opens a sheet listing every
-destination grouped as the desktop nav is, with search, the theme toggle, the
-account links and Logout. The top bar keeps the logo, the Kea status dot and the
-avatar; the keyboard-shortcuts button and the Getting started pill moved off it
-because two of the five old controls could not be told apart by looking at them. The
-tab bar and the sheet are built by `nav_context()` with the same role and
-subnet-scope filtering as the strips, so a restricted account never sees Doctor in
-the sheet. The section strip scrolls its active tab into view. Content is padded so
-nothing hides behind the bar, and the bar and the sheets respect the iOS safe area
-and use `dvh` so the Safari address bar does not cover them.
-
-**Shared phone patterns.** Tables can opt in to a dense two-line row
-(`table.rowlist` with a `data-m` on each cell): the name and badge on the first
-line, the address, subnet and expiry joined with a middle dot on the second, the
-kebab at the right, empty and "—" cells dropped, and a tap anywhere on the row opens
-its link. Checkboxes stay hidden on a phone until a Select button turns on Select
-mode, which also pins the bulk-action bar above the tab bar. A filter bar collapses
-to its search box plus a Filters button showing how many values are not at their
-default, and the rest opens in a bottom sheet; a select's `aria-label` is shown as
-its label there, which is what tells two unlabeled dropdowns apart. An action bar
-keeps its first primary button at full width and folds the rest into a More actions
-sheet. Chip rows scroll sideways on one line with a fade instead of wrapping into
-four. All of it is inert above 768 px.
-
-**Tokens and utilities.** `base.html` gains a spacing scale (`--sp-1` to `--sp-6`),
-a type scale (`--fs-xs` to `--fs-2xl`), `--radius-sm`, `--surface3` and `--tap`,
-and the utility classes the templates repeat inline most often (`.muted`, `.small`,
-`.flex`, `.wrap`, `.gap-2`, `.mt-2`, `.mb-2`, `.grow`, `.right`, `.stack` and a few
-more). On a phone `.btn-sm` is now 44 px tall like `.btn`. `docs/ui.md` documents
-the tokens, every pattern and how to make a new page phone-ready.
-
-**The phone screenshot job.** The `e2e (Playwright)` CI job now opens every page at
-390 by 844 (and again at 1440 by 900), fails on a server error, horizontal overflow
-or a tap target under 44 px, exercises each pattern against a synthetic page, and
-uploads the screenshots as the `mobile-screenshots` and `desktop-screenshots`
-artifacts on every run, pass or fail, so the pages can be reviewed on a phone.
-
-**The ratchet.** `tests/test_ui_ratchet.py` pins the count of inline `style=`
-attributes in the templates (1,739 today) and the emoji scanner's allowlist (2). Each
-later change lowers the first and says so here.
-
-No migration, no config change, no sudoers or helper change; the upgrade is
-`sudo ./install.sh` as usual.
-
-## [5.50.0-beta.1] - 2026-09-21
-
-Beta channel. Q57 — one icon system across the whole interface, plus five small
-layout and wording fixes that were each too minor to release alone.
-
-**Icons.** Every emoji that acted as interface chrome (about 600 of them across 78
-files: nav items, card titles, buttons, status marks, empty states) is now a
-[Lucide](https://lucide.dev) icon drawn from a single inline SVG sprite. Emoji
-render differently on every operating system, ignore the light and dark themes,
-and cannot be sized or coloured; the icons inherit the surrounding text colour,
-scale with the font and look the same everywhere. The sprite is inlined into the
-page, so there is no extra request and no change to the Content-Security-Policy.
-Templates call `{{ icon("name") }}`; `tests/test_icons.py` fails on an unknown
-name, on a sprite that has drifted from its sources, and on any new emoji in a
-template, route or script, with a short reasoned allowlist for content that is
-genuinely not chrome (device-type badges, alert test messages). The two top-bar
-controls that had no words, the theme toggle and the shortcuts button, now carry
-a label. A plugin that supplies its own emoji as a nav icon still shows it as
-text. How to add an icon is written up in the admin guide.
-
-**Alert messages.** The default alert messages now open with one of four glyphs,
-one meaning each: critical, warning, recovered, information. Settings → Alerts
-shows the legend. Templates you customised are stored in the database and are
-never rewritten.
-
-**Quick wins.**
-
-- Doctor groups findings of the same kind: 68 reservations inside a dynamic pool
-  are one row with a count and a "Show all" list rather than 68 cards. The Health
-  Center row reads "N note(s) of K kind(s)".
-- The Kea host helper version is worded one way on the Health Center, the Kea 3.2
-  readiness row and the SSH card: "1/1 host(s) on helper v4 (v5 available)".
-- The Servers page packet counters wrap to the card width instead of overflowing
-  it, and the Config history and History buttons are evenly spaced.
-- The dashboard header keeps its controls on one row; the auto-refresh label
-  and last-updated text hide on narrow screens, and a long Kea version string is
-  shortened with the full text on hover.
-- The Subnets header buttons share one equal-height, wrapping action bar.
-
-No migration, no config change, no sudoers or helper change; the upgrade is
-`sudo ./install.sh` as usual.
+## [5.56.3] - 2026-09-23
+
+Stable. The UI round; everything below shipped beta-first between
+2026-09-21 and 2026-09-23.
+
+**Beta history:** 5.50.0-beta.1, 5.51.0-beta.1, 5.52.0-beta.1, 5.53.0-beta.1,
+5.54.0-beta.1, 5.55.0-beta.1, 5.55.1-beta.1, 5.55.2-beta.1, 5.55.3-beta.1,
+5.56.0-beta.1, 5.56.1-beta.1, 5.56.2-beta.1, 5.56.3-beta.1.
+Upgrading from 5.49.0 is automatic (`sudo ./install.sh`, or the in-app
+updater): migration 28 (the wider dashboard-prefs column) runs at startup,
+and nothing needs doing by hand. Every browser gets the install-default
+theme on its first load after the upgrade — the old, permanently-tainted
+storage key that used to shadow it forever was cleared on purpose — and
+anyone who wants their own look simply picks it once more. The two
+bundled plugins, IPAM Lite and Network Discovery, offer their updates
+(1.5.2 and 1.1.2) from the registry on the next check.
+
+### Icons and look
+
+- **One icon system** — roughly 600 emoji used as interface chrome (nav
+  items, card titles, buttons, status marks, empty states) across 78
+  files are now [Lucide](https://lucide.dev) icons from a single inlined
+  SVG sprite: consistent across operating systems and themes, and
+  colored/sized by the surrounding text instead of baked in. Alert
+  message templates keep emoji on purpose (they travel to Telegram,
+  Discord and ntfy), now standardized to one glyph per severity.
+- **Quick wins** — Doctor groups repeated findings instead of one card
+  each; the Kea host helper's version is worded the same way everywhere
+  it appears; the Servers page's packet counters no longer overflow
+  their card; the dashboard header and the Subnets header buttons each
+  settled onto one row.
+
+### On a phone
+
+- **A real mobile layout**, not a squeezed desktop one: a bottom tab bar
+  (Dashboard, Leases, Reservations, Settings, More) with a More sheet
+  for everything else, a dense two-line row pattern for tables, Select
+  mode for bulk actions, a filter bar that collapses into a labeled
+  sheet, and an action bar that folds secondary buttons into a "More
+  actions" sheet. Every page was converted to it, one at a time.
+- **Settings pages collapse** to their first card on a phone, with a
+  jump-list of chips that expand and scroll to the one you tapped,
+  instead of one very long scroll through every card at once.
+- **A touch-navigation bug fixed** that had been there since v2.5.10:
+  every link listened for touchstart/touchmove/touchend and navigated
+  on touchend unless the finger's movement looked like a horizontal
+  swipe, so scrolling past a link and lifting a finger anywhere on it
+  navigated — worst on the Settings page, where the tiles are full-width
+  links. The same block had also silently broken iOS's long-press link
+  preview and Android's link context menu, everywhere, the whole time.
+  Removed outright; nothing replaces it.
+- **1,699 inline `style=` attributes became 492**, extracted into
+  generated utility classes so the phone layout didn't mean rewriting
+  every template's styling by hand.
+
+### Dashboard
+
+- **Arrangeable, not just toggleable** — Arrange mode adds drag (desktop)
+  and up/down arrows (phone) for widget order and width, and per-subnet
+  pin/hide/reorder on the subnet panel, on top of the existing show/hide.
+- **Seven more widgets** — Pool Exhaustion Forecast, Packet Health, Kea
+  3.2 Readiness, Recent Events, HA State, DDNS Errors and Getting
+  Started, each reusing a read another page already makes; a widget
+  with nothing to say for a given install doesn't appear at all.
+- **The subnet stat grid** now fits four cards per row instead of
+  stranding a fourth one alone on its own row.
+
+### Themes
+
+- **A real theme system** replaces the dark/light toggle that had been
+  there since v4.4.5: seven built-in presets (Dark, Light, High
+  Contrast, Phosphor, Slate, Ember, Retro), a per-user picker, and an
+  install-wide custom palette — eleven colors, corner radius, a
+  monospace-UI option, a live preview and WCAG contrast warnings. Every
+  submitted color is validated server-side against a hex-only whitelist
+  regardless of what the client sent; that whitelist is the entire
+  injection boundary a saved palette's CSS has to pass, since it reaches
+  every page unescaped. The default look is unchanged — Dark is pinned
+  byte-for-byte against what it always was.
+- **Retro** reads as an early-90s desktop (a teal background behind grey
+  panels, a navy accent, beveled borders and a navy title-bar nav) via a
+  small fixed CSS string a preset can carry that a custom palette can
+  never produce.
+- **The install default actually applies now.** It silently never had:
+  the picker wrote its own fallback into every browser's storage on the
+  very first page load since the theme system shipped, so nothing could
+  ever change what a browser showed afterward. Fixed at the root, and
+  the picker gained an "Install default" entry to return to it in one
+  click. The theme now also applies before the page's own content
+  paints, so a non-Dark pick no longer flashes Dark first.
+- The Install Default form's missing CSRF field (a plain oversight, not
+  an exploitable one — the app correctly refused the unverifiable
+  submission) is fixed, with a new test scanning every POST form across
+  Jen's own templates the same way an existing one already scanned every
+  plugin template.
+
+### Correctness
+
+A second look at the theme and dashboard work above turned up fifteen
+smaller things, each verified against the code rather than assumed from
+a screenshot: a subnet's name and CIDR reaching the dashboard's
+sparkline cards unescaped, inconsistent with the rest of that file; two
+dashboard widgets each independently re-running the full Health Center
+check when both were enabled at once; a restricted account's Recent
+Events widget that could report nothing when older, accessible events
+existed past an internal fetch window; a sheet that claimed to be a
+modal dialog but never actually trapped keyboard focus or returned it on
+close; a preferences value where the string `"false"` was silently
+treated as true; a saved custom palette trusted on every load without
+being re-checked against the rules it had to pass to be saved in the
+first place; a leftover pre-release script enforcing a README policy the
+project dropped two years ago; and an installer script that couldn't
+read a beta's own version off an upgrade candidate.
+
+### Plugins
+
+- **IPAM Lite 1.5.2** — every write route (save, delete, a range action,
+  both steps of a CSV import) used to check only subnet access, never
+  the caller's role: a viewer could create, overwrite, delete or
+  bulk-import entries even though the interface looked read-only to
+  them. A viewer is refused before any write route even looks at the
+  subnet or the submitted form, and an import is capped at 2 MB.
+- **Network Discovery 1.1.2** — the same gap: a viewer could start an
+  nmap scan from the Jen host, and could silence or un-silence the
+  rogue-device alert for any MAC, since the known-hosts list has no
+  subnet column by design. Fixed the same way, plus a real race where
+  two clicks on different subnets while one scan held the shared lock
+  could queue a duplicate scan of the second.
+- The registry offers 1.5.2 and 1.1.2 to every install's Settings →
+  Plugins Update button, and both bundled copies are resynced to them.
+
+### Docs and README
+
+- The README's screenshots are generated in CI, on every run, from a
+  fictional homelab dataset — never from a real install — so the
+  project's front door never carries a real hostname, a real person's
+  name, or the maintainer's own addresses.
 
 ## [5.49.0] - 2026-09-21
 
