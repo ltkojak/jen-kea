@@ -897,9 +897,9 @@ function applyTheme(id, persist) {
     // that) can never be trusted as a deliberate pick; drop it so it
     // stops shadowing the install default forever. The <head> script
     // already set the real data-theme before paint (v5.56.1, Q68h) —
-    // this just recomputes the same value to run applyTheme's other
-    // work (check marks, meta theme-color, the jen:theme event) once
-    // the nav exists.
+    // this just recomputes the same value so applyTheme can still do
+    // its remaining work (check marks, meta theme-color, the
+    // jen:theme event) once the nav exists.
     try { localStorage.removeItem('jen-theme'); } catch (e) { /* ignore */ }
     document.addEventListener('DOMContentLoaded', function() {
         var saved = null;
