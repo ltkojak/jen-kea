@@ -33,25 +33,23 @@ def _raising_search_provider(query, accessible_subnet_ids, all_subnets):
 
 
 @pytest.fixture(scope="module")
-def fake_plugin(app):
-    """Registers all of v3's new hooks directly on the real `app`, the
-    same way a plugin's own register(app) would from plugin.py — module
-    scoped so the Flask routes are only ever added once per test run.
-    register_alert_type/register_row_action/register_search_provider all
+def fake_plugin():
+    """Registers register_alert_type/register_row_action/register_search_provider
+    the same way a plugin's own register(app) would from plugin.py. These
     mutate process-global dicts (the same ones a real plugin's load
     would), so this tears itself back down afterward rather than leaking
     a fake entry into every other test file that iterates them (e.g.
     tests/test_q57_quickwins.py checks every DEFAULT_TEMPLATES entry
     opens with a standard glyph — the template below follows that
-    convention too, for the same reason a real plugin should)."""
-    from flask import g, jsonify
+    convention too, for the same reason a real plugin should).
 
-    from jen.plugin_api import (
-        api_key_required,
-        register_alert_type,
-        register_row_action,
-        register_search_provider,
-    )
+    api_key_required's own routes are NOT registered here: the shared
+    session-scoped `app` fixture may already have served a request by
+    the time this module's tests run, and Flask refuses new @app.route()
+    registration after that ("the setup method 'route' can no longer be
+    called"). TestApiKeyRequired hosts its two probe routes on a
+    throwaway Flask app of its own instead (see its api_client fixture)."""
+    from jen.plugin_api import register_alert_type, register_row_action, register_search_provider
     from jen.services import alerts as alerts_svc
     from jen.services import row_actions as row_actions_svc
     from jen.services import search_providers as search_providers_svc
@@ -72,18 +70,6 @@ def fake_plugin(app):
     )
     register_search_provider(FAKE_PLUGIN_ID, title="Fake Plugin", fn=_fake_search_provider)
     register_search_provider("fake-raiser", title="Fake Raiser", fn=_raising_search_provider)
-
-    if "fake_echo" not in app.view_functions:
-
-        @app.route("/api/v1/plugins/fake/echo", methods=["GET"])
-        @api_key_required(write=False)
-        def fake_echo():
-            return jsonify({"key_id": g.api_key["id"]})
-
-        @app.route("/api/v1/plugins/fake/write", methods=["POST"])
-        @api_key_required(write=True)
-        def fake_write():
-            return jsonify({"ok": True})
 
     yield FAKE_PLUGIN_ID
 
@@ -171,9 +157,34 @@ class TestRegisterRowAction:
 
 
 class TestApiKeyRequired:
+    """api_key_required is plain Flask (g/request/jsonify) with no
+    dependency on Jen's own app instance, so these tests host the two
+    probe routes on a throwaway Flask app rather than the shared
+    session-scoped `app` fixture — see fake_plugin's docstring for why."""
+
     RAW_RW = "jen_q73_rw_probe"
     RAW_RO = "jen_q73_ro_probe"
     RAW_SCOPED = "jen_q73_scoped_probe"
+
+    @pytest.fixture(scope="class")
+    def api_client(self):
+        from flask import Flask, g, jsonify
+
+        from jen.plugin_api import api_key_required
+
+        mini = Flask(__name__)
+
+        @mini.route("/api/v1/plugins/fake/echo", methods=["GET"])
+        @api_key_required(write=False)
+        def fake_echo():
+            return jsonify({"key_id": g.api_key["id"]})
+
+        @mini.route("/api/v1/plugins/fake/write", methods=["POST"])
+        @api_key_required(write=True)
+        def fake_write():
+            return jsonify({"ok": True})
+
+        return mini.test_client()
 
     @pytest.fixture
     def keys(self, db):
@@ -200,25 +211,25 @@ class TestApiKeyRequired:
             cur.execute("DELETE FROM api_keys WHERE name LIKE '_q73_probe_%%'")
         db.commit()
 
-    def test_no_key_is_401(self, fake_plugin, client):
-        r = client.get("/api/v1/plugins/fake/echo")
+    def test_no_key_is_401(self, api_client):
+        r = api_client.get("/api/v1/plugins/fake/echo")
         assert r.status_code == 401
 
-    def test_bad_key_is_401(self, fake_plugin, client):
-        r = client.get("/api/v1/plugins/fake/echo", headers={"Authorization": "Bearer not-a-real-key"})
+    def test_bad_key_is_401(self, api_client):
+        r = api_client.get("/api/v1/plugins/fake/echo", headers={"Authorization": "Bearer not-a-real-key"})
         assert r.status_code == 401
 
-    def test_valid_key_is_200_and_sets_g_api_key(self, fake_plugin, client, keys):
-        r = client.get("/api/v1/plugins/fake/echo", headers={"Authorization": f"Bearer {self.RAW_RW}"})
+    def test_valid_key_is_200_and_sets_g_api_key(self, api_client, keys):
+        r = api_client.get("/api/v1/plugins/fake/echo", headers={"Authorization": f"Bearer {self.RAW_RW}"})
         assert r.status_code == 200
         assert r.get_json() == {"key_id": keys["rw"]}
 
-    def test_read_only_key_on_a_write_route_is_403(self, fake_plugin, client, keys):
-        r = client.post("/api/v1/plugins/fake/write", headers={"Authorization": f"Bearer {self.RAW_RO}"})
+    def test_read_only_key_on_a_write_route_is_403(self, api_client, keys):
+        r = api_client.post("/api/v1/plugins/fake/write", headers={"Authorization": f"Bearer {self.RAW_RO}"})
         assert r.status_code == 403
 
-    def test_write_capable_key_on_a_write_route_is_200(self, fake_plugin, client, keys):
-        r = client.post("/api/v1/plugins/fake/write", headers={"Authorization": f"Bearer {self.RAW_RW}"})
+    def test_write_capable_key_on_a_write_route_is_200(self, api_client, keys):
+        r = api_client.post("/api/v1/plugins/fake/write", headers={"Authorization": f"Bearer {self.RAW_RW}"})
         assert r.status_code == 200
 
 
