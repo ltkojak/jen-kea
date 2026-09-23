@@ -340,14 +340,29 @@ class TestProgressBarAndFullPageSubmit:
         # and the class never cleared. reset() forces a known zero first,
         # exactly the guarantee a bfcache pageshow needs for the same
         # reason (see the pageshow test below).
+        # reset() alone isn't enough across two separate page.evaluate()
+        # round trips either: a background fetch already in flight (the
+        # Kea-status poll fires on every authenticated page, dashboard or
+        # not) can complete and call stop() in the gap between one Python
+        # call and the next, racing my own start()/stop() the same way.
+        # JS is single-threaded — nothing can interleave INSIDE one
+        # synchronous script — so reset, start, read, stop, read all
+        # happen in one evaluate() call with no window for that race.
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        page.evaluate("() => window.jenProgress.reset()")
-        page.evaluate("() => window.jenProgress.start()")
-        expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
-        page.evaluate("() => window.jenProgress.stop()")
-        expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"))
+        result = page.evaluate(
+            "() => { "
+            "window.jenProgress.reset(); "
+            "window.jenProgress.start(); "
+            "var afterStart = document.getElementById('jen-progress').className; "
+            "window.jenProgress.stop(); "
+            "var afterStop = document.getElementById('jen-progress').className; "
+            "return { afterStart: afterStart, afterStop: afterStop }; "
+            "}"
+        )
+        assert "active" in result["afterStart"], result
+        assert "active" not in result["afterStop"], result
         ctx.close()
 
     # Explain's own submit button, not any of the several other
