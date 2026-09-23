@@ -2,7 +2,7 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.1.1",
+    "version": "1.1.2",
     "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. Needs nmap on the Jen host (Settings → Plugins can install it).",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.34.0",
@@ -66,8 +66,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_settings (subnet_id INT PRIMARY KEY, every_hours INT NOT NULL DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.1.1",
-    "sha256": "e84e779de764533dd282104b5452300d0362c434a7fc2f166bb8a943d84f3215",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.1.2",
+    "sha256": "5121c444919b21e2e5b832d016c6c8361d4002531a1dfc5dd4ef16f351e6fd73",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery",
     "os_packages": [

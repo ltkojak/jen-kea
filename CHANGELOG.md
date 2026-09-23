@@ -2,6 +2,27 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.56.3-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.56.2-beta.1. The bundled Network Discovery plugin
+let a viewer start scans and mark hosts known — both routes checked only
+subnet access, never the role, and since the known-hosts list has no
+subnet column by design, a viewer scoped to one subnet could silence or
+un-silence the rogue-device alert for a MAC seen anywhere.
+
+Network Discovery 1.1.2 fixes that, the same way IPAM Lite 1.5.2 did last
+release: a viewer is refused before either route even looks at the subnet
+or the submitted form. It also fixes a real duplicate-scan race — a
+scan's job row used to appear only once the background thread actually
+started running, so two clicks on different subnets while one scan held
+the shared lock could queue the same subnet twice. A scan is now recorded
+as queued the moment it's requested, before the lock is even reached, and
+the index card shows "Queued" while it waits its turn.
+
+The registry now offers 1.1.2 on every install's Settings → Plugins
+Update button, and the bundled copy shipped in this tarball is resynced
+to the same release.
+
 ## [5.56.2-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.56.1-beta.1. The bundled IPAM Lite plugin let a
