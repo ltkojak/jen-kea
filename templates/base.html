@@ -1157,12 +1157,13 @@ function sortTable(table, col, th) {
     var sheetSupportsInert = sheetContentWrap && 'inert' in sheetContentWrap;
     var openSheetEl = null;
     var sheetOpener = null;
+    var sheetInertApplied = false;
     function closeSheet() {
         var was = openSheetEl;
         if (openSheetEl) { openSheetEl.classList.remove('open'); openSheetEl = null; }
         if (sheetBackdrop) sheetBackdrop.classList.remove('open');
         document.body.classList.remove('sheet-open');
-        if (sheetSupportsInert) sheetContentWrap.inert = false;
+        if (sheetInertApplied) { sheetContentWrap.inert = false; sheetInertApplied = false; }
         if (was) document.dispatchEvent(new CustomEvent('jen:sheet', { detail: { id: was.id, open: false } }));
         if (sheetOpener) { sheetOpener.focus(); sheetOpener = null; }
     }
@@ -1177,7 +1178,13 @@ function sortTable(table, col, th) {
         sheetBackdrop.classList.add('open');
         document.body.classList.add('sheet-open');
         openSheetEl = el;
-        if (sheetSupportsInert) sheetContentWrap.inert = true;
+        // showSheet() is also how the filter/action bars (Q58) open — those
+        // live INSIDE .container, not beside it like the real nav sheets, so
+        // making .container inert would make the "sheet" itself untouchable.
+        if (sheetSupportsInert && !sheetContentWrap.contains(el)) {
+            sheetContentWrap.inert = true;
+            sheetInertApplied = true;
+        }
         var first = el.querySelector(SHEET_FOCUSABLE);
         if (first) first.focus();
     }

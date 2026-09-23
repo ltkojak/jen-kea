@@ -190,10 +190,21 @@ class TestDashboardHeaderRowOnPhone:
     row instead."""
 
     def test_customize_and_the_refresh_select_share_the_same_row(self, phone, base_url):
+        # Center-aligned, not top-aligned — the button and select are
+        # different heights (the select keeps its compact size), so their
+        # own tops legitimately differ; what "share a row" actually means
+        # is their vertical centers line up and the header stays one line
+        # tall, not three.
         _visit(phone, base_url, "/")
-        customize_top = phone.eval_on_selector("#customize-btn", "el => el.getBoundingClientRect().top")
-        select_top = phone.eval_on_selector("#refreshInterval", "el => el.getBoundingClientRect().top")
-        assert abs(customize_top - select_top) < 2
+        customize_mid = phone.eval_on_selector(
+            "#customize-btn", "el => { var r = el.getBoundingClientRect(); return r.top + r.height / 2; }"
+        )
+        select_mid = phone.eval_on_selector(
+            "#refreshInterval", "el => { var r = el.getBoundingClientRect(); return r.top + r.height / 2; }"
+        )
+        assert abs(customize_mid - select_mid) < 2
+        controls_height = phone.eval_on_selector(".page-header-controls", "el => el.getBoundingClientRect().height")
+        assert controls_height < 60, f"page-header-controls is {controls_height}px tall — looks stacked, not a row"
 
     def test_last_updated_and_the_auto_refresh_label_stay_hidden(self, phone, base_url):
         _visit(phone, base_url, "/")
