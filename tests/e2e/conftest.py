@@ -164,6 +164,20 @@ def live_server(fake_kea):
 
     reset_pools()
 
+    # v5.57.1 (Q74) — both bundled plugins enabled for this whole suite
+    # (not just test_mobile.py) so their pages, nav entries and Settings
+    # → System listing are exercised by a real create_app() the same way
+    # an operator who installed them would see. _patch_extensions() just
+    # pointed PLUGIN_DIR_BUNDLED at an absent path on purpose, so the
+    # UNIT suite never pulls the real shipped plugins in — repoint it
+    # back to the real tree for this session-scoped e2e server only.
+    from jen import extensions
+    from jen.services.plugins import enable_plugin
+
+    extensions.PLUGIN_DIR_BUNDLED = os.path.join(extensions.JEN_ROOT, "plugins")
+    enable_plugin("ipam")
+    enable_plugin("network-discovery")
+
     # _patch_extensions() already wrote a working jen.config at
     # extensions.CONFIG_FILE; point [kea] at the fake Control Agent and
     # give the subnets/dashboard/leases journeys two real subnets to

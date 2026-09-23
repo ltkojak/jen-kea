@@ -259,15 +259,18 @@ ALERT_TYPE_LABELS = {
     "config_drift_resolved": "Config drift resolved",
     "cert_expiring": "TLS certificate expiring soon",
     "daily_summary": "Daily summary",
-    "rogue_device": "Rogue device detected (Network Discovery plugin)",
+    # v5.57.1 (Q74) — legacy, kept in 5.x. Network Discovery 1.2.0 moved
+    # to its own plugin-registered type, network-discovery_rogue_device
+    # (register_alert_type, Q73's API); this core entry stays only so an
+    # install whose channels already opted into it keeps working. No
+    # plugin sends under it any more.
+    "rogue_device": "Rogue device detected (legacy — superseded by Network Discovery's own alert type)",
 }
 
 
-# v5.57.0 (Q73) — plugin-registered alert types (rogue_device stays a
-# core entry — "legacy — keep in 5.x" — network-discovery's own move to
-# this API is a later Q, not this one). type_id -> plugin_id, so Settings
-# → Alerts can group registered types under "From plugins" with the
-# owning plugin's name.
+# v5.57.0 (Q73) — plugin-registered alert types. type_id -> plugin_id, so
+# Settings → Alerts can group registered types under "From plugins" with
+# the owning plugin's name.
 PLUGIN_ALERT_TYPES: dict[str, str] = {}
 
 

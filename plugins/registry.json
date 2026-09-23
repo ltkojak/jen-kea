@@ -2,10 +2,10 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.1.2",
-    "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. Needs nmap on the Jen host (Settings → Plugins can install it).",
+    "version": "1.2.0",
+    "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. A new unknown host also reaches the Timeline, and the last-seen results are in Jen's global search. Needs nmap on the Jen host (Settings → Plugins can install it).",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.34.0",
+    "requires_jen": "5.57.0",
     "tags": [
       "network",
       "security",
@@ -15,7 +15,7 @@
       {
         "section": "network",
         "label": "Discovery",
-        "icon": "🔍",
+        "icon": "search",
         "endpoint": "network_discovery.index"
       }
     ],
@@ -66,22 +66,22 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_settings (subnet_id INT PRIMARY KEY, every_hours INT NOT NULL DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.1.2",
-    "sha256": "5121c444919b21e2e5b832d016c6c8361d4002531a1dfc5dd4ef16f351e6fd73",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.2.0",
+    "sha256": "cebd1ecacaafaccef92498c2cdcc65ab02a2a1434404356c6b1f56ec7a5f0062",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery",
     "os_packages": [
       "nmap"
     ],
-    "plugin_api": 1
+    "plugin_api": 3
   },
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.5.2",
-    "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Replaces Netbox for simple static IP tracking.",
+    "version": "1.6.0",
+    "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Alerts on new conflicts, a JSON API for entries and next-free, and a global search provider. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.34.0",
+    "requires_jen": "5.57.0",
     "tags": [
       "ipam",
       "addresses",
@@ -91,7 +91,7 @@
       {
         "section": "network",
         "label": "IPAM",
-        "icon": "📋",
+        "icon": "clipboard-list",
         "endpoint": "ipam.index"
       }
     ],
@@ -170,12 +170,17 @@
         "version": 15,
         "description": "unmanaged subnets: optional gateway, shown as infrastructure (v1.5.0)",
         "sql": "ALTER TABLE ipam_subnets ADD COLUMN gateway VARCHAR(15) NULL AFTER description"
+      },
+      {
+        "version": 16,
+        "description": "ipam_conflict_state table: tracks which conflicts have already alerted (v1.6.0)",
+        "sql": "CREATE TABLE IF NOT EXISTS ipam_conflict_state (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_kind ENUM('kea','ipam') NOT NULL, subnet_id INT NOT NULL, first_detected DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_conflict (ip, subnet_kind, subnet_id))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.5.2",
-    "sha256": "780c55be13143a925ba253e22df1a4c28a8ae5ec3f9fa199a25bbbf46f17892f",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.6.0",
+    "sha256": "a8b6c7445dd815e01dd81c048fab2ac524b5d29356db038a690177bb41f05f6b",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam",
-    "plugin_api": 1
+    "plugin_api": 3
   }
 ]

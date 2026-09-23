@@ -71,6 +71,13 @@ PAGES = [
     ("settings-api-keys", "/settings/api-keys"),
     ("subnet-edit", "/subnets/edit/1"),
     ("ha-maintenance", "/servers/ha/maintenance"),
+    # v5.57.1 (Q74) — both bundled plugins enabled for this whole suite
+    # (tests/e2e/conftest.py), so their pages are covered by the same
+    # overflow guard as core pages.
+    ("plugin-ipam", "/network/ipam"),
+    ("plugin-ipam-subnet", "/network/ipam/subnet/kea/1"),
+    ("plugin-discovery", "/network/discovery"),
+    ("plugin-discovery-results", "/network/discovery/results/1"),
 ]
 
 # Pages that still overflow a phone today, with the release that converts them.
@@ -431,6 +438,38 @@ class TestStickyTableHeaderOnDesktop:
         assert style["position"] == "sticky"
         assert style["top"] == sticky_top, f"th top is {style['top']!r}, --sticky-top is {sticky_top!r}"
         ctx.close()
+
+
+class TestPluginsTableStaysStaticInsideSettingsCols:
+    """v5.57.1 (Q74 step 0) — Settings -> System's Plugins table sits
+    inside .settings-cols (a CSS multi-column container, Q72c); a
+    sticky th there used to position against its column fragment, not
+    the viewport, landing the header mid-table. Both bundled plugins
+    are enabled for this whole suite (conftest.py), so the Plugins
+    card renders two real rows, not the empty state CI could not see
+    this bug through before."""
+
+    def _check(self, browser, base_url, theme_pick=None):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        if theme_pick:
+            ctx.add_init_script(f"localStorage.setItem('jen-theme-pick', '{theme_pick}')")
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        _visit(page, base_url, "/settings/system")
+        card = page.locator("#sys-plugins")
+        expect(card.locator("tbody tr").first).to_be_visible()
+        thead_top = card.locator("thead th").first.bounding_box()["y"]
+        first_row_top = card.locator("tbody tr").first.bounding_box()["y"]
+        assert thead_top < first_row_top, (
+            f"Plugins table header (y={thead_top}) is not above the first row (y={first_row_top})"
+        )
+        ctx.close()
+
+    def test_default_theme(self, browser, base_url):
+        self._check(browser, base_url)
+
+    def test_retro_theme(self, browser, base_url):
+        self._check(browser, base_url, theme_pick="retro")
 
 
 DEMO = """

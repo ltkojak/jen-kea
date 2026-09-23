@@ -2,6 +2,35 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.57.1-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.57.0-beta.1. IPAM Lite and Network Discovery
+move onto Q73's plugin API v3, both bundled at their new versions:
+IPAM Lite 1.6.0 and Network Discovery 1.2.0. Every emoji across both
+plugins' pages — including Discovery's seven host-status labels — is
+now a sprite icon through Jen's own `icon()` global, and IPAM's 187
+and Discovery's 61 inline `style="…"` attributes are gone (moved into
+page-local classes, since a plugin page has no shared stylesheet to
+extract into), and IPAM's address table and Discovery's results table are now phone-
+friendly rowlists. IPAM gained a periodic check that alerts once on a
+new address conflict and writes an event for the Timeline, a JSON API
+for reading and writing entries, and a search provider; a reservation
+row now offers "Open in IPAM". Discovery's rogue-device alert moves
+onto its own plugin-registered type (Jen's core `rogue_device` stays
+only as a legacy entry so an already-configured channel keeps working),
+a new unknown host now also reaches the Timeline as a `discovery.unknown`
+event, and discovered hosts show up in Jen's global search. Jen's own
+phone screenshot job now enables both plugins for the whole suite and
+covers their pages with the same overflow guard as every core page.
+
+This release also fixes a real regression from 5.56.4-beta.1: Settings
+→ System's Plugins table rendered its column headings between the two
+rows instead of above them, because a sticky `<th>` inside the Settings
+pages' two-column CSS container (Q72c) positions against its own
+column fragment rather than the viewport. Sticky headers are now for
+page-level lists only — a `.card`'s own table inside that container
+stays static.
+
 ## [5.57.0-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.56.4-beta.1. Plugin API v3 — the start of
