@@ -328,39 +328,26 @@ class TestProgressBarAndFullPageSubmit:
         # jenFetch is a two-line wrapper (window.jenFetch = function(url,
         # opts) { start(); return fetch(url, opts).finally(stop); }) —
         # tests/test_desktop_polish.py checks that source directly. What's
-        # worth an actual browser is the DOM half: does the #jen-progress
-        # element really pick up and drop the "active" class. Driving a
-        # real network delay through page.route()/a patched window.fetch
-        # to exercise that indirectly proved unreliable in CI for reasons
-        # that didn't reproduce locally (something about this sync
-        # Playwright bridge's timing with a slow fetch in flight) — calling
-        # jenProgress.start()/stop() directly is the same DOM mechanism,
-        # deterministically.
+        # worth an actual browser is the DOM half: does #jen-progress
+        # actually pick up and drop the "active" class.
+        #
+        # Found by making a failing version of this test return its own
+        # diagnostics: the dashboard's own page-load fetches (the Kea-
+        # status poll, lease-history, alert-summary, …) share jenProgress's
+        # ONE counter, and one or more were still in flight when start()/
+        # stop() ran here — stop() only ever decrements, so a start() on
+        # top of an already-nonzero count never brought it back to zero,
+        # and the class never cleared. reset() forces a known zero first,
+        # exactly the guarantee a bfcache pageshow needs for the same
+        # reason (see the pageshow test below).
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        # Everything in one round trip, including the read-back: two
-        # separate CI runs each showed #jen-progress never picking up the
-        # class even right after a direct start() call, for reasons that
-        # didn't reproduce locally and that a bare locator mismatch gives
-        # no way to diagnose further. This either confirms the mechanism
-        # or fails with the actual state (does jenProgress exist, does the
-        # element exist, what its class was immediately after start()).
-        diag = page.evaluate(
-            "() => { "
-            "var bar = document.getElementById('jen-progress'); "
-            "var hasProgress = typeof window.jenProgress; "
-            "if (window.jenProgress) window.jenProgress.start(); "
-            "var afterStart = bar ? bar.className : null; "
-            "if (window.jenProgress) window.jenProgress.stop(); "
-            "var afterStop = bar ? bar.className : null; "
-            "return { hasProgress: hasProgress, barExists: !!bar, afterStart: afterStart, afterStop: afterStop }; "
-            "}"
-        )
-        assert diag["hasProgress"] == "object", diag
-        assert diag["barExists"] is True, diag
-        assert diag["afterStart"] and "active" in diag["afterStart"], diag
-        assert not diag["afterStop"] or "active" not in diag["afterStop"], diag
+        page.evaluate("() => window.jenProgress.reset()")
+        page.evaluate("() => window.jenProgress.start()")
+        expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
+        page.evaluate("() => window.jenProgress.stop()")
+        expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"))
         ctx.close()
 
     # Explain's own submit button, not any of the several other
