@@ -287,7 +287,7 @@ async function showConfirm() {
     try {
         var formEl = document.getElementById('edit-subnet-form');
         var formData = new FormData(formEl);
-        var resp = await fetch({{ (url_for('subnets.edit_subnet6_preview', subnet_id=subnet_id) if family == 'v6' else url_for('subnets.edit_subnet_preview', subnet_id=subnet_id)) | tojson }}, {
+        var resp = await jenFetch({{ (url_for('subnets.edit_subnet6_preview', subnet_id=subnet_id) if family == 'v6' else url_for('subnets.edit_subnet_preview', subnet_id=subnet_id)) | tojson }}, {
             method: 'POST',
             body: formData,
         });

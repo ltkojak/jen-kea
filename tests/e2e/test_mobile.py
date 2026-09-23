@@ -21,6 +21,7 @@ in the other files keep the CSP on.
 
 import pathlib
 import re
+import time
 
 import pytest
 from playwright.sync_api import expect
@@ -241,6 +242,20 @@ class TestSettingsCardsCollapsibleOnPhone:
         for anchor in ("kea-api", "kea-ssh", "kea-servers", "kea6", "kea-d2", "kea-packages", "kea-drift"):
             expect(desktop.locator(f"#{anchor} > :not(.card-header)").first).to_be_visible()
 
+    # v5.56.4 (Q72c) — the two-column Settings layout at >=1280px. The
+    # baseline is settings-kea.png's actual pixel height from the
+    # v5.56.3-beta.1 CI artifact (1440x2546, device_scale_factor 1 so PNG
+    # pixels == CSS/scrollHeight pixels) — a real measurement, not a guess.
+    SETTINGS_KEA_HEIGHT_BEFORE_Q72 = 2546
+
+    def test_settings_kea_is_at_least_30_percent_shorter_than_5_56_3(self, desktop, base_url):
+        _visit(desktop, base_url, "/settings/kea")
+        height = desktop.evaluate("document.documentElement.scrollHeight")
+        ceiling = self.SETTINGS_KEA_HEIGHT_BEFORE_Q72 * 0.7
+        assert height <= ceiling, (
+            f"settings-kea is {height}px tall now, needed <= {ceiling:.0f}px (was {self.SETTINGS_KEA_HEIGHT_BEFORE_Q72}px)"
+        )
+
 
 class TestDesktopPass:
     def test_every_page_is_screenshotted_and_the_phone_chrome_is_absent(self, desktop, base_url):
@@ -255,6 +270,118 @@ class TestDesktopPass:
         expect(desktop.locator(".tabbar")).to_be_hidden()
         expect(desktop.locator("#more-sheet")).to_be_hidden()
         expect(desktop.locator(".nav-links")).to_be_visible()
+
+
+class TestSkipLinkAndFocusOrder:
+    """v5.56.4 (Q72a) — the first Tab stop on any page is the skip link;
+    activating it moves real keyboard focus into <main>, not just the URL
+    hash (needs tabindex="-1" on <main> — a bare landmark isn't focusable)."""
+
+    def test_tab_then_enter_lands_focus_in_main(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        _visit(page, base_url, "/leases")
+        page.keyboard.press("Tab")
+        assert page.evaluate("document.activeElement.className") == "skip-link"
+        assert page.evaluate("document.activeElement.getAttribute('href')") == "#main"
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(100)
+        assert page.evaluate("document.activeElement.id") == "main"
+        ctx.close()
+
+
+class TestAriaLabelSweep:
+    """v5.56.4 (Q72a) — every icon-only button/label/anchor across the
+    whole PAGES list carries an accessible name; a visible text sibling
+    (any non-whitespace textContent) is an accessible name on its own and
+    doesn't need one too."""
+
+    def test_every_icon_only_control_has_an_accessible_name(self, desktop, base_url):
+        js = """() => {
+            const out = [];
+            document.querySelectorAll('button, a, label[for], [role="button"]').forEach((el) => {
+                if (el.offsetParent === null) return;  // hidden (closed sheet/dropdown, display:none)
+                const text = (el.textContent || '').replace(/\\s+/g, '');
+                if (text.length > 0) return;  // has a visible accessible name already
+                const named = el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')
+                    || el.getAttribute('title') || (el.tagName === 'IMG' && el.getAttribute('alt'));
+                if (!named) out.push(el.outerHTML.slice(0, 120));
+            });
+            return out;
+        }"""
+        offenders = {}
+        for name, path in PAGES:
+            _visit(desktop, base_url, path)
+            found = desktop.evaluate(js)
+            if found:
+                offenders[name] = found
+        assert not offenders, offenders
+
+
+class TestProgressBarAndFullPageSubmit:
+    """v5.56.4 (Q72b) — #jen-progress driven by jenFetch (htmx already has
+    its own beforeRequest/afterRequest path, not re-tested here), and a
+    plain full-page <form> submit disables its button until the response
+    lands, resetting again on a bfcache pageshow."""
+
+    def _slow(self, route):
+        time.sleep(1.5)
+        route.continue_()
+
+    def test_progress_bar_shows_during_a_slow_fetch_and_hides_after(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.route("**/api/alert-summary", self._slow)
+        _visit(page, base_url, "/")
+        expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
+        expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"), timeout=5000)
+        ctx.close()
+
+    def test_a_delayed_explain_submit_disables_its_button(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        page.route("**/tools/explain?**", self._slow)
+        _visit(page, base_url, "/tools/explain")
+        page.fill('input[name="mac"]', "aa:bb:cc:dd:ee:ff")
+        page.click("button[type=submit]")
+        expect(page.locator("button[type=submit]")).to_be_disabled()
+        expect(page.locator("button[type=submit]")).to_have_attribute("aria-busy", "true")
+        ctx.close()
+
+    def test_pageshow_clears_a_stale_disabled_submit_button(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        _visit(page, base_url, "/tools/explain")
+        page.evaluate(
+            "var b = document.querySelector('button[type=submit]'); "
+            "b.disabled = true; b.setAttribute('aria-busy', 'true'); "
+            "window.dispatchEvent(new Event('pageshow'));"
+        )
+        expect(page.locator("button[type=submit]")).to_be_enabled()
+        assert page.get_attribute("button[type=submit]", "aria-busy") is None
+        ctx.close()
+
+
+class TestStickyTableHeaderOnDesktop:
+    """v5.56.4 (Q72d) — a sticky <thead> th on Leases stops at
+    --sticky-top (nav height + the section-tab strip, since Leases has
+    one), not just under the bare nav."""
+
+    def test_the_first_header_cell_sticks_at_the_shared_offset(self, browser, base_url):
+        ctx = browser.new_context(viewport={"width": 1440, "height": 600}, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        _visit(page, base_url, "/leases?subnet=10")
+        expect(page.locator("table.rowlist tbody tr").first).to_be_visible()
+        page.evaluate("window.scrollBy(0, 400)")
+        offset_px = page.evaluate("parseFloat(getComputedStyle(document.body).getPropertyValue('--sticky-top'))")
+        top = page.eval_on_selector("table.rowlist thead th", "el => el.getBoundingClientRect().top")
+        assert abs(top - offset_px) < 1, f"th top {top}px, expected {offset_px}px"
+        ctx.close()
 
 
 DEMO = """

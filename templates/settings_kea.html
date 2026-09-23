@@ -80,6 +80,7 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Direct mode needs an explicit port on every API URL — missing on: {{ direct_port_warnings | join('; ') }}. Add <code>:8004</code> (dhcp4) / <code>:8006</code> (dhcp6) and re-save.</div>
 {% endif %}
 
+<div class="settings-cols">
 <!-- Kea control plane -->
 <div class="card" id="kea-api">
     <div class="card-header"><span class="card-title">{{ icon("plug") }} Kea Control Plane</span>
@@ -321,7 +322,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
             <div class="u-02dd14">
                 <strong>Server {{ loop.index + 1 }}</strong>
                 <input type="hidden" name="extra_id[]" value="{{ srv.id }}">
-                <button type="button" class="btn-act btn-act-del remove-server-row-btn" title="Remove">{{ icon_trash() }}</button>
+                <button type="button" class="btn-act btn-act-del remove-server-row-btn" title="Remove" aria-label="Remove server">{{ icon_trash() }}</button>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -553,6 +554,7 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea</pre>
     <div id="config-drift-results" class="u-b20d1a"></div>
 </div>
 {% endif %}
+</div>
 
 {% endblock %}
 {% block scripts %}
@@ -665,7 +667,7 @@ async function probeKea() {
     btn.disabled = true;
     out.innerHTML = '<span class="u-5872de">Probing…</span>';
     try {
-        var resp = await fetch('/settings/infrastructure/probe-kea', {
+        var resp = await jenFetch('/settings/infrastructure/probe-kea', {
             method: 'POST',
             headers: {
                 'X-CSRFToken': {{ csrf_token()|tojson }},
@@ -721,7 +723,7 @@ async function checkKeaPackages() {
     btn.disabled = true;
     resultsDiv.innerHTML = '<span class="u-5872de">Checking…</span>';
     try {
-        var resp = await fetch('/settings/infrastructure/check-kea-binaries', {
+        var resp = await jenFetch('/settings/infrastructure/check-kea-binaries', {
             method: 'POST',
             headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
         });
@@ -755,7 +757,7 @@ async function installKeaPkg(btn, service) {
     btn.disabled = true;
     statusEl.textContent = 'Installing kea-' + service + '-server — this can take a minute…';
     try {
-        var resp = await fetch('/settings/infrastructure/install-kea-binary/' + service, {
+        var resp = await jenFetch('/settings/infrastructure/install-kea-binary/' + service, {
             method: 'POST',
             headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
         });
@@ -783,7 +785,7 @@ async function checkConfigDrift() {
     btn.disabled = true;
     resultsDiv.innerHTML = '<span class="u-5872de">Checking…</span>';
     try {
-        var resp = await fetch('/settings/infrastructure/check-config-drift', {
+        var resp = await jenFetch('/settings/infrastructure/check-config-drift', {
             method: 'POST',
             headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
         });

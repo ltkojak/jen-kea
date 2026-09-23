@@ -27,7 +27,7 @@
     <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
         <span class="card-title">Status</span>
         <button class="btn btn-secondary" hx-get="/health-center/data?partial=1" hx-target="#health-results"
-                hx-swap="innerHTML">Refresh</button>
+                hx-swap="innerHTML" hx-disabled-elt="this">Refresh</button>
     </div>
     <div id="health-results" hx-get="/health-center/data?partial=1" hx-target="#health-results"
          hx-swap="innerHTML" hx-trigger="every 60s">

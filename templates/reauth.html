@@ -52,7 +52,7 @@
         return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
     async function postJson(url, body) {
-        var r = await fetch(url, {method: 'POST', credentials: 'same-origin',
+        var r = await jenFetch(url, {method: 'POST', credentials: 'same-origin',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF}, body: JSON.stringify(body || {})});
         var data = await r.json();
         if (!r.ok || !data.ok) throw new Error(data.error || ('request failed (' + r.status + ')'));

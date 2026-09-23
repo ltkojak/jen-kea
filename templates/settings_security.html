@@ -13,6 +13,7 @@
 {% if current_user.role == 'superadmin' %}{% set toc = toc + [('sec-sso', 'Single Sign-On')] %}{% endif %}
 {% include '_card_toc.html' %}
 
+<div class="settings-cols">
 <!-- MFA Settings -->
 <div class="card" id="sec-mfa">
     <div class="card-header">
@@ -241,6 +242,7 @@
         <button type="submit" class="btn btn-primary">{% if ssl_configured %}{{ icon("refresh-cw") }} Replace Certificate{% else %}{{ icon("lock") }} Enable HTTPS{% endif %}</button>
     </form>
     <div class="form-hint u-8a77e5">Ports are set on <a href="/settings/system#sys-ports">System → Ports &amp; threads</a>.</div>
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

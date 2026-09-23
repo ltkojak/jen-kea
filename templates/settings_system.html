@@ -12,6 +12,7 @@
 {% set toc = [('sys-updates', 'Jen Updates'), ('sys-plugins', 'Plugins'), ('sys-ports', 'Ports & Threads'), ('sys-restart', 'Restart'), ('sys-retention', 'Retention'), ('sys-config-history', 'Kea Config History')] %}
 {% include '_card_toc.html' %}
 
+<div class="settings-cols">
 <!-- Jen Update -->
 <div class="card" id="sys-updates">
     <div class="card-header">
@@ -240,6 +241,7 @@
         <button type="submit" class="btn btn-primary">{{ icon("save") }} Save</button>
     </form>
 </div>
+</div>
 
 <script nonce="{{ csp_nonce }}">
 function checkForUpdates() {
@@ -250,7 +252,7 @@ function checkForUpdates() {
     status.textContent = 'Contacting GitHub…';
     status.style.color = 'var(--text-muted)';
 
-    fetch('/settings/infrastructure/check-update')
+    jenFetch('/settings/infrastructure/check-update')
         .then(function(r) { return r.json(); })
         .then(function(d) {
             btn.disabled = false;
@@ -342,7 +344,7 @@ if (updateForm && updateForm.tagName === 'FORM') {
         // v5.8.4 — ask systemd how jen-update.service is doing before
         // asking Jen what version it is, so a crash before the restart is
         // reported as a failure instead of "still reports vX".
-        fetch('/settings/infrastructure/update-status', { cache: 'no-store' })
+        jenFetch('/settings/infrastructure/update-status', { cache: 'no-store' })
             .then(function(r) { return r.ok ? r.json() : {}; })
             .catch(function() { return {}; })
             .then(function(s) {
@@ -358,7 +360,7 @@ if (updateForm && updateForm.tagName === 'FORM') {
                 if (s && (s.active_state === 'activating' || s.active_state === 'active')) {
                     msg.textContent = 'Installing update (' + (s.sub_state || 'running') + ')…';
                 }
-                return fetch('/settings/infrastructure/check-update', { cache: 'no-store' });
+                return jenFetch('/settings/infrastructure/check-update', { cache: 'no-store' });
             })
             .then(function(r) {
                 if (r === null) return null;

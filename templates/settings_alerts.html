@@ -10,6 +10,7 @@
 {% set toc = [('al-global', 'Thresholds'), ('al-channels', 'Channels'), ('al-templates', 'Templates'), ('al-ddns', 'DDNS / DNS'), ('al-metrics', 'Prometheus')] %}
 {% include '_card_toc.html' %}
 
+<div class="settings-cols">
 <!-- Global alert settings -->
 <div class="card" id="al-global">
     <div class="card-header"><span class="card-title">{{ icon("settings") }} Global Alert Settings</span></div>
@@ -125,7 +126,7 @@ var JEN_CHANNELS = {
 </div>
 
 <!-- Message Templates -->
-<div class="card" id="al-templates">
+<div class="card card--wide" id="al-templates">
     <div class="card-header"><span class="card-title">{{ icon("pencil") }} Message Templates</span></div>
     <p style="color:var(--text-muted);font-size:12px;margin-bottom:16px;">
         Customize alert messages. Available variables: <code>{ip}</code> <code>{mac}</code> <code>{hostname}</code> <code>{subnet}</code> <code>{cidr}</code> <code>{pct}</code> <code>{used}</code> <code>{total}</code> <code>{free}</code> <code>{days}</code> <code>{details}</code> <code>{summary}</code>
@@ -505,6 +506,7 @@ var JEN_CHANNELS = {
         </div>
         <button type="submit" class="btn btn-primary u-8a77e5">Save Metrics Settings</button>
     </form>
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

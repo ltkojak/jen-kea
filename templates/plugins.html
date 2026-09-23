@@ -118,7 +118,7 @@
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
                           data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin">{{ icon_trash() }}</button>
+                        <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin" aria-label="Uninstall plugin">{{ icon_trash() }}</button>
                     </form>
                 </div>
             </td>
@@ -256,7 +256,7 @@
     var attempts = 0;
     var poll = setInterval(function() {
         attempts++;
-        fetch('/settings/plugins/install-status/' + encodeURIComponent(pluginId), { cache: 'no-store' })
+        jenFetch('/settings/plugins/install-status/' + encodeURIComponent(pluginId), { cache: 'no-store' })
             .then(function(r) { return r.ok ? r.json() : {}; })
             .catch(function() { return {}; })
             .then(function(s) {

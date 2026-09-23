@@ -145,7 +145,12 @@ class TestBaseRender:
             assert f"<span>{label}</span>" in bar
         assert 'data-sheet-open="more-sheet"' in bar and 'id="more-sheet"' in html
         assert 'id="sheet-backdrop"' in html
-        assert 'class="has-tabbar"' in html
+        # v5.56.4 (Q72d) — the body class also carries has-strip when
+        # nav.strip is non-empty (servers.servers is a "network" section
+        # page, so it is here); has-tabbar itself is still always present
+        # for an authenticated render.
+        body_tag = re.search(r"<body[^>]*>", html).group(0)
+        assert "has-tabbar" in body_tag
 
     def test_active_tab_has_aria_current(self):
         html = _render(endpoint="leases.leases")

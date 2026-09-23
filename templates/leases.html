@@ -134,7 +134,7 @@ document.addEventListener('change', function(e) {
 </div>
 <script nonce="{{ csp_nonce }}">
 // Load saved filters for this page
-fetch('/api/saved-searches?page=leases')
+jenFetch('/api/saved-searches?page=leases')
     .then(r => r.json()).then(searches => {
         var sel = document.getElementById('saved-filter-select');
         searches.forEach(function(s) {
@@ -150,7 +150,7 @@ function saveCurrentFilter() {
     var name = prompt('Name this filter:');
     if (!name) return;
     var params = window.location.search.replace('?','');
-    fetch('/saved-searches/save', {
+    jenFetch('/saved-searches/save', {
         method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body:'name='+encodeURIComponent(name)+'&page=leases&params='+encodeURIComponent(params)

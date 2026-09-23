@@ -515,7 +515,7 @@ function drawSparkline(canvasId, points, _unused, _attempt) {
 function loadSparklines() {
     var container = document.getElementById('sparklines-container');
     if (!container) return;
-    fetch('/api/lease-history?days=30')
+    jenFetch('/api/lease-history?days=30')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var loading = document.getElementById('sparklines-loading');
@@ -573,7 +573,7 @@ function loadSparklines() {
 function loadTopDevices() {
     var container = document.getElementById('top-devices-container');
     if (!container) return;
-    fetch('/api/top-devices')
+    jenFetch('/api/top-devices')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var devices = data.devices || [];
@@ -625,7 +625,7 @@ function loadHistory() {
     if (loading) loading.style.display = '';
     if (empty)   empty.style.display = 'none';
 
-    fetch('/api/lease-history?days=' + d)
+    jenFetch('/api/lease-history?days=' + d)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (loading) loading.style.display = 'none';
@@ -663,7 +663,7 @@ function loadRecentLeases() {
     var body = document.getElementById('recent-leases-body');
     if (!body) return;
     body.style.opacity = '0.5';
-    fetch('/api/recent-leases?hours=' + hours)
+    jenFetch('/api/recent-leases?hours=' + hours)
         .then(function(r) { return r.text(); })
         .then(function(html) {
             body.innerHTML = html;
@@ -676,7 +676,7 @@ function loadRecentLeases() {
 function loadAlertSummary() {
     var body = document.getElementById('alert-summary-body');
     if (!body) return;
-    fetch('/api/alert-summary')
+    jenFetch('/api/alert-summary')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (!data.alerts || data.alerts.length === 0) {
@@ -739,7 +739,7 @@ function loadCatalogWidget(id, render) {
     var el = widgetEl(id);
     var body = el && el.querySelector('.dash-cat-body');
     if (!body) return;
-    fetch('/api/dashboard/catalog-data?widgets=' + id)
+    jenFetch('/api/dashboard/catalog-data?widgets=' + id)
         .then(function(r) { return r.json(); })
         .then(function(data) { body.innerHTML = render(data[id]); })
         .catch(function() { body.innerHTML = '<p class="u-6f1339">Could not load.</p>'; });
@@ -819,7 +819,7 @@ function loadGettingStarted() {
 function updateStats() {
     var dot = document.getElementById('refreshDot');
     if (dot) dot.style.background = 'var(--warning)';
-    fetch('/api/stats')
+    jenFetch('/api/stats')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (dot) dot.style.background = 'var(--success)';
@@ -1034,7 +1034,7 @@ function collectPrefsFromDom() {
 }
 
 function savePrefs(prefs, onDone) {
-    fetch('/api/dashboard/save-prefs', {
+    jenFetch('/api/dashboard/save-prefs', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}'},
         body: JSON.stringify(prefs)
@@ -1183,7 +1183,7 @@ function setRefreshInterval(ms) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 (function() {
     // Load preferences and apply
-    fetch('/api/dashboard/get-prefs')
+    jenFetch('/api/dashboard/get-prefs')
         .then(function(r) { return r.json(); })
         .then(function(d) { applyDashPrefs(d); })
         .catch(function() {

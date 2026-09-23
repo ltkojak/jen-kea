@@ -125,7 +125,7 @@
         status.textContent = msg;
     }
     async function postJson(url, body) {
-        var r = await fetch(url, {
+        var r = await jenFetch(url, {
             method: 'POST',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
             body: JSON.stringify(body || {}),

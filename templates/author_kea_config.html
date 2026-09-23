@@ -158,7 +158,7 @@ async function showPreview() {
     try {
         var formEl = document.getElementById('author-kea-form');
         var formData = new FormData(formEl);
-        var resp = await fetch("/settings/infrastructure/author-kea/{{ service }}/preview", {
+        var resp = await jenFetch("/settings/infrastructure/author-kea/{{ service }}/preview", {
             method: 'POST', body: formData,
         });
         var data = await resp.json();
@@ -220,7 +220,7 @@ async function installBinary(btn, binary) {
     btn.disabled = true;
     statusEl.textContent = 'Installing ' + binary + ' — this can take a minute…';
     try {
-        var resp = await fetch("/settings/infrastructure/install-kea-binary/{{ service }}", {
+        var resp = await jenFetch("/settings/infrastructure/install-kea-binary/{{ service }}", {
             method: 'POST',
             headers: {'X-CSRFToken': {{ csrf_token()|tojson }}},
         });

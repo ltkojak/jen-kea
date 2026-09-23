@@ -11,6 +11,7 @@
 {% if current_user.role == 'superadmin' %}{% set toc = toc[:1] + [('app-theme', 'Theme')] + toc[1:] %}{% endif %}
 {% include '_card_toc.html' %}
 
+<div class="settings-cols">
 <!-- Custom Branding -->
 <div class="card" id="app-branding">
     <div class="card-header">
@@ -26,7 +27,7 @@
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
                 <img src="{{ branding.nav_logo }}" style="max-height:36px;max-width:180px;border-radius:4px;border:1px solid var(--border);padding:4px;background:var(--surface2);">
                 <form method="POST" action="/settings/remove-nav-logo" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn-act btn-act-del" data-confirm="Remove logo?">{{ icon_trash() }}</button>
+                    <button type="submit" class="btn-act btn-act-del" data-confirm="Remove logo?" aria-label="Remove logo">{{ icon_trash() }}</button>
                 </form>
             </div>
             {% endif %}
@@ -61,7 +62,7 @@
 <!-- Theme (v5.55.0, Q63) — superadmin only: unlike nav color/logo, this
      changes what every viewer sees, and a custom palette is CSS that
      reaches every page unescaped once saved. -->
-<div class="card" id="app-theme">
+<div class="card card--wide" id="app-theme">
     <div class="card-header">
         <span class="card-title">{{ icon("palette") }} Theme</span>
     </div>
@@ -267,6 +268,7 @@
             {% endfor %}
         </div>
     </details>
+</div>
 </div>
 {% endblock %}
 {% block scripts %}

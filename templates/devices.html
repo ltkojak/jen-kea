@@ -280,7 +280,7 @@ function saveDevice() {
     const notes = document.getElementById('editNotes').value.trim();
     const typeOverride = document.getElementById('editTypeOverride').value;
     const iconOverride = document.getElementById('editIconOverride') ? document.getElementById('editIconOverride').value : '';
-    fetch(`/devices/edit/${editingId}`, {
+    jenFetch(`/devices/edit/${editingId}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body: `device_name=${encodeURIComponent(name)}&owner=${encodeURIComponent(owner)}&notes=${encodeURIComponent(notes)}&type_override=${encodeURIComponent(typeOverride)}&icon_override=${encodeURIComponent(iconOverride)}`

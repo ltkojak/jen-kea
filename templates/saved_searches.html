@@ -30,7 +30,7 @@
             <a href="/{{ s.page }}?{{ s.params }}" class="btn btn-sm btn-secondary">{{ icon("play") }} Load</a>
             <form method="POST" action="/saved-searches/delete/{{ s.id }}" class="u-cccfa4"
                   data-confirm="Delete this saved filter?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn-act btn-act-del" title="Delete">{{ icon_trash() }}</button>
+                <button type="submit" class="btn-act btn-act-del" title="Delete" aria-label="Delete">{{ icon_trash() }}</button>
             </form>
         </td>
     </tr>

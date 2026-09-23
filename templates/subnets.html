@@ -12,7 +12,7 @@ function cancelNote(id) {
 }
 function saveNote(id) {
     const notes = document.getElementById('note-text-' + id).value.trim();
-    fetch('/subnets/save-note', {
+    jenFetch('/subnets/save-note', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
         body: 'subnet_id=' + id + '&notes=' + encodeURIComponent(notes)

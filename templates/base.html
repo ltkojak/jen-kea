@@ -65,9 +65,87 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             --font-mono: 'SF Mono', 'Fira Code', monospace;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 14px; }
+        body {
+            background: var(--bg); color: var(--text); font-family: var(--font-ui); font-size: 14px;
+            /* v5.56.4 (Q72d) — nav height, plus the section-tab strip's height when
+               `has-strip` is on the body (Leases/Reservations/… and every Settings
+               group page); a sticky table header stops just under whichever is
+               actually present. .nav is min-height:56px, .section-tabs gets an
+               explicit min-height below for the same reason: a sticky offset must
+               be a number, not "however tall the content happens to make it". */
+            --sticky-top: 56px;
+        }
+        body.has-strip { --sticky-top: 96px; }
         a { color: var(--primary); text-decoration: none; }
         a:hover { text-decoration: underline; }
+
+        /* v5.56.4 (Q72a) — a visible keyboard-focus ring everywhere; nothing in
+           this file or ui-classes.css sets outline:none on a :focus-visible
+           selector, so this always wins the cascade even where a plain,
+           non-focus-visible rule (form inputs, the search box) sets outline:none
+           for the mouse/touch case. */
+        a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+        textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+
+        /* v5.56.4 (Q72a) — "Skip to content", visually hidden until it receives
+           keyboard focus (the first Tab stop on every page). */
+        .skip-link {
+            position: absolute; top: -40px; left: 8px; z-index: 1100;
+            background: var(--primary); color: var(--bg); padding: 8px 14px;
+            border-radius: var(--radius); font-size: 13px; font-weight: 600;
+            text-decoration: none; transition: top 0.15s;
+        }
+        .skip-link:focus { top: 8px; text-decoration: none; }
+
+        /* v5.56.4 (Q72a) */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
+        }
+
+        /* v5.56.4 (Q72b) — one shared progress bar under the nav, driven by
+           htmx's own request events and by jenFetch() (see the inline script
+           below); a counter, not a boolean, so overlapping requests (the
+           background Kea-status poll on top of whatever the page itself is
+           doing) don't hide it early. */
+        #jen-progress {
+            position: fixed; top: calc(56px + env(safe-area-inset-top)); left: 0; right: 0;
+            height: 2px; z-index: 150; pointer-events: none;
+            background: transparent;
+        }
+        #jen-progress.active { background: color-mix(in srgb, var(--primary) 25%, transparent); }
+        #jen-progress.active::after {
+            content: ""; position: absolute; top: 0; left: 0; height: 100%; width: 40%;
+            background: var(--primary);
+            animation: jen-progress-sweep 1.1s ease-in-out infinite;
+        }
+        @keyframes jen-progress-sweep {
+            0% { left: -40%; }
+            100% { left: 100%; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #jen-progress.active::after { animation: none; left: 0; width: 100%; }
+        }
+
+        /* v5.56.4 (Q72b) — a submit button mid full-page-form-submit; pure CSS
+           off aria-busy so no per-button markup change is needed anywhere. */
+        [aria-busy="true"] { position: relative; padding-right: 30px; pointer-events: none; opacity: 0.75; }
+        [aria-busy="true"]::after {
+            content: ""; position: absolute; top: 50%; right: 10px; width: 12px; height: 12px;
+            margin-top: -6px; border: 2px solid currentColor; border-right-color: transparent;
+            border-radius: 50%; animation: jen-spin 0.6s linear infinite;
+        }
+        @keyframes jen-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+            [aria-busy="true"]::after { animation: none; }
+        }
 
         /* ── Fix iOS 300ms double-tap delay on ALL interactive elements ── */
         a, button, .btn, input, select, textarea, label,
@@ -93,7 +171,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .kea-down { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 
         /* Section sub-tabs */
-        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; gap: 2px; position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; touch-action: pan-x; overscroll-behavior-x: contain; }
+        .section-tabs { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; min-height: 40px; gap: 2px; position: sticky; top: max(56px, calc(56px + env(safe-area-inset-top))); z-index: 99; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; touch-action: pan-x; overscroll-behavior-x: contain; }
         .section-tabs::-webkit-scrollbar { display: none; }
         .section-tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-muted); text-decoration: none; border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 5px; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; -webkit-touch-callout: none; }
         .section-tab:hover { color: var(--text); text-decoration: none; }
@@ -115,6 +193,16 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .settings-hint { font-size: 11px; padding: 2px 8px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); }
         .settings-hint-ok { color: var(--success); border-color: color-mix(in srgb, var(--success) 27%, transparent); }
         .settings-hint-warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 27%, transparent); }
+        /* v5.56.4 (Q72c) — the five chip-TOC Settings group pages wrap their
+           cards in .settings-cols; multi-column CSS keeps document order (top
+           to bottom, then the second column), so the chip TOC's anchors and
+           the phone accordion (≤768px, no overlap with this ≥1280px rule)
+           both still work unmodified. */
+        @media (min-width: 1280px) {
+            .settings-cols { columns: 2; column-gap: var(--sp-5); }
+            .settings-cols .card { break-inside: avoid; }
+            .settings-cols .card--wide { column-span: all; }
+        }
         .settings-hint-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 27%, transparent); }
         .subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
         .subtab { padding: 6px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 12px; font-weight: 500; text-decoration: none; white-space: nowrap; }
@@ -166,6 +254,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
         table { width: 100%; border-collapse: collapse; }
         th { background: var(--surface2); color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+        /* v5.56.4 (Q72d) — sticky table headers on desktop; --sticky-top (above)
+           already accounts for the section-tab strip, so a header stops right
+           under it on Leases/Reservations/etc. and right under the bare nav
+           everywhere else. Phone rows don't use a <thead> at all (Q59/Q60), so
+           this is desktop-only on purpose, not just as an optimization. */
+        @media (min-width: 769px) {
+            .table-wrap thead th { position: sticky; top: var(--sticky-top); z-index: 5; }
+        }
         td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
         td.mono { font-size: 12px; }
         tr:last-child td { border-bottom: none; }
@@ -612,7 +708,9 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
          inline block so its equal-precedence rules win. -->
     <link rel="stylesheet" href="/static/css/ui-classes.css?v={{ jen_version }}">
 </head>
-<body class="{% if current_user.is_authenticated %}has-tabbar{% endif %}" hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<body class="{{ ['has-tabbar' if current_user.is_authenticated else '', 'has-strip' if nav.strip else ''] | select | join(' ') }}" hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
+<a href="#main" class="skip-link">Skip to content</a>
+<div id="jen-progress"></div>
 {% include "_icon_sprite.html" %}
 <nav class="nav" {% if branding_nav_color %}style="background:{{ branding_nav_color }};"{% endif %}>
     <a href="/" class="nav-brand">
@@ -663,7 +761,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         <!-- User avatar dropdown -->
         <div class="nav-dropdown nav-avatar-wrap">
             <input type="checkbox" id="dd-avatar" class="nav-dd-toggle">
-            <label for="dd-avatar" class="nav-avatar" style="cursor:pointer;">
+            <label for="dd-avatar" class="nav-avatar" style="cursor:pointer;" aria-label="Account">
                 {% if current_user_avatar %}
                 <img src="{{ current_user_avatar }}" alt="{{ current_user.username[0].upper() }}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;">
                 {% else %}
@@ -691,7 +789,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 
     <!-- Keyboard shortcut hint -->
     <div class="nav-kb" style="margin-left:4px;">
-        <button id="kb-hint-btn" title="Keyboard shortcuts (?)"
+        <button id="kb-hint-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"
                 style="background:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);padding:4px 8px;cursor:pointer;font-size:11px;">{{ icon("keyboard") }}</button>
     </div>
 
@@ -720,6 +818,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
 </div>
 {% endif %}
 
+<main id="main" tabindex="-1">
 <div class="container">
     {% if restart_pending and current_user.is_authenticated and current_user.role in ('superadmin','admin') %}
     <div style="background:color-mix(in srgb, var(--warning) 18%, transparent);border:1px solid var(--warning);border-radius:var(--radius);
@@ -761,7 +860,11 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}
-    <div class="alert alert-{{ category }}">{{ message }}</div>
+    {% if category in ('error', 'danger') %}
+    <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+    {% else %}
+    <div class="alert alert-{{ category }}" role="status" aria-live="polite">{{ message }}</div>
+    {% endif %}
     {% endfor %}
     {% endif %}
     {% endwith %}
@@ -770,6 +873,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     {% endif %}
     {% block content %}{% endblock %}
 </div>
+</main>
 
 {% if current_user.is_authenticated %}
 <!-- v5.51.0 (Q58) — phone navigation: a bottom tab bar (Dashboard, Leases,
@@ -845,6 +949,38 @@ document.addEventListener('DOMContentLoaded', function() {
     if (window.htmx) { htmx.config.allowEval = false; }
 });
 
+// v5.56.4 (Q72b) — one shared #jen-progress bar for every request this page
+// makes: htmx's own lifecycle events, and the app's own fetch() calls (now
+// routed through jenFetch() below instead of the bare global, so this
+// counter sees them too — grep fetch( across templates/, every call site
+// was switched). A counter, not a boolean: the background Kea-status poll
+// can be mid-flight at the same time as whatever the visible page just
+// triggered, and the bar should only hide once BOTH finish.
+(function() {
+    var bar = document.getElementById('jen-progress');
+    var count = 0;
+    function start() {
+        count++;
+        if (bar) bar.classList.add('active');
+    }
+    function stop() {
+        count = Math.max(0, count - 1);
+        if (count === 0 && bar) bar.classList.remove('active');
+    }
+    function reset() {
+        count = 0;
+        if (bar) bar.classList.remove('active');
+    }
+    window.jenProgress = { start: start, stop: stop, reset: reset };
+    document.body.addEventListener('htmx:beforeRequest', start);
+    document.body.addEventListener('htmx:afterRequest', stop);
+    document.body.addEventListener('htmx:responseError', stop);
+    window.jenFetch = function(url, opts) {
+        start();
+        return fetch(url, opts).finally(stop);
+    };
+})();
+
 function escapeHtml(str) {
     // Shared helper for any client-side code that builds HTML from
     // untrusted or user/device-supplied strings (DHCP hostnames, notes,
@@ -919,7 +1055,7 @@ window.jenColor = function(cssVar) {
 };
 
 function updateKeaStatus() {
-    fetch('/api/stats').then(r => r.json()).then(data => {
+    jenFetch('/api/stats').then(r => r.json()).then(data => {
         const el = document.getElementById('kea-indicator');
         if (el) {
             el.className = 'kea-status ' + (data.kea_up ? 'kea-up' : 'kea-down');
@@ -960,7 +1096,7 @@ function sortTable(table, col, th) {
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;max-width:420px;width:90%;max-height:80vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <strong>{{ icon("keyboard") }} Keyboard Shortcuts</strong>
-            <button id="kb-modal-close-btn" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);">✕</button>
+            <button id="kb-modal-close-btn" aria-label="Close" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--text-muted);">✕</button>
         </div>
         <table style="width:100%;font-size:13px;">
             <tr><td style="padding:6px 0;color:var(--text-muted);">Go to Dashboard</td><td><kbd>G</kbd> <kbd>D</kbd></td></tr>
@@ -1473,6 +1609,45 @@ function sortTable(table, col, th) {
         document.addEventListener('keydown', onKey);
     };
 
+    // v5.56.4 (Q72b) — full-page form submissions (a plain GET/POST form, not
+    // one HTMX is driving) get the same feedback HTMX requests already get
+    // from the htmx:beforeRequest listener above: the submit button disables
+    // and shows a spinner (aria-busy, pure CSS), and the progress bar shows.
+    // Checked on both the <form> itself and its submitter — a button can
+    // carry its own hx-* attributes without the <form> having any.
+    function jenFormIsHtmx(form, submitter) {
+        function has(el) {
+            return !!(el && (el.getAttribute('hx-post') || el.getAttribute('hx-get') ||
+                el.getAttribute('hx-put') || el.getAttribute('hx-delete') || el.getAttribute('hx-patch')));
+        }
+        return has(form) || has(submitter);
+    }
+    function jenBeginFullPageSubmit(form, submitter) {
+        if (!form || jenFormIsHtmx(form, submitter)) return;
+        var btn = submitter || form.querySelector('[type=submit], button:not([type=button])');
+        if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
+        jenProgress.start();
+    }
+    function jenResetFullPageSubmits() {
+        document.querySelectorAll('[aria-busy="true"]').forEach(function(el) {
+            el.disabled = false;
+            el.removeAttribute('aria-busy');
+        });
+        jenProgress.reset();
+    }
+    // Covers every plain <form> submitted the ordinary way (a click on its
+    // submit button, or Enter in a field) — Explain/Trace's search forms,
+    // every Settings card's save form, the import wizards. HTMLFormElement's
+    // own .submit() method (used below, and by data-submit) does NOT fire
+    // this event, so those two paths call jenBeginFullPageSubmit themselves.
+    document.addEventListener('submit', function(e) {
+        if (e.target && e.target.tagName === 'FORM') jenBeginFullPageSubmit(e.target, e.submitter);
+    });
+    // bfcache restore (back/forward): any button this page itself disabled
+    // is stale the moment the page is shown again, whether or not its
+    // request ever actually finished.
+    window.addEventListener('pageshow', jenResetFullPageSubmits);
+
     // v5.22.0 (Q18) — the one nonced dispatcher every inline on*= handler
     // that used to do a confirm, a plain navigation, or a plain form
     // submit was converted to. Delegated so it keeps working after an
@@ -1497,7 +1672,7 @@ function sortTable(table, col, th) {
                 if (btn) {
                     btn.addEventListener('click', function(e) {
                         e.preventDefault();
-                        jenConfirm(el.getAttribute('data-confirm'), function() { el.submit(); });
+                        jenConfirm(el.getAttribute('data-confirm'), function() { jenBeginFullPageSubmit(el, btn); el.submit(); });
                     });
                 }
             } else {
@@ -1505,7 +1680,7 @@ function sortTable(table, col, th) {
                     e.preventDefault();
                     jenConfirm(el.getAttribute('data-confirm'), function() {
                         var f = el.closest('form');
-                        if (f) f.submit();
+                        if (f) { jenBeginFullPageSubmit(f, el); f.submit(); }
                         else if (el.href) window.location.href = el.href;
                     });
                 });
@@ -1529,7 +1704,7 @@ function sortTable(table, col, th) {
             var evt = (el.tagName === 'SELECT' || el.tagName === 'INPUT') ? 'change' : 'click';
             el.addEventListener(evt, function() {
                 var f = el.closest('form') || (el.tagName === 'FORM' ? el : null);
-                if (f) f.submit();
+                if (f) { jenBeginFullPageSubmit(f, el); f.submit(); }
             });
         });
     }
