@@ -156,4 +156,32 @@
     </div>
 </div>
 {% endif %}
+
+{# v5.57.0 (Q73) — one card per registered plugin search provider,
+   after the core sections; a provider that raised shows "unavailable"
+   rather than an empty card silently disappearing. #}
+{% for provider in provider_results %}
+<div class="card">
+    <div class="card-header"><span class="card-title">{{ icon("puzzle") }} {{ provider.title }}{% if not provider.unavailable %} ({{ provider.rows|length }}){% endif %}</span></div>
+    {% if provider.unavailable %}
+    <p class="u-6f1339">{{ provider.title }} search is unavailable right now.</p>
+    {% elif provider.rows %}
+    <div class="table-wrap">
+    <table>
+        <thead><tr><th>Result</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for row in provider.rows %}
+        <tr>
+            <td>{{ row.title }}{% if row.subtitle %} <span class="muted small">{{ row.subtitle }}</span>{% endif %}</td>
+            <td><a href="{{ row.href }}" class="btn btn-sm btn-secondary">View</a></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="u-6f1339">No {{ provider.title }} results.</p>
+    {% endif %}
+</div>
+{% endfor %}
 {% endblock %}

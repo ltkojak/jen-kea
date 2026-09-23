@@ -107,6 +107,13 @@ def create_app() -> Flask:
     app.jinja_env.globals["icon"] = _icon
     app.jinja_env.globals["nav_icon"] = _nav_icon
 
+    # v5.57.0 (Q73) — register_row_action()'s render side: the three row
+    # partials (_lease_rows.html, _reservation_row.html, _device_rows.html)
+    # call this directly, same pattern as icon()/nav_icon() above.
+    from jen.services.row_actions import row_actions_for as _plugin_row_actions
+
+    app.jinja_env.globals["plugin_row_actions"] = _plugin_row_actions
+
     # v5.57.0 (Q73) — Timeline's kind badges render a plugin kind
     # (plugin.<id>.<name>) as the plugin's display name + a puzzle icon
     # instead of the raw string; every other kind is unchanged.

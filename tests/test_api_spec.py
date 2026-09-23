@@ -66,6 +66,11 @@ class TestDriftAgainstTheApp:
         for rule in app.url_map.iter_rules():
             if not rule.rule.startswith("/api/v1/"):
                 continue
+            # v5.57.0 (Q73) — plugin routes live under this prefix too
+            # (mounted by each plugin's own register(app)) but are
+            # documented in the plugin's own README, not here.
+            if rule.rule.startswith("/api/v1/plugins/"):
+                continue
             methods = {m.lower() for m in rule.methods if m not in ("HEAD", "OPTIONS")}
             out.setdefault(flask_rule_to_openapi_path(rule.rule), set()).update(methods)
         return out

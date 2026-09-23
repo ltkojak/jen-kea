@@ -123,6 +123,22 @@ def seeded(db, mock_kea, monkeypatch):
         lambda server, path, lines=200, **kw: {"ok": True, "code": "ok", "lines": log, "via": "helper"},
     )
     monkeypatch.setattr(ddns, "_run_verify", lambda hostname, ip: {"forward_ips": [ip], "reverse_name": hostname})
+
+    # v5.57.0 (Q73) — register_search_provider() is a new authz surface:
+    # /search now renders whatever a plugin's provider returns, so a
+    # provider that (correctly, or not) hands back a B-subnet row must
+    # be caught by the SAME subnet_id filter every other surface here
+    # gets, not trusted on the plugin's word alone (the Q55 rule).
+    from jen.services import search_providers as _search_providers
+
+    _search_providers.register_search_provider(
+        "authz-fake",
+        title="Authz Fake",
+        fn=lambda query, accessible_subnet_ids, all_subnets: [
+            {"title": B_HOST, "subtitle": B_MAC, "href": "/x", "subnet_id": 2}
+        ],
+    )
+
     yield
     with db.cursor() as cur:
         cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN (%s, %s)", (B_MAC_HEX, A_MAC_HEX))
@@ -130,6 +146,7 @@ def seeded(db, mock_kea, monkeypatch):
         cur.execute("DELETE FROM events")
         cur.execute("DELETE FROM api_keys WHERE name LIKE '_authz_%%'")
     db.commit()
+    _search_providers._PROVIDERS.pop("authz-fake", None)
 
 
 # role -> how the caller authenticates
@@ -260,6 +277,18 @@ SURFACES = [
         "search by B ip fragment",
         "GET",
         "/search?q=0.77",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        # v5.57.0 (Q73) — the "authz-fake" search provider always returns a
+        # B-subnet row (registered in `seeded` above); run_search_providers()
+        # must drop it for a restricted caller the same way the core search
+        # already does, not just when a well-behaved plugin filters first.
+        "search provider row (plugin-provided) by B host",
+        "GET",
+        "/search?q=secret-host",
         None,
         {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
         (),

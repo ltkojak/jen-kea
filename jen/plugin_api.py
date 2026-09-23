@@ -50,6 +50,9 @@ from jen.services.access import (  # noqa: E402
 # ── Alerts (register_alert_type added v5.57.0, Q73) ──────────────────────────
 from jen.services.alerts import register_alert_type, send_alert  # noqa: E402
 
+# ── API-key auth for plugin routes (v5.57.0, Q73) ────────────────────────────
+from jen.services.api_auth import api_key_required, filter_subnet_ids  # noqa: E402
+
 # ── Background work ──────────────────────────────────────────────────────────
 from jen.services.background import periodic_jobs, register_periodic, unregister_periodic  # noqa: E402
 
@@ -70,6 +73,12 @@ from jen.services.fingerprint import classify_device  # noqa: E402
 from jen.services.plugins import discover_plugins as installed_plugins  # noqa: E402
 from jen.services.plugins import is_systemd_host  # noqa: E402
 
+# ── Row actions (v5.57.0, Q73) ────────────────────────────────────────────────
+from jen.services.row_actions import register_row_action  # noqa: E402
+
+# ── Search providers (v5.57.0, Q73) ──────────────────────────────────────────
+from jen.services.search_providers import register_search_provider  # noqa: E402
+
 # ── What Jen knows about a subnet ────────────────────────────────────────────
 from jen.services.subnet_context import classify_address, dhcp4_config, in_pool, subnet_context  # noqa: E402
 
@@ -89,6 +98,7 @@ def jen_version() -> str:
 __all__ = [
     "PLUGIN_API_VERSION",
     "admin_required",
+    "api_key_required",
     "assert_subnet_access",
     "audit",
     "classify_address",
@@ -98,6 +108,7 @@ __all__ = [
     "emit",
     "encrypt_secret",
     "event_kinds",
+    "filter_subnet_ids",
     "get_accessible_subnet_map",
     "get_global_setting",
     "get_jen_db",
@@ -114,6 +125,8 @@ __all__ = [
     "periodic_jobs",
     "register_alert_type",
     "register_periodic",
+    "register_row_action",
+    "register_search_provider",
     "safe_cell",
     "safe_row",
     "send_alert",

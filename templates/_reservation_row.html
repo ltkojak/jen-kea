@@ -48,6 +48,19 @@
                         hx-swap="outerHTML swap:300ms"
                         hx-confirm="Delete reservation for {{ h.ip }}?"
                         hx-indicator="#reservation-{{ h.host_id }}">{{ icon_trash() }}Delete reservation</button>
+                {% set p_actions = plugin_row_actions('reservation', h, current_user.role) %}
+                {% if p_actions %}
+                <div class="action-menu-divider"></div>
+                {% for pa in p_actions %}
+                {% if pa.method == 'POST' %}
+                <form method="POST" action="{{ pa.href }}" class="contents"{% if pa.confirm %} data-confirm="{{ pa.confirm }}"{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="action-menu-item">{{ nav_icon(pa.icon) }}{{ pa.label }}</button>
+                </form>
+                {% else %}
+                <a href="{{ pa.href }}" class="action-menu-item"{% if pa.confirm %} data-confirm="{{ pa.confirm }}"{% endif %}>{{ nav_icon(pa.icon) }}{{ pa.label }}</a>
+                {% endif %}
+                {% endfor %}
+                {% endif %}
             </div>
         </div>
     </td>

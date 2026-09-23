@@ -167,6 +167,30 @@ then each row on its own `subnet_id`; rows with no subnet at all — audit and
 alert matches that merely mention a MAC or IP — are hidden from restricted
 users, because their text can name a subnet the user cannot see.
 
+**Plugin API v3 — emit, row actions, search providers, API-key routes
+(v5.57.0).** `jen.plugin_api.emit` re-exports the same `events.emit()` core
+code calls, so a plugin can now write to the stream, not just observe it —
+gated to a `plugin.<plugin_id>.<name>` kind (refused, logged, never raised,
+same contract as every other `emit()` failure mode) so a plugin can never
+write a core-looking kind it didn't earn. `register_row_action` and
+`register_search_provider` both run **with the caller's own session**
+(the three row partials and the search page render them inline, in the
+same request as everything else on the page) and are subject to the same
+subnet rules as core content: Jen drops a search provider's row whose
+`subnet_id` the caller cannot access, and for a restricted caller, any row
+with no `subnet_id` at all — the plugin's own filtering is never trusted
+alone (the same defence-in-depth rule as `filter_client_view`, above).
+`api_key_required` (`jen/services/api_auth.py`, shared with
+`jen/routes/api.py`'s own REST v1 routes) is the one way a plugin route
+under `/api/v1/plugins/<plugin_id>/…` authenticates a Bearer key; it sets
+`g.api_key` and refuses on 401/403, but a plugin route is still Jen code
+running in Jen's process — it must scope its own queries by
+`filter_subnet_ids(g.api_key, …)` itself, the same as any other API-key
+route. `register_alert_type` merges into the same three dicts a core alert
+type lives in (`jen/services/alerts.py`), so a registered type is
+selectable, templatable and sendable exactly like a core one, with no
+separate code path to keep in sync.
+
 **Doctor and Trace are read-only views over data Jen already holds.** Doctor
 (`jen/services/config_doctor.py`) is pure analysis of the config Jen already
 reads from Kea. Trace (`jen/routes/trace.py`) reads the tail of the Kea log

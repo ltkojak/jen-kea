@@ -121,6 +121,9 @@ nothing new lives behind it, and importing it does no work:
 | Plugins | `installed_plugins()`, `is_systemd_host()` |
 | Jen | `jen_version()`, `PLUGIN_API_VERSION` |
 | Alert types (v5.57.0) | `register_alert_type(plugin_id, type_id, *, label, icon, default_template)` |
+| Row actions (v5.57.0) | `register_row_action(plugin_id, surface, *, label, icon, href, method="GET", roles=(…), confirm=None, when=None)` |
+| Search (v5.57.0) | `register_search_provider(plugin_id, *, title, fn)` |
+| Plugin API routes (v5.57.0) | `api_key_required(write=False)`, `filter_subnet_ids(key_row, subnet_ids)` |
 | Secrets (v5.57.0) | `encrypt_secret(plaintext)`, `decrypt_secret(stored)` |
 
 ```python
@@ -236,6 +239,89 @@ upgrade (templates live in the settings-table-backed `alert_templates`
 table by type id); if the plugin is later removed, the type simply
 stops appearing on the settings page on the next registration pass —
 its past `alert_log` rows are untouched.
+
+### Adding a row action — `register_row_action(...)` (v5.57.0)
+
+Adds a menu item to the Leases, Reservations or Devices row-action menu
+(the "⋮" button on each row) — rendered fresh on every row, after the
+built-in items, with the caller's own session (Jen's subnet rules and
+the `roles` you pass are both enforced at render; enforce them again in
+your own route, since a hidden menu item is not access control).
+`href` is a format string; `{mac}`, `{ip}`, `{subnet_id}` and
+`{hostname}` are filled in and URL-encoded per row.
+
+```python
+from jen.plugin_api import register_row_action
+
+register_row_action(
+    "watchdog",
+    "lease",
+    label="Ping now",
+    icon="activity",
+    href="/plugin/watchdog/ping?mac={mac}",
+    roles=("admin", "superadmin"),
+    confirm="Ping {mac} right now?",
+)
+```
+
+`method="POST"` renders a form (with `csrf_token`) instead of a plain
+link; `when(row)` is called per row if you only want the action to show
+sometimes (a raising `when()` just hides it for that row).
+
+### Adding a search result — `register_search_provider(...)` (v5.57.0)
+
+Adds a card of results to `/search`, after Jen's own sections. `fn`
+gets the query text and the CALLER's own subnet scope — return rows
+outside it if you like, Jen drops them anyway (the same defence-in-depth
+rule as every other subnet-scoped surface), so there's no harm in a
+simple query that doesn't pre-filter. At most 20 rows are shown; a
+provider that raises shows "unavailable" instead of breaking the page.
+
+```python
+from jen.plugin_api import register_search_provider
+
+
+def _search(query, accessible_subnet_ids, all_subnets):
+    hosts = find_matching_hosts(query)  # your own lookup
+    return [
+        {"title": h.name, "subtitle": h.ip, "href": f"/plugin/watchdog/host/{h.id}", "subnet_id": h.subnet_id}
+        for h in hosts
+    ]
+
+
+register_search_provider("watchdog", title="Host Watchdog", fn=_search)
+```
+
+### A plugin's own API routes — `api_key_required(...)` (v5.57.0)
+
+For a plugin route mounted under `/api/v1/plugins/<plugin_id>/…`, using
+the same Bearer API keys Jen's own REST v1 uses (Settings → Access &
+Security → API Keys). Sets `flask.g.api_key` on success — `filter_subnet_ids`
+narrows a list of subnet ids to what the key can access, the same
+convention every other subnet-scoped surface follows. A request under
+`/api/v1/` with a Bearer header is already CSRF-exempt.
+
+```python
+from flask import g, jsonify
+
+from jen.plugin_api import api_key_required, filter_subnet_ids
+
+
+@app.route("/api/v1/plugins/watchdog/hosts")
+@api_key_required()
+def watchdog_hosts():
+    ids = filter_subnet_ids(g.api_key, all_watched_subnet_ids())
+    return jsonify(hosts_in(ids))
+
+
+@app.route("/api/v1/plugins/watchdog/silence/<int:host_id>", methods=["POST"])
+@api_key_required(write=True)
+def watchdog_silence(host_id): ...
+```
+
+Document your own plugin's endpoints in its README — Jen's
+`/api/v1/openapi.json` deliberately doesn't list them (see its own
+`description` field).
 
 ### Secrets — `encrypt_secret(plaintext)` / `decrypt_secret(stored)` (v5.57.0)
 

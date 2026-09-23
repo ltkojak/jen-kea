@@ -29,12 +29,15 @@ class TestSurface:
         from jen.services import (
             access,
             alerts,
+            api_auth,
             background,
             crypto,
             csv_safe,
             events,
             fingerprint,
             plugins,
+            row_actions,
+            search_providers,
             subnet_context,
         )
 
@@ -72,6 +75,10 @@ class TestSurface:
             "dhcp4_config": subnet_context.dhcp4_config,
             "emit": events.emit,
             "register_alert_type": alerts.register_alert_type,
+            "register_row_action": row_actions.register_row_action,
+            "api_key_required": api_auth.api_key_required,
+            "filter_subnet_ids": api_auth.filter_subnet_ids,
+            "register_search_provider": search_providers.register_search_provider,
             "encrypt_secret": crypto.encrypt_secret,
             "decrypt_secret": crypto.decrypt_secret,
         }

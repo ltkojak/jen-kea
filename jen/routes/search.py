@@ -202,6 +202,22 @@ def global_search():
     total = sum(len(v) for v in results.values())
     subnet_names = {sid: info["name"] for sid, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items()}
     subnet6_names = {sid: info["name"] for sid, info in extensions.SUBNET6_MAP.items()}
+
+    # v5.57.0 (Q73) — one card per plugin search provider, after the core
+    # sections. Same q>=2 gate as everything above; accessible_subnet_ids
+    # is this restricted user's own view, the same one add_subnet_restriction
+    # enforces for the core searches — a provider is handed it to filter by,
+    # and Jen filters again on the way back out (the Q55 rule).
+    provider_results = []
+    if len(q) >= 2:
+        from jen.services.search_providers import run_search_providers
+
+        accessible_subnet_ids = list(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
+        try:
+            provider_results = run_search_providers(q, accessible_subnet_ids, current_user.all_subnets)
+        except Exception as e:
+            logger.error(f"Search providers error: {e}")
+
     return render_template(
         "search_results.html",
         q=q,
@@ -210,6 +226,7 @@ def global_search():
         subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
         subnet_names=subnet_names,
         subnet6_names=subnet6_names,
+        provider_results=provider_results,
     )
 
 

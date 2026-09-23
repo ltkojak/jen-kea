@@ -18,6 +18,8 @@ import jen.services.kea as __kea
 from jen import extensions
 from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
+from jen.services.api_auth import api_auth as _api_auth
+from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
 from jen.services.fingerprint import get_device_info_map
 from jen.services.kea import get_active_kea_server, kea_command, kea_is_up
 
@@ -29,60 +31,11 @@ JEN_VERSION = None  # injected by app factory
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-
-
-def _api_auth():
-    """Validate Bearer token. Returns key row (with subnet_access) or None.
-
-    v5.2.10 — last_used used to be written on every single authenticated
-    API request, unconditionally, regardless of how recently it was
-    last updated. Harmless at low traffic, but unnecessary write
-    amplification for a value whose only real use (showing roughly
-    when a key was last used, in the API keys list) doesn't need
-    second-level precision. Now only updates once per 5-minute window
-    per key, via a single conditional UPDATE — atomic and one round
-    trip, not a separate SELECT-then-maybe-UPDATE that could race with
-    itself under concurrent requests.
-    """
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return None
-    raw_key = auth[7:].strip()
-    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-    try:
-        with jen_db() as db, db.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, subnet_access, can_write FROM api_keys WHERE key_hash=%s AND active=1", (key_hash,)
-            )
-            row = cur.fetchone()
-            if row:
-                cur.execute(
-                    "UPDATE api_keys SET last_used=NOW() WHERE id=%s "
-                    "AND (last_used IS NULL OR last_used < NOW() - INTERVAL 5 MINUTE)",
-                    (row["id"],),
-                )
-                db.commit()
-        return row
-    except Exception:
-        return None
-
-
-def _api_key_subnet_ids(key_row):
-    """Return the set of subnet_ids this key is scoped to, or None for
-    unrestricted (all subnets) — same NULL-means-all convention as
-    users.subnet_access. Malformed JSON is treated as unrestricted-deny
-    (empty set) rather than unrestricted-allow, so a corrupt value can
-    never silently grant more access than intended."""
-    raw = key_row.get("subnet_access") if key_row else None
-    if raw is None:
-        return None
-    try:
-        import json as _json
-
-        ids = _json.loads(raw) if isinstance(raw, str) else raw
-        return {int(i) for i in ids}
-    except Exception:
-        return set()
+# _api_auth()/_api_key_subnet_ids() moved to jen/services/api_auth.py
+# (v5.57.0, Q73) so api_key_required() — the plugin-API v3 decorator for
+# routes under /api/v1/plugins/<plugin_id>/… — can reuse the exact same
+# validation. Imported here under their original names so every call
+# site below is unchanged.
 
 
 def api_error(message, code=400):

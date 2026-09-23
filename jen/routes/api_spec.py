@@ -36,7 +36,10 @@ def build_spec(version: str, base_url: str = "") -> dict:
             "description": (
                 "Jen's integration API. Reads for Home Assistant, Zabbix and scripts; "
                 "writes (v5.34.0) for reservations, device names and subnet notes with a key that has write access. "
-                "Nothing that edits a Kea configuration file is exposed here."
+                "Nothing that edits a Kea configuration file is exposed here. Plugin endpoints "
+                "(v5.57.0), mounted under /api/v1/plugins/<plugin_id>/…, use the same Bearer key "
+                "and the same write flag but are not listed here — each plugin documents its own "
+                "endpoints in its README."
             ),
         },
         "servers": [{"url": base_url or "/"}],
