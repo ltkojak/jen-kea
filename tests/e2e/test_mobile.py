@@ -190,13 +190,13 @@ class TestDashboardHeaderRowOnPhone:
     row instead."""
 
     def test_customize_and_the_refresh_select_share_the_same_row(self, phone, base_url):
-        _visit(phone, base_url, "/dashboard")
+        _visit(phone, base_url, "/")
         customize_top = phone.eval_on_selector("#customize-btn", "el => el.getBoundingClientRect().top")
         select_top = phone.eval_on_selector("#refreshInterval", "el => el.getBoundingClientRect().top")
         assert abs(customize_top - select_top) < 2
 
     def test_last_updated_and_the_auto_refresh_label_stay_hidden(self, phone, base_url):
-        _visit(phone, base_url, "/dashboard")
+        _visit(phone, base_url, "/")
         expect(phone.locator("#last-updated")).to_be_hidden()
         expect(phone.locator(".dash-refresh-label")).to_be_hidden()
 
