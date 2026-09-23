@@ -146,7 +146,10 @@ class TestRegisterRowAction:
     def test_renders_for_an_admin_with_mac_url_encoded(self, fake_plugin, one_lease, logged_in_client):
         html = logged_in_client.get("/leases").data.decode()
         assert "Fake Action" in html
-        assert f"/fake/action?mac={self.MAC.replace(':', '%3A')}" in html
+        # The leases list renders MAC uppercase (MySQL/MariaDB HEX()), same
+        # as every other MAC shown on that page — the row action's href
+        # inherits that case rather than normalizing it.
+        assert f"/fake/action?mac={self.MAC.upper().replace(':', '%3A')}" in html
 
     def test_does_not_render_for_a_viewer(self, fake_plugin, one_lease, client, db):
         from tests.conftest import restricted_client
