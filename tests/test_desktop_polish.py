@@ -208,6 +208,19 @@ class TestStickyTableHeaders:
         assert "has-strip" not in body_tag
         assert 'class="has-tabbar"' in body_tag
 
+    def test_a_table_inside_settings_cols_is_excluded_from_sticky(self):
+        """v5.57.1 (Q74 step 0) — a sticky th inside a CSS multi-column
+        container (.settings-cols) positions against its column fragment,
+        not the viewport, so Settings -> System's Plugins table rendered
+        its header mid-table. Sticky headers are for page-level lists
+        only; a .card's own table inside .settings-cols stays static."""
+        css = (TEMPLATES / "base.html").read_text(encoding="utf-8")
+        m = re.search(r"@media \(min-width: 769px\)\s*\{(.*?)\n\s*\}\n", css, re.DOTALL)
+        assert m, "no @media (min-width: 769px) block found"
+        block = m.group(1)
+        assert ".settings-cols .card .table-wrap thead th { position: static; }" in block
+        assert ".settings-cols .card .table-wrap tbody tr { scroll-margin-top: unset; }" in block
+
 
 PILL = None
 

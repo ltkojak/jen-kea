@@ -278,6 +278,15 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             .table-wrap thead th { position: sticky; top: var(--sticky-top); z-index: 5; }
             .table-wrap thead th:empty { pointer-events: none; }
             .table-wrap tbody tr { scroll-margin-top: calc(var(--sticky-top) + var(--thead-h)); }
+            /* v5.57.1 (Q74 step 0) — a sticky th's containing block is its
+               nearest positioned/scroll ancestor; inside a CSS multi-column
+               container (.settings-cols, Q72c) that's the COLUMN FRAGMENT,
+               not the viewport, so the header lands mid-table instead of
+               under the nav. Sticky headers are for page-level lists only —
+               a .card's own table (Settings → System's Plugins summary is
+               the only one today) stays static. */
+            .settings-cols .card .table-wrap thead th { position: static; }
+            .settings-cols .card .table-wrap tbody tr { scroll-margin-top: unset; }
         }
         td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
         td.mono { font-size: 12px; }
