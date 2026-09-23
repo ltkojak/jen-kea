@@ -339,10 +339,28 @@ class TestProgressBarAndFullPageSubmit:
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        page.evaluate("() => window.jenProgress.start()")
-        expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
-        page.evaluate("() => window.jenProgress.stop()")
-        expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"))
+        # Everything in one round trip, including the read-back: two
+        # separate CI runs each showed #jen-progress never picking up the
+        # class even right after a direct start() call, for reasons that
+        # didn't reproduce locally and that a bare locator mismatch gives
+        # no way to diagnose further. This either confirms the mechanism
+        # or fails with the actual state (does jenProgress exist, does the
+        # element exist, what its class was immediately after start()).
+        diag = page.evaluate(
+            "() => { "
+            "var bar = document.getElementById('jen-progress'); "
+            "var hasProgress = typeof window.jenProgress; "
+            "if (window.jenProgress) window.jenProgress.start(); "
+            "var afterStart = bar ? bar.className : null; "
+            "if (window.jenProgress) window.jenProgress.stop(); "
+            "var afterStop = bar ? bar.className : null; "
+            "return { hasProgress: hasProgress, barExists: !!bar, afterStart: afterStart, afterStop: afterStop }; "
+            "}"
+        )
+        assert diag["hasProgress"] == "object", diag
+        assert diag["barExists"] is True, diag
+        assert diag["afterStart"] and "active" in diag["afterStart"], diag
+        assert not diag["afterStop"] or "active" not in diag["afterStop"], diag
         ctx.close()
 
     # Explain's own submit button, not any of the several other
