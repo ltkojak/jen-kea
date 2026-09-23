@@ -2,6 +2,18 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.56.4-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.56.3. Desktop polish: keyboard focus was
+invisible almost everywhere, there was no way to skip the nav to get to
+a page's content, a slow request gave no sign it was happening, the
+five chip-TOC Settings pages were a single long column even on a wide
+monitor, and a scrolled table's header disappeared with the rows above
+it. All five are fixed without touching a single page's own content —
+base.html, five Settings templates, and a mechanical switch of every
+`fetch(` call in templates/ to a shared `window.jenFetch()` wrapper so
+the new progress bar sees them too.
+
 ## [5.56.3] - 2026-09-23
 
 Stable. The UI round; everything below shipped beta-first between
