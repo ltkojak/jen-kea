@@ -195,8 +195,9 @@ class TestRealShippedManifests:
         # a fresh table and is recorded via the runner's already-in-effect
         # tolerance — on MySQL 8 as well as MariaDB. v5.30.0: IPAM Lite
         # v1.5.0 adds 14 (history index) and 15 (ipam_subnets.gateway).
-        assert count == 15
-        assert _plugin_applied_versions("ipam") == set(range(1, 16))
+        # v5.57.1: IPAM Lite v1.6.0 adds 16 (ipam_conflict_state).
+        assert count == 16
+        assert _plugin_applied_versions("ipam") == set(range(1, 17))
         with db.cursor() as cur:
             for tbl in ("ipam_static_entries", "ipam_assignment_history", "ipam_subnets"):
                 cur.execute(f"SHOW TABLES LIKE '{tbl}'")
