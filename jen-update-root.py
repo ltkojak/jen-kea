@@ -1249,7 +1249,7 @@ def _write_plugin_result(requests_dir, plugin_id, action, result):
 # allowlist below is the control, the same philosophy as jen-kea-helper's
 # op table: a registry entry (or a compromised one) can only ever ask for
 # a package this version of the script already agreed to install.
-_DEPS_ALLOWED_PACKAGES = frozenset({"nmap"})
+_DEPS_ALLOWED_PACKAGES = frozenset({"nmap", "iputils-ping", "snmp"})
 _PKG_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]{0,63}$")
 _PLUGIN_MARKER_SUFFIXES = (".install", ".remove", ".deps")
 

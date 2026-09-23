@@ -15,6 +15,8 @@ Pure: `py -m pytest --noconftest tests/test_dashboard_catalog.py -k "not Shape"`
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from jen.services import dashboard_catalog as dc
 from jen.services.health import Check
 
@@ -129,9 +131,6 @@ class TestDdnsErrorsWidget:
     list instead of calling health.run_checks() itself, so the catalog
     route can share one pass with readiness_widget()."""
 
-    def test_skip_status_becomes_none(self):
-        assert dc.ddns_errors_widget([Check("d2_errors", "D2 errors", "ddns", "skip", "off")]) is None
-
     def test_missing_check_becomes_none(self):
         assert dc.ddns_errors_widget([]) is None
 
@@ -142,6 +141,21 @@ class TestDdnsErrorsWidget:
     def test_a_real_status_passes_through(self):
         checks = [Check("d2_errors", "D2 errors", "ddns", "warn", "ncr-error=3")]
         assert dc.ddns_errors_widget(checks) == {"status": "warn", "detail": "ncr-error=3"}
+
+    # v5.57.0 (Q73, Q72's missed item e) — a skip used to collapse to
+    # None, which the panel rendered as one generic sentence regardless
+    # of which of the check's three skip reasons actually applied.
+    @pytest.mark.parametrize(
+        "detail",
+        [
+            "DDNS updates disabled",
+            "direct mode needs a D2 control-socket URL ([d2] api_url — 5.22.0)",
+            "D2 statistics unavailable",
+        ],
+    )
+    def test_each_skip_reason_carries_its_own_detail_and_fix_url(self, detail):
+        checks = [Check("d2_errors", "D2 errors", "ddns", "skip", detail, fix_url="/ddns")]
+        assert dc.ddns_errors_widget(checks) == {"status": "skip", "detail": detail, "fix_url": "/ddns"}
 
 
 class TestGettingStartedWidget:

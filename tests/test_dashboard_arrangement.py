@@ -8,6 +8,8 @@ Needs the CI database (uses `logged_in_client`/`restricted_client`).
 
 import json
 
+import pytest
+
 from tests.conftest import restricted_client
 
 
@@ -189,6 +191,32 @@ class TestCatalogDataRoute:
         r = logged_in_client.get("/api/dashboard/catalog-data?widgets=readiness,ddns_errors")
         assert r.status_code == 200
         assert r.get_json() == {"readiness": None, "ddns_errors": None}
+
+    # v5.57.0 (Q73, Q72's missed item e) — a d2_errors skip used to
+    # collapse to a bare None; the panel then printed one generic
+    # sentence no matter which of three reasons applied. Route-level so
+    # this exercises the same run_checks() sharing as the test above,
+    # not just ddns_errors_widget() in isolation.
+    @pytest.mark.parametrize(
+        "detail",
+        [
+            "DDNS updates disabled",
+            "direct mode needs a D2 control-socket URL ([d2] api_url — 5.22.0)",
+            "D2 statistics unavailable",
+        ],
+    )
+    def test_each_ddns_skip_reason_reaches_the_route_with_its_fix_url(
+        self, logged_in_client, db, mock_kea, monkeypatch, detail
+    ):
+        from jen.services import health
+        from jen.services.health import Check
+
+        monkeypatch.setattr(
+            health, "run_checks", lambda: [Check("d2_errors", "D2 errors", "ddns", "skip", detail, fix_url="/ddns")]
+        )
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=ddns_errors")
+        assert r.status_code == 200
+        assert r.get_json() == {"ddns_errors": {"status": "skip", "detail": detail, "fix_url": "/ddns"}}
 
 
 class TestDataHrefGuardsInteractiveChildren:

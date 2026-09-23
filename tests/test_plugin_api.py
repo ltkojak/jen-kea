@@ -18,15 +18,25 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 
 class TestSurface:
-    def test_version_is_two(self):
-        assert plugin_api.PLUGIN_API_VERSION == 2
+    def test_version_is_three(self):
+        assert plugin_api.PLUGIN_API_VERSION == 3
 
     def test_every_name_in_all_exists_and_is_the_real_object(self):
         """Re-exports, not copies: monkeypatching the internal in a test
         must affect what a plugin sees."""
         from jen.models import db as _db
         from jen.models import user as _user
-        from jen.services import access, alerts, background, csv_safe, events, fingerprint, plugins, subnet_context
+        from jen.services import (
+            access,
+            alerts,
+            background,
+            crypto,
+            csv_safe,
+            events,
+            fingerprint,
+            plugins,
+            subnet_context,
+        )
 
         same = {
             "jen_db": _db.jen_db,
@@ -60,6 +70,10 @@ class TestSurface:
             "classify_address": subnet_context.classify_address,
             "in_pool": subnet_context.in_pool,
             "dhcp4_config": subnet_context.dhcp4_config,
+            "emit": events.emit,
+            "register_alert_type": alerts.register_alert_type,
+            "encrypt_secret": crypto.encrypt_secret,
+            "decrypt_secret": crypto.decrypt_secret,
         }
         for name in plugin_api.__all__:
             assert hasattr(plugin_api, name), name

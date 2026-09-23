@@ -202,6 +202,38 @@ class TestEmit:
         assert len(seen_b) == 1
 
 
+class TestEmitKindValidation:
+    """v5.57.0 (Q73) — emit() is now re-exported to plugins
+    (jen.plugin_api), which had no way to write to the stream before.
+    A plugin kind must be plugin.<plugin_id>.<name>; anything else is
+    refused before emit() ever touches the DB."""
+
+    def test_a_plugin_kind_is_accepted(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM events")
+        db.commit()
+        ev = emit("plugin.fake.thing")
+        assert ev is not None and ev["id"] is not None
+
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            "bad kind",
+            "plugin.fake",  # missing the <name> segment
+            "plugin.fake.",  # empty <name>
+            "Plugin.fake.thing",  # not lowercase
+            "plugin.fa ke.thing",  # space in the plugin id
+            "plugin..thing",  # empty plugin id
+            "",
+            None,
+        ],
+    )
+    def test_a_bad_kind_is_refused_without_touching_the_db(self, kind):
+        # No `db` fixture on purpose — the refusal must happen before
+        # emit() ever opens a connection.
+        assert emit(kind) is None
+
+
 class TestBoundedDispatcher:
     """v5.49.0-beta.2 (audit I) - subscribers run on one shared worker when
     it is running; inline when it is not. DB-free: the row write is stubbed."""

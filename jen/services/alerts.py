@@ -263,6 +263,32 @@ ALERT_TYPE_LABELS = {
 }
 
 
+# v5.57.0 (Q73) — plugin-registered alert types (rogue_device stays a
+# core entry — "legacy — keep in 5.x" — network-discovery's own move to
+# this API is a later Q, not this one). type_id -> plugin_id, so Settings
+# → Alerts can group registered types under "From plugins" with the
+# owning plugin's name.
+PLUGIN_ALERT_TYPES: dict[str, str] = {}
+
+
+def register_alert_type(plugin_id: str, type_id: str, *, label: str, icon: str, default_template: str) -> None:
+    """Merges `type_id` into ALERT_TYPE_LABELS/ALERT_TYPE_ICONS/
+    DEFAULT_TEMPLATES at plugin load. `type_id` must start with
+    `<plugin_id>_` so two plugins can never collide, and so a type_id
+    alone is enough to tell which plugin owns it if the plugin itself is
+    ever removed (its rows in alert_log just keep the id, unlabelled).
+    A custom template a channel saved earlier survives a plugin upgrade
+    unchanged — templates live in the settings-table-backed
+    alert_templates table by type id, exactly like a core type's."""
+    prefix = f"{plugin_id}_"
+    if not type_id.startswith(prefix):
+        raise ValueError(f"type_id {type_id!r} must start with {prefix!r}")
+    ALERT_TYPE_LABELS[type_id] = label
+    ALERT_TYPE_ICONS[type_id] = icon
+    DEFAULT_TEMPLATES[type_id] = default_template
+    PLUGIN_ALERT_TYPES[type_id] = plugin_id
+
+
 def get_alert_template(alert_type):
     try:
         with __jen_db_ctx() as db, db.cursor() as cur:

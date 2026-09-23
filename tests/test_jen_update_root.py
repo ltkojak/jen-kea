@@ -2045,5 +2045,9 @@ class TestPluginDepsRequests:
         finally:
             stop()
 
-    def test_allowlist_is_exactly_nmap_today(self, jen_update_root):
-        assert frozenset({"nmap"}) == jen_update_root._DEPS_ALLOWED_PACKAGES
+    def test_allowlist_is_exactly_nmap_ping_and_snmp_today(self, jen_update_root):
+        # v5.57.0 (Q73) — widened for the round-5 plugins (watchdog needs
+        # ping, switch-port-locator needs snmp), same allowlist philosophy
+        # as jen-kea-helper's op table: a registry entry can only ever ask
+        # for a package this exact Jen version already agreed to install.
+        assert frozenset({"nmap", "iputils-ping", "snmp"}) == jen_update_root._DEPS_ALLOWED_PACKAGES

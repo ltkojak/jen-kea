@@ -107,6 +107,13 @@ def create_app() -> Flask:
     app.jinja_env.globals["icon"] = _icon
     app.jinja_env.globals["nav_icon"] = _nav_icon
 
+    # v5.57.0 (Q73) — Timeline's kind badges render a plugin kind
+    # (plugin.<id>.<name>) as the plugin's display name + a puzzle icon
+    # instead of the raw string; every other kind is unchanged.
+    from jen.services.events import describe_kind as _describe_kind
+
+    app.jinja_env.globals["describe_kind"] = _describe_kind
+
     # v5.55.0 (Q63) — lets the Settings -> Appearance Theme card show the
     # same contrast warnings server-side (after a save) that its own JS
     # computes live while the form is being edited, off the one function.

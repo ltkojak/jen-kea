@@ -78,7 +78,8 @@
         <div class="tl-row" data-kind="{{ r.kind }}" style="display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:13px;align-items:baseline;{% if r.related %}opacity:.6;{% endif %}">
             <div class="mono" style="color:var(--text-muted);white-space:nowrap;min-width:150px;">{{ r.ts|utcfmt }}</div>
             <div style="min-width:170px;">
-                <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{{ r.kind }}</span>
+                {% set kd = describe_kind(r.kind) %}
+                <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{% if kd.icon %}{{ icon(kd.icon) }} {% endif %}{{ kd.label }}</span>
             </div>
             <div class="u-5872de">{{ r.detail }}
                 {% if r.related == 'address' %}<div class="u-42e3b5">possibly related — same address, client unknown</div>{% endif %}

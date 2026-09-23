@@ -24,7 +24,7 @@ Rules (also in plugins/README.md):
 from jen import extensions as _extensions
 
 # ── Version ──────────────────────────────────────────────────────────────────
-PLUGIN_API_VERSION = 2
+PLUGIN_API_VERSION = 3
 
 # ── Database ─────────────────────────────────────────────────────────────────
 # Context managers (preferred): `with jen_db() as db, db.cursor() as cur: …`
@@ -47,18 +47,21 @@ from jen.services.access import (  # noqa: E402
     viewer_or_above,
 )
 
-# ── Alerts ───────────────────────────────────────────────────────────────────
-from jen.services.alerts import send_alert  # noqa: E402
+# ── Alerts (register_alert_type added v5.57.0, Q73) ──────────────────────────
+from jen.services.alerts import register_alert_type, send_alert  # noqa: E402
 
 # ── Background work ──────────────────────────────────────────────────────────
 from jen.services.background import periodic_jobs, register_periodic, unregister_periodic  # noqa: E402
 
+# ── Secrets (v5.57.0, Q73) ────────────────────────────────────────────────────
+from jen.services.crypto import decrypt_secret, encrypt_secret  # noqa: E402
+
 # ── CSV formula guard ────────────────────────────────────────────────────────
 from jen.services.csv_safe import safe_cell, safe_row  # noqa: E402
 
-# ── Events (v5.42.0, Q43) ────────────────────────────────────────────────────
+# ── Events (v5.42.0, Q43; emit() added v5.57.0, Q73) ─────────────────────────
 from jen.services.events import KINDS as event_kinds  # noqa: E402
-from jen.services.events import subscribe, unsubscribe  # noqa: E402
+from jen.services.events import emit, subscribe, unsubscribe  # noqa: E402
 
 # ── Device fingerprinting ────────────────────────────────────────────────────
 from jen.services.fingerprint import classify_device  # noqa: E402
@@ -90,7 +93,10 @@ __all__ = [
     "audit",
     "classify_address",
     "classify_device",
+    "decrypt_secret",
     "dhcp4_config",
+    "emit",
+    "encrypt_secret",
     "event_kinds",
     "get_accessible_subnet_map",
     "get_global_setting",
@@ -106,6 +112,7 @@ __all__ = [
     "kea6_db",
     "kea_db",
     "periodic_jobs",
+    "register_alert_type",
     "register_periodic",
     "safe_cell",
     "safe_row",

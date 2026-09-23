@@ -115,11 +115,13 @@ nothing new lives behind it, and importing it does no work:
 | Subnets | `subnet_map()` (all IPv4 subnets), `subnet_context(subnet_id)`, `classify_address(ctx, ip)`, `in_pool(ctx, ip)`, `dhcp4_config()` |
 | Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)` |
 | Background | `register_periodic(plugin_id, name, fn, every_minutes)`, `unregister_periodic`, `periodic_jobs()` |
-| Events (v5.42.0) | `subscribe(kind_or_"*", fn)`, `unsubscribe(fn)`, `event_kinds` (the pinned kind vocabulary) |
+| Events (v5.42.0; `emit` added v5.57.0) | `subscribe(kind_or_"*", fn)`, `unsubscribe(fn)`, `emit(kind, **fields)`, `event_kinds` (the pinned kind vocabulary) |
 | CSV | `safe_cell(value)`, `safe_row(values)` |
 | Devices | `classify_device(mac, hostname)` → (manufacturer, type, icon) |
 | Plugins | `installed_plugins()`, `is_systemd_host()` |
 | Jen | `jen_version()`, `PLUGIN_API_VERSION` |
+| Alert types (v5.57.0) | `register_alert_type(plugin_id, type_id, *, label, icon, default_template)` |
+| Secrets (v5.57.0) | `encrypt_secret(plaintext)`, `decrypt_secret(stored)` |
 
 ```python
 from jen.plugin_api import assert_subnet_access, audit, jen_db, subnet_context
@@ -161,13 +163,14 @@ called inline. There's no `unsubscribe_all` — a plugin that
 responsible for calling `unsubscribe(fn)` itself if it needs to stop
 listening.
 
-**Versioning.** `PLUGIN_API_VERSION` is `2` (events pushed it from `1`
-— see below). Adding a name is a MINOR Jen release and does not move
-it; removing a name or changing a signature moves it and is a MAJOR for
-Jen. A manifest may declare the version it was written against:
+**Versioning.** `PLUGIN_API_VERSION` is `3` (v5.57.0 — the additions
+below pushed it from `2`, which events itself pushed from `1`). Adding a
+name is a MINOR Jen release and does not move it; removing a name or
+changing a signature moves it and is a MAJOR for Jen. A manifest may
+declare the version it was written against:
 
 ```json
-"plugin_api": 2
+"plugin_api": 3
 ```
 
 Jen refuses to load a plugin whose `plugin_api` is newer than what it
@@ -179,6 +182,83 @@ surface should set `requires_jen` to `5.34.0` or later.
 the surface (a short transitional list of internals is tolerated until
 the plugins' own releases move over), and that every name they use is
 offered by it.
+
+### Emitting events — `emit(kind, **fields)` (v5.57.0)
+
+The other side of `subscribe()`: a plugin can now write to the stream
+Jen itself writes to (`jen.services.events`, the record behind Timeline
+and `GET /api/v1/events`), not just observe it. `kind` must be
+`plugin.<plugin_id>.<name>` (lowercase, `<plugin_id>` matching your own
+manifest id) — anything else is refused and logged, `emit()` itself
+never raises, matching its contract for every other failure mode.
+Fields are the same as a core event: `mac`, `ip`, `subnet_id`,
+`hostname`, `server`, `actor`, `detail`. Timeline and the dashboard's
+Recent Events widget both render a plugin kind with a puzzle icon and
+your plugin's display name instead of the raw kind string.
+
+```python
+from jen.plugin_api import emit
+
+emit("plugin.watchdog.host_down", mac=mac, ip=ip, subnet_id=subnet_id, detail="3 missed pings")
+```
+
+### Registering an alert type — `register_alert_type(...)` (v5.57.0)
+
+Adds your own entry to Settings → Alerts, selectable per channel and
+editable per-install exactly like a core alert type (`kea_down`,
+`new_lease`, …) — no separate code path. `type_id` must start with
+`<plugin_id>_`, so two plugins can never collide. Call it from
+`register(app)`, once per type, every time the plugin loads (it's a
+cheap dict merge, not a database write):
+
+```python
+from jen.plugin_api import register_alert_type
+
+register_alert_type(
+    "watchdog",
+    "watchdog_host_down",
+    label="Host stopped responding",
+    icon="triangle-alert",
+    default_template="⚠️ <b>{subject}</b> stopped responding to ping.",
+)
+```
+
+Send it the same way as any core type:
+
+```python
+from jen.plugin_api import send_alert
+
+send_alert("watchdog_host_down", subnet_id=subnet_id, subject=hostname)
+```
+
+A custom template an admin saved for your type survives a plugin
+upgrade (templates live in the settings-table-backed `alert_templates`
+table by type id); if the plugin is later removed, the type simply
+stops appearing on the settings page on the next registration pass —
+its past `alert_log` rows are untouched.
+
+### Secrets — `encrypt_secret(plaintext)` / `decrypt_secret(stored)` (v5.57.0)
+
+The same encryption Jen uses for MFA secrets and alert-channel tokens
+(`jen/services/crypto.py`), for a plugin holding its own credential (an
+API token, a device password). Store the returned `v1:…`-prefixed
+string as a JSON string literal if the column is `JSON` (MariaDB
+enforces `json_valid()` on every value in one) or a plain `VARCHAR`.
+
+```python
+from jen.plugin_api import decrypt_secret, encrypt_secret
+
+token_to_store = encrypt_secret(raw_token)  # save this
+raw_token = decrypt_secret(token_to_store)  # read it back
+```
+
+### Sprite icon names in `nav[].icon` (v5.57.0)
+
+A manifest's `nav[].icon` can name a Lucide sprite icon directly —
+`"icon": "activity"` — instead of an emoji; Jen's nav renderer already
+resolves a recognized sprite name to the real icon and falls back to
+plain text for anything else, so a legacy emoji manifest keeps working
+unchanged.
 
 ## Writing migrations
 

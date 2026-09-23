@@ -17,7 +17,7 @@ import jen.services.alerts as __alerts
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
-from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES, GLYPH_LEGEND
+from jen.services.alerts import ALERT_TYPE_LABELS, DEFAULT_TEMPLATES, GLYPH_LEGEND, PLUGIN_ALERT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,14 @@ def settings_alerts():
         "dns_provider": cfg.get("ddns", "dns_provider", fallback="technitium"),
     }
 
+    # v5.57.0 (Q73) — {type_id: plugin display name}, for the Message
+    # Templates card's "From plugins" group; empty on every install with
+    # no plugin registering an alert type yet.
+    from jen.services.plugins import get_loaded_plugins
+
+    loaded = get_loaded_plugins()
+    plugin_alert_types = {type_id: loaded.get(pid, {}).get("name", pid) for type_id, pid in PLUGIN_ALERT_TYPES.items()}
+
     summary_time = __user.get_global_setting("daily_summary_time", "07:00")
     pool_exhaustion_free = __user.get_global_setting("pool_exhaustion_free", "5")
     threshold_pct = __user.get_global_setting("alert_threshold_pct", "80")
@@ -79,6 +87,7 @@ def settings_alerts():
         templates=templates,
         default_templates=DEFAULT_TEMPLATES,
         alert_type_labels=ALERT_TYPE_LABELS,
+        plugin_alert_types=plugin_alert_types,
         glyph_legend=GLYPH_LEGEND,
         summary_time=summary_time,
         pool_exhaustion_free=pool_exhaustion_free,

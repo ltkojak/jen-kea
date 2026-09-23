@@ -11,6 +11,7 @@ plugins, not a transaction anything else depends on.
 
 import logging
 import queue
+import re
 import threading
 import time
 
@@ -36,6 +37,10 @@ KINDS = (
     "alert.sent",
     "discovery.unknown",
 )
+
+# v5.57.0 (Q73) — a plugin kind emit() will accept, lowercase, matching a
+# manifest id's own charset (letters/digits/hyphens) for the plugin id.
+_PLUGIN_KIND_RE = re.compile(r"^plugin\.[a-z0-9-]+\.[a-z_]+$")
 
 _SUBSCRIBERS: list[tuple[str, object]] = []  # (kind_or_"*", fn)
 _lock = threading.Lock()
@@ -152,8 +157,37 @@ def _dispatch(event: dict) -> None:
             logger.error(f"events subscriber for {kind_or_star!r} raised on kind={kind!r}: {e}")
 
 
+def describe_kind(kind: str) -> dict:
+    """Display info for one event kind: {"label", "icon", "is_plugin"}. A
+    core (or audit.*/alert.* — timeline.py's own synthetic kinds) label
+    is the kind string itself, unchanged, icon None. A plugin kind's
+    label is "<plugin display name>: <name>" with icon "puzzle" —
+    templates/timeline.html and the dashboard's events feed
+    (dashboard_catalog.py::events_feed_widget) both use this instead of
+    showing the raw plugin.<id>.<name> string."""
+    m = _PLUGIN_KIND_RE.match(kind or "")
+    if not m:
+        return {"label": kind, "icon": None, "is_plugin": False}
+    _, plugin_id, name = kind.split(".", 2)
+    from jen.services.plugins import get_loaded_plugins
+
+    plugin_name = get_loaded_plugins().get(plugin_id, {}).get("name", plugin_id)
+    return {"label": f"{plugin_name}: {name}", "icon": "puzzle", "is_plugin": True}
+
+
 def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None, actor=None, detail=""):
-    """Write one `events` row and notify subscribers. Never raises."""
+    """Write one `events` row and notify subscribers. Never raises.
+
+    v5.57.0 (Q73) — `emit` is now re-exported to plugins (jen.plugin_api),
+    which had no way to write to the stream before, only observe it via
+    subscribe(). A plugin kind must match `plugin.<plugin_id>.<name>`
+    (lowercase, `<plugin_id>` allowing hyphens same as a manifest id);
+    anything else — including a core-looking string a plugin didn't
+    actually earn — is refused and logged, never raised, matching
+    emit()'s own contract for every other failure mode here."""
+    if kind not in KINDS and not _PLUGIN_KIND_RE.match(kind or ""):
+        logger.error(f"events.emit(): refusing unrecognized kind {kind!r}")
+        return None
     event_id = None
     try:
         from jen.models.db import jen_db

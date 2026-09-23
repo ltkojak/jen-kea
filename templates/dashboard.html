@@ -782,7 +782,12 @@ function loadEventsFeed() {
         if (!rows || !rows.length) return '<p class="u-6f1339">No events yet.</p>';
         return '<table class="rowlist"><tbody>' + rows.map(function(r) {
             var who = r.hostname || r.mac || r.ip || r.server || '';
-            return '<tr><td data-m="primary">' + escapeHtml(r.kind) + '</td>' +
+            // v5.57.0 (Q73) — a plugin kind shows its plugin's display
+            // name + a puzzle icon (kind_icon/kind_label from the route)
+            // instead of the raw plugin.<id>.<name> string; a core kind
+            // is unchanged (kind_icon null, kind_label == kind).
+            var kindHtml = (r.kind_icon === 'puzzle' ? ICO_PUZZLE + ' ' : '') + escapeHtml(r.kind_label || r.kind);
+            return '<tr><td data-m="primary">' + kindHtml + '</td>' +
                 '<td data-m="secondary">' + escapeHtml(who) + '</td>' +
                 '<td data-m="secondary">' + escapeHtml(r.ts || '') + '</td></tr>';
         }).join('') + '</tbody></table>';
@@ -804,6 +809,13 @@ function loadHaState() {
 function loadDdnsErrors() {
     loadCatalogWidget('ddns_errors', function(d) {
         if (!d) return '<p class="u-6f1339">DDNS updates are off, or nothing to report.</p>';
+        // v5.57.0 (Q73, Q72's missed item e) — a skip carries a fix_url
+        // now, same as Health Center's own fix links, instead of the
+        // generic sentence above swallowing which of three reasons applies.
+        if (d.status === 'skip') {
+            return '<p class="small">' + escapeHtml(d.detail) +
+                (d.fix_url ? ' <a href="' + escapeHtml(d.fix_url) + '">Fix &rarr;</a>' : '') + '</p>';
+        }
         return '<p class="small">' + (STATUS_ICO[d.status] || '') + ' ' + escapeHtml(d.detail) + '</p>';
     });
 }
@@ -942,6 +954,7 @@ var currentPrefs = null;   // the last prefs applied — what Cancel reverts to
 var SUBNET_BASELINE_ORDER = null;  // the server-rendered (Kea) order, captured once
 var ICO_GRIP = '<svg class="ico" aria-hidden="true"><use href="#i-grip-vertical"></use></svg>';
 var ICO_UP = '<svg class="ico" aria-hidden="true"><use href="#i-chevron-up"></use></svg>';
+var ICO_PUZZLE = '<svg class="ico" aria-hidden="true"><use href="#i-puzzle"></use></svg>';
 var ICO_DOWN = '<svg class="ico" aria-hidden="true"><use href="#i-chevron-down"></use></svg>';
 var ICO_PIN = '<svg class="ico" aria-hidden="true"><use href="#i-pin"></use></svg>';
 var ICO_EYEOFF = '<svg class="ico" aria-hidden="true"><use href="#i-eye-off"></use></svg>';

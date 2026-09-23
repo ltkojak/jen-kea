@@ -142,7 +142,7 @@ var JEN_CHANNELS = {
         <button type="button" class="btn btn-sm btn-secondary" data-al-fold="close">Collapse all</button>
     </div>
     <div class="al-tpl-list">
-    {% for atype, label in alert_type_labels.items() %}
+    {% for atype, label in alert_type_labels.items() if atype not in plugin_alert_types %}
     {% set tpl = templates.get(atype, default_templates.get(atype, '')) %}
     <details class="al-tpl" id="al-tpl-{{ atype }}">
         <summary>
@@ -165,6 +165,38 @@ var JEN_CHANNELS = {
     </details>
     {% endfor %}
     </div>
+    {% if plugin_alert_types %}
+    {# v5.57.0 (Q73) — types a plugin registered via register_alert_type(),
+       grouped here by the plugin that added them; a removed plugin's
+       type simply stops appearing (it's never re-registered on load),
+       its alert_log rows are untouched. #}
+    <div class="sheet-group-label">From plugins</div>
+    <div class="al-tpl-list">
+    {% for atype, plugin_name in plugin_alert_types.items() %}
+    {% set label = alert_type_labels.get(atype, atype) %}
+    {% set tpl = templates.get(atype, default_templates.get(atype, '')) %}
+    <details class="al-tpl" id="al-tpl-{{ atype }}">
+        <summary>
+            <span class="al-tpl-label">{{ label }} <span class="muted small">({{ plugin_name }})</span></span>
+            <span class="al-tpl-first">{{ tpl.split('\\n')[0] | striptags }}</span>
+        </summary>
+        <div class="al-tpl-body">
+            <form method="POST" action="/settings/alerts/save-template"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="alert_type" value="{{ atype }}">
+                <textarea name="template_text" rows="3" aria-label="{{ label }} message template" class="al-tpl-text">{{ tpl }}</textarea>
+                <div class="al-tpl-actions">
+                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                </div>
+            </form>
+            <form method="POST" action="/settings/alerts/reset-template" class="al-tpl-reset"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="alert_type" value="{{ atype }}">
+                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reset to default template?">Reset to default</button>
+            </form>
+        </div>
+    </details>
+    {% endfor %}
+    </div>
+    {% endif %}
 </div>
 
 <!-- Add/Edit Channel Modal -->

@@ -30,6 +30,7 @@ import logging
 
 import jen.models.db as __db
 import jen.services.capacity as __capacity
+import jen.services.events as __events
 import jen.services.health as __health
 import jen.services.onboarding as __onboarding
 import jen.services.packet_health as __packet_health
@@ -162,6 +163,13 @@ def events_feed_widget(accessible_subnet_ids, all_subnets, limit=10) -> list[dic
             for r in cur.fetchall():
                 row = dict(r)
                 row["ts"] = row["ts"].isoformat() if row["ts"] else None
+                # v5.57.0 (Q73) — a plugin kind (plugin.<id>.<name>) shows
+                # as the plugin's display name + a puzzle icon on the
+                # dashboard, same as Timeline; kind_label/kind_icon are
+                # None for a core kind, i.e. no change from before.
+                desc = __events.describe_kind(row["kind"])
+                row["kind_label"] = desc["label"]
+                row["kind_icon"] = desc["icon"] if desc["is_plugin"] else None
                 out.append(row)
     except Exception as e:
         logger.warning(f"dashboard events_feed widget: {e}")
@@ -198,18 +206,27 @@ def ha_state_widget(server_statuses) -> list[dict] | None:
 
 
 def ddns_errors_widget(checks) -> dict | None:
-    """The `d2_errors` Health check's own reading — None (skip) exactly when
-    that check itself skips (DDNS off, or direct mode without a D2 control
-    socket configured), so this widget and the Health Center page always
-    agree on whether DDNS is something worth watching here. `checks` is the
-    caller's own run_checks() result (v5.56.1, Q68k — shared with
-    readiness_widget rather than each calling run_checks() itself)."""
+    """The `d2_errors` Health check's own reading. None only when the check
+    itself is absent from this run (`checks` came back empty, or the id
+    isn't in it) — a skip still returns a dict (v5.57.0, Q73) carrying
+    WHICH of three things is true (DDNS off, direct mode without a D2
+    control socket, or D2 stats unreachable) and the check's own fix_url,
+    so the dashboard and the Health Center page always agree on both
+    whether DDNS is worth watching here and why. `checks` is the caller's
+    own run_checks() result (v5.56.1, Q68k — shared with readiness_widget
+    rather than each calling run_checks() itself)."""
     if not checks:
         return None
     by_id = {c.id: c for c in checks}
     c = by_id.get("d2_errors")
-    if c is None or c.status == "skip":
+    if c is None:
         return None
+    if c.status == "skip":
+        # v5.57.0 (Q73, Q72's missed item e) — the check already says
+        # WHICH of three things is true (DDNS off, direct mode with no D2
+        # socket, or D2 stats unreachable); the widget used to collapse
+        # all three into one generic sentence with no way to act on it.
+        return {"status": "skip", "detail": c.detail, "fix_url": c.fix_url}
     return {"status": c.status, "detail": c.detail}
 
 
