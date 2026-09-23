@@ -2,6 +2,21 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.56.2-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.56.1-beta.1. The bundled IPAM Lite plugin let a
+viewer change entries — every write route checked only subnet access,
+never the role, so the templates hid the buttons from viewers while the
+routes underneath them stayed open. A CSV import also read an uploaded
+file into memory before its row cap ever applied, with no size limit from
+Jen or the plugin.
+
+IPAM Lite 1.5.2 fixes both: a viewer is refused before any write route
+even looks at the subnet or the submitted form, and an import is capped
+at 2 MB. The registry now offers 1.5.2 on every install's Settings →
+Plugins Update button, and the bundled copy shipped in this tarball is
+resynced to the same release.
+
 ## [5.56.1-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.56.0-beta.1. A second look at that release, from
