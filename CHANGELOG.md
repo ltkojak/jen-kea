@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.57.0-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.56.4-beta.1. Plugin API v3 — the start of
+round 5, the plugin platform — opens five things a plugin previously
+had no way to do, all through `jen.plugin_api`, the one surface a
+plugin may import from. `emit(kind, ...)` lets a plugin write to the
+events feed and Timeline under a namespaced `plugin.<plugin_id>.<name>`
+kind (validated, never raises — a bad kind is logged and dropped); both
+views now show plugin events with a puzzle icon and the plugin's
+display name. `register_alert_type(plugin_id, type_id, *, label, icon,
+default_template)` lets a plugin add its own alert type, shown under a
+new "From plugins" group on Settings → Alerts, with a channel-editable
+template that survives plugin upgrades. `register_row_action(plugin_id,
+surface, *, label, icon, href, method, roles, confirm, when)` adds menu
+items to the Leases, Reservations, and Devices row action menus, with
+`{mac}`/`{ip}`/`{subnet_id}`/`{hostname}` url-encoded into the href and
+role enforcement at render (the plugin's own route enforces it again).
+`api_key_required(write=False)` is a decorator for a plugin's own
+routes under `/api/v1/plugins/<plugin_id>/…`, reusing the same Bearer
+validation as Jen's REST API (moved to `jen/services/api_auth.py` so
+both call sites share it) — a plugin scopes its own queries with the
+new `filter_subnet_ids(key, subnet_ids)` helper.
+`register_search_provider(plugin_id, *, title, fn)` adds a card to
+search results; Jen re-filters every returned row by the caller's
+subnet access before rendering it, the same defense-in-depth rule
+applied everywhere else a plugin hands back data Jen didn't already
+scope. `encrypt_secret`/`decrypt_secret` are re-exported for plugins
+that need to hold their own credentials. The OS-package allow-list used
+by the root-run plugin installer widens to include `iputils-ping` and
+`snmp`, ahead of the watchdog and switchport plugins later in this
+round. A manifest's `nav[].icon` can now name a sprite icon directly
+(`"icon": "activity"`) instead of only the legacy emoji.
+`PLUGIN_API_VERSION` moves to 3; adding names never moves it, only a
+removal or signature change would. This release also folds in a gap
+from 5.56.4-beta.1: the DDNS Errors dashboard panel now shows the
+actual skip reason and a fix link when D2 is unreachable, instead of a
+bare "nothing to report."
+
 ## [5.56.4-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.56.3. Desktop polish: keyboard focus was
