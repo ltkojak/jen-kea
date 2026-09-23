@@ -307,6 +307,17 @@ SURFACES = [
         {"key_read": {403}, "key_write": {403, 404}},
         (),
     ),
+    (
+        # v5.56.1 (Q68l) — the events_feed catalog widget now filters in
+        # SQL before LIMIT instead of over-fetching and dropping rows in
+        # Python; this is the same B-marker guard every other surface gets.
+        "dashboard catalog-data events feed",
+        "GET",
+        "/api/dashboard/catalog-data?widgets=events_feed",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
 ]
 
 CELLS = [

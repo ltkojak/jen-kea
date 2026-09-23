@@ -240,6 +240,42 @@ class TestRetroExtraCssReachesTheRenderedPage:
         assert "border-color:#ffffff #808080" not in custom_css
 
 
+class TestCustomPaletteRevalidatedOnLoad:
+    """v5.56.1 (Q68o) — validate_palette() only ever ran at save time;
+    inject_theme() handed a stored theme_custom straight to render_css().
+    A restored DB from an older Jen, a manual row edit, or a future
+    validator change could put an unvalidated string into a |safe style
+    block. It's re-validated on every load now — only its own output is
+    ever trusted, never the stored dict directly."""
+
+    def _seed_hostile_custom(self, db):
+        from jen.models.user import set_global_setting
+
+        tokens = {name: VALID_CUSTOM[name] for name in thememod.TOKENS}
+        tokens["bg"] = "url(x)"  # the hostile field
+        stored = {"tokens": tokens, "radius": 8, "mono_ui": True}
+        set_global_setting("theme_custom", json.dumps(stored))
+        db.commit()
+
+    def test_a_hostile_stored_token_is_dropped_not_rendered(self, logged_in_client, db):
+        self._seed_hostile_custom(db)
+        resp = logged_in_client.get("/")
+        assert resp.status_code == 200
+        assert b"url(x)" not in resp.data
+        assert b':root[data-theme="custom"]' not in resp.data
+
+    def test_a_valid_stored_palette_still_renders(self, logged_in_client, db):
+        from jen.models.user import set_global_setting
+
+        tokens = {name: VALID_CUSTOM[name] for name in thememod.TOKENS}
+        stored = {"tokens": tokens, "radius": 8, "mono_ui": True}
+        set_global_setting("theme_custom", json.dumps(stored))
+        db.commit()
+        resp = logged_in_client.get("/")
+        assert resp.status_code == 200
+        assert b':root[data-theme="custom"]' in resp.data
+
+
 class TestSettingsEndpointsRegistered:
     def test_the_three_endpoints_exist(self, app):
         names = {r.endpoint for r in app.url_map.iter_rules()}

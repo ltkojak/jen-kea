@@ -15,12 +15,12 @@ already lazy. A widget with nothing to say (a single-server install for
 `ha_state`, DDNS off for `ddns_errors`) returns None rather than an empty
 card, so the page can skip rendering it instead of showing a blank one.
 
-`readiness_widget()` and `ddns_errors_widget()` both call `health.run_checks()`
+`readiness_widget()` and `ddns_errors_widget()` both need `health.run_checks()`
 (every group, not just the one each wants) — the same round trips a visit to
-Health Center itself makes. Enabling both catalog widgets at once repeats
-that work rather than sharing one cached pass; a real per-request cache
-would be a reasonable follow-up, not done here to keep this Q's scope to
-what the spec asked for.
+Health Center itself makes. v5.56.1 (Q68k): the route computes that pass
+ONCE, lazily (only when one of the two widgets is actually requested), and
+hands the same `checks` list to both — no module-level or cross-request
+cache, just not doubling the work within a single catalog-data request.
 """
 
 from __future__ import annotations
@@ -106,53 +106,63 @@ def packet_health_widget(servers) -> list[dict]:
     return out
 
 
-def readiness_widget() -> dict | None:
+def readiness_widget(checks) -> dict | None:
     """The Kea 3.2 readiness group's one-liner + its rows — the same output
-    Health Center's own readiness section shows. None only if the group
-    produced no checks at all (never happens in practice; the five
-    readiness checks always run)."""
-    try:
-        checks = [c for c in __health.run_checks() if c.group == "readiness"]
-    except Exception as e:
-        logger.warning(f"dashboard readiness widget: {e}")
-        return None
+    Health Center's own readiness section shows. `checks` is the caller's
+    own run_checks() result (v5.56.1, Q68k — shared with ddns_errors_widget
+    rather than each calling run_checks() itself); None if that call failed,
+    or if the group produced no checks at all (never happens in practice;
+    the five readiness checks always run)."""
     if not checks:
         return None
-    counts = __health.summarize(checks)
+    group_checks = [c for c in checks if c.group == "readiness"]
+    if not group_checks:
+        return None
+    counts = __health.summarize(group_checks)
     worst = "ok"
     for level in ("fail", "warn"):
         if counts.get(level):
             worst = level
             break
     line = ", ".join(f"{counts[k]} {k}" for k in ("ok", "warn", "fail", "skip") if counts.get(k))
-    return {"status": worst, "line": line, "rows": [c.as_dict() for c in checks]}
+    return {"status": worst, "line": line, "rows": [c.as_dict() for c in group_checks]}
 
 
 def events_feed_widget(accessible_subnet_ids, all_subnets, limit=10) -> list[dict]:
     """The last `limit` events this account can see — the same fail-closed
     rule `/api/v1/events` uses: with a restricted scope, an event carrying
     no subnet_id is dropped rather than shown, since it cannot be
-    attributed to a subnet the caller is confirmed to have access to."""
-    scope = None if all_subnets else set(accessible_subnet_ids)
+    attributed to a subnet the caller is confirmed to have access to.
+
+    v5.56.1 (Q68l) — the restriction now filters in SQL, before LIMIT, the
+    same shape `jen.services.access.add_subnet_restriction()` builds (not
+    that helper itself: it reads `current_user`, and this widget is built
+    to run with explicit args so tests/test_dashboard_catalog.py can cover
+    it without a request context). Before this, a restricted account could
+    see "No recent events" while older accessible ones existed, whenever
+    the newest `limit * 5` rows (the old over-fetch window) all happened
+    to belong to subnets outside their scope."""
+    where = ["1=1"]
+    params: list = []
+    if not all_subnets:
+        ids = list(accessible_subnet_ids)
+        if not ids:
+            return []
+        placeholders = ",".join(["%s"] * len(ids))
+        where.append(f"subnet_id IN ({placeholders})")
+        params.extend(ids)
     out: list[dict] = []
     try:
         with __db.jen_db() as db, db.cursor() as cur:
-            # Restricted scopes drop rows post-query, so over-fetch a little
-            # rather than under-filling the last 10 the account can actually see.
-            fetch = limit if scope is None else limit * 5
             cur.execute(
                 "SELECT ts, kind, mac, ip, subnet_id, hostname, server, actor, detail "
-                "FROM events ORDER BY ts DESC LIMIT %s",
-                (fetch,),
+                f"FROM events WHERE {' AND '.join(where)} ORDER BY ts DESC LIMIT %s",
+                (*params, limit),
             )
             for r in cur.fetchall():
-                if scope is not None and (r["subnet_id"] is None or r["subnet_id"] not in scope):
-                    continue
                 row = dict(r)
                 row["ts"] = row["ts"].isoformat() if row["ts"] else None
                 out.append(row)
-                if len(out) >= limit:
-                    break
     except Exception as e:
         logger.warning(f"dashboard events_feed widget: {e}")
     return out
@@ -187,17 +197,17 @@ def ha_state_widget(server_statuses) -> list[dict] | None:
     return out
 
 
-def ddns_errors_widget() -> dict | None:
+def ddns_errors_widget(checks) -> dict | None:
     """The `d2_errors` Health check's own reading — None (skip) exactly when
     that check itself skips (DDNS off, or direct mode without a D2 control
     socket configured), so this widget and the Health Center page always
-    agree on whether DDNS is something worth watching here."""
-    try:
-        checks = {c.id: c for c in __health.run_checks()}
-    except Exception as e:
-        logger.warning(f"dashboard ddns_errors widget: {e}")
+    agree on whether DDNS is something worth watching here. `checks` is the
+    caller's own run_checks() result (v5.56.1, Q68k — shared with
+    readiness_widget rather than each calling run_checks() itself)."""
+    if not checks:
         return None
-    c = checks.get("d2_errors")
+    by_id = {c.id: c for c in checks}
+    c = by_id.get("d2_errors")
     if c is None or c.status == "skip":
         return None
     return {"status": c.status, "detail": c.detail}

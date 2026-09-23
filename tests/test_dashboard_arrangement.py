@@ -147,6 +147,49 @@ class TestCatalogDataRoute:
         assert r.status_code == 500
         assert b"boom" not in r.data
 
+    def test_run_checks_runs_once_for_both_readiness_and_ddns_widgets(
+        self, logged_in_client, db, mock_kea, monkeypatch
+    ):
+        # v5.56.1 (Q68k) — readiness_widget()/ddns_errors_widget() used to
+        # each call health.run_checks() themselves; enabling both widgets
+        # doubled that work (Kea/DB/DNS/remote round trips) on one request.
+        from jen.services import health
+
+        calls = []
+
+        def counted():
+            calls.append(1)
+            return []
+
+        monkeypatch.setattr(health, "run_checks", counted)
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=readiness,ddns_errors")
+        assert r.status_code == 200
+        assert calls == [1]
+        assert r.get_json() == {"readiness": None, "ddns_errors": None}
+
+    def test_run_checks_never_runs_when_neither_widget_is_requested(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.services import health
+
+        def boom():
+            raise AssertionError("run_checks should not have been called")
+
+        monkeypatch.setattr(health, "run_checks", boom)
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=forecast")
+        assert r.status_code == 200
+
+    def test_a_run_checks_failure_degrades_both_widgets_to_null_not_a_500(
+        self, logged_in_client, db, mock_kea, monkeypatch
+    ):
+        from jen.services import health
+
+        def boom():
+            raise RuntimeError("kea down")
+
+        monkeypatch.setattr(health, "run_checks", boom)
+        r = logged_in_client.get("/api/dashboard/catalog-data?widgets=readiness,ddns_errors")
+        assert r.status_code == 200
+        assert r.get_json() == {"readiness": None, "ddns_errors": None}
+
 
 class TestDataHrefGuardsInteractiveChildren:
     """v5.54.0 (Q61) — Arrange mode was the first thing to put interactive

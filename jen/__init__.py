@@ -557,6 +557,13 @@ def create_app() -> Flask:
     # table is never re-validated here, but render_css() only ever emits
     # exactly the fields that call put there, so a corrupted row degrades to
     # a broken *value*, never broken CSS syntax.
+    # v5.56.1 (Q68o) — "once per process, not per request" for the warning
+    # below. A closure-local flag rather than a module-level one: each
+    # create_app() call (one per test's `app` fixture, one per gunicorn
+    # worker in production) gets its own, so tests stay isolated from
+    # each other and production still only logs it once.
+    _custom_theme_warned = [False]
+
     @app.context_processor
     def inject_theme():
         import json
@@ -578,20 +585,36 @@ def create_app() -> Flask:
         if custom_raw:
             try:
                 parsed = json.loads(custom_raw)
-                theme_custom = parsed
-                theme_css.append(
-                    (
-                        "custom",
-                        _theme.render_css(
+                # v5.56.1 (Q68o) — validate_palette() only ever ran at save
+                # time; a restored DB from an older Jen, a manual edit, or a
+                # future validator change could put an unvalidated string
+                # straight into a |safe style block. Re-run it here, flattened
+                # back into the form shape validate_palette() expects, and
+                # trust only its OWN output (never the stored dict directly).
+                flat_form = dict(parsed.get("tokens") or {})
+                flat_form["radius"] = parsed.get("radius")
+                flat_form["mono_ui"] = parsed.get("mono_ui")
+                revalidated, errors = _theme.validate_palette(flat_form)
+                if errors:
+                    if not _custom_theme_warned[0]:
+                        logger.warning(f"stored custom theme palette failed validation, ignoring it: {errors}")
+                        _custom_theme_warned[0] = True
+                    theme_custom = None
+                else:
+                    theme_custom = revalidated
+                    theme_css.append(
+                        (
                             "custom",
-                            parsed["tokens"],
-                            parsed["radius"],
-                            parsed["mono_ui"],
-                            _theme.guess_color_scheme(parsed["tokens"]),
-                        ),
+                            _theme.render_css(
+                                "custom",
+                                revalidated["tokens"],
+                                revalidated["radius"],
+                                revalidated["mono_ui"],
+                                _theme.guess_color_scheme(revalidated["tokens"]),
+                            ),
+                        )
                     )
-                )
-                theme_presets.append(("custom", "Custom"))
+                    theme_presets.append(("custom", "Custom"))
             except Exception:
                 theme_custom = None
         theme_default = get_global_setting("theme_default", "dark")

@@ -374,3 +374,24 @@ class TestGrafanaDashboard:
         emitted = set(re.findall(r"^(jen_[a-z0-9_]*)[\s{]", text, re.MULTILINE))
         missing = referenced - emitted
         assert not missing, f"dashboard panel(s) reference metric(s) /metrics never emits: {missing}"
+
+
+class TestSparklineCardsEscapeSubnetText:
+    """v5.56.1 (Q68g) — the 30-day sparkline cards built the subnet name
+    and CIDR straight into an innerHTML string while the other 23
+    insertions in this file used escapeHtml(). Subnet names come from
+    jen.config / the Add Subnet form (admin-controlled, not a live XSS),
+    but every other client-supplied-shaped value here goes through
+    escapeHtml() and these two should too, for consistency and because
+    a restored/edited config is not guaranteed clean forever. The
+    sparkline data (subnetMap) is embedded server-side via |tojson, not
+    fetched, so there's no API response to assert on — the source is
+    the only place this can be checked."""
+
+    def test_subnet_name_and_cidr_are_escaped_in_the_card_builder(self):
+        import pathlib
+
+        src = pathlib.Path("templates/dashboard.html").read_text(encoding="utf-8")
+        card_block = src.split("function loadSparklines(")[1]
+        assert "escapeHtml(info.name" in card_block
+        assert "escapeHtml(info.cidr)" in card_block

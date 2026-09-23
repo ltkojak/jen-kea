@@ -303,7 +303,10 @@ detect_existing() {
         elif [[ -f "$INSTALL_DIR/legacy/jen.py"        ]]; then ver_file="$INSTALL_DIR/legacy/jen.py"
         fi
         if [[ -n "$ver_file" ]]; then
-            EXISTING_VERSION=$(grep -m1 'JEN_VERSION' "$ver_file" 2>/dev/null                 | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' || echo "unknown")
+            # jen/version.py::parse_version is the grammar this mirrors: X.Y.Z,
+            # optionally -beta.N or -rc.N (v5.56.1, Q68j — this used to drop
+            # the suffix entirely, so an installed beta showed as "unknown").
+            EXISTING_VERSION=$(grep -m1 'JEN_VERSION' "$ver_file" 2>/dev/null                 | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)\.[0-9]+)?"' | tr -d '"' || echo "unknown")
         else
             EXISTING_VERSION="unknown"
         fi

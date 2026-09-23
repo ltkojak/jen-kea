@@ -76,8 +76,31 @@ _RETRO_EXTRA_CSS = (
     ':root[data-theme="retro"] .nav{'
     "background:#000080;color:#ffffff;"
     "}"
-    ':root[data-theme="retro"] .nav a{'
+    # v5.56.1 (Q68f) — .nav a alone left every top-level nav control
+    # (var(--text-muted), too dark for navy) unreadable: the theme
+    # toggle, the version string, the keyboard-shortcut button. Icons
+    # pick it up too via stroke:currentColor. The search box becomes a
+    # plain light field instead, since white text needs a dark field to
+    # sit on and the nav itself is now the dark field for everything else.
+    ':root[data-theme="retro"] .nav a,'
+    ':root[data-theme="retro"] .nav .theme-toggle,'
+    ':root[data-theme="retro"] .nav-brand span,'
+    ':root[data-theme="retro"] #kb-hint-btn{'
     "color:#ffffff;"
+    "}"
+    ':root[data-theme="retro"] .nav-search input{'
+    "background:#ffffff;color:#000000;"
+    "}"
+    ':root[data-theme="retro"] .nav-search input::placeholder{'
+    "color:#666666;"
+    "}"
+    # The two nav dropdowns (Theme, avatar) already sit on their own
+    # var(--surface) panel, not the navy bar — the broad ".nav a" rule
+    # above would otherwise paint their menu text white-on-grey too.
+    # Same specificity as that rule; wins on source order (later).
+    ':root[data-theme="retro"] .nav-dropdown-content a,'
+    ':root[data-theme="retro"] .nav-dropdown-content button.linkish{'
+    "color:var(--text);"
     "}"
 )
 

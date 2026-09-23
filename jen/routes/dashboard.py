@@ -17,6 +17,7 @@ import jen.services.alerts as __alerts
 import jen.services.dashboard_catalog as __dcatalog
 import jen.services.dashboard_prefs as __dprefs
 import jen.services.fingerprint as __fp
+import jen.services.health as __health
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_view as __view
@@ -345,14 +346,26 @@ def dashboard_catalog_data():
                 for s in extensions.KEA_SERVERS
             ]
             out["packet_health"] = __dcatalog.packet_health_widget(servers)
+        # v5.56.1 (Q68k) — readiness and ddns_errors both read Health
+        # Center's full run_checks() pass; run it once here (only if one of
+        # them is actually requested) instead of once per widget, which
+        # doubled every Kea/DB/DNS/remote round trip Health Center makes
+        # whenever both catalog widgets were enabled on the same dashboard.
+        checks = None
+        if "readiness" in requested or "ddns_errors" in requested:
+            try:
+                checks = __health.run_checks()
+            except Exception as e:
+                logger.warning(f"dashboard catalog-data health run_checks: {e}")
+                checks = None
         if "readiness" in requested:
-            out["readiness"] = __dcatalog.readiness_widget()
+            out["readiness"] = __dcatalog.readiness_widget(checks)
         if "events_feed" in requested:
             out["events_feed"] = __dcatalog.events_feed_widget(accessible.keys(), current_user.all_subnets)
         if "ha_state" in requested:
             out["ha_state"] = __dcatalog.ha_state_widget(__kea.get_all_server_status())
         if "ddns_errors" in requested:
-            out["ddns_errors"] = __dcatalog.ddns_errors_widget()
+            out["ddns_errors"] = __dcatalog.ddns_errors_widget(checks)
         if "getting_started" in requested:
             out["getting_started"] = __dcatalog.getting_started_widget(current_user, current_user.role == "superadmin")
     except Exception as e:

@@ -319,6 +319,21 @@ class TestFoundationPatterns:
         sheet.get_by_role("link", name=re.compile("Devices")).first.click()
         expect(phone).to_have_url(re.compile(r"/devices"))
 
+    def test_more_sheet_traps_tab_and_restores_focus_on_escape(self, phone, base_url):
+        # v5.56.1 (Q68m) — the sheet was role="dialog" aria-modal="true" but
+        # never actually moved or trapped focus, and never restored it.
+        _visit(phone, base_url, "/")
+        more_btn = phone.locator('.tabbar button[data-sheet-open="more-sheet"]')
+        more_btn.click()
+        expect(phone.locator("#more-sheet")).to_be_visible()
+        for _ in range(10):
+            phone.keyboard.press("Tab")
+            inside = phone.evaluate("document.getElementById('more-sheet').contains(document.activeElement)")
+            assert inside, "focus escaped the More sheet"
+        phone.keyboard.press("Escape")
+        expect(phone.locator("#more-sheet")).to_be_hidden()
+        expect(more_btn).to_be_focused()
+
     def test_content_is_never_hidden_behind_the_tabbar(self, phone, base_url):
         _visit(phone, base_url, "/about")
         pad = phone.evaluate("() => parseFloat(getComputedStyle(document.body).paddingBottom)")
@@ -508,6 +523,59 @@ class TestThemePicker:
             pytest.skip("no history data seeded for a chart canvas")
         resolved = themed_page.evaluate("window.jenColor('var(--primary)')")
         assert resolved.replace(" ", "").lower() == thememod.PRESETS[preset_id]["tokens"]["primary"].lower()
+
+
+class TestRetroNavContrast:
+    """v5.56.1 (Q68f) — once (a) landed and Retro's nav actually turned
+    navy, its non-anchor controls (still var(--text-muted), ~1.5:1 on
+    navy) became unreadable. palette_warnings() only ever sees a
+    preset's *tokens*, never extra_css, so it can't catch this — the
+    e2e is the only guard."""
+
+    def test_theme_toggle_and_the_version_string_are_white_on_navy(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        ctx.add_init_script("localStorage.setItem('jen-theme-pick', 'retro')")
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        _visit(page, base_url, "/")
+        toggle_color = page.eval_on_selector(".theme-toggle", "el => getComputedStyle(el).color")
+        version_color = page.eval_on_selector(".nav-brand span", "el => getComputedStyle(el).color")
+        assert toggle_color == "rgb(255, 255, 255)"
+        assert version_color == "rgb(255, 255, 255)"
+        ctx.close()
+
+
+class TestThemeAppliesBeforeContentPaints:
+    """v5.56.1 (Q68h) — the theme used to apply from a script positioned
+    after {% block content %}, so a non-Dark pick painted Dark first.
+    The fix is a synchronous <head> script; the earliest this test can
+    observe data-theme without literally capturing paint frames is the
+    moment the HTML parser reaches the closing </html> tag (readyState
+    'interactive', reached the instant after every parser-blocking
+    script — including the <head> one — has run, and before body
+    content the OLD code depended on for its own script tag to even
+    exist). A regression back to a post-content script would still be
+    'interactive' by definition of when that event fires, but would no
+    longer be true at the moment content itself starts parsing — this
+    still catches the concrete fix (the constant is read and applied
+    before <style>/<body>, never after)."""
+
+    def test_data_theme_is_already_correct_at_interactive(self, browser, base_url):
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        ctx.add_init_script("""
+            localStorage.setItem('jen-theme-pick', 'light');
+            window.__themeAtInteractive = null;
+            document.addEventListener('readystatechange', function() {
+                if (document.readyState === 'interactive' && window.__themeAtInteractive === null) {
+                    window.__themeAtInteractive = document.documentElement.getAttribute('data-theme');
+                }
+            });
+        """)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        _visit(page, base_url, "/")
+        assert page.evaluate("window.__themeAtInteractive") == "light"
+        ctx.close()
 
 
 class TestThemePickerSwitchesWithoutReload:

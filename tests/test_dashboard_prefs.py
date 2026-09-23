@@ -84,9 +84,15 @@ class TestValidate:
         prefs = dp.validate(raw, accessible_subnet_ids=[1, 2])
         assert prefs["subnets"]["order"] == [1, 2]
 
-    def test_compact_is_coerced_to_a_bool(self):
-        assert dp.validate({"v": 2, "compact": 1}, [])["compact"] is True
-        assert dp.validate({"v": 2, "compact": 0}, [])["compact"] is False
+    def test_compact_requires_a_literal_true_not_any_truthy_value(self):
+        # v5.56.1 (Q68n) — bool("false") is True (any non-empty string is
+        # truthy), so a JSON body with "compact": "false" used to turn
+        # Compact ON. Only the real JSON/Python boolean True counts now.
+        assert dp.validate({"v": 2, "compact": True}, [])["compact"] is True
+        assert dp.validate({"v": 2, "compact": "false"}, [])["compact"] is False
+        assert dp.validate({"v": 2, "compact": False}, [])["compact"] is False
+        assert dp.validate({"v": 2, "compact": 1}, [])["compact"] is False
+        assert dp.validate({"v": 2}, [])["compact"] is False
 
     def test_a_v1_list_still_validates_cleanly(self):
         prefs = dp.validate(["subnet_stats", "bogus", "totals"], [])

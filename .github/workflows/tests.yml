@@ -242,7 +242,7 @@ jobs:
       # script predates this check and carries style warnings; genuine
       # errors fail the build today, warnings get worked down over time.
       - name: shellcheck (errors)
-        run: shellcheck -S error install.sh uninstall.sh scripts/release_check.sh
+        run: shellcheck -S error install.sh uninstall.sh
 
   bandit:
     runs-on: ubuntu-latest

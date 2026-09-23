@@ -546,8 +546,8 @@ function loadSparklines() {
                 card.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;';
                 card.innerHTML =
                     '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">'
-                    + '<span style="font-size:12px;font-weight:600;">' + (info.name || sid) + '</span>'
-                    + '<span class="u-749148">' + info.cidr + '</span>'
+                    + '<span style="font-size:12px;font-weight:600;">' + escapeHtml(info.name || sid) + '</span>'
+                    + '<span class="u-749148">' + escapeHtml(info.cidr) + '</span>'
                     + '</div>'
                     + '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="width:100%;display:block;">'
                     + '<polyline points="' + polyline + '" fill="none" stroke="var(--primary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>'

@@ -75,7 +75,12 @@ def upgrade(raw) -> dict:
                 "pinned": _as_int_list(subnets.get("pinned")),
                 "hidden": _as_int_list(subnets.get("hidden")),
             },
-            "compact": bool(raw.get("compact")),
+            # v5.56.1 (Q68n) — bool("false") is True (any non-empty string
+            # is truthy); a JSON body with "compact": "false" silently
+            # turned Compact ON. The normal UI path always sends a real
+            # JSON boolean, but this is the one place a saved/submitted
+            # value becomes the effective setting, so it has to be strict.
+            "compact": raw.get("compact") is True,
         }
     if isinstance(raw, list):
         # v1: a plain list of widget ids, in the order they were shown, always full width.

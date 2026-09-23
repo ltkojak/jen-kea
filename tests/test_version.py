@@ -146,3 +146,37 @@ class TestEveryOtherParserDelegates:
             if 'split(".")[:3]' in path.read_text(encoding="utf-8"):
                 offenders.append(path.as_posix())
         assert not offenders, f"version parsing outside jen/version.py: {offenders}"
+
+
+class TestInstallShReadsAnExistingBetasVersion:
+    """v5.56.1 (Q68j) — install.sh's own EXISTING_VERSION grep dropped
+    a beta's -beta.N suffix entirely (the regex only matched X.Y.Z), so
+    upgrading a beta install showed "unknown" in the upgrade banner.
+    install.sh can't run headless here (needs root/systemd/a real
+    host — see test_small_hardening_fixes.py's own note on this), so
+    this runs the actual grep -oP install.sh uses against sample
+    JEN_VERSION lines, same technique as install.sh itself."""
+
+    def _grep_pattern(self):
+        text = (REPO / "install.sh").read_text(encoding="utf-8")
+        m = re.search(r"grep -oP '([^']+)' \| tr -d '\"' \|\| echo \"unknown\"", text)
+        assert m, "EXISTING_VERSION's grep -oP pattern not found in install.sh"
+        return m.group(1)
+
+    @pytest.mark.parametrize(
+        "line,expected",
+        [
+            ('JEN_VERSION = "5.56.1-beta.1"', "5.56.1-beta.1"),
+            ('JEN_VERSION = "5.49.0"', "5.49.0"),
+            ('JEN_VERSION = "5.56.1-rc.2"', "5.56.1-rc.2"),
+        ],
+    )
+    def test_the_grep_pattern_keeps_the_prerelease_suffix(self, line, expected):
+        import shutil
+        import subprocess
+
+        if not shutil.which("grep"):
+            pytest.skip("no grep on PATH (install.sh itself only ever runs on Linux)")
+        pattern = self._grep_pattern()
+        result = subprocess.run(["grep", "-oP", pattern], input=line, capture_output=True, text=True)
+        assert result.stdout.strip().strip('"') == expected

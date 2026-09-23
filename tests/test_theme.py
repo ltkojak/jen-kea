@@ -187,6 +187,18 @@ class TestPresetsPinned:
             assert "border-color:#ffffff #808080" not in css
             assert "#000080" not in css
 
+    def test_retros_nav_control_contrast_is_a_documented_extra_css_only_fix(self):
+        # v5.56.1 (Q68f) — palette_warnings() only ever inspects a
+        # preset's tokens, never extra_css, so it has no way to see (or
+        # flag) that the navy nav from extra_css needed its own white-
+        # on-navy override for the theme toggle / version string / kb
+        # button — that's why the real guard is the e2e test
+        # (TestRetroNavContrast), not a unit assertion on this function.
+        assert theme.palette_warnings(theme.PRESETS["retro"]["tokens"]) == []
+        css = theme.PRESETS["retro"]["extra_css"]
+        assert ".theme-toggle{" in css or ".theme-toggle," in css
+        assert "#kb-hint-btn" in css
+
 
 class TestEveryPresetPassesItsOwnContrastFloor:
     @pytest.mark.parametrize("preset_id", list(theme.PRESETS))
@@ -367,3 +379,30 @@ class TestInstallDefaultPickerEntry:
         src = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
         assert src.count('data-theme-id=""') == 2  # nav dropdown + phone sheet
         assert src.count("Install default (") == 2
+
+
+class TestThemeAppliesBeforePaint:
+    """v5.56.1 (Q68h) — the theme pick used to apply after {% block
+    content %} rendered, so any non-Dark pick painted Dark first. A tiny
+    synchronous <head> script now sets data-theme before anything paints;
+    the applyTheme()/picker/check-mark script stays where it was."""
+
+    def _base_html(self):
+        return pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+
+    def test_the_head_script_runs_before_the_style_block_and_before_head_closes(self):
+        src = self._base_html()
+        head_script = src.index("document.documentElement.dataset.theme = initial;")
+        first_style = src.index("<style>")
+        head_close = src.index("</head>")
+        content_block = src.index("{% block content %}")
+        assert head_script < first_style < head_close < content_block
+
+    def test_the_head_script_declares_the_constants_only_once(self):
+        src = self._base_html()
+        assert src.count("var THEME_DEFAULT = ") == 1
+        assert src.count("var THEME_IDS = ") == 1
+        # both declarations must be the head script's, i.e. before <style>
+        first_style = src.index("<style>")
+        assert src.index("var THEME_DEFAULT = ") < first_style
+        assert src.index("var THEME_IDS = ") < first_style

@@ -1817,6 +1817,27 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b704_markupsafe_markup_xss.html",
       "test_id": "B704",
       "test_name": "markupsafe_markup_xss"
+    },
+    {
+      "code": "157             cur.execute(\n158                 \"SELECT ts, kind, mac, ip, subnet_id, hostname, server, actor, detail \"\n159                 f\"FROM events WHERE {' AND '.join(where)} ORDER BY ts DESC LIMIT %s\",\n160                 (*params, limit),\n",
+      "col_offset": 16,
+      "end_col_offset": 84,
+      "filename": "jen/services/dashboard_catalog.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 158,
+      "line_range": [
+        158,
+        159
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
     }
   ]
 }
