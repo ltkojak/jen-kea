@@ -333,11 +333,18 @@ class TestProgressBarAndFullPageSubmit:
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        # Called directly (the mechanism under test), not left to the
+        # dashboard's own staggered widget loading to fire it on its own
+        # schedule — this is what jenFetch does, not what any one page does.
         page.route("**/api/alert-summary", self._slow)
-        _visit(page, base_url, "/")
+        page.evaluate("window.jenFetch('/api/alert-summary')")
         expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
         expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"), timeout=5000)
         ctx.close()
+
+    # Explain's own submit button, not any of the several other
+    # button[type=submit] on the page (the nav's Logout forms in particular).
+    _EXPLAIN_SUBMIT = 'form[action="/tools/explain"] button[type=submit]'
 
     def test_a_delayed_explain_submit_disables_its_button(self, browser, base_url):
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
@@ -346,9 +353,9 @@ class TestProgressBarAndFullPageSubmit:
         page.route("**/tools/explain?**", self._slow)
         _visit(page, base_url, "/tools/explain")
         page.fill('input[name="mac"]', "aa:bb:cc:dd:ee:ff")
-        page.click("button[type=submit]")
-        expect(page.locator("button[type=submit]")).to_be_disabled()
-        expect(page.locator("button[type=submit]")).to_have_attribute("aria-busy", "true")
+        page.click(self._EXPLAIN_SUBMIT)
+        expect(page.locator(self._EXPLAIN_SUBMIT)).to_be_disabled()
+        expect(page.locator(self._EXPLAIN_SUBMIT)).to_have_attribute("aria-busy", "true")
         ctx.close()
 
     def test_pageshow_clears_a_stale_disabled_submit_button(self, browser, base_url):
@@ -356,13 +363,13 @@ class TestProgressBarAndFullPageSubmit:
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
         _visit(page, base_url, "/tools/explain")
-        page.evaluate(
-            "var b = document.querySelector('button[type=submit]'); "
-            "b.disabled = true; b.setAttribute('aria-busy', 'true'); "
-            "window.dispatchEvent(new Event('pageshow'));"
+        page.eval_on_selector(
+            self._EXPLAIN_SUBMIT,
+            "b => { b.disabled = true; b.setAttribute('aria-busy', 'true'); "
+            "window.dispatchEvent(new Event('pageshow')); }",
         )
-        expect(page.locator("button[type=submit]")).to_be_enabled()
-        assert page.get_attribute("button[type=submit]", "aria-busy") is None
+        expect(page.locator(self._EXPLAIN_SUBMIT)).to_be_enabled()
+        assert page.get_attribute(self._EXPLAIN_SUBMIT, "aria-busy") is None
         ctx.close()
 
 
@@ -377,7 +384,12 @@ class TestStickyTableHeaderOnDesktop:
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
         _visit(page, base_url, "/leases?subnet=10")
         expect(page.locator("table.rowlist tbody tr").first).to_be_visible()
-        page.evaluate("window.scrollBy(0, 400)")
+        # Scroll relative to the table's own position, not a fixed guess: the
+        # header only actually sticks once its natural position has scrolled
+        # past --sticky-top, and how much content sits above the table (page
+        # header, filter/action bars) isn't this test's business to hardcode.
+        table_top = page.eval_on_selector("table.rowlist", "el => el.getBoundingClientRect().top + window.scrollY")
+        page.evaluate(f"window.scrollTo(0, {table_top} + 100)")
         offset_px = page.evaluate("parseFloat(getComputedStyle(document.body).getPropertyValue('--sticky-top'))")
         top = page.eval_on_selector("table.rowlist thead th", "el => el.getBoundingClientRect().top")
         assert abs(top - offset_px) < 1, f"th top {top}px, expected {offset_px}px"

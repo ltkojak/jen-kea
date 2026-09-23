@@ -59,6 +59,12 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
             --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-lg: 15px; --fs-xl: 20px; --fs-2xl: 26px;
             --radius-sm: 4px; --tap: 44px;
             --tabbar-h: 56px;
+            /* v5.56.4 (Q72d) — the sticky <thead> th's own height (10px
+               padding top+bottom + an 11px label's line height + the 1px
+               border), for scroll-margin-top on rows — not exact to the
+               pixel, an overestimate just scrolls a hair further, an
+               underestimate leaves a row's top edge under the header. */
+            --thead-h: 36px;
             /* v5.55.0 (Q63) — a preset can point --font-ui at --font-mono on
                desktop (Phosphor); nothing else changes these. */
             --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -258,9 +264,15 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            already accounts for the section-tab strip, so a header stops right
            under it on Leases/Reservations/etc. and right under the bare nav
            everywhere else. Phone rows don't use a <thead> at all (Q59/Q60), so
-           this is desktop-only on purpose, not just as an optimization. */
+           this is desktop-only on purpose, not just as an optimization. scroll-
+           margin-top on every row is not decorative: without it, a browser (or
+           Playwright's actionability check) scrolling a row into view can land
+           it directly under the now-pinned header, which then intercepts every
+           click on that row — a real bug, not just a test flake. --thead-h is
+           the header row's own height (padding + line height + border). */
         @media (min-width: 769px) {
             .table-wrap thead th { position: sticky; top: var(--sticky-top); z-index: 5; }
+            .table-wrap tbody tr { scroll-margin-top: calc(var(--sticky-top) + var(--thead-h)); }
         }
         td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
         td.mono { font-size: 12px; }
