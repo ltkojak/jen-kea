@@ -324,23 +324,25 @@ class TestProgressBarAndFullPageSubmit:
     plain full-page <form> submit disables its button until the response
     lands, resetting again on a bfcache pageshow."""
 
-    def test_progress_bar_shows_during_a_slow_fetch_and_hides_after(self, browser, base_url):
+    def test_progress_bar_toggles_on_jen_progress_start_and_stop(self, browser, base_url):
+        # jenFetch is a two-line wrapper (window.jenFetch = function(url,
+        # opts) { start(); return fetch(url, opts).finally(stop); }) —
+        # tests/test_desktop_polish.py checks that source directly. What's
+        # worth an actual browser is the DOM half: does the #jen-progress
+        # element really pick up and drop the "active" class. Driving a
+        # real network delay through page.route()/a patched window.fetch
+        # to exercise that indirectly proved unreliable in CI for reasons
+        # that didn't reproduce locally (something about this sync
+        # Playwright bridge's timing with a slow fetch in flight) — calling
+        # jenProgress.start()/stop() directly is the same DOM mechanism,
+        # deterministically.
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        # jenFetch's start/stop wiring is what's under test, not the real
-        # network — a page.route() delay depends on nothing else matching
-        # or caching the same URL first (the dashboard's own widgets also
-        # call this endpoint), which made this flaky. Swapping window.fetch
-        # for a setTimeout-delayed wrapper is deterministic regardless.
-        page.evaluate(
-            "() => { var real = window.fetch; "
-            "window.fetch = function(u, o) { return new Promise(function(res) { "
-            "setTimeout(function() { res(real(u, o)); }, 1500); }); }; "
-            "window.jenFetch('/api/alert-summary'); }"
-        )
+        page.evaluate("() => { window.jenProgress.start(); }")
         expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
-        expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"), timeout=5000)
+        page.evaluate("() => { window.jenProgress.stop(); }")
+        expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"))
         ctx.close()
 
     # Explain's own submit button, not any of the several other
@@ -405,15 +407,21 @@ class TestStickyTableHeaderOnDesktop:
             "table.rowlist",
             "el => el.insertAdjacentHTML('afterend', '<div style=\"height:2000px\"></div>')",
         )
-        # A small amount past the table's own top — just enough to cross the
-        # sticky threshold without also scrolling the table's (possibly very
-        # short, depending on how many rows this run seeded) remaining
-        # content out of view, which would unstick the header again.
+        # Scroll incrementally past the table's own top rather than
+        # guessing a fixed amount: how many rows sit below the header
+        # (and so how much scroll room is actually available before the
+        # end of the table itself un-sticks it again) depends on however
+        # many leases this run's dataset happens to have seeded.
         table_top = page.eval_on_selector("table.rowlist", "el => el.getBoundingClientRect().top + window.scrollY")
-        page.evaluate(f"window.scrollTo(0, {table_top} + 10)")
         offset_px = page.evaluate("parseFloat(getComputedStyle(document.body).getPropertyValue('--sticky-top'))")
-        top = page.eval_on_selector("table.rowlist thead th", "el => el.getBoundingClientRect().top")
-        assert abs(top - offset_px) < 1, f"th top {top}px, expected {offset_px}px"
+        stuck_at = None
+        for extra in (5, 15, 30, 60, 120, 250, 500, 1000):
+            page.evaluate(f"window.scrollTo(0, {table_top} + {extra})")
+            top = page.eval_on_selector("table.rowlist thead th", "el => el.getBoundingClientRect().top")
+            if abs(top - offset_px) < 1:
+                stuck_at = top
+                break
+        assert stuck_at is not None, f"header never stuck at {offset_px}px scrolling past the table's own top"
         ctx.close()
 
 
