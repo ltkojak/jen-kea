@@ -21,7 +21,6 @@ in the other files keep the CSP on.
 
 import pathlib
 import re
-import time
 
 import pytest
 from playwright.sync_api import expect
@@ -325,23 +324,21 @@ class TestProgressBarAndFullPageSubmit:
     plain full-page <form> submit disables its button until the response
     lands, resetting again on a bfcache pageshow."""
 
-    def _slow(self, route):
-        time.sleep(1.5)
-        route.continue_()
-
     def test_progress_bar_shows_during_a_slow_fetch_and_hides_after(self, browser, base_url):
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        # Called directly (the mechanism under test), not left to the
-        # dashboard's own staggered widget loading to fire it on its own
-        # schedule — this is what jenFetch does, not what any one page does.
-        # Fired without awaiting the returned promise: page.evaluate() by
-        # default awaits a returned promise, and awaiting jenFetch's own
-        # promise here would block until the (deliberately slow) request
-        # has already finished, defeating the point of checking mid-flight.
-        page.route("**/api/alert-summary", self._slow)
-        page.evaluate("() => { window.jenFetch('/api/alert-summary'); }")
+        # jenFetch's start/stop wiring is what's under test, not the real
+        # network — a page.route() delay depends on nothing else matching
+        # or caching the same URL first (the dashboard's own widgets also
+        # call this endpoint), which made this flaky. Swapping window.fetch
+        # for a setTimeout-delayed wrapper is deterministic regardless.
+        page.evaluate(
+            "() => { var real = window.fetch; "
+            "window.fetch = function(u, o) { return new Promise(function(res) { "
+            "setTimeout(function() { res(real(u, o)); }, 1500); }); }; "
+            "window.jenFetch('/api/alert-summary'); }"
+        )
         expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
         expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"), timeout=5000)
         ctx.close()
@@ -408,8 +405,12 @@ class TestStickyTableHeaderOnDesktop:
             "table.rowlist",
             "el => el.insertAdjacentHTML('afterend', '<div style=\"height:2000px\"></div>')",
         )
+        # A small amount past the table's own top — just enough to cross the
+        # sticky threshold without also scrolling the table's (possibly very
+        # short, depending on how many rows this run seeded) remaining
+        # content out of view, which would unstick the header again.
         table_top = page.eval_on_selector("table.rowlist", "el => el.getBoundingClientRect().top + window.scrollY")
-        page.evaluate(f"window.scrollTo(0, {table_top} + 100)")
+        page.evaluate(f"window.scrollTo(0, {table_top} + 10)")
         offset_px = page.evaluate("parseFloat(getComputedStyle(document.body).getPropertyValue('--sticky-top'))")
         top = page.eval_on_selector("table.rowlist thead th", "el => el.getBoundingClientRect().top")
         assert abs(top - offset_px) < 1, f"th top {top}px, expected {offset_px}px"
