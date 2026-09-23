@@ -336,8 +336,12 @@ class TestProgressBarAndFullPageSubmit:
         # Called directly (the mechanism under test), not left to the
         # dashboard's own staggered widget loading to fire it on its own
         # schedule — this is what jenFetch does, not what any one page does.
+        # Fired without awaiting the returned promise: page.evaluate() by
+        # default awaits a returned promise, and awaiting jenFetch's own
+        # promise here would block until the (deliberately slow) request
+        # has already finished, defeating the point of checking mid-flight.
         page.route("**/api/alert-summary", self._slow)
-        page.evaluate("window.jenFetch('/api/alert-summary')")
+        page.evaluate("() => { window.jenFetch('/api/alert-summary'); }")
         expect(page.locator("#jen-progress")).to_have_class(re.compile(r"\bactive\b"))
         expect(page.locator("#jen-progress")).not_to_have_class(re.compile(r"\bactive\b"), timeout=5000)
         ctx.close()
@@ -346,16 +350,25 @@ class TestProgressBarAndFullPageSubmit:
     # button[type=submit] on the page (the nav's Logout forms in particular).
     _EXPLAIN_SUBMIT = 'form[action="/tools/explain"] button[type=submit]'
 
-    def test_a_delayed_explain_submit_disables_its_button(self, browser, base_url):
+    def test_explain_submit_disables_its_button_before_navigating(self, browser, base_url):
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        page.route("**/tools/explain?**", self._slow)
         _visit(page, base_url, "/tools/explain")
         page.fill('input[name="mac"]', "aa:bb:cc:dd:ee:ff")
-        page.click(self._EXPLAIN_SUBMIT)
-        expect(page.locator(self._EXPLAIN_SUBMIT)).to_be_disabled()
-        expect(page.locator(self._EXPLAIN_SUBMIT)).to_have_attribute("aria-busy", "true")
+        # Read state back in the SAME script that triggers the click,
+        # before the browser's own (real, unmocked) navigation has a
+        # chance to tear the page down — jenBeginFullPageSubmit runs
+        # synchronously inside the 'submit' handler, ahead of navigation,
+        # so this doesn't need a slow route to observe it; racing a real
+        # click()-then-assert against a real page navigation is exactly
+        # the kind of flake a synchronous round trip avoids.
+        state = page.eval_on_selector(
+            self._EXPLAIN_SUBMIT,
+            "b => { b.click(); return { disabled: b.disabled, ariaBusy: b.getAttribute('aria-busy') }; }",
+        )
+        assert state["disabled"] is True
+        assert state["ariaBusy"] == "true"
         ctx.close()
 
     def test_pageshow_clears_a_stale_disabled_submit_button(self, browser, base_url):
@@ -382,12 +395,19 @@ class TestStickyTableHeaderOnDesktop:
         ctx = browser.new_context(viewport={"width": 1440, "height": 600}, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        _visit(page, base_url, "/leases?subnet=10")
-        expect(page.locator("table.rowlist tbody tr").first).to_be_visible()
-        # Scroll relative to the table's own position, not a fixed guess: the
-        # header only actually sticks once its natural position has scrolled
-        # past --sticky-top, and how much content sits above the table (page
-        # header, filter/action bars) isn't this test's business to hardcode.
+        _visit(page, base_url, "/leases")
+        expect(page.locator("table.rowlist thead th").first).to_be_visible()
+        # This CSS mechanism doesn't care how many real leases this run
+        # happens to have seeded (the non-"demo" default dataset the e2e
+        # job seeds by default is much smaller than the 22-row demo one) —
+        # a spacer forces enough page height to scroll regardless, then
+        # scroll relative to the table's own position, not a fixed guess:
+        # how much sits above it (page header, filter/action bars) isn't
+        # this test's business to hardcode.
+        page.eval_on_selector(
+            "table.rowlist",
+            "el => el.insertAdjacentHTML('afterend', '<div style=\"height:2000px\"></div>')",
+        )
         table_top = page.eval_on_selector("table.rowlist", "el => el.getBoundingClientRect().top + window.scrollY")
         page.evaluate(f"window.scrollTo(0, {table_top} + 100)")
         offset_px = page.evaluate("parseFloat(getComputedStyle(document.body).getPropertyValue('--sticky-top'))")

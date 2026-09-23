@@ -264,14 +264,19 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            already accounts for the section-tab strip, so a header stops right
            under it on Leases/Reservations/etc. and right under the bare nav
            everywhere else. Phone rows don't use a <thead> at all (Q59/Q60), so
-           this is desktop-only on purpose, not just as an optimization. scroll-
-           margin-top on every row is not decorative: without it, a browser (or
-           Playwright's actionability check) scrolling a row into view can land
-           it directly under the now-pinned header, which then intercepts every
-           click on that row — a real bug, not just a test flake. --thead-h is
-           the header row's own height (padding + line height + border). */
+           this is desktop-only on purpose, not just as an optimization.
+           scroll-margin-top helps a browser's native scrollIntoView() leave
+           room above a row it scrolls to, but every rowlist table's trailing
+           actions column is a bare <th></th> (no sort link, nothing to click)
+           — :empty th { pointer-events: none } is what actually stops it
+           from intercepting a click on the row that has scrolled to sit
+           beneath it, which the un-clickable-row-under-header bug came down
+           to (a real bug: Playwright surfaced it, but any scroll landing a
+           row exactly there hit the same thing). --thead-h is the header
+           row's own height (padding + line height + border). */
         @media (min-width: 769px) {
             .table-wrap thead th { position: sticky; top: var(--sticky-top); z-index: 5; }
+            .table-wrap thead th:empty { pointer-events: none; }
             .table-wrap tbody tr { scroll-margin-top: calc(var(--sticky-top) + var(--thead-h)); }
         }
         td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13px; }
