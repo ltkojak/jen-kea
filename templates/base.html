@@ -80,10 +80,10 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         a:hover { text-decoration: underline; }
 
         /* v5.56.4 (Q72a) — a visible keyboard-focus ring everywhere; nothing in
-           this file or ui-classes.css sets outline:none on a :focus-visible
-           selector, so this always wins the cascade even where a plain,
-           non-focus-visible rule (form inputs, the search box) sets outline:none
-           for the mouse/touch case. */
+           this file or the generated utility stylesheet sets outline:none on a
+           :focus-visible selector, so this always wins the cascade even where a
+           plain, non-focus-visible rule (form inputs, the search box) sets
+           outline:none for the mouse/touch case. */
         a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
         textarea:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
             outline: 2px solid var(--primary);
