@@ -16,8 +16,9 @@ from html.parser import HTMLParser
 
 from jinja2 import Environment, FileSystemLoader
 
-from jen.services.icons import icon
+from jen.services.icons import icon, nav_icon
 from jen.services.reltime import relative_time
+from jen.services.row_actions import row_actions_for
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -37,6 +38,10 @@ def _env():
     env = Environment(loader=FileSystemLoader(str(ROOT / "templates")))
     env.globals.update(
         icon=icon,
+        nav_icon=nav_icon,
+        # v5.57.0 (Q73) — the row partials call this directly, the same
+        # global create_app() registers for the real app (jen/__init__.py).
+        plugin_row_actions=row_actions_for,
         csrf_token=lambda: "tok",
         get_manufacturer_icon_url=lambda m: None,
         device_type_display={"phone": ("Phone", "#00b4d8")},
