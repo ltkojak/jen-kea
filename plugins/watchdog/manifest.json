@@ -1,0 +1,32 @@
+{
+  "id": "watchdog",
+  "name": "Host Watchdog",
+  "version": "1.0.0",
+  "description": "Probes chosen hosts on a schedule and alerts when one stops answering, and again when it comes back — the gap Network Discovery leaves, since it only alerts on a new unknown host appearing. Ping (unprivileged ICMP) or TCP connect, added from a Kea reservation, an IPAM Lite entry, or any IP. 7-day uptime, per-target history, a JSON API.",
+  "author": "Matthew Thibodeau",
+  "requires_jen": "5.57.0",
+  "plugin_api": 3,
+  "tags": [
+    "monitoring",
+    "network",
+    "alerts"
+  ],
+  "changelog_url": "https://github.com/ltkojak/jen-plugin-watchdog/blob/main/CHANGELOG.md",
+  "nav": [
+    {
+      "section": "network",
+      "label": "Watchdog",
+      "icon": "activity",
+      "endpoint": "watchdog.index"
+    }
+  ],
+  "os_packages": [
+    "iputils-ping"
+  ],
+  "db_migrations": [
+    {"version": 1, "description": "wd_targets table", "sql": "CREATE TABLE IF NOT EXISTS wd_targets (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, mac VARCHAR(17) NULL, subnet_id INT NULL, label VARCHAR(100), source ENUM('reservation','ipam','manual') NOT NULL DEFAULT 'manual', probe VARCHAR(40) NOT NULL DEFAULT 'ping', interval_min INT NOT NULL DEFAULT 5, fails_to_down INT NOT NULL DEFAULT 3, enabled TINYINT(1) NOT NULL DEFAULT 1, created_by VARCHAR(100), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"},
+    {"version": 2, "description": "wd_state table", "sql": "CREATE TABLE IF NOT EXISTS wd_state (target_id INT PRIMARY KEY, state ENUM('up','down','unknown') NOT NULL DEFAULT 'unknown', since DATETIME NULL, last_ok_at DATETIME NULL, last_fail_at DATETIME NULL, consecutive_fails INT NOT NULL DEFAULT 0, last_error VARCHAR(200))"},
+    {"version": 3, "description": "wd_checks table (pruned to 7 days by the periodic job)", "sql": "CREATE TABLE IF NOT EXISTS wd_checks (id INT AUTO_INCREMENT PRIMARY KEY, target_id INT NOT NULL, checked_at DATETIME DEFAULT CURRENT_TIMESTAMP, ok TINYINT(1) NOT NULL, rtt_ms INT NULL, error VARCHAR(200))"},
+    {"version": 4, "description": "wd_checks: index for the 7-day uptime query and pruning", "sql": "ALTER TABLE wd_checks ADD INDEX idx_target_checked (target_id, checked_at)"}
+  ]
+}

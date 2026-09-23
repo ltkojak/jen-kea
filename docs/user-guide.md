@@ -442,3 +442,24 @@ Below each server's status card, the **Servers** page shows a **Packet health (l
 The block reads **Warn** when drops and parse failures exceed 1% of received traffic (over the trailing window) or any allocation failure occurred, and **Fail** when NAKs exceed 10% of ACKs or drops exceed 10% of received. It needs two snapshots before it can show a rate — the snapshot interval is the same one configured in **Reports → History Settings**.
 
 A **Packet Health** alert fires once when a server's status flips to Warn or Fail, and again when it recovers — see **Alert Channels** above to configure where it's sent. The admin guide's Health Center also carries a `packet_health` row with the always-current verdict.
+
+---
+
+## Plugins
+
+Bundled plugins install from **Settings → Plugins**: click **Install** next to one, Jen downloads and verifies it from its own plugin registry, and it's enabled once Jen restarts.
+
+### Host Watchdog (v5.58.0)
+
+Network Discovery (below) alerts when an *unknown* device shows up on a subnet; Host Watchdog is the other half — it alerts when a device you already know about stops answering, and again when it comes back.
+
+Open **Network → Watchdog** and click **Add Target**. Pick a host already in Jen (a Kea reservation or, if IPAM Lite is installed, an IPAM entry) or type any IPv4 address directly. Choose a probe:
+
+- **Ping (ICMP)** — works without any special privilege on the Jen host.
+- **TCP connect** — one or more ports (e.g. `80,443`); any one answering counts as up. Use this for a host that doesn't respond to ping but does run a service you care about.
+
+Set how often it's checked (1–60 minutes) and how many consecutive failed checks in a row count as "down" (1–10) — a single missed check never alerts by itself, only a genuine run of failures does. Each target's row shows its current state, when it was last seen up, a 7-day uptime percentage, and a history icon with its last 50 checks. Pause a target to stop probing it without losing its history, or delete it outright.
+
+From **Reservations**, the row menu on any reservation offers **Watch this host** as a shortcut to add it without typing the address again.
+
+Watchdog needs `ping` on the Jen host for ICMP targets (`iputils-ping` — Settings → Plugins offers an Install button on a systemd host) but nothing extra for TCP-only targets.

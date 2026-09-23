@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block title %}Host Watchdog{% endblock %}
+{% block content %}
+
+<div class="page-header flex items-center between wrap gap-3">
+    <div>
+        <h1>{{ icon("activity", "ico-lg") }} Host Watchdog</h1>
+        <p>Probes chosen hosts on a schedule — alerts when one stops answering, and again when it's back.</p>
+    </div>
+    {% if is_admin %}
+    <button id="wd-add-btn" class="btn btn-primary">{{ icon("plus") }} Add Target</button>
+    {% endif %}
+</div>
+
+{% if ipv6_enabled %}
+<div class="alert alert-info">{{ icon("info") }} Host Watchdog probes IPv4 addresses only.</div>
+{% endif %}
+
+<div class="card">
+    <div class="flex gap-2 wrap" id="wd-filters">
+        <button class="btn btn-sm btn-primary" data-filter="all">All ({{ rows|length }})</button>
+        <button class="btn btn-sm btn-secondary" data-filter="up">Up</button>
+        <button class="btn btn-sm btn-secondary" data-filter="down">Down</button>
+        <button class="btn btn-sm btn-secondary" data-filter="unknown">Unknown</button>
+        <button class="btn btn-sm btn-secondary" data-filter="paused">Paused</button>
+    </div>
+</div>
+
+<div class="card" style="padding:0;">
+<div class="table-wrap">
+<table id="wd-table" class="rowlist">
+    <thead><tr>
+        <th>Target</th>
+        <th>Status</th>
+        <th>Subnet</th>
+        <th>Last check</th>
+        <th>Uptime (7d)</th>
+        <th>Probe</th>
+        <th></th>
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}
+    <tr data-state="{{ r.state or 'unknown' }}" data-enabled="{{ 1 if r.enabled else 0 }}">
+        <td data-m="primary">
+            {{ r.label or r.ip }}
+            {% if r.label %}<span class="small muted">({{ r.ip }})</span>{% endif %}
+            {% if not r.enabled %}<span class="badge">paused</span>{% endif %}
+        </td>
+        <td data-m="badge">
+            {% if r.state == 'up' %}<span class="ok">{{ icon("circle-check") }} Up</span>
+            {% elif r.state == 'down' %}<span class="bad">{{ icon("circle-x") }} Down</span>
+            {% else %}<span class="muted">{{ icon("circle") }} Unknown</span>{% endif %}
+        </td>
+        <td data-m="hide">{{ r.subnet_name }}</td>
+        <td class="small muted" data-m="hide">{{ r.last_ok_at | utcfmt if r.last_ok_at else '—' }}</td>
+        <td data-m="hide">{{ r.uptime_pct ~ '%' if r.uptime_pct is not none else '—' }}</td>
+        <td class="mono small" data-m="hide">{{ r.probe }}</td>
+        <td data-m="trailing">
+            <div class="flex gap-1 items-center">
+                <button class="btn btn-sm btn-secondary wd-history-btn" title="History" aria-label="History" data-id="{{ r.id }}" data-label="{{ r.label or r.ip }}">{{ icon("clock") }}</button>
+                {% if is_admin %}
+                <form method="POST" action="{{ url_for('watchdog.toggle_target', target_id=r.id) }}" class="contents">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-secondary" title="{{ 'Pause' if r.enabled else 'Resume' }}" aria-label="{{ 'Pause' if r.enabled else 'Resume' }}">
+                        {{ icon("timer") if r.enabled else icon("play") }}
+                    </button>
+                </form>
+                <form method="POST" action="{{ url_for('watchdog.delete_target', target_id=r.id) }}" class="contents"
+                      data-confirm="Stop watching {{ r.label or r.ip }}?">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-sm btn-secondary bad" title="Delete" aria-label="Delete">{{ icon("trash") }}</button>
+                </form>
+                {% endif %}
+            </div>
+        </td>
+    </tr>
+    {% endfor %}
+    {% if not rows %}
+    <tr><td data-m="full" colspan="7" class="center muted">No targets yet. {% if is_admin %}Add one above.{% endif %}</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+</div>
+</div>
+
+{% if is_admin %}
+<div id="wd-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
+<div class="card" style="width:min(460px,94vw);max-height:90vh;overflow-y:auto;">
+    <div class="flex between items-center mb-3">
+        <h3>{{ icon("plus") }} Add Target</h3>
+        <button id="wd-add-close-btn" class="btn btn-sm btn-secondary" aria-label="Close">{{ icon("x") }}</button>
+    </div>
+    <form method="POST" action="{{ url_for('watchdog.add_target') }}" id="wd-add-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="source" id="wd-source" value="manual">
+        <div class="form-group">
+            <label>IP address</label>
+            <input type="text" name="ip" id="wd-ip" list="wd-candidates" class="mono" placeholder="10.0.0.5" required autocomplete="off">
+            <datalist id="wd-candidates">
+                {% for c in candidates %}
+                <option value="{{ c.ip }}">{{ c.label or c.ip }}</option>
+                {% endfor %}
+            </datalist>
+        </div>
+        <div class="form-group">
+            <label>Label <span class="small muted">(optional)</span></label>
+            <input type="text" name="label" id="wd-label" maxlength="100" autocomplete="off">
+        </div>
+        <input type="hidden" name="mac" id="wd-mac" value="">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Probe</label>
+                <select name="probe" id="wd-probe-select">
+                    <option value="ping">Ping (ICMP)</option>
+                    <option value="tcp">TCP connect</option>
+                </select>
+            </div>
+            <div class="form-group" id="wd-tcp-ports-group" style="display:none;">
+                <label>Port(s)</label>
+                <input type="text" id="wd-tcp-ports" placeholder="80,443" autocomplete="off">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Check every</label>
+                <select name="interval_min">
+                    {% for m in interval_choices %}
+                    <option value="{{ m }}" {% if m == 5 %}selected{% endif %}>{{ m }} min</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Down after</label>
+                <select name="fails_to_down">
+                    {% for f in fails_choices %}
+                    <option value="{{ f }}" {% if f == 3 %}selected{% endif %}>{{ f }} failure{{ 's' if f != 1 else '' }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="flex gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Add Target</button>
+            <button type="button" id="wd-add-cancel-btn" class="btn btn-secondary">Cancel</button>
+        </div>
+    </form>
+</div>
+</div>
+{% endif %}
+
+<div id="wd-history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
+<div class="card" style="width:min(480px,94vw);max-height:80vh;overflow-y:auto;">
+    <div class="flex between items-center mb-3">
+        <h3>{{ icon("clock") }} <span id="wd-history-title"></span></h3>
+        <button id="wd-history-close-btn" class="btn btn-sm btn-secondary" aria-label="Close">{{ icon("x") }}</button>
+    </div>
+    <div id="wd-history-body" class="small">Loading…</div>
+</div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+var WD_CANDIDATES = {{ candidates|tojson }};
+
+function _wdModal(id, show) {
+    document.getElementById(id).style.display = show ? 'flex' : 'none';
+}
+
+{% if is_admin %}
+document.getElementById('wd-add-btn').addEventListener('click', function() { _wdModal('wd-add-modal', true); });
+document.getElementById('wd-add-close-btn').addEventListener('click', function() { _wdModal('wd-add-modal', false); });
+document.getElementById('wd-add-cancel-btn').addEventListener('click', function() { _wdModal('wd-add-modal', false); });
+document.getElementById('wd-add-modal').addEventListener('click', function(e) { if (e.target === this) _wdModal('wd-add-modal', false); });
+
+document.getElementById('wd-probe-select').addEventListener('change', function() {
+    var isTcp = this.value === 'tcp';
+    document.getElementById('wd-tcp-ports-group').style.display = isTcp ? '' : 'none';
+});
+
+document.getElementById('wd-ip').addEventListener('input', function() {
+    var match = WD_CANDIDATES.find(function(c) { return c.ip === this.value; }.bind(this));
+    if (!match) return;
+    var labelField = document.getElementById('wd-label');
+    if (!labelField.value) labelField.value = match.label || '';
+    document.getElementById('wd-mac').value = match.mac || '';
+    document.getElementById('wd-source').value = match.source || 'manual';
+});
+
+// Fold the port list into the probe value ('tcp:80,443') just before submit —
+// the <select> only ever carries 'ping' or 'tcp', the port field is separate.
+document.getElementById('wd-add-form').addEventListener('submit', function(e) {
+    var probeSelect = document.getElementById('wd-probe-select');
+    if (probeSelect.value === 'tcp') {
+        var ports = document.getElementById('wd-tcp-ports').value.trim();
+        if (!ports) { e.preventDefault(); alert('Enter at least one port.'); return; }
+        var hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'probe';
+        hidden.value = 'tcp:' + ports;
+        probeSelect.disabled = true;
+        this.appendChild(hidden);
+    }
+});
+{% endif %}
+
+function _wdEscape(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+}
+
+function wdLoadHistory(id, label) {
+    document.getElementById('wd-history-title').textContent = label;
+    var body = document.getElementById('wd-history-body');
+    body.textContent = 'Loading…';
+    _wdModal('wd-history-modal', true);
+    fetch('/network/watchdog/targets/' + id + '/history', {cache: 'no-store'})
+        .then(function(r) { return r.ok ? r.json() : {rows: []}; })
+        .catch(function() { return {rows: []}; })
+        .then(function(d) {
+            var rows = (d && d.rows) || [];
+            if (!rows.length) { body.textContent = 'No checks recorded yet.'; return; }
+            var html = '<table class="rowlist"><thead><tr><th>When (UTC)</th><th>Result</th><th>RTT</th></tr></thead><tbody>';
+            rows.forEach(function(r) {
+                html += '<tr><td class="mono">' + _wdEscape(r.checked_at) + '</td><td class="' + (r.ok ? 'ok' : 'bad') +
+                        '">' + (r.ok ? 'ok' : _wdEscape(r.error || 'failed')) + '</td><td>' +
+                        (r.rtt_ms != null ? r.rtt_ms + ' ms' : '—') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            body.innerHTML = html;
+        });
+}
+
+document.querySelectorAll('.wd-history-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        wdLoadHistory(this.getAttribute('data-id'), this.getAttribute('data-label'));
+    });
+});
+document.getElementById('wd-history-close-btn').addEventListener('click', function() { _wdModal('wd-history-modal', false); });
+document.getElementById('wd-history-modal').addEventListener('click', function(e) { if (e.target === this) _wdModal('wd-history-modal', false); });
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        _wdModal('wd-history-modal', false);
+        {% if is_admin %}_wdModal('wd-add-modal', false);{% endif %}
+    }
+});
+
+document.getElementById('wd-filters').addEventListener('click', function(e) {
+    var btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    var f = btn.getAttribute('data-filter');
+    document.querySelectorAll('#wd-filters button').forEach(function(b) {
+        var on = b === btn;
+        b.classList.toggle('btn-primary', on);
+        b.classList.toggle('btn-secondary', !on);
+    });
+    document.querySelectorAll('#wd-table tbody tr[data-state]').forEach(function(row) {
+        var show = f === 'all' ||
+            (f === 'paused' ? row.getAttribute('data-enabled') === '0' : row.getAttribute('data-state') === f);
+        row.style.display = show ? '' : 'none';
+    });
+});
+</script>
+
+{% endblock %}

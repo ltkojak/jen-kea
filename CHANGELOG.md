@@ -2,6 +2,33 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.58.0-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.57.1-beta.1. A new bundled plugin, Host
+Watchdog 1.0.0 — the first brand-new plugin repo since round 5 started,
+built on Q73's plugin API v3 from its first commit rather than
+retrofitted onto it. Network Discovery alerts when an unknown device
+appears on a subnet; nothing in Jen alerted when a device you already
+know about stopped answering. Host Watchdog fills that gap: pick a
+target — a Kea reservation, an IPAM Lite entry (when that plugin is
+installed), or any bare IPv4 address — and it gets probed on a
+schedule, either an unprivileged ping (the same `cap_net_raw`-on-the-
+binary trick Network Discovery's own neighbour-table read relies on)
+or a plain TCP connect for a host that answers a service but not ICMP.
+
+A pure state machine drives it: a target starts unknown, any single
+successful probe moves it to up, and it only counts as down after a
+configurable run of consecutive failures — a lone network blip never
+flips a healthy target down and pages nobody by mistake. Every due
+target is probed through one shared thread pool, budgeted per run so a
+slow or hung probe can never hold up Jen's other background work.
+Two new plugin-registered alert types fire only on an actual
+transition, each also writing an event to the Timeline; a "Watch this
+host" action is available straight from the Reservations page, watched
+targets show up in Jen's global search, and a small JSON API lets
+another tool read or add targets with a Jen API key, scoped to
+whatever subnets that key can see.
+
 ## [5.57.1-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.57.0-beta.1. IPAM Lite and Network Discovery
