@@ -2,6 +2,31 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.60.1-beta.1] - 2026-09-24
+
+Beta channel. Host Watchdog 1.0.0 and Local DNS Sync 1.0.0 could not
+load on any Jen install, on any version, since the day each shipped.
+Watchdog's periodic probe tick was registered every 1 minute, but
+every Jen release since v5.30.0 refuses a periodic job registered
+more often than every 5 minutes; Local DNS Sync's own alert type was
+registered as `dns_sync_failed`, an all-underscore name, when Jen
+requires a plugin's alert type to start with the plugin's own id —
+`dns-sync`, with a hyphen — so it never matched. Both calls raised on
+every single start, and Jen's per-plugin error handling caught the
+exception, logged one line, and moved on, which meant neither plugin
+ever showed a nav item, registered a route, or did any of the work it
+was installed for — installing and enabling either one did nothing,
+with no error an operator would ever see short of the log itself.
+
+Both are fixed (Watchdog 1.0.1, Local DNS Sync 1.0.1) and bundled
+here. Neither bug was ever caught because the end-to-end test suite
+only ever enabled two of the five bundled plugins; every bundled
+plugin is now enabled in that suite, and a new unit test builds a
+real app with every one of them turned on and asserts each actually
+finishes loading — this is the test that caught both bugs, and it
+runs on every push from here on, for whichever plugin is bundled
+next as well as the five that exist today.
+
 ## [5.60.0-beta.1] - 2026-09-24
 
 Beta channel. Bundles Switch Port Locator 1.0.0, the fifth plugin of
