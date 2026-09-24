@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.58.2-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.58.1-beta.1. No code change — 5.58.1-beta.1
+was tagged and published with its own version bump missing: the tag
+exists and its sticky-header fix (below) is real and correct, but the
+build under that tag reports itself as 5.58.0-beta.1 internally and
+carries no changelog entry for what it actually contains. This release
+is that version bump alone, so the running version, the tag, and the
+changelog agree with each other again. Do not install 5.58.1-beta.1
+directly; take 5.58.2-beta.1 or later.
+
+## [5.58.1-beta.1] - 2026-09-23
+
+Beta channel. Stacked on 5.58.0-beta.1. Sticky table headers, shipped
+in 5.56.4, never actually worked: `position: sticky` sticks to its
+nearest ancestor with its own scrolling mechanism, and `.table-wrap`'s
+`overflow-x: auto` — needed so a wide table can scroll sideways on a
+phone — already made the wrapper that ancestor. A header stuck to the
+wrapper's own scroll box instead of the page, offset by the same
+amount either way: a blank band at the top of an empty-looking table,
+or the header drawn directly over the first rows wherever content
+existed. It affected every table on every desktop page, not only
+Settings → System's Plugins card where a maintainer first spotted it
+on 5.57.1-beta.1 — 5.57.1's own fix correctly diagnosed a symptom (a
+CSS multi-column container makes things worse) but not the actual
+cause, and is superseded here. `.table-wrap` no longer has a scrolling
+mechanism of its own at desktop widths, so a sticky header now sticks
+to the page the way it was always meant to; sideways scroll on a wide
+table becomes an explicit opt-in (`.table-wrap--scroll`), which gives
+up the sticky header in exchange, since the two can't coexist. The
+regression test that should have caught this only checked computed
+CSS properties, never where the header actually rendered — replaced
+with checks against real, on-screen geometry.
+
+This release also bundled Host Watchdog 1.0.0, the first brand-new
+plugin repo of round 5 — see the 5.58.0-beta.1 entry below for what
+it does; this PATCH is the sticky-header fix alone.
+
 ## [5.58.0-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.57.1-beta.1. A new bundled plugin, Host
