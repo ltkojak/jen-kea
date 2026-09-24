@@ -27,7 +27,7 @@ Jen runs as an unprivileged service user. Sending a raw ICMP echo request normal
 
 ## Probing budget
 
-Every due target is probed through one shared 8-thread pool, one run at a time, budgeted at 30 seconds total per periodic tick (which runs once a minute). A run that takes longer than its budget just leaves the slowest targets for the next tick rather than blocking it — a watchdog that hangs waiting on itself would be a poor watchdog.
+Every due target is probed through one shared 8-thread pool, one run at a time, budgeted at 30 seconds total per periodic tick — which runs every 5 minutes, Jen's own floor for any plugin's periodic job; a target's own 1-minute interval choice means "checked on every tick", not literally once a minute. A run that takes longer than its budget just leaves the slowest targets for the next tick rather than blocking it — a watchdog that hangs waiting on itself would be a poor watchdog.
 
 ## Installation
 

@@ -775,9 +775,9 @@ def _maybe_alert(target, error_summary):
     try:
         from jen.plugin_api import send_alert
 
-        send_alert("dns_sync_failed", subnet_id=None, name=target["name"], kind=target["kind"], error=error_summary)
+        send_alert("dns-sync_failed", subnet_id=None, name=target["name"], kind=target["kind"], error=error_summary)
     except Exception as e:
-        logger.warning(f"DNS Sync: could not send dns_sync_failed alert: {e}")
+        logger.warning(f"DNS Sync: could not send dns-sync_failed alert: {e}")
 
 
 # ── Debounce glue (impure: threading.Timer, driven by the pure state above) ────
@@ -1122,7 +1122,7 @@ def register(app):
 
     register_alert_type(
         PLUGIN_ID,
-        "dns_sync_failed",
+        "dns-sync_failed",
         label="DNS Sync: sync failed",
         icon="triangle-alert",
         default_template="⚠️ DNS Sync target <b>{name}</b> ({kind}) failed: {error}",

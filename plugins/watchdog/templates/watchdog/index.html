@@ -128,6 +128,7 @@
                     <option value="{{ m }}" {% if m == 5 %}selected{% endif %}>{{ m }} min</option>
                     {% endfor %}
                 </select>
+                <div class="form-hint">A target is checked at least every 5 minutes regardless — Jen's periodic jobs never run more often than that. Pick 1 to be checked on every 5-minute tick; a longer interval just skips ticks until it's due.</div>
             </div>
             <div class="form-group">
                 <label>Down after</label>

@@ -14,7 +14,14 @@ because `tests/e2e/conftest.py` only ever enabled `ipam` and
 once had their own `register()` actually called by any test.
 
 Needs the real database (plugin migrations run at load time) — a
-normal conftest test, not `--noconftest`.
+normal conftest test, not `--noconftest`. Building a real app also
+runs every bundled plugin's migrations for real (DDL against jen_db,
+which MySQL/MariaDB can't roll back transactionally) and stamps
+`plugin_migrated_ok:<id>` in `settings` — both undone in `finally` by
+diffing `SHOW TABLES` and deleting the settings rows this test wrote,
+so a later test (e.g. test_plugin_migrations.py::TestRealShippedManifests,
+which wants to apply those same migrations itself against a pristine
+DB) never sees this test's leftovers.
 """
 
 import logging
@@ -22,6 +29,7 @@ import os
 
 import jen.services.plugins as plugins_svc
 from jen import extensions
+from jen.models.db import jen_db
 
 
 def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
@@ -35,6 +43,10 @@ def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
     assert shipped, "no bundled plugins found — PLUGIN_DIR_BUNDLED points at the wrong tree"
     for plugin_id in shipped:
         plugins_svc.enable_plugin(plugin_id)
+
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SHOW TABLES")
+        tables_before = {next(iter(r.values())) for r in cur.fetchall()}
 
     saved_loaded = dict(plugins_svc._loaded_plugins)
     plugins_svc._loaded_plugins.clear()
@@ -54,3 +66,13 @@ def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
     finally:
         plugins_svc._loaded_plugins.clear()
         plugins_svc._loaded_plugins.update(saved_loaded)
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW TABLES")
+            tables_after = {next(iter(r.values())) for r in cur.fetchall()}
+            for table in tables_after - tables_before:
+                cur.execute(f"DROP TABLE IF EXISTS `{table}`")
+            for plugin_id in shipped:
+                cur.execute(
+                    "DELETE FROM settings WHERE setting_key IN (%s, %s)",
+                    (f"plugin_migrated_ok:{plugin_id}", f"plugin_migration_failed:{plugin_id}"),
+                )

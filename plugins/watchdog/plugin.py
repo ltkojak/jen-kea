@@ -355,9 +355,10 @@ def _probe_target(target):
 
 
 def _tick():
-    """The periodic job (every minute): probe every due, enabled
-    target through the module pool, one run at a time. Records a
-    wd_checks row and updates wd_state per target; alerts + emits only
+    """The periodic job (every PERIODIC_MIN_MINUTES, Jen's own floor —
+    5 as of v5.57.0-5.60.x): probe every due, enabled target through
+    the module pool, one run at a time. Records a wd_checks row and
+    updates wd_state per target; alerts + emits only
     on a state transition. Prunes wd_checks older than 7 days."""
     if not _run_lock.acquire(blocking=False):
         return
@@ -843,6 +844,13 @@ def register(app):
         register_search_provider,
     )
 
+    try:
+        from jen.plugin_api import PERIODIC_MIN_MINUTES as _tick_every
+    except ImportError:
+        # Jen versions before PERIODIC_MIN_MINUTES was exported (v5.60.1) —
+        # 5 is the actual floor there too, it just wasn't importable yet.
+        _tick_every = 5
+
     api_bp.add_url_rule(
         "/targets", "api_list_targets", api_key_required(write=False)(_api_list_targets), methods=["GET"]
     )
@@ -872,6 +880,6 @@ def register(app):
         method="POST",
     )
     register_search_provider(PLUGIN_ID, title="Host Watchdog", fn=_watchdog_search)
-    register_periodic(PLUGIN_ID, "probe-tick", _tick, 1)
+    register_periodic(PLUGIN_ID, "probe-tick", _tick, _tick_every)
 
     logger.info("Host Watchdog plugin registered")
