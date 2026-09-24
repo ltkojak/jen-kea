@@ -92,6 +92,15 @@ def create_app() -> Flask:
         migrate_legacy_content()
     except Exception as e:
         logger.warning(f"content migration skipped: {e}")
+    # v5.58.3 (Q88) — before load_plugins() runs (below), so a stray
+    # writable copy of a bundled plugin (shadowing the real one, the bug
+    # this release fixes) is gone before this same startup ever loads it.
+    try:
+        from jen.services.plugins import heal_stray_writable_plugin_copies
+
+        heal_stray_writable_plugin_copies()
+    except Exception as e:
+        logger.warning(f"plugin self-heal skipped: {e}")
     # Static for the process lifetime — `sudo ./install.sh` restarts jen.
     global _CONTENT_DIR_INCOMPLETE
     _CONTENT_DIR_INCOMPLETE = content_dir_incomplete()

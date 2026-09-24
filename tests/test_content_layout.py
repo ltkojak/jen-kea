@@ -165,6 +165,13 @@ class TestMigrateLegacyContent:
 
     def test_enabled_marker_relocates_for_bundled_and_installed(self, legacy):
         root, content = legacy
+        # "ipam" is shipped: a matching dir with a manifest exists under
+        # PLUGIN_DIR_BUNDLED (plugins-bundled, per the `legacy` fixture —
+        # deliberately a different path than JEN_ROOT/plugins here, the
+        # pre-5.14.0 flat-layout case shipped_plugin_ids() must still get
+        # right). "thirdparty" is not: no such dir under PLUGIN_DIR_BUNDLED.
+        (root / "plugins-bundled" / "ipam").mkdir(parents=True)
+        (root / "plugins-bundled" / "ipam" / "manifest.json").write_text('{"id":"ipam"}')
         (root / "plugins" / "ipam").mkdir()
         (root / "plugins" / "ipam" / ".enabled").write_text("")
         (root / "plugins" / "thirdparty").mkdir()
@@ -175,6 +182,32 @@ class TestMigrateLegacyContent:
         assert (content / "plugins-enabled" / "thirdparty").exists()
         assert (content / "plugins" / "thirdparty" / "manifest.json").exists()  # non-shipped dir copied
         assert not (content / "plugins" / "ipam").exists()  # shipped dir NOT copied
+
+    def test_a_newly_bundled_plugin_is_not_copied_into_the_writable_tree(self, legacy):
+        """v5.58.3 (Q88) — the actual bug: a plugin bundled after the
+        SHIPPED_PLUGIN_IDS literal was last updated (Host Watchdog,
+        bundled in Q75) got copied into the writable tree on every
+        single start, shadowing the real bundled copy forever —
+        shipped_plugin_ids() reads the directory instead, so a plugin
+        that's bundled is never mistaken for a rescued registry
+        install just because nobody edited a list."""
+        root, content = legacy
+        (root / "plugins-bundled" / "watchdog").mkdir(parents=True)
+        (root / "plugins-bundled" / "watchdog" / "manifest.json").write_text('{"id":"watchdog"}')
+        (root / "plugins" / "watchdog").mkdir()
+        (root / "plugins" / "watchdog" / "manifest.json").write_text('{"id":"watchdog"}')
+        content_svc.migrate_legacy_content()
+        assert not (content / "plugins" / "watchdog").exists()
+
+    def test_a_dir_with_no_bundled_counterpart_is_still_copied(self, legacy):
+        """A genuinely non-bundled dir under the old flat plugins/ layout
+        — a real registry-installed plugin from a pre-5.13 box — is
+        exactly what migrate_legacy_content() exists to rescue."""
+        root, content = legacy
+        (root / "plugins" / "homegrown").mkdir()
+        (root / "plugins" / "homegrown" / "manifest.json").write_text('{"id":"homegrown"}')
+        content_svc.migrate_legacy_content()
+        assert (content / "plugins" / "homegrown" / "manifest.json").exists()
 
     def test_keys_relocate(self, legacy):
         root, content = legacy
@@ -224,6 +257,148 @@ class TestDiscoverPluginsMerge:
         assert plugins_svc._is_enabled("ipam")
         ok, msg = plugins_svc.uninstall_plugin("ipam")
         assert ok and "built-in" in msg and not plugins_svc._is_enabled("ipam")
+
+
+# ── shipped_plugin_ids (v5.58.3, Q88) ───────────────────────────────────────
+
+
+class TestShippedPluginIds:
+    def test_reads_the_bundled_directory(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        (bundled / "ipam").mkdir(parents=True)
+        (bundled / "ipam" / "manifest.json").write_text('{"id":"ipam"}')
+        (bundled / "watchdog").mkdir()
+        (bundled / "watchdog" / "manifest.json").write_text('{"id":"watchdog"}')
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(bundled))
+        assert plugins_svc.shipped_plugin_ids() == frozenset({"ipam", "watchdog"})
+
+    def test_a_dir_with_no_manifest_is_not_a_plugin(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        (bundled / "not-a-plugin").mkdir(parents=True)
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(bundled))
+        assert plugins_svc.shipped_plugin_ids() == frozenset()
+
+    def test_an_absent_bundled_dir_is_an_empty_set_not_an_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(tmp_path / "does-not-exist"))
+        assert plugins_svc.shipped_plugin_ids() == frozenset()
+
+    def test_matches_the_real_bundled_directory_and_the_registry(self, monkeypatch):
+        """The property Q88 exists to guarantee: every id under Jen's own
+        plugins/ (the real tree, not a fixture) is what shipped_plugin_ids()
+        reports for it — no more hand-maintained literal to drift from
+        the directory the moment a plugin is bundled.
+
+        conftest.py's session-scoped, autouse test_database fixture points
+        extensions.PLUGIN_DIR_BUNDLED at an absent temp path for the whole
+        suite (a direct assignment, not a monkeypatch, so it never reverts
+        on its own) — repoint it at the real tree for this one test."""
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", "plugins")
+        real = {
+            name for name in os.listdir("plugins") if os.path.isfile(os.path.join("plugins", name, "manifest.json"))
+        }
+        assert plugins_svc.shipped_plugin_ids() == frozenset(real)
+
+    def test_is_memoised_per_bundled_path_not_globally(self, tmp_path, monkeypatch):
+        first = tmp_path / "first"
+        (first / "a").mkdir(parents=True)
+        (first / "a" / "manifest.json").write_text('{"id":"a"}')
+        second = tmp_path / "second"
+        (second / "b").mkdir(parents=True)
+        (second / "b" / "manifest.json").write_text('{"id":"b"}')
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(first))
+        assert plugins_svc.shipped_plugin_ids() == frozenset({"a"})
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(second))
+        assert plugins_svc.shipped_plugin_ids() == frozenset({"b"})
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(first))
+        assert plugins_svc.shipped_plugin_ids() == frozenset({"a"})
+
+
+# ── heal_stray_writable_plugin_copies (v5.58.3, Q88) ────────────────────────
+
+
+class TestHealStrayWritablePluginCopies:
+    def _setup(self, tmp_path, monkeypatch):
+        bundled = tmp_path / "bundled"
+        writable = tmp_path / "writable"
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(bundled))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(writable))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(tmp_path / "root-absent"))
+        return bundled, writable
+
+    def test_removes_an_identical_stray_copy(self, tmp_path, monkeypatch):
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        for base in (bundled, writable):
+            d = base / "watchdog"
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+            (d / "plugin.py").write_text("REGISTER = True\n")
+        plugins_svc.heal_stray_writable_plugin_copies()
+        assert not (writable / "watchdog").exists()
+
+    def test_leaves_a_modified_copy_in_place(self, tmp_path, monkeypatch):
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        for base, content in ((bundled, "ORIGINAL"), (writable, "EDITED")):
+            d = base / "watchdog"
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+            (d / "plugin.py").write_text(content)
+        plugins_svc.heal_stray_writable_plugin_copies()
+        assert (writable / "watchdog" / "plugin.py").read_text() == "EDITED"
+
+    def test_leaves_a_different_version_in_place(self, tmp_path, monkeypatch):
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        (bundled / "watchdog").mkdir(parents=True)
+        (bundled / "watchdog" / "manifest.json").write_text('{"id":"watchdog","version":"1.1.0"}')
+        (writable / "watchdog").mkdir(parents=True)
+        (writable / "watchdog" / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+        plugins_svc.heal_stray_writable_plugin_copies()
+        assert (writable / "watchdog").exists()
+
+    def test_ignores_pycache_differences(self, tmp_path, monkeypatch):
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        for base in (bundled, writable):
+            d = base / "watchdog"
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+        (writable / "watchdog" / "__pycache__").mkdir()
+        (writable / "watchdog" / "__pycache__" / "plugin.cpython-310.pyc").write_bytes(b"stale bytecode")
+        plugins_svc.heal_stray_writable_plugin_copies()
+        assert not (writable / "watchdog").exists()
+
+    def test_no_writable_copy_is_a_silent_noop(self, tmp_path, monkeypatch):
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        (bundled / "watchdog").mkdir(parents=True)
+        (bundled / "watchdog" / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+        plugins_svc.heal_stray_writable_plugin_copies()  # must not raise
+
+    def test_the_enabled_marker_is_never_touched(self, tmp_path, monkeypatch):
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        enabled_dir = tmp_path / "enabled"
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(enabled_dir))
+        for base in (bundled, writable):
+            d = base / "watchdog"
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+        enabled_dir.mkdir()
+        (enabled_dir / "watchdog").write_text("")
+        plugins_svc.heal_stray_writable_plugin_copies()
+        assert (enabled_dir / "watchdog").exists()
+
+    def test_never_touches_plugin_dir_root(self, tmp_path, monkeypatch):
+        """The self-heal only ever considers PLUGIN_DIR (the legacy
+        www-data-writable tree) — a root-owned install under
+        PLUGIN_DIR_ROOT is never in shipped_plugin_ids()'s own
+        candidate loop target (extensions.PLUGIN_DIR), so it can't be
+        touched even if PLUGIN_DIR_ROOT happens to hold a same-named,
+        differing copy."""
+        bundled, writable = self._setup(tmp_path, monkeypatch)
+        root_owned = pathlib.Path(extensions.PLUGIN_DIR_ROOT)
+        (bundled / "watchdog").mkdir(parents=True)
+        (bundled / "watchdog" / "manifest.json").write_text('{"id":"watchdog","version":"1.0.0"}')
+        (root_owned / "watchdog").mkdir(parents=True)
+        (root_owned / "watchdog" / "manifest.json").write_text('{"id":"watchdog","version":"9.9.9"}')
+        plugins_svc.heal_stray_writable_plugin_copies()
+        assert (root_owned / "watchdog" / "manifest.json").read_text() == '{"id":"watchdog","version":"9.9.9"}'
 
 
 class TestContentDirIncompleteBanner:

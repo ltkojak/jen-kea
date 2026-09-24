@@ -1017,6 +1017,22 @@ class TestBundledCopiesMatchRegistry:
             assert not pathlib.Path(f"plugins/{plugin_id}/plugin.zip").exists(), plugin_id
             assert not pathlib.Path(f"plugins/{plugin_id}/.enabled").exists(), plugin_id
 
+    def test_every_bundled_dir_is_a_shipped_plugin_id(self, monkeypatch):
+        """v5.58.3 (Q88) — the other half of the reverse check the class
+        docstring already does (every registry entry IS bundled): every
+        id shipped_plugin_ids() reports for the real plugins/ tree is
+        also a registry entry, and vice versa. Set equality, not a
+        hand-maintained literal that can silently stop matching the
+        directory the moment a new plugin is bundled without it.
+
+        conftest.py's session-scoped, autouse test_database fixture points
+        extensions.PLUGIN_DIR_BUNDLED at an absent temp path for the whole
+        suite (a direct assignment, not a monkeypatch, so it never reverts
+        on its own) — repoint it at the real tree for this one test."""
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", "plugins")
+        registry_ids = {e["id"] for e in json.loads(pathlib.Path("plugins/registry.json").read_text(encoding="utf-8"))}
+        assert plugins_svc.shipped_plugin_ids() == frozenset(registry_ids)
+
 
 class TestOsPackages:
     """v5.30.0 (Q30, A1) — manifest `os_packages`: Jen reports what's

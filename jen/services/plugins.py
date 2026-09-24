@@ -58,11 +58,13 @@ database — see _DDL_ALREADY_IN_EFFECT.
 """
 
 import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -75,10 +77,45 @@ logger = logging.getLogger(__name__)
 # In-memory registry of loaded plugin metadata
 _loaded_plugins: dict[str, dict] = {}
 
-# The plugin ids Jen ships in its own tree (extensions.PLUGIN_DIR_BUNDLED).
 # Registry-installed plugins go to extensions.PLUGIN_DIR (CONTENT_DIR); a
-# same-id copy there wins. Uninstalling a shipped plugin only disables it.
-SHIPPED_PLUGIN_IDS = frozenset({"ipam", "network-discovery"})
+# same-id copy there wins over the bundled one. Uninstalling a shipped
+# plugin only disables it. Which ids Jen ships is shipped_plugin_ids()
+# below, not a literal — see its docstring for why.
+_shipped_plugin_ids_cache: dict[str, frozenset[str]] = {}
+
+
+def shipped_plugin_ids() -> frozenset[str]:
+    """The plugin ids Jen ships in its own tree (extensions.PLUGIN_DIR_BUNDLED)
+    — derived from the directory itself (v5.58.3, Q88), not the
+    hand-maintained `SHIPPED_PLUGIN_IDS` literal it replaces, which
+    silently went stale the moment a plugin was bundled without
+    updating it: `migrate_legacy_content()` treated the new plugin as
+    a rescued pre-5.13 registry install and copied it into the
+    writable tree on every startup, so it never stopped shadowing the
+    bundled copy no matter how many times an operator reinstalled it.
+
+    Memoised per distinct `extensions.PLUGIN_DIR_BUNDLED` value (not a
+    single flat cache): the directory's contents never change during a
+    real running process — an upgrade always starts a fresh one — but
+    the test suite patches PLUGIN_DIR_BUNDLED to different paths
+    within the same process, and a cache that didn't key on the path
+    would silently serve a wrong answer to whichever test ran first.
+
+    Deliberately free of Flask/app context — called from
+    jen/services/content.py before the app is fully built."""
+    base = extensions.PLUGIN_DIR_BUNDLED
+    cached = _shipped_plugin_ids_cache.get(base)
+    if cached is not None:
+        return cached
+    ids = set()
+    if os.path.isdir(base):
+        for name in os.listdir(base):
+            if _PLUGIN_ID_RE.match(name) and os.path.isfile(os.path.join(base, name, "manifest.json")):
+                ids.add(name)
+    result = frozenset(ids)
+    _shipped_plugin_ids_cache[base] = result
+    return result
+
 
 # Every function below that turns a plugin_id into a filesystem path must
 # validate it against this first — a plugin_id is attacker-influenced input
@@ -98,6 +135,98 @@ _PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 def valid_plugin_id(plugin_id: str) -> bool:
     return bool(plugin_id) and bool(_PLUGIN_ID_RE.match(plugin_id))
+
+
+# ── Self-heal a stray writable copy of a bundled plugin (v5.58.3, Q88) ────────
+
+
+def _read_manifest_version(plugin_dir: str) -> str | None:
+    try:
+        with open(os.path.join(plugin_dir, "manifest.json"), encoding="utf-8") as f:
+            return json.load(f).get("version")
+    except (OSError, ValueError):
+        return None
+
+
+def _plugin_tree_files(root: str) -> dict:
+    """{relative/path: sha256} for every file under root, skipping
+    __pycache__ (present locally, never in a release tarball or a
+    fresh checkout, so comparing it would always report a difference
+    that isn't one)."""
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for fn in filenames:
+            full = os.path.join(dirpath, fn)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            try:
+                with open(full, "rb") as f:
+                    out[rel] = hashlib.sha256(f.read()).hexdigest()
+            except OSError:
+                out[rel] = ""
+    return out
+
+
+def _plugin_trees_identical(writable: str, bundled: str) -> tuple:
+    """(identical: bool, reason: str). The manifest version is checked
+    first — cheap, and gives a clearer reason than "N files differ"
+    for the common case of a stale copy from an older bundled
+    version — then every file's sha256 if the versions do match."""
+    wv = _read_manifest_version(writable)
+    bv = _read_manifest_version(bundled)
+    if wv != bv:
+        return False, f"manifest.json version differs (writable={wv!r}, bundled={bv!r})"
+    wf = _plugin_tree_files(writable)
+    bf = _plugin_tree_files(bundled)
+    only_writable = sorted(set(wf) - set(bf))
+    if only_writable:
+        return False, f"{only_writable[0]} exists only in the writable copy"
+    only_bundled = sorted(set(bf) - set(wf))
+    if only_bundled:
+        return False, f"{only_bundled[0]} exists only in the bundled copy"
+    for rel in sorted(wf):
+        if wf[rel] != bf[rel]:
+            return False, f"{rel} differs"
+    return True, ""
+
+
+def heal_stray_writable_plugin_copies() -> None:
+    """A plugin bundled after this box's install (or any 5.58.0-5.58.2
+    box, which hit the bug fixed above) can have a stray writable copy
+    under extensions.PLUGIN_DIR that migrate_legacy_content() copied
+    there by mistake, shadowing the bundled one — Reinstall can never
+    fix it, since the next start just copies it back. Removes that
+    stray copy automatically when it is genuinely identical to the
+    bundled one (manifest version and every file's sha256 both match);
+    leaves it — with a warning naming the first difference — when it
+    isn't, since an operator may have edited it. The `.enabled` marker
+    is untouched either way; never touches PLUGIN_DIR_ROOT (root-owned
+    installs) or PLUGIN_DIR_BUNDLED itself (read-only, and one of the
+    updater's own rollback items). Called once from create_app(),
+    before load_plugins() — same "never crash the factory" discipline
+    as migrate_legacy_content(), which this runs alongside."""
+    for plugin_id in shipped_plugin_ids():
+        writable = os.path.join(extensions.PLUGIN_DIR, plugin_id)
+        bundled = os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)
+        if not os.path.isdir(writable):
+            continue
+        try:
+            identical, reason = _plugin_trees_identical(writable, bundled)
+        except OSError as e:
+            logger.warning(f"could not compare writable and bundled copies of '{plugin_id}': {e}")
+            continue
+        if identical:
+            version = _read_manifest_version(bundled) or "?"
+            try:
+                shutil.rmtree(writable)
+                logger.info(f"removed stray writable copy of '{plugin_id}' (identical to the bundled v{version})")
+            except OSError as e:
+                logger.warning(f"could not remove stray writable copy of '{plugin_id}': {e}")
+        else:
+            logger.warning(
+                f"'{plugin_id}' has both a bundled and a writable copy that differ ({reason}) — leaving the "
+                "writable copy in place; an operator may have edited it"
+            )
 
 
 # ── Versioning helper ─────────────────────────────────────────────────────────
@@ -624,7 +753,7 @@ def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str)
         return f"installed v{version}", "PLUGIN_INSTALL", f"root-owned install completed v{version}"
 
     remove_plugin_row(plugin_id)
-    if os.path.isdir(os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)):
+    if plugin_id in shipped_plugin_ids():
         detail = f"the built-in copy of '{plugin_id}' is active again"
     else:
         disable_plugin(plugin_id)
@@ -881,8 +1010,7 @@ def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
 
     path = os.path.join(extensions.PLUGIN_DIR, plugin_id)
     if not os.path.isdir(path):
-        bundled = os.path.join(extensions.PLUGIN_DIR_BUNDLED, plugin_id)
-        if os.path.isdir(bundled):
+        if plugin_id in shipped_plugin_ids():
             disable_plugin(plugin_id)
             _loaded_plugins.pop(plugin_id, None)
             return True, f"'{plugin_id}' is a built-in plugin and can't be removed — it has been disabled instead."

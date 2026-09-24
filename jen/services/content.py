@@ -147,18 +147,31 @@ def migrate_legacy_content() -> None:
         except OSError as e:
             logger.warning(f"content migrate (branding): favicon: {e}")
 
-    # plugins: a registry-installed plugin whose id is NOT one Jen ships
-    # (ipam, network-discovery) → copy the dir; the .enabled marker (bundled
-    # ones too) → recreate under plugins-enabled/<id>.
-    from jen.services.plugins import SHIPPED_PLUGIN_IDS
+    # plugins: a registry-installed plugin whose id is NOT one Jen ships →
+    # copy the dir; the .enabled marker (bundled ones too) → recreate under
+    # plugins-enabled/<id>. shipped_plugin_ids() (v5.58.3, Q88) derives the
+    # shipped set from extensions.PLUGIN_DIR_BUNDLED itself, replacing a
+    # hand-maintained literal that went stale the moment a new plugin was
+    # bundled without updating it — that plugin then looked like a rescued
+    # pre-5.13 registry install and got copied here on every single start.
+    from jen.services.plugins import shipped_plugin_ids
 
+    shipped = shipped_plugin_ids()
     if os.path.isdir(old_plugins):
         for pid in os.listdir(old_plugins):
             src = os.path.join(old_plugins, pid)
             if not os.path.isdir(src):
                 continue
             dst = os.path.join(extensions.CONTENT_PLUGIN_DIR, pid)
-            if pid not in SHIPPED_PLUGIN_IDS and not os.path.exists(dst):
+            # Belt and braces: this loop is reading the very directory
+            # shipped_plugin_ids() describes, so check it directly too — the
+            # two can never actually disagree in a modern (5.14.0+) install
+            # (old_plugins IS extensions.PLUGIN_DIR_BUNDLED there), but this
+            # is exactly the kind of "the set silently stopped matching the
+            # directory" bug this Q exists to close, so don't trust the set
+            # alone a second time.
+            is_shipped = pid in shipped or os.path.isdir(os.path.join(extensions.PLUGIN_DIR_BUNDLED, pid))
+            if not is_shipped and not os.path.exists(dst):
                 try:
                     os.makedirs(extensions.CONTENT_PLUGIN_DIR, exist_ok=True)
                     shutil.copytree(src, dst)
