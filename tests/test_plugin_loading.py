@@ -16,12 +16,16 @@ once had their own `register()` actually called by any test.
 Needs the real database (plugin migrations run at load time) — a
 normal conftest test, not `--noconftest`. Building a real app also
 runs every bundled plugin's migrations for real (DDL against jen_db,
-which MySQL/MariaDB can't roll back transactionally) and stamps
-`plugin_migrated_ok:<id>` in `settings` — both undone in `finally` by
-diffing `SHOW TABLES` and deleting the settings rows this test wrote,
-so a later test (e.g. test_plugin_migrations.py::TestRealShippedManifests,
-which wants to apply those same migrations itself against a pristine
-DB) never sees this test's leftovers.
+which MySQL/MariaDB can't roll back transactionally), records each one
+in `plugin_schema_migrations` (plugin_id, version), and stamps
+`plugin_migrated_ok:<id>` in `settings` — all three undone in `finally`
+(diff `SHOW TABLES` for anything newly created; delete this test's own
+rows from `plugin_schema_migrations` and `settings` otherwise, since
+that tracking table itself is shared with other tests and must never
+be dropped), so a later test (e.g.
+test_plugin_migrations.py::TestRealShippedManifests, which wants to
+apply those same migrations itself against a pristine DB) never sees
+this test's leftovers.
 """
 
 import logging
@@ -69,8 +73,18 @@ def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
         with jen_db() as db, db.cursor() as cur:
             cur.execute("SHOW TABLES")
             tables_after = {next(iter(r.values())) for r in cur.fetchall()}
-            for table in tables_after - tables_before:
+            new_tables = tables_after - tables_before
+            for table in new_tables:
                 cur.execute(f"DROP TABLE IF EXISTS `{table}`")
+            if "plugin_schema_migrations" not in new_tables:
+                # It already existed (another test's fixture created it
+                # first) — never drop a table this test doesn't own, just
+                # remove the rows THIS run inserted.
+                placeholders = ",".join(["%s"] * len(shipped))
+                cur.execute(
+                    f"DELETE FROM plugin_schema_migrations WHERE plugin_id IN ({placeholders})",
+                    tuple(shipped),
+                )
             for plugin_id in shipped:
                 cur.execute(
                     "DELETE FROM settings WHERE setting_key IN (%s, %s)",
