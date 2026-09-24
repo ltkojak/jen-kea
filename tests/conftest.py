@@ -361,6 +361,18 @@ def db():
 
 
 @pytest.fixture(autouse=True)
+def _reset_capabilities_cache():
+    """v5.64.0 (Q83) — jen.services.capabilities caches a server's Kea version
+    for 60 s; every test starts (and ends) with none, so one test's mocked
+    Kea can never answer for the next."""
+    from jen.services import capabilities
+
+    capabilities.invalidate()
+    yield
+    capabilities.invalidate()
+
+
+@pytest.fixture(autouse=True)
 def clean_tables(db):
     yield
     with db.cursor() as cur:

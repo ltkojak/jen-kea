@@ -1199,6 +1199,47 @@ field, a copy-pasted value with trailing garbage) from becoming a
 broken `<style>` block or, worse, closing it early — not to defend
 against a superadmin acting in bad faith.
 
+### 3.14 Per-server capabilities: one place that knows what a Kea server can do (v5.64.0)
+
+Availability used to be decided by whoever needed it, from the raw
+ingredients — a helper version compared to a threshold, a Kea version tuple,
+"is this direct mode" — and each site worded its own reason. The helper-version
+gate alone lived in three places (the SSH card's button, the installer's
+"already" answer, the feature's own check), which is what the old rule
+"change all three together" was guarding against.
+`jen.services.capabilities` is now the single answer: `derive()` (pure — no
+I/O) turns a Kea version, the connection mode, the recorded helper version and
+the Dhcp4 config Jen already caches into a frozen `ServerCapabilities`;
+`for_server(id)` gathers those inputs (memoised per request, the Kea version
+cached 60 s per server, dropped by a Health Center refresh) and calls it;
+`ServerCapabilities.why(name)` is the one sentence a page shows when a
+capability is off. Health Center → Kea → "Server capabilities" lists what is on
+and off per server, built from the status rows that run already fetched.
+
+| Capability | On when | Derived from |
+|---|---|---|
+| `control_agent` | Control Agent mode and Kea < 3.2 (`ca_deprecated`: 3.0–3.1; `ca_removed`: ≥ 3.2) | mode, Kea version |
+| `direct_control` | Jen is in direct mode | mode |
+| `direct_socket` | Kea ≥ 2.7.2 (unknown counts as yes) | Kea version |
+| `helper` / `tls` / `trace` | a helper version is recorded / ≥ 4 (`install-tls`) / ≥ 5 (`tail-log`) and SSH is configured | recorded helper status, SSH host |
+| `packet_stats`, `config_test` | the server answered `version-get` | reachability |
+| `packet_drop_reasons` | Kea ≥ 3.2 (the extra `pkt4-*` counters, Q52) | Kea version |
+| `ha_commands`, `lease_cmds`, `host_cmds` | `libdhcp_ha.so` / `libdhcp_lease_cmds.so` / `libdhcp_host_cmds.so` loaded | Dhcp4 `hooks-libraries` |
+| `ddns` | `dhcp-ddns.enable-updates` is true | Dhcp4 config |
+| `kea32_ready` | direct mode and (no SSH, or the helper is current) | mode, helper, SSH |
+
+Two things it does not pretend. A server that never answered has no version, so
+every version-gated capability is off and `reachable` says why. The hook- and
+DDNS-derived capabilities come from the config Jen already caches for the
+ACTIVE server; another server's config is not fetched for a capability
+lookup, so they are off there with a `why()` that says Jen has no config to
+read (`hooks_known` is the flag). A host Jen has never heard from
+(`helper_known` False) is not the same as one recorded as having no helper:
+Trace still makes its one attempt on the former and refuses the latter
+without touching SSH. `tests/test_capabilities.py` pins the derivation table
+and a scanner proving no route re-derives any of this itself;
+`tests/kea_compat/` checks the derivation against the real daemon.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:

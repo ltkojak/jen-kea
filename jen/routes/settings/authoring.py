@@ -15,6 +15,7 @@ from flask_login import login_required
 import jen.config as __config
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.capabilities as __caps
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
 import jen.services.kea_host as __host
@@ -59,7 +60,7 @@ def _author_kea_detect(service: str):
     autodetected_interfaces = []
     ca_socket = None
     detected_addresses = []
-    direct_mode = extensions.KEA_CONNECTION_MODE == "direct"
+    direct_mode = __caps.is_direct()
     try:
         ssh = __kea6._connect_ssh(target_server)
         try:
@@ -164,7 +165,7 @@ def author_kea_config(service):
     # Control Agent config to read the real one from (the common case in
     # direct mode). Editable in the form; kea-dhcpX -t validates it.
     default_socket = ca_socket or f"/run/kea/kea{'4' if service == 'dhcp4' else '6'}-ctrl-socket"
-    direct_mode = extensions.KEA_CONNECTION_MODE == "direct"
+    direct_mode = __caps.is_direct()
 
     # v5.10.3 — every ssh-configured server gets its own bind picker. An
     # HA pair has two management IPs; 5.10.2 detected one address on the
@@ -321,7 +322,7 @@ def _author_kea_common(service, form):
     if not (db_host and db_user and db_name):
         return None, None, "Database host, username, and name are required."
 
-    direct = extensions.KEA_CONNECTION_MODE == "direct"
+    direct = __caps.is_direct()
     bind_addresses = {}
     interfaces_by_server = {}
     tls = None
@@ -421,7 +422,7 @@ def _author_kea_config_for(service, server, common, subnets):
     direct mode only, since that's the only mode with a per-server
     section in the form) wins when present, in both connection modes."""
     ifaces = common["interfaces_by_server"].get(server.get("id")) or common["interfaces"]
-    if extensions.KEA_CONNECTION_MODE != "direct":
+    if not __caps.is_direct():
         config = __authoring.build_new_kea_config(
             service, ifaces, common["lease_db"], common["control_socket_path"], subnets, api_socket=None
         )

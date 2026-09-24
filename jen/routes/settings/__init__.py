@@ -33,7 +33,7 @@ from flask_login import current_user, login_required
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
-import jen.services.kea as __kea
+import jen.services.capabilities as __caps
 import jen.services.mfa as __mfa
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
@@ -91,15 +91,15 @@ def settings():
 
     # v5.10.0 — one version-get does double duty: reachability + the
     # number we need to warn when ca mode won't survive the running Kea.
-    _kea_ver = __kea.kea_command("version-get", timeout=3)
-    kea_up = _kea_ver.get("result") == 0
+    # v5.64.0 (Q83) — the same single version-get, read through
+    # jen.services.capabilities instead of comparing tuples here.
+    _caps = __caps.for_primary(with_config=False)
+    kea_up = _caps.reachable
     hints["kea"] = [("Kea: connected", "ok") if kea_up else ("Kea: unreachable", "bad")]
-    if kea_up and extensions.KEA_CONNECTION_MODE == "ca":
-        _vt = __kea.parse_kea_version(_kea_ver.get("arguments", {}).get("extended", "") or _kea_ver.get("text", ""))
-        if _vt is not None and _vt >= (3, 2, 0):
-            hints["kea"].append(("Control Agent removed in this Kea — switch to direct mode", "bad"))
-        elif _vt is not None and _vt >= (3, 0, 0):
-            hints["kea"].append(("Control Agent deprecated — switch to direct mode", "warn"))
+    if kea_up and _caps.ca_removed:
+        hints["kea"].append(("Control Agent removed in this Kea — switch to direct mode", "bad"))
+    elif kea_up and _caps.ca_deprecated:
+        hints["kea"].append(("Control Agent deprecated — switch to direct mode", "warn"))
     if not extensions.KEA_SSH_HOST:
         hints["kea"].append(("SSH not configured", "warn"))
 

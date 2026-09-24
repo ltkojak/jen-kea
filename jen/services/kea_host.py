@@ -165,6 +165,9 @@ _D2_NEEDS_HELPER = "D2 needs jen-kea-helper v3+ on this host — install or upda
 # https setup path needs it, so it gates that path (tls_supported)
 # rather than nagging every host through JEN_HELPER_WANT_VERSION.
 TLS_HELPER_MIN_VERSION = 4
+# v5.64.0 (Q83) — `tail-log` (Trace) arrived in helper v5 (bounded deque);
+# jen.services.capabilities derives the `trace` capability from this.
+TRACE_HELPER_MIN_VERSION = 5
 # v5.29.1 — the HELPER_VERSION of the jen-kea-helper file this install
 # ships (tests/test_kea_host.py pins it to the file). Distinct from
 # JEN_HELPER_WANT_VERSION on purpose: WANT drives the amber "upgrade

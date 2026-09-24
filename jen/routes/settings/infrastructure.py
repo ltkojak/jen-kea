@@ -19,6 +19,7 @@ from flask_login import current_user, login_required
 import jen.config as __config
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.capabilities as __caps
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 from jen import extensions
@@ -113,8 +114,7 @@ def _kea_servers_with_helper_status():
                 # v5.29.0 (Q29) — the https option of "Set up direct socket"
                 # needs the v4 helper (install-tls); same fail-closed rule
                 # as kea_host.tls_supported, computed from this one read.
-                "tls_supported": isinstance(st.get("version"), int)
-                and st.get("version") >= kea_host.TLS_HELPER_MIN_VERSION,
+                "tls_supported": __caps.helper_caps(st.get("version"))["tls"],
             }
         )
     return rows
@@ -159,15 +159,16 @@ def settings_kea():
     # removes it in 3.2). One extra version-get on an already-reachable
     # server; skipped entirely when Kea is down.
     kea_version = ""
-    kea_version_tuple = None
     if kea_up:
-        _vr = __kea.kea_command("version-get")
-        if _vr.get("result") == 0:
-            kea_version = (_vr.get("arguments", {}).get("extended", "") or _vr.get("text", "")).splitlines()[0].strip()
-            kea_version_tuple = __kea.parse_kea_version(kea_version)
-    ca_mode = extensions.KEA_CONNECTION_MODE == "ca"
-    ca_deprecation_warning = ca_mode and kea_version_tuple is not None and kea_version_tuple >= (3, 0, 0)
-    ca_removed = ca_mode and kea_version_tuple is not None and kea_version_tuple >= (3, 2, 0)
+        # v5.64.0 (Q83) — the primary's version and what it implies for the
+        # connection mode come from jen.services.capabilities (one cached
+        # version-get per minute), not a private comparison here.
+        _caps = __caps.for_primary(with_config=False)
+        kea_version = _caps.kea_version_text
+    else:
+        _caps = __caps.derive()
+    ca_deprecation_warning = _caps.ca_deprecated or _caps.ca_removed
+    ca_removed = _caps.ca_removed
 
     ssh_pub_key = ""
     if os.path.exists(extensions.SSH_KEY_PATH + ".pub"):
@@ -207,7 +208,7 @@ def settings_kea():
     # save routes validate their own field; this catches a URL that was
     # valid in ca mode and became invalid when the mode was switched.
     direct_port_warnings = []
-    if extensions.KEA_CONNECTION_MODE == "direct":
+    if __caps.is_direct():
 
         def _needs_port(u):
             return bool(u) and not __auth.valid_api_url(u, require_port=True)
@@ -271,7 +272,7 @@ def settings_kea():
     # v5.29.0 (Q29) — per-daemon control sockets exist from Kea 2.7.2; hide
     # the "Set up direct socket" forms when the primary is KNOWN to be
     # older (unknown = show them; the route re-checks before writing).
-    direct_socket_supported = kea_version_tuple is None or kea_version_tuple >= (2, 7, 2)
+    direct_socket_supported = _caps.direct_socket
     ipv6_enabled = __kea6.is_ipv6_enabled()
     # v5.38.0 (Q37) — the Kea 3.2 readiness one-liner on the servers card.
     readiness = None
@@ -449,8 +450,8 @@ def save_infra_kea6():
     inherit_db_pass = request.form.get("inherit_db_pass", "") == "1"
     db_name = request.form.get("db_name", "").strip()
 
-    if api_url and not __auth.valid_api_url(api_url, require_port=(extensions.KEA_CONNECTION_MODE == "direct")):
-        if extensions.KEA_CONNECTION_MODE == "direct":
+    if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
+        if __caps.is_direct():
             flash(
                 "The Kea6 API URL must be a valid http(s):// URL with an explicit port "
                 "in direct mode (e.g. http://kea:8006).",
@@ -529,8 +530,8 @@ def save_infra_d2():
     api_pass = request.form.get("api_pass", "").strip()
     inherit_api_pass = request.form.get("inherit_api_pass", "") == "1"
 
-    if api_url and not __auth.valid_api_url(api_url, require_port=(extensions.KEA_CONNECTION_MODE == "direct")):
-        if extensions.KEA_CONNECTION_MODE == "direct":
+    if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
+        if __caps.is_direct():
             flash(
                 "The D2 API URL must be a valid http(s):// URL with an explicit port "
                 "in direct mode (e.g. http://kea:53001).",
@@ -691,7 +692,7 @@ def probe_kea():
     """
     from urllib.parse import urlparse
 
-    configured_mode = extensions.KEA_CONNECTION_MODE
+    configured_mode = "direct" if __caps.is_direct() else "ca"
     attempts = []
 
     service = "dhcp6" if request.form.get("service", "").strip() == "dhcp6" else "dhcp4"
@@ -771,7 +772,7 @@ def probe_kea():
         rec = ("Reached Kea, but couldn't parse a version from its reply.", "warn")
     elif identified_key == "Control-agent":
         daemon_port = 8006 if service == "dhcp6" else 8004
-        if v < (3, 2, 0):
+        if __caps.ships_control_agent(v):
             # Maintainer decision (2026-09-13, Q26 Q1) — Kea still
             # supports the Control Agent at this version, so this is a
             # config gap to fix, not a dead end: stay on ca mode until
@@ -814,13 +815,13 @@ def probe_kea():
             f"Kea {version} answered on its direct control socket — this is the mode to use for Kea 3.2+.",
             "ok",
         )
-    elif v < (2, 7, 2):
+    elif not __caps.supports_direct_socket(v):
         rec = (
             f"Kea {version} predates per-daemon control sockets (2.7.2), so the Control Agent is the only "
             "option here. Plan a Kea upgrade before moving to 3.2.",
             "warn",
         )
-    elif v < (3, 2, 0):
+    elif __caps.ships_control_agent(v):
         # Maintainer decision (2026-09-13, Q26 Q1) — this recommendation
         # is what led a real box into direct mode with no daemon http
         # socket configured at all (D2's identity branch above is what
@@ -1151,7 +1152,7 @@ def setup_direct_socket(server_id, service):
     # that's the exact 2026-09-13 confusion, and Kea would fail to bind
     # a port the agent already holds (a restart failure, not a clear
     # message).
-    if extensions.KEA_CONNECTION_MODE == "ca":
+    if __caps.is_ca():
         ca = urlparse(server.get("api_url", ""))
         if ca.hostname == address and ca.port == port:
             flash(
@@ -1170,7 +1171,7 @@ def setup_direct_socket(server_id, service):
     if vr.get("result") == 0:
         ver_text = (vr.get("arguments", {}).get("extended", "") or vr.get("text", "")).splitlines()[0].strip()
         v = __kea.parse_kea_version(ver_text)
-        if v and v < (2, 7, 2):
+        if v and not __caps.supports_direct_socket(v):
             flash(
                 f"Kea {'.'.join(str(n) for n in v)} on {name} predates per-daemon control sockets (2.7.2), so "
                 "the Control Agent is the only option there. Plan a Kea upgrade first — nothing was changed.",
@@ -1187,7 +1188,7 @@ def setup_direct_socket(server_id, service):
         from jen.services import kea_host as __host
         from jen.services import kea_tls as __tls
 
-        if not __host.tls_supported(server_id):
+        if not __caps.for_server(server_id, probe_kea=False).tls:
             flash(f"{name}: {__host._TLS_NEEDS_HELPER}", "error")
             return back
         jen_ca, _jen_ca_key = __tls.ca_paths()
@@ -1255,7 +1256,7 @@ def setup_direct_socket(server_id, service):
     if result.status in ("aborted", "rollback_failed"):
         flash("Jen's own settings were not changed.", "info")
         return back
-    mode_now = "Control Agent" if extensions.KEA_CONNECTION_MODE == "ca" else "direct"
+    mode_now = "Control Agent" if __caps.is_ca() else "direct"
     if result.status == "restart_failed":
         flash(
             f"The socket is in {conf} on {name} but {daemon} did NOT restart, so it isn't listening yet. "
@@ -1289,17 +1290,17 @@ def setup_direct_socket(server_id, service):
         __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} probe=failed")
         return back
 
-    was_ca = extensions.KEA_CONNECTION_MODE == "ca"
+    was_ca = __caps.is_ca()
     written = _write_direct_socket_config(server, service, new_url, user, password, tls=(scheme == "https"))
     __user.set_global_setting("restart_pending", "true")
     flash(f"{daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
-    if service != "dhcp4" and extensions.KEA_CONNECTION_MODE == "ca":
+    if service != "dhcp4" and __caps.is_ca():
         flash(
             "Jen is still in Control Agent mode — set up kea-dhcp4's direct socket to switch it over; "
             "until then this URL is only used in direct mode.",
             "info",
         )
-    if service == "dhcp4" and was_ca and extensions.KEA_CONNECTION_MODE == "direct":
+    if service == "dhcp4" and was_ca and __caps.is_direct():
         others = _servers_not_on_direct_sockets(server_id)
         if others:
             flash(
@@ -1364,7 +1365,7 @@ def rotate_kea_ca():
         if not server.get("ssh_host"):
             blocked.append(f"{label} (no SSH host)")
             continue
-        if not __host.tls_supported(sid):
+        if not __caps.for_server(sid, probe_kea=False).tls:
             blocked.append(f"{label} (helper below v4)")
             continue
         targets.append((server, copy["service"], urlparse(url).hostname or ""))
@@ -1732,7 +1733,7 @@ def save_extra_servers():
         if kc.strip() and not __auth.valid_remote_path(kc.strip()):
             flash(f"Invalid Kea config path: {kc.strip()}", "error")
             return redirect(url_for("settings.settings_kea"))
-    _require_port = extensions.KEA_CONNECTION_MODE == "direct"
+    _require_port = __caps.is_direct()
     for u in api_urls:
         if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
             flash(f"Invalid API URL: {u.strip()}", "error")

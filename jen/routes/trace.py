@@ -19,6 +19,7 @@ from flask import Blueprint, abort, render_template, request
 from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
+import jen.services.capabilities as __caps
 import jen.services.kea_host as __host
 import jen.services.kea_log_trace as __trace
 from jen import extensions
@@ -114,16 +115,21 @@ def trace_page():
             subnet_map = get_accessible_subnet_map()
             known_subnets = {int(lease["subnet_id"])} if lease and lease.get("subnet_id") else set()
             known_subnets |= {int(r["subnet_id"]) for r in reservations if r["subnet_id"]}
-            # Helper-only: a host whose recorded helper version is None (known
-            # legacy) is refused without touching SSH, and tail_log(helper_only)
-            # never falls back to the legacy `sudo tail` grant.
-            recorded = __host.helper_status().get(str(server.get("id")))
-            if recorded is not None and recorded.get("version") is None:
+            # Helper-only: a host Jen has recorded as unable to serve Trace (no
+            # helper, or one older than v5) is refused without touching SSH, and
+            # tail_log(helper_only) never falls back to the legacy `sudo tail`
+            # grant. A host Jen has never heard from still gets one attempt.
+            # (v5.64.0, Q83 — the gate is capabilities' `trace`, and the message
+            # is its own `why("trace")`.)
+            caps = __caps.for_server(server.get("id"), probe_kea=False)
+            if caps.helper_known and not caps.trace:
                 res = {"ok": False, "code": "no-helper"}
+                trace_refusal = caps.why("trace")
             else:
                 res = __host.tail_log(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S, helper_only=True)
+                trace_refusal = NEEDS_HELPER
             if res["code"] == "no-helper":
-                ctx["error"] = NEEDS_HELPER
+                ctx["error"] = trace_refusal
             elif res["code"] == "missing":
                 ctx["error"] = (
                     f"Log file not found on the Kea server: {extensions.DHCP4_LOG}. "

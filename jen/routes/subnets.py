@@ -17,6 +17,7 @@ import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.capabilities as __caps
 import jen.services.dhcp_options as __opts
 import jen.services.isc_dhcp_import as __isc
 import jen.services.kea as __kea
@@ -1173,12 +1174,12 @@ def _kea_version():
     only needs it as a widest-compatible fallback when the config doesn't
     already commit to an old/new key spelling somewhere."""
     try:
-        result = __kea.kea_command("version-get", server=__kea.get_active_kea_server())
+        active = __kea.get_active_kea_server()
+        # v5.64.0 (Q83) — the version lookup is jen.services.capabilities'
+        # (cached 60 s per server), not a private version-get here.
+        return __caps.for_server(active.get("id"), with_config=False).kea_version
     except Exception:
         return None
-    if result.get("result") != 0:
-        return None
-    return __kea.parse_kea_version(result.get("arguments", {}).get("extended", "") or result.get("text", ""))
 
 
 def _live_dhcp4_cfg():

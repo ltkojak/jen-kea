@@ -13,7 +13,8 @@ Groups and check ids are stable (tests and the JSON twin key off them):
 
   kea       kea_reachable · kea_version_supported · kea_ha_state ·
             kea_hooks · kea_time_sync · kea_config_drift ·
-            kea_subnets_declared · config_doctor · packet_health
+            kea_subnets_declared · config_doctor · packet_health ·
+            capabilities
   capacity  pool_utilization · lease_snapshot_fresh
   ddns      d2_reachable · d2_errors · dns_reconcile
   jen       cert_expiry · db_jen · db_kea · schema_current ·
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import jen.models.db as __db
+import jen.services.capabilities as __caps
 import jen.services.capacity as __capacity
 import jen.services.kea as __kea
 from jen import extensions
@@ -166,6 +168,32 @@ def _kea_version_supported(ctx) -> Check:
         return c
     c.status = worst
     c.detail = "; ".join(notes) if notes else "all reachable servers on a supported Kea"
+    return c
+
+
+def _capabilities(ctx) -> Check:
+    """v5.64.0 (Q83) — what each server can do, from jen.services.capabilities
+    (built from the status rows this run already fetched: no extra Kea call).
+    Informational: it never warns or fails on its own — an unreachable
+    server is `kea_reachable`'s to report, a missing helper the helper
+    row's. A refresh also drops the cached capabilities other pages hold,
+    so the next page load reads live."""
+    c = Check("capabilities", "Server capabilities", "kea", fix_url="/servers")
+    __caps.invalidate()
+    statuses = ctx["server_status"]
+    if not statuses:
+        c.status, c.detail = "skip", "no server status available"
+        return c
+    active_id = (ctx.get("active_server") or {}).get("id")
+    parts = []
+    for s in statuses:
+        is_active = active_id is not None and (s.get("server") or {}).get("id") == active_id
+        caps = __caps.from_status(s, dhcp4_cfg=ctx.get("dhcp4_config") if is_active else None)
+        rows = caps.as_rows()
+        on = [label for _n, label, is_on in rows if is_on]
+        off = [label for _n, label, is_on in rows if not is_on]
+        parts.append(f"{_server_name(s['server'])} — on: {', '.join(on) or 'none'} · off: {', '.join(off) or 'none'}")
+    c.status, c.detail = "ok", "; ".join(parts)
     return c
 
 
@@ -1162,6 +1190,7 @@ _CHECKS = [
     _kea_subnets_declared,
     _config_doctor,
     _packet_health,
+    _capabilities,
     _pool_utilization,
     _pool_exhaustion_forecast,
     _lease_snapshot_fresh,
@@ -1194,6 +1223,7 @@ _CHECK_META = {
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),
     "packet_health": ("Packet health", "kea"),
+    "capabilities": ("Server capabilities", "kea"),
     "pool_utilization": ("Pool utilization", "capacity"),
     "pool_exhaustion_forecast": ("Pool exhaustion forecast", "capacity"),
     "lease_snapshot_fresh": ("Lease snapshots current", "capacity"),
