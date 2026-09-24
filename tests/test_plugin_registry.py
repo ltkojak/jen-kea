@@ -551,6 +551,7 @@ class TestConsumePluginResults:
         bundled = tmp_path / "bundled"
         requests_dir.mkdir()
         (bundled / "q24-consume-c").mkdir(parents=True)
+        (bundled / "q24-consume-c" / "manifest.json").write_text('{"id":"q24-consume-c"}')
         (requests_dir / "q24-consume-c.remove.result").write_text("ok\n")
         monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(requests_dir))
         monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(bundled))
