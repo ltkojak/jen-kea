@@ -111,10 +111,14 @@ class TestSearchToInvestigate:
 
         page.locator("a", has_text="Investigate").first.click()
         page.wait_for_url("**/client?q=**")
-        assert "aa:bb:cc:dd:ee:01" in page.locator('input[name="q"]').input_value().lower()
+        # base.html's own nav also carries a search box named "q" (desktop
+        # + mobile drawer) — scope to this page's own form, not the global
+        # nav search, to avoid a Playwright strict-mode ambiguity.
+        q_input = 'form[action="/client"] input[name="q"]'
+        assert "aa:bb:cc:dd:ee:01" in page.locator(q_input).input_value().lower()
 
         for tab in ("Explain", "Trace", "Timeline", "Dns", "Config", "Overview"):
             page.locator(".badge", has_text=tab).first.click()
             page.wait_for_load_state("networkidle")
             assert f"tab={tab.lower()}" in page.url
-            assert "aabbccddee01" in page.locator('input[name="q"]').input_value().lower().replace(":", "")
+            assert "aabbccddee01" in page.locator(q_input).input_value().lower().replace(":", "")
