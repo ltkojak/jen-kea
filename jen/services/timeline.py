@@ -7,6 +7,12 @@ rows mentioning it, its `devices` bookends, and its current lease and
 reservation. Both `GET /timeline` (the page) and `GET /api/v1/timeline/
 {mac}` (the API) call `build_timeline()` — one merge, two renderings.
 
+v5.63.0 (Q82) — the device/lease/reservation/v6-address lookups and the
+moved-client subnet filtering are `jen.services.client_subject`'s now
+(the same queries, moved verbatim); this module keeps only what's
+actually Timeline's own job — merging events/audit/alert rows and
+labelling them (`related`, `previous_holder`).
+
 No access control here — callers resolve the subject's subnet_id
 (`subnet_id_for()`) and gate the whole response themselves; a client
 identified only by IP with no lease/device/reservation on record has no
@@ -16,7 +22,7 @@ subnet to gate on at all.
 import logging
 
 import jen.models.db as __db
-import jen.services.kea6 as __kea6
+from jen.services import client_subject as __subject
 
 logger = logging.getLogger(__name__)
 
@@ -26,70 +32,6 @@ logger = logging.getLogger(__name__)
 # row). Fixed SQL statements only (bandit B608) — never built with an
 # f-string/join, even over these fixed values; only parameters vary.
 _NEVER_MATCH = "\x00\x00\x00"
-
-
-def _mac_from_ip(ip: str) -> str:
-    """The active lease's MAC for this IP, or ''."""
-    try:
-        with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute("SELECT HEX(hwaddr) AS mac_hex FROM lease4 WHERE address=inet_aton(%s) AND state=0", (ip,))
-            row = cur.fetchone()
-    except Exception:
-        return ""
-    if not row or not row["mac_hex"]:
-        return ""
-    hexed = row["mac_hex"]
-    return ":".join(hexed[i : i + 2] for i in range(0, 12, 2)).lower()
-
-
-def _current_lease(mac: str, ip: str) -> dict | None:
-    try:
-        with __db.kea_db() as db, db.cursor() as cur:
-            if mac:
-                cur.execute(
-                    "SELECT inet_ntoa(address) AS ip, subnet_id, IFNULL(hostname,'') AS hostname, expire "
-                    "FROM lease4 WHERE HEX(hwaddr)=%s AND state=0 ORDER BY expire DESC LIMIT 1",
-                    (mac.replace(":", "").upper(),),
-                )
-            else:
-                cur.execute(
-                    "SELECT inet_ntoa(address) AS ip, subnet_id, IFNULL(hostname,'') AS hostname, expire "
-                    "FROM lease4 WHERE address=inet_aton(%s) AND state=0",
-                    (ip,),
-                )
-            return cur.fetchone()
-    except Exception:
-        return None
-
-
-def _current_reservation(mac: str) -> dict | None:
-    if not mac:
-        return None
-    try:
-        with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute(
-                "SELECT host_id, dhcp4_subnet_id AS subnet_id, inet_ntoa(ipv4_address) AS ip, "
-                "IFNULL(hostname,'') AS hostname FROM hosts WHERE HEX(dhcp_identifier)=%s AND dhcp_identifier_type=0",
-                (mac.replace(":", "").upper(),),
-            )
-            return cur.fetchone()
-    except Exception:
-        return None
-
-
-def _device(mac: str) -> dict | None:
-    if not mac:
-        return None
-    try:
-        with __db.jen_db() as db, db.cursor() as cur:
-            cur.execute(
-                "SELECT mac, device_name, first_seen, last_seen, last_ip, last_hostname, last_subnet_id "
-                "FROM devices WHERE mac=%s",
-                (mac,),
-            )
-            return cur.fetchone()
-    except Exception:
-        return None
 
 
 def subnet_id_for(device, lease, reservation) -> int | None:
@@ -112,17 +54,6 @@ def _address_only(subject_is_mac: bool, mac: str, text: str):
     if subject_is_mac and mac and mac not in text:
         return "address"
     return None
-
-
-def _v6_visible(addr: dict, accessible_v4_ids) -> bool:
-    """Devices-page rule for a restricted caller: a v6 address shows only when
-    its v6 subnet is paired to a v4 subnet the caller can access; an unpaired
-    (or unknown) v6 subnet is unrestricted-only."""
-    from jen import extensions
-
-    info = extensions.SUBNET6_MAP.get(addr.get("subnet_id"))
-    paired = info.get("paired_subnet4_id") if info else None
-    return paired is not None and paired in accessible_v4_ids
 
 
 def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_ids=None) -> dict:
@@ -148,19 +79,21 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
     # header (device, reservation) and to label earlier holders — never to
     # widen which rows are matched: an IP timeline is about the ADDRESS, so it
     # must not pull in the holder's activity on other addresses.
-    holder_mac = _mac_from_ip(ip) if (not mac and ip) else ""
+    holder_mac = __subject.mac_from_ip(ip) if (not mac and ip) else ""
     ctx_mac = mac or holder_mac
 
-    device = _device(ctx_mac)
-    lease = _current_lease(mac, ip)
-    reservation = _current_reservation(ctx_mac)
+    device = __subject.load_device(ctx_mac)
+    leases4 = __subject.load_leases4(mac, ip)
+    lease = leases4[0] if leases4 else None
+    reservations = __subject.load_reservations4(__subject.mac_hex(ctx_mac)) if ctx_mac else []
+    reservation = reservations[0] if reservations else None
     if not ip and lease:
         ip = lease["ip"]
     elif not ip and device:
         ip = device.get("last_ip") or ""
 
     rows: list[dict] = []
-    mac_hex = ctx_mac.replace(":", "").upper() if ctx_mac else ""
+    mac_hex = __subject.mac_hex(ctx_mac) if ctx_mac else ""
 
     if mac or ip:
         # Fixed statements throughout (bandit B608) — mac/ip are always
@@ -250,26 +183,30 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
     # kea6.lease6_by_hwaddr_mac()). No access control here either, same
     # as everything else in this function — the caller already gates the
     # whole response on subnet_id_for()'s v4 subnet, and passes
-    # accessible_v4_ids for a restricted caller (see _v6_visible).
+    # accessible_v4_ids for a restricted caller (the v6-pairing rule now
+    # lives in client_subject.load_leases6).
     v6_addresses = []
     if mac:
         try:
-            if __kea6.is_ipv6_enabled():
-                v6_addresses = __kea6.lease6_by_hwaddr_mac().get(mac, [])
-                if accessible_v4_ids is not None:
-                    v6_addresses = [a for a in v6_addresses if _v6_visible(a, accessible_v4_ids)]
+            v6_addresses = __subject.load_leases6(mac, accessible_v4_ids)
         except Exception as e:
             logger.error(f"timeline v6 address lookup failed for mac={mac!r}: {e}")
 
     subnet_id = subnet_id_for(device, lease, reservation)
     if accessible_v4_ids is not None:
         # A client that moved subnets: judge the device, the lease and the
-        # reservation each on ITS OWN subnet (see access.filter_client_view),
-        # not all of them on one "subject" subnet.
-        from jen.services.access import filter_client_view
-
-        view = filter_client_view({"device": device, "lease": lease, "reservation": reservation}, accessible_v4_ids)
-        device, lease, reservation, subnet_id = view["device"], view["lease"], view["reservation"], view["subnet_id"]
+        # reservation each on ITS OWN subnet (Q55/Q56's rule, now
+        # client_subject.authorize(rule="per_object")), not all of them on
+        # one "subject" subnet.
+        subject = __subject.ClientSubject(
+            kind="mac",
+            device=device,
+            leases4=[lease] if lease else [],
+            reservations=[reservation] if reservation else [],
+        )
+        authorized = __subject.authorize(subject, rule="per_object", accessible_ids=accessible_v4_ids)
+        device, lease, reservation = authorized.device, authorized.lease, authorized.reservation
+        subnet_id = subnet_id_for(device, lease, reservation)
         if not supplied_ip:  # the IP was derived from an object that may now be hidden
             ip = (lease["ip"] if lease else "") or ((device or {}).get("last_ip") or "")
 

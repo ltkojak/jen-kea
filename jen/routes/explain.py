@@ -8,6 +8,12 @@ jen/services/dhcp_explain.py, render.
 
 Subnet-restricted users only ever see the decision for subnets they can
 access: the answer reveals a subnet's pools and options.
+
+v5.63.0 (Q82) — the reservation/lease lookups are
+`jen.services.client_subject`'s `load_reservations4`/`load_leases4` now
+(the same queries, moved verbatim) — Explain's own private resolver is
+gone; `_hex_identifier` stays here since Trace still imports it for its
+own mac-only lookups.
 """
 
 import logging
@@ -15,8 +21,8 @@ import logging
 from flask import Blueprint, flash, render_template, request
 from flask_login import login_required
 
-import jen.models.db as __db
 import jen.services.auth as __auth
+from jen.services import client_subject as __subject
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import INPUT_LABELS, explain
 from jen.services.subnet_context import dhcp4_config
@@ -38,65 +44,17 @@ def _hex_identifier(value: str) -> str:
 
 
 def _load_reservations(mac_hex: str, cid_hex: str) -> list[dict]:
-    """Host-DB reservations for either identifier, with their option-data."""
-    if not mac_hex and not cid_hex:
-        return []
-    rows: list[dict] = []
-    try:
-        with __db.kea_db() as db, db.cursor() as cur:
-            # One fixed statement; an absent identifier is passed as '' and
-            # can't match anything (HEX() of a real identifier is never empty).
-            cur.execute(
-                "SELECT host_id, dhcp4_subnet_id AS subnet_id, dhcp_identifier_type AS identifier_type, "
-                "HEX(dhcp_identifier) AS identifier, inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_client_classes "
-                "FROM hosts WHERE (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=0) "
-                "OR (HEX(dhcp_identifier)=%s AND dhcp_identifier_type=3)",
-                (mac_hex or "", cid_hex or ""),
-            )
-            for r in cur.fetchall():
-                classes = [c.strip() for c in str(r.get("dhcp4_client_classes") or "").split(",") if c.strip()]
-                cur.execute(
-                    "SELECT code, formatted_value, HEX(value) AS value_hex FROM dhcp4_options WHERE host_id=%s",
-                    (r["host_id"],),
-                )
-                options = [
-                    {
-                        "code": o["code"],
-                        "data": o["formatted_value"] if o["formatted_value"] else (o["value_hex"] or ""),
-                    }
-                    for o in cur.fetchall()
-                ]
-                rows.append(
-                    {
-                        "subnet_id": r["subnet_id"] or 0,
-                        "identifier_type": int(r["identifier_type"] or 0),
-                        "identifier": (r["identifier"] or "").lower(),
-                        "ip": r["ip"],
-                        "hostname": r["hostname"] or "",
-                        "classes": classes,
-                        "options": options,
-                        "source": "host database",
-                    }
-                )
-    except Exception as e:
-        logger.error(f"explain: reservation lookup failed: {e}")
-    return rows
+    return __subject.load_reservations4(mac_hex, cid_hex)
 
 
 def _load_lease(mac_hex: str) -> dict | None:
+    """The newest active lease for this hw-address hex, or None — the
+    single-object shape this route (and Trace, which imports this) has
+    always used; client_subject.load_leases4 returns every active lease."""
     if not mac_hex:
         return None
-    try:
-        with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute(
-                "SELECT inet_ntoa(address) AS ip, subnet_id, expire FROM lease4 "
-                "WHERE HEX(hwaddr)=%s AND state=0 ORDER BY expire DESC LIMIT 1",
-                (mac_hex,),
-            )
-            return cur.fetchone()
-    except Exception as e:
-        logger.error(f"explain: lease lookup failed: {e}")
-        return None
+    leases = __subject.load_leases4(__subject.hex_to_mac(mac_hex))
+    return leases[0] if leases else None
 
 
 @bp.route("/tools/explain")

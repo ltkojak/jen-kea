@@ -23,6 +23,7 @@ import jen.services.kea_host as __host
 import jen.services.kea_log_trace as __trace
 from jen import extensions
 from jen.routes.explain import _hex_identifier, _load_lease, _load_reservations
+from jen.services import client_subject as __subject
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import explain
@@ -59,8 +60,14 @@ def trace_page():
     # Kea's log has no per-line subnet boundary Jen can trust: the last 1000
     # lines can carry a MAC's EARLIER activity in a subnet the caller cannot
     # access, whatever its current lease says. So, like config history and
-    # Doctor, Trace needs unrestricted subnet access (docs/ARCHITECTURE.md §2).
-    if not current_user.all_subnets:
+    # Doctor, Trace needs unrestricted subnet access (docs/ARCHITECTURE.md §2)
+    # — the "unrestricted" policy, via client_subject.authorize() (v5.63.0,
+    # Q82), same as the Investigation page's own Trace tab uses.
+    try:
+        __subject.authorize(
+            __subject.ClientSubject(kind="mac"), rule="unrestricted", all_subnets=current_user.all_subnets
+        )
+    except __subject.ClientNotAuthorized:
         abort(403, description="Trace needs access to all subnets.")
     mac_raw = (request.args.get("mac") or "").strip().lower()
     server = _pick_server((request.args.get("server") or "").strip())

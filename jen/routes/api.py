@@ -18,6 +18,7 @@ import jen.services.kea as __kea
 from jen import extensions
 from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
+from jen.services import client_subject as __subject
 from jen.services.access import diagnostic_surface
 from jen.services.api_auth import api_auth as _api_auth
 from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
@@ -413,10 +414,14 @@ def api_v1_device_by_mac(mac):
     scope = _api_key_subnet_ids(key)
     mac_fmt = mac.lower().replace("-", ":")
     try:
-        with jen_db() as db, kea_db() as kdb:
-            with db.cursor() as cur:
-                cur.execute("SELECT * FROM devices WHERE mac=%s", (mac_fmt,))
-                row = cur.fetchone()
+        # v5.63.0 (Q82) — the device lookup itself is client_subject's now
+        # (the same query every other consumer uses); the lease query below
+        # stays this route's own — it needs the raw row regardless of
+        # lease state (to report `online: false` rather than 404) and a
+        # precomputed `obtained` column client_subject.load_leases4 doesn't
+        # return, so it isn't a fit for the shared loader.
+        row = __subject.load_device(mac_fmt)
+        with kea_db() as kdb:
             if not row or (scope is not None and row["last_subnet_id"] not in scope):
                 return api_error("Device not found.", 404)
             mac_clean = mac_fmt.replace(":", "").upper()
