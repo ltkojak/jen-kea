@@ -509,14 +509,19 @@ class TestStickyTableHeaderOnDesktop:
             # the table itself from scrolling out from under it.
             page.evaluate(f"window.scrollTo(0, {initial_top - sticky_top_px + 200})")
             page.wait_for_timeout(100)
-            th_top = page.eval_on_selector("table.rowlist thead th", "el => Math.round(el.getBoundingClientRect().top)")
-            # The first row in DOM order may itself have scrolled above the
-            # viewport by now (40 rows, a 200px overshoot) — "the first
-            # visible row" means the first one not already scrolled past,
-            # i.e. the first whose own top is still >= 0.
+            header_rect = page.eval_on_selector(
+                "table.rowlist thead th",
+                "el => { var r = el.getBoundingClientRect(); return { top: Math.round(r.top), bottom: Math.round(r.bottom) }; }",
+            )
+            th_top = header_rect["top"]
+            # "The first visible row" means the first row not obscured by
+            # the sticky header at all — its own top must clear the
+            # header's BOTTOM edge, not just be >= 0 (a row whose top sits
+            # between 0 and the header's bottom is still partly hidden
+            # behind it).
             first_row_top = page.eval_on_selector(
                 "table.rowlist tbody",
-                "el => { var first = [...el.children].find(r => r.getBoundingClientRect().top >= 0); "
+                f"el => {{ var first = [...el.children].find(r => r.getBoundingClientRect().top >= {header_rect['bottom']}); "
                 "return first ? Math.round(first.getBoundingClientRect().top) : null; }",
             )
             assert f"{th_top}px" == sticky_top, f"th top is {th_top}px, --sticky-top is {sticky_top!r}"
