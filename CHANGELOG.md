@@ -2,6 +2,41 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.62.1-beta.1] - 2026-09-24
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.62.0-beta.1
+run; test-only, no user-facing behavior change.
+
+Turns the authorization matrix from a convention into something CI
+enforces. `tests/test_authz_matrix.py::SURFACES` has proven for a
+while that every diagnostic route -- Explain, Trace, Timeline, Doctor,
+the Devices page, global search, the client-shaped REST API, and a
+handful more -- refuses to leak one subnet's client through a caller
+scoped to another. What it never did was stop the *next* such route
+shipping without a row of its own; the comment next to the list saying
+"adding a surface later is one row" was something a person had to
+remember, not something that could fail a pull request.
+
+A new `diagnostic_surface` decorator marks a route as part of that
+surface, and the app factory resolves every tagged route into a
+registry right after startup. The test suite now checks, both ways,
+that the routes carrying the decorator and the routes `SURFACES`
+actually exercises are exactly the same set -- so a new diagnostic
+route with no matrix row, or a stale matrix row whose route stopped
+being decorated, each fail by name. A second, independent check scans
+every route for a direct reference to a client table and requires it
+to be either decorated or explicitly justified as a CRUD page or
+aggregate view that already has its own subnet-restriction test
+elsewhere.
+
+Building that comparison found four routes the matrix already covers
+that a first pass at the decorator's target list missed --
+`/ddns/reconcile`, `/reports`, `/servers`, and the dashboard's
+catalog-data events feed -- plus the write half of one already-covered
+API path. All are decorated now, closing the gap before it could ever
+have been exploited: these were already properly gated, just not yet
+provably so by the enforced list.
+
 ## [5.62.0-beta.1] - 2026-09-24
 
 Beta channel. Bundles Presence 1.0.0, the fifth and final plugin of
