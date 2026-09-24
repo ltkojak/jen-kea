@@ -2,6 +2,22 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.58.3-beta.1] - 2026-09-24
+
+Beta channel. A plugin bundled after a box's own install used to get
+copied into the writable plugin tree at every single start and shown
+in Plugin Manager as "writable — reinstall to harden," and reinstalling
+never fixed it: the next start just copied it right back. Host Watchdog
+hit this the moment it was bundled in 5.58.0 because the check for
+"is this one Jen ships" was a hand-maintained list that nobody updated
+when a new plugin joined the bundled tree — it now reads the bundled
+directory itself instead, so bundling a plugin can never leave it
+looking like a stray, rescued install again. A box already showing the
+"writable" state removes the stray copy automatically on its next start,
+as long as it's byte-for-byte identical to the shipped one; if it isn't
+(an operator edited it), the copy is left alone and a warning names the
+first file that differs. Nothing else changes.
+
 ## [5.58.2-beta.1] - 2026-09-23
 
 Beta channel. Stacked on 5.58.1-beta.1. No code change — 5.58.1-beta.1
