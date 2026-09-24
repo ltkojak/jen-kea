@@ -485,3 +485,11 @@ Every switch is polled every ten minutes. Type a MAC into the search box on the 
 When a known device's port changes — whether it moves to a different port on the same switch or to a different switch entirely — Switch Port Locator records the change, so a repeat lookup always reflects where it is now.
 
 Switch Port Locator needs `snmpbulkwalk` on the Jen host (package `snmp` — Settings → Plugins offers an Install button on a systemd host).
+
+### Wake & Actions (v5.61.0)
+
+Every Lease, Reservation, and Device row gains a **Wake** action: click it, confirm the MAC it's about to wake, and Jen sends a standard Wake-on-LAN magic packet straight away — no separate tool needed to get a sleeping machine back online.
+
+Open **Management → Wake** to see and manage a list of favourites: hosts you wake often enough to want one click from a dedicated page instead of hunting them down on Leases or Reservations. Add one by MAC address (reservations you can access appear in the picker as you type), with an optional label, an IP to help Jen work out which subnet it's on, and an optional SecureOn password for hardware that expects one. Each favourite remembers when it was last woken and by whom.
+
+A wake packet goes out to both the target subnet's own broadcast address and the general broadcast address, which covers the common case of Jen and its targets sharing the same network; a target on a different network needs directed broadcast allowed on the router between them. Jen won't send more than one wake packet to the same MAC within five seconds, however it was triggered.

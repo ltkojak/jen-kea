@@ -322,5 +322,37 @@
       "snmp"
     ],
     "plugin_api": 3
+  },
+  {
+    "id": "wol",
+    "name": "Wake & Actions",
+    "version": "1.0.0",
+    "description": "Wake-on-LAN from any lease, reservation, or device row, plus a favourites list for the hosts you wake often. Sends a standard magic packet (with optional SecureOn password) to both the subnet's directed broadcast and 255.255.255.255.",
+    "author": "Matthew Thibodeau",
+    "requires_jen": "5.57.0",
+    "tags": [
+      "network",
+      "automation"
+    ],
+    "nav": [
+      {
+        "section": "management",
+        "label": "Wake",
+        "icon": "zap",
+        "endpoint": "wol.index"
+      }
+    ],
+    "db_migrations": [
+      {
+        "version": 1,
+        "description": "wol_hosts table",
+        "sql": "CREATE TABLE IF NOT EXISTS wol_hosts (id INT AUTO_INCREMENT PRIMARY KEY, mac VARCHAR(17) NOT NULL UNIQUE, ip VARCHAR(15) NULL, subnet_id INT NULL, label VARCHAR(100), secureon VARCHAR(23) NULL, last_woken_at DATETIME NULL, last_woken_by VARCHAR(100) NULL)"
+      }
+    ],
+    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.0.0",
+    "sha256": "d3f39ad1a9ddc1f841c5d17aad73fb5ee9d507f20f71bd0e6b21653952b97835",
+    "changelog_url": "https://github.com/ltkojak/jen-plugin-wol/blob/main/CHANGELOG.md",
+    "source_url": "https://github.com/ltkojak/jen-plugin-wol",
+    "plugin_api": 3
   }
 ]

@@ -2,6 +2,31 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.61.0-beta.1] - 2026-09-24
+
+Beta channel. Bundles Wake & Actions 1.0.0, the fourth plugin of
+round 5 and the first built on top of the row actions Q73 added:
+every Lease, Reservation, and Device row gains a Wake button that
+sends a standard Wake-on-LAN magic packet straight away, with a
+confirmation naming the actual MAC before it goes out. A favourites
+page (Management → Wake) keeps a short list of the hosts worth waking
+from a dedicated page instead of hunting them down elsewhere, with an
+optional label, an IP to help work out the subnet, and an optional
+SecureOn password for hardware that expects one; every favourite
+remembers when it was last woken and by whom.
+
+A wake packet always goes to both the target subnet's own broadcast
+address and the general broadcast address, and is rate-limited to
+once per MAC every five seconds no matter which entry point sent it —
+the favourites page, a row action, or the plugin's own JSON API.
+
+This release also gives `register_row_action`'s `confirm` text the
+same placeholder substitution `href` has always had — Wake & Actions
+is the first plugin to actually need a confirmation naming the row it
+applies to, and a raw `{mac}` slipping through unsubstituted would
+have shown the literal braces instead of the address about to be
+woken.
+
 ## [5.60.1-beta.1] - 2026-09-24
 
 Beta channel. Host Watchdog 1.0.0 and Local DNS Sync 1.0.0 could not
