@@ -2,6 +2,47 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.64.0-beta.1] - 2026-09-24
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.63.0-beta.1
+run.
+
+Jen now has one place that knows what each Kea server can do. Before
+this, every feature worked out its own availability from the raw
+ingredients -- which helper version a host reports, which Kea version
+answered, whether Jen is talking to the Control Agent or to each
+daemon's own socket -- and each worded its own reason when the answer
+was no. The Kea host helper's version gate in particular lived in three
+places at once, which is why changing it meant remembering all three.
+A new capabilities layer derives the answer once, from the Kea version,
+the connection mode, the helper version Jen last recorded and the
+configuration it already reads, and every page that used to decide for
+itself now asks it: the Control Agent deprecation and removal notices
+and the direct-socket forms on Settings -> Kea, the https-socket check
+that needs a current helper, Trace's helper requirement, the hints on
+the Settings landing page and the direct-socket recommendations.
+
+What a page tells you when something isn't available is now one
+sentence per capability, in one place -- for example, Trace says it
+needs the Kea host helper v5 and names the Settings page that installs
+it. One behavior is deliberately sharper than before: Trace used to
+refuse only a host recorded as having no helper at all; a host recorded
+with a helper too old to serve Trace (older than v5) now gets the same
+clear refusal instead of a confusing log-read failure. A host Jen has
+never heard from still gets its one attempt.
+
+The Health Center gains a "Server capabilities" row listing, per
+server, what is on and what is off. It is informational -- an
+unreachable server is still reported by the reachability row and a
+missing helper by the helper row -- and it costs nothing extra: it is
+built from the server status the Health Center had already fetched.
+Two limits are stated rather than hidden: a server that never answered
+has no version, so everything that depends on one shows as off; and the
+hook and DDNS items are read from the active server's configuration
+only, so another server shows them as off with a note that Jen has no
+configuration to read for it. The weekly real-Kea job now also checks
+the derivation against real kea-dhcp4 daemons.
+
 ## [5.63.0-beta.1] - 2026-09-24
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.62.1-beta.1

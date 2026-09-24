@@ -119,11 +119,16 @@ class TestSettingsBlueprintSplit:
         import inspect
 
         from jen.routes.settings import settings
+        from jen.services import capabilities
 
         src = inspect.getsource(settings)
         assert "dbexport.backup_count()" in src
         assert "dbexport.list_backups()" not in src
-        assert 'kea_command("version-get", timeout=3)' in src
+        # v5.64.0 (Q83) — the same guard, followed to its new home: the landing
+        # page reads Kea only through capabilities, whose version-get keeps
+        # the 3 s timeout so an unreachable Kea can't stall the page.
+        assert "capabilities" in src and "for_primary(" in src
+        assert 'kea_command("version-get", server=server, timeout=3)' in inspect.getsource(capabilities._fetch_version)
 
     def test_a_route_from_each_split_module_responds(self, logged_in_client, mock_kea):
         # one GET route per module, smoke-level.
