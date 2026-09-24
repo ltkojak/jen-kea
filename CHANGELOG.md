@@ -2,6 +2,34 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.60.0-beta.1] - 2026-09-24
+
+Beta channel. Bundles Switch Port Locator 1.0.0, the fifth plugin of
+round 5: it answers the one question Client Investigation can't —
+which switch port is this MAC actually plugged into? It polls each
+configured switch's MAC address table over SNMP every ten minutes,
+either in a single walk (most non-Cisco gear, which exposes every
+VLAN's table through one community string) or once per VLAN using
+Cisco's own `community@vlan` indexing, and resolves every bridge port
+to the real interface name and description a person would recognize.
+
+A port seen carrying more than eight MACs is treated as a trunk to
+another switch rather than somewhere a device actually lives, so an
+uplink never gets reported as a device's own location — that
+classification can be overridden by hand on any port when the
+automatic count gets a particular one wrong. A known MAC whose
+non-uplink port changes, whether to a different port on the same
+switch or a move to a different switch entirely, is recorded so a
+repeat lookup always reflects where it is now.
+
+The locate page finds a MAC's switch, port, alias, VLAN, and
+last-seen time; a "Find switch port" action reaches the same lookup
+straight from a Lease, Reservation, or Device row, and a small
+read-only JSON API lets another tool ask the same question. Every OID
+the plugin sends is verified against the actual BRIDGE-MIB,
+Q-BRIDGE-MIB, and IF-MIB texts, pinned in its own source with the
+file and the date read.
+
 ## [5.59.0-beta.1] - 2026-09-24
 
 Beta channel. Bundles Local DNS Sync 1.0.0, the fourth plugin of round

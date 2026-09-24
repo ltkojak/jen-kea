@@ -1,0 +1,174 @@
+{% extends "base.html" %}
+{% block title %}Switch Ports{% endblock %}
+{% block content %}
+
+<div class="page-header flex items-center between wrap gap-3">
+    <div>
+        <h1>{{ icon("cable", "ico-lg") }} Switch Ports</h1>
+        <p>Which switch port is this MAC on? Polls managed switches' MAC tables over SNMP.</p>
+    </div>
+    {% if is_admin %}
+    <button id="sp-add-btn" class="btn btn-primary">{{ icon("plus") }} Add Switch</button>
+    {% endif %}
+</div>
+
+{% if ipv6_enabled %}
+<div class="alert alert-info">{{ icon("info") }} Switch Port Locator tracks IPv4-identified MACs only.</div>
+{% endif %}
+
+<div class="card">
+    <form method="GET" action="{{ url_for('switchport.index') }}" class="flex gap-2 items-center wrap">
+        <input type="text" name="mac" value="{{ query_mac }}" placeholder="aa:bb:cc:dd:ee:ff" class="mono" autocomplete="off" style="max-width:220px;">
+        <button type="submit" class="btn btn-primary">{{ icon("search") }} Locate</button>
+    </form>
+    {% if query_mac %}
+        {% if located and located.switch_name %}
+        <div class="alert alert-info mt-2">
+            <span class="mono">{{ located.mac }}</span> is on <b>{{ located.switch_name }}</b>, port
+            <span class="mono">{{ located.ifname or ('ifindex ' ~ located.ifindex) }}</span>
+            {% if located.ifalias %}<span class="small muted">({{ located.ifalias }})</span>{% endif %}
+            {% if located.vlan is not none %}&middot; VLAN {{ located.vlan }}{% endif %}
+            &middot; last seen {{ located.last_seen | utcfmt if located.last_seen else '—' }}
+        </div>
+        {% elif located %}
+        <div class="alert alert-warning mt-2">No switch has reported <span class="mono">{{ located.mac }}</span> yet.</div>
+        {% else %}
+        <div class="alert alert-warning mt-2">Not a valid or accessible MAC address.</div>
+        {% endif %}
+    {% endif %}
+</div>
+
+{% for s in switches %}
+<div class="card">
+    <div class="flex between items-center wrap gap-2 mb-2">
+        <div>
+            <h3>{{ s.name }} <span class="small muted">({{ s.host }})</span>
+                {% if not s.enabled %}<span class="badge">paused</span>{% endif %}
+            </h3>
+            <p class="small muted">
+                {{ 'Q-BRIDGE-MIB (single walk)' if s.vlan_indexing == 'none' else 'BRIDGE-MIB per VLAN: ' ~ (s.vlans or '—') }}
+                &middot; last poll {{ s.last_poll_at | utcfmt if s.last_poll_at else 'never' }}
+                {% if s.last_error %}&middot; <span class="bad">{{ icon("triangle-alert") }} {{ s.last_error }}</span>{% endif %}
+            </p>
+        </div>
+        {% if is_admin %}
+        <div class="flex gap-1">
+            <form method="POST" action="{{ url_for('switchport.toggle_switch', switch_id=s.id) }}" class="contents">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary">{{ 'Pause' if s.enabled else 'Enable' }}</button>
+            </form>
+            <form method="POST" action="{{ url_for('switchport.delete_switch', switch_id=s.id) }}" class="contents"
+                  data-confirm="Remove {{ s.name }}?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary bad">{{ icon("trash") }}</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+    <div class="table-wrap">
+    <table class="rowlist">
+        <thead><tr>
+            <th>Port</th>
+            <th>Alias</th>
+            <th>MACs</th>
+            <th>Uplink</th>
+        </tr></thead>
+        <tbody>
+        {% for p in s.ports %}
+        <tr>
+            <td data-m="primary" class="mono">{{ p.ifname }}</td>
+            <td data-m="hide" class="small muted">{{ p.ifalias or '—' }}</td>
+            <td data-m="badge">{{ p.mac_count }}</td>
+            <td data-m="trailing">
+                {% if is_admin %}
+                <form method="POST" action="{{ url_for('switchport.set_uplink', switch_id=s.id, ifindex=p.ifindex) }}" class="flex gap-1 items-center">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <select name="value" class="btn-sm sp-uplink-select">
+                        <option value="auto" {% if p.is_uplink is none %}selected{% endif %}>Auto{{ ' (uplink)' if p.mac_count > 8 else '' }}</option>
+                        <option value="up" {% if p.is_uplink == 1 %}selected{% endif %}>Uplink</option>
+                        <option value="down" {% if p.is_uplink == 0 %}selected{% endif %}>Not uplink</option>
+                    </select>
+                </form>
+                {% else %}
+                {{ 'Uplink' if (p.is_uplink == 1 or (p.is_uplink is none and p.mac_count > 8)) else '—' }}
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        {% if not s.ports %}
+        <tr><td data-m="full" colspan="4" class="center muted">No ports seen yet — waiting on the next poll.</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+    </div>
+</div>
+{% endfor %}
+{% if not switches %}
+<div class="card center muted">No switches configured yet. {% if is_admin %}Add one above.{% endif %}</div>
+{% endif %}
+
+{% if is_admin %}
+<div id="sp-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
+<div class="card" style="width:min(460px,94vw);max-height:90vh;overflow-y:auto;">
+    <div class="flex between items-center mb-3">
+        <h3>{{ icon("plus") }} Add Switch</h3>
+        <button id="sp-add-close-btn" class="btn btn-sm btn-secondary" aria-label="Close">{{ icon("x") }}</button>
+    </div>
+    <form method="POST" action="{{ url_for('switchport.add_switch') }}" id="sp-add-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label>Name</label>
+            <input type="text" name="name" maxlength="100" required autocomplete="off" placeholder="Core switch">
+        </div>
+        <div class="form-group">
+            <label>Host</label>
+            <input type="text" name="host" maxlength="255" required autocomplete="off" placeholder="10.0.0.2">
+        </div>
+        <div class="form-group">
+            <label>SNMP community</label>
+            <input type="password" name="community" autocomplete="new-password">
+            <div class="form-hint">Stored encrypted; never shown again once saved.</div>
+        </div>
+        <div class="form-group">
+            <label>VLAN indexing</label>
+            <select name="vlan_indexing" id="sp-vlan-indexing">
+                {% for c in vlan_indexing_choices %}
+                <option value="{{ c }}">{{ 'None — one walk covers every VLAN (HP/Aruba)' if c == 'none' else 'Cisco community@vlan — one walk per VLAN' }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group" id="sp-vlans-group" style="display:none;">
+            <label>VLANs (comma-separated)</label>
+            <input type="text" name="vlans" autocomplete="off" placeholder="1,10,20">
+        </div>
+        <div class="flex gap-2 mt-3">
+            <button type="submit" class="btn btn-primary">Add Switch</button>
+            <button type="button" id="sp-add-cancel-btn" class="btn btn-secondary">Cancel</button>
+        </div>
+    </form>
+</div>
+</div>
+{% endif %}
+
+<script nonce="{{ csp_nonce }}">
+function _spModal(id, show) {
+    document.getElementById(id).style.display = show ? 'flex' : 'none';
+}
+{% if is_admin %}
+document.getElementById('sp-add-btn').addEventListener('click', function() { _spModal('sp-add-modal', true); });
+document.getElementById('sp-add-close-btn').addEventListener('click', function() { _spModal('sp-add-modal', false); });
+document.getElementById('sp-add-cancel-btn').addEventListener('click', function() { _spModal('sp-add-modal', false); });
+document.getElementById('sp-add-modal').addEventListener('click', function(e) { if (e.target === this) _spModal('sp-add-modal', false); });
+document.getElementById('sp-vlan-indexing').addEventListener('change', function() {
+    document.getElementById('sp-vlans-group').style.display = this.value === 'community' ? '' : 'none';
+});
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') _spModal('sp-add-modal', false);
+});
+document.querySelectorAll('.sp-uplink-select').forEach(function(sel) {
+    sel.addEventListener('change', function() { this.form.submit(); });
+});
+{% endif %}
+</script>
+
+{% endblock %}

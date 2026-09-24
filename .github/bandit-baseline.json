@@ -1924,6 +1924,27 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
       "test_id": "B310",
       "test_name": "blacklist"
+    },
+    {
+      "code": "497                 cur.execute(\n498                     f\"SELECT mac, switch_id, ifindex, last_seen FROM sp_mac_ports \"\n499                     f\"WHERE mac IN ({_in_placeholders(new_positions)}) ORDER BY last_seen DESC\",\n500                     tuple(new_positions),\n",
+      "col_offset": 20,
+      "end_col_offset": 95,
+      "filename": "plugins/switchport/plugin.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 498,
+      "line_range": [
+        498,
+        499
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
     }
   ]
 }

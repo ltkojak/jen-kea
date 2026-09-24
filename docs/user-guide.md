@@ -473,3 +473,15 @@ Open **Network → DNS Sync** and click **Add Target**: give it a name, pick Pi-
 Once enabled, a target syncs automatically a few seconds after a related lease or reservation change, and again on a 15-minute schedule regardless, so nothing is missed. Local DNS Sync only ever touches records it created itself — anything already on your DNS server that it didn't add is left alone, even if it looks unrelated to any current device. Credentials are stored encrypted and are never shown again once saved.
 
 If your resolver is Unbound instead — which has no API to push to — each target's row offers an **Export Unbound local-data** download with the same records in Unbound's own config syntax, to include by hand.
+
+### Switch Port Locator (v5.60.0)
+
+Client Investigation can answer almost everything about a device except the one question that actually gets someone up from their desk: which switch port is it plugged into? Switch Port Locator polls your managed switches over SNMP and keeps track.
+
+Open **Network → Switch Ports** and add a switch: its name, its IP or hostname, and its SNMP community string. Most non-Cisco switches (HP, Aruba ProCurve) need nothing else — pick **None** for VLAN indexing and one poll covers every VLAN. Cisco switches usually need **Cisco community@vlan** instead, with the VLAN IDs to poll listed alongside — Cisco's SNMP agent only ever shows one VLAN's table per community string, so the plugin asks for each one separately.
+
+Every switch is polled every ten minutes. Type a MAC into the search box on the page (or use **Find switch port** from any Lease, Reservation, or Device row) to see its switch, port, alias, VLAN, and when it was last seen there. Each switch's own port table shows a live MAC count per port — a port carrying more than 8 MACs is treated as a trunk to another switch rather than somewhere a device lives, and is left out of search results accordingly; use the **Uplink** dropdown on any port to override that call by hand if the automatic count gets a particular port wrong.
+
+When a known device's port changes — whether it moves to a different port on the same switch or to a different switch entirely — Switch Port Locator records the change, so a repeat lookup always reflects where it is now.
+
+Switch Port Locator needs `snmpbulkwalk` on the Jen host (package `snmp` — Settings → Plugins offers an Install button on a systemd host).
