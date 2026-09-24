@@ -478,21 +478,48 @@ class TestStickyTableHeaderOnDesktop:
         assert not displaced, f"these pages' table header is not flush with the table top: {displaced}"
 
     def test_leases_header_stops_at_sticky_top_after_scrolling(self, browser, base_url):
-        ctx = browser.new_context(viewport={"width": 1440, "height": 600}, bypass_csp=True)
-        page = ctx.new_page()
-        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
-        _visit(page, base_url, "/leases")
-        expect(page.locator("table.rowlist thead th").first).to_be_visible()
-        page.evaluate("window.scrollTo(0, 400)")
-        page.wait_for_timeout(100)
-        sticky_top = page.evaluate("getComputedStyle(document.body).getPropertyValue('--sticky-top').trim()")
-        th_top = page.eval_on_selector("table.rowlist thead th", "el => Math.round(el.getBoundingClientRect().top)")
-        first_row_top = page.eval_on_selector(
-            "table.rowlist tbody tr", "el => Math.round(el.getBoundingClientRect().top)"
-        )
-        assert f"{th_top}px" == sticky_top, f"th top is {th_top}px, --sticky-top is {sticky_top!r}"
-        assert th_top < first_row_top, "header is not above the first visible row after scrolling"
-        ctx.close()
+        # The standard (non-demo) e2e dataset's fake Kea server reports zero
+        # leases (tests/e2e/_fake_kea_server.py's canned lease4-get-all) —
+        # nowhere near enough rows to scroll the header into its sticky
+        # position, so seed a batch directly the same way
+        # TestTouchNav::test_a_vertical_drag_starting_on_a_leases_row_...
+        # does for the same reason.
+        from jen.models.db import kea_db
+
+        with kea_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE hostname LIKE 'sticky-probe-%%'")
+            for i in range(40):
+                cur.execute(
+                    "INSERT INTO lease4 (address, hwaddr, subnet_id, state, expire, valid_lifetime, hostname) "
+                    "VALUES (INET_ATON(%s), UNHEX(%s), 1, 0, DATE_ADD(NOW(), INTERVAL 1 HOUR), 3600, %s)",
+                    (f"10.99.0.{i + 2}", f"aabbcc{i:06x}", f"sticky-probe-{i}"),
+                )
+            db.commit()
+        try:
+            ctx = browser.new_context(viewport={"width": 1440, "height": 600}, bypass_csp=True)
+            page = ctx.new_page()
+            login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+            _visit(page, base_url, "/leases")  # per_page defaults to "all"
+            expect(page.locator("table.rowlist thead th").first).to_be_visible()
+            sticky_top = page.evaluate("getComputedStyle(document.body).getPropertyValue('--sticky-top').trim()")
+            initial_top = page.eval_on_selector("table.rowlist thead th", "el => el.getBoundingClientRect().top")
+            sticky_top_px = float(sticky_top.replace("px", ""))
+            # Scroll comfortably past the point the header would stick at,
+            # while 40 rows (well over a 600px-tall viewport's worth) keep
+            # the table itself from scrolling out from under it.
+            page.evaluate(f"window.scrollTo(0, {initial_top - sticky_top_px + 200})")
+            page.wait_for_timeout(100)
+            th_top = page.eval_on_selector("table.rowlist thead th", "el => Math.round(el.getBoundingClientRect().top)")
+            first_row_top = page.eval_on_selector(
+                "table.rowlist tbody tr", "el => Math.round(el.getBoundingClientRect().top)"
+            )
+            assert f"{th_top}px" == sticky_top, f"th top is {th_top}px, --sticky-top is {sticky_top!r}"
+            assert th_top < first_row_top, "header is not above the first visible row after scrolling"
+            ctx.close()
+        finally:
+            with kea_db() as db, db.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE hostname LIKE 'sticky-probe-%%'")
+                db.commit()
 
 
 class TestPluginManagerTableHeaderGeometry:
