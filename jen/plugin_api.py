@@ -54,7 +54,15 @@ from jen.services.alerts import register_alert_type, send_alert  # noqa: E402
 from jen.services.api_auth import api_key_required, filter_subnet_ids  # noqa: E402
 
 # ── Background work ──────────────────────────────────────────────────────────
-from jen.services.background import periodic_jobs, register_periodic, unregister_periodic  # noqa: E402
+# PERIODIC_MIN_MINUTES added v5.60.1 (Q89) — register_periodic() already
+# enforces it and raises below it; exporting the number itself lets a plugin
+# read the floor instead of guessing (Host Watchdog 1.0.0 guessed wrong).
+from jen.services.background import (  # noqa: E402
+    PERIODIC_MIN_MINUTES,
+    periodic_jobs,
+    register_periodic,
+    unregister_periodic,
+)
 
 # ── Secrets (v5.57.0, Q73) ────────────────────────────────────────────────────
 from jen.services.crypto import decrypt_secret, encrypt_secret  # noqa: E402
@@ -96,6 +104,7 @@ def jen_version() -> str:
 
 
 __all__ = [
+    "PERIODIC_MIN_MINUTES",
     "PLUGIN_API_VERSION",
     "admin_required",
     "api_key_required",

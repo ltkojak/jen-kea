@@ -71,13 +71,18 @@ PAGES = [
     ("settings-api-keys", "/settings/api-keys"),
     ("subnet-edit", "/subnets/edit/1"),
     ("ha-maintenance", "/servers/ha/maintenance"),
-    # v5.57.1 (Q74) — both bundled plugins enabled for this whole suite
-    # (tests/e2e/conftest.py), so their pages are covered by the same
-    # overflow guard as core pages.
+    # v5.57.1 (Q74), widened v5.60.1 (Q89) — every bundled plugin is
+    # enabled for this whole suite (tests/e2e/conftest.py), so every
+    # plugin's own page is covered by the same overflow guard as core
+    # pages. Watchdog/dns-sync/switchport are each a single page (no
+    # per-item detail route the way ipam/discovery have).
     ("plugin-ipam", "/network/ipam"),
     ("plugin-ipam-subnet", "/network/ipam/subnet/kea/1"),
     ("plugin-discovery", "/network/discovery"),
     ("plugin-discovery-results", "/network/discovery/results/1"),
+    ("plugin-watchdog", "/network/watchdog"),
+    ("plugin-dns-sync", "/network/dns-sync"),
+    ("plugin-switchport", "/network/switchport"),
 ]
 
 # Pages that still overflow a phone today, with the release that converts them.

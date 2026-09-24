@@ -164,19 +164,23 @@ def live_server(fake_kea):
 
     reset_pools()
 
-    # v5.57.1 (Q74) — both bundled plugins enabled for this whole suite
-    # (not just test_mobile.py) so their pages, nav entries and Settings
-    # → System listing are exercised by a real create_app() the same way
-    # an operator who installed them would see. _patch_extensions() just
-    # pointed PLUGIN_DIR_BUNDLED at an absent path on purpose, so the
-    # UNIT suite never pulls the real shipped plugins in — repoint it
-    # back to the real tree for this session-scoped e2e server only.
+    # v5.57.1 (Q74), widened v5.60.1 (Q89) — EVERY bundled plugin enabled
+    # for this whole suite (not just test_mobile.py) so their pages, nav
+    # entries and Settings → System listing are exercised by a real
+    # create_app() the same way an operator who installed them would see.
+    # _patch_extensions() just pointed PLUGIN_DIR_BUNDLED at an absent path
+    # on purpose, so the UNIT suite never pulls the real shipped plugins in
+    # — repoint it back to the real tree for this session-scoped e2e
+    # server only. Q89 found the two-literal list (ipam, network-discovery)
+    # had let Host Watchdog go completely unloaded through Q75-Q77 — every
+    # bundled id now goes through the same enable path, so a plugin whose
+    # register() can't even run is caught here instead of on a real box.
     from jen import extensions
-    from jen.services.plugins import enable_plugin
+    from jen.services.plugins import enable_plugin, shipped_plugin_ids
 
     extensions.PLUGIN_DIR_BUNDLED = os.path.join(extensions.JEN_ROOT, "plugins")
-    enable_plugin("ipam")
-    enable_plugin("network-discovery")
+    for pid in shipped_plugin_ids():
+        enable_plugin(pid)
 
     # _patch_extensions() already wrote a working jen.config at
     # extensions.CONFIG_FILE; point [kea] at the fake Control Agent and
