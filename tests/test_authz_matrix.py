@@ -20,12 +20,16 @@ the marker ambiguous. Values a caller itself typed into the URL (the MAC in
 ?mac=) are removed from the body before scanning: a page may echo its input.
 """
 
+import ast
+import glob
 import hashlib
 import json
+import re
 
 import pytest
 
 from jen import extensions
+from jen.services import access
 
 B_NAME = "ZZ-SECRET-B"
 B_HOST = "secret-host-b"
@@ -385,3 +389,151 @@ class TestFixtureIsReal:
         with pytest.raises(AssertionError):
             assert_no_marker(f"<p>{B_NAME}</p>")
         assert_no_marker(f"<input value='{B_MAC}'>", ignore=(B_MAC,))  # an echoed input is fine
+
+
+# ── v5.62.1 (Q81) — SURFACES above and access.DIAGNOSTIC_SURFACES must name
+# the same routes, in both directions, so a new diagnostic route can't ship
+# without a matrix row, and a stale row can't outlive its route. ───────────
+
+
+def _endpoint_for(app, method, path):
+    """The Flask endpoint `method path` (query string stripped) resolves to."""
+    adapter = app.url_map.bind("localhost")
+    endpoint, _args = adapter.match(path.split("?", 1)[0], method=method)
+    return endpoint
+
+
+class TestDiagnosticSurfaceCoverage:
+    def test_diagnostic_surfaces_and_matrix_rows_are_the_same_set(self, app):
+        decorated = {endpoint for endpoint, _methods, _rule in access.DIAGNOSTIC_SURFACES}
+        assert decorated, "access.DIAGNOSTIC_SURFACES is empty — collect_diagnostic_surfaces() didn't run"
+        covered = {_endpoint_for(app, method, path) for (_label, method, path, _body, _expected, _typed) in SURFACES}
+        only_decorated = decorated - covered
+        only_surfaces = covered - decorated
+        assert not only_decorated, (
+            f"@diagnostic_surface route(s) with no SURFACES row — add one: {sorted(only_decorated)}"
+        )
+        assert not only_surfaces, (
+            f"SURFACES row(s) whose route isn't @diagnostic_surface-decorated: {sorted(only_surfaces)}"
+        )
+
+
+# Routes that read or write a client table (lease4/hosts/devices/events/
+# alert_log) but are a core CRUD/list page or an aggregate view, not a
+# single-client lookup that could leak one client's data through another's
+# caller — each already covered by its own page's subnet-restriction tests,
+# not this matrix. A new entry here needs the same: a one-line reason AND a
+# real test elsewhere, not a rubber stamp.
+ROUTE_ALLOWLIST = {
+    # Lease CRUD — add_subnet_restriction() in the query; tests/test_leases.py.
+    "leases.leases": "list page, subnet-restricted at the query — tests/test_leases.py",
+    "leases.delete_stale_leases": "bulk admin action, subnet-restricted — tests/test_leases.py",
+    "leases.release_lease": "single-lease admin action, subnet-restricted — tests/test_leases.py",
+    "leases.bulk_release_leases": "bulk admin action, subnet-restricted — tests/test_leases.py",
+    "leases.ipmap": "subnet-scoped visualisation of the leases page's own data — tests/test_leases.py",
+    # Reservation CRUD — add_subnet_restriction()/assert_subnet_access(); tests/test_reservations.py.
+    "reservations.reservations": "list page, subnet-restricted at the query — tests/test_reservations.py",
+    "reservations.add_reservation_post": "write route, subnet-restricted — tests/test_reservations.py",
+    "reservations.edit_reservation": "single-object form, assert_subnet_access — tests/test_reservations.py",
+    "reservations.edit_reservation_post": "write route, assert_subnet_access — tests/test_reservations.py",
+    "reservations.delete_reservation": "write route, assert_subnet_access — tests/test_reservations.py",
+    "reservations.export_reservations": "export of the already subnet-restricted list — tests/test_reservations.py",
+    "reservations.import_reservations": "write route, subnet-restricted — tests/test_reservations.py",
+    "reservations.bulk_delete_reservations": "bulk write route, subnet-restricted — tests/test_reservations.py",
+    "reservations.bulk_export_reservations": "bulk export, subnet-restricted — tests/test_reservations.py",
+    # Device CRUD — assert_subnet_access(); the list/detail view (devices.devices)
+    # is the diagnostic surface and is decorated instead. tests/test_devices.py.
+    "devices.edit_device": "write route, assert_subnet_access — tests/test_devices.py",
+    "devices.delete_device": "write route, assert_subnet_access — tests/test_devices.py",
+    "devices.bulk_delete_devices": "bulk write route, assert_subnet_access — tests/test_devices.py",
+    # Dashboard — counts and top-N aggregate views, not a per-client lookup;
+    # the one dashboard route that resolves a specific client (catalog-data's
+    # events feed) is decorated instead. tests/test_dashboard.py.
+    "dashboard.dashboard": "aggregate summary counts, subnet-filtered — tests/test_dashboard.py",
+    "dashboard.api_stats": "aggregate counts, subnet-filtered — tests/test_dashboard.py",
+    "dashboard.api_top_devices": "top-N aggregate, subnet-filtered — tests/test_dashboard.py",
+    "dashboard.api_alert_summary": "aggregate counts, subnet-filtered — tests/test_dashboard.py",
+    "dashboard.api_recent_leases": "recent-N aggregate, subnet-filtered — tests/test_dashboard.py",
+    "dashboard.prometheus_metrics": "scrape endpoint, aggregate counts only, no per-client fields",
+    # Subnet management — admin-scoped, not a per-client surface.
+    "subnets.subnets": "subnet list with aggregate counts — tests/test_subnets.py",
+    "subnets.delete_subnet": "write route, admin-only — tests/test_subnets.py",
+    # Users — audit_log is the superadmin-only audit trail (unrestricted by
+    # design, like Doctor); about is a static info page with lease COUNT()s only.
+    "users.audit_log": "superadmin-only audit trail, unrestricted by design — tests/test_users.py",
+    "users.about": "static info page, aggregate lease counts only, no per-client fields",
+    # Other REST v1 routes — scoped via _api_key_subnet_ids()/filter_subnet_ids()
+    # already; not in Q81's named six (devices/devices-by-mac/leases-by-mac/
+    # timeline/events/health-checks). tests/test_api_key_authorization.py.
+    "api.api_v1_subnets": "subnet list with aggregate counts, key-scoped — tests/test_api_key_authorization.py",
+    "api.api_v1_leases": "lease list, key-scoped — tests/test_api_key_authorization.py",
+    "api.api_v1_reservations": "reservation list, key-scoped — tests/test_api_key_authorization.py",
+    "api.api_v1_reservation_create": "write route, key-scoped — tests/test_api_key_authorization.py",
+    "api.api_v1_reservation_delete": "write route, key-scoped — tests/test_api_key_authorization.py",
+}
+
+_TABLE_PATTERN = re.compile(
+    r"\b(?:FROM|JOIN|UPDATE|INTO)\s+`?(lease4|hosts|devices|events|alert_log)`?\b", re.IGNORECASE
+)
+
+
+def _routed_functions():
+    """Every top-level `@bp.route(...)`-decorated function across
+    jen/routes/*.py (not the settings/ subpackage — Q81 doesn't cover it),
+    as (endpoint, path, source text)."""
+    found = []
+    for path in sorted(glob.glob("jen/routes/*.py")):
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        tree = ast.parse(src, filename=path)
+        bp_name = None
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "bp" for t in node.targets)
+                and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", "") == "Blueprint"
+            ):
+                bp_name = ast.literal_eval(node.value.args[0])
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            is_route = any(
+                isinstance(d, ast.Call)
+                and isinstance(d.func, ast.Attribute)
+                and d.func.attr == "route"
+                and getattr(d.func.value, "id", "") == "bp"
+                for d in node.decorator_list
+            )
+            if not is_route:
+                continue
+            seg = ast.get_source_segment(src, node) or ""
+            found.append((f"{bp_name}.{node.name}", path, seg))
+    return found
+
+
+class TestDiagnosticSurfaceScanner:
+    """Q81's second guardrail: SURFACES only proves the routes it already
+    knows about stay covered. This one catches the NEXT route someone adds
+    that touches a client table without either decorating it or explaining
+    why it's not a per-client diagnostic surface."""
+
+    def test_every_client_table_route_is_decorated_or_allowlisted(self, app):
+        decorated = {endpoint for endpoint, _methods, _rule in access.DIAGNOSTIC_SURFACES}
+        offenders = []
+        for endpoint, path, seg in _routed_functions():
+            if not _TABLE_PATTERN.search(seg):
+                continue
+            if endpoint in decorated or endpoint in ROUTE_ALLOWLIST:
+                continue
+            offenders.append(f"{endpoint} ({path})")
+        assert not offenders, "decorate it or allow-list it — " + ", ".join(offenders)
+
+    def test_allowlist_has_no_stale_entries(self, app):
+        """Every ROUTE_ALLOWLIST entry names a route that still exists and
+        still isn't decorated — an entry that no longer applies just hides a
+        route the scanner should be checking."""
+        decorated = {endpoint for endpoint, _methods, _rule in access.DIAGNOSTIC_SURFACES}
+        routed = {endpoint for endpoint, _path, _seg in _routed_functions()}
+        stale = (set(ROUTE_ALLOWLIST) & decorated) | (set(ROUTE_ALLOWLIST) - routed)
+        assert not stale, f"ROUTE_ALLOWLIST entry no longer applies (route removed or now decorated): {sorted(stale)}"

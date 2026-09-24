@@ -18,6 +18,7 @@ from flask import Blueprint, jsonify, render_template, request
 from flask_login import current_user
 
 import jen.services.health as __health
+from jen.services.access import diagnostic_surface
 from jen.services.access import viewer_or_above as _viewer_or_above
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ def health_center():
 
 @bp.route("/health-center/data")
 @_viewer_or_above
+@diagnostic_surface(subject="client")
 def health_center_data():
     ctx = _run()
     if request.args.get("partial") == "1":

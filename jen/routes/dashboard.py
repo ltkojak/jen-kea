@@ -22,6 +22,7 @@ import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_view as __view
 from jen import extensions
+from jen.services.access import diagnostic_surface
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
 
 logger = logging.getLogger(__name__)
@@ -329,6 +330,7 @@ def get_dashboard_prefs():
 
 @bp.route("/api/dashboard/catalog-data")
 @login_required
+@diagnostic_surface(subject="client")
 def dashboard_catalog_data():
     """v5.54.0 (Q61) — the seven catalog widgets are lazy, like the
     pre-existing sparklines/top-devices/alert-summary widgets: nothing here

@@ -24,7 +24,7 @@ import jen.services.kea_log_trace as __trace
 from jen import extensions
 from jen.routes.explain import _hex_identifier, _load_lease, _load_reservations
 from jen.services.access import admin_required as _admin_required
-from jen.services.access import get_accessible_subnet_map
+from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import explain
 from jen.services.subnet_context import dhcp4_config
 
@@ -54,6 +54,7 @@ def _pick_server(raw: str) -> dict | None:
 @bp.route("/tools/trace")
 @login_required
 @_admin_required
+@diagnostic_surface(subject="client")
 def trace_page():
     # Kea's log has no per-line subnet boundary Jen can trust: the last 1000
     # lines can carry a MAC's EARLIER activity in a subnet the caller cannot

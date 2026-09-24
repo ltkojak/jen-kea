@@ -17,6 +17,7 @@ import jen.services.fingerprint as __fp
 import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("devices", __name__)
@@ -35,6 +36,7 @@ def __ip_to_int(ip):
 
 @bp.route("/devices")
 @login_required
+@diagnostic_surface(subject="client")
 def devices():
     view_mode = request.args.get("view", "v4")
     if view_mode == "v6":

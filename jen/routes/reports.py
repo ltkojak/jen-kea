@@ -15,6 +15,7 @@ import jen.services.capacity as __capacity
 import jen.services.health as __health
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reports", __name__)
@@ -33,6 +34,7 @@ def __ip_to_int(ip):
 
 @bp.route("/reports")
 @login_required
+@diagnostic_surface(subject="client")
 def reports():
     days = request.args.get("days", "7")
     try:

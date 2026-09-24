@@ -18,6 +18,7 @@ import jen.services.kea as __kea
 from jen import extensions
 from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
+from jen.services.access import diagnostic_surface
 from jen.services.api_auth import api_auth as _api_auth
 from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
 from jen.services.fingerprint import get_device_info_map
@@ -287,6 +288,7 @@ def api_v1_leases():
 
 
 @bp.route("/api/v1/leases/<mac>")
+@diagnostic_surface(subject="client")
 def api_v1_lease_by_mac(mac):
     key = _api_auth()
     if not key:
@@ -332,6 +334,7 @@ def api_v1_lease_by_mac(mac):
 
 
 @bp.route("/api/v1/devices")
+@diagnostic_surface(subject="client")
 def api_v1_devices_endpoint():
     key = _api_auth()
     if not key:
@@ -402,6 +405,7 @@ def api_v1_devices_endpoint():
 
 
 @bp.route("/api/v1/devices/<mac>")
+@diagnostic_surface(subject="client")
 def api_v1_device_by_mac(mac):
     key = _api_auth()
     if not key:
@@ -666,6 +670,7 @@ def api_v1_reservation_delete(host_id):
 
 
 @bp.route("/api/v1/devices/<mac>", methods=["PATCH"])
+@diagnostic_surface(subject="client")
 def api_v1_device_patch(mac):
     """The plain-text fields an admin can set on the Devices page: name,
     owner, notes. Type/icon overrides stay UI-only (they map through a
@@ -765,6 +770,7 @@ def api_v1_subnet_notes(subnet_id):
 
 
 @bp.route("/api/v1/events")
+@diagnostic_surface(subject="client")
 def api_v1_events():
     """v5.42.0 (Q43) — raw events rows (jen.services.events.emit()), not
     the merged timeline. mac/ip/kind/since are all optional filters,
@@ -831,6 +837,7 @@ def api_v1_events():
 
 
 @bp.route("/api/v1/timeline/<mac>")
+@diagnostic_surface(subject="client")
 def api_v1_timeline(mac):
     """v5.42.0 (Q43) — the same merged view GET /timeline renders,
     scoped to a single MAC. Subnet rules match the page: a key scoped to
@@ -878,6 +885,7 @@ def api_v1_timeline(mac):
 
 
 @bp.route("/api/v1/health/checks")
+@diagnostic_surface(subject="client")
 def api_v1_health_checks():
     """v5.43.0 (Q44) — the Health Center run as JSON, scoped to the key's
     subnet access exactly like a restricted viewer's page load

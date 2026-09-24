@@ -36,6 +36,7 @@ import jen.services.kea_host as __host
 from jen import extensions
 from jen.services.access import add_subnet_restriction as _add_subnet_restriction
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import diagnostic_surface
 from jen.services.csv_safe import safe_row as _safe_row
 
 logger = logging.getLogger(__name__)
@@ -428,6 +429,7 @@ def _reconcile_suffix() -> str:
 @bp.route("/ddns/reconcile")
 @login_required
 @_admin_required
+@diagnostic_surface(subject="client")
 def ddns_reconcile():
     try:
         limit = int(request.args.get("limit", "200"))

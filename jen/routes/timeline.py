@@ -12,7 +12,7 @@ from flask import Blueprint, flash, render_template, request
 from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
-from jen.services.access import get_accessible_subnet_map
+from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.timeline import build_timeline
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ bp = Blueprint("timeline", __name__)
 
 @bp.route("/timeline")
 @login_required
+@diagnostic_surface(subject="client")
 def timeline_page():
     raw_mac = (request.args.get("mac") or "").strip().lower()
     raw_ip = (request.args.get("ip") or "").strip()

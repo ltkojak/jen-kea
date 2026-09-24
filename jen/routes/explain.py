@@ -17,7 +17,7 @@ from flask_login import login_required
 
 import jen.models.db as __db
 import jen.services.auth as __auth
-from jen.services.access import get_accessible_subnet_map
+from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import INPUT_LABELS, explain
 from jen.services.subnet_context import dhcp4_config
 
@@ -101,6 +101,7 @@ def _load_lease(mac_hex: str) -> dict | None:
 
 @bp.route("/tools/explain")
 @login_required
+@diagnostic_surface(subject="client")
 def explain_page():
     subnet_map = get_accessible_subnet_map()
     client = _client_from_args(request.args)

@@ -16,6 +16,7 @@ import jen.services.config_doctor as __doctor
 import jen.services.health as __health
 import jen.services.kea as __kea
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("doctor", __name__)
@@ -24,6 +25,7 @@ bp = Blueprint("doctor", __name__)
 @bp.route("/tools/doctor")
 @login_required
 @_admin_required
+@diagnostic_surface(subject="client")
 def doctor_page():
     # Renders the whole Kea config — including subnets a restricted admin
     # cannot otherwise see — so it needs unrestricted subnet access, the

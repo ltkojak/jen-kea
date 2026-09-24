@@ -197,6 +197,27 @@ reads from Kea. Trace (`jen/routes/trace.py`) reads the tail of the Kea log
 through the existing helper `tail-log` op — deliberately not a packet capture,
 so §3.3's narrow helper surface is unchanged.
 
+**The authorization matrix is an enforced invariant, not a convention
+(v5.62.1, Q81).** `tests/test_authz_matrix.py::SURFACES` proves every
+diagnostic route — one that can resolve or display data about a single
+client — refuses to leak another subnet's client through it. Nothing used to
+stop the next such route shipping without a row in `SURFACES`; the comment
+saying "adding a surface later is one row" was a convention someone had to
+remember. `jen.services.access.diagnostic_surface` makes it mechanical
+instead: every route it decorates is resolved, once, into
+`access.DIAGNOSTIC_SURFACES` right after all blueprints register (Flask
+defers a Blueprint route's endpoint/methods/rule until
+`app.register_blueprint()` runs, so the triple can't be read at decoration
+time), and `test_authz_matrix.py` asserts the decorated set and the set
+`SURFACES` actually exercises are identical, in both directions — a
+decorated route with no row, or a row whose route stopped being decorated,
+both fail CI by name. A second scanner statically greps every route
+function in `jen/routes/*.py` for a direct reference to a client table
+(`lease4`, `hosts`, `devices`, `events`, `alert_log`) and requires it to be
+either decorated or named in `ROUTE_ALLOWLIST` with a one-line reason — the
+backstop for a route that touches client data but was never added to
+`SURFACES` at all.
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather

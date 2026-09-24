@@ -13,6 +13,7 @@ import jen.models.db as __db
 import jen.services.auth as __auth
 import jen.services.kea6 as __kea6
 from jen import extensions
+from jen.services.access import diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("search", __name__)
@@ -31,6 +32,7 @@ def __ip_to_int(ip):
 
 @bp.route("/search")
 @login_required
+@diagnostic_surface(subject="client")
 def global_search():
     q = __auth.sanitize_search(request.args.get("q", "").strip())
     results = {"leases": [], "reservations": [], "devices": [], "leases6": [], "reservations6": []}

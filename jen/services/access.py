@@ -233,6 +233,52 @@ def filter_client_view(view: dict, accessible_ids) -> dict:
     return out
 
 
+# ── Diagnostic-surface coverage (v5.62.1, Q81) ────────────────────────────────
+#
+# tests/test_authz_matrix.py::SURFACES is a hand-maintained list of every
+# route that can show data about a client across subnets a restricted caller
+# must not see. It was complete the day it was audited; nothing stopped the
+# next diagnostic route shipping without a row. `diagnostic_surface` makes
+# that an invariant instead of a convention: every route it marks MUST have
+# a matching SURFACES row, and the matrix test enforces the set equality
+# both ways (see `collect_diagnostic_surfaces` below and the two-way test).
+
+DIAGNOSTIC_SURFACES: list[tuple[str, tuple[str, ...], str]] = []
+
+
+def diagnostic_surface(*, subject="client"):
+    """Mark a route as part of the diagnostic surface. Does nothing at
+    request time — it only tags the view function; Flask doesn't bind a
+    Blueprint route's endpoint/methods/rule into `app.url_map` until
+    `app.register_blueprint()` runs, so the actual triple can't be known at
+    decoration time. `collect_diagnostic_surfaces()` resolves it once, right
+    after every blueprint is registered (`jen/__init__.py`).
+
+    Apply it as the innermost decorator (directly above `def`, below any
+    `@login_required`/`@_admin_required`): every decorator in this module
+    uses `functools.wraps`, which merges `__dict__`, so the tag written here
+    survives being wrapped by the decorators above it.
+    """
+
+    def deco(f):
+        f._diagnostic_surface_subject = subject
+        return f
+
+    return deco
+
+
+def collect_diagnostic_surfaces(app) -> None:
+    """Populate DIAGNOSTIC_SURFACES from every route `diagnostic_surface`
+    tagged, once, right after every blueprint has been registered on `app`."""
+    DIAGNOSTIC_SURFACES.clear()
+    for rule in app.url_map.iter_rules():
+        view = app.view_functions.get(rule.endpoint)
+        if view is None or not hasattr(view, "_diagnostic_surface_subject"):
+            continue
+        methods = tuple(sorted((rule.methods or set()) - {"HEAD", "OPTIONS"}))
+        DIAGNOSTIC_SURFACES.append((rule.endpoint, methods, rule.rule))
+
+
 def add_subnet_restriction(where_clauses, params, table_alias="l", column="subnet_id"):
     """
     If the current user has restricted subnet access, append a

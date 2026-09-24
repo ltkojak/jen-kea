@@ -23,6 +23,7 @@ import jen.services.packet_health as __packet_health
 from jen import extensions
 from jen.services import config_revisions as __rev
 from jen.services.access import admin_required as _admin_required
+from jen.services.access import diagnostic_surface
 from jen.services.access import is_admin_or_above as _is_admin_or_above
 from jen.services.access import is_superadmin as _is_superadmin
 from jen.services.access import recent_auth_required as _recent_auth_required
@@ -140,6 +141,7 @@ def __ip_to_int(ip):
 
 @bp.route("/servers")
 @login_required
+@diagnostic_surface(subject="client")
 def servers():
     statuses = __kea.get_all_server_status()
     # Get version info for each server

@@ -870,6 +870,14 @@ def _register_blueprints(app: Flask) -> None:
     ]:
         app.register_blueprint(blueprint)
 
+    # v5.62.1 (Q81) — resolve every `@diagnostic_surface`-tagged route into
+    # access.DIAGNOSTIC_SURFACES now that app.url_map is fully populated
+    # (Blueprint route registration is deferred until register_blueprint()
+    # runs, so this can't happen at decoration time).
+    from jen.services.access import collect_diagnostic_surfaces
+
+    collect_diagnostic_surfaces(app)
+
 
 def _load_secret_key() -> str:
     """Load (or create) the persistent Flask session secret key.
