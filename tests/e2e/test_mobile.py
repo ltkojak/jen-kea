@@ -413,41 +413,94 @@ class TestProgressBarAndFullPageSubmit:
 
 
 class TestStickyTableHeaderOnDesktop:
-    """v5.56.4 (Q72d) — a sticky <thead> th on Leases stops at
-    --sticky-top (nav height + the section-tab strip, since Leases has
-    one), not just under the bare nav."""
+    """v5.58.1 (Q87) — Q72d's sticky header never actually worked:
+    `.table-wrap { overflow-x: auto }` (needed on a phone) already made
+    the wrapper the nearest ancestor with a scrolling mechanism, so a
+    sticky th stuck to THAT box instead of the viewport — offset by
+    --sticky-top INSIDE the wrapper, either a blank band at the top or
+    the header drawn over the rows wherever content existed. (Q74 Step
+    0's ".settings-cols is a multi-column container" diagnosis was a
+    red herring; removed from base.html.) Desktop widths now unset
+    .table-wrap's overflow-x so it isn't a scroll container there at
+    all; sideways scroll becomes the opt-in .table-wrap--scroll, whose
+    header is static since sticky cannot work inside a real scroll
+    container. These check actual rendered geometry, not computed
+    style alone — Q72's own style-only check stayed green through this
+    exact bug."""
 
-    def test_the_first_header_cell_has_sticky_positioning_at_the_shared_offset(self, browser, base_url):
-        # Simulating an actual scroll and checking where the header lands
-        # depends on how many rows this run's dataset happens to have
-        # seeded (too few, and a large scroll overshoots the table's own
-        # bottom and unsticks it again — proved flaky in CI trying to
-        # guess or search for a safe amount). Checking the computed style
-        # directly is exactly as strong a check of "this header is set up
-        # to stick at --sticky-top" without needing a real scroll at all.
+    def test_every_table_wrap_fits_at_1440_or_opts_into_scroll(self, browser, base_url):
+        # Decides which tables, if any, must opt into .table-wrap--scroll
+        # (whose header is static, since sticky can't work inside a real
+        # scroll container) — anything not opted in must fit without
+        # horizontal overflow at this width.
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        overflowing = []
+        for name, path in PAGES:
+            status = _visit(page, base_url, path)
+            if status >= 400:
+                continue
+            gaps = page.eval_on_selector_all(
+                ".table-wrap:not(.table-wrap--scroll)",
+                "els => els.map(el => el.scrollWidth - el.clientWidth)",
+            )
+            bad = [g for g in gaps if g > 1]
+            if bad:
+                overflowing.append((name, bad))
+        ctx.close()
+        assert not overflowing, (
+            "these pages have a .table-wrap wider than its container at 1440px and must opt into "
+            f".table-wrap--scroll: {overflowing}"
+        )
+
+    def test_no_page_displaces_its_table_header(self, browser, base_url):
+        """At scrollY 0, a sticky thead's top must equal its table's own
+        top — any gap means the header stuck to the wrong scroll
+        ancestor (the bug this Q fixes)."""
+        ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
+        page = ctx.new_page()
+        login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
+        displaced = []
+        for name, path in PAGES:
+            status = _visit(page, base_url, path)
+            if status >= 400:
+                continue
+            gaps = page.eval_on_selector_all(
+                ".table-wrap table",
+                "els => els.filter(t => t.querySelector('thead')).map(t => "
+                "Math.round(t.querySelector('thead').getBoundingClientRect().top - t.getBoundingClientRect().top))",
+            )
+            bad = [g for g in gaps if abs(g) > 1]
+            if bad:
+                displaced.append((name, bad))
+        ctx.close()
+        assert not displaced, f"these pages' table header is not flush with the table top: {displaced}"
+
+    def test_leases_header_stops_at_sticky_top_after_scrolling(self, browser, base_url):
+        ctx = browser.new_context(viewport={"width": 1440, "height": 600}, bypass_csp=True)
         page = ctx.new_page()
         login(page, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, f"{base_url}/")
         _visit(page, base_url, "/leases")
         expect(page.locator("table.rowlist thead th").first).to_be_visible()
-        style = page.eval_on_selector(
-            "table.rowlist thead th",
-            "el => { var cs = getComputedStyle(el); return { position: cs.position, top: cs.top }; }",
-        )
+        page.evaluate("window.scrollTo(0, 400)")
+        page.wait_for_timeout(100)
         sticky_top = page.evaluate("getComputedStyle(document.body).getPropertyValue('--sticky-top').trim()")
-        assert style["position"] == "sticky"
-        assert style["top"] == sticky_top, f"th top is {style['top']!r}, --sticky-top is {sticky_top!r}"
+        th_top = page.eval_on_selector("table.rowlist thead th", "el => Math.round(el.getBoundingClientRect().top)")
+        first_row_top = page.eval_on_selector(
+            "table.rowlist tbody tr", "el => Math.round(el.getBoundingClientRect().top)"
+        )
+        assert f"{th_top}px" == sticky_top, f"th top is {th_top}px, --sticky-top is {sticky_top!r}"
+        assert th_top < first_row_top, "header is not above the first visible row after scrolling"
         ctx.close()
 
 
-class TestPluginsTableStaysStaticInsideSettingsCols:
-    """v5.57.1 (Q74 step 0) — Settings -> System's Plugins table sits
-    inside .settings-cols (a CSS multi-column container, Q72c); a
-    sticky th there used to position against its column fragment, not
-    the viewport, landing the header mid-table. Both bundled plugins
-    are enabled for this whole suite (conftest.py), so the Plugins
-    card renders two real rows, not the empty state CI could not see
-    this bug through before."""
+class TestPluginManagerTableHeaderGeometry:
+    """v5.58.1 (Q87) item 3 — the concrete case that surfaced this bug:
+    Settings -> System's Plugins table sits inside .settings-cols
+    (Q72c); both bundled plugins are enabled for this whole suite
+    (conftest.py), so the card renders two real rows, not the empty
+    state CI could not see this bug through before."""
 
     def _check(self, browser, base_url, theme_pick=None):
         ctx = browser.new_context(viewport=DESKTOP, bypass_csp=True)
@@ -458,11 +511,16 @@ class TestPluginsTableStaysStaticInsideSettingsCols:
         _visit(page, base_url, "/settings/system")
         card = page.locator("#sys-plugins")
         expect(card.locator("tbody tr").first).to_be_visible()
-        thead_top = card.locator("thead th").first.bounding_box()["y"]
+        thead_top = card.locator("thead").bounding_box()["y"]
         first_row_top = card.locator("tbody tr").first.bounding_box()["y"]
         assert thead_top < first_row_top, (
             f"Plugins table header (y={thead_top}) is not above the first row (y={first_row_top})"
         )
+        clipped = page.eval_on_selector_all(
+            "#sys-plugins tbody td",
+            "els => els.filter(el => el.scrollWidth > el.clientWidth + 1).length",
+        )
+        assert clipped == 0, f"{clipped} cell(s) in the Plugins table clip their text"
         ctx.close()
 
     def test_default_theme(self, browser, base_url):

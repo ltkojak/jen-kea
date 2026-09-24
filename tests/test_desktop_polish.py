@@ -185,7 +185,7 @@ class TestStickyTableHeaders:
         css = (TEMPLATES / "base.html").read_text(encoding="utf-8")
         assert "--sticky-top: 56px;" in css
         assert "body.has-strip { --sticky-top: 96px; }" in css
-        m = re.search(r"@media \(min-width: 769px\)\s*\{\s*\.table-wrap thead th \{([^}]*)\}", css)
+        m = re.search(r"\.table-wrap thead th \{([^}]*)\}", css)
         assert m, "no sticky thead th rule found"
         rule = m.group(1)
         assert "position: sticky" in rule and "top: var(--sticky-top)" in rule
@@ -208,18 +208,24 @@ class TestStickyTableHeaders:
         assert "has-strip" not in body_tag
         assert 'class="has-tabbar"' in body_tag
 
-    def test_a_table_inside_settings_cols_is_excluded_from_sticky(self):
-        """v5.57.1 (Q74 step 0) — a sticky th inside a CSS multi-column
-        container (.settings-cols) positions against its column fragment,
-        not the viewport, so Settings -> System's Plugins table rendered
-        its header mid-table. Sticky headers are for page-level lists
-        only; a .card's own table inside .settings-cols stays static."""
+    def test_table_wrap_is_not_a_scroll_container_at_desktop_widths(self):
+        """v5.58.1 (Q87) — .table-wrap { overflow-x: auto } (needed on a
+        phone) made the wrapper the nearest ancestor with a scrolling
+        mechanism, so a sticky th stuck to THAT box instead of the
+        viewport, on every desktop table, not just inside a CSS
+        multi-column container (Q74 step 0's diagnosis was a red
+        herring, since corrected). At desktop widths overflow-x is unset
+        so nothing inside .table-wrap can stick to it; sideways scroll
+        becomes the opt-in .table-wrap--scroll, whose header is static
+        since sticky cannot work inside a real scroll container."""
         css = (TEMPLATES / "base.html").read_text(encoding="utf-8")
         m = re.search(r"@media \(min-width: 769px\)\s*\{(.*?)\n\s*\}\n", css, re.DOTALL)
         assert m, "no @media (min-width: 769px) block found"
         block = m.group(1)
-        assert ".settings-cols .card .table-wrap thead th { position: static; }" in block
-        assert ".settings-cols .card .table-wrap tbody tr { scroll-margin-top: unset; }" in block
+        assert ".table-wrap { overflow-x: visible; }" in block
+        assert ".table-wrap--scroll { overflow-x: auto; }" in block
+        assert ".table-wrap--scroll thead th { position: static; }" in block
+        assert ".settings-cols" not in block, "the Q74 multi-column exclusion should be removed, not just unused"
 
 
 PILL = None
