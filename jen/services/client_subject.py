@@ -482,7 +482,21 @@ def authorize(subject: ClientSubject, *, rule: str, accessible_ids=None, all_sub
             from jen.services.access import _DEVICE_PLACEMENT_FIELDS
 
             device = {**device, **dict.fromkeys(_DEVICE_PLACEMENT_FIELDS)}
-        return replace(subject, device=device, leases4=leases4, reservations=reservations)
+        # v5.63.0 (Q82) fix — `ip`/`hostname` were set from the UNFILTERED
+        # leases4/device during resolve() and, unlike device/leases4/
+        # reservations above, were never recomputed here: a MAC subject
+        # whose only lease sat in an inaccessible subnet kept showing that
+        # lease's IP even after the lease itself was correctly dropped from
+        # `leases4` — a real leak, caught by the moved-client fixture run
+        # against the Investigation page. `ip` is only ever DERIVED for a
+        # "mac"-kind subject; an "ipv4"-kind subject's `ip` is the identifier
+        # the caller already typed, never overwritten (matching
+        # build_timeline's own `supplied_ip` guard).
+        hostname = (leases4[0].get("hostname") if leases4 else "") or ((device or {}).get("last_hostname") or "")
+        ip = subject.ip
+        if subject.kind == "mac":
+            ip = (leases4[0].get("ip") if leases4 else "") or ((device or {}).get("last_ip") or "")
+        return replace(subject, device=device, leases4=leases4, reservations=reservations, ip=ip, hostname=hostname)
 
     if rule == "all_known":
         if all_subnets:

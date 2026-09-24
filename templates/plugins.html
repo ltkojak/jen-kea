@@ -86,7 +86,7 @@
                 <div class="plugin-install-result" data-plugin-id="{{ p.id }}" style="margin-top:4px;font-size:11px;"></div>
             </td>
             <td data-m="trailing">
-                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                <div class="u-b5711a">
                     {% if p.update_available %}
                     <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary">{{ icon("upload") }} Update</button>

@@ -40,8 +40,8 @@
 <div class="card"><p class="u-5872de">No client matched that identifier, or you don't have access to it.</p></div>
 {% else %}
 
-<div class="card" style="padding:10px 16px;">
-    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+<div class="card u-8bfeea">
+    <div class="u-b5711a">
         {% for t in tabs %}
         <a href="/client?q={{ q|urlencode }}&tab={{ t }}" class="badge {% if t == tab %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ t|capitalize }}</a>
         {% endfor %}
@@ -59,7 +59,7 @@
         {% if view.device %}<div><div class="stat-label">Last seen</div><div class="mono">{{ view.device.last_seen|utcfmt if view.device.last_seen else '—' }}</div></div>{% endif %}
         {% if alert %}<div><div class="stat-label">Last alert</div><div class="mono">{{ alert.alert_type }} — {{ alert.status }} ({{ alert.sent_at|utcfmt }})</div></div>{% endif %}
     </div>
-    <div class="u-865c33" style="margin-top:8px;">
+    <div class="u-865c33 u-8a77e5">
         Config {{ view.fetched_at.get('device')|utcfmt if view.fetched_at.get('device') else '—' }} ·
         Leases {{ view.fetched_at.get('leases')|utcfmt if view.fetched_at.get('leases') else '—' }} ·
         Reservations {{ view.fetched_at.get('reservations')|utcfmt if view.fetched_at.get('reservations') else '—' }}

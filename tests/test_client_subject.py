@@ -111,6 +111,39 @@ class TestAuthorize:
         out = authorize(subject, rule="per_object", accessible_ids={1})
         assert out.device == device
 
+    def test_per_object_recomputes_ip_and_hostname_for_a_mac_subject(self):
+        # A real leak, caught by the moved-client fixture run against the
+        # Investigation page: `ip`/`hostname` are set from the UNFILTERED
+        # leases4 during resolve() and must be recomputed here too, not just
+        # device/leases4/reservations — otherwise a MAC subject whose only
+        # lease sits in an inaccessible subnet keeps showing that lease's
+        # (secret) IP and hostname even after the lease itself is dropped.
+        subject = ClientSubject(
+            kind="mac",
+            ip="10.99.9.77",
+            hostname="secret-host",
+            leases4=[{"subnet_id": 2, "ip": "10.99.9.77", "hostname": "secret-host"}],
+            device={"last_subnet_id": 1, "last_ip": "10.1.0.5", "last_hostname": "device-host"},
+        )
+        out = authorize(subject, rule="per_object", accessible_ids={1})
+        assert out.leases4 == []  # the B lease is correctly dropped
+        assert out.ip == "10.1.0.5"  # falls back to the accessible device's own IP
+        assert out.hostname == "device-host"
+        assert "10.99.9.77" not in (out.ip, out.hostname)
+
+    def test_per_object_never_overwrites_an_explicitly_typed_ip(self):
+        # An "ipv4"-kind subject's `ip` is the identifier the caller already
+        # typed into the URL — never derived, so it must never be
+        # overwritten by a (possibly inaccessible) lease's own address.
+        subject = ClientSubject(
+            kind="ipv4",
+            ip="10.99.9.77",
+            leases4=[{"subnet_id": 2, "ip": "10.99.9.77", "hostname": "secret-host"}],
+        )
+        out = authorize(subject, rule="per_object", accessible_ids={1})
+        assert out.leases4 == []
+        assert out.ip == "10.99.9.77"  # unchanged — it's what the caller typed, not a secret
+
     def test_all_known_passes_an_unrestricted_caller(self):
         subject = ClientSubject(kind="mac", subnet_ids=frozenset({1, 2}))
         assert authorize(subject, rule="all_known", all_subnets=True) is subject
