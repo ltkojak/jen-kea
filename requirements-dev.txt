@@ -10,7 +10,7 @@
 pytest
 bandit
 pip-audit
-ruff==0.16.6
+ruff==0.16.8
 
 # Browser end-to-end suite (tests/e2e/, v5.39.0/Q40) — excluded from the
 # default `pytest`/`pytest tests/` run (tests/e2e/conftest.py
