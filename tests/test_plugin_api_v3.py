@@ -67,6 +67,7 @@ def fake_plugin():
         label="Fake Action",
         icon="puzzle",
         href="/fake/action?mac={mac}",
+        confirm="Do the fake thing to {mac}?",
     )
     register_search_provider(FAKE_PLUGIN_ID, title="Fake Plugin", fn=_fake_search_provider)
     register_search_provider("fake-raiser", title="Fake Raiser", fn=_raising_search_provider)
@@ -150,6 +151,14 @@ class TestRegisterRowAction:
         # as every other MAC shown on that page — the row action's href
         # inherits that case rather than normalizing it.
         assert f"/fake/action?mac={self.MAC.upper().replace(':', '%3A')}" in html
+
+    def test_confirm_text_substitutes_the_raw_mac_not_url_encoded(self, fake_plugin, one_lease, logged_in_client):
+        """v5.61.0 (Q78) — confirm is a sentence a person reads, so its
+        {mac} substitutes the raw MAC ('aa:bb:...'), never the
+        %-encoded form href's {mac} gets. The exact-string match below
+        (real colons, no %3A) is itself the proof."""
+        html = logged_in_client.get("/leases").data.decode()
+        assert f'data-confirm="Do the fake thing to {self.MAC.upper()}?"' in html
 
     def test_does_not_render_for_a_viewer(self, fake_plugin, one_lease, client, db):
         from tests.conftest import restricted_client

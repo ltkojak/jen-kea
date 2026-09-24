@@ -72,8 +72,19 @@ def registered_row_actions(surface: str | None = None) -> list[dict]:
 
 def row_actions_for(surface: str, row: dict, role: str) -> list[dict]:
     """Actions to render for one row: [{label, icon, href, method,
-    confirm}], role-filtered and with placeholders substituted."""
+    confirm}], role-filtered and with placeholders substituted. `href`
+    substitutes url-encoded values (it's a URL); `confirm` (v5.61.0,
+    Q78 — the first caller that needed it) substitutes the SAME
+    fields raw, since it's a confirmation sentence a person reads, not
+    a URL — "Send a wake packet to aa:bb:cc:dd:ee:ff?", never a
+    %-encoded MAC."""
     out = []
+    raw_fields = {
+        "mac": str(row.get("mac", "")),
+        "ip": str(row.get("ip", "")),
+        "subnet_id": str(row.get("subnet_id", "")),
+        "hostname": str(row.get("hostname", "")),
+    }
     for a in registered_row_actions(surface):
         if role not in a["roles"]:
             continue
@@ -85,15 +96,17 @@ def row_actions_for(surface: str, row: dict, role: str) -> list[dict]:
                 logger.error(f"row action when() for {a['plugin_id']!r}/{a['label']!r} raised: {e}")
                 continue
         try:
-            href = a["href"].format(
-                mac=quote(str(row.get("mac", "")), safe=""),
-                ip=quote(str(row.get("ip", "")), safe=""),
-                subnet_id=quote(str(row.get("subnet_id", "")), safe=""),
-                hostname=quote(str(row.get("hostname", "")), safe=""),
-            )
+            href = a["href"].format(**{k: quote(v, safe="") for k, v in raw_fields.items()})
         except Exception as e:
             logger.error(f"row action href format for {a['plugin_id']!r}/{a['label']!r} raised: {e}")
             continue
+        confirm = a["confirm"]
+        if confirm is not None:
+            try:
+                confirm = confirm.format(**raw_fields)
+            except Exception as e:
+                logger.error(f"row action confirm format for {a['plugin_id']!r}/{a['label']!r} raised: {e}")
+                continue
         out.append(
             {
                 "plugin_id": a["plugin_id"],
@@ -101,7 +114,7 @@ def row_actions_for(surface: str, row: dict, role: str) -> list[dict]:
                 "icon": a["icon"],
                 "href": href,
                 "method": a["method"],
-                "confirm": a["confirm"],
+                "confirm": confirm,
             }
         )
     return out
