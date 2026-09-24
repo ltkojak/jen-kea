@@ -1236,7 +1236,10 @@ lookup, so they are off there with a `why()` that says Jen has no config to
 read (`hooks_known` is the flag). A host Jen has never heard from
 (`helper_known` False) is not the same as one recorded as having no helper:
 Trace still makes its one attempt on the former and refuses the latter
-without touching SSH. `tests/test_capabilities.py` pins the derivation table
+without touching SSH. It also attempts a host recorded with an OLD helper
+(below v5): a recorded version can be stale, and the attempt is how Jen
+learns the real one, so the route gates on `helper` (known missing), not on
+`trace`, which is what pages display. `tests/test_capabilities.py` pins the derivation table
 and a scanner proving no route re-derives any of this itself;
 `tests/kea_compat/` checks the derivation against the real daemon.
 

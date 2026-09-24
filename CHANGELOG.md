@@ -25,11 +25,11 @@ the Settings landing page and the direct-socket recommendations.
 What a page tells you when something isn't available is now one
 sentence per capability, in one place -- for example, Trace says it
 needs the Kea host helper v5 and names the Settings page that installs
-it. One behavior is deliberately sharper than before: Trace used to
-refuse only a host recorded as having no helper at all; a host recorded
-with a helper too old to serve Trace (older than v5) now gets the same
-clear refusal instead of a confusing log-read failure. A host Jen has
-never heard from still gets its one attempt.
+it. Trace's own behavior is unchanged: a host recorded as having no
+helper is still refused without touching SSH, and any other host --
+including one recorded with an older helper -- still gets its attempt,
+because a recorded version can be out of date (a helper updated by hand)
+and the attempt is how Jen learns the real one.
 
 The Health Center gains a "Server capabilities" row listing, per
 server, what is on and what is off. It is informational -- an

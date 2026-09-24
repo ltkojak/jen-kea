@@ -115,14 +115,16 @@ def trace_page():
             subnet_map = get_accessible_subnet_map()
             known_subnets = {int(lease["subnet_id"])} if lease and lease.get("subnet_id") else set()
             known_subnets |= {int(r["subnet_id"]) for r in reservations if r["subnet_id"]}
-            # Helper-only: a host Jen has recorded as unable to serve Trace (no
-            # helper, or one older than v5) is refused without touching SSH, and
-            # tail_log(helper_only) never falls back to the legacy `sudo tail`
-            # grant. A host Jen has never heard from still gets one attempt.
-            # (v5.64.0, Q83 — the gate is capabilities' `trace`, and the message
-            # is its own `why("trace")`.)
+            # Helper-only: a host Jen has recorded as having NO helper is refused
+            # without touching SSH, and tail_log(helper_only) never falls back to
+            # the legacy `sudo tail` grant. Any other host — including one
+            # recorded below v5 — still gets its attempt: a recorded version can
+            # be stale (a helper updated by hand), and the attempt is how Jen
+            # learns the real one, so gating on `caps.trace` here would refuse
+            # such a host forever. (v5.64.0, Q83 — "known missing" is read from
+            # capabilities, and so is the sentence.)
             caps = __caps.for_server(server.get("id"), probe_kea=False)
-            if caps.helper_known and not caps.trace:
+            if caps.helper_known and not caps.helper:
                 res = {"ok": False, "code": "no-helper"}
                 trace_refusal = caps.why("trace")
             else:
