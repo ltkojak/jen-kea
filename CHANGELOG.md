@@ -2,6 +2,35 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.62.0-beta.1] - 2026-09-24
+
+Beta channel. Bundles Presence 1.0.0, the fifth and final plugin of
+round 5: track a device and Jen publishes its online/offline state to
+Home Assistant, MQTT, or any HTTP endpoint that can receive one, so
+the rest of the house can react to a phone joining or leaving.
+Nothing is published for a device that hasn't been explicitly
+tracked, and every device's state comes from two signals — an active
+Kea lease means online right away, and a background check every five
+minutes catches everything else, with a device having to be missed
+three checks in a row before it's called offline, so one skipped
+check never flags it by mistake.
+
+MQTT is handled by this plugin's own minimal publish-only client,
+written and verified byte-for-byte against the OASIS MQTT 3.1.1
+specification rather than a third-party library, since no such
+dependency is available to a Jen plugin. Each state change opens a
+fresh connection, publishes, and disconnects — nothing stays
+connected between updates. Home Assistant and generic HTTP sinks
+share one JSON body; an MQTT sink can optionally send a retained
+Home Assistant discovery message too, so a tracked device shows up
+as a device tracker automatically. A "Track presence" action is
+available from Lease and Device rows, and every sink has a "Send
+test" button to confirm it's reachable before relying on it.
+
+This closes round 5 — every plugin from the maintainer's 2026-09-23
+list is now bundled and beta-tagged. Promotion is the maintainer's
+call.
+
 ## [5.61.0-beta.1] - 2026-09-24
 
 Beta channel. Bundles Wake & Actions 1.0.0, the fourth plugin of

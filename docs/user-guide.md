@@ -493,3 +493,17 @@ Every Lease, Reservation, and Device row gains a **Wake** action: click it, conf
 Open **Management → Wake** to see and manage a list of favourites: hosts you wake often enough to want one click from a dedicated page instead of hunting them down on Leases or Reservations. Add one by MAC address (reservations you can access appear in the picker as you type), with an optional label, an IP to help Jen work out which subnet it's on, and an optional SecureOn password for hardware that expects one. Each favourite remembers when it was last woken and by whom.
 
 A wake packet goes out to both the target subnet's own broadcast address and the general broadcast address, which covers the common case of Jen and its targets sharing the same network; a target on a different network needs directed broadcast allowed on the router between them. Jen won't send more than one wake packet to the same MAC within five seconds, however it was triggered.
+
+### Presence (v5.62.0)
+
+Track a device and Jen tells the rest of your house when it comes and goes — a phone leaving for work, a laptop waking up on the desk — by publishing its online/offline state to Home Assistant, MQTT, or any HTTP endpoint that can receive one.
+
+Nothing is published for a device you haven't explicitly tracked. Open **Management → Presence** and either use **Track a device** (pick from recent leases and devices you can access) or the **Track presence** action on any Lease or Device row. A tracked device's state comes from two places: an active Kea lease means it's online right away, and a background check every five minutes catches everything else — a device has to be missed three times in a row before Jen calls it offline, so one skipped check never flags it by mistake.
+
+Add a sink under **Sinks** to actually receive the updates:
+
+- **Home Assistant webhook** — the URL from a webhook-triggered automation in Home Assistant
+- **MQTT** — publishes the state and a few details (IP, hostname, since when) to your own broker, with an optional Home Assistant auto-discovery message so a tracked device shows up as a device tracker with no extra setup on the Home Assistant side
+- **Generic HTTP** — a plain JSON POST to any endpoint of your choosing
+
+Each sink has a **Send test** button to confirm it's reachable before relying on it. Passwords and tokens are stored encrypted and never shown again once saved.

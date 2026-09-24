@@ -1945,6 +1945,46 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
       "test_id": "B608",
       "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "497     try:\n498         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S, context=ctx) as resp:\n499             status = resp.status\n",
+      "col_offset": 13,
+      "end_col_offset": 78,
+      "filename": "plugins/presence/plugin.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 498,
+      "line_range": [
+        498
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
+    },
+    {
+      "code": "692             placeholders = \",\".join([\"%s\"] * len(tracked))\n693             cur.execute(f\"SELECT mac, online, misses FROM pr_state WHERE mac IN ({placeholders})\", tuple(tracked))\n694             states = {r[\"mac\"]: r for r in cur.fetchall()}\n",
+      "col_offset": 24,
+      "end_col_offset": 97,
+      "filename": "plugins/presence/plugin.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 693,
+      "line_range": [
+        693
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
     }
   ]
 }
