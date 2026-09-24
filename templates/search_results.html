@@ -35,7 +35,7 @@
             <td class="mono hide-mobile">{{ l.mac }}</td>
             <td>{% set sname = subnet_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) %}
                 <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>
-            <td><a href="/leases?search={{ l.ip }}" class="btn btn-sm btn-secondary">View</a></td>
+            <td><a href="/leases?search={{ l.ip }}" class="btn btn-sm btn-secondary">View</a> <a href="/client?q={{ l.mac }}" class="btn btn-sm btn-secondary">{{ icon("search") }} Investigate</a></td>
         </tr>
         {% endfor %}
         </tbody>
@@ -64,7 +64,7 @@
             <td class="mono hide-mobile">{{ r.mac }}</td>
             <td>{% set sname = subnet_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) %}
                 <span class="badge badge-{{ sname.lower().replace(' ','') }}">{{ sname }}</span></td>
-            <td><a href="/reservations?search={{ r.ip }}" class="btn btn-sm btn-secondary">View</a></td>
+            <td><a href="/reservations?search={{ r.ip }}" class="btn btn-sm btn-secondary">View</a> <a href="/client?q={{ r.mac }}" class="btn btn-sm btn-secondary">{{ icon("search") }} Investigate</a></td>
         </tr>
         {% endfor %}
         </tbody>
@@ -92,7 +92,7 @@
             <td class="mono">{{ d.last_ip or '—' }}</td>
             <td>{{ d.name or '—' }}</td>
             <td class="hide-mobile">{{ d.owner or '—' }}</td>
-            <td><a href="/devices?search={{ d.mac }}" class="btn btn-sm btn-secondary">View</a></td>
+            <td><a href="/devices?search={{ d.mac }}" class="btn btn-sm btn-secondary">View</a> <a href="/client?q={{ d.mac }}" class="btn btn-sm btn-secondary">{{ icon("search") }} Investigate</a></td>
         </tr>
         {% endfor %}
         </tbody>

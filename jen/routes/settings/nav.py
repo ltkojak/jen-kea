@@ -63,6 +63,7 @@ SECTION_STRIPS = {
         {"icon": "server", "label": "Servers", "url": "/servers", "match": ("servers.",)},
         {"icon": "link", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
         {"icon": "stethoscope", "label": "Health", "url": "/health-center", "match": ("health.",)},
+        {"icon": "search", "label": "Investigate", "url": "/client", "match": ("client.",)},
         {"icon": "compass", "label": "Explain", "url": "/tools/explain", "match": ("explain.",)},
         {
             "icon": "activity",

@@ -1,0 +1,41 @@
+{# v5.63.0 (Q82) — Timeline's filter strip + history list, extracted from
+   timeline.html so the Investigation page's Timeline tab can render the
+   identical output. Context: result, kinds. The filter-button script stays
+   duplicated in each page's own {% block scripts %} (nonce'd per page). #}
+{% if kinds|length > 1 %}
+<div class="card" style="padding:10px 16px;">
+    <div id="tl-filters" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;">
+        <span class="u-5872de">Filter:</span>
+        <button type="button" class="badge badge-reserved tl-filter-btn" data-kind="">all</button>
+        {% for k in kinds %}
+        <button type="button" class="badge badge-dynamic tl-filter-btn" data-kind="{{ k }}">{{ k }}</button>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-header"><span class="card-title">History</span>
+        <span class="u-865c33">{{ result.rows|length }} entr{{ 'y' if result.rows|length == 1 else 'ies' }}</span>
+    </div>
+    {% if result.rows %}
+    <div id="tl-rows" style="display:flex;flex-direction:column;gap:2px;">
+        {% for r in result.rows %}
+        <div class="tl-row" data-kind="{{ r.kind }}" style="display:flex;gap:14px;padding:8px 4px;border-bottom:1px solid var(--border);font-size:13px;align-items:baseline;{% if r.related %}opacity:.6;{% endif %}">
+            <div class="mono" style="color:var(--text-muted);white-space:nowrap;min-width:150px;">{{ r.ts|utcfmt }}</div>
+            <div style="min-width:170px;">
+                {% set kd = describe_kind(r.kind) %}
+                <span class="badge {% if r.source == 'event' %}badge-reserved{% elif r.source == 'alert' %}badge-dynamic{% else %}badge-production{% endif %}">{% if kd.icon %}{{ icon(kd.icon) }} {% endif %}{{ kd.label }}</span>
+            </div>
+            <div class="u-5872de">{{ r.detail }}
+                {% if r.related == 'address' %}<div class="u-42e3b5">possibly related — same address, client unknown</div>{% endif %}
+                {% if r.previous_holder %}<div class="u-42e3b5">previous holder <span class="mono">{{ r.previous_holder }}</span></div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    {% from '_empty.html' import empty_state %}
+    {{ empty_state(icon('clock'), 'Nothing recorded for this client yet.') }}
+    {% endif %}
+</div>

@@ -26,6 +26,7 @@
             <label for="am-lease-{{ loop.index }}-{{ l.mac|replace(':','') }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
                 <div class="action-menu-item disabled mono">{{ l.mac }}</div>
+                <a href="/client?q={{ l.mac }}" class="action-menu-item">{{ icon("search") }} Investigate</a>
                 {% if l.has_reservation %}
                 <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
                 {% else %}

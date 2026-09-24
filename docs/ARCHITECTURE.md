@@ -133,7 +133,8 @@ download written to the audit log. A viewer or admin sees the same
 masked diff a superadmin does — the step-up boundary is specifically
 "the real secret values," not "the config history feature."
 
-**Whole-config surfaces vs per-object surfaces (v5.49.0-beta.2).** Surfaces
+**Whole-config surfaces vs per-object surfaces (v5.49.0-beta.2; unified into
+`client_subject.authorize()` at v5.63.0, Q82).** Surfaces
 that render the whole Kea config — config history, Doctor, Kea authoring, the
 Servers config views — and **Trace**, whose source (Kea's log) has no per-line
 subnet boundary Jen can trust — require unrestricted subnet access
@@ -141,7 +142,14 @@ subnet boundary Jen can trust — require unrestricted subnet access
 devices, Explain, Timeline, Reconcile — filters by subnet instead: a restricted user (or a subnet-scoped
 API key) sees an object only when every subnet it belongs to is one they can
 access, and rows that carry no subnet at all (audit and alert matches) are for
-unrestricted callers only.
+unrestricted callers only. The three policies this section names —
+per-object filtering, "every subnet a client is known in" (`all_known`), and
+unrestricted-only — now live in one function, `jen.services.client_subject.authorize(subject,
+rule=...)`, instead of being reimplemented per caller: `per_object` wraps the
+same judgement `filter_client_view` (below) always made, `unrestricted` is
+Trace's own gate expressed as a reusable rule, and `all_known` is available
+for a future surface that needs it, though none of Q82's own five refactored
+consumers currently does.
 
 **A client that moves subnets (v5.49.0-beta.4).** One MAC can have a device row
 in subnet A, an active lease in B and a reservation in B. Authorising on a
@@ -190,6 +198,20 @@ route. `register_alert_type` merges into the same three dicts a core alert
 type lives in (`jen/services/alerts.py`), so a registered type is
 selectable, templatable and sendable exactly like a core one, with no
 separate code path to keep in sync.
+
+**One identity, one place to resolve it (v5.63.0, Q82).**
+`jen.services.client_subject.resolve()` is now the only place a typed
+identifier (MAC in any separator style, IPv4, IPv6, DUID, or a hostname —
+disambiguated against candidates when more than one client uses it) becomes
+device + lease(s) + reservation(s) + v6 addresses. Before this, Timeline,
+Explain, Trace and the client-shaped REST API each ran their own version of
+that lookup, and every Q54–Q56 cross-subnet leak was two of them disagreeing
+about the answer. The Investigation page (`GET /client?q=&tab=`) is the one
+page built on it directly; Explain, Trace and Timeline keep their own
+standalone URLs and their own routes still run their own authorization —
+the Investigation page's tabs for those three embed the SAME already-tested
+route's own result (via `hx-get` and each route's existing HX-partial
+branch), never a second, re-derived copy of the same decision.
 
 **Doctor and Trace are read-only views over data Jen already holds.** Doctor
 (`jen/services/config_doctor.py`) is pure analysis of the config Jen already

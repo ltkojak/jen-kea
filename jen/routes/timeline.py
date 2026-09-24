@@ -60,6 +60,12 @@ def timeline_page():
 
     kinds = sorted({r["kind"] for r in result["rows"]}) if result else []
 
+    # v5.63.0 (Q82) — the Investigation page's Timeline tab embeds this
+    # exact result via htmx, same pattern as Trace's own HX-partial branch.
+    if request.headers.get("HX-Request") == "true":
+        if result is None:
+            return "<p>No client matched that MAC or IP, or you don't have access to it.</p>"
+        return render_template("_timeline_rows.html", result=result, kinds=kinds)
     return render_template(
         "timeline.html",
         mac=raw_mac,

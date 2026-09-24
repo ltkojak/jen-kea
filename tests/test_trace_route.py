@@ -285,7 +285,10 @@ class TestTraceNeedsUnrestrictedAccess:
         import pathlib
 
         root = pathlib.Path(__file__).resolve().parent.parent / "templates"
-        for name in ("explain.html", "_lease_rows.html", "_reservation_row.html"):
+        # v5.63.0 (Q82) — explain.html's own "What Kea logged" link moved into
+        # _explain_result.html when that result rendering was extracted so the
+        # Investigation page's Explain tab could reuse it; the guard moved with it.
+        for name in ("_explain_result.html", "_lease_rows.html", "_reservation_row.html"):
             lines = [ln for ln in (root / name).read_text(encoding="utf-8").splitlines() if "/tools/trace" in ln]
             assert lines and all("current_user.all_subnets" in ln for ln in lines), name
 

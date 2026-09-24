@@ -104,6 +104,12 @@ def explain_page():
                 flash(result.get("error", "Could not explain this client."), "error")
                 result = None
 
+    # v5.63.0 (Q82) — the Investigation page's Explain tab embeds this
+    # exact result via htmx (the same result-only partial, no duplicated
+    # subnet-selection/reservation-filtering logic), same pattern as
+    # Trace's own HX-partial branch below.
+    if request.headers.get("HX-Request") == "true":
+        return render_template("_explain_result.html", client=client, chosen_how=chosen_how, result=result)
     return render_template(
         "explain.html",
         client=client,

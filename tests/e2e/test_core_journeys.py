@@ -96,3 +96,25 @@ class TestLeasesToExplain:
         page.wait_for_url("**/tools/explain**")
         mac_value = page.locator('input[name="mac"]').input_value()
         assert mac_value.replace(":", "").lower() == "aabbccddee01"
+
+
+class TestSearchToInvestigate:
+    """v5.63.0 (Q82) — search a MAC, follow "Investigate" into the
+    Investigation page, and confirm every tab renders with the same
+    identifier carried across all of them."""
+
+    def test_search_then_every_tab_renders_with_the_identifier_persisting(self, logged_in_page, base_url):
+        _seed_active_lease()
+        page = logged_in_page
+        page.goto(f"{base_url}/search?q=e2e-test-host")
+        page.wait_for_selector("text=e2e-test-host")
+
+        page.locator("a", has_text="Investigate").first.click()
+        page.wait_for_url("**/client?q=**")
+        assert "aa:bb:cc:dd:ee:01" in page.locator('input[name="q"]').input_value().lower()
+
+        for tab in ("Explain", "Trace", "Timeline", "Dns", "Config", "Overview"):
+            page.locator(".badge", has_text=tab).first.click()
+            page.wait_for_load_state("networkidle")
+            assert f"tab={tab.lower()}" in page.url
+            assert "aabbccddee01" in page.locator('input[name="q"]').input_value().lower().replace(":", "")

@@ -2,6 +2,39 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.63.0-beta.1] - 2026-09-24
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.62.1-beta.1
+run.
+
+A new Investigation page (Network -> Investigate, or GET /client) gives
+one MAC, IP, or hostname six tabs onto the same resolved client:
+Overview, Explain, Trace, Timeline, DNS and Config. Before this,
+Timeline, Explain, Trace and the REST API's device/timeline routes each
+resolved "which client is this" on their own, and every past
+cross-subnet leak in this area came from two of those private resolvers
+disagreeing about the answer. jen.services.client_subject is now the
+one place that turns a typed identifier into a device, its active
+leases and reservations, and its v6 addresses -- and, for an address
+rather than a MAC, who holds it now and who has held it before -- with
+the exact same subnet-visibility rule (per-object, whichever subnets
+each thing actually belongs to) applied everywhere it's used. A
+hostname more than one client currently answers to shows every match
+instead of silently picking one.
+
+Explain, Trace and Timeline keep their own pages and their own URLs
+unchanged; the Investigation page's tabs for those three embed each
+one's own already-tested result live, so nothing about their behavior
+is re-derived or duplicated. The DNS tab checks just one client's own
+reservation and lease names against DNS -- the same forward/reverse
+verification the fleet-wide Reconcile tab runs, scoped down to one
+client. The Config tab reads the same evaluation Explain computes for
+its effective subnet, pool, options and classes, alongside the live
+configuration's SHA, so it's easy to tell whether the config has moved
+since you last looked. Leases, reservations, devices and search results
+all gained an "Investigate" action pointing here, alongside the
+existing per-page shortcuts, which are unchanged.
+
 ## [5.62.1-beta.1] - 2026-09-24
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.62.0-beta.1

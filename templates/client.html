@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Investigate a client{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>{{ icon("search", "ico-lg") }} Investigate a client</h1>
+    <p>One identifier — a MAC, an IP, or a hostname — resolved once, with every diagnostic view onto it in one place.</p>
+</div>
+
+<div class="card">
+    <form method="GET" action="/client" autocomplete="off">
+        <div class="form-row u-f0e9d3">
+            <div class="form-group u-116966">
+                <label>MAC, IP, or hostname</label>
+                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff, 10.0.0.50, or a hostname" autofocus>
+            </div>
+        </div>
+        <div class="u-012c80">
+            <button type="submit" class="btn btn-primary">{{ icon("search") }} Investigate</button>
+        </div>
+    </form>
+</div>
+
+{% if q %}
+{% if subject and subject.candidates %}
+<div class="card">
+    <div class="card-header"><span class="card-title">More than one client uses that hostname</span></div>
+    <table class="rowlist">
+        <thead><tr><th>MAC</th></tr></thead>
+        <tbody>
+        {% for c in subject.candidates %}
+        <tr><td class="mono"><a href="/client?q={{ c.mac }}">{{ c.mac }}</a></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% elif denied_reason %}
+<div class="card"><p class="u-5872de">{{ denied_reason }}</p></div>
+{% elif not view %}
+<div class="card"><p class="u-5872de">No client matched that identifier, or you don't have access to it.</p></div>
+{% else %}
+
+<div class="card" style="padding:10px 16px;">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        {% for t in tabs %}
+        <a href="/client?q={{ q|urlencode }}&tab={{ t }}" class="badge {% if t == tab %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ t|capitalize }}</a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="card u-e25041">
+    <div class="card-header"><span class="card-title">{{ view.mac or view.ip or view.hostname }}</span>
+        <span class="u-865c33 mono" title="investigation {{ investigation_id }}">{{ investigation_id }}</span>
+    </div>
+    <div class="u-260fab">
+        {% if view.mac %}<div><div class="stat-label">MAC</div><div class="mono">{{ view.mac }}</div></div>{% endif %}
+        {% if view.ip %}<div><div class="stat-label">IP</div><div class="mono">{{ view.ip }}</div></div>{% endif %}
+        {% if view.hostname %}<div><div class="stat-label">Hostname</div><div class="mono">{{ view.hostname }}</div></div>{% endif %}
+        {% if view.device %}<div><div class="stat-label">Last seen</div><div class="mono">{{ view.device.last_seen|utcfmt if view.device.last_seen else '—' }}</div></div>{% endif %}
+        {% if alert %}<div><div class="stat-label">Last alert</div><div class="mono">{{ alert.alert_type }} — {{ alert.status }} ({{ alert.sent_at|utcfmt }})</div></div>{% endif %}
+    </div>
+    <div class="u-865c33" style="margin-top:8px;">
+        Config {{ view.fetched_at.get('device')|utcfmt if view.fetched_at.get('device') else '—' }} ·
+        Leases {{ view.fetched_at.get('leases')|utcfmt if view.fetched_at.get('leases') else '—' }} ·
+        Reservations {{ view.fetched_at.get('reservations')|utcfmt if view.fetched_at.get('reservations') else '—' }}
+        {% if config_sha %} · Config {{ config_sha[:8] }}…{% endif %}
+    </div>
+</div>
+
+{% if tab == "overview" %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Device</span></div>
+    {% if view.device %}
+    <table class="rowlist">
+        <tbody>
+            <tr><td>Name</td><td>{{ view.device.device_name or '—' }}</td></tr>
+            <tr><td>Owner</td><td>{{ view.device.owner or '—' }}</td></tr>
+            <tr><td>Last IP</td><td class="mono">{{ view.device.last_ip or '—' }}</td></tr>
+            <tr><td>Last hostname</td><td>{{ view.device.last_hostname or '—' }}</td></tr>
+            <tr><td>First seen</td><td>{{ view.device.first_seen|utcfmt if view.device.first_seen else '—' }}</td></tr>
+        </tbody>
+    </table>
+    {% else %}
+    <p class="u-5872de">No device record for this client (or you don't have access to the one that exists).</p>
+    {% endif %}
+</div>
+<div class="card">
+    <div class="card-header"><span class="card-title">Leases</span></div>
+    {% if view.leases4 %}
+    <table class="rowlist">
+        <thead><tr><th>IP</th><th>Subnet</th><th>Hostname</th><th>Expires</th></tr></thead>
+        <tbody>
+        {% for l in view.leases4 %}
+        <tr><td class="mono">{{ l.ip }}</td><td>{{ l.subnet_id }}</td><td>{{ l.hostname or '—' }}</td><td>{{ l.expire|utcfmt }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="u-5872de">No active v4 lease.</p>
+    {% endif %}
+    {% if view.leases6 %}
+    <table class="rowlist">
+        <thead><tr><th>IPv6 address</th><th>Subnet</th></tr></thead>
+        <tbody>
+        {% for a in view.leases6 %}
+        <tr><td class="mono">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</td><td>{{ a.subnet_id }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+<div class="card">
+    <div class="card-header"><span class="card-title">Reservations</span></div>
+    {% if view.reservations %}
+    <table class="rowlist">
+        <thead><tr><th>IP</th><th>Subnet</th><th>Hostname</th></tr></thead>
+        <tbody>
+        {% for r in view.reservations %}
+        <tr><td class="mono">{{ r.ip }}</td><td>{{ r.subnet_id }}</td><td>{{ r.hostname or '—' }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="u-5872de">No reservation.</p>
+    {% endif %}
+</div>
+
+{% elif tab == "explain" %}
+{% if view.mac %}
+<div hx-get="/tools/explain?mac={{ view.mac|urlencode }}{% if request.args.get('subnet') %}&subnet={{ request.args.get('subnet') }}{% endif %}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+    <p class="u-5872de">Loading…</p>
+</div>
+{% else %}
+<div class="card"><p class="u-5872de">Explain needs a MAC — this identifier didn't resolve to one.</p></div>
+{% endif %}
+
+{% elif tab == "trace" %}
+{% if not trace_allowed %}
+<div class="card"><p class="u-5872de">Trace needs admin access to every subnet (docs/ARCHITECTURE.md §2).</p></div>
+{% elif not view.mac %}
+<div class="card"><p class="u-5872de">Trace needs a MAC — this identifier didn't resolve to one.</p></div>
+{% else %}
+<div hx-get="/tools/trace?mac={{ view.mac|urlencode }}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+    <p class="u-5872de">Loading…</p>
+</div>
+{% endif %}
+
+{% elif tab == "timeline" %}
+<div hx-get="/timeline?mac={{ view.mac|urlencode if view.mac else '' }}{% if not view.mac and view.ip %}&ip={{ view.ip|urlencode }}{% endif %}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+    <p class="u-5872de">Loading…</p>
+</div>
+
+{% elif tab == "dns" %}
+<div class="card">
+    <div class="card-header"><span class="card-title">DNS reconciliation</span></div>
+    {% if dns_error %}
+    <p class="u-5872de">{{ dns_error }}</p>
+    {% elif dns_results %}
+    <table class="rowlist">
+        <thead><tr><th>Name</th><th>IP</th><th>Source</th><th>Verdict</th></tr></thead>
+        <tbody>
+        {% for r in dns_results %}
+        <tr><td class="mono">{{ r.name }}</td><td class="mono">{{ r.ip }}</td><td>{{ r.source }}</td><td>{{ r.verdict }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="u-5872de">This client has no named reservation or lease to check.</p>
+    {% endif %}
+</div>
+
+{% elif tab == "config" %}
+{% if config_result %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Effective configuration</span>
+        <span class="u-865c33">subnet {{ config_result.subnet.id }} · {{ config_result.subnet.cidr }}{% if config_sha %} · config {{ config_sha[:8] }}…{% endif %}</span>
+    </div>
+    <div class="u-260fab">
+        <div><div class="stat-label">Answer</div><div class="mono">{{ config_result.answer.ip or 'no address' }}</div></div>
+        <div><div class="stat-label">Valid lifetime</div><div class="mono">{{ config_result.answer.lifetime }} s</div></div>
+        {% if view.reservation %}<div><div class="stat-label">Reservation</div><div class="mono">{{ view.reservation.ip }}</div></div>{% endif %}
+    </div>
+</div>
+{% if config_result.pools %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Pools</span></div>
+    <table class="rowlist">
+        <thead><tr><th>Pool</th><th>Eligible</th></tr></thead>
+        <tbody>
+        {% for p in config_result.pools %}
+        <tr><td class="mono">{{ p.pool }}</td><td>{% if p.eligible is none %}undecided{% elif p.eligible %}yes{% else %}no{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% if config_result.classes %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Classes</span></div>
+    <table class="rowlist">
+        <thead><tr><th>Class</th><th>Result</th></tr></thead>
+        <tbody>
+        {% for c in config_result.classes %}
+        <tr><td class="mono">{{ c.name }}</td><td>{% if not c.evaluable %}not evaluable{% elif c.matched %}matched{% elif c.matched is none %}undecided{% else %}no{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% if config_result.options %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Options</span></div>
+    <table class="rowlist">
+        <thead><tr><th>Code</th><th>Name</th><th>Value</th><th>From</th></tr></thead>
+        <tbody>
+        {% for o in config_result.options %}
+        <tr><td>{{ o.code }}</td><td>{{ o.name }}</td><td class="mono">{{ o.data }}</td><td>{{ o.source }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% else %}
+<div class="card"><p class="u-5872de">Could not read the effective configuration for this client — see the Explain tab.</p></div>
+{% endif %}
+
+{% endif %}
+{% endif %}
+{% endif %}
+
+{% endblock %}

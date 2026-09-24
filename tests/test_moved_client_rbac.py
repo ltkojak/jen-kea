@@ -198,6 +198,41 @@ class TestTimelinePageMovedClient:
             _clean(db)
 
 
+class TestClientPageMovedClient:
+    """v5.63.0 (Q82) — the same fixture, run against the Investigation page
+    instead of Timeline: client_subject.authorize(rule="per_object") must
+    reproduce filter_client_view's exact per-object judgement."""
+
+    def test_restricted_user_sees_the_device_and_nothing_from_subnet_b(self, client, db, moved):
+        c = _restricted(client, db, "moved_client_restricted1")
+        body = c.get(f"/client?q={MAC}").data.decode()
+        assert "Device" in body  # the allowed device section renders
+        for leaked in DENIED:
+            assert leaked not in body
+
+    def test_unrestricted_user_sees_everything(self, logged_in_client, moved):
+        body = logged_in_client.get(f"/client?q={MAC}").data.decode()
+        assert LEASE_IP_B in body and RES_IP_B in body
+
+    def test_inverse_device_in_b_lease_in_a_shows_lease_hides_device_placement(self, client, db, moved_inverse):
+        c = _restricted(client, db, "moved_client_restricted2")
+        body = c.get(f"/client?q={MAC}").data.decode()
+        assert LEASE_IP_A in body  # the accessible lease is shown
+        assert "10.99.9.55" not in body and "moved-device-host" not in body and "device-note" not in body
+        assert "do not have access" not in body
+
+    def test_only_denied_objects_means_refusal(self, client, db):
+        _seed(db, device_subnet=B, lease=(B, LEASE_IP_B), reservation=(B, RES_IP_B))
+        try:
+            c = _restricted(client, db, "moved_client_restricted3")
+            body = c.get(f"/client?q={MAC}").data.decode()
+            assert "do not have access" in body
+            for leaked in DENIED:
+                assert leaked not in body
+        finally:
+            _clean(db)
+
+
 class TestApiMovedClient:
     def test_scoped_key_timeline_has_no_lease_or_reservation(self, client, db, moved):
         _key(db, "_moved_probe_scoped", RAW_SCOPED, [A])

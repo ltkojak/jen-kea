@@ -351,6 +351,58 @@ SURFACES = [
         {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
         (),
     ),
+    # v5.63.0 (Q82) — the Investigation page never 403s itself (a denial is
+    # shown inline, in a 200 response); the marker check is what proves it,
+    # same shape as Explain/Doctor/Reports above. Six rows, one per tab,
+    # split across both identifier kinds the design calls for.
+    (
+        "client overview by B mac",
+        "GET",
+        f"/client?q={B_MAC}&tab=overview",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_MAC,),
+    ),
+    (
+        "client explain tab by B mac",
+        "GET",
+        f"/client?q={B_MAC}&tab=explain",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_MAC,),
+    ),
+    (
+        "client trace tab by B mac",
+        "GET",
+        f"/client?q={B_MAC}&tab=trace",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_MAC,),
+    ),
+    (
+        "client timeline tab by B ip",
+        "GET",
+        f"/client?q={B_LEASE_IP}&tab=timeline",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_LEASE_IP,),
+    ),
+    (
+        "client dns tab by B ip",
+        "GET",
+        f"/client?q={B_LEASE_IP}&tab=dns",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_LEASE_IP,),
+    ),
+    (
+        "client config tab by B ip",
+        "GET",
+        f"/client?q={B_LEASE_IP}&tab=config",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_LEASE_IP,),
+    ),
 ]
 
 CELLS = [

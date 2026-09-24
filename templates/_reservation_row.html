@@ -37,6 +37,7 @@
             <label for="am-res-{{ h.host_id }}" class="action-menu-btn" aria-label="Actions">{{ icon_dots() }}</label>
             <div class="action-menu-dropdown">
                 <div class="action-menu-item disabled mono">{{ h.mac }}</div>
+                <a href="/client?q={{ h.mac }}" class="action-menu-item">{{ icon("search") }} Investigate</a>
                 <a href="/reservations/edit/{{ h.host_id }}" class="action-menu-item">{{ icon_edit() }}Edit reservation</a>
                 <a href="/tools/explain?mac={{ h.mac }}&subnet={{ h.subnet_id }}&hostname={{ h.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>
                 <a href="/timeline?mac={{ h.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>

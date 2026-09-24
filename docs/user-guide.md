@@ -135,9 +135,22 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 **Getting started** (admins; the nav pill, or `/getting-started`) is the first-hour checklist: each row is one thing worth having in place — SSH and the Kea host helper current, HTTPS, MFA on your account, an alert channel, a backup, a second server for HA — with a **Fix** link on any that isn't. The pill in the top bar shows `done/total` until everything is green. A superadmin can hide the pill for the whole install with **Dismiss the nav reminder**; the page itself stays available.
 
-## Why did this client get this? (v5.35.0)
+## Investigate a client (v5.63.0)
 
-**Network → Explain**, or *Why this address?* in the action menu of any lease or reservation row. Give it a MAC (and, if you have them, the vendor class, user class, hostname, client id, relay ids or giaddr the client sends) and Jen walks the decision Kea makes, step by step:
+**Network → Investigate**, or *Investigate* in the action menu of any lease, reservation or device inventory row, or from a search result. Give it a MAC, an IP, or a hostname and Jen resolves it once — the same identity every tab below reads — then lays out six tabs onto it:
+
+- **Overview** — the device, its active lease(s) and reservation(s), an IPv6 address if it has one, the most recent alert that mentioned it, and a freshness line showing exactly when the device/lease/reservation data on screen was read.
+- **Explain** — the same step-by-step decision Kea would make for this client (see below).
+- **Trace** — the same tail-of-the-Kea-log view (see below); admin-only and needs access to every subnet, same as the standalone page.
+- **Timeline** — the same merged event/audit/alert history (see below).
+- **DNS** — checks just this client's own reservation/lease name against DNS, the same forward/reverse verification the DDNS Reconcile tab runs fleet-wide.
+- **Config** — the effective subnet, pool, options and classes from the same Explain evaluation, plus the live configuration's SHA so you can tell at a glance whether it's changed since you last looked.
+
+A hostname that more than one client currently uses shows every match instead of guessing which one you meant. Every tab is subnet-restricted exactly the way the page it draws from already is; a client outside subnets you can access says so rather than showing anything about it. The identifier and the active tab both live in the URL, so a tab is always a page you can reload, bookmark, or send to someone else with access.
+
+### Why did this client get this? (v5.35.0)
+
+Explain — reachable at **Network → Explain**, or as the Investigate page's Explain tab. Give it a MAC (and, if you have them, the vendor class, user class, hostname, client id, relay ids or giaddr the client sends) and Jen walks the decision Kea makes, step by step:
 
 1. **Subnet selection** — the subnet you chose, or the lease's / a reservation's; a giaddr is checked against the subnet's relay addresses and range.
 2. **Reservation** — by MAC or client id, in this subnet or globally when the subnet allows global reservations. This decides KNOWN / UNKNOWN.
@@ -148,9 +161,9 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 Kea has no dry-run, so this is a reconstruction from the configuration Jen holds; it cannot see which interface a request arrived on. Only subnets you can access are shown.
 
-## Trace a client (v5.48.0)
+### Trace a client (v5.48.0)
 
-**Network → Explain → "What Kea logged"**, or *Trace in Kea log* in the action menu of any lease or reservation row (admins only). Explain predicts what Kea *should* do; Trace shows what it *did*: Jen reads the tail of the Kea server's `kea-dhcp4` log (through the same helper `tail-log` op the DDNS log tab uses — no packet capture, nothing installed), keeps the lines that name the client's MAC, and shows them in plain English grouped into exchanges — DISCOVER → offer → REQUEST → ACK, a NAK, a release or a decline. Lines are grouped when they are less than two seconds apart. Above the timeline, Explain's answer for the same client ("Jen expects subnet 3, 10.0.1.55") sits next to it so the two can be compared.
+Trace — reachable at **Network → Explain → "What Kea logged"**, or as the Investigate page's Trace tab. Explain predicts what Kea *should* do; Trace shows what it *did*: Jen reads the tail of the Kea server's `kea-dhcp4` log (through the same helper `tail-log` op the DDNS log tab uses — no packet capture, nothing installed), keeps the lines that name the client's MAC, and shows them in plain English grouped into exchanges — DISCOVER → offer → REQUEST → ACK, a NAK, a release or a decline. Lines are grouped when they are less than two seconds apart. Above the timeline, Explain's answer for the same client ("Jen expects subnet 3, 10.0.1.55") sits next to it so the two can be compared.
 
 **Watch for 60 s** re-reads the log every 5 seconds, then stops on its own.
 
@@ -158,9 +171,9 @@ What it can see depends on the server's log level. At Kea's default (INFO) the l
 
 Only the last 1000 lines are scanned (the helper's own limit), so on a busy server an older exchange may already be out of the window. Trace needs the **Kea host helper** on the server (Settings → Kea → SSH → Install helper): it reads the log through the helper's bounded `tail-log`, never through the old `tail -200` sudo grant, which could not serve 1000 lines. Without the helper the page says so instead of showing a partial log. If your Kea writes its log somewhere other than `/var/log/kea/kea-dhcp4.log`, set `[kea] dhcp4_log_path`. The log can contain other clients' data — and Kea's log has no per-line subnet boundary Jen can trust, so a client's earlier activity in another subnet can sit in the last 1000 lines whatever its current lease says. Trace is therefore admin-only **and needs access to all subnets**: a subnet-restricted admin gets a refusal for every MAC, and the *Trace in Kea log* links are hidden from them. It is never part of the support bundle.
 
-## Timeline (v5.42.0)
+### Timeline (v5.42.0)
 
-**Network → Timeline**, or *Timeline* in the action menu of any lease, reservation or device inventory row — also linked from an Explain result ("What happened to this client?"). Give it a MAC or an IP and it shows everything Jen has recorded about that one client, newest first:
+Timeline — reachable at **Network → Timeline**, or as the Investigate page's Timeline tab. Give it a MAC or an IP and it shows everything Jen has recorded about that one client, newest first:
 
 - **Events** — a new lease, an IP or hostname change, an expired lease, a reservation added/deleted/changed, a config push, an HA state change, config drift detected or resolved, and every alert Jen sent, with which channel and whether it landed.
 - **Audit log** entries and **alert** deliveries that mention the MAC or IP in their text.

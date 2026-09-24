@@ -25,7 +25,7 @@ from jen.services import csrf as csrf_svc
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.62.1-beta.1"
+JEN_VERSION = "5.63.0-beta.1"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None
@@ -821,6 +821,7 @@ def _register_blueprints(app: Flask) -> None:
     """Import and register all route blueprints."""
     from jen.routes.api import bp as api_bp
     from jen.routes.auth import bp as auth_bp
+    from jen.routes.client import bp as client_bp
     from jen.routes.content import bp as content_bp
     from jen.routes.dashboard import bp as dashboard_bp
     from jen.routes.database import bp as database_bp
@@ -846,6 +847,7 @@ def _register_blueprints(app: Flask) -> None:
     for blueprint in [
         api_bp,
         auth_bp,
+        client_bp,
         content_bp,
         dashboard_bp,
         database_bp,
