@@ -2,6 +2,36 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.59.0-beta.1] - 2026-09-24
+
+Beta channel. Bundles Local DNS Sync 1.0.0, the fourth plugin of round
+5: Kea's own DDNS integration assumes a BIND-style DNS server, and most
+homelabs run Pi-hole or AdGuard Home instead. This plugin pushes DHCP
+names — from active leases, Kea reservations, and IPAM Lite entries —
+into either one, so a name like `nas.lan` resolves on the LAN without
+touching Kea's DDNS settings at all. Unbound has no write API, so a
+target-less "Export Unbound local-data" download covers that case
+instead, in the same config syntax Unbound already expects.
+
+Every record the plugin creates lives in its own ledger, and a sync
+only ever proposes removing a name that's in that ledger — anything
+already on the DNS server that Jen didn't add is left alone, no matter
+what the plugin's own view of the world looks like when it compares
+against the remote server's current records for drift. A target starts
+paused and cannot be enabled until an operator has run Preview, which
+shows the exact adds, updates, and removes a real sync would make
+without applying any of them — the enable route itself refuses when
+no preview has ever been run, not just the page's own nudging. Once
+live, a target syncs within seconds of a related lease or reservation
+change (debounced, so a burst of DHCP renewals doesn't turn into one
+HTTP call per lease) and again on a 15-minute schedule regardless, to
+catch anything a debounced sync missed.
+
+Every request shape the plugin sends to Pi-hole or AdGuard Home is
+pinned in its own source against the vendor's published OpenAPI specs,
+not a blog post or a guess, with the exact file and the date it was
+read.
+
 ## [5.58.3-beta.1] - 2026-09-24
 
 Beta channel. A plugin bundled after a box's own install used to get

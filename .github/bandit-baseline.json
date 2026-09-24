@@ -1838,6 +1838,92 @@
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
       "test_id": "B608",
       "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "403             cur.execute(\n404                 f\"SELECT inet_ntoa(address) AS ip, hostname, subnet_id FROM lease4 \"\n405                 f\"WHERE state=0 AND hostname IS NOT NULL AND hostname != '' \"\n406                 f\"AND subnet_id IN ({_in_placeholders(subnet_ids)})\",\n407                 tuple(subnet_ids),\n",
+      "col_offset": 16,
+      "end_col_offset": 68,
+      "filename": "plugins/dns-sync/plugin.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 404,
+      "line_range": [
+        404,
+        405,
+        406
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "425             cur.execute(\n426                 f\"SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id AS subnet_id FROM hosts \"\n427                 f\"WHERE ipv4_address IS NOT NULL AND ipv4_address > 0 AND hostname IS NOT NULL AND hostname != '' \"\n428                 f\"AND dhcp4_subnet_id IN ({_in_placeholders(subnet_ids)})\",\n429                 tuple(subnet_ids),\n",
+      "col_offset": 16,
+      "end_col_offset": 74,
+      "filename": "plugins/dns-sync/plugin.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 426,
+      "line_range": [
+        426,
+        427,
+        428
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "447             cur.execute(\n448                 f\"SELECT ip, label AS hostname, subnet_id FROM ipam_static_entries \"\n449                 f\"WHERE subnet_kind='kea' AND entry_status IN ('static','planned') \"\n450                 f\"AND label IS NOT NULL AND label != '' AND subnet_id IN ({_in_placeholders(subnet_ids)})\",\n451                 tuple(subnet_ids),\n",
+      "col_offset": 16,
+      "end_col_offset": 106,
+      "filename": "plugins/dns-sync/plugin.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 448,
+      "line_range": [
+        448,
+        449,
+        450
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "511     try:\n512         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S, context=_ssl_context(url, allow_self_signed)) as resp:\n513             raw = resp.read().decode(\"utf-8\", \"replace\")\n",
+      "col_offset": 13,
+      "end_col_offset": 111,
+      "filename": "plugins/dns-sync/plugin.py",
+      "issue_confidence": "HIGH",
+      "issue_cwe": {
+        "id": 22,
+        "link": "https://cwe.mitre.org/data/definitions/22.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Audit url open for permitted schemes. Allowing use of file:/ or custom schemes is often unexpected.",
+      "line_number": 512,
+      "line_range": [
+        512
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/blacklists/blacklist_calls.html#b310-urllib-urlopen",
+      "test_id": "B310",
+      "test_name": "blacklist"
     }
   ]
 }

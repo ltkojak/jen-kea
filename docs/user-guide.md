@@ -463,3 +463,13 @@ Set how often it's checked (1–60 minutes) and how many consecutive failed chec
 From **Reservations**, the row menu on any reservation offers **Watch this host** as a shortcut to add it without typing the address again.
 
 Watchdog needs `ping` on the Jen host for ICMP targets (`iputils-ping` — Settings → Plugins offers an Install button on a systemd host) but nothing extra for TCP-only targets.
+
+### Local DNS Sync (v5.59.0)
+
+Kea's own DDNS integration assumes a BIND-style DNS server. If your network instead runs Pi-hole or AdGuard Home, Local DNS Sync pushes DHCP names into it so `nas.lan` resolves on the LAN without touching Kea's DDNS settings at all.
+
+Open **Network → DNS Sync** and click **Add Target**: give it a name, pick Pi-hole or AdGuard Home, the server's URL and credentials (a Pi-hole password, or `user:pass` for AdGuard Home's admin login), a domain suffix (e.g. `lan`), which sources feed it — active leases, reservations, and IPAM Lite entries, in that order of priority when more than one names the same address — and which subnets it should watch. A target starts paused: click **Preview** to see exactly what it would add, change, or remove before anything is sent, and enable it once that looks right. A paused target can be previewed as many times as you like; it only ever goes live after you've looked.
+
+Once enabled, a target syncs automatically a few seconds after a related lease or reservation change, and again on a 15-minute schedule regardless, so nothing is missed. Local DNS Sync only ever touches records it created itself — anything already on your DNS server that it didn't add is left alone, even if it looks unrelated to any current device. Credentials are stored encrypted and are never shown again once saved.
+
+If your resolver is Unbound instead — which has no API to push to — each target's row offers an **Export Unbound local-data** download with the same records in Unbound's own config syntax, to include by hand.
