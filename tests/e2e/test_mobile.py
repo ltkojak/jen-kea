@@ -510,11 +510,20 @@ class TestStickyTableHeaderOnDesktop:
             page.evaluate(f"window.scrollTo(0, {initial_top - sticky_top_px + 200})")
             page.wait_for_timeout(100)
             th_top = page.eval_on_selector("table.rowlist thead th", "el => Math.round(el.getBoundingClientRect().top)")
+            # The first row in DOM order may itself have scrolled above the
+            # viewport by now (40 rows, a 200px overshoot) — "the first
+            # visible row" means the first one not already scrolled past,
+            # i.e. the first whose own top is still >= 0.
             first_row_top = page.eval_on_selector(
-                "table.rowlist tbody tr", "el => Math.round(el.getBoundingClientRect().top)"
+                "table.rowlist tbody",
+                "el => { var first = [...el.children].find(r => r.getBoundingClientRect().top >= 0); "
+                "return first ? Math.round(first.getBoundingClientRect().top) : null; }",
             )
             assert f"{th_top}px" == sticky_top, f"th top is {th_top}px, --sticky-top is {sticky_top!r}"
-            assert th_top < first_row_top, "header is not above the first visible row after scrolling"
+            assert first_row_top is not None, "every row has scrolled past the viewport"
+            assert th_top < first_row_top, (
+                f"header (top={th_top}) is not above the first visible row (top={first_row_top})"
+            )
             ctx.close()
         finally:
             with kea_db() as db, db.cursor() as cur:
