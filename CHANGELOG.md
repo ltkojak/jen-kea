@@ -2,6 +2,53 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.3-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.2-beta.1
+run; test, icon and documentation work with one small loader change, no new
+user-facing capability.
+
+The phone and desktop screenshot job claimed in a comment to cover every
+bundled plugin's own page, but its list was typed by hand and had never
+contained Wake or Presence, so neither page was ever opened by the overflow,
+tap-target or screenshot passes. The list is now derived: every directory
+under `plugins/` contributes the URL path of each `nav` endpoint in its
+manifest (read statically from `plugin.py`, because the list is needed before
+any app exists, and an endpoint that needs URL arguments is an error rather
+than a silent skip), plus an optional `screenshot_pages` list a manifest may
+carry for a second page. A plugin added under `plugins/` can no longer be
+skipped: a pure test fails until its page is accounted for. The Client
+Investigation page joins the set, with a seeded lease so the capture shows a
+client rather than an empty form. The Wake, Presence and Investigate captures
+were opened from the CI artifact: each renders cleanly at phone width with no
+sideways scroll and nothing clipped.
+
+The Switch Port Locator manifest names the icon `cable`, which the sprite did
+not contain, so its navigation entry would have printed the word instead of a
+glyph. `cable` and `search-check` are now in the sprite, and the plugin
+loader checks every `nav` icon: a name the sprite lacks is logged as a warning
+and replaced with the generic `puzzle` icon, so a manifest from a registry
+plugin can no longer put a stray word into the navigation. A test holds every
+bundled manifest to the sprite. The inline-style ratchet pin is lowered to the
+real count, 489, as the ratchet's own rule asks when the count drops.
+
+Documentation caught up with seven bundled plugins. The README's feature list
+and plugin table, the admin guide (seven theme presets, and a new Bundled
+plugins section with one paragraph per plugin saying what it needs, stores and
+sends) and the bundled-plugin wording in CLAUDE.md and ARCHITECTURE now say
+seven, not two. ARCHITECTURE gains a paragraph on the `tests/system/` suite
+naming the two invariants it holds: a change set never raises and never leaves
+servers disagreeing, including after a failed restart, and the shipped image
+boots. `plugins/README.md` names `PERIODIC_MIN_MINUTES` and says that a shorter
+interval raises at register time and the plugin does not load.
+
+Three corrections to earlier entries, each with a dated note at the top of the
+entry it touches: 5.59.0 and 5.60.0 gave Local DNS Sync and Switch Port Locator
+the wrong ordinals among round 5's new plugins; the "unpromoted run" sentence
+in the six entries from 5.62.1 to 5.65.2 said it began at 5.32.1-beta.1 when
+5.49.0 and 5.56.3 had been promoted since, so it begins at 5.56.4-beta.1; and
+5.58.1 said it had also bundled Host Watchdog, which shipped in 5.58.0.
+
 ## [5.65.2-beta.1] - 2026-09-25
 
 *Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
