@@ -2,6 +2,50 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.1-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.65.0-beta.1
+run.
+
+The Docker image could not start. Its launcher runs gunicorn as a
+module, and gunicorn finds Jen's code through the directory it is started
+in, but the image never set a working directory, so in a container it began
+in the filesystem root and stopped at once with "No module named 'jen'" --
+then restarted, and stopped again, forever. This is not new in this beta:
+gunicorn has launched Jen since 5.5.0 and the image has never had a working
+directory, so every Docker deployment since then has been unable to start,
+stable channel included (5.56.3 has the same launch line and the same
+Dockerfile). It went unseen because the tests read the compose files as text
+and nothing ever booted the image. It was found by the new system-boundary
+suite and confirmed on a clean `docker compose up` of the shipped bundled-
+database compose file. The image now sets its working directory to the
+application root, and the launcher also tells gunicorn where to look, so
+neither alone is load-bearing; the system suite gained a job that boots the
+shipped compose file so this cannot regress unseen.
+
+Two flaws in the multi-server configuration push were found by the same suite
+and are fixed. First, if a second server's SSH connection was refused after
+the first server had already been written, the push raised instead of
+reverting, leaving the first server on the new configuration and the second on
+the old one -- exactly the split the push exists to prevent. Every call to a
+Kea host during the push is now guarded, a connection error is recorded as a
+failure, the servers already written are reverted, and a revert
+that cannot connect is reported as a failed rollback naming the server. Second,
+when a server would not restart on a validated new configuration, the push left
+that configuration on disk and the daemon stopped, calling it "still live and
+valid" -- untrue once the daemon cannot start from it. The push now puts every
+server back on the configuration it had and restarts it again, and says so
+("rolled back"); if that too fails it says "rollback failed" and names the
+servers to fix by hand. In both cases nothing is recorded as changed, the
+timeline no longer claims the change was applied, and the Servers page keeps a
+dismissible banner with the failing lines until an administrator clears it or a
+later change succeeds.
+
+One small operator aid: when a previous update was killed part-way, its
+half-built staging directory is kept for a day on purpose (a second updater
+must never have one deleted from under it), and the next update run now names
+it in its log so it is not a mystery.
+
 ## [5.65.0-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.64.0-beta.1
