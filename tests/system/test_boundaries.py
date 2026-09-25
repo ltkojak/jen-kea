@@ -219,11 +219,6 @@ except Exception as e:
 )
 
 
-@known_bug(
-    "kea_changeset.apply_change raises NoValidConnectionsError instead of reverting when a later server's SSH "
-    "is refused after preflight: kea_host.apply_config catches only HelperMissing/HelperError, so "
-    "kea_host._connect_ssh's failure escapes Phase 3 and server A is left on the new config"
-)
 def test_02_changeset_reverts_the_first_server_when_the_second_dies(stack):
     """kea_changeset: server A committed, then B's sshd dies after preflight -> A is reverted
     and both configs are byte-identical to what they were."""
@@ -277,11 +272,6 @@ except Exception as e:
 )
 
 
-@known_bug(
-    "kea_changeset.apply_change leaves the NEW config on disk (and the daemon down) when the restart of a "
-    "validated config fails: status 'restart_failed' is by design, on the premise that 'the config is still "
-    "live and valid' — untrue once the daemon cannot start; there is no rollback-and-restart"
-)
 def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
     """kea_changeset: a validated config whose restart fails (the daemon exits at start) is rolled
     back — the previous config is what is on disk."""
@@ -289,10 +279,19 @@ def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
     proc = st.jen_py_bg(CHANGESET_RESTART_FAILS)
     try:
         st.sentinel_wait(st.JEN, "/tmp/s3-before-restart", timeout=120)
-        # config-test has passed and the file is written; now the binary stops being runnable
-        st.sh(
+        # config-test has passed and the file is written; now the daemon cannot start ONCE: the wrapper
+        # puts the real binary back (renaming over itself) and exits 1, so the rollback's second
+        # restart runs the real daemon on the previous config
+        wrapper = """#!/bin/sh
+mv -f "$0.real" "$0"
+exit 1
+"""
+        st.dexec(
             st.KEA_A,
-            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && printf "#!/bin/sh\\nexit 1\\n" > "$b" && chmod 755 "$b"',
+            "sh",
+            "-c",
+            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b"',
+            input=wrapper,
         )
         st.sh(st.JEN, "touch /tmp/s3-proceed")
         stdout, stderr = proc.communicate(timeout=180)
@@ -307,6 +306,8 @@ def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
         "INVARIANT: when the restart of a newly written config fails, the previous config is the one on disk "
         f"(apply_change said: {result})"
     )
+    assert result.get("status") == "rolled_back", f"INVARIANT: the outcome is reported as rolled_back: {result}"
+    st.wait_for(lambda: st.kea_answers("kea-a"), timeout=30, what="kea-a answering on the previous config")
 
 
 # ── 4. DNS reconcile against a resolver that goes silent ────────────────────

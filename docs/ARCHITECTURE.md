@@ -1052,14 +1052,36 @@ place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
    `untouched` (the one target whose commit itself failed first,
    triggering the revert, and so was never written to at all).
 4. **Restart** — attempted for every committed target regardless of
-   whether another target's restart already failed; a failed restart
-   is reported per-server as a warning line (never a ✅, since Kea
-   hasn't picked up the config yet), never silently retried, and never
-   reverts the (already-valid, already-committed) config. **v5.28.1** —
-   this is its own status, `restart_failed`, distinct from `ok`: the
-   outcome is genuinely different from a clean run (a server needs a
-   manual restart), even though it's just as safe for Jen's own
-   bookkeeping below, since the write itself succeeded.
+   whether another target's restart already failed. **v5.65.1 (Q90)** —
+   if any restart fails, the change did not stand, so EVERY target is put
+   back: `apply_config(before_cfg)` (guarded by the sha the commit
+   returned) and a second restart, in reverse order. All back and
+   running gives `rolled_back` (the failing restart's stderr tail is in
+   the lines; `last_code` is `restart-failed`, so code-gated callers do
+   not treat it as done); any revert or second restart that fails gives
+   `rollback_failed` with `needs_hands` naming those servers and the
+   by-hand line (Config history → restore, restart Kea there). Reverting
+   only the failed server would leave the servers disagreeing — the state this module exists to prevent. Before
+   v5.65.1 a failed restart left the NEW config on disk and the daemon
+   down (`restart_failed`, "the config is still live and valid — restart
+   it by hand"), which is false when the daemon cannot start from the
+   config it was just handed; the system-boundary suite's scenario 3
+   proved it and `restart_failed` is retired. `config.applied` is
+   emitted only when the change stands.
+
+   **Nothing here raises (v5.65.1).** Each host call in the preflight,
+   the commit, the revert and the restart goes through `_safe()`:
+   `kea_host.apply_config` and friends catch only the helper's own
+   errors, so a refused SSH connection used to escape Phase 3 with the
+   first server already committed (scenario 2). A raised error is now a
+   recorded failure and the revert proceeds; a revert that cannot
+   connect is `rollback_failed`.
+
+   **Surfaced (v5.65.1).** `apply_change` records a `rolled_back` /
+   `rollback_failed` outcome in the `changeset_attention` setting
+   (`record_outcome`); the Servers page shows it as a banner with the
+   failing lines until an admin dismisses it or a later change set
+   succeeds.
 
 **What this does NOT cover.** `jen/services/settings/authoring.py`'s
 author-from-blank loops (a different flow: generating a brand-new
@@ -1068,18 +1090,18 @@ config per server, not editing an existing one), `install_kea_binary`/
 has its own single-primary-server preview==apply guarantee — see the
 wizard's own code) are unchanged by this module.
 
-**Why a restart failure doesn't revert.** The config on disk is valid
-(it passed preflight and the write succeeded) — reverting it because
-the *service* didn't restart would throw away a good config over an
-unrelated systemd/service problem the operator needs to fix directly,
-not a reason to distrust the config itself. Jen's own bookkeeping
-(`SUBNET_MAP`, the audit log) is written only when nothing was left
-half-applied — `status` is `"ok"`, `"restart_failed"` (the config
-applied; a target's service just didn't restart), `"nothing"` (every
-target was a no-op skip), or `"noservers"` (nothing SSH-reachable to
-push to); an `"aborted"` or `"rollback_failed"` status leaves Jen's own
-metadata untouched, matching whatever actually ended up on the Kea
-servers themselves.
+**Why a restart failure now reverts (v5.65.1).** The pre-5.65.1 design
+argued that reverting a valid config over a service problem throws away
+a good config. In practice the restart has already stopped the old
+process, so "leave the config and restart it by hand" left the operator
+with a stopped DHCP server and an unexplained new file; the maintainer
+chose the invariant — a change set either stands or every server is
+back where it was — over the banner. Jen's own bookkeeping (`SUBNET_MAP`,
+the audit log) is written only when the change stands — `status` is
+`"ok"`, `"nothing"` (every target was a no-op skip) or `"noservers"`
+(nothing SSH-reachable to push to); `kea_changeset.NOT_APPLIED`
+(`"aborted"`, `"rolled_back"`, `"rollback_failed"`) leaves it untouched,
+matching whatever actually ended up on the Kea servers themselves.
 
 **Fail closed when a v1/legacy host can't be reread (v5.28.1).**
 `_jen_side_conflict()`'s best-effort compare (§3.3) used to return

@@ -1253,18 +1253,10 @@ def setup_direct_socket(server_id, service):
         return back
     for style, text in result.lines:
         flash(text, style)
-    if result.status in ("aborted", "rollback_failed"):
+    if result.status in __changeset.NOT_APPLIED:
         flash("Jen's own settings were not changed.", "info")
         return back
     mode_now = "Control Agent" if __caps.is_ca() else "direct"
-    if result.status == "restart_failed":
-        flash(
-            f"The socket is in {conf} on {name} but {daemon} did NOT restart, so it isn't listening yet. "
-            f"Restart it by hand, then Probe {new_url} (candidate URL, above) and run this again — Jen stays "
-            f"in {mode_now} mode and none of its settings were changed.",
-            "warning",
-        )
-        return back
 
     version_text, probe_err = _probe_after_restart(
         new_url, user, password, service, verify=probe_verify, cert=probe_cert
@@ -1505,7 +1497,7 @@ def remove_direct_socket(server_id, service):
         return back
     for style, text in result.lines:
         flash(text, style)
-    if result.status in ("aborted", "rollback_failed"):
+    if result.status in __changeset.NOT_APPLIED:
         flash("Jen's own settings were not changed.", "info")
         return back
 

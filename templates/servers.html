@@ -6,9 +6,29 @@
     <p>{% if single_server %}Single server deployment{% else %}Multi-server / HA deployment — {{ statuses|length }} servers configured{% endif %}</p>
 </div>
 
+{% if changeset_attention %}
+{% set ca = changeset_attention %}
+<div class="alert alert-warning u-3bceda">
+    {{ icon("siren") }}
+    {% if ca.status == "rollback_failed" %}
+    <strong>A configuration change could not be rolled back cleanly.</strong>
+    {% if ca.needs_hands %}{{ ca.needs_hands|join(", ") }} may be on the wrong config or stopped: check the config on the host, restore the last good one from Config history, and restart Kea there by hand.{% else %}Check each server's config and that Kea is running.{% endif %}
+    {% else %}
+    <strong>The last configuration change was rolled back.</strong>
+    {{ ca.failed_restart|join(", ") or "A server" }} would not restart on the new config, so every server was put back on the previous one and restarted. Nothing was changed.
+    {% endif %}
+    <div class="u-bd72d7">{{ ca.summary }} &middot; {{ ca.at }}</div>
+    {% if ca.lines %}<ul style="margin:6px 0 0 18px;font-size:12px;">{% for l in ca.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}
+    <form method="POST" action="{{ url_for('servers.dismiss_changeset_attention') }}" class="u-8a77e5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary">Dismiss</button>
+    </form>
+</div>
+{% endif %}
+
 {% if not single_server and ha_mode %}
 {% if ha_degraded %}
-<div class="alert alert-warning" style="border-color:var(--danger);background:rgba(200,50,50,0.08);">
+<div class="alert alert-warning u-3bceda">
     {{ icon("siren") }} <strong>This HA pair currently has no working backup.</strong>
     {{ ha_degraded_reason|capitalize }}. If the active server fails right now, there is nothing to fail over to.
 </div>

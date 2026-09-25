@@ -70,3 +70,18 @@ class TestFallbackDetection:
         # Importing run.py must not start a server or touch the network.
         assert hasattr(run, "main")
         assert callable(run.main)
+
+
+class TestGunicornChdir:
+    def test_chdir_is_the_directory_holding_the_jen_package(self):
+        """v5.65.1 (Q90) - gunicorn imports `jen.wsgi` from its CWD; the Docker image
+        started in `/`. Passing --chdir makes the launch independent of where it began."""
+        import os
+
+        argv = run.gunicorn_argv("x", 8)
+        chdir = argv[argv.index("--chdir") + 1]
+        assert os.path.isdir(os.path.join(chdir, "jen")) and os.path.isfile(os.path.join(chdir, "run.py"))
+
+    def test_chdir_present_with_and_without_tls(self):
+        for kw in ({}, {"certfile": "/c.crt", "keyfile": "/c.key"}):
+            assert "--chdir" in run.gunicorn_argv("x", 8, **kw)

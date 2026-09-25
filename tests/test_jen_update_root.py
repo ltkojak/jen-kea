@@ -648,6 +648,20 @@ class TestPruneOldReleases:
         assert "5.14.1.staging-1" not in left  # old staging
         assert "5.14.0" in left
 
+    def test_a_fresh_staging_dir_is_kept_but_named_in_the_log(self, jen_update_root, tmp_path, capsys):
+        """v5.65.1 (Q90) - a crashed update leaves `<version>.staging-<ts>`; it stays for a day
+        (a concurrent updater's must never be deleted) but the next run says it is there."""
+        rel = self._layout(tmp_path)
+        (rel / "5.14.0").mkdir()
+        fresh = rel / "5.14.1.staging-1790301888"
+        fresh.mkdir()
+        removed = jen_update_root._prune_old_releases(
+            releases_dir=str(rel), current_link=str(tmp_path / "current"), install_dir=str(tmp_path / "no-flat")
+        )
+        assert fresh.is_dir() and removed == 0
+        out = capsys.readouterr().out
+        assert "5.14.1.staging-1790301888" in out and "older than a day" in out
+
     def test_also_sweeps_legacy_rollback_dirs_in_install_dir(self, jen_update_root, tmp_path):
         flat = tmp_path / "opt-jen"
         flat.mkdir()

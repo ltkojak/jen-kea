@@ -270,3 +270,27 @@ class TestVersionedReleaseLayout:
     def test_extensions_jen_root_prefers_current_app(self):
         ext = _text("jen/extensions.py")
         assert '"/opt/jen/current/app" if os.path.isdir("/opt/jen/current/app") else "/opt/jen"' in ext
+
+
+class TestImageCanImportJen:
+    """v5.65.1 (Q90) - the shipped image once had no WORKDIR, and run.py's
+    `python -m gunicorn jen.wsgi:application` finds `jen` only through the
+    working directory: from `/` gunicorn died with "No module named 'jen'",
+    so a clean `docker compose up` never came up. The system-boundary suite's
+    `shipped-compose` job boots the real compose file; these pin the two
+    settings that make it work."""
+
+    def test_dockerfile_sets_workdir_to_the_app_root(self):
+        text = _text("Dockerfile")
+        assert re.search(r"^WORKDIR\s+/opt/jen\s*$", text, re.M)
+        # after the COPYs and before the process starts as the service user
+        assert text.index("WORKDIR /opt/jen") < text.index("USER www-data")
+
+    def test_the_workdir_is_where_the_app_is_copied(self):
+        text = _text("Dockerfile")
+        assert "COPY run.py        /opt/jen/run.py" in text or "/opt/jen/run.py" in text
+        assert "COPY jen/          /opt/jen/jen/" in text or "/opt/jen/jen/" in text
+
+    def test_harness_compose_does_not_paper_over_it(self):
+        # tests/system runs the image as shipped: no working_dir pin of its own
+        assert "working_dir" not in _text("tests/system/compose/docker-compose.yml")

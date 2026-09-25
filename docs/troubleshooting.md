@@ -468,17 +468,21 @@ from the ordinary "changed since you opened this form" conflict below
 — that one is refused before anything is written anywhere; this one
 means a write already happened and its own undo didn't complete.
 
-### "⚠️ … did NOT restart" instead of a rollback (v5.28.1)
+### "❌ … did NOT restart on the new config" and "↩️ rolled back" (v5.65.1)
 
-A multi-server change committed and (if it needed one) reverted
-cleanly, but a server's Kea service didn't come back up afterward. This
-is reported as its own outcome, `restart_failed` — the config on disk
-is valid and Jen's own bookkeeping (subnet list, audit log) is written
-normally, exactly as a full success would be — only the *service*
-needs a manual restart on that host. This replaced a v5.28.0-and-earlier
-line that read "✅ … restart Kea manually", which looked like a
-success line despite naming a problem; it's a warning now, with no
-checkmark.
+A change was written and validated, but a server's Kea would not restart
+on it. Jen now puts every server back on the config it had and restarts
+it again ("↩️ rolled back … the change was NOT applied"), so nothing is
+left on a new config with a stopped daemon; Jen's own bookkeeping (subnet
+list, audit log) is not written, because the change did not happen. The
+lines above show the failing restart's own error: fix that (a config
+Kea's validator accepts but cannot start from, a broken unit, a missing
+file) and repeat the change. If the rollback itself could not finish you get
+"🛑 ROLLBACK FAILED" naming the servers, and a red banner on the Servers
+page until you dismiss it: check the config on those hosts, restore the last
+good one from Config history, and restart Kea there by hand. (Before
+v5.65.1 this was a warning, `restart_failed`, that left the new config on
+disk and the daemon stopped.)
 
 ### "Could not verify the current configuration on \<host\> — no changes were written" (v5.28.1)
 

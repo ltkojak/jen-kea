@@ -17,6 +17,7 @@ import jen.services.ha_maintenance as __maint
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
+import jen.services.kea_changeset as __changeset
 import jen.services.kea_ha as __ha
 import jen.services.kea_host as __host
 import jen.services.packet_health as __packet_health
@@ -254,10 +255,23 @@ def servers():
         history_counts=history_counts,
         ha_actions=__ha.HA_ACTIONS,
         compare_rows=compare_rows,
+        changeset_attention=__changeset.attention(),
         packet_health_sparklines={
             s["server"]["id"]: s["packet_health"]["sparkline"] for s in statuses if s["packet_health"]
         },
     )
+
+
+@bp.route("/servers/changeset-attention/dismiss", methods=["POST"])
+@login_required
+@_admin_required
+def dismiss_changeset_attention():
+    """v5.65.1 (Q90) - clear the "a change was rolled back / a rollback failed" banner."""
+    note = __changeset.attention()
+    __changeset.clear_attention()
+    if note:
+        __user.audit("DISMISS_CHANGESET_NOTICE", note.get("status", ""), note.get("summary", ""))
+    return redirect(url_for("servers.servers"))
 
 
 @bp.route("/servers/restart/<int:server_id>", methods=["POST"])

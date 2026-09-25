@@ -61,6 +61,11 @@ EXPOSE 5050 8443
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD curl -sf http://localhost:5050/ || curl -skf https://localhost:8443/ || exit 1
 
+# v5.65.1 - `python -m gunicorn jen.wsgi:application` finds the package through the working
+# directory (there is no PYTHONPATH); without this the container started in `/` and died with
+# "No module named 'jen'". run.py also passes --chdir, so neither alone is load-bearing.
+WORKDIR /opt/jen
+
 USER www-data
 
 CMD ["python3", "/opt/jen/run.py"]

@@ -363,3 +363,54 @@ class TestPacketHealthForServer:
         self._insert(db, 0, {"pkt4-received": 200})
         ph = _packet_health_for_server(1)
         assert "Duplicate packet" not in {n["label"] for n in ph["named"]}
+
+
+class TestChangesetAttentionBanner:
+    """v5.65.1 (Q90) - a rolled-back / failed-rollback change set stays on the Servers page
+    until an admin dismisses it."""
+
+    def _set(self, db, value):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("changeset_attention", value)
+
+    def test_no_banner_by_default(self, logged_in_client, mock_kea, db):
+        self._set(db, "")
+        assert b"could not be rolled back cleanly" not in logged_in_client.get("/servers").data
+
+    def test_rollback_failed_banner_names_the_servers(self, logged_in_client, mock_kea, db):
+        self._set(
+            db,
+            json.dumps(
+                {
+                    "status": "rollback_failed",
+                    "summary": "add a pool",
+                    "at": "2026-09-25T10:00:00+00:00",
+                    "needs_hands": ["kea-b"],
+                    "failed_restart": ["kea-b"],
+                    "lines": ["boom from kea-b"],
+                }
+            ),
+        )
+        body = logged_in_client.get("/servers").data.decode()
+        assert "could not be rolled back cleanly" in body
+        assert "kea-b" in body and "add a pool" in body and "boom from kea-b" in body
+
+    def test_rolled_back_banner_says_nothing_was_changed(self, logged_in_client, mock_kea, db):
+        self._set(
+            db,
+            json.dumps({"status": "rolled_back", "summary": "s", "at": "t", "failed_restart": ["kea-a"], "lines": []}),
+        )
+        body = logged_in_client.get("/servers").data.decode()
+        assert "was rolled back" in body and "Nothing was changed" in body
+
+    def test_dismiss_clears_it(self, logged_in_client, mock_kea, db):
+        self._set(
+            db, json.dumps({"status": "rolled_back", "summary": "s", "at": "t", "failed_restart": [], "lines": []})
+        )
+        r = logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
+        assert r.status_code == 200 and b"was rolled back" not in r.data
+
+    def test_dismiss_needs_login(self, client):
+        r = client.post("/servers/changeset-attention/dismiss", follow_redirects=False)
+        assert r.status_code in (301, 302, 308) and "login" in r.headers.get("Location", "").lower()

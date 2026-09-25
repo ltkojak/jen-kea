@@ -50,6 +50,7 @@
 .u-37e8cf.u-37e8cf{font-size:24px;font-weight:700;color:var(--primary)}
 .u-3928fa.u-3928fa{cursor:pointer;font-size:13px}
 .u-3b6a3a.u-3b6a3a{cursor:pointer}
+.u-3bceda.u-3bceda{border-color:var(--danger);background:rgba(200,50,50,0.08)}
 .u-3c9b03.u-3c9b03{text-decoration:line-through;opacity:.5}
 .u-3de8f9.u-3de8f9{display:flex;gap:8px;flex-wrap:wrap}
 .u-3efc98.u-3efc98{display:flex;gap:10px}
@@ -160,6 +161,7 @@
 .u-bae250.u-bae250{display:flex;align-items:flex-start;gap:12px}
 .u-bbc1fe.u-bbc1fe{max-width:120px}
 .u-bca09b.u-bca09b{font-family:monospace;font-size:12px}
+.u-bd72d7.u-bd72d7{font-size:12px;color:var(--text-muted);margin-top:4px}
 .u-be83f6.u-be83f6{border:1px solid var(--danger);color:var(--danger);background:transparent}
 .u-c00d39.u-c00d39{margin-top:3px}
 .u-c088cd.u-c088cd{width:20px;height:20px;object-fit:contain;filter:brightness(0) invert(0.8)}

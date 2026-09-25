@@ -15,13 +15,24 @@ Kea B = old config", sometimes with Jen's own SUBNET_MAP updated to
 match neither. Preflighting every target with `kea_host.test_config()`
 before the first real write, and reverting on a later failure, closes
 that gap. This module never touches Jen's own metadata (SUBNET_MAP,
-audit log) — callers do that unless `ChangeSetResult.status` is
-"aborted" or "rollback_failed" (see kea_changeset's callers in
-subnets.py/ddns.py); "ok", "restart_failed", "nothing" and "noservers"
-all mean nothing was left half-written (a "restart_failed" config is
-still live and valid — only the service didn't come back — so a
-metadata write is still safe there too), so a metadata write is safe
-in each of those cases.
+audit log) — callers do that only when `ChangeSetResult.status` is
+not in `NOT_APPLIED` ("aborted", "rolled_back", "rollback_failed";
+see kea_changeset's callers in subnets.py/ddns.py/infrastructure.py):
+"ok", "nothing" and "noservers" all mean nothing was left
+half-written, so a metadata write is safe in each of those cases.
+
+v5.65.1 (Q90) — a restart that fails after the config was written no
+longer leaves the new config on disk and the daemon down. Every target
+is put back on its previous config and restarted again: "rolled_back"
+when that worked everywhere (the change did not happen — same rule as
+"aborted"), "rollback_failed" when a revert or the second restart did
+not (a mixed or stopped state that needs a person). The old
+"restart_failed" status is retired: it rested on "the config is still
+live and valid", which is false when the daemon cannot start from the
+config it was just handed. And nothing in here raises any more: an SSH
+failure in the preflight, the commit, the revert or the restart is a
+recorded failure, so a transport error can no longer skip the revert
+and leave the first server on the new config.
 
 Pure orchestration over `kea_host` — no Flask imports. Callers build
 the flash lines from `ChangeSetResult.lines` themselves; this module
@@ -58,10 +69,45 @@ class Target:
 
 @dataclass
 class ChangeSetResult:
-    status: str  # "ok" | "restart_failed" | "nothing" | "noservers" | "aborted" | "rollback_failed"
+    # "ok" | "nothing" | "noservers" | "aborted" | "rolled_back" | "rollback_failed"
+    status: str
     last_code: str  # the last mutate code seen — callers map it to their own message
     lines: list[tuple[str, str]] = field(default_factory=list)  # ("success"|"warning"|"error", text), in order
     restart_failures: list[str] = field(default_factory=list)  # server names whose restart failed
+    # servers a person has to look at: the ones a failed revert / second restart left wrong
+    needs_hands: list[str] = field(default_factory=list)
+
+
+# The statuses after which the change did NOT happen (or is half-applied): callers must not write
+# Jen's own metadata (SUBNET_MAP, audit "done" lines) for these.
+NOT_APPLIED = ("aborted", "rolled_back", "rollback_failed")
+
+_DETAIL_TAIL = 300
+
+
+def _safe(fn, *args, **kwargs) -> dict:
+    """Call a kea_host operation; a raised exception (paramiko refusing the
+    connection, a socket timeout ...) becomes a not-ok result instead of
+    escaping — kea_host.apply_config / test_config / service_action catch only
+    the helper's own errors, so a dead sshd used to raise straight through
+    Phase 3 with the first server already committed."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        logger.warning(f"kea_changeset: {getattr(fn, '__name__', 'call')} raised {type(e).__name__}: {e}")
+        return {"ok": False, "code": "error", "detail": f"{type(e).__name__}: {e}"}
+
+
+def _tail(text) -> str:
+    text = str(text or "").strip()
+    return text if len(text) <= _DETAIL_TAIL else "…" + text[-_DETAIL_TAIL:]
+
+
+def _by_hand(names) -> str:
+    return (
+        f"{', '.join(names)} need attention: check the config on the host, restore the last good one from "
+        "Servers → Config history, and restart Kea there by hand."
+    )
 
 
 def _default_conflict_phrase(name: str) -> str:
@@ -84,7 +130,7 @@ def _failure_line(name: str, res: dict, daemon_label: str) -> str:
     return f"❌ {name}: {res.get('detail', code)}"
 
 
-def apply_change(
+def _run_change(
     service: str,
     mutate_fn,
     summary: str,
@@ -194,7 +240,7 @@ def apply_change(
     # ── Phase 2: preflight every target before touching anything ─────
     preflight_failed = False
     for t in targets:
-        res = _host.test_config(t.server, service, t.after_cfg, tls_paths=tls_paths)
+        res = _safe(_host.test_config, t.server, service, t.after_cfg, tls_paths=tls_paths)
         if not res.get("ok"):
             preflight_failed = True
             if res.get("code") == "conflict":
@@ -208,8 +254,14 @@ def apply_change(
     # ── Phase 3: commit sequentially, revert on the first failure ────
     committed: list[Target] = []
     for t in targets:
-        res = _host.apply_config(
-            t.server, service, t.after_cfg, tls_paths=tls_paths, expect_sha256=t.before_sha, summary=summary
+        res = _safe(
+            _host.apply_config,
+            t.server,
+            service,
+            t.after_cfg,
+            tls_paths=tls_paths,
+            expect_sha256=t.before_sha,
+            summary=summary,
         )
         if res.get("ok"):
             t.applied_sha = res.get("sha256")
@@ -224,7 +276,8 @@ def apply_change(
 
         revert_failed = []
         for done in reversed(committed):
-            rres = _host.apply_config(
+            rres = _safe(
+                _host.apply_config,
                 done.server,
                 service,
                 done.before_cfg,
@@ -236,7 +289,7 @@ def apply_change(
                 revert_failed.append(done.name)
                 continue
             if restart:
-                rres_restart = _host.service_action(done.server, service, "restart")
+                rres_restart = _safe(_host.service_action, done.server, service, "restart")
                 if not rres_restart.get("ok"):
                     lines.append(
                         (
@@ -264,42 +317,150 @@ def apply_change(
                     f"{untouched} was never changed. Fix by hand: Servers → Config history → restore.",
                 )
             )
-            return ChangeSetResult("rollback_failed", res.get("code", "error"), lines)
+            return ChangeSetResult("rollback_failed", res.get("code", "error"), lines, needs_hands=revert_failed)
 
         if committed:
             names = ", ".join(d.name for d in committed)
             lines.append(("error", f"↩️ reverted {len(committed)} server(s) that had already been updated: {names}"))
         return ChangeSetResult("aborted", res.get("code", "error"), lines)
 
-    # Every target committed — the config write itself succeeded on
-    # every server, independent of whether the restart below does.
-    for t in targets:
-        _events.emit("config.applied", server=t.name, detail=summary)
-
     # ── Phase 4: restart (every apply succeeded) ──────────────────────
-    restart_failures: list[str] = []
-    if restart:
+    # `config.applied` is emitted only once the change stands: a restart failure below
+    # rolls it back, and a timeline entry saying it was applied would be false.
+    if not restart:
         for t in targets:
-            rres = _host.service_action(t.server, service, "restart")
-            if rres.get("ok"):
-                lines.append(("success", f"✅ {t.name}: {summary}, {daemon_label} restarted"))
-            else:
-                # v5.28.1 (Q26, A4) — a warning line, not a ✅ "success"
-                # one: the config IS live and valid (it passed preflight
-                # and the write succeeded), but a restart failure is a
-                # real operational problem that needs the operator's
-                # attention, not a line that visually reads as "done".
-                lines.append(
-                    (
-                        "warning",
-                        f"⚠️ {t.name}: {summary} — {daemon_label} did NOT restart ({rres.get('detail')}); "
-                        f"restart it by hand",
-                    )
-                )
-                restart_failures.append(t.name)
-    else:
-        for t in targets:
+            _events.emit("config.applied", server=t.name, detail=summary)
             lines.append(("success", f"✅ {t.name}: {summary}"))
+        return ChangeSetResult("ok", "ok", lines)
 
-    status = "restart_failed" if restart_failures else "ok"
-    return ChangeSetResult(status, "ok", lines, restart_failures)
+    restarts = {t.name: _safe(_host.service_action, t.server, service, "restart") for t in targets}
+    failed = [t for t in targets if not restarts[t.name].get("ok")]
+    if not failed:
+        for t in targets:
+            _events.emit("config.applied", server=t.name, detail=summary)
+            lines.append(("success", f"✅ {t.name}: {summary}, {daemon_label} restarted"))
+        return ChangeSetResult("ok", "ok", lines)
+
+    # A restart failed although the config passed preflight and was written: the daemon
+    # cannot start from what it was just handed (and the restart already stopped the old
+    # process). "The config is valid, restart it by hand" is not an honest state to leave a
+    # server in, so EVERY target goes back to what it had and is restarted again — putting
+    # only the failed one back would leave the servers disagreeing, the very state this
+    # module exists to prevent.
+    for t in failed:
+        lines.append(
+            (
+                "error",
+                f"❌ {t.name}: {daemon_label} did NOT restart on the new config ({_tail(restarts[t.name].get('detail'))})",
+            )
+        )
+    stuck: list[str] = []
+    for t in reversed(targets):
+        rres = _safe(
+            _host.apply_config,
+            t.server,
+            service,
+            t.before_cfg,
+            expect_sha256=t.applied_sha,
+            summary=f"rollback: {summary}",
+            source="rollback",
+        )
+        if not rres.get("ok"):
+            stuck.append(t.name)
+            lines.append(
+                ("error", f"❌ {t.name}: could not put the previous config back ({_tail(rres.get('detail'))})")
+            )
+            continue
+        again = _safe(_host.service_action, t.server, service, "restart")
+        if not again.get("ok"):
+            stuck.append(t.name)
+            lines.append(
+                (
+                    "error",
+                    f"❌ {t.name}: previous config restored but {daemon_label} did not restart on it "
+                    f"({_tail(again.get('detail'))})",
+                )
+            )
+    names = [t.name for t in failed]
+    if stuck:
+        lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(stuck)))
+        return ChangeSetResult("rollback_failed", "restart-failed", lines, names, stuck)
+    lines.append(
+        (
+            "error",
+            f"↩️ rolled back: {', '.join(t.name for t in targets)} {'is' if len(targets) == 1 else 'are'} "
+            f"on the previous config and {daemon_label} restarted; the change was NOT applied.",
+        )
+    )
+    return ChangeSetResult("rolled_back", "restart-failed", lines, names)
+
+
+# ── what a person must be told about (v5.65.1, Q90) ──────────────────────────
+# A change set that ended "rolled_back" or "rollback_failed" is shown once, in the flash lines
+# of the request that made it. The Servers page keeps it in front of the operator until they
+# dismiss it (or a later change set succeeds), because a "rollback_failed" is a server that may
+# be on the wrong config or stopped, and a flash is easy to miss.
+
+ATTENTION_KEY = "changeset_attention"
+
+
+def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
+    """Remember a rolled-back / failed-rollback outcome for the Servers page; clear it after a
+    clean run. Best-effort telemetry: never raises, never changes the result."""
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        from jen.models import user as _user
+
+        if result.status in ("rolled_back", "rollback_failed"):
+            _user.set_global_setting(
+                ATTENTION_KEY,
+                json.dumps(
+                    {
+                        "status": result.status,
+                        "service": service,
+                        "summary": summary,
+                        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "failed_restart": list(result.restart_failures),
+                        "needs_hands": list(result.needs_hands),
+                        "lines": [text for kind, text in result.lines if kind == "error"][-6:],
+                    }
+                ),
+            )
+        elif result.status == "ok" and _user.get_global_setting(ATTENTION_KEY, ""):
+            _user.set_global_setting(ATTENTION_KEY, "")
+    except Exception as e:
+        logger.debug(f"kea_changeset: could not record the outcome: {e}")
+
+
+def attention() -> dict | None:
+    """The outcome record for the Servers page banner, or None."""
+    try:
+        import json
+
+        from jen.models import user as _user
+
+        raw = _user.get_global_setting(ATTENTION_KEY, "")
+        data = json.loads(raw) if raw else None
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def clear_attention() -> None:
+    try:
+        from jen.models import user as _user
+
+        _user.set_global_setting(ATTENTION_KEY, "")
+    except Exception as e:
+        logger.debug(f"kea_changeset: could not clear the outcome: {e}")
+
+
+def apply_change(service: str, mutate_fn, summary: str, **kwargs) -> ChangeSetResult:
+    """`_run_change` (documented above) plus `record_outcome`, so every caller's
+    rolled-back / failed-rollback result reaches the Servers page without each route
+    remembering to."""
+    result = _run_change(service, mutate_fn, summary, **kwargs)
+    record_outcome(result, service, summary)
+    return result

@@ -466,7 +466,7 @@ def add_subnet_post():
     )
     for style, text in result.lines:
         flash(text, style)
-    if result.status in ("aborted", "rollback_failed"):
+    if result.status in __changeset.NOT_APPLIED:
         return redirect(url_for("subnets.add_subnet"))
 
     # Register the new subnet with Jen only after Kea accepted it
@@ -527,7 +527,7 @@ def delete_subnet(subnet_id):
     )
     for style, text in result.lines:
         flash(text, style)
-    if result.status in ("aborted", "rollback_failed"):
+    if result.status in __changeset.NOT_APPLIED:
         return redirect(url_for("subnets.subnets"))
 
     # Remove from Jen's own subnet map now that Kea no longer has it

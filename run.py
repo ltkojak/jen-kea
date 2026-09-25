@@ -247,6 +247,11 @@ def gunicorn_argv(
         "-",
         "--name",
         "jen",
+        # v5.65.1 - gunicorn finds `jen` through its own CWD (`python -m gunicorn` has no
+        # PYTHONPATH here). The Docker image sets no working directory, so from `/` it died with
+        # "No module named 'jen'"; pin it to the directory this file, and the `jen/` package, live in.
+        "--chdir",
+        os.path.dirname(os.path.abspath(__file__)),
     ]
     if certfile:
         # --ciphers + the TLS 1.2 floor from jen/gunicorn_conf.py's

@@ -1455,6 +1455,14 @@ def _prune_old_releases(releases_dir=RELEASES_DIR, current_link=CURRENT_LINK, in
             if now - _mtime(path) > 86400:
                 shutil.rmtree(path, ignore_errors=True)
                 removed += 1
+            else:
+                # v5.65.1 - kept on purpose (a concurrent updater's staging must never be deleted
+                # from under it), but a crashed attempt's leftover was invisible until it aged out
+                log(
+                    f"Leaving {name} in place: an update attempt started it and it is under a day old "
+                    "(one still running, or one that was killed). It is removed automatically once it is "
+                    "older than a day."
+                )
             continue
         if os.path.isdir(path) and not os.path.islink(path):
             release_dirs.append(name)

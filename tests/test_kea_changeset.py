@@ -18,6 +18,7 @@ from jen.services import kea_changeset as cs
 from jen.services import kea_host
 from tests._kea_host_fakes import FakeHelper
 
+_REAL_RECORD_OUTCOME = cs.record_outcome
 SERVER_A = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}
 SERVER_B = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.2"}
 
@@ -38,6 +39,9 @@ def fake(monkeypatch):
     # itself, which simply overrides this one for that test.
     monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a, **k: None)
     monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+    # v5.65.1: the outcome note for the Servers page is a settings-table write; only the
+    # tests that are about it (TestOutcomeReachesTheServersPage) turn it back on.
+    monkeypatch.setattr(cs, "record_outcome", lambda *a, **k: None)
     return f
 
 
@@ -183,33 +187,6 @@ class TestApplyChangeSuccess:
         assert fake.ops().count("service") == 2
         assert result.restart_failures == []
 
-    def test_one_restart_failure_is_its_own_status_and_a_warning_line(self, fake):
-        """v5.28.1 (Q26, A4) — a restart failure is a real operational
-        problem, not a ✅ "success" line that reads as "done". The
-        config DID apply cleanly (last_code stays "ok"), so callers
-        still write Jen's own metadata — only the status distinguishes
-        it from a fully clean run."""
-        fake.responses["test-config"] = {"ok": True}
-        fake.responses["apply-config"] = {"ok": True, "sha256": "new", "helper_version": 2}
-
-        def service_resp(server, op, payload):
-            if server["id"] == 1:
-                return {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
-            return {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
-
-        fake.responses["service"] = service_resp
-
-        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
-
-        assert result.status == "restart_failed"
-        assert result.last_code == "ok"
-        assert result.restart_failures == ["kea-b"]
-        warning_lines = [text for t, text in result.lines if t == "warning"]
-        assert len(warning_lines) == 1
-        assert warning_lines[0].startswith("⚠️ kea-b:")
-        assert "✅" not in warning_lines[0]
-        assert not any(t == "success" and "kea-b" in text for t, text in result.lines)
-
 
 class TestApplyChangeSkipAndNoServers:
     def test_every_target_skipped_is_status_nothing(self, fake):
@@ -315,3 +292,206 @@ class TestApplyChangeTlsPaths:
         assert result.status == "aborted"
         assert "apply-config" not in fake.ops() and "service" not in fake.ops()
         assert any("/etc/kea/tls/dhcp4/server.key" in text for _t, text in result.lines)
+
+
+class TestTransportErrorsAreRecordedNotRaised:
+    """v5.65.1 (Q90) - the system-boundary suite found `apply_change` raising
+    NoValidConnectionsError when server B's SSH was refused AFTER preflight,
+    leaving server A on the new config: kea_host.apply_config catches only the
+    helper's own errors, so a paramiko/OS error escaped Phase 3 and skipped
+    the revert. A transport error is now a recorded failure like any other."""
+
+    def _ok(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+
+    def test_second_server_refusing_the_connection_reverts_the_first(self, fake):
+        self._ok(fake)
+
+        def apply_resp(server, op, payload):
+            if server["id"] == 2:
+                raise OSError("Unable to connect to port 22 on 10.0.0.2")
+            return {"ok": True, "sha256": "new-a", "helper_version": 2}
+
+        fake.responses["apply-config"] = apply_resp
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+
+        assert result.status == "aborted"  # raised nothing, and A was put back
+        applies = [(sid, p) for (sid, op, p) in fake.calls if op == "apply-config"]
+        assert [sid for sid, _p in applies] == [1, 2, 1]
+        assert applies[2][1]["config"] == fake.configs[(1, "dhcp4")], "A's revert restores its before_cfg"
+        assert any("kea-b" in text and "Unable to connect" in text for _t, text in result.lines)
+        assert any("reverted 1 server" in text for _t, text in result.lines)
+
+    def test_a_revert_that_cannot_connect_is_rollback_failed_naming_the_server(self, fake):
+        self._ok(fake)
+        seen = {"n": 0}
+
+        def apply_resp(server, op, payload):
+            seen["n"] += 1
+            if seen["n"] == 1:
+                return {"ok": True, "sha256": "new-a", "helper_version": 2}
+            raise OSError("connection reset")  # B's commit AND A's revert both raise
+
+        fake.responses["apply-config"] = apply_resp
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+
+        assert result.status == "rollback_failed"
+        assert result.needs_hands == ["kea-a"]
+        (line,) = [text for _t, text in result.lines if "ROLLBACK FAILED" in text]
+        assert "kea-a still have the NEW config" in line
+
+    def test_a_preflight_that_raises_aborts_before_any_write(self, fake):
+        def test_resp(server, op, payload):
+            raise OSError("no route to host")
+
+        fake.responses["test-config"] = test_resp
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+        assert result.status == "aborted"
+        assert "apply-config" not in fake.ops()
+
+    def test_a_restart_that_raises_is_a_failed_restart(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
+
+        def service_resp(server, op, payload):
+            raise OSError("ssh gone")
+
+        fake.responses["service"] = service_resp
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A])
+        assert result.status == "rollback_failed"  # nothing restarts, so the second restart cannot either
+
+
+class TestFailedRestartRollsBack:
+    """v5.65.1 (Q90) - a restart that fails after the config was written used to
+    leave the NEW config on disk and the daemon DOWN ("restart_failed": the config
+    is still live, restart it by hand). Now every target is put back on its previous
+    config and restarted again: `rolled_back`, or `rollback_failed` when that fails too."""
+
+    def _base(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "new", "helper_version": 2}
+
+    def _service(self, fake, failures):
+        """`failures`: how many restarts of server 2 fail before it works (99 = never)."""
+        n = {"b": 0}
+
+        def resp(server, op, payload):
+            if server["id"] == 2:
+                n["b"] += 1
+                if n["b"] <= failures:
+                    return {"ok": False, "error": "systemctl failed", "detail": "Job for kea-dhcp4-server failed"}
+            return {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+
+        fake.responses["service"] = resp
+
+    def test_one_failed_restart_puts_every_server_back_and_restarts_them(self, fake):
+        self._base(fake)
+        self._service(fake, failures=1)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+
+        assert result.status == "rolled_back"
+        assert result.last_code == "restart-failed"  # code-gated callers must not treat it as done
+        assert result.restart_failures == ["kea-b"] and result.needs_hands == []
+        applies = [(sid, p) for (sid, op, p) in fake.calls if op == "apply-config"]
+        assert [sid for sid, _p in applies] == [1, 2, 2, 1]  # commit A, commit B, revert B, revert A
+        for sid, payload in applies[2:]:
+            assert payload["config"] == fake.configs[(sid, "dhcp4")], "each revert restores its before_cfg"
+        assert fake.ops().count("service") == 4  # 2 restarts on the new config, 2 on the old
+        text = " | ".join(t for _k, t in result.lines)
+        assert "Job for kea-dhcp4-server failed" in text and "NOT applied" in text
+        assert not any(k == "success" for k, _t in result.lines)  # no "restarted" tick for a change that did not stand
+
+    def test_a_second_failed_restart_is_rollback_failed_and_names_the_server(self, fake):
+        self._base(fake)
+        self._service(fake, failures=99)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+        assert result.status == "rollback_failed"
+        assert result.needs_hands == ["kea-b"]
+        assert any("ROLLBACK FAILED" in t and "kea-b" in t and "by hand" in t for _k, t in result.lines)
+
+    def test_a_revert_that_cannot_be_written_is_rollback_failed(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        seen = {"n": 0}
+
+        def apply_resp(server, op, payload):
+            seen["n"] += 1
+            if seen["n"] <= 2:  # both commits succeed
+                return {"ok": True, "sha256": "new", "helper_version": 2}
+            return {"ok": False, "error": "conflict", "helper_version": 2}  # the reverts do not
+
+        fake.responses["apply-config"] = apply_resp
+        self._service(fake, failures=1)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+        assert result.status == "rollback_failed"
+        assert sorted(result.needs_hands) == ["kea-a", "kea-b"]
+
+    def test_all_restarts_ok_is_unchanged(self, fake):
+        self._base(fake)
+        self._service(fake, failures=0)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+        assert result.status == "ok" and result.last_code == "ok"
+        assert fake.ops().count("apply-config") == 2  # no revert traffic on the happy path
+
+    def test_no_restart_requested_never_rolls_back(self, fake):
+        self._base(fake)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A], restart=False)
+        assert result.status == "ok" and "service" not in fake.ops()
+
+    def test_config_applied_event_only_when_the_change_stands(self, fake, monkeypatch):
+        events = []
+        monkeypatch.setattr(cs._events, "emit", lambda *a, **k: events.append((a, k)))
+        self._base(fake)
+        self._service(fake, failures=1)
+        cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+        assert events == []  # rolled back: nothing "applied"
+        self._service(fake, failures=0)
+        cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
+        assert len(events) == 2
+
+    def test_not_applied_statuses_are_the_ones_callers_must_not_write_metadata_for(self):
+        assert set(cs.NOT_APPLIED) == {"aborted", "rolled_back", "rollback_failed"}
+
+
+class TestOutcomeReachesTheServersPage:
+    """The Servers page keeps a rolled-back / failed-rollback outcome in front of the operator."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        return data
+
+    def test_a_failed_rollback_is_recorded_and_a_later_ok_clears_it(self, fake, store):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
+        fake.responses["service"] = {"ok": False, "error": "x", "detail": "boom"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
+        note = cs.attention()
+        assert note["status"] == "rollback_failed" and note["summary"] == "add a pool"
+        assert note["needs_hands"] == ["kea-a"]
+
+        fake.responses["service"] = {"ok": True, "unit": "u", "state": "active"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
+        assert cs.attention() is None
+
+    def test_dismiss_clears_it(self, store):
+        store[cs.ATTENTION_KEY] = '{"status": "rolled_back"}'
+        assert cs.attention() == {"status": "rolled_back"}
+        cs.clear_attention()
+        assert cs.attention() is None
+
+    def test_recording_never_raises(self, monkeypatch):
+        from jen.models import user as user_mod
+
+        def boom(*a, **k):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(user_mod, "set_global_setting", boom)
+        monkeypatch.setattr(user_mod, "get_global_setting", boom)
+        cs.record_outcome(cs.ChangeSetResult("rollback_failed", "x"), "dhcp4", "s")  # no raise
+        assert cs.attention() is None
