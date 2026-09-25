@@ -2,6 +2,52 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.0-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.64.0-beta.1
+run.
+
+The recovery bundle no longer has to fit in memory. Until now the export
+encrypted the whole archive as a single message, so building one held the
+archive, a copy for the cipher and the ciphertext at the same time --
+roughly three times the bundle's size -- and restoring one did the same in
+reverse. That is why the format carried a 200 MB ceiling, and why a Jen
+with a large content directory could not make a bundle at all. The bundle
+is now written as a stream of 4 MB encrypted chunks (the new format is
+called JENREC2), read from disk a little at a time on the way in and
+decrypted a chunk at a time on the way out, so memory stays at a couple of
+chunks however large the bundle is. The limit is 2 GB, checked against the
+file sizes before anything is written, so an oversized bundle is refused
+straight away with nothing left behind.
+
+The point of a chunked format is that it must not be easier to tamper with
+than a single message, so every chunk is bound to its position and to the
+bundle it belongs to. Its counter, whether it is the final chunk, and the
+header (the salt, the nonce prefix and the chunk size) are all authenticated
+along with its contents, and the final chunk records the total length. A
+chunk that is dropped, repeated, moved, cut off the end, followed by extra
+data or lifted from a different bundle fails its check, and the reader
+treats every one of those exactly like a wrong passphrase: the same message,
+its partial output deleted, and nothing on the box touched. The reader also
+refuses a header that asks for an absurd chunk size before it allocates
+anything.
+
+Nothing an operator has to do changes. Bundles made by earlier releases
+(JENREC1) restore exactly as before, and the restore command detects the
+format on its own. The restore itself is lighter as well: it decrypts
+through a scratch file in its own working directory rather than a possibly
+small temporary one, and copies files in 1 MiB reads while extracting,
+restoring content and rolling a snapshot back, instead of reading each file
+whole. The database dump inside the bundle is still built in memory by the
+export code, which is a much smaller matter than the files.
+
+The tests cover every chunk-boundary length, each refusal above, format
+compatibility in both directions, the size limit and a restore of a JENREC2
+bundle through the whole stop, snapshot, apply and health-check lifecycle.
+On Linux one test builds and reads a 300 MB bundle in a separate process and
+requires the extra memory to stay under 64 MB. The system-boundary suite's
+size-limit scenario now drives the 2 GB limit with a sparse 2.2 GB file.
+
 ## [5.64.0-beta.1] - 2026-09-24
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.63.0-beta.1
