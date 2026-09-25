@@ -87,3 +87,54 @@ jobs:
             echo
             python -m tests.system.summarize system-results/results.json
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # v5.65.1 (Q90) — the SHIPPED compose file, on a clean checkout, exactly as
+  # the README tells an operator to run it: `docker compose up` with a .env.
+  # The scenarios above run the image through the harness's own compose file;
+  # this proves the one operators use actually boots (the image once shipped
+  # with no WORKDIR and gunicorn died with "No module named 'jen'").
+  shipped-compose:
+    name: The shipped docker-compose.mysql.yml boots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Write a .env the way .env.example asks
+        run: |
+          cat > .env <<'ENVEOF'
+          JEN_DATABASE_MODE=bundled
+          JEN_KEA_API_URL=http://192.0.2.1:8000
+          JEN_KEA_API_USER=kea-api
+          JEN_KEA_API_PASS=unused-in-this-probe
+          JEN_KEA_DB_HOST=192.0.2.1
+          JEN_KEA_DB_USER=kea
+          JEN_KEA_DB_PASS=unused-in-this-probe
+          JEN_INITIAL_ADMIN_PASSWORD=probe-Adm1n-Pass!
+          MYSQL_ROOT_PASSWORD=probe-root-pw
+          JEN_MYSQL_PASSWORD=probe-jen-pw
+          ENVEOF
+
+      - name: docker compose up
+        run: docker compose -f docker-compose.mysql.yml up -d --build
+
+      - name: Jen answers on its health endpoint
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -m 3 http://127.0.0.1:5050/api/v1/health | grep -q jen_version; then
+              echo "Jen answered after ~$((i * 3))s"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::Jen never answered /api/v1/health after docker compose up"
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker compose -f docker-compose.mysql.yml logs --no-color --tail 80 jen || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.mysql.yml down -v || true
