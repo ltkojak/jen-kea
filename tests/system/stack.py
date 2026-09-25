@@ -139,6 +139,7 @@ def jen_py_bg(code, *, user="www-data") -> subprocess.Popen:
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     p.stdin.write(PRELUDE + "\n" + code)
     p.stdin.close()
+    p.stdin = None  # communicate() would otherwise try to flush the closed pipe
     return p
 
 
@@ -345,7 +346,14 @@ def kea_running(container) -> bool:
 
 
 def sshd_running(container) -> bool:
-    return dexec(container, "pgrep", "-x", "sshd", check=False).returncode == 0
+    """The listener, by its pidfile (its process title is rewritten, so `pgrep -x sshd` never matches it)."""
+    return sh(container, "kill -0 $(cat /run/sshd.pid)", check=False).returncode == 0
+
+
+def sshd_stop(container):
+    """Stop the listener: new connections are refused; nothing else on the host changes."""
+    sh(container, "kill $(cat /run/sshd.pid)")
+    wait_for(lambda: not sshd_running(container), timeout=15, what=f"sshd stopped on {container}")
 
 
 def kea_answers(host, port=8004) -> bool:

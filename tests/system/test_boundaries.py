@@ -226,8 +226,7 @@ def test_02_changeset_reverts_the_first_server_when_the_second_dies(stack):
     proc = st.jen_py_bg(CHANGESET_B_DIES)
     try:
         st.sentinel_wait(st.JEN, "/tmp/s2-preflighted", timeout=120)
-        st.dexec(st.KEA_B, "pkill", "-x", "sshd")
-        st.wait_for(lambda: not st.sshd_running(st.KEA_B), timeout=15, what="kea-b's sshd stopped")
+        st.sshd_stop(st.KEA_B)
         st.sh(st.JEN, "touch /tmp/s2-proceed")
         stdout, stderr = proc.communicate(timeout=180)
     finally:
@@ -283,7 +282,7 @@ def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
         # config-test has passed and the file is written; now the binary stops being runnable
         st.sh(
             st.KEA_A,
-            'b="$(command -v kea-dhcp4)"; cp "$b" "$b.real" && printf "#!/bin/sh\\nexit 1\\n" > "$b" && chmod 755 "$b"',
+            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && printf "#!/bin/sh\\nexit 1\\n" > "$b" && chmod 755 "$b"',
         )
         st.sh(st.JEN, "touch /tmp/s3-proceed")
         stdout, stderr = proc.communicate(timeout=180)
@@ -436,7 +435,14 @@ def test_06_updater_killed_mid_update_leaves_the_previous_release_serving(stack)
     st.dexec(st.UPDATER, "rm", "-f", "/tmp/sys-updater.sentinel")
     proc = st.dexec_bg(st.UPDATER, "python3", DRIVER, "update", "--hang-after-extract")
     try:
-        st.sentinel_wait(st.UPDATER, "/tmp/sys-updater.sentinel", timeout=120)
+        try:
+            st.sentinel_wait(st.UPDATER, "/tmp/sys-updater.sentinel", timeout=90)
+        except AssertionError:
+            proc.kill()
+            out, err = proc.communicate()
+            raise AssertionError(
+                f"the updater never reached the extract-done point:\n{out[-2500:]}\n{err[-2500:]}"
+            ) from None
         pid = st.dexec(st.UPDATER, "cat", "/tmp/sys-updater.sentinel").stdout.strip()
         st.dexec(st.UPDATER, "kill", "-9", pid)
         proc.communicate(timeout=60)
@@ -520,8 +526,12 @@ def test_08_ha_handover_with_the_partner_unreachable_reports_and_does_not_advanc
     the flow stays where it was — nothing is sent to the wrong server, no step is skipped."""
     for node, name in ((st.KEA_A, "kea-a"), (st.KEA_B, "kea-b")):
         st.dexec(node, "sh", "-c", f"cat > {st.KEA_CONF}", input=json.dumps(st.ha_kea_config(name), indent=2))
+    hooks = st.sh(
+        st.KEA_A, "ls /usr/lib/kea/hooks; kea-dhcp4 -t /etc/kea/kea-dhcp4.conf 2>&1 | tail -n 12", check=False
+    )
     for node in (st.KEA_A, st.KEA_B):
-        st.dexec(node, "/usr/local/bin/keactl", "restart")
+        r = st.dexec(node, "/usr/local/bin/keactl", "restart", check=False)
+        assert r.returncode == 0, f"the HA-configured daemon did not start on {node}:\n{r.stderr}\n{hooks.stdout}"
     st.wait_for(
         lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"), timeout=60, what="HA-configured daemons answering"
     )

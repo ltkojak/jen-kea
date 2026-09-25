@@ -139,6 +139,7 @@ def _heal(st):
     for node in (st.KEA_A, st.KEA_B):
         if not st.sshd_running(node):
             st.dexec(node, "/usr/sbin/sshd", check=False)
+            st.wait_for(lambda n=node: st.sshd_running(n), timeout=15, what=f"sshd back on {node}")
         st.sh(
             node,
             "for f in /usr/sbin /usr/bin /usr/local/sbin /usr/local/bin; do "

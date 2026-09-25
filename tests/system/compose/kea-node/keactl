@@ -27,7 +27,7 @@ start() {
   done
   sleep 0.5
   if running; then return 0; fi
-  echo "kea-dhcp4 exited right after starting: $(tail -n 3 /var/log/kea/kea-dhcp4.stdout 2>/dev/null | tr '\n' ' ')" >&2
+  echo "kea-dhcp4 exited right after starting: $(tail -n 12 /var/log/kea/kea-dhcp4.stdout 2>/dev/null | tr '\n' ' ')" >&2
   return 1
 }
 
