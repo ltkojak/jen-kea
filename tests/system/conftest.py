@@ -158,10 +158,29 @@ def _heal(st):
     )
     st.sh(st.JEN, "rm -f /tmp/s[0-9]*-*", check=False)
     st.sh(st.DNS, "rm -f /ctl/limit; touch /ctl/reset", check=False)
-    st.wait_for(
-        lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"), timeout=60, what="Kea control sockets after heal"
-    )
+    try:
+        st.wait_for(
+            lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"),
+            timeout=60,
+            what="Kea control sockets after heal",
+        )
+    except AssertionError as e:
+        diagnostics = _kea_diagnostics(st)
+        raise AssertionError(e.args[0] + "\n" + diagnostics) from None
     st.wait_jen_healthy(timeout=90)
+
+
+def _kea_diagnostics(st):
+    out = []
+    for node in (st.KEA_A, st.KEA_B):
+        p = st.sh(
+            node,
+            "echo '--- ps'; ps; echo '--- stdout'; tail -n 25 /var/log/kea/kea-dhcp4.stdout 2>&1; "
+            "echo '--- log'; tail -n 15 /var/log/kea/kea-dhcp4.log 2>&1; echo '--- conf'; ls -la /etc/kea",
+            check=False,
+        )
+        out.append("##### " + node + "\n" + p.stdout + p.stderr)
+    return "\n".join(out)
 
 
 # ── results file ─────────────────────────────────────────────────────────────
