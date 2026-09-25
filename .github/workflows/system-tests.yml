@@ -102,14 +102,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # The Kea address is a closed local port: this job proves the CONTAINER boots. (A blackholed
+      # Kea makes /api/v1/health itself take ~20 s; see the Q90 notes in PENDING.)
       - name: Write a .env the way .env.example asks
         run: |
           cat > .env <<'ENVEOF'
           JEN_DATABASE_MODE=bundled
-          JEN_KEA_API_URL=http://192.0.2.1:8000
+          JEN_KEA_API_URL=http://127.0.0.1:9
           JEN_KEA_API_USER=kea-api
           JEN_KEA_API_PASS=unused-in-this-probe
-          JEN_KEA_DB_HOST=192.0.2.1
+          JEN_KEA_DB_HOST=127.0.0.1
           JEN_KEA_DB_USER=kea
           JEN_KEA_DB_PASS=unused-in-this-probe
           JEN_INITIAL_ADMIN_PASSWORD=probe-Adm1n-Pass!
