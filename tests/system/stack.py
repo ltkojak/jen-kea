@@ -365,9 +365,10 @@ def kea_answers(host, port=8004) -> bool:
 # ── HA (scenario 8 only) ──────────────────────────────────────────────────────
 
 
-def ha_kea_config(node: str) -> dict:
+def ha_kea_config(node: str, ips: dict) -> dict:
     """The baseline config plus the HA hook: kea-a primary, kea-b standby,
-    hot-standby, each peer's dedicated HA listener on :8005."""
+    hot-standby, each peer's dedicated HA listener on :8005. Kea's HA hook takes
+    peer URLs as ADDRESSES (a hostname is refused: "Failed to convert string to address")."""
     cfg = kea_config(node)
     cfg["Dhcp4"]["hooks-libraries"].append(
         {
@@ -388,8 +389,8 @@ def ha_kea_config(node: str) -> dict:
                             "http-client-threads": 2,
                         },
                         "peers": [
-                            {"name": "kea-a", "url": "http://kea-a:8005/", "role": "primary"},
-                            {"name": "kea-b", "url": "http://kea-b:8005/", "role": "standby"},
+                            {"name": "kea-a", "url": f"http://{ips['kea-a']}:8005/", "role": "primary"},
+                            {"name": "kea-b", "url": f"http://{ips['kea-b']}:8005/", "role": "standby"},
                         ],
                     }
                 ]

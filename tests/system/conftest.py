@@ -206,6 +206,9 @@ def pytest_runtest_logreport(report):
     if row.get("status") in ("failed", "known-bug") and status == "passed":
         status = row["status"]  # a teardown pass doesn't erase a call failure
     row.update({"status": status, "seconds": round(report.duration, 1)})
+    for key, value in report.user_properties:
+        if key == "note":
+            row["note"] = value
     if report.outcome == "failed" and report.longreprtext:
         row["detail"] = report.longreprtext[-1500:]
     data[name] = row

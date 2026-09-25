@@ -438,7 +438,7 @@ emit(res)
 DRIVER = "/repo/tests/system/updater_driver.py"
 
 
-def test_06_updater_killed_mid_update_leaves_the_previous_release_serving(stack):
+def test_06_updater_killed_mid_update_leaves_the_previous_release_serving(stack, record_property):
     """jen-update-root.py SIGKILLed after extract and before the `current` switch: the previous
     release still serves, a retry completes, and the crashed staging dir does not outlive a prune."""
     st.dexec(st.UPDATER, "python3", DRIVER, "layout")
@@ -479,13 +479,28 @@ def test_06_updater_killed_mid_update_leaves_the_previous_release_serving(stack)
         f"INVARIANT: the next update run completes despite the crashed attempt: {retry.stdout[-1500:]}"
     )
 
-    # the crashed attempt's staging dir is pruned once it is older than a day (a fresh one is kept: a
-    # concurrent updater's staging must never be deleted from under it)
-    st.sh(st.UPDATER, "for d in /opt/jen/releases/*.staging-*; do touch -d '2 days ago' \"$d\"; done")
+    # the crashed attempt's half-built staging dir must not outlive the next runs. Whatever the retry
+    # already pruned is fine; anything left is aged past the one-day rule and pruned (a FRESH staging dir
+    # is kept on purpose: a concurrent updater's must never be deleted from under it)
+    listing = st.sh(st.UPDATER, "ls -la --time-style=full-iso /opt/jen/releases").stdout
+    left_after_retry = st.sh(st.UPDATER, "ls -d /opt/jen/releases/*.staging-* 2>/dev/null || true").stdout.split()
+    record_property("note", f"staging dirs left after the retry run: {left_after_retry or 'none'}")
+    st.sh(
+        st.UPDATER, 'for d in /opt/jen/releases/*.staging-*; do [ -d "$d" ] && touch -d \'2 days ago\' "$d"; done; true'
+    )
     pruned = st.dexec(st.UPDATER, "python3", DRIVER, "prune")
     after = result_of(pruned.stdout)
     assert after and not any(".staging-" in n for n in after["releases"]), (
-        f"INVARIANT: no half-extracted staging dir survives the next prune once stale: {after}"
+        "INVARIANT: no half-extracted staging dir survives the next prune once stale: "
+        + f"{after}"
+        + "\n"
+        + f"left after the retry: {left_after_retry}"
+        + "\n"
+        + listing
+        + "\n"
+        + "retry output:"
+        + "\n"
+        + retry.stdout[-1800:]
     )
 
 
@@ -534,8 +549,9 @@ def test_07_recovery_bundle_over_the_cap_is_refused_cleanly(stack):
 def test_08_ha_handover_with_the_partner_unreachable_reports_and_does_not_advance(stack):
     """HA maintenance stepper: kea-b unreachable at the handover step is reported to the operator and
     the flow stays where it was — nothing is sent to the wrong server, no step is skipped."""
+    ips = {"kea-a": st.container_ip(st.KEA_A), "kea-b": st.container_ip(st.KEA_B)}
     for node, name in ((st.KEA_A, "kea-a"), (st.KEA_B, "kea-b")):
-        st.dexec(node, "sh", "-c", f"cat > {st.KEA_CONF}", input=json.dumps(st.ha_kea_config(name), indent=2))
+        st.dexec(node, "sh", "-c", f"cat > {st.KEA_CONF}", input=json.dumps(st.ha_kea_config(name, ips), indent=2))
     hooks = st.sh(
         st.KEA_A, "ls /usr/lib/kea/hooks; kea-dhcp4 -t /etc/kea/kea-dhcp4.conf 2>&1 | tail -n 12", check=False
     )

@@ -29,6 +29,9 @@ def render(results: dict) -> str:
         detail = (results[n].get("detail") or "").strip()
         if detail:
             out += f"\n<details><summary>{n}</summary>\n\n```\n{detail}\n```\n</details>\n"
+    notes = [(n, r["note"]) for n, r in sorted(results.items()) if r.get("note")]
+    if notes:
+        out += "\nNotes:\n" + "\n".join(f"- {n.replace('test_', '', 1)}: {t}" for n, t in notes) + "\n"
     bugs = [n for n, r in sorted(results.items()) if r.get("status") == "known-bug"]
     if bugs:
         out += "\n🐞 known bug = the scenario fails today because Jen really has the bug it names; see the marker's reason in the test.\n"
