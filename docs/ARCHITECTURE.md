@@ -240,6 +240,41 @@ either decorated or named in `ROUTE_ALLOWLIST` with a one-line reason — the
 backstop for a route that touches client data but was never added to
 `SURFACES` at all.
 
+**Everything the resolver derives is judged, and plugin routes are inside the
+invariant (v5.65.2, Q91).** Two seams were found by audit. `authorize(rule=
+"per_object")` used to judge only the three object lists (device, leases,
+reservations): the MAC an address resolved to, `holder_mac`,
+`previous_holders`, `subnet_ids` and — worst — the MACs behind an ambiguous
+hostname reached the page unfiltered, so a subnet-scoped admin could learn
+another subnet's MACs by typing a shared hostname or an address in it. Now
+`macs_for_hostname` filters every source by the caller's subnets (a row with no
+subnet is for unrestricted callers only), an address held through a lease the
+caller cannot see hides its holder and everything found through it, a global
+(subnet-0) reservation is kept for everyone (it has no subnet to restrict on,
+and Explain already shows it), and the page renders only `view.candidates`,
+each candidate resolved and judged like a subject of its own; a denial and a
+not-found are one message, so the page is not an existence oracle. Alert rows
+carry no subnet, so the Overview's "last alert" is unrestricted-only and matches
+on whole tokens (`10.0.0.5` no longer matches `10.0.0.50`). The Config and
+Explain tabs evaluate only a subnet a lease, a reservation or an explicit
+`?subnet=` fixes — otherwise they show a picker of the caller's subnets — and
+capabilities are CONFIRMED (§3.14), never assumed. The second seam: the
+diagnostic surfaces were collected inside `_register_blueprints`, before any
+plugin registered a route, `diagnostic_surface` was not in `plugin_api`, and
+the scanner read only `jen/routes`. Collection now runs after `load_plugins`,
+`plugin_api` exports the decorator, and two static guards
+(`TestEveryDiagnosticRouteIsAccountedFor`) require every route in the
+diagnostic route files and every route a bundled plugin registers to be
+decorated or named with a reason — "it calls a service" is no escape.
+`tests/test_authz_matrix_plugins.py` runs the same B-marker matrix against a
+second app with every bundled plugin enabled, with state checks for the routes
+that write by id or address; a cell that fails today is `xfail(strict)` with the
+release that fixes it. `plugin_api.can_access_subnet` /
+`api_key_can_access_subnet` give plugins one answer for "no attributable
+subnet": `None` is False unless the caller is unrestricted or opts out
+explicitly — core's rule, instead of four plugins each writing
+`if sid is not None and sid not in allowed` (which makes None mean allow).
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather

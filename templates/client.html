@@ -2,17 +2,34 @@
 {% block title %}Investigate a client{% endblock %}
 {% block content %}
 
+{% macro subnet_picker(q, tab, choices) %}
+<div class="card">
+    <form method="GET" action="/client">
+        <input type="hidden" name="q" value="{{ q }}">
+        <input type="hidden" name="tab" value="{{ tab }}">
+        <div class="form-group">
+            <label>Which subnet should this be evaluated against?</label>
+            <select name="subnet">
+                {% for sid, info in choices.items() %}<option value="{{ sid }}">{{ info.name }} — {{ info.cidr }}</option>{% endfor %}
+            </select>
+        </div>
+        <p class="u-5872de">Jen has no lease or reservation that says which subnet this client is in, so it does not guess. Pick one to evaluate.</p>
+        <button type="submit" class="btn btn-primary">Evaluate</button>
+    </form>
+</div>
+{% endmacro %}
+
 <div class="page-header">
     <h1>{{ icon("search", "ico-lg") }} Investigate a client</h1>
-    <p>One identifier — a MAC, an IP, or a hostname — resolved once, with every diagnostic view onto it in one place.</p>
+    <p>One identifier — a MAC, an IPv4 address or a hostname — resolved once, with every diagnostic view onto it in one place.</p>
 </div>
 
 <div class="card">
     <form method="GET" action="/client" autocomplete="off">
         <div class="form-row u-f0e9d3">
             <div class="form-group u-116966">
-                <label>MAC, IP, or hostname</label>
-                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff, 10.0.0.50, or a hostname" autofocus>
+                <label>MAC, IPv4 address or hostname</label>
+                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff, 10.0.0.50 or a hostname" autofocus>
             </div>
         </div>
         <div class="u-012c80">
@@ -22,20 +39,20 @@
 </div>
 
 {% if q %}
-{% if subject and subject.candidates %}
+{% if unsupported %}
+<div class="card"><p class="u-5872de">{{ unsupported }}</p></div>
+{% elif view and view.candidates %}
 <div class="card">
     <div class="card-header"><span class="card-title">More than one client uses that hostname</span></div>
     <table class="rowlist">
         <thead><tr><th>MAC</th></tr></thead>
         <tbody>
-        {% for c in subject.candidates %}
+        {% for c in view.candidates %}
         <tr><td class="mono"><a href="/client?q={{ c.mac }}">{{ c.mac }}</a></td></tr>
         {% endfor %}
         </tbody>
     </table>
 </div>
-{% elif denied_reason %}
-<div class="card"><p class="u-5872de">{{ denied_reason }}</p></div>
 {% elif not view %}
 <div class="card"><p class="u-5872de">No client matched that identifier, or you don't have access to it.</p></div>
 {% else %}
@@ -126,10 +143,13 @@
 </div>
 
 {% elif tab == "explain" %}
-{% if view.mac %}
-<div hx-get="/tools/explain?mac={{ view.mac|urlencode }}{% if request.args.get('subnet') %}&subnet={{ request.args.get('subnet') }}{% endif %}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+{% if view.mac and chosen_subnet is none %}
+{{ subnet_picker(q, 'explain', subnet_choices) }}
+{% elif view.mac %}
+<div hx-get="/tools/explain?mac={{ view.mac|urlencode }}&subnet={{ chosen_subnet }}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
     <p class="u-5872de">Loading…</p>
 </div>
+<div class="u-865c33">Evaluated against subnet {{ chosen_subnet }} ({{ chosen_how }}).</div>
 {% else %}
 <div class="card"><p class="u-5872de">Explain needs a MAC — this identifier didn't resolve to one.</p></div>
 {% endif %}
@@ -170,7 +190,9 @@
 </div>
 
 {% elif tab == "config" %}
-{% if config_result %}
+{% if view.mac and chosen_subnet is none %}
+{{ subnet_picker(q, 'config', subnet_choices) }}
+{% elif config_result %}
 <div class="card">
     <div class="card-header"><span class="card-title">Effective configuration</span>
         <span class="u-865c33">subnet {{ config_result.subnet.id }} · {{ config_result.subnet.cidr }}{% if config_sha %} · config {{ config_sha[:8] }}…{% endif %}</span>
@@ -220,6 +242,7 @@
     </table>
 </div>
 {% endif %}
+{% if chosen_how %}<div class="u-865c33">Subnet {{ chosen_subnet }} — {{ chosen_how }}.</div>{% endif %}
 {% else %}
 <div class="card"><p class="u-5872de">Could not read the effective configuration for this client — see the Explain tab.</p></div>
 {% endif %}

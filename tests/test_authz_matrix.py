@@ -39,9 +39,13 @@ B_LEASE_IP = "10.77.0.77"
 B_RES_IP = "10.77.0.88"
 A_MAC = "de:ad:be:ef:00:aa"
 A_MAC_HEX = "DEADBEEF00AA"
+# v5.65.2 (Q91): one hostname on a client in A and a client in B - the ambiguous-hostname fixture
+SHARED_HOST = "shared-host"
+A2_MAC = "de:ad:be:ef:00:a2"
+B2_MAC = "de:ad:be:ef:00:b2"
 # "4242 name": the fleet-wide reconcile summary seeded below — a distinctive AGGREGATE count
 # that must never reach a subnet-scoped caller (Q56-2)
-MARKERS = (B_NAME, B_HOST, B_MAC, B_MAC_HEX, "10.77.0.", "deadbeef00bb", "4242 name")
+MARKERS = (B_NAME, B_HOST, B_MAC, B_MAC_HEX, "10.77.0.", "deadbeef00bb", "4242 name", B2_MAC, "deadbeef00b2")
 
 RAW_READ = "jen_authz_read_key"
 RAW_WRITE = "jen_authz_write_key"
@@ -94,6 +98,11 @@ def seeded(db, mock_kea, monkeypatch):
             "INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, device_name, first_seen, last_seen) VALUES "
             "(%s, %s, %s, 2, %s, NOW(), NOW()), (%s, '10.98.1.10', 'alpha-host', 1, 'Alpha device', NOW(), NOW())",
             (B_MAC, B_LEASE_IP, B_HOST, B_HOST, A_MAC),
+        )
+        cur.execute(
+            "INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, device_name, first_seen, last_seen) VALUES "
+            "(%s, '10.98.1.20', %s, 1, 'Shared in A', NOW(), NOW()), (%s, '10.77.0.20', %s, 2, 'Shared in B', NOW(), NOW())",
+            (A2_MAC, SHARED_HOST, B2_MAC, SHARED_HOST),
         )
         cur.execute(
             "INSERT INTO alert_log (channel_type, alert_type, message, status) VALUES "
@@ -380,6 +389,24 @@ SURFACES = [
         (B_MAC,),
     ),
     (
+        # v5.65.2 (Q91 b): typing the address of a lease in B used to show the holder's MAC
+        "client overview by B ip (the holder's MAC must not show)",
+        "GET",
+        f"/client?q={B_LEASE_IP}&tab=overview",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_LEASE_IP,),
+    ),
+    (
+        # v5.65.2 (Q91 a): the same hostname on a client in A and one in B - the B MAC must not be listed
+        "client by a hostname shared between A and B",
+        "GET",
+        f"/client?q={SHARED_HOST}",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (SHARED_HOST,),
+    ),
+    (
         "client timeline tab by B ip",
         "GET",
         f"/client?q={B_LEASE_IP}&tab=timeline",
@@ -589,3 +616,218 @@ class TestDiagnosticSurfaceScanner:
         routed = {endpoint for endpoint, _path, _seg in _routed_functions()}
         stale = (set(ROUTE_ALLOWLIST) & decorated) | (set(ROUTE_ALLOWLIST) - routed)
         assert not stale, f"ROUTE_ALLOWLIST entry no longer applies (route removed or now decorated): {sorted(stale)}"
+
+
+# ── v5.65.2 (Q91 d) — no route in the diagnostic files, and no plugin route, can hide ──────
+#
+# `_TABLE_PATTERN` above only sees SQL written inline in a route body, so a route that
+# delegates to a service (the Q82 pattern) or to a plugin's own helper was invisible. These
+# guards are stricter and simpler: every route in the diagnostic route files, and every
+# route a bundled plugin registers, is either decorated `@diagnostic_surface` or named below
+# WITH A REASON. "It calls a service" is no longer an escape. Purely static (AST) - they need
+# no app and no database.
+
+DIAGNOSTIC_ROUTE_FILES = ("client", "explain", "trace", "timeline", "search", "devices", "doctor", "health")
+
+# By endpoint ("blueprint.function"), for the files above. Routes already named in ROUTE_ALLOWLIST
+# (the devices CRUD) are not repeated here.
+NAMED_ALLOWLIST = {
+    "search.saved_searches": "a user's own saved query strings; no client table",
+    "search.save_search": "writes a user's own saved query string; no client table",
+    "search.delete_saved_search": "deletes a user's own saved query string; no client table",
+    "search.api_saved_searches": "a user's own saved query strings, as JSON; no client table",
+    "devices.save_device_settings": "per-user display settings for the devices page; no client table",
+    "health.health_center": "the page shell over the same subnet-filtered run as the decorated health_center_data",
+}
+
+_PLUGIN_CLIENT_FACING = (
+    "acts on, or reads, a client row chosen by an id or address in the request; left undecorated until the "
+    "plugin fix (Q93/Q94) that the matching row in tests/test_authz_matrix_plugins.py is marked for - that row is the proof"
+)
+_PLUGIN_OWN = (
+    "the plugin's own configuration or list, filtered by subnet in its own query; reads none of the client tables"
+)
+_PLUGIN_SUBNET_URL = "scoped by a subnet id in the URL and checked with the subnet helpers before any read"
+
+# By "<plugin dir>:<function>". A plugin route is a `@bp.route` function or a function handed to
+# `add_url_rule` through api_key_required(...).
+PLUGIN_ROUTE_ALLOWLIST = {
+    **{f"dns-sync:{fn}": _PLUGIN_CLIENT_FACING for fn in ("export_unbound", "target_records")},
+    **{
+        f"dns-sync:{fn}": _PLUGIN_OWN
+        for fn in ("index", "add_target", "preview_target", "toggle_target", "delete_target")
+    },
+    **{
+        f"watchdog:{fn}": _PLUGIN_CLIENT_FACING
+        for fn in (
+            "target_history",
+            "toggle_target",
+            "delete_target",
+            "watch_from_row",
+            "_api_list_targets",
+            "_api_add_target",
+        )
+    },
+    **{f"watchdog:{fn}": _PLUGIN_OWN for fn in ("index", "add_target")},
+    **{
+        f"wol:{fn}": _PLUGIN_CLIENT_FACING
+        for fn in ("delete_favourite", "wake_favourite", "wake_from_row", "_api_wake")
+    },
+    **{f"wol:{fn}": _PLUGIN_OWN for fn in ("index", "add_favourite")},
+    **{f"presence:{fn}": _PLUGIN_CLIENT_FACING for fn in ("track", "untrack", "track_from_row")},
+    **{f"presence:{fn}": _PLUGIN_OWN for fn in ("index", "add_sink", "toggle_sink", "delete_sink", "test_sink")},
+    **{f"switchport:{fn}": _PLUGIN_CLIENT_FACING for fn in ("index", "_api_locate")},
+    **{f"switchport:{fn}": _PLUGIN_OWN for fn in ("add_switch", "toggle_switch", "delete_switch", "set_uplink")},
+    **{
+        f"ipam:{fn}": _PLUGIN_SUBNET_URL
+        for fn in (
+            "index",
+            "subnet_detail",
+            "subnet_detail_legacy",
+            "export_csv",
+            "history",
+            "import_preview",
+            "import_commit",
+            "save_entry",
+            "delete_entry",
+            "range_action",
+            "add_subnet",
+            "delete_subnet",
+            "_api_list_entries",
+            "_api_save_entry",
+            "_api_next_free",
+        )
+    },
+    **{
+        f"network-discovery:{fn}": _PLUGIN_SUBNET_URL
+        for fn in ("index", "start_scan", "set_schedule", "results", "export_results", "mark_known", "api_scan_status")
+    },
+}
+
+
+def _decorated_with(node, name):
+    return any(isinstance(d, ast.Call) and getattr(d.func, "id", "") == name for d in node.decorator_list)
+
+
+def _is_route_decorator(d):
+    return isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "route"
+
+
+def _core_route_keys():
+    """{"blueprint.function": decorated?} for the routes in DIAGNOSTIC_ROUTE_FILES."""
+    found = {}
+    for name in DIAGNOSTIC_ROUTE_FILES:
+        path = f"jen/routes/{name}.py"
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        bp_name = None
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", "") == "Blueprint"
+            ):
+                bp_name = ast.literal_eval(node.value.args[0])
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and any(_is_route_decorator(d) for d in node.decorator_list):
+                found[f"{bp_name}.{node.name}"] = _decorated_with(node, "diagnostic_surface")
+    return found
+
+
+def _plugin_route_keys():
+    """{"plugin-dir:function": decorated?} for every route every bundled plugin registers."""
+    found = {}
+    for path in sorted(glob.glob("plugins/*/plugin.py")):
+        plugin_dir = path.replace("\\", "/").split("/")[1]
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=path)
+        funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        for name, node in funcs.items():
+            if any(_is_route_decorator(d) for d in node.decorator_list):
+                found[f"{plugin_dir}:{name}"] = _decorated_with(node, "diagnostic_surface")
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_url_rule"
+                and len(node.args) >= 3
+            ):
+                view = node.args[2]
+                target = view.args[0] if isinstance(view, ast.Call) and view.args else view
+                if isinstance(target, ast.Name) and target.id in funcs:
+                    found[f"{plugin_dir}:{target.id}"] = _decorated_with(funcs[target.id], "diagnostic_surface")
+    return found
+
+
+class TestEveryDiagnosticRouteIsAccountedFor:
+    def test_the_diagnostic_route_files_have_no_unnamed_undecorated_route(self):
+        offenders = [
+            key
+            for key, decorated in _core_route_keys().items()
+            if not decorated and key not in NAMED_ALLOWLIST and key not in ROUTE_ALLOWLIST
+        ]
+        assert not offenders, "decorate with @diagnostic_surface, or name it (with a reason) - " + ", ".join(offenders)
+
+    def test_every_plugin_route_is_decorated_or_named(self):
+        keys = _plugin_route_keys()
+        assert keys, "no plugin routes found - the scanner is broken"
+        offenders = [k for k, decorated in keys.items() if not decorated and k not in PLUGIN_ROUTE_ALLOWLIST]
+        assert not offenders, "decorate it with jen.plugin_api.diagnostic_surface, or name it - " + ", ".join(offenders)
+
+    def test_the_named_lists_have_no_stale_entries(self):
+        core, plugin = _core_route_keys(), _plugin_route_keys()
+        stale_core = [k for k in NAMED_ALLOWLIST if k not in core or core[k]]
+        stale_plugin = [k for k in PLUGIN_ROUTE_ALLOWLIST if k not in plugin or plugin[k]]
+        assert not stale_core, f"NAMED_ALLOWLIST entry no longer applies (route gone or now decorated): {stale_core}"
+        assert not stale_plugin, f"PLUGIN_ROUTE_ALLOWLIST entry no longer applies: {stale_plugin}"
+
+    def test_the_scanners_really_see_the_routes(self):
+        """A vacuous pass would hide a broken scanner: these routes exist and are found."""
+        core, plugin = _core_route_keys(), _plugin_route_keys()
+        assert core["client.client_page"] is True and core["search.save_search"] is False
+        assert plugin["wol:_api_wake"] is False and plugin["watchdog:target_history"] is False
+        assert "presence:track_from_row" in plugin and "dns-sync:export_unbound" in plugin
+
+
+class TestPluginsCanJoinTheInvariant:
+    def test_plugin_api_exports_the_same_decorator_core_uses(self):
+        from jen import plugin_api
+
+        assert plugin_api.diagnostic_surface is access.diagnostic_surface
+        assert "diagnostic_surface" in plugin_api.__all__
+
+    def test_surfaces_are_collected_after_the_plugins_load(self):
+        """The collection used to run inside _register_blueprints(), before any plugin route existed."""
+        import inspect
+
+        import jen
+
+        src = inspect.getsource(jen.create_app)
+        assert "collect_diagnostic_surfaces(app)" in src
+        assert src.index("load_plugins(app)") < src.index("collect_diagnostic_surfaces(app)")
+        assert "collect_diagnostic_surfaces" not in inspect.getsource(jen._register_blueprints)
+
+    def test_a_decorated_plugin_style_route_is_collected(self):
+        from flask import Blueprint, Flask
+
+        from jen.plugin_api import diagnostic_surface
+
+        saved = list(access.DIAGNOSTIC_SURFACES)
+        try:
+            app = Flask("plugin-collect-check")
+            bp = Blueprint("pluginish", __name__)
+
+            @bp.route("/x/<mac>")
+            @diagnostic_surface(subject="client")
+            def lookup(mac):
+                return ""
+
+            @bp.route("/y")
+            def unrelated():
+                return ""
+
+            app.register_blueprint(bp)
+            access.collect_diagnostic_surfaces(app)
+            assert [e for e, _m, _r in access.DIAGNOSTIC_SURFACES] == ["pluginish.lookup"]
+        finally:
+            access.DIAGNOSTIC_SURFACES[:] = saved

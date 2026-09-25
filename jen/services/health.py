@@ -176,10 +176,12 @@ def _capabilities(ctx) -> Check:
     (built from the status rows this run already fetched: no extra Kea call).
     Informational: it never warns or fails on its own — an unreachable
     server is `kea_reachable`'s to report, a missing helper the helper
-    row's. A refresh also drops the cached capabilities other pages hold,
-    so the next page load reads live."""
+    row's. It never touches the capability cache: a run is triggered by any
+    viewer (the page, its 60 s auto-refresh, the JSON twin, the API), and letting
+    that drop the cache let one viewer defeat it for every page. The cache is
+    invalidated from the admin Refresh button (routes/health.py) and when
+    Jen's configuration is saved (config.AppConfig.apply)."""
     c = Check("capabilities", "Server capabilities", "kea", fix_url="/servers")
-    __caps.invalidate()
     statuses = ctx["server_status"]
     if not statuses:
         c.status, c.detail = "skip", "no server status available"

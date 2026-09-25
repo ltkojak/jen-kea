@@ -305,29 +305,48 @@ def previous_holders_for_ip(ip: str, exclude_mac: str) -> list[str]:
         return []
 
 
-def macs_for_hostname(hostname: str) -> set[str]:
+def macs_for_hostname(hostname: str, accessible_ids=None) -> set[str]:
     """Every distinct MAC currently associated with `hostname`, across the
     three places a hostname can live: an active lease, a reservation, or
-    Jen's own device tracking."""
+    Jen's own device tracking.
+
+    v5.65.2 (Q91) - `accessible_ids` is `None` for an unrestricted caller, else
+    the set of v4 subnet ids they may see, and EVERY source is filtered by it: a
+    row in a subnet the caller cannot see contributes no MAC (a row with no
+    subnet at all is for unrestricted callers only). This used to be unfiltered,
+    so `/client?q=printer` handed a subnet-scoped admin the MACs of every
+    `printer` in the fleet. Each statement is fixed SQL and the subnet is judged in
+    Python, so no query text is built from the id list."""
+    ids = None if accessible_ids is None else {int(i) for i in accessible_ids}
+
+    def keep(subnet_id) -> bool:
+        if ids is None:
+            return True
+        try:
+            return subnet_id is not None and int(subnet_id) in ids
+        except (TypeError, ValueError):
+            return False
+
     macs: set[str] = set()
     try:
         with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute("SELECT DISTINCT HEX(hwaddr) AS h FROM lease4 WHERE hostname=%s AND state=0", (hostname,))
-            macs |= {_hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"]}
+            cur.execute("SELECT HEX(hwaddr) AS h, subnet_id FROM lease4 WHERE hostname=%s AND state=0", (hostname,))
+            macs |= {_hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and keep(r["subnet_id"])}
             cur.execute(
-                "SELECT DISTINCT HEX(dhcp_identifier) AS h FROM hosts WHERE hostname=%s AND dhcp_identifier_type=0",
+                "SELECT HEX(dhcp_identifier) AS h, dhcp4_subnet_id AS subnet_id FROM hosts "
+                "WHERE hostname=%s AND dhcp_identifier_type=0",
                 (hostname,),
             )
-            macs |= {_hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"]}
+            macs |= {_hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and keep(r["subnet_id"])}
     except Exception as e:
         logger.error(f"client_subject: hostname lease/reservation lookup failed for {hostname!r}: {e}")
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT DISTINCT mac FROM devices WHERE last_hostname=%s OR device_name=%s",
+                "SELECT mac, last_subnet_id FROM devices WHERE last_hostname=%s OR device_name=%s",
                 (hostname, hostname),
             )
-            macs |= {r["mac"].lower() for r in cur.fetchall() if r["mac"]}
+            macs |= {r["mac"].lower() for r in cur.fetchall() if r["mac"] and keep(r["last_subnet_id"])}
     except Exception as e:
         logger.error(f"client_subject: hostname device lookup failed for {hostname!r}: {e}")
     return {m for m in macs if m}
@@ -350,7 +369,7 @@ def resolve(identifier: str, *, accessible_ids=None, all_subnets: bool = True, n
     kind, normalized = detect_kind(identifier)
 
     if kind == "hostname":
-        macs = macs_for_hostname(normalized)
+        macs = macs_for_hostname(normalized, accessible_ids)
         if len(macs) > 1:
             return ClientSubject(
                 kind="hostname",
@@ -453,7 +472,24 @@ def _subnet_ok(subnet_id, accessible_ids) -> bool:
         return False
 
 
-def authorize(subject: ClientSubject, *, rule: str, accessible_ids=None, all_subnets: bool = True) -> ClientSubject:
+def _is_global(row) -> bool:
+    """A reservation with no subnet (Kea's global reservation): nothing to restrict it on."""
+    try:
+        return int(row.get("subnet_id") or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _names_a_subnet(view: "ClientSubject") -> bool:
+    """Did anything survive that places this client in a subnet (the question Timeline asks)."""
+    from jen.services.timeline import subnet_id_for
+
+    return subnet_id_for(view.device, view.lease, view.reservation) is not None
+
+
+def authorize(
+    subject: ClientSubject, *, rule: str, accessible_ids=None, all_subnets: bool = True, resolver=None
+) -> ClientSubject:
     """The view `subject` a caller may see under one of three policies
     (docs/ARCHITECTURE.md §2):
 
@@ -462,6 +498,11 @@ def authorize(subject: ClientSubject, *, rule: str, accessible_ids=None, all_sub
       unrestricted caller (`accessible_ids is None`) gets `subject` back
       unchanged. Never raises — an object that isn't accessible is simply
       dropped from the view, the same as Timeline/the API have always done.
+      v5.65.2 (Q91): EVERYTHING the resolver derived is judged, not just the
+      three object lists — the MAC a typed address resolved to, `holder_mac`,
+      `previous_holders`, `subnet_ids`, and each hostname candidate (resolved
+      and judged like a subject of its own; `resolver` overrides `resolve`
+      for tests). A global reservation (no subnet) is kept for everyone.
     * `all_known` — the subject qualifies only when EVERY subnet it is
       known in (`subject.subnet_ids`) is accessible; raises
       `ClientNotAuthorized` otherwise. A subject with no known subnet at
@@ -476,12 +517,24 @@ def authorize(subject: ClientSubject, *, rule: str, accessible_ids=None, all_sub
             return subject
         ids = {int(i) for i in accessible_ids}
         leases4 = [row for row in subject.leases4 if _subnet_ok(row.get("subnet_id"), ids)]
-        reservations = [row for row in subject.reservations if _subnet_ok(row.get("subnet_id"), ids)]
+        reservations = [row for row in subject.reservations if _subnet_ok(row.get("subnet_id"), ids) or _is_global(row)]
         device = subject.device
         if device and not _subnet_ok(device.get("last_subnet_id"), ids):
             from jen.services.access import _DEVICE_PLACEMENT_FIELDS
 
             device = {**device, **dict.fromkeys(_DEVICE_PLACEMENT_FIELDS)}
+        mac, holder_mac = subject.mac, subject.holder_mac
+        previous, leases6 = list(subject.previous_holders), subject.leases6
+        if subject.kind == "ipv4" and not leases4:
+            # v5.65.2 (Q91) - the client holding a typed address was found through a lease in a subnet
+            # the caller cannot see. Its MAC, its device, its reservations, its v6 addresses and the
+            # MACs that held the address before are all derived from that lease, so none of them may
+            # show; the address alone is what the caller typed.
+            mac = holder_mac = ""
+            device = None
+            reservations = []
+            leases6 = []
+            previous = []
         # v5.63.0 (Q82) fix — `ip`/`hostname` were set from the UNFILTERED
         # leases4/device during resolve() and, unlike device/leases4/
         # reservations above, were never recomputed here: a MAC subject
@@ -496,7 +549,31 @@ def authorize(subject: ClientSubject, *, rule: str, accessible_ids=None, all_sub
         ip = subject.ip
         if subject.kind == "mac":
             ip = (leases4[0].get("ip") if leases4 else "") or ((device or {}).get("last_ip") or "")
-        return replace(subject, device=device, leases4=leases4, reservations=reservations, ip=ip, hostname=hostname)
+        candidates = []
+        if subject.candidates:
+            resolve_fn = resolver or resolve
+            for cand in subject.candidates:
+                one = authorize(
+                    resolve_fn(cand["mac"], accessible_ids=ids, all_subnets=False),
+                    rule="per_object",
+                    accessible_ids=ids,
+                )
+                if _names_a_subnet(one):
+                    candidates.append(cand)
+        return replace(
+            subject,
+            device=device,
+            leases4=leases4,
+            leases6=leases6,
+            reservations=reservations,
+            ip=ip,
+            hostname=hostname,
+            mac=mac,
+            holder_mac=holder_mac,
+            previous_holders=previous,
+            subnet_ids=frozenset(i for i in subject.subnet_ids if _subnet_ok(i, ids)),
+            candidates=candidates,
+        )
 
     if rule == "all_known":
         if all_subnets:

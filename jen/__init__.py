@@ -752,6 +752,17 @@ def create_app() -> Flask:
 
     load_plugins(app)
 
+    # v5.62.1 (Q81) — resolve every `@diagnostic_surface`-tagged route into
+    # access.DIAGNOSTIC_SURFACES now that app.url_map is fully populated
+    # (Blueprint route registration is deferred until register_blueprint()
+    # runs, so this can't happen at decoration time).
+    # v5.65.2 (Q91 d) — AFTER load_plugins(): it used to run inside
+    # _register_blueprints(), before any plugin route existed, so a plugin's
+    # client-facing route could never be collected (or flagged).
+    from jen.services.access import collect_diagnostic_surfaces
+
+    collect_diagnostic_surfaces(app)
+
     # ── Plugin nav injection context processor ────────────────────────────────
     @app.context_processor
     def inject_plugin_nav():
@@ -871,14 +882,6 @@ def _register_blueprints(app: Flask) -> None:
         users_bp,
     ]:
         app.register_blueprint(blueprint)
-
-    # v5.62.1 (Q81) — resolve every `@diagnostic_surface`-tagged route into
-    # access.DIAGNOSTIC_SURFACES now that app.url_map is fully populated
-    # (Blueprint route registration is deferred until register_blueprint()
-    # runs, so this can't happen at decoration time).
-    from jen.services.access import collect_diagnostic_surfaces
-
-    collect_diagnostic_surfaces(app)
 
 
 def _load_secret_key() -> str:

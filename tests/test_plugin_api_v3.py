@@ -306,3 +306,79 @@ class TestNavIconSpriteName:
     def test_a_legacy_emoji_still_renders_as_plain_text(self):
         out = str(nav_icon("🚀"))
         assert "<svg" not in out and "🚀" in out
+
+
+# ── v5.65.2 (Q91 i): one helper for "no attributable subnet" ─────────────────────
+
+
+class _User:
+    def __init__(self, allowed=None, authenticated=True):
+        self.is_authenticated = authenticated
+        self._allowed = allowed
+
+    @property
+    def all_subnets(self):
+        return self._allowed is None
+
+    def can_access_subnet(self, subnet_id):
+        return self.all_subnets or int(subnet_id) in self._allowed
+
+
+class TestCanAccessSubnet:
+    def _as(self, monkeypatch, user):
+        from jen import plugin_api
+
+        monkeypatch.setattr(plugin_api, "_current_user", user)
+        return plugin_api.can_access_subnet
+
+    def test_a_scoped_user_is_judged_on_the_subnet(self, monkeypatch):
+        can = self._as(monkeypatch, _User(allowed=[1]))
+        assert can(1) is True and can("1") is True
+        assert can(2) is False and can("nonsense") is False
+
+    def test_none_fails_closed_for_a_scoped_user(self, monkeypatch):
+        """Core's rule (docs/ARCHITECTURE.md section 2): no attributable subnet is for unrestricted callers only."""
+        can = self._as(monkeypatch, _User(allowed=[1]))
+        assert can(None) is False
+        assert can(None, allow_unattributed=True) is True  # the explicit, commented opt-out
+
+    def test_an_unrestricted_user_may_see_anything_including_none(self, monkeypatch):
+        can = self._as(monkeypatch, _User(allowed=None))
+        assert can(1) is True and can(99) is True and can(None) is True
+
+    def test_an_anonymous_caller_may_see_nothing(self, monkeypatch):
+        can = self._as(monkeypatch, _User(allowed=None, authenticated=False))
+        assert can(1) is False and can(None) is False and can(None, allow_unattributed=True) is False
+
+
+class TestApiKeyCanAccessSubnet:
+    def test_scoped_key(self):
+        from jen.plugin_api import api_key_can_access_subnet as can
+
+        key = {"subnet_access": "[1, 3]"}
+        assert can(key, 1) is True and can(key, "3") is True
+        assert can(key, 2) is False and can(key, "x") is False
+
+    def test_none_fails_closed_for_a_scoped_key(self):
+        from jen.plugin_api import api_key_can_access_subnet as can
+
+        key = {"subnet_access": [1]}
+        assert can(key, None) is False
+        assert can(key, None, allow_unattributed=True) is True
+
+    def test_an_unrestricted_key_sees_everything(self):
+        from jen.plugin_api import api_key_can_access_subnet as can
+
+        for key in ({"subnet_access": None}, {}):
+            assert can(key, 5) is True and can(key, None) is True
+
+    def test_a_malformed_scope_fails_closed(self):
+        from jen.plugin_api import api_key_can_access_subnet as can
+
+        key = {"subnet_access": "not json"}
+        assert can(key, 1) is False and can(key, None) is False
+
+    def test_the_helpers_are_published(self):
+        from jen import plugin_api
+
+        assert "can_access_subnet" in plugin_api.__all__ and "api_key_can_access_subnet" in plugin_api.__all__

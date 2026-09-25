@@ -50,13 +50,27 @@ HOOK_HA = "libdhcp_ha.so"
 
 
 def supports_direct_socket(v: tuple | None) -> bool:
-    """Per-daemon control sockets exist from Kea 2.7.2. An unknown version
-    counts as yes (callers re-check before writing anything)."""
-    return v is None or v >= DIRECT_SOCKET_MIN
+    """CONFIRMED: per-daemon control sockets exist from Kea 2.7.2. An unknown
+    version is NOT confirmed (v5.65.2, Q91 h): a server Jen never reached must not
+    report the capability as on. Setup and preflight paths that re-check before
+    writing anything use `may_attempt_direct_socket` instead."""
+    return v is not None and v >= DIRECT_SOCKET_MIN
 
 
 def ships_control_agent(v: tuple | None) -> bool:
-    """False from Kea 3.2, which removes the Control Agent. Unknown: yes."""
+    """CONFIRMED: False from Kea 3.2, which removes the Control Agent; an
+    unknown version is not confirmed either. See `may_ship_control_agent`."""
+    return v is not None and v < CA_REMOVED_FROM
+
+
+def may_attempt_direct_socket(v: tuple | None) -> bool:
+    """The permissive reading for the paths that go on to re-check (a probe, a
+    preflight, a write that verifies): an unknown version is worth trying."""
+    return v is None or v >= DIRECT_SOCKET_MIN
+
+
+def may_ship_control_agent(v: tuple | None) -> bool:
+    """Permissive twin of `ships_control_agent`: unknown counts as "might"."""
     return v is None or v < CA_REMOVED_FROM
 
 
@@ -88,7 +102,7 @@ class ServerCapabilities:
     ca_deprecated: bool = False  # ca mode on Kea 3.0.x/3.1.x
     ca_removed: bool = False  # ca mode on Kea >= 3.2 (nothing to talk to)
     direct_control: bool = False
-    direct_socket: bool = False  # Kea new enough for per-daemon sockets (unknown counts as yes)
+    direct_socket: bool = False  # CONFIRMED: Kea new enough for per-daemon sockets (unknown version: False)
     tls: bool = False  # helper >= 4 (install-tls)
     # the host helper
     helper: bool = False
@@ -184,9 +198,18 @@ def _hook(what: str, lib: str):
     return _why
 
 
+def _unknown_version(c: ServerCapabilities) -> bool:
+    return c.kea_version is None
+
+
+_UNKNOWN_VERSION = "Kea version unknown — is the server reachable? (Servers)"
+
+
 def _control_agent_why(c: ServerCapabilities) -> str:
     if c.direct_control:
         return "Jen is in direct mode — this server is reached on its own control socket, not the Control Agent."
+    if _unknown_version(c):
+        return f"The Control Agent is not confirmed: {_UNKNOWN_VERSION}"
     return f"Kea {_vstr(c.kea_version)} no longer ships the Control Agent — switch to direct mode (Settings → Kea)."
 
 
@@ -195,6 +218,8 @@ def _direct_control_why(c: ServerCapabilities) -> str:
 
 
 def _direct_socket_why(c: ServerCapabilities) -> str:
+    if _unknown_version(c):
+        return f"Per-daemon control sockets are not confirmed: {_UNKNOWN_VERSION}"
     return f"Kea {_vstr(c.kea_version)} predates per-daemon control sockets (2.7.2) — the Control Agent is the only option there."
 
 
@@ -290,7 +315,7 @@ def derive(
         reachable=bool(reachable),
         kea_version=kea_version,
         kea_version_text=kea_version_text,
-        control_agent=ca and not ca_removed,
+        control_agent=ca and ships_control_agent(kea_version),
         ca_deprecated=ca_deprecated,
         ca_removed=ca_removed,
         direct_control=direct,

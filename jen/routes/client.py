@@ -18,6 +18,7 @@ never pays for six tabs' worth of work when the caller looked at one.
 
 import hashlib
 import logging
+import re
 import secrets
 from datetime import datetime, timezone
 
@@ -38,10 +39,26 @@ bp = Blueprint("client", __name__)
 TABS = ("overview", "explain", "trace", "timeline", "dns", "config")
 
 
+def _alert_matcher(mac: str, ip: str):
+    """A compiled pattern that finds this client's MAC or IP in alert text as a WHOLE token:
+    `10.0.0.5` must not match `10.0.0.50` (v5.65.2, Q91 c')."""
+    parts = []
+    if mac:
+        parts.append(r"(?<![0-9a-f:])" + re.escape(mac.lower()) + r"(?![0-9a-f:])")
+    if ip:
+        parts.append(r"(?<![0-9.])" + re.escape(ip) + r"(?![0-9.])")
+    return re.compile("|".join(parts), re.IGNORECASE) if parts else None
+
+
 def _alert_status(mac: str, ip: str) -> dict | None:
     """The most recent alert_log row mentioning this client, or None — a
-    lightweight status line for the Overview tab, not the full Timeline."""
-    if not mac and not ip:
+    lightweight status line for the Overview tab, not the full Timeline.
+
+    alert_log rows carry no subnet, so (docs/ARCHITECTURE.md §2: audit/alert matches are
+    unrestricted-only, as Timeline enforces) the caller only asks for a subnet-unrestricted
+    user. The SQL LIKE is a cheap prefilter; the decision is a word-boundary match in Python."""
+    matcher = _alert_matcher(mac, ip)
+    if matcher is None:
         return None
     import jen.models.db as __db
 
@@ -50,21 +67,25 @@ def _alert_status(mac: str, ip: str) -> dict | None:
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT sent_at, alert_type, status FROM alert_log WHERE message LIKE %s OR message LIKE %s "
-                "ORDER BY sent_at DESC LIMIT 1",
+                "SELECT sent_at, alert_type, status, message FROM alert_log WHERE message LIKE %s OR message LIKE %s "
+                "ORDER BY sent_at DESC LIMIT 200",
                 (mac_pat, ip_pat),
             )
-            return cur.fetchone()
+            for row in cur.fetchall():
+                if matcher.search(row.get("message") or ""):
+                    return {k: row[k] for k in ("sent_at", "alert_type", "status")}
     except Exception as e:
         logger.error(f"client: alert status lookup failed for mac={mac!r} ip={ip!r}: {e}")
-        return None
+    return None
 
 
 def _explain_inputs(view) -> tuple[dict, int | None, str]:
-    """The same subnet-choice priority Explain's own page uses — chosen
-    param > lease > reservation > first accessible — over an already
-    resolved/authorized ClientSubject, so both the Explain and Config tabs
-    read one evaluation."""
+    """The subnet the Explain and Config tabs evaluate against, over an already
+    resolved/authorized ClientSubject: an explicit `?subnet=` > the current lease >
+    a reservation, and NOTHING else. (v5.65.2, Q91 f: it used to fall through to
+    "the first subnet you can see", so a client known only by a device row got an
+    "effective configuration" evaluated against whichever subnet happened to come
+    first. With no subnet fixed, the tabs show a picker and evaluate nothing.)"""
     subnet_map = get_accessible_subnet_map()
     client = {"mac": view.mac}
     raw_subnet = (request.args.get("subnet") or "").strip()
@@ -79,11 +100,8 @@ def _explain_inputs(view) -> tuple[dict, int | None, str]:
     elif view.reservation and view.reservation.get("subnet_id"):
         subnet_id = int(view.reservation["subnet_id"])
         chosen_how = "from a reservation"
-    elif subnet_map:
-        subnet_id = next(iter(subnet_map))
-        chosen_how = "first subnet you can see — pick one above if that's wrong"
     if subnet_id is not None and subnet_id not in subnet_map:
-        subnet_id = None
+        subnet_id, chosen_how = None, ""
     return client, subnet_id, chosen_how
 
 
@@ -98,10 +116,8 @@ def _config_tab(view):
     cfg = dhcp4_config()
     if not cfg:
         return None, ""
-    reservations = [
-        r for r in view.reservations if r["subnet_id"] == 0 or r["subnet_id"] in get_accessible_subnet_map()
-    ]
-    result = explain(cfg, client, subnet_id=subnet_id, reservations=reservations, lease=view.lease)
+    # view.reservations was judged by authorize() (global reservations kept for everyone)
+    result = explain(cfg, client, subnet_id=subnet_id, reservations=view.reservations, lease=view.lease)
     config_sha = hashlib.sha256(__rev.canonical(cfg).encode()).hexdigest()
     return (result if result.get("ok") else None), config_sha
 
@@ -144,22 +160,32 @@ def client_page():
 
     subject = None
     view = None
-    denied_reason = ""
+    unsupported = ""
     if q:
         accessible_ids = None if current_user.all_subnets else set(get_accessible_subnet_map())
         subject = __subject.resolve(q, accessible_ids=accessible_ids, all_subnets=current_user.all_subnets)
-        if subject.kind in ("mac", "ipv4", "hostname") and subject.found:
+        if subject.kind in ("ipv6", "duid"):
+            unsupported = "IPv6 and DUID lookups are not supported yet — search by the client's MAC."
+        elif subject.kind in ("mac", "ipv4", "hostname") and subject.found:
             view = __subject.authorize(subject, rule="per_object", accessible_ids=accessible_ids)
             # v5.63.0 (Q82) — `view.found` alone isn't the right signal here:
             # a blanked device dict (placement fields None, bookends kept)
             # is still non-None, so it's still "found". The real question,
             # the same one timeline_page() asks via subnet_id_for(), is
             # whether ANYTHING SURVIVED that actually names a subnet.
-            if subnet_id_for(view.device, view.lease, view.reservation) is None and not current_user.all_subnets:
-                denied_reason = "You do not have access to this client."
+            # v5.65.2 (Q91): a hostname shared by several clients is answered from
+            # `view.candidates` (each judged like a subject of its own), never from
+            # `subject.candidates`; and a denial is the same "no client matched"
+            # answer as not-found, so the page is not an existence oracle.
+            if (
+                not view.candidates
+                and not current_user.all_subnets
+                and subnet_id_for(view.device, view.lease, view.reservation) is None
+            ):
                 view = None
 
-    alert = _alert_status(view.mac, view.ip) if view else None
+    # alert_log rows carry no subnet: unrestricted callers only (docs/ARCHITECTURE.md §2)
+    alert = _alert_status(view.mac, view.ip) if view and current_user.all_subnets else None
 
     trace_allowed = bool(current_user.role in ("superadmin", "admin") and current_user.all_subnets)
 
@@ -167,8 +193,12 @@ def client_page():
     config_sha = ""
     dns_results: list = []
     dns_error = ""
+    chosen_subnet = None
+    chosen_how = ""
     if view and view.mac:
-        if tab == "config":
+        if tab in ("explain", "config"):
+            _client, chosen_subnet, chosen_how = _explain_inputs(view)
+        if tab == "config" and chosen_subnet is not None:
             config_result, config_sha = _config_tab(view)
         if tab == "dns":
             dns_results, dns_error = _dns_tab(view)
@@ -180,7 +210,10 @@ def client_page():
         tabs=TABS,
         subject=subject,
         view=view,
-        denied_reason=denied_reason,
+        unsupported=unsupported,
+        chosen_subnet=chosen_subnet,
+        chosen_how=chosen_how,
+        subnet_choices=get_accessible_subnet_map(),
         alert=alert,
         trace_allowed=trace_allowed,
         config_result=config_result,

@@ -21,6 +21,8 @@ Rules (also in plugins/README.md):
   Plugins page, not an ImportError at boot).
 """
 
+from flask_login import current_user as _current_user
+
 from jen import extensions as _extensions
 
 # ── Version ──────────────────────────────────────────────────────────────────
@@ -40,6 +42,7 @@ from jen.models.user import audit, get_global_setting, set_global_setting  # noq
 from jen.services.access import (  # noqa: E402
     admin_required,
     assert_subnet_access,
+    diagnostic_surface,
     get_accessible_subnet_map,
     is_admin_or_above,
     is_superadmin,
@@ -52,6 +55,7 @@ from jen.services.alerts import register_alert_type, send_alert  # noqa: E402
 
 # ── API-key auth for plugin routes (v5.57.0, Q73) ────────────────────────────
 from jen.services.api_auth import api_key_required, filter_subnet_ids  # noqa: E402
+from jen.services.api_auth import key_subnet_ids as _key_subnet_ids  # noqa: E402
 
 # ── Background work ──────────────────────────────────────────────────────────
 # PERIODIC_MIN_MINUTES added v5.60.1 (Q89) — register_periodic() already
@@ -97,6 +101,43 @@ def subnet_map() -> dict:
     return _extensions.SUBNET_MAP
 
 
+def can_access_subnet(subnet_id, *, allow_unattributed: bool = False) -> bool:
+    """May the SESSION user see something in `subnet_id`? (v5.65.2, Q91 i.)
+
+    The one place a plugin asks that question, so "no attributable subnet" means
+    the same thing everywhere: `None` is False for a subnet-restricted user unless
+    the caller passes `allow_unattributed=True` (say why in a comment at the call
+    site). An unrestricted user is always True. Core's rule (docs/ARCHITECTURE.md
+    §2) is the same: an object with no subnet is for unrestricted callers only. Four
+    plugins used to write `if sid is not None and sid not in allowed: deny`, which
+    made None mean ALLOW."""
+    if not _current_user.is_authenticated:
+        return False
+    if _current_user.all_subnets:
+        return True
+    if subnet_id is None:
+        return bool(allow_unattributed)
+    try:
+        return bool(_current_user.can_access_subnet(int(subnet_id)))
+    except (TypeError, ValueError):
+        return False
+
+
+def api_key_can_access_subnet(key, subnet_id, *, allow_unattributed: bool = False) -> bool:
+    """`can_access_subnet` for an API key row (`flask.g.api_key`): True for an
+    unrestricted key, False for `None` on a scoped key unless `allow_unattributed`,
+    and a malformed scope fails closed (it reads as "no subnets")."""
+    scope = _key_subnet_ids(key)
+    if scope is None:
+        return True
+    if subnet_id is None:
+        return bool(allow_unattributed)
+    try:
+        return int(subnet_id) in scope
+    except (TypeError, ValueError):
+        return False
+
+
 def jen_version() -> str:
     from jen import JEN_VERSION
 
@@ -107,13 +148,16 @@ __all__ = [
     "PERIODIC_MIN_MINUTES",
     "PLUGIN_API_VERSION",
     "admin_required",
+    "api_key_can_access_subnet",
     "api_key_required",
     "assert_subnet_access",
     "audit",
+    "can_access_subnet",
     "classify_address",
     "classify_device",
     "decrypt_secret",
     "dhcp4_config",
+    "diagnostic_surface",
     "emit",
     "encrypt_secret",
     "event_kinds",

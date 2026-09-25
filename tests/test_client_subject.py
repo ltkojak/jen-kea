@@ -144,6 +144,83 @@ class TestAuthorize:
         assert out.leases4 == []
         assert out.ip == "10.99.9.77"  # unchanged — it's what the caller typed, not a secret
 
+    # ── v5.65.2 (Q91): everything the resolver DERIVED is judged, not only the object lists ──
+
+    def _ip_subject_whose_holder_lives_in_b(self):
+        return ClientSubject(
+            kind="ipv4",
+            ip="10.99.9.77",
+            mac="de:ad:be:ef:00:bb",
+            holder_mac="de:ad:be:ef:00:bb",
+            previous_holders=["de:ad:be:ef:00:b0"],
+            leases4=[{"subnet_id": 2, "ip": "10.99.9.77", "hostname": "secret-host"}],
+            device={"mac": "de:ad:be:ef:00:bb", "last_subnet_id": 1, "last_hostname": "moved", "last_ip": "10.98.1.5"},
+            reservations=[{"subnet_id": 1, "ip": "10.98.1.5", "hostname": "moved"}],
+            leases6=[{"address": "2001:db8::bb", "subnet_id": 9}],
+            subnet_ids=frozenset({1, 2}),
+        )
+
+    def test_an_address_held_through_an_inaccessible_lease_hides_its_holder(self):
+        """The moved-client case: restricted to A, typing the B lease's address must not
+        reveal WHO holds it - nor the holder's device, reservations or history."""
+        out = authorize(self._ip_subject_whose_holder_lives_in_b(), rule="per_object", accessible_ids={1})
+        assert out.mac == "" and out.holder_mac == ""
+        assert out.previous_holders == [] and out.leases4 == [] and out.leases6 == []
+        assert out.device is None and out.reservations == []
+        assert out.ip == "10.99.9.77"  # the address the caller typed is theirs to see
+        assert out.subnet_ids == frozenset({1})
+
+    def test_an_address_held_through_an_accessible_lease_keeps_its_holder(self):
+        subject = ClientSubject(
+            kind="ipv4",
+            ip="10.98.1.5",
+            mac="aa:bb:cc:dd:ee:01",
+            holder_mac="aa:bb:cc:dd:ee:01",
+            previous_holders=["aa:bb:cc:dd:ee:02"],
+            leases4=[{"subnet_id": 1, "ip": "10.98.1.5", "hostname": "h"}],
+            subnet_ids=frozenset({1}),
+        )
+        out = authorize(subject, rule="per_object", accessible_ids={1})
+        assert out.mac == out.holder_mac == "aa:bb:cc:dd:ee:01"
+        assert out.previous_holders == ["aa:bb:cc:dd:ee:02"]
+
+    def test_a_mac_subject_keeps_the_mac_the_caller_typed(self):
+        subject = ClientSubject(
+            kind="mac", mac="aa:bb:cc:dd:ee:01", leases4=[{"subnet_id": 2, "ip": "10.77.0.1", "hostname": "x"}]
+        )
+        assert authorize(subject, rule="per_object", accessible_ids={1}).mac == "aa:bb:cc:dd:ee:01"
+
+    def test_subnet_ids_are_narrowed_to_the_accessible_ones(self):
+        subject = ClientSubject(kind="mac", mac="m", subnet_ids=frozenset({1, 2, 3}))
+        assert authorize(subject, rule="per_object", accessible_ids={1, 3}).subnet_ids == frozenset({1, 3})
+
+    def test_a_global_reservation_is_kept_for_everyone(self):
+        """A reservation with no subnet has nothing to restrict it on (Explain already shows it)."""
+        subject = ClientSubject(
+            kind="mac",
+            mac="m",
+            reservations=[
+                {"subnet_id": 0, "ip": "10.0.0.9", "hostname": "global"},
+                {"subnet_id": 2, "ip": "10.77.0.9", "hostname": "b-only"},
+            ],
+        )
+        out = authorize(subject, rule="per_object", accessible_ids={1})
+        assert [r["hostname"] for r in out.reservations] == ["global"]
+
+    def test_each_hostname_candidate_is_resolved_and_judged_like_a_subject(self):
+        macs = {
+            "aa:aa:aa:aa:aa:01": ClientSubject(kind="mac", mac="aa:aa:aa:aa:aa:01", device={"last_subnet_id": 1}),
+            "bb:bb:bb:bb:bb:02": ClientSubject(kind="mac", mac="bb:bb:bb:bb:bb:02", device={"last_subnet_id": 2}),
+            "cc:cc:cc:cc:cc:03": ClientSubject(kind="mac", mac="cc:cc:cc:cc:cc:03"),  # known nowhere
+        }
+        subject = ClientSubject(
+            kind="hostname", hostname="printer", candidates=[{"mac": m, "hostname": "printer"} for m in macs]
+        )
+        out = authorize(subject, rule="per_object", accessible_ids={1}, resolver=lambda mac, **kw: macs[mac])
+        assert [c["mac"] for c in out.candidates] == ["aa:aa:aa:aa:aa:01"]
+        # unrestricted: nothing is resolved or judged, the subject comes back as is
+        assert authorize(subject, rule="per_object", accessible_ids=None) is subject
+
     def test_all_known_passes_an_unrestricted_caller(self):
         subject = ClientSubject(kind="mac", subnet_ids=frozenset({1, 2}))
         assert authorize(subject, rule="all_known", all_subnets=True) is subject
@@ -342,3 +419,66 @@ class TestResolve:
 
         sd = resolve("duid:0001000aaa112233445566")
         assert sd.kind == "duid" and sd.duid == "0001000aaa112233445566" and sd.found is False
+
+
+class TestMacsForHostnameIsSubnetFiltered:
+    """v5.65.2 (Q91 a): every source is filtered by the caller's subnets; a row with no subnet
+    at all is for unrestricted callers only."""
+
+    A_MAC, B_MAC, N_MAC = "aa:bb:cc:dd:ef:a1", "aa:bb:cc:dd:ef:b1", "aa:bb:cc:dd:ef:c1"
+    HOST = "q91-shared"
+
+    def _seed(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN ('AABBCCDDEFA1','AABBCCDDEFB1','AABBCCDDEFC1')")
+            cur.execute(
+                "DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('AABBCCDDEFA1','AABBCCDDEFB1','AABBCCDDEFC1')"
+            )
+            cur.execute("DELETE FROM devices WHERE mac IN (%s, %s, %s)", (self.A_MAC, self.B_MAC, self.N_MAC))
+            # A: a lease in subnet 1; B: a reservation in subnet 2; N: a device with no subnet
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, valid_lifetime, expire, state, hostname) VALUES "
+                "(inet_aton('10.98.1.31'), UNHEX('AABBCCDDEFA1'), 1, 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 0, %s)",
+                (self.HOST,),
+            )
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEFB1'), 0, 2, inet_aton('10.77.0.31'), %s)",
+                (self.HOST,),
+            )
+            cur.execute("INSERT INTO devices (mac, last_hostname) VALUES (%s, %s)", (self.N_MAC, self.HOST))
+        db.commit()
+
+    def _clean(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN ('AABBCCDDEFA1','AABBCCDDEFB1','AABBCCDDEFC1')")
+            cur.execute(
+                "DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('AABBCCDDEFA1','AABBCCDDEFB1','AABBCCDDEFC1')"
+            )
+            cur.execute("DELETE FROM devices WHERE mac IN (%s, %s, %s)", (self.A_MAC, self.B_MAC, self.N_MAC))
+        db.commit()
+
+    def test_each_source_is_filtered(self, db):
+        from jen.services.client_subject import macs_for_hostname
+
+        self._seed(db)
+        try:
+            assert macs_for_hostname(self.HOST) == {self.A_MAC, self.B_MAC, self.N_MAC}  # unrestricted: all three
+            assert macs_for_hostname(self.HOST, {1}) == {self.A_MAC}  # lease in A only
+            assert macs_for_hostname(self.HOST, {2}) == {self.B_MAC}  # reservation in B only
+            assert macs_for_hostname(self.HOST, {1, 2}) == {self.A_MAC, self.B_MAC}  # never the subnet-less device
+            assert macs_for_hostname(self.HOST, set()) == set()
+        finally:
+            self._clean(db)
+
+    def test_resolve_passes_the_callers_subnets_through(self, db):
+        from jen.services.client_subject import resolve
+
+        self._seed(db)
+        try:
+            unrestricted = resolve(self.HOST)
+            assert {c["mac"] for c in unrestricted.candidates} == {self.A_MAC, self.B_MAC, self.N_MAC}
+            scoped = resolve(self.HOST, accessible_ids={1}, all_subnets=False)
+            assert scoped.kind == "mac" and scoped.mac == self.A_MAC and scoped.candidates == []
+        finally:
+            self._clean(db)

@@ -772,7 +772,7 @@ def probe_kea():
         rec = ("Reached Kea, but couldn't parse a version from its reply.", "warn")
     elif identified_key == "Control-agent":
         daemon_port = 8006 if service == "dhcp6" else 8004
-        if __caps.ships_control_agent(v):
+        if __caps.may_ship_control_agent(v):
             # Maintainer decision (2026-09-13, Q26 Q1) — Kea still
             # supports the Control Agent at this version, so this is a
             # config gap to fix, not a dead end: stay on ca mode until
@@ -815,13 +815,13 @@ def probe_kea():
             f"Kea {version} answered on its direct control socket — this is the mode to use for Kea 3.2+.",
             "ok",
         )
-    elif not __caps.supports_direct_socket(v):
+    elif not __caps.may_attempt_direct_socket(v):
         rec = (
             f"Kea {version} predates per-daemon control sockets (2.7.2), so the Control Agent is the only "
             "option here. Plan a Kea upgrade before moving to 3.2.",
             "warn",
         )
-    elif __caps.ships_control_agent(v):
+    elif __caps.may_ship_control_agent(v):
         # Maintainer decision (2026-09-13, Q26 Q1) — this recommendation
         # is what led a real box into direct mode with no daemon http
         # socket configured at all (D2's identity branch above is what
@@ -1171,7 +1171,7 @@ def setup_direct_socket(server_id, service):
     if vr.get("result") == 0:
         ver_text = (vr.get("arguments", {}).get("extended", "") or vr.get("text", "")).splitlines()[0].strip()
         v = __kea.parse_kea_version(ver_text)
-        if v and not __caps.supports_direct_socket(v):
+        if v and not __caps.may_attempt_direct_socket(v):
             flash(
                 f"Kea {'.'.join(str(n) for n in v)} on {name} predates per-daemon control sockets (2.7.2), so "
                 "the Control Agent is the only option there. Plan a Kea upgrade first — nothing was changed.",

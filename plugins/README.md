@@ -111,7 +111,8 @@ nothing new lives behind it, and importing it does no work:
 |---|---|
 | Database | `jen_db()`, `kea_db()`, `kea6_db()` (context managers, preferred); `get_jen_db()`, `get_kea_db()` (raw connections — close what you open) |
 | Audit & settings | `audit(action, entity, details)`, `get_global_setting(key, default)`, `set_global_setting(key, value)` |
-| Access control | `assert_subnet_access(subnet_id)`, `get_accessible_subnet_map()`, `is_admin_or_above()`, `is_superadmin()`, decorators `admin_required`, `superadmin_required`, `viewer_or_above` |
+| Access control | `assert_subnet_access(subnet_id)`, `get_accessible_subnet_map()`, `is_admin_or_above()`, `is_superadmin()`, decorators `admin_required`, `superadmin_required`, `viewer_or_above`; `can_access_subnet(subnet_id, *, allow_unattributed=False)` and `api_key_can_access_subnet(key, subnet_id, *, allow_unattributed=False)` (v5.65.2) |
+| Diagnostic surface (v5.65.2) | decorator `diagnostic_surface(subject="client")` — mark a route that looks up one client (see below) |
 | Subnets | `subnet_map()` (all IPv4 subnets), `subnet_context(subnet_id)`, `classify_address(ctx, ip)`, `in_pool(ctx, ip)`, `dhcp4_config()` |
 | Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)` |
 | Background | `register_periodic(plugin_id, name, fn, every_minutes)`, `unregister_periodic`, `periodic_jobs()` |
@@ -291,6 +292,38 @@ def _search(query, accessible_subnet_ids, all_subnets):
 
 register_search_provider("watchdog", title="Host Watchdog", fn=_search)
 ```
+
+### Subnet checks — `can_access_subnet` / `api_key_can_access_subnet` (v5.65.2)
+
+A route that acts on a row must check the row's OWN subnet, and a row with no
+subnet must not be a way round the restriction. Core's rule
+(docs/ARCHITECTURE.md §2) is: derive the subject's subnet server-side from where
+the object actually is (never from a `subnet_id` the caller typed), check it before
+acting, and treat "no attributable subnet" as **unrestricted callers only**. Both
+helpers implement exactly that: `None` returns `False` for a subnet-restricted user
+or key, `True` for an unrestricted one, and `allow_unattributed=True` is the
+explicit, commented opt-out. Do not write `if sid is not None and sid not in
+allowed: deny` — it makes `None` mean allow.
+
+```python
+from jen.plugin_api import api_key_can_access_subnet, can_access_subnet
+
+if not can_access_subnet(row["subnet_id"]):  # a session user
+    abort(403)
+if not api_key_can_access_subnet(g.api_key, sid):  # an API key
+    return jsonify({"error": "Not found."}), 404
+```
+
+### Client-facing routes — `diagnostic_surface` (v5.65.2)
+
+A route that resolves ONE client (by MAC, IP or hostname) or reads the lease,
+reservation, device, event or alert tables for a caller-chosen client is part of
+Jen's diagnostic surface. Decorate it (innermost, directly above `def`) with
+`@diagnostic_surface(subject="client")`. Jen collects the tagged routes after
+plugins load and its authorization-matrix test requires every one to have a row
+proving a subnet-restricted caller sees no other subnet's client through it; a
+plugin route that reads those tables without the decorator fails Jen's own CI for
+the bundled plugins.
 
 ### A plugin's own API routes — `api_key_required(...)` (v5.57.0)
 

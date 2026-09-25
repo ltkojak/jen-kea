@@ -184,7 +184,7 @@ class TestTimelinePageMovedClient:
         body = c.get(f"/timeline?mac={MAC}").data.decode()
         assert LEASE_IP_A in body  # the accessible lease is shown
         assert "10.99.9.55" not in body and "moved-device-host" not in body and "device-note" not in body
-        assert "do not have access" not in body
+        assert "No client matched" not in body
 
     def test_only_denied_objects_means_refusal(self, client, db):
         _seed(db, device_subnet=B, lease=(B, LEASE_IP_B), reservation=(B, RES_IP_B))
@@ -219,18 +219,35 @@ class TestClientPageMovedClient:
         body = c.get(f"/client?q={MAC}").data.decode()
         assert LEASE_IP_A in body  # the accessible lease is shown
         assert "10.99.9.55" not in body and "moved-device-host" not in body and "device-note" not in body
-        assert "do not have access" not in body
+        assert "No client matched" not in body
 
     def test_only_denied_objects_means_refusal(self, client, db):
         _seed(db, device_subnet=B, lease=(B, LEASE_IP_B), reservation=(B, RES_IP_B))
         try:
             c = _restricted(client, db, "moved_client_restricted3")
             body = c.get(f"/client?q={MAC}").data.decode()
-            assert "do not have access" in body
+            # v5.65.2 (Q91 c): denied and not-found are ONE answer - no existence oracle
+            assert "No client matched that identifier" in body
             for leaked in DENIED:
                 assert leaked not in body
         finally:
             _clean(db)
+
+    def test_typing_the_address_of_a_lease_in_b_does_not_reveal_who_holds_it(self, client, db, moved):
+        """v5.65.2 (Q91 b): the resolver finds the holder through the B lease; the header used to show
+        the holder's MAC (and the device/reservations found through it)."""
+        c = _restricted(client, db, "moved_client_restricted4")
+        body = c.get(f"/client?q={LEASE_IP_B}").data.decode()
+        assert MAC not in body and "moved-device-host" not in body and "device-note" not in body
+        assert "No client matched that identifier" in body
+
+    def test_the_address_of_an_accessible_lease_still_names_its_holder(self, client, db, moved_inverse):
+        c = _restricted(client, db, "moved_client_restricted5")
+        body = c.get(f"/client?q={LEASE_IP_A}").data.decode()
+        assert MAC in body
+
+    def test_unrestricted_user_sees_the_holder_of_a_b_address(self, logged_in_client, moved):
+        assert MAC in logged_in_client.get(f"/client?q={LEASE_IP_B}").data.decode()
 
 
 class TestApiMovedClient:

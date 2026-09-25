@@ -47,7 +47,7 @@ class TestTransport:
             (V26, True, False, False, False),
             (V30, True, False, False, False),
             (V32, True, False, False, False),
-            (None, False, True, False, False),  # unknown version: assume it still ships one
+            (None, False, False, False, False),  # unknown version: NOT confirmed (v5.65.2, Q91 h)
         ],
     )
     def test_control_agent_table(self, version, direct, control_agent, deprecated, removed):
@@ -59,14 +59,19 @@ class TestTransport:
             direct,
         )
 
-    @pytest.mark.parametrize("version,ok", [(V26, False), (V30, True), (V32, True), (None, True), ((2, 7, 1), False)])
+    @pytest.mark.parametrize("version,ok", [(V26, False), (V30, True), (V32, True), (None, False), ((2, 7, 1), False)])
     def test_direct_socket_needs_2_7_2(self, version, ok):
         assert _derive(version).direct_socket is ok
 
     def test_the_predicates_are_the_same_thresholds(self):
         assert caps.supports_direct_socket((2, 7, 2)) and not caps.supports_direct_socket((2, 7, 1))
         assert caps.ships_control_agent((3, 1, 9)) and not caps.ships_control_agent((3, 2, 0))
-        assert caps.supports_direct_socket(None) and caps.ships_control_agent(None)
+        # v5.65.2 (Q91 h): an unknown version is not CONFIRMED; the setup/preflight paths that
+        # re-check before writing use the permissive twins
+        assert not caps.supports_direct_socket(None) and not caps.ships_control_agent(None)
+        assert caps.may_attempt_direct_socket(None) and caps.may_ship_control_agent(None)
+        assert caps.may_attempt_direct_socket((2, 7, 2)) and not caps.may_attempt_direct_socket((2, 7, 1))
+        assert caps.may_ship_control_agent((3, 1, 9)) and not caps.may_ship_control_agent((3, 2, 0))
 
 
 class TestHelper:
@@ -253,6 +258,16 @@ class TestForServer:
         c = caps.for_server(99)
         assert not c.helper_known and not c.ssh and not c.trace
 
+    def test_a_server_with_no_version_reports_the_version_gated_ones_off(self):
+        """v5.65.2 (Q91 h) - capabilities are CONFIRMED: a server Jen never talked to is not
+        shown as having per-daemon sockets or a Control Agent, and why() says why."""
+        c = caps.derive(server_id=99)
+        assert c.direct_socket is False and c.control_agent is False and not c.reachable
+        assert "unknown" in c.why("direct_socket") and "reachable" in c.why("direct_socket")
+        assert "unknown" in c.why("control_agent") and "reachable" in c.why("control_agent")
+        rows = {n: on for n, _label, on in c.as_rows()}
+        assert rows["direct_socket"] is False and rows["control_agent"] is False
+
     def test_the_version_is_fetched_once_per_minute_per_server(self, gathered):
         caps.for_server(1)
         caps.for_server(1, with_config=False)
@@ -375,13 +390,34 @@ class TestHealthRow:
 
         assert health._capabilities({"server_status": []}).status == "skip"
 
-    def test_a_refresh_drops_the_cached_capabilities(self, gathered):
+    def test_a_health_run_does_not_drop_the_cached_capabilities(self, gathered):
+        """v5.65.2 (Q91 e) - a run is triggered by any viewer (page, auto-refresh, JSON, API);
+        it must not defeat the 60 s cache for every page. Only an admin's Refresh and a config
+        save invalidate."""
         from jen.services import health
 
         caps.for_server(1)
         health._capabilities({"server_status": [{"server": {"id": 1}, "up": True, "version": "3.0.3"}]})
         caps.for_server(1)
-        assert gathered.count(PRIMARY_CALL) == 2
+        assert gathered.count(PRIMARY_CALL) == 1
+
+    def test_a_config_apply_invalidates_the_cache(self):
+        """AppConfig.apply is the one place every config write and reload passes; it drops the
+        cached versions (asserted on the source: apply() assigns every global, so running it
+        here would rewrite the test session's config)."""
+        import inspect
+
+        from jen.config import AppConfig
+
+        assert "_caps.invalidate()" in inspect.getsource(AppConfig.apply)
+
+    def test_only_an_admins_refresh_invalidates_from_the_health_route(self):
+        import inspect
+
+        from jen.routes import health as health_route
+
+        src = inspect.getsource(health_route._run)
+        assert 'request.args.get("refresh") == "1"' in src and '"superadmin", "admin"' in src
 
 
 # ── nothing in jen/routes/ decides availability for itself any more ─────────

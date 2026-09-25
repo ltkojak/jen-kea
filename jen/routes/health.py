@@ -28,6 +28,12 @@ bp = Blueprint("health", __name__)
 def _run():
     """Run the checks scoped to what the current user may see, and return
     everything the page/partial/JSON need."""
+    # v5.65.2 (Q91 e): only an admin's explicit Refresh (`refresh=1`) drops the capability
+    # cache; a viewer's page load or the auto-refresh must not.
+    if request.args.get("refresh") == "1" and current_user.role in ("superadmin", "admin"):
+        from jen.services import capabilities as __caps
+
+        __caps.invalidate()
     checks = __health.run_checks(
         {"subnet_filter": current_user.can_access_subnet, "unrestricted": current_user.all_subnets}
     )

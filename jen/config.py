@@ -115,6 +115,14 @@ class AppConfig:
         This is the ONLY place extensions config globals are assigned.
         """
         extensions.cfg = cfg
+        # v5.65.2 (Q91 e): a saved configuration (a server, the connection mode) makes any cached
+        # per-server capability stale; this is the one place every config write and reload passes.
+        try:
+            from jen.services import capabilities as _caps
+
+            _caps.invalidate()
+        except Exception:  # never let a cache drop break a config load
+            pass
 
         extensions.KEA_API_URL = cfg.get("kea", "api_url")
         extensions.KEA_API_USER = cfg.get("kea", "api_user")
