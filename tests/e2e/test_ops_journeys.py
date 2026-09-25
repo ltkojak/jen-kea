@@ -130,5 +130,5 @@ class TestHealthCenterRefresh:
     def test_refresh_button_polls_the_partial(self, logged_in_page, base_url):
         page = logged_in_page
         page.goto(f"{base_url}/health-center")
-        with page.expect_response("**/health-center/data?partial=1", timeout=10000):
+        with page.expect_response("**/health-center/data?partial=1&refresh=1", timeout=10000):
             page.get_by_role("button", name="Refresh").click()
