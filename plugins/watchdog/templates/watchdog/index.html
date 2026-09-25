@@ -2,6 +2,17 @@
 {% block title %}Host Watchdog{% endblock %}
 {% block content %}
 
+<style>
+/* static declarations live here, not in inline style attributes (docs/ui.md); a plugin page has no
+   shared stylesheet hook, so the page carries its own block */
+.wd-card-flush{padding:0}
+.wd-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
+.wd-dialog{overflow-y:auto}
+.wd-dialog-add{width:min(460px,94vw);max-height:90vh}
+.wd-dialog-history{width:min(480px,94vw);max-height:80vh}
+.wd-hidden{display:none}
+</style>
+
 <div class="page-header flex items-center between wrap gap-3">
     <div>
         <h1>{{ icon("activity", "ico-lg") }} Host Watchdog</h1>
@@ -26,7 +37,7 @@
     </div>
 </div>
 
-<div class="card" style="padding:0;">
+<div class="card wd-card-flush">
 <div class="table-wrap">
 <table id="wd-table" class="rowlist">
     <thead><tr>
@@ -84,8 +95,8 @@
 </div>
 
 {% if is_admin %}
-<div id="wd-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
-<div class="card" style="width:min(460px,94vw);max-height:90vh;overflow-y:auto;">
+<div id="wd-add-modal" class="wd-modal">
+<div class="card wd-dialog wd-dialog-add">
     <div class="flex between items-center mb-3">
         <h3>{{ icon("plus") }} Add Target</h3>
         <button id="wd-add-close-btn" class="btn btn-sm btn-secondary" aria-label="Close">{{ icon("x") }}</button>
@@ -115,7 +126,7 @@
                     <option value="tcp">TCP connect</option>
                 </select>
             </div>
-            <div class="form-group" id="wd-tcp-ports-group" style="display:none;">
+            <div class="form-group wd-hidden" id="wd-tcp-ports-group">
                 <label>Port(s)</label>
                 <input type="text" id="wd-tcp-ports" placeholder="80,443" autocomplete="off">
             </div>
@@ -148,8 +159,8 @@
 </div>
 {% endif %}
 
-<div id="wd-history-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
-<div class="card" style="width:min(480px,94vw);max-height:80vh;overflow-y:auto;">
+<div id="wd-history-modal" class="wd-modal">
+<div class="card wd-dialog wd-dialog-history">
     <div class="flex between items-center mb-3">
         <h3>{{ icon("clock") }} <span id="wd-history-title"></span></h3>
         <button id="wd-history-close-btn" class="btn btn-sm btn-secondary" aria-label="Close">{{ icon("x") }}</button>
@@ -173,7 +184,7 @@ document.getElementById('wd-add-modal').addEventListener('click', function(e) { 
 
 document.getElementById('wd-probe-select').addEventListener('change', function() {
     var isTcp = this.value === 'tcp';
-    document.getElementById('wd-tcp-ports-group').style.display = isTcp ? '' : 'none';
+    document.getElementById('wd-tcp-ports-group').classList.toggle('wd-hidden', !isTcp);
 });
 
 document.getElementById('wd-ip').addEventListener('input', function() {

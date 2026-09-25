@@ -2,6 +2,65 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.4-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.3-beta.1
+run. Bundles Local DNS Sync 1.0.2, Host Watchdog 1.0.2 and IPAM Lite 1.6.1,
+each tagged and CI-green in its own repository first, and re-pins the plugin
+registry to those tags.
+
+The audit behind this round found one bug shape repeated across the plugins: a
+route authorises on one thing and then acts on another. The thing it
+authorises on is a `subnet_id` the caller typed into the query string, or
+nothing at all for a by-id POST; the thing it acts on is the address's real
+subnet, or a row in a subnet the caller cannot see. And where no subnet could be
+worked out, the answer was "allow". Last release put the plugins' routes inside
+the authorization matrix, with each failing cell marked as a known failure
+tagged with the release that would fix it; this release fixes the ones
+belonging to these three plugins, and all eight of those cells are now
+ordinary passing tests with their markers removed. That is the proof.
+
+Host Watchdog: a target's history, its pause and its delete took an id and
+checked nothing, so any user could read any target's check times and error
+strings and a scoped admin could delete a target in a subnet they cannot see.
+The "Watch this host" row action trusted a `subnet_id` in the URL. Targets with
+no subnet were shown to a scoped API key and could be added by one, and the Add
+Target picker offered global reservations to a scoped admin. Every decision now
+goes through Jen's own `can_access_subnet` and `api_key_can_access_subnet` on
+the target's stored subnet, or on the subnet derived from the address, and a
+target with no subnet belongs to unrestricted callers only. Two smaller fixes
+ride along: a new target no longer fires an "answering again" alert on its first
+successful check, and check times are written in UTC like everything that reads
+them.
+
+Local DNS Sync: changing a host's address left the old record answering next to
+the new one on both Pi-hole and AdGuard Home, because an update only added. An
+update now removes the record the ledger holds and then adds the new one. Its
+preview, enable, pause and delete routes, and its Unbound export, ignored the
+target's subnets; a DNS Sync target is now an all-known object, so acting on it
+needs access to every subnet it covers, creating or deleting one needs an
+account that can see every subnet, and only the record list and the export are
+scoped, record by record. A failed read of the remote list now stops the sync
+instead of making one failing call per record, a sync uses one Pi-hole session
+and logs it out, two syncs of one target can no longer overlap, and the domain
+suffix is validated as DNS labels.
+
+IPAM Lite: the subnet page collapsed runs of empty addresses only on a /22 or
+larger, so a /24 drew all 254 rows, 33,512 px tall on the phone capture. Runs
+now collapse at every prefix length, keeping the four-address floor and the
+`?all=1` escape. IPAM's own routes already checked the subnet they act on, so
+no access rule changed there.
+
+All three plugins now keep their static styling out of inline `style=`
+attributes (the round-4 rule), and each repository's `tools/verify.py` fails a
+template that carries one. Their harnesses run the real routes, the JSON API and
+`register(app)` against fakes. Network Discovery got the same `register(app)`
+harness check in its own repository as a test-only commit; it changed no
+shipped file, so it has no release and is not part of this one.
+
+Watchdog and DNS Sync now require Jen 5.65.2 or later, because they use the
+subnet helpers added to the plugin API there.
+
 ## [5.65.3-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.2-beta.1

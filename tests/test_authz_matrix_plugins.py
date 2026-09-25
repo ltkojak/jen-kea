@@ -275,7 +275,7 @@ ROWS = [
         {200},
         (),
         None,
-        dict.fromkeys(KEYS, Q93 + ": None subnet read as allow in _api_list_targets"),
+        {},
     ),
     (
         "watchdog target history (B's target, with an error naming a B address)",
@@ -286,7 +286,7 @@ ROWS = [
         _DENY,
         (),
         None,
-        dict.fromkeys(UI, Q93 + ": target_history has no subnet check"),
+        {},
     ),
     (
         "watchdog toggle B's target",
@@ -297,7 +297,7 @@ ROWS = [
         _DENY,
         (),
         _wd_b_untouched,
-        {"admin_A": Q93 + ": toggle_target acts on any id"},
+        {},
     ),
     (
         "watchdog delete B's target",
@@ -308,7 +308,7 @@ ROWS = [
         _DENY,
         (),
         _wd_b_untouched,
-        {"admin_A": Q93 + ": delete_target acts on any id"},
+        {},
     ),
     (
         "watchdog api add a target outside every subnet (no attributable subnet)",
@@ -319,7 +319,7 @@ ROWS = [
         {403, 404},
         (),
         _wd_nothing_created,
-        {"key_write": Q93 + ": _api_add_target lets a None subnet through"},
+        {},
     ),
     (
         "watchdog api add a target inside subnet B",
@@ -469,7 +469,7 @@ ROWS = [
         _DENY,
         (),
         None,
-        dict.fromkeys(UI, Q93 + ": export_unbound writes the whole ledger, unfiltered"),
+        {},
     ),
     (
         "dns-sync toggle B's target",
@@ -480,7 +480,7 @@ ROWS = [
         _DENY,
         (),
         _ds_b_untouched,
-        {"admin_A": Q93 + ": toggle_target acts on any id"},
+        {},
     ),
     (
         "dns-sync delete B's target",
@@ -491,7 +491,7 @@ ROWS = [
         _DENY,
         (),
         _ds_b_untouched,
-        {"admin_A": Q93 + ": delete_target acts on any id"},
+        {},
     ),
     # ── IPAM (subnet id is explicit; it is checked) ──────────────────────────
     (

@@ -1,10 +1,10 @@
 {
   "id": "watchdog",
   "name": "Host Watchdog",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Probes chosen hosts on a schedule and alerts when one stops answering, and again when it comes back — the gap Network Discovery leaves, since it only alerts on a new unknown host appearing. Ping (unprivileged ICMP) or TCP connect, added from a Kea reservation, an IPAM Lite entry, or any IP. 7-day uptime, per-target history, a JSON API.",
   "author": "Matthew Thibodeau",
-  "requires_jen": "5.57.0",
+  "requires_jen": "5.65.2",
   "plugin_api": 3,
   "tags": [
     "monitoring",

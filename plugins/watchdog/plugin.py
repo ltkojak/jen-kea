@@ -24,7 +24,22 @@ A target starts 'unknown'. Any single successful probe moves it (or
 keeps it) 'up'. A run of `fails_to_down` CONSECUTIVE failures moves it
 to 'down' — a lone blip while 'up' or 'unknown' does not flip it early.
 Once 'down', it only leaves on the next success. Transitions (not
-every check) send an alert and emit an event.
+every check) send an alert and emit an event — except the very first
+result of a new target: 'unknown' -> 'up' is the plugin learning where
+the target is, not a host coming back, so it is recorded silently
+(see should_alert()).
+
+Who may see and change what (v1.0.2)
+─────────────────────────────────────
+A target belongs to the subnet its IP is in (`derive_subnet_id`), stored
+in `wd_targets.subnet_id`, or to no subnet at all. Every route judges
+THAT stored value — the page, the history, pause/resume, delete — and
+"no subnet" is for unrestricted callers only, for API keys too. A value
+the caller typed (a `subnet_id` query parameter) is never the subject of
+a decision: `watch_from_row` derives the subnet from the address itself.
+Every decision goes through `plugin_api.can_access_subnet` /
+`api_key_can_access_subnet`, so "None" means the same thing here as in
+Jen's own pages.
 """
 
 import ipaddress
@@ -121,6 +136,16 @@ def next_state(state, consecutive_fails, fails_to_down, ok):
     return state, fails, False
 
 
+def should_alert(previous_state, new_state, transitioned):
+    """Pure: does this transition deserve an alert (and a Timeline event)?
+    Every transition does, except a target's first result being 'up' —
+    `next_state` reports unknown -> up as a transition, and a new target
+    answering its first probe is not "answering again"."""
+    if not transitioned:
+        return False
+    return not (previous_state == "unknown" and new_state == "up")
+
+
 def due_targets(targets, last_checked, now):
     """Pure: ids of `targets` (each {id, interval_min, enabled}) whose
     last check (from `last_checked`, {id: datetime or None}) is at
@@ -191,12 +216,6 @@ def _subnet_map():
     return subnet_map()
 
 
-def _accessible_subnets():
-    from jen.plugin_api import get_accessible_subnet_map
-
-    return get_accessible_subnet_map()
-
-
 def _is_admin():
     try:
         from jen.plugin_api import is_admin_or_above
@@ -216,25 +235,36 @@ def _require_write():
     return False
 
 
-def _all_subnets_user():
-    return bool(getattr(current_user, "all_subnets", False))
+def _can(subnet_id):
+    """May the session user act on something in `subnet_id`? `None` (no Kea subnet
+    contains the address) is for unrestricted users only — plugin_api decides."""
+    from jen.plugin_api import can_access_subnet
+
+    return can_access_subnet(subnet_id)
 
 
 def _visible_rows(rows):
-    """Filters DB rows carrying a `subnet_id` column to accessible Kea
-    subnets; a NULL subnet_id (no Kea subnet contains the target's IP)
-    is unrestricted-only, per the Q55 rule."""
-    accessible = _accessible_subnets()
-    all_subnets = _all_subnets_user()
-    out = []
-    for r in rows:
-        sid = r.get("subnet_id")
-        if sid is None:
-            if all_subnets:
-                out.append(r)
-        elif sid in accessible:
-            out.append(r)
-    return out
+    """Filters DB rows carrying a `subnet_id` column to the caller's subnets; a NULL
+    subnet_id (no Kea subnet contains the target's IP) is unrestricted-only."""
+    return [r for r in rows if _can(r.get("subnet_id"))]
+
+
+def _load_target(target_id):
+    """(row, refusal): the wd_targets row the caller may act on, else (None, why).
+    A target in a subnet the caller cannot see is reported exactly as one that does
+    not exist — the by-id routes must not confirm what is out of the caller's sight."""
+    db = None
+    try:
+        db = _get_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, subnet_id, enabled FROM wd_targets WHERE id=%s", (target_id,))
+            row = cur.fetchone()
+    finally:
+        if db:
+            db.close()
+    if row is None or not _can(row["subnet_id"]):
+        return None, "Target not found."
+    return row, ""
 
 
 def _normalize_mac(raw):
@@ -261,8 +291,9 @@ def _audit(action, target, detail):
 
 def _candidate_hosts():
     """Reservations (Kea's hosts table, incl. global ones) plus IPAM
-    Lite static/planned entries, across accessible subnets only."""
-    accessible = _accessible_subnets()
+    Lite static/planned entries, across the caller's subnets only. A global
+    reservation belongs to no subnet, so it is offered to unrestricted callers
+    alone — a scoped admin would otherwise be handed hosts from every subnet."""
     out = []
     kdb = None
     try:
@@ -277,7 +308,7 @@ def _candidate_hosts():
                 if not row["ip"]:
                     continue
                 sid = row.get("subnet_id") or None
-                if sid and sid not in accessible:
+                if not _can(sid):
                     continue
                 mac = _format_identifier(row.get("ident_hex"), row.get("ident_type"))
                 out.append(
@@ -303,7 +334,7 @@ def _candidate_hosts():
                 "WHERE subnet_kind='kea' AND entry_status IN ('static','planned')"
             )
             for row in cur.fetchall():
-                if row["subnet_id"] not in accessible:
+                if not _can(row["subnet_id"]):
                     continue
                 out.append(
                     {
@@ -412,7 +443,8 @@ def _record_results(by_id, results):
         with db.cursor() as cur:
             for target_id, (ok, rtt, error) in results.items():
                 cur.execute(
-                    "INSERT INTO wd_checks (target_id, ok, rtt_ms, error) VALUES (%s, %s, %s, %s)",
+                    "INSERT INTO wd_checks (target_id, checked_at, ok, rtt_ms, error) "
+                    "VALUES (%s, UTC_TIMESTAMP(), %s, %s, %s)",
                     (target_id, 1 if ok else 0, rtt, (error or "")[:200]),
                 )
                 cur.execute(
@@ -439,7 +471,7 @@ def _record_results(by_id, results):
                         "IF(%s, UTC_TIMESTAMP(), NULL), IF(%s, NULL, UTC_TIMESTAMP()), %s)",
                         (target_id, new_state, new_fails, ok, ok, (error or "")[:200]),
                     )
-                if transitioned:
+                if should_alert(state, new_state, transitioned):
                     _alert_transition(target, new_state)
             cur.execute(
                 "DELETE FROM wd_checks WHERE checked_at < UTC_TIMESTAMP() - INTERVAL %s DAY", (_KEEP_CHECKS_DAYS,)
@@ -599,11 +631,13 @@ def add_target():
         return redirect(url_for("watchdog.index"))
 
     subnet_id = derive_subnet_id(ip, _subnet_map())
-    if subnet_id is not None and subnet_id not in _accessible_subnets():
-        flash("That address is outside your accessible subnets.", "error")
-        return redirect(url_for("watchdog.index"))
-    if subnet_id is None and not _all_subnets_user():
-        flash("That address isn't in any subnet you have full access to.", "error")
+    if not _can(subnet_id):
+        flash(
+            "That address is outside your accessible subnets."
+            if subnet_id is not None
+            else "That address isn't in any subnet you have full access to.",
+            "error",
+        )
         return redirect(url_for("watchdog.index"))
 
     db = None
@@ -631,16 +665,15 @@ def add_target():
 def toggle_target(target_id):
     if not _require_write():
         return redirect(url_for("watchdog.index"))
+    row, refusal = _load_target(target_id)
+    if row is None:
+        flash(refusal, "error")
+        return redirect(url_for("watchdog.index"))
+    new_enabled = 0 if row["enabled"] else 1
     db = None
     try:
         db = _get_db()
         with db.cursor() as cur:
-            cur.execute("SELECT enabled FROM wd_targets WHERE id=%s", (target_id,))
-            row = cur.fetchone()
-            if row is None:
-                flash("Target not found.", "error")
-                return redirect(url_for("watchdog.index"))
-            new_enabled = 0 if row["enabled"] else 1
             cur.execute("UPDATE wd_targets SET enabled=%s WHERE id=%s", (new_enabled, target_id))
         db.commit()
         flash("Target resumed." if new_enabled else "Target paused.", "success")
@@ -656,6 +689,10 @@ def toggle_target(target_id):
 @login_required
 def delete_target(target_id):
     if not _require_write():
+        return redirect(url_for("watchdog.index"))
+    row, refusal = _load_target(target_id)
+    if row is None:
+        flash(refusal, "error")
         return redirect(url_for("watchdog.index"))
     db = None
     try:
@@ -678,6 +715,9 @@ def delete_target(target_id):
 @bp.route("/targets/<int:target_id>/history")
 @login_required
 def target_history(target_id):
+    row, _refusal = _load_target(target_id)
+    if row is None:
+        return jsonify({"error": "not found"}), 404
     db = None
     rows = []
     try:
@@ -717,15 +757,15 @@ def watch_from_row():
     mac = _normalize_mac(request.args.get("mac", ""))
     hostname = request.args.get("hostname", "").strip()[:100]
     try:
-        subnet_id = int(request.args.get("subnet_id", ""))
-    except (TypeError, ValueError):
-        subnet_id = derive_subnet_id(ip, _subnet_map())
-    try:
         ipaddress.IPv4Address(ip)
     except ValueError:
         flash("Invalid IP address.", "error")
         return redirect(url_for("watchdog.index"))
-    if subnet_id is not None and subnet_id not in _accessible_subnets():
+    # The subnet is where the ADDRESS is, worked out here. The `subnet_id` in the query string is
+    # only what the page that linked us happened to know; trusting it let a caller authorise
+    # against one subnet and watch a host in another.
+    subnet_id = derive_subnet_id(ip, _subnet_map())
+    if not _can(subnet_id):
         flash("That address is outside your accessible subnets.", "error")
         return redirect(url_for("watchdog.index"))
 
@@ -764,14 +804,12 @@ api_bp = Blueprint("watchdog_api", __name__, url_prefix="/api/v1/plugins/watchdo
 def _api_list_targets():
     from flask import g
 
-    from jen.plugin_api import filter_subnet_ids
+    from jen.plugin_api import api_key_can_access_subnet
 
-    rows = _target_rows()
-    kea_ids = [r["subnet_id"] for r in rows if r["subnet_id"] is not None]
-    allowed = set(filter_subnet_ids(g.api_key, kea_ids))
     out = []
-    for r in rows:
-        if r["subnet_id"] is not None and r["subnet_id"] not in allowed:
+    for r in _target_rows():
+        # a target in no subnet is for an unrestricted key only — a scoped key never gets it
+        if not api_key_can_access_subnet(g.api_key, r["subnet_id"]):
             continue
         out.append(
             {
@@ -792,7 +830,7 @@ def _api_list_targets():
 def _api_add_target():
     from flask import g
 
-    from jen.plugin_api import filter_subnet_ids
+    from jen.plugin_api import api_key_can_access_subnet
 
     body = request.get_json(silent=True) or {}
     ip = str(body.get("ip", "")).strip()
@@ -805,7 +843,7 @@ def _api_add_target():
     if kind is None:
         return jsonify({"error": err}), 400
     subnet_id = derive_subnet_id(ip, _subnet_map())
-    if subnet_id is not None and subnet_id not in filter_subnet_ids(g.api_key, [subnet_id]):
+    if not api_key_can_access_subnet(g.api_key, subnet_id):
         return jsonify({"error": "subnet not accessible to this key"}), 403
     label = str(body.get("label", "") or "")[:100]
     mac = _normalize_mac(body.get("mac", ""))

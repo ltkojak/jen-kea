@@ -6,7 +6,7 @@ Probes chosen hosts on a schedule and alerts when one stops answering, and again
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.57.0 or later
+- [Jen](https://github.com/ltkojak/jen-kea) v5.65.2 or later
 - `ping` on the Jen host for ICMP targets — Ubuntu's `/usr/bin/ping` (package `iputils-ping`) carries `cap_net_raw`, so a single unprivileged `ping -c 1` works the same way Network Discovery's neighbour-table read does; Settings → Plugins offers an **Install** button on a systemd host (through Jen's root-run plugin service)
 
 ## Why ping works unprivileged
@@ -23,7 +23,7 @@ Jen runs as an unprivileged service user. Sending a raw ICMP echo request normal
 - **"Watch this host"** row action on Jen's Reservations page
 - Discovered in Jen's global search by label or IP
 - **JSON API**: `GET /api/v1/plugins/watchdog/targets` (read key), `POST …/targets` (write key), both scoped to the calling key's accessible subnets
-- Respects Jen subnet access control: a target on an address inside a Kea subnet is visible only to users who can see that subnet; a target on an address in *no* Kea subnet at all (an unmanaged network) is visible only to unrestricted users, the same rule IPAM Lite's own unmanaged subnets use. Adding, pausing, resuming and deleting targets all need admin — viewers are read-only
+- Respects Jen subnet access control: a target on an address inside a Kea subnet is visible only to users who can see that subnet; a target on an address in *no* Kea subnet at all (an unmanaged network) is visible only to unrestricted users, the same rule IPAM Lite's own unmanaged subnets use. Every route judges the target's own stored subnet (never a `subnet_id` the caller typed): history, pause/resume and delete included, and a target the caller cannot see is answered like one that does not exist. Adding, pausing, resuming and deleting targets all need admin — viewers are read-only
 
 ## Probing budget
 
@@ -37,7 +37,7 @@ To install by hand instead (a checkout without registry access), unzip `plugin.z
 
 ## Development
 
-`python3 tools/verify.py --build` rebuilds `plugin.zip` deterministically from the tree and runs the same checks CI runs on every push and tag: the zip matches the tree byte-for-byte, no template carries an inline event handler or an un-nonce'd `<script>` (Jen's CSP executes neither), `manifest.json`'s version matches the top `CHANGELOG.md` entry, and `plugin.py` compiles and passes ruff. The committed `plugin.zip` is the artifact Jen installs, so rebuild it in the same commit as any change.
+`python3 tools/verify.py --build` rebuilds `plugin.zip` deterministically from the tree and runs the same checks CI runs on every push and tag: the zip matches the tree byte-for-byte, no template carries an inline event handler, an inline `style=` attribute or an un-nonce'd `<script>` (Jen's CSP executes neither of the first and last), `manifest.json`'s version matches the top `CHANGELOG.md` entry, and `plugin.py` compiles and passes ruff. The committed `plugin.zip` is the artifact Jen installs, so rebuild it in the same commit as any change.
 
 `python3 tools/test_plugin.py` exercises every pure function (the probe-string parser, the ping-output parser, the state machine, due-target selection, uptime maths) against hand-built inputs — no Jen, database, or network access needed.
 

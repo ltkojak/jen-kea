@@ -78,7 +78,7 @@
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.6.0",
+    "version": "1.6.1",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Alerts on new conflicts, a JSON API for entries and next-free, and a global search provider. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.57.0",
@@ -177,8 +177,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ipam_conflict_state (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_kind ENUM('kea','ipam') NOT NULL, subnet_id INT NOT NULL, first_detected DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_conflict (ip, subnet_kind, subnet_id))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.6.0",
-    "sha256": "a8b6c7445dd815e01dd81c048fab2ac524b5d29356db038a690177bb41f05f6b",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.6.1",
+    "sha256": "4829106d36d938dde6a358b2e48b29fc93f3128daa2b64febef2c3b84571f971",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam",
     "plugin_api": 3
@@ -186,10 +186,10 @@
   {
     "id": "watchdog",
     "name": "Host Watchdog",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Probes chosen hosts on a schedule and alerts when one stops answering, and again when it comes back — the gap Network Discovery leaves, since it only alerts on a new unknown host appearing. Ping (unprivileged ICMP) or TCP connect, added from a Kea reservation, an IPAM Lite entry, or any IP. 7-day uptime, per-target history, a JSON API.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.57.0",
+    "requires_jen": "5.65.2",
     "tags": [
       "monitoring",
       "network",
@@ -225,8 +225,8 @@
         "sql": "ALTER TABLE wd_checks ADD INDEX idx_target_checked (target_id, checked_at)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.0.1",
-    "sha256": "cbd85480b4c6c49012dda27448ba9bcf2ab98cbae13ef578b83cf557a48842b1",
+    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.0.2",
+    "sha256": "d3dca026963028ddaa48fe764ea6f7a3f777656a534ff13703ef011223d26991",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-watchdog/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-watchdog",
     "os_packages": [
@@ -237,10 +237,10 @@
   {
     "id": "dns-sync",
     "name": "Local DNS Sync",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Pushes DHCP names into Pi-hole or AdGuard Home local DNS so hostnames like nas.lan resolve without Kea DDNS — Jen only ever touches records it created itself (a ledger), and an Unbound export is offered for setups with no API.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.57.0",
+    "requires_jen": "5.65.2",
     "tags": [
       "dns",
       "network",
@@ -266,8 +266,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ds_records (id INT AUTO_INCREMENT PRIMARY KEY, target_id INT NOT NULL, name VARCHAR(63) NOT NULL, ip VARCHAR(15) NOT NULL, source ENUM('lease','reservation','ipam') NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY ux_target_name (target_id, name))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.0.1",
-    "sha256": "6f0fa14154be3397e32a1f2d427445e2a2e145135fec70391e82753eeb261acc",
+    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.0.2",
+    "sha256": "0e9848a796a513a51b4d6ad34a11dd98b12679d09e23576b9dd19475cde3fcc7",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-dns-sync/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-dns-sync",
     "plugin_api": 3

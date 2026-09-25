@@ -663,19 +663,26 @@ the subnet you scan and, when an unknown host appears, a "Rogue Device" alert to
 **IPAM Lite** — the whole address space of a subnet, Kea-managed or not: what is leased, reserved, static or
 planned, with labels and owners. *Needs* nothing from the host. *Stores* the static and planned entries, the
 unmanaged subnets you add, and an assignment history in its own `ipam_*` tables. *Sends* nothing outside Jen, except
-a conflict alert when a static entry's address is taken by a DHCP client.
+a conflict alert when a static entry's address is taken by a DHCP client. The subnet page folds every run of four or
+more empty addresses into one row, on subnets of any size (`?all=1` shows them all).
 
 **Host Watchdog** — probes chosen hosts and alerts when one stops answering, and again when it returns. *Needs*
 `ping` on the Jen host for ICMP targets (Ubuntu's `/usr/bin/ping` carries the capability, package `iputils-ping`);
 a TCP target needs nothing. *Stores* the targets, their state and a short check history in its own `wd_*` tables.
-*Sends* one ICMP echo or TCP connection per due target, at most every five minutes, and the up/down alerts.
+*Sends* one ICMP echo or TCP connection per due target, at most every five minutes, and the up/down alerts. A target
+belongs to the subnet its address is in (an address in no subnet belongs to accounts that can see every subnet), and
+the history, pause and delete actions check that stored subnet, never a value in the URL. A new target's first
+successful check is recorded without an alert.
 
 **Local DNS Sync** — pushes DHCP names into Pi-hole v6 or AdGuard Home so `nas.lan` resolves without Kea DDNS.
 *Needs* a Pi-hole v6 or AdGuard Home install whose API the Jen host can reach. *Stores* each target, an encrypted
 credential (never shown again) and a ledger of the records Jen created, in its own `ds_*` tables. *Sends* record
 changes to the DNS server, over TLS that is verified unless you switch that off per target. A target starts paused:
 Preview shows exactly what would change, and it must be run before the target can be enabled. Jen only ever touches
-records it created itself.
+records it created itself; an address change removes the old record before adding the new one. A target is judged as
+a whole: Preview, Enable and Pause need access to every subnet it covers, and adding or removing one needs an account
+that can see every subnet, while the record list and the Unbound export show only the records in the viewer's own
+subnets.
 
 **Switch Port Locator** — which switch port a MAC is on. *Needs* `snmpbulkwalk` (package `snmp`) on the Jen host
 (an Install button on a systemd host) and managed switches that answer SNMPv2c. *Stores* the switches (with their
