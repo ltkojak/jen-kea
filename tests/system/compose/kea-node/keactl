@@ -1,0 +1,43 @@
+#!/bin/sh
+# Q84 — start/stop kea-dhcp4 the way a unit would, without systemd.
+#   keactl start    launch it (no-op if running); fail if it dies within 3 s
+#   keactl stop     stop it
+#   keactl restart  stop, then start
+# The daemon's own stdout/stderr go to /var/log/kea/kea-dhcp4.stdout; its
+# configured logger writes /var/log/kea/kea-dhcp4.log (what Trace tails).
+CONF=/etc/kea/kea-dhcp4.conf
+
+running() { pgrep -x kea-dhcp4 >/dev/null 2>&1; }
+
+start() {
+  if running; then return 0; fi
+  setsid nohup kea-dhcp4 -c "$CONF" >>/var/log/kea/kea-dhcp4.stdout 2>&1 &
+  i=0
+  while [ $i -lt 6 ]; do
+    sleep 0.5
+    if ! running; then break; fi
+    i=$((i + 1))
+  done
+  sleep 0.5
+  if running; then return 0; fi
+  echo "kea-dhcp4 exited right after starting: $(tail -n 3 /var/log/kea/kea-dhcp4.stdout 2>/dev/null | tr '\n' ' ')" >&2
+  return 1
+}
+
+stop() {
+  pkill -x kea-dhcp4 >/dev/null 2>&1 || true
+  i=0
+  while running && [ $i -lt 20 ]; do
+    sleep 0.25
+    i=$((i + 1))
+  done
+  pkill -9 -x kea-dhcp4 >/dev/null 2>&1 || true
+  return 0
+}
+
+case "$1" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  *) echo "usage: keactl start|stop|restart" >&2; exit 2 ;;
+esac

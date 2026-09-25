@@ -21,3 +21,7 @@ PENDING.md
 
 # Screenshots written by tests/e2e/test_mobile.py (uploaded by CI, never committed)
 artifacts/
+
+# Q84 system-boundary suite: the harness workdir and its result files (uploaded by CI, never committed)
+system-work/
+system-results/

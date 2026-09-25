@@ -15,3 +15,7 @@ run.py text eol=lf
 # v5.17.0 — systemd rejects a unit file with CRLF line endings.
 jen.service text eol=lf
 jen-update.service text eol=lf
+
+# v5.64.x (Q84) — the system-test stack's shell scripts and Dockerfiles run
+# inside Linux containers; a CRLF from a Windows checkout breaks their shebangs.
+tests/system/compose/** text eol=lf

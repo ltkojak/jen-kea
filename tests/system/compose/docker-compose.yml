@@ -1,0 +1,97 @@
+# Q84 — the system-boundary stack. Everything here is a REAL process:
+# Jen under gunicorn, two Kea hosts (kea-dhcp4 + sshd + the helper Jen
+# installs through its own install_helper path), MariaDB, and two small
+# fault injectors. Driven by tests/system/ with `docker compose` and
+# `docker exec` only; nothing is mocked.
+#
+#   JEN_SYSTEM_TESTS=1 python -m pytest tests/system -m system -v
+#
+# SYS_WORK is the host directory the harness prepares before `up` (ssh
+# keys, jen.config, each Kea host's /etc/kea); the harness always sets it.
+name: jensys
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: sys-mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: sys_root_pw
+    volumes:
+      - ./mariadb-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  kea-a: &kea
+    build:
+      context: kea-node
+      args:
+        KEA_IMAGE: ${KEA_IMAGE:-docker.cloudsmith.io/isc/docker/kea-dhcp4:3.0.3}
+    container_name: sys-kea-a
+    hostname: kea-a
+    environment:
+      NODE: kea-a
+    volumes:
+      - ${SYS_WORK}/kea-a:/etc/kea
+      - ${SYS_WORK}/keys:/keys:ro
+
+  kea-b:
+    <<: *kea
+    container_name: sys-kea-b
+    hostname: kea-b
+    environment:
+      NODE: kea-b
+    volumes:
+      - ${SYS_WORK}/kea-b:/etc/kea
+      - ${SYS_WORK}/keys:/keys:ro
+
+  # A resolver that can be told to go silent (see faults/faults.py), for
+  # the Reconcile scenario.
+  dns:
+    build:
+      context: faults
+    container_name: sys-dns
+    command: ["python3", "/faults.py", "dns"]
+
+  # A Control Agent that answers everything with HTTP 500.
+  broken-ca:
+    build:
+      context: faults
+    container_name: sys-broken-ca
+    command: ["python3", "/faults.py", "http", "8500"]
+
+  jen:
+    build:
+      context: ../../..
+      dockerfile: Dockerfile
+    image: jensys-jen:latest
+    container_name: sys-jen
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      JEN_INITIAL_ADMIN_PASSWORD: ${SYS_ADMIN_PASSWORD:-sys-Adm1n-Pass!}
+    ports:
+      - "127.0.0.1:5050:5050"
+    volumes:
+      - ${SYS_WORK}/jen-etc:/etc/jen
+    # The recovery-bundle scenario runs against a small /tmp; the Jen
+    # process must not depend on it having room.
+    tmpfs:
+      - /tmp:size=52428800
+
+  # The root-side updater's sandbox: the same image, run as root, with the
+  # checkout mounted read-only. It has its own filesystem, so the
+  # scenario can lay out /opt/jen as a versioned-release tree and kill
+  # the real jen-update-root.py mid-update without touching `jen` above.
+  updater:
+    image: jensys-jen:latest
+    container_name: sys-updater
+    depends_on:
+      - jen
+    user: root
+    entrypoint: ["sleep", "infinity"]
+    volumes:
+      - ../../..:/repo:ro

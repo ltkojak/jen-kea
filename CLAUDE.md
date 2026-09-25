@@ -105,6 +105,24 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   3.3 dev leg is `continue-on-error`. Read-only against Kea (`config-test`, never
   `config-set`). Run it by hand with `gh workflow run kea-compat.yml`; a workflow-only
   change carries no version bump and no release tag.
+- `tests/system/` (Q84 — `pytest.mark.system`) breaks ten of Jen's boundaries on purpose
+  against REAL processes: a docker compose stack (`tests/system/compose/`) of Jen under
+  gunicorn, two Kea hosts (real kea-dhcp4 + sshd + `jen-kea-helper` installed through
+  Jen's own `install_helper`), MariaDB, a resolver that goes silent and a Control Agent
+  that answers 500. Driven with `docker compose` / `docker exec` only; the scenario
+  scripts run INSIDE the Jen container. Every test skips unless `JEN_SYSTEM_TESTS=1`,
+  and `tests/system/conftest.py` overrides the unit suite's autouse DB fixtures the way
+  `tests/kea_compat/conftest.py` does. It belongs to its own workflow,
+  `.github/workflows/system-tests.yml` (weekly, `workflow_dispatch` with an optional `-k`
+  selector, and any `-rc.` tag — NOT called from ci.yml/release.yml, so a slow boundary
+  test can't redden a push or a tag). It has no Docker or WSL here, so a change to it
+  is verified by dispatching the workflow (`gh workflow run system-tests.yml`, ~10 min a
+  round). The job summary is the per-scenario table (`summarize.py`); a red run is read
+  there and does NOT open an issue. A scenario that fails because Jen really has the bug
+  it names is marked `known_bug(...)` (xfail, strict) so it reads "known bug" in the
+  table and goes red the day the bug is fixed with the marker still on. Stand-ins are
+  named in the test that uses them (no systemd in a container; no GitHub for the updater).
+  A workflow-only change carries no version bump and no release tag.
 
 Gotchas learned the hard way:
 

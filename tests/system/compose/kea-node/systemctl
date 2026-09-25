@@ -1,0 +1,31 @@
+#!/bin/sh
+# Q84 — the three systemctl calls jen-kea-helper makes, answered for a host
+# that runs kea-dhcp4 without systemd:
+#   systemctl show -p LoadState --value <unit>   -> "loaded"
+#   systemctl restart <unit>                     -> restart the daemon
+#   systemctl is-active <unit>                   -> "active" / "inactive"
+case "$1" in
+  show)
+    echo loaded
+    exit 0
+    ;;
+  is-active)
+    if pgrep -x kea-dhcp4 >/dev/null 2>&1; then echo active; exit 0; fi
+    echo inactive
+    exit 3
+    ;;
+  restart|start)
+    /usr/local/bin/keactl restart || {
+      echo "Job for kea-dhcp4-server.service failed. See 'journalctl -xe' for details." >&2
+      exit 1
+    }
+    exit 0
+    ;;
+  stop)
+    /usr/local/bin/keactl stop
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
