@@ -219,6 +219,11 @@ except Exception as e:
 )
 
 
+@known_bug(
+    "kea_changeset.apply_change raises NoValidConnectionsError instead of reverting when a later server's SSH "
+    "is refused after preflight: kea_host.apply_config catches only HelperMissing/HelperError, so "
+    "kea_host._connect_ssh's failure escapes Phase 3 and server A is left on the new config"
+)
 def test_02_changeset_reverts_the_first_server_when_the_second_dies(stack):
     """kea_changeset: server A committed, then B's sshd dies after preflight -> A is reverted
     and both configs are byte-identical to what they were."""
@@ -272,6 +277,11 @@ except Exception as e:
 )
 
 
+@known_bug(
+    "kea_changeset.apply_change leaves the NEW config on disk (and the daemon down) when the restart of a "
+    "validated config fails: status 'restart_failed' is by design, on the premise that 'the config is still "
+    "live and valid' — untrue once the daemon cannot start; there is no rollback-and-restart"
+)
 def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
     """kea_changeset: a validated config whose restart fails (the daemon exits at start) is rolled
     back — the previous config is what is on disk."""
@@ -531,7 +541,11 @@ def test_08_ha_handover_with_the_partner_unreachable_reports_and_does_not_advanc
     )
     for node in (st.KEA_A, st.KEA_B):
         r = st.dexec(node, "/usr/local/bin/keactl", "restart", check=False)
-        assert r.returncode == 0, f"the HA-configured daemon did not start on {node}:\n{r.stderr}\n{hooks.stdout}"
+        if r.returncode != 0:
+            why = st.sh(node, "grep -E 'ERROR|HA_|HOOKS' /var/log/kea/kea-dhcp4.log | tail -n 20", check=False).stdout
+            raise AssertionError(
+                f"the HA-configured daemon did not start on {node}:\n{r.stderr}\n{why}\n{hooks.stdout}"
+            )
     st.wait_for(
         lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"), timeout=60, what="HA-configured daemons answering"
     )

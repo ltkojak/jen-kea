@@ -150,6 +150,7 @@ def update(hang_after_extract):
         return real_run(argv, *a, **k)
 
     subprocess.run = run
+    sys.argv = sys.argv[:1]  # main() refuses any argument (the sudoers-pinned invocation takes none)
     rc = jur.main()
     emit({"rc": rc, "current": os.readlink("/opt/jen/current")})
 
