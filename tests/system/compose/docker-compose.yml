@@ -71,6 +71,12 @@ services:
     depends_on:
       mariadb:
         condition: service_healthy
+    # The shipped Dockerfile sets no WORKDIR, and run.py launches `python -m
+    # gunicorn jen.wsgi:application` — which finds `jen` only through the CWD
+    # (there is no PYTHONPATH). Left at `/`, the image fails at start with "No
+    # module named 'jen'" (found by this suite's first run; noted in PENDING for
+    # the next release). The harness pins the directory the image should have.
+    working_dir: /opt/jen
     environment:
       JEN_INITIAL_ADMIN_PASSWORD: ${SYS_ADMIN_PASSWORD:-sys-Adm1n-Pass!}
     ports:
