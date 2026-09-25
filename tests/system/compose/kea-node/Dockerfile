@@ -14,7 +14,7 @@ RUN apk add --no-cache openssh sudo python3 bash
 # refused by sshd even for key auth, so give it a throwaway unusable password.
 RUN adduser -D -s /bin/sh keaadmin \
  && echo "keaadmin:$(head -c 24 /dev/urandom | base64)" | chpasswd \
- && mkdir -p /home/keaadmin/.ssh /run/sshd /var/log/kea /var/lib/kea /var/run/kea \
+ && mkdir -p /home/keaadmin/.ssh /run/sshd /var/log/kea /var/lib/kea /var/run/kea /usr/local/sbin \
  && chown -R keaadmin:keaadmin /home/keaadmin/.ssh \
  && chmod 700 /home/keaadmin/.ssh
 
