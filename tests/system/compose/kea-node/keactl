@@ -7,7 +7,14 @@
 # configured logger writes /var/log/kea/kea-dhcp4.log (what Trace tails).
 CONF=/etc/kea/kea-dhcp4.conf
 
-running() { pgrep -x kea-dhcp4 >/dev/null 2>&1; }
+# a zombie (Z) still shows up in pgrep; only a live process counts
+running() {
+  for p in $(pgrep -x kea-dhcp4 2>/dev/null); do
+    st=$(awk '{print $3}' "/proc/$p/stat" 2>/dev/null)
+    [ -n "$st" ] && [ "$st" != Z ] && return 0
+  done
+  return 1
+}
 
 start() {
   if running; then return 0; fi
@@ -39,5 +46,6 @@ case "$1" in
   start) start ;;
   stop) stop ;;
   restart) stop; start ;;
-  *) echo "usage: keactl start|stop|restart" >&2; exit 2 ;;
+  running) running ;;
+  *) echo "usage: keactl start|stop|restart|running" >&2; exit 2 ;;
 esac

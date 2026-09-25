@@ -341,7 +341,7 @@ def kea_conf_bytes(container) -> str:
 
 
 def kea_running(container) -> bool:
-    return dexec(container, "pgrep", "-x", "kea-dhcp4", check=False).returncode == 0
+    return dexec(container, "/usr/local/bin/keactl", "running", check=False).returncode == 0
 
 
 def sshd_running(container) -> bool:

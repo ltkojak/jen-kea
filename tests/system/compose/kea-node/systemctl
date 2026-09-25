@@ -10,7 +10,7 @@ case "$1" in
     exit 0
     ;;
   is-active)
-    if pgrep -x kea-dhcp4 >/dev/null 2>&1; then echo active; exit 0; fi
+    if /usr/local/bin/keactl running; then echo active; exit 0; fi
     echo inactive
     exit 3
     ;;

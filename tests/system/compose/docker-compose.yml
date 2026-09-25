@@ -31,6 +31,9 @@ services:
         KEA_IMAGE: ${KEA_IMAGE:-docker.cloudsmith.io/isc/docker/kea-dhcp4:3.0.3}
     container_name: sys-kea-a
     hostname: kea-a
+    # PID 1 must reap: sshd sessions and a stopped kea-dhcp4 are its children, and
+    # a zombie still answers `pgrep`, which made "is the daemon running?" lie.
+    init: true
     environment:
       NODE: kea-a
     volumes:
