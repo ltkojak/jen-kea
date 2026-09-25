@@ -82,8 +82,13 @@ at call time (`shutil.which("nmap")`), never at import.
 `register(app)`. `create_app()` must not start background work, so a
 plugin never starts its own thread: it registers a callable and Jen's
 one periodic loop (started only by the real entrypoint, never in the
-test suite) runs it every `every_minutes` (minimum 5; the first run is
-one interval after startup). Each run is wrapped — an exception is
+test suite) runs it every `every_minutes` (the first run is one interval
+after startup). The floor is `PERIODIC_MIN_MINUTES` (5, in
+`jen/services/background.py`): a shorter interval makes `register_periodic`
+raise `ValueError` at register time, which fails your `register(app)`: Jen logs "Failed to load plugin"
+and the plugin does not load (none of its
+routes exist). Do not catch that error to carry on with a
+shorter loop; register at five or more. Each run is wrapped — an exception is
 logged and recorded on the job, never propagated — and a run still in
 progress when the next tick comes is skipped, not stacked.
 `periodic_jobs()` lists what's registered.

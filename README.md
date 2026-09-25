@@ -108,6 +108,10 @@ These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_
   can't evaluate instead of guessing (v5.35.0)
 
 ### Diagnose and plan
+- **Investigate a client** — one identifier (a MAC, an IPv4 address or a
+  hostname) resolved once, with Overview, Explain, Trace, Timeline, DNS and
+  Config tabs onto it, every result stamped with when it was read, and the
+  same subnet-access rules on every tab (v5.63.0)
 - **Getting started** — a first-hour checklist with a nav reminder until
   it's done (v5.39.0)
 - **Explain** — why did this client get this address? Subnet, reservation,
@@ -124,6 +128,9 @@ These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_
   history (v5.36.0)
 - **Kea 3.2 readiness** — what to change before the Control Agent goes away
   (v5.38.0)
+- **Per-server capabilities** — one place that knows what each Kea server can
+  do (its Kea version, connection mode, host helper and hooks), with one plain
+  sentence for anything that is off; shown as a Health Center row (v5.64.0)
 
 ### Operate
 - **Planned maintenance** — a stepper for taking one HA server down and back
@@ -131,7 +138,9 @@ These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_
 - **Packet health** — DHCP drops, parse failures and NAKs per server from
   Kea's own counters, with the drop reasons Kea 3.2 adds (v5.41.0)
 - **Recovery bundle** — one encrypted file with config, keys, content and the
-  Jen database; `install.sh --restore` puts it back (v5.44.0)
+  Jen database; `install.sh --restore` puts it back (v5.44.0). Since v5.65.0 it
+  is a chunked, authenticated stream — never held in memory, up to 2 GB — and
+  bundles from earlier releases still restore
 - **Grafana dashboard** and API health endpoints for monitoring (v5.43.0)
 
 ### Health Center
@@ -185,7 +194,15 @@ These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_
 - Install optional add-ins from Settings → Plugins
 - Plugin registry fetched live from GitHub
 - Enable/disable/update/uninstall from the UI
-- Available plugins: Network Discovery, IPAM Lite
+- Seven plugins bundled with Jen, each an opt-in enable and each obeying the
+  same subnet access rules as the core pages:
+  - **Network Discovery** — find devices on a subnet that Kea does not know
+  - **IPAM Lite** — the whole address space of a subnet, managed or not
+  - **Host Watchdog** — probe chosen hosts and alert when one stops answering (v1.0.0)
+  - **Local DNS Sync** — push DHCP names into Pi-hole or AdGuard Home, touching only records it created (v1.0.0)
+  - **Switch Port Locator** — which switch port a MAC is on, read from managed switches over SNMP (v1.0.0)
+  - **Wake & Actions** — Wake-on-LAN from any lease, reservation or device row (v1.0.0)
+  - **Presence** — publish tracked devices' online/offline state to Home Assistant, MQTT or an HTTP endpoint (v1.0.0)
 
 ---
 
@@ -312,6 +329,11 @@ Jen supports optional plugins installable from **Settings → Plugins**.
 |--------|-------------|------|
 | Network Discovery | Scan subnets for devices not in Kea. Detects rogue devices, fires alerts. Requires nmap. | [jen-plugin-network-discovery](https://github.com/ltkojak/jen-plugin-network-discovery) |
 | IPAM Lite | Full IP address space view. See every IP — available, dynamic, reserved, or static. Add labels, owners, notes. CSV export. | [jen-plugin-ipam](https://github.com/ltkojak/jen-plugin-ipam) |
+| Host Watchdog | Probe chosen hosts (ICMP or TCP) on a schedule; alert when one stops answering and again when it returns. Requires `ping` on the Jen host. | [jen-plugin-watchdog](https://github.com/ltkojak/jen-plugin-watchdog) |
+| Local DNS Sync | Push DHCP names into Pi-hole v6 or AdGuard Home so `nas.lan` resolves without Kea DDNS. A mandatory preview; only records it created are ever touched. | [jen-plugin-dns-sync](https://github.com/ltkojak/jen-plugin-dns-sync) |
+| Switch Port Locator | Which switch port is this MAC on? Polls managed switches over SNMP. Requires `snmpbulkwalk` (package `snmp`). | [jen-plugin-switchport](https://github.com/ltkojak/jen-plugin-switchport) |
+| Wake & Actions | Wake-on-LAN from a lease, reservation or device row, plus a favourites list; rate-limited and audited. | [jen-plugin-wol](https://github.com/ltkojak/jen-plugin-wol) |
+| Presence | Publish tracked devices' online/offline state to Home Assistant, MQTT or any HTTP endpoint. | [jen-plugin-presence](https://github.com/ltkojak/jen-plugin-presence) |
 
 ---
 

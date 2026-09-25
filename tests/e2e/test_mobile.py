@@ -27,6 +27,8 @@ from playwright.sync_api import expect
 
 from jen.services import theme as thememod
 from tests.e2e.conftest import ADMIN_PASSWORD, ADMIN_USERNAME, login
+from tests.e2e.pages import plugin_pages
+from tests.e2e.test_core_journeys import _seed_active_lease
 
 pytestmark = pytest.mark.e2e
 
@@ -37,6 +39,7 @@ DESKTOP_DIR = ROOT / "artifacts" / "desktop"
 PHONE = {"width": 390, "height": 844}
 DESKTOP = {"width": 1440, "height": 900}
 MIN_TAP = 44
+CLIENT_MAC = "aa:bb:cc:dd:ee:01"  # the client the journeys' own lease seed creates
 
 # name -> path. Every nav destination, the Q41-Q49 tools, Getting started, each
 # Settings page, a subnet edit form and the HA maintenance chooser.
@@ -71,18 +74,13 @@ PAGES = [
     ("settings-api-keys", "/settings/api-keys"),
     ("subnet-edit", "/subnets/edit/1"),
     ("ha-maintenance", "/servers/ha/maintenance"),
-    # v5.57.1 (Q74), widened v5.60.1 (Q89) — every bundled plugin is
-    # enabled for this whole suite (tests/e2e/conftest.py), so every
-    # plugin's own page is covered by the same overflow guard as core
-    # pages. Watchdog/dns-sync/switchport are each a single page (no
-    # per-item detail route the way ipam/discovery have).
-    ("plugin-ipam", "/network/ipam"),
-    ("plugin-ipam-subnet", "/network/ipam/subnet/kea/1"),
-    ("plugin-discovery", "/network/discovery"),
-    ("plugin-discovery-results", "/network/discovery/results/1"),
-    ("plugin-watchdog", "/network/watchdog"),
-    ("plugin-dns-sync", "/network/dns-sync"),
-    ("plugin-switchport", "/network/switchport"),
+    # v5.65.3 (Q92) - the Investigation page, with a client that exists (seeded below), so the
+    # screenshot shows a client rather than "no client matched".
+    ("client", f"/client?q={CLIENT_MAC}"),
+    # Every bundled plugin's own page(s), DERIVED from its manifest's nav endpoint(s) plus any
+    # `screenshot_pages` (tests/e2e/pages.py). This list used to be typed by hand and said it covered
+    # every plugin while Wake and Presence had no entry at all.
+    *plugin_pages(),
 ]
 
 # Pages that still overflow a phone today, with the release that converts them.
@@ -111,6 +109,14 @@ SMALL_TAPS_JS = """(min) => {
     });
     return out;
 }"""
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _client_to_investigate():
+    """A lease for CLIENT_MAC, so the `client` page in PAGES renders a client (every pass in this
+    module visits it)."""
+    _seed_active_lease(mac_hex=CLIENT_MAC.replace(":", "").upper())
+    yield
 
 
 @pytest.fixture(scope="module")

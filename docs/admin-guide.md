@@ -618,12 +618,15 @@ Every color in Jen's UI is a CSS token (`jen/services/theme.py`), not a hard-cod
 
 Any logged-in user — any role — can pick their own look from the palette icon in the nav bar (desktop) or the **Theme** button in the phone's More sheet. The choice is per-browser (stored in `localStorage`), so it doesn't affect anyone else and doesn't need a page reload to take effect.
 
-Four presets ship with Jen:
+Seven presets ship with Jen:
 
 - **Dark** — the install default since day one. Byte-identical to what every prior version rendered; upgrading never changes anyone's look.
 - **Light**
 - **High contrast** — every text/background pairing is at least 7:1 (WCAG AAA)
 - **Phosphor** — amber-on-green terminal look, monospace UI on desktop only (a phone keeps the regular font — a mono table would overflow it)
+- **Slate** — a cooler dark theme, blue-grey surfaces with a blue accent
+- **Ember** — a warm dark theme, near-black with an orange accent
+- **Retro** — an early-90s desktop: a teal background behind grey panels, a navy accent and beveled borders
 
 A user who hasn't picked one gets the install's default theme, below.
 
@@ -638,6 +641,61 @@ A superadmin can also define the install's own palette: 11 colors (background, t
 Every color is validated as a plain hex value (`#1a1a2a` or `#fff`) on save — nothing else is accepted, so a saved palette can never inject anything beyond a color into the page. Once saved, "Custom" appears as a choice both in the install-default dropdown above and in every user's own picker.
 
 Removing the custom palette falls the install default back to Dark if it had been set to Custom; anyone who had personally picked Custom falls back to Dark too, the next time they load a page.
+
+---
+
+## Bundled plugins
+
+Seven plugins ship inside Jen (every directory under `plugins/`; `shipped_plugin_ids()` in
+`jen/services/plugins.py` is the list). None is on until you enable it under **Settings → Plugins**, and a change
+there needs a Jen restart. Each keeps its own tables in Jen's database (created by its own migrations when it
+first loads), sends nothing anywhere until you configure a target, and follows the same subnet rules as the core
+pages: a restricted user sees only what belongs to their subnets. All of them are IPv4 only, and none needs
+anything beyond what is listed below. Adding, removing and acting on things is an admin action in every one;
+viewers are read-only. What a plugin needs from the Jen host is checked by the plugin, not assumed: if the
+program is missing the page says so.
+
+**Network Discovery** — finds devices on a subnet that Kea does not know about. *Needs* `nmap` on the Jen host
+(Settings → Plugins offers an Install button on a systemd host). *Stores* scan results (the last three per
+subnet), the hosts you marked known, and its schedule in its own `nd_*` tables. *Sends* probes to the addresses of
+the subnet you scan and, when an unknown host appears, a "Rogue Device" alert to the channels you opted in.
+
+**IPAM Lite** — the whole address space of a subnet, Kea-managed or not: what is leased, reserved, static or
+planned, with labels and owners. *Needs* nothing from the host. *Stores* the static and planned entries, the
+unmanaged subnets you add, and an assignment history in its own `ipam_*` tables. *Sends* nothing outside Jen, except
+a conflict alert when a static entry's address is taken by a DHCP client.
+
+**Host Watchdog** — probes chosen hosts and alerts when one stops answering, and again when it returns. *Needs*
+`ping` on the Jen host for ICMP targets (Ubuntu's `/usr/bin/ping` carries the capability, package `iputils-ping`);
+a TCP target needs nothing. *Stores* the targets, their state and a short check history in its own `wd_*` tables.
+*Sends* one ICMP echo or TCP connection per due target, at most every five minutes, and the up/down alerts.
+
+**Local DNS Sync** — pushes DHCP names into Pi-hole v6 or AdGuard Home so `nas.lan` resolves without Kea DDNS.
+*Needs* a Pi-hole v6 or AdGuard Home install whose API the Jen host can reach. *Stores* each target, an encrypted
+credential (never shown again) and a ledger of the records Jen created, in its own `ds_*` tables. *Sends* record
+changes to the DNS server, over TLS that is verified unless you switch that off per target. A target starts paused:
+Preview shows exactly what would change, and it must be run before the target can be enabled. Jen only ever touches
+records it created itself.
+
+**Switch Port Locator** — which switch port a MAC is on. *Needs* `snmpbulkwalk` (package `snmp`) on the Jen host
+(an Install button on a systemd host) and managed switches that answer SNMPv2c. *Stores* the switches (with their
+SNMP community string, which is kept as entered, so use a read-only community), the port list and the MAC sightings
+in its own `sp_*` tables. *Sends* SNMP walks to the switches you add, every ten minutes.
+
+**Wake & Actions** — Wake-on-LAN from a lease, reservation or device row, and a favourites list. *Needs* nothing
+from the host beyond being able to send UDP broadcast on the target's subnet. *Stores* the favourites (and an
+optional SecureOn password) in its own `wol_hosts` table. *Sends* one standard magic packet per wake, to the subnet's
+directed broadcast address and the limited broadcast address, at most one per MAC every five seconds; every wake
+is audited.
+
+**Presence** — publishes tracked devices' online or offline state. *Needs* the Jen host's IPv4 neighbour table
+(`ip -4 neigh`, read every five minutes alongside lease events). *Stores* the devices you track, their current
+state, and your sinks (an MQTT password or HTTP bearer token is stored encrypted and never shown again) in its own
+`pr_*` tables. *Sends* every state change to each sink you configured: a Home Assistant webhook, MQTT, or any HTTP
+endpoint; nothing is published for a device you did not choose to track.
+
+*Presence* is also the push alternative to the polling example in the Home Assistant quick start above, which asks
+the REST API whether a device is online.
 
 ---
 

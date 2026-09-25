@@ -834,7 +834,9 @@ the header itself carries a fresh nonce per request that matches what
 the page actually renders.
 
 **Bundled plugin templates got the same conversion; a registry-installed
-copy did not.** `plugins/ipam/` and `plugins/network-discovery/` in
+copy did not.** (Written when those two were the only bundled plugins; every
+directory under `plugins/` is a bundled copy now — `shipped_plugin_ids()` — and
+seven ship today.) `plugins/ipam/` and `plugins/network-discovery/` in
 this repo are Jen's own bundled copies, converted in this release like
 every other template. The plugin *registry* (§3.7) installs from each
 plugin's own separately-versioned external repository
@@ -1318,6 +1320,18 @@ As of the process work following the v4.4.10 audit series:
   - `pip-audit` against the actual installed dependency set.
 - **Dependabot** watches the GitHub Actions used in these workflows and
   opens PRs to bump pinned commit SHAs forward when new releases exist.
+- **`system-tests.yml`** (v5.64.x, Q84) sits beside `kea-compat.yml`: weekly, on
+  demand and on release-candidate tags, and deliberately NOT called from `ci.yml`
+  or `release.yml`, so a slow or flaky boundary test never reddens a push or a tag.
+  `tests/system/` runs Jen under gunicorn against real Kea hosts (kea-dhcp4, sshd
+  and the helper Jen installs), MariaDB and two fault injectors, with no mocks.
+  It exists to hold two invariants the unit suite cannot: (1) a config change set
+  never raises out of `kea_changeset` and never leaves the servers disagreeing,
+  including when a restart fails after the write (the before-config is re-applied
+  and the server restarted again, reported `rolled_back` or `rollback_failed`);
+  (2) the image Jen ships actually boots (`WORKDIR /opt/jen` plus gunicorn's
+  `--chdir`), which the `shipped-compose` job proves with a real
+  `docker compose up` of the shipped compose file.
 
 None of this replaces a real external security audit. It's the
 realistic, zero-budget equivalent: automated checks that catch
@@ -1616,7 +1630,7 @@ added the versioned release directories.
 
 | Path | Holds | Owner / mode | What an upgrade does |
 |------|-------|--------------|----------------------|
-| `/opt/jen/releases/<X.Y.Z>/app/` | One release's full tree: `jen/`, `templates/`, `static/`, `plugins/` (bundled `ipam` + `network-discovery`), `run.py`, the shipped external files, `docs/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Built whole under a `.staging-<ts>` sibling, then `os.rename()`d into place. Byte-compiled as root. The previous release's directory is left untouched. |
+| `/opt/jen/releases/<X.Y.Z>/app/` | One release's full tree: `jen/`, `templates/`, `static/`, `plugins/` (every bundled plugin directory, seven today; `shipped_plugin_ids()`), `run.py`, the shipped external files, `docs/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Built whole under a `.staging-<ts>` sibling, then `os.rename()`d into place. Byte-compiled as root. The previous release's directory is left untouched. |
 | `/opt/jen/releases/<X.Y.Z>/venv/` | That release's virtualenv, built for its own `requirements.txt` | `root:root` | Built fresh per release — the rollback is a true point-in-time revert of dependencies too. |
 | `/opt/jen/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |
 | `/opt/jen/` (flat, pre-5.14) | `jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `venv/` | `root:root`, `a+rX` | Removed by the migration run / `install.sh` once the versioned layout is live. Docker stays flat. |

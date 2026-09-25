@@ -1173,3 +1173,57 @@ class TestDepsRoute:
             r = c.post("/settings/plugins/deps/nd")
         assert r.status_code == 302
         trigger.assert_not_called()
+
+
+class TestNavIcons:
+    """v5.65.3 (Q92) - a manifest naming an icon the sprite lacks put the WORD into the navigation
+    ("cable Switch Ports"). The bundled manifests are held to the sprite; the loader is
+    forgiving about anything else."""
+
+    def test_every_bundled_manifest_nav_icon_is_in_the_sprite(self):
+        from jen.services.icons import is_icon
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "plugins"
+        checked = 0
+        for manifest_path in sorted(root.glob("*/manifest.json")):
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for item in manifest.get("nav", []):
+                checked += 1
+                assert is_icon(item.get("icon")), (
+                    f"{manifest_path.parent.name}: nav icon {item.get('icon')!r} is not in templates/_icon_sprite.html "
+                    "- add it to static/icons/src/ and run tools/build_icon_sprite.py"
+                )
+        assert checked >= 7  # every bundled plugin has a nav entry; a vacuous pass would hide a broken glob
+
+    def test_the_two_icons_the_round_needed_are_in_the_sprite(self):
+        from jen.services.icons import is_icon
+
+        assert is_icon("cable") and is_icon("search-check") and is_icon("puzzle")
+
+    def test_a_missing_sprite_name_becomes_puzzle_and_is_logged(self, caplog):
+        manifest = {"id": "demo", "nav": [{"label": "X", "icon": "no-such-icon", "endpoint": "x.index"}]}
+        with caplog.at_level("WARNING", logger="jen.services.icons"):
+            plugins_svc.sanitize_nav_icons(manifest)
+        assert manifest["nav"][0]["icon"] == "puzzle"
+        assert "no-such-icon" in caplog.text and "plugin demo" in caplog.text
+
+    def test_a_real_name_an_emoji_and_a_missing_value_are_handled(self):
+        manifest = {
+            "id": "demo",
+            "nav": [
+                {"icon": "cable"},  # in the sprite: untouched
+                {"icon": "\U0001f50d"},  # a plugin's own emoji: still shown as the text it always was
+                {"label": "no icon key at all"},  # nothing to validate
+                {"icon": ""},  # empty: the puzzle
+            ],
+        }
+        plugins_svc.sanitize_nav_icons(manifest)
+        assert [i.get("icon") for i in manifest["nav"]] == ["cable", "\U0001f50d", None, "puzzle"]
+
+    def test_the_loader_sanitizes_before_it_registers_anything(self, tmp_path):
+        manifest = {"id": "iconless", "path": str(tmp_path), "nav": [{"icon": "not-a-real-icon"}]}
+        try:
+            assert plugins_svc._load_plugin(MagicMock(), manifest) is True
+            assert plugins_svc.get_nav_items()[-1]["icon"] == "puzzle"
+        finally:
+            plugins_svc._loaded_plugins.pop("iconless", None)

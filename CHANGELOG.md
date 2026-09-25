@@ -4,7 +4,9 @@
 
 ## [5.65.2-beta.1] - 2026-09-25
 
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.65.1-beta.1
+*Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.1-beta.1
 run.
 
 An audit of the Investigate page (added in 5.63.0) found that a
@@ -64,7 +66,9 @@ viewer opening the page or its automatic refresh.
 
 ## [5.65.1-beta.1] - 2026-09-25
 
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.65.0-beta.1
+*Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.0-beta.1
 run.
 
 The Docker image could not start. Its launcher runs gunicorn as a
@@ -108,7 +112,9 @@ it in its log so it is not a mystery.
 
 ## [5.65.0-beta.1] - 2026-09-25
 
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.64.0-beta.1
+*Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.64.0-beta.1
 run.
 
 The recovery bundle no longer has to fit in memory. Until now the export
@@ -154,7 +160,9 @@ size-limit scenario now drives the 2 GB limit with a sparse 2.2 GB file.
 
 ## [5.64.0-beta.1] - 2026-09-24
 
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.63.0-beta.1
+*Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.63.0-beta.1
 run.
 
 Jen now has one place that knows what each Kea server can do. Before
@@ -195,7 +203,9 @@ the derivation against real kea-dhcp4 daemons.
 
 ## [5.63.0-beta.1] - 2026-09-24
 
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.62.1-beta.1
+*Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.62.1-beta.1
 run.
 
 A new Investigation page (Network -> Investigate, or GET /client) gives
@@ -228,7 +238,9 @@ existing per-page shortcuts, which are unchanged.
 
 ## [5.62.1-beta.1] - 2026-09-24
 
-Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.62.0-beta.1
+*Correction, 2026-09-25: the "unpromoted run" below was written as starting at 5.32.1-beta.1. 5.49.0 and 5.56.3 were promoted since, so the run starts at 5.56.4-beta.1; the text now says so.*
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.62.0-beta.1
 run; test-only, no user-facing behavior change.
 
 Turns the authorization matrix from a convention into something CI
@@ -342,7 +354,9 @@ next as well as the five that exist today.
 
 ## [5.60.0-beta.1] - 2026-09-24
 
-Beta channel. Bundles Switch Port Locator 1.0.0, the fifth plugin of
+*Correction, 2026-09-25: below, Switch Port Locator is called the "fifth plugin of round 5". It was the third brand-new plugin of the round (Wake & Actions in 5.61.0 was the fourth and Presence in 5.62.0 the fifth).*
+
+Beta channel. Bundles Switch Port Locator 1.0.0, the third new plugin of
 round 5: it answers the one question Client Investigation can't —
 which switch port is this MAC actually plugged into? It polls each
 configured switch's MAC address table over SNMP every ten minutes,
@@ -370,7 +384,9 @@ file and the date read.
 
 ## [5.59.0-beta.1] - 2026-09-24
 
-Beta channel. Bundles Local DNS Sync 1.0.0, the fourth plugin of round
+*Correction, 2026-09-25: below, Local DNS Sync is called the "fourth plugin of round 5". It was the second brand-new plugin of the round (Host Watchdog 1.0.0 came first, in 5.58.0; Switch Port Locator was the third, Wake & Actions the fourth, Presence the fifth).*
+
+Beta channel. Bundles Local DNS Sync 1.0.0, the second new plugin of round
 5: Kea's own DDNS integration assumes a BIND-style DNS server, and most
 homelabs run Pi-hole or AdGuard Home instead. This plugin pushes DHCP
 names — from active leases, Kea reservations, and IPAM Lite entries —
@@ -427,6 +443,8 @@ directly; take 5.58.2-beta.1 or later.
 
 ## [5.58.1-beta.1] - 2026-09-23
 
+*Correction, 2026-09-25: below, this entry says the release "also bundled Host Watchdog 1.0.0". It did not: Host Watchdog was bundled in 5.58.0-beta.1, one release earlier, and 5.58.1 is the sticky-header fix alone.*
+
 Beta channel. Stacked on 5.58.0-beta.1. Sticky table headers, shipped
 in 5.56.4, never actually worked: `position: sticky` sticks to its
 nearest ancestor with its own scrolling mechanism, and `.table-wrap`'s
@@ -448,8 +466,8 @@ regression test that should have caught this only checked computed
 CSS properties, never where the header actually rendered — replaced
 with checks against real, on-screen geometry.
 
-This release also bundled Host Watchdog 1.0.0, the first brand-new
-plugin repo of round 5 — see the 5.58.0-beta.1 entry below for what
+The release before this one (5.58.0-beta.1) bundled Host Watchdog 1.0.0, the first brand-new
+plugin repo of round 5 — see that entry below for what
 it does; this PATCH is the sticky-header fix alone.
 
 ## [5.58.0-beta.1] - 2026-09-23

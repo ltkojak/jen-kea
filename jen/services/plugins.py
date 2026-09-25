@@ -393,6 +393,17 @@ def load_plugins(app) -> None:
         _load_plugin(app, plugin)
 
 
+def sanitize_nav_icons(manifest: dict) -> None:
+    """v5.65.3 (Q92) - validate every `nav[].icon` against the icon sprite at load: a sprite-shaped
+    name that the sprite lacks is logged and replaced by `puzzle`, so a manifest naming a missing icon
+    can never put the word into the navigation. (An emoji is left as the text it always was.)"""
+    from jen.services.icons import checked_nav_icon
+
+    for item in manifest.get("nav", []) or []:
+        if isinstance(item, dict) and "icon" in item:
+            item["icon"] = checked_nav_icon(item["icon"], f"plugin {manifest.get('id', '?')}")
+
+
 def _load_plugin(app, manifest: dict) -> bool:
     """
     Load a single plugin: run its plugin.py register(app) if present.
@@ -401,6 +412,7 @@ def _load_plugin(app, manifest: dict) -> bool:
     plugin_id = manifest["id"]
     path = manifest["path"]
     plugin_py = os.path.join(path, "plugin.py")
+    sanitize_nav_icons(manifest)
 
     try:
         if os.path.isfile(plugin_py):

@@ -44,6 +44,23 @@ def is_icon(name) -> bool:
     return isinstance(name, str) and name in icon_names()
 
 
+FALLBACK_NAV_ICON = "puzzle"
+_NAME_SHAPED = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def checked_nav_icon(value, owner: str = "") -> str:
+    """The icon a plugin manifest's nav entry will actually show (v5.65.3, Q92).
+
+    A value shaped like a sprite name (`cable`, `search-check`) that is NOT in the sprite
+    used to fall through `nav_icon` to the literal text, so the Network strip read "cable
+    Switch Ports". It is now logged and replaced by `puzzle`. Anything that cannot be a sprite
+    name - a plugin's own emoji - is left alone, as `nav_icon` always allowed."""
+    if not isinstance(value, str) or not value or is_icon(value) or not _NAME_SHAPED.match(value):
+        return value if isinstance(value, str) and value else FALLBACK_NAV_ICON
+    logger.warning(f"{owner or 'plugin'}: nav icon {value!r} is not in the icon sprite - showing {FALLBACK_NAV_ICON!r}")
+    return FALLBACK_NAV_ICON
+
+
 def nav_icon(value) -> Markup:
     """A nav/tile icon: a sprite name renders as the icon; anything else (a plugin
     manifest's own emoji) is shown as the plain text it always was."""

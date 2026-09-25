@@ -21,8 +21,8 @@ import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645; Q60 (extracted classes, Management + Network + Settings) to 507; Q61 (dashboard widget wrappers -> the shared .hidden class) to 500; Q63 (tint colors converted to tokens, several newly-duplicate declarations picked up by the extractor) to 497; Q64 (the Alert Summary widget's JS-built row strings moved to classes) to 492.
-MAX_INLINE_STYLES = 492
+# Q58 measured 1,739 across templates/**; Q59 (Leases, Reservations, Devices) lowered it to 1,645; Q60 (extracted classes, Management + Network + Settings) to 507; Q61 (dashboard widget wrappers -> the shared .hidden class) to 500; Q63 (tint colors converted to tokens, several newly-duplicate declarations picked up by the extractor) to 497; Q64 (the Alert Summary widget's JS-built row strings moved to classes) to 492. Q92 (v5.65.3): the pin had drifted loose at 492 while the actual count fell to 489 (Q82's Investigate page, then Q90's extractor pass over servers.html and doctor.html) - set to 489, the count today.
+MAX_INLINE_STYLES = 489
 MAX_EMOJI_ALLOWLIST = 2
 
 
