@@ -272,7 +272,8 @@ def settings_kea():
     # v5.29.0 (Q29) — per-daemon control sockets exist from Kea 2.7.2; hide
     # the "Set up direct socket" forms when the primary is KNOWN to be
     # older (unknown = show them; the route re-checks before writing).
-    direct_socket_supported = _caps.direct_socket
+    # (a SETUP path: v5.65.2 - the capability itself is now confirmed-only, so this asks the permissive twin)
+    direct_socket_supported = __caps.may_attempt_direct_socket(_caps.kea_version)
     ipv6_enabled = __kea6.is_ipv6_enabled()
     # v5.38.0 (Q37) — the Kea 3.2 readiness one-liner on the servers card.
     readiness = None

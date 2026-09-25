@@ -553,12 +553,12 @@ def authorize(
         if subject.candidates:
             resolve_fn = resolver or resolve
             for cand in subject.candidates:
-                one = authorize(
+                judged = authorize(
                     resolve_fn(cand["mac"], accessible_ids=ids, all_subnets=False),
                     rule="per_object",
                     accessible_ids=ids,
                 )
-                if _names_a_subnet(one):
+                if _names_a_subnet(judged):
                     candidates.append(cand)
         return replace(
             subject,

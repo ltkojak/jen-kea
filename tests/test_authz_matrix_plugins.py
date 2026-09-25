@@ -84,7 +84,12 @@ def plugin_app():
     saved_surfaces = list(access.DIAGNOSTIC_SURFACES)
     plugins_svc._loaded_plugins.clear()
 
+    # create_app() re-applies jen.config, overwriting the globals the test session patched
+    # (KEA_SERVERS names, ...): put every extensions global back so no later test sees the difference
+    saved_ext = {k: v for k, v in vars(extensions).items() if not k.startswith("__")}
     app = jen_pkg.create_app()
+    for k, v in saved_ext.items():
+        setattr(extensions, k, v)
     app.config.update({"TESTING": True, "SECRET_KEY": "test-secret-key-not-for-production", "WTF_CSRF_ENABLED": False})
     jen_pkg._ssl_configured_cache = False
     try:
@@ -227,8 +232,12 @@ def _pr_b_still_tracked(db, ctx):
 
 
 def _pr_b_not_retagged(db, ctx):
-    row = _one(db, "SELECT subnet_id FROM pr_tracked WHERE mac=%s", (B_MAC,))
-    return "" if row and row["subnet_id"] == 2 else f"the B device's subnet was rewritten to {row and row['subnet_id']}"
+    row = _one(db, "SELECT subnet_id, label FROM pr_tracked WHERE mac=%s", (B_MAC,))
+    if not row:
+        return "the subnet-B tracked device is gone"
+    if row["subnet_id"] != 2 or row["label"] != B_NAME:
+        return f"the B device was re-labelled/re-tagged to {row['label']!r} in subnet {row['subnet_id']}"
+    return ""
 
 
 def _wd_nothing_created(db, ctx):
