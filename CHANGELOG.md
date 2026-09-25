@@ -2,6 +2,66 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.2-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.65.1-beta.1
+run.
+
+An audit of the Investigate page (added in 5.63.0) found that a
+subnet-scoped user could still learn things about clients in subnets they
+have no access to, and this release closes every route by which they could.
+Before it, typing a hostname that several clients share listed the MAC address
+of every one of them, in every subnet, to a user restricted to a single
+subnet; typing the address of a lease in a subnet the user could not see
+showed which MAC held it, along with the holder's further subnet records; the
+"last alert" line on the Overview tab quoted alert history that carries no
+subnet at all, and matched `10.0.0.5` against text about `10.0.0.50`; and the
+page answered "you do not have access" for a client that exists but "not found"
+for one that does not, which is enough to confirm that a MAC or hostname is in
+use elsewhere. Now every candidate behind an ambiguous hostname is looked up and
+judged the way a client typed directly would be, so a restricted user sees only
+the ones in their own subnets (and if only one is left, goes straight to it);
+an address held through a lease the user cannot see shows nothing about its
+holder; the alert line is for unrestricted users and matches whole addresses;
+and a denial and a not-found are the same sentence. A reservation that belongs
+to no subnet is shown to everyone, as Explain always showed it.
+
+Three smaller honesty fixes on the same page. The Config and Explain tabs used
+to evaluate whichever subnet happened to be first when nothing pinned the
+client to one, then present the result as that client's configuration; they now
+ask you to pick from your own subnets and evaluate nothing until you do. A
+search for an IPv6 address or a DUID used to report "no client matched" when it
+simply is not supported yet; it now says so and points at the MAC. And the box
+says "IPv4 address" because that is what it accepts.
+
+The same audit turned up a gap in how plugins are held to the rule. Plugin
+routes register after the diagnostic surfaces were collected, so they could
+never be checked, and the plugin interface did not offer the marker that
+declares a route as one that looks up a client. Surfaces are now collected after
+the plugins load, the interface exports the marker, and two guards require every
+route in the diagnostic files and every route a bundled plugin registers to be
+marked or named with a reason. The interface also gains two helpers, one for a
+signed-in user and one for an API key, that answer "may this caller see this
+subnet" and treat a record with no subnet as visible to unrestricted callers only,
+which is the core rule; four bundled plugins each re-derived that check and read
+"no subnet" as "allowed". A new test module runs the authorization matrix against
+an application with every bundled plugin enabled, including checks that a request
+did not change a record in a subnet the caller cannot see. Twenty of its cases
+fail today, because the plugin routes they exercise still have the flaw; each is
+marked as an expected failure naming the plugin release that fixes it (the
+Host Watchdog, DNS Sync and IPAM releases, then the Switch Port, Wake and
+Presence releases), and each turns the build red the day its fix ships until its
+marker is removed. Nothing in the bundled plugins changed in this release.
+
+Two behaviours around the Kea capability model change. A server Jen has never
+reached is no longer reported as having per-daemon control sockets or a Control
+Agent; the Health Center says the version is unknown and asks whether the server
+is reachable, while the setup form on Settings -> Kea, which re-checks before it
+writes anything, still offers itself for a server whose version is not known yet.
+And the cached capabilities are now dropped only when an administrator presses
+Refresh on the Health Center or saves Jen's configuration, no longer by any
+viewer opening the page or its automatic refresh.
+
 ## [5.65.1-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.32.1-beta.1 ... 5.65.0-beta.1
