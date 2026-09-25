@@ -197,10 +197,34 @@ class TestRecoveryBundleRoute:
         )
         assert r.status_code == 200
         assert r.headers["Content-Disposition"].startswith("attachment;")
+        assert r.data.startswith(b"JENREC2")  # v5.65.0: the streaming format
+        assert int(r.headers["Content-Length"]) == len(r.data)
         tf = open_bundle(r.data, self.PASSPHRASE)
         names = tf.getnames()
         assert "manifest.json" in names
         assert "jen_db.json.gz" in names
+
+    def test_an_over_the_cap_bundle_is_refused_with_no_file_left(
+        self, logged_in_client, db, mock_kea, monkeypatch, tmp_path
+    ):
+        """v5.65.0 (Q85) - the cap now bites on file SIZES before anything is written."""
+        from jen import extensions
+        from jen.services import recovery
+
+        content = tmp_path / "content"
+        content.mkdir()
+        (content / "big.bin").write_bytes(b"0" * 5000)
+        tmp = tmp_path / "tmp"
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(content))
+        monkeypatch.setattr(extensions, "CONTENT_TMP_DIR", str(tmp))
+        monkeypatch.setattr(recovery, "SIZE_CAP_BYTES", 4000)
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200 and b"size cap" in r.data
+        assert not tmp.exists() or list(tmp.iterdir()) == []
 
     def test_wrong_passphrase_cannot_open_it(self, logged_in_client, db, mock_kea):
         from jen.services.recovery import BadPassphrase, open_bundle
@@ -307,7 +331,7 @@ class TestBundleDownloadsAreNoStore:
         def boom(*a, **k):
             raise RuntimeError("build failed")
 
-        monkeypatch.setattr(recovery, "build", boom)
+        monkeypatch.setattr(recovery, "build_stream", boom)
         r = self._post_recovery(logged_in_client)
         assert r.status_code in (200, 302)
         assert list(tmp_path.iterdir()) == []

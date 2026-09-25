@@ -1603,15 +1603,47 @@ files.
 (`jen-recovery-<host>-<ts>.tar.enc`) that a new install can restore from
 via `sudo ./install.sh --restore <bundle>` — see the admin guide's
 "Recover Jen on a new machine" runbook for the operator-facing flow. The
-format is deliberately simple: `build_tar()` produces a plain
-uncompressed tar of the members below, then `encrypt()` wraps it as
-`MAGIC ("JENREC1") || salt || nonce || AES-GCM(...)`, the key derived
-from an operator-supplied passphrase via Scrypt (N=2^15, r=8, p=1) — no
-key material is stored anywhere; losing the passphrase loses the bundle.
-`MAGIC` doubles as the AEAD associated data, so a corrupted or edited
-header fails the same way a wrong passphrase does — `decrypt()`
-deliberately never distinguishes the two, to avoid leaking which guess
-was closer. A 200 MB cap is enforced before key derivation even starts.
+payload is deliberately simple: a plain uncompressed tar of the members
+below, encrypted with a key derived from an operator-supplied passphrase
+via Scrypt (N=2^15, r=8, p=1) — no key material is stored anywhere;
+losing the passphrase loses the bundle. A corrupted or edited bundle
+fails the same way a wrong passphrase does — the readers deliberately
+never distinguish the two, to avoid leaking which guess was closer.
+
+*Two envelope formats, both readable (v5.65.0).* `JENREC1` — `MAGIC ||
+salt || nonce || AES-GCM(whole tar)`, `MAGIC` as the associated data —
+is one AEAD message, so writer and reader each hold the bundle in memory
+(peak about 3x its size, hence its 200 MB cap, which `encrypt()` still
+enforces before key derivation). The export route now writes `JENREC2`,
+a chunked AES-GCM stream, so a bundle is never in memory on either side:
+
+```
+header  = "JENREC2"(7) | version(1) | salt(16) | chunk_size(4, BE) | nonce_prefix(8)   (36 bytes)
+chunk n = AES-GCM(key, nonce = nonce_prefix | n(4, BE),
+                  plaintext = chunk_size bytes of the tar (the last chunk: the tail + an 8-byte
+                              BE trailer holding the total tar length),
+                  AAD = header | n(4, BE) | is_last(1))
+```
+
+The counter and `is_last` are authenticated, and so is the header (salt,
+nonce prefix, chunk size) through the AAD, so a chunk cannot be dropped,
+duplicated, reordered, truncated off the end, appended after, or moved
+into another bundle without a tag failing. The reader never trusts a
+length or a flag it has not authenticated: it decides "is this the last
+chunk" from EOF and the AAD makes a wrong guess fail; it refuses a chunk
+size outside 4 KiB–64 MiB before allocating anything; and on the first
+failure of any kind it truncates what it had written and raises the same
+`BadPassphrase` as a wrong passphrase. Chunks are 4 MB, so writer and
+reader hold about two chunks: `build_stream()` writes tar entries
+straight into the cipher (files are handed over as paths and read in
+small pieces), `decrypt_stream()` writes plaintext to a scratch file
+that `restore.py` extracts from and deletes. The cap is now 2 GB of tar,
+checked against the file sizes before anything is written and again by
+the running total. `restore.py` detects the format by magic
+(`decrypt_any()`); its extract and rollback paths copy files in 1 MiB
+reads rather than reading each whole. The database dump inside the bundle
+is still assembled in memory by `dbexport` (a separate, much smaller
+problem).
 
 **The bundle is everything in §6.1's `/etc/jen/` row and most of
 `/var/lib/jen/`, in the clear once decrypted — it is explicitly NOT

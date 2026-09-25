@@ -521,14 +521,14 @@ def test_07_recovery_bundle_over_the_cap_is_refused_cleanly(stack):
     assert ok.status_code == 200 and "attachment" in ok.headers.get("Content-Disposition", ""), (
         f"control: a normal recovery bundle downloads on this stack ({ok.status_code})"
     )
-    assert ok.content.startswith(b"JENREC1"), "control: the download is a recovery bundle"
+    assert ok.content.startswith(b"JENREC2"), "control: the download is a recovery bundle"
 
     try:
         st.dexec(
             st.JEN,
             "sh",
             "-c",
-            "mkdir -p /var/lib/jen/icons && dd if=/dev/zero of=/var/lib/jen/icons/sys-big.bin bs=1M count=210 2>/dev/null",
+            "mkdir -p /var/lib/jen/icons && truncate -s 2200M /var/lib/jen/icons/sys-big.bin",
             user="www-data",
         )
         r = web.post("/settings/databases/recovery-bundle", form, page="/settings/databases", timeout=300)

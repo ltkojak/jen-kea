@@ -65,17 +65,43 @@ def _write_file(dest: Path, content: bytes, mode: int, owner: tuple[int, int] | 
             print(f"warning: could not set ownership on {dest}: {e}", file=sys.stderr)
 
 
-def extract_bundle(blob: bytes, passphrase: str, dest_dir: Path) -> None:
-    """Decrypt and extract every member of the bundle under `dest_dir`.
-    Raises `recovery.BadPassphrase` on a wrong passphrase or a
-    tampered/corrupt bundle — the caller decides what that means."""
-    from jen.services.recovery import open_bundle
+def _copy_file(src: Path, dest: Path, mode: int, owner: tuple[int, int] | None) -> None:
+    """`_write_file` for a file on disk: copied in small reads, never read whole
+    (a JENREC2 bundle can carry files far larger than memory is worth)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(src, "rb") as fin, open(dest, "wb") as fout:
+        shutil.copyfileobj(fin, fout, 1024 * 1024)
+    dest.chmod(mode)
+    if owner is not None and hasattr(os, "chown"):
+        try:
+            os.chown(dest, *owner)
+        except OSError as e:
+            print(f"warning: could not set ownership on {dest}: {e}", file=sys.stderr)
 
-    tf = open_bundle(blob, passphrase)
-    try:
-        safe_extract(tf, Path(dest_dir))
-    finally:
-        tf.close()
+
+def extract_bundle_file(in_fp, passphrase: str, dest_dir: Path, scratch_dir: Path | None = None) -> None:
+    """Decrypt a bundle of either format from the seekable file object `in_fp`
+    and extract every member under `dest_dir`. A JENREC2 bundle streams through
+    an anonymous scratch file (in `scratch_dir`; the restore passes its own work
+    directory rather than a possibly tiny /tmp), so neither the bundle nor its
+    plaintext is ever held in memory. Raises `recovery.BadPassphrase` on a wrong
+    passphrase or a tampered/corrupt bundle - the caller decides what that means."""
+    import tempfile
+
+    from jen.services.recovery import decrypt_any
+
+    with tempfile.TemporaryFile(dir=scratch_dir) as plain:
+        decrypt_any(in_fp, passphrase, plain)
+        plain.seek(0)
+        with tarfile.open(fileobj=plain, mode="r:") as tf:
+            safe_extract(tf, Path(dest_dir))
+
+
+def extract_bundle(blob: bytes, passphrase: str, dest_dir: Path) -> None:
+    """`extract_bundle_file` for a bundle already in memory."""
+    import io
+
+    extract_bundle_file(io.BytesIO(blob), passphrase, dest_dir)
 
 
 def safe_extract(tf, dest_dir: Path) -> None:
@@ -111,7 +137,7 @@ def safe_extract(tf, dest_dir: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         src = tf.extractfile(m)
         with open(target, "wb") as out:
-            out.write(src.read())
+            shutil.copyfileobj(src, out, 1024 * 1024)
         target.chmod(0o755 if m.mode & 0o111 else 0o644)
 
 
@@ -309,7 +335,7 @@ def restore_content(bundle_dir: Path, content_dir: Path) -> int:
             # files (content/keys/) as ordinary content; never write one
             # back world-readable.
             mode = 0o600 if rel.parts and rel.parts[0] == "keys" else 0o644
-            _write_file(content_dir / rel, path.read_bytes(), mode, owner)
+            _copy_file(path, content_dir / rel, mode, owner)
             count += 1
     return count
 
@@ -525,7 +551,8 @@ def _restore_tree(tar_path: Path, root: Path, exclude: tuple[str, ...] = ()) -> 
                 target.mkdir(parents=True, exist_ok=True)
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(tf.extractfile(m).read())
+            with open(target, "wb") as out:
+                shutil.copyfileobj(tf.extractfile(m), out, 1024 * 1024)
             target.chmod(m.mode & 0o777)
             if hasattr(os, "chown"):
                 with contextlib.suppress(OSError):
@@ -579,11 +606,11 @@ def run(
 
     content_dir = content_dir or extensions.CONTENT_DIR
 
-    blob = Path(bundle_path).read_bytes()
     with tempfile.TemporaryDirectory(prefix="jen-restore-") as tmp:
         bundle_dir = Path(tmp)
         try:
-            extract_bundle(blob, passphrase, bundle_dir)
+            with open(bundle_path, "rb") as bundle_fp:
+                extract_bundle_file(bundle_fp, passphrase, bundle_dir, scratch_dir=bundle_dir)
         except BadPassphrase as e:
             print(f"error: {e}", file=sys.stderr)
             return 1

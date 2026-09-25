@@ -152,11 +152,14 @@ def export_kea():
 # the support bundle (v5.33.0), this is meant to restore the box, not to
 # hand to someone else; the page and the admin guide both say so.
 #
-# Memory: the bundle is assembled IN MEMORY (`_recovery_members()` then
-# `recovery.build()`; peak roughly 3x the bundle size, capped at 200 MB by
-# recovery.SIZE_CAP_BYTES) and only then written to a tempfile and streamed
-# from it. A truly streaming format would need chunked AEAD (a JENREC2
-# format) — a MINOR-release change, not a release-candidate one.
+# Memory (v5.65.0, Q85): the bundle is written as JENREC2 — chunked AES-GCM —
+# straight into the tempfile by `recovery.build_stream()`, and every file under
+# /etc/jen and the content directory is handed over as a PATH, read in small
+# pieces while the tar is written. Peak memory is about two 4 MB chunks plus
+# the small in-memory members (manifest, config, keys, the database dump), not
+# a multiple of the bundle; the size cap is 2 GB (recovery.SIZE_CAP_BYTES) and
+# is checked against the file sizes before anything is written. JENREC1 bundles
+# (assembled in memory, 200 MB cap) are still READABLE by restore.py.
 
 
 def _recovery_manifest() -> dict:
@@ -193,12 +196,15 @@ def _recovery_manifest() -> dict:
     }
 
 
-def _walk_files(root: str, prefix: str, skip: set[str] | None = None) -> dict[str, bytes]:
-    """Every regular file under `root`, as `{f"{prefix}/{relpath}": content}`
-    (forward slashes — this goes into a tar, not a Windows path). `skip` is
-    a set of already-`os.path.normpath`'d absolute directories pruned from
-    the walk entirely (never even descended into)."""
-    out: dict[str, bytes] = {}
+def _walk_files(root: str, prefix: str, skip: set[str] | None = None) -> dict[str, str]:
+    """Every regular file under `root`, as `{f"{prefix}/{relpath}": path}`
+    (forward slashes in the archive name — this goes into a tar, not a Windows
+    path; the value is the file's path on disk, which `recovery.build_stream`
+    reads in small pieces, so nothing is loaded whole here). `skip` is a set of
+    already-`os.path.normpath`'d absolute directories pruned from the walk
+    entirely (never even descended into). A file that cannot be read is skipped
+    with a warning when the bundle is written."""
+    out: dict[str, str] = {}
     if not os.path.isdir(root):
         return out
     skip = skip or set()
@@ -209,18 +215,18 @@ def _walk_files(root: str, prefix: str, skip: set[str] | None = None) -> dict[st
         dirnames[:] = [d for d in dirnames if os.path.normpath(os.path.join(dirpath, d)) not in skip]
         for fn in filenames:
             full = os.path.join(dirpath, fn)
+            if not os.path.isfile(full):  # a dangling symlink, a socket - nothing to archive
+                continue
             rel = os.path.relpath(full, root).replace(os.sep, "/")
-            try:
-                with open(full, "rb") as f:
-                    out[f"{prefix}/{rel}"] = f.read()
-            except OSError as e:
-                logger.warning(f"recovery bundle: could not read {full}: {e}")
+            out[f"{prefix}/{rel}"] = full
     return out
 
 
-def _recovery_members() -> dict[str, bytes]:
-    """Every file the bundle carries, as `{archive path: content}`."""
-    members: dict[str, bytes] = {"manifest.json": json.dumps(_recovery_manifest(), indent=2).encode("utf-8")}
+def _recovery_members() -> dict[str, bytes | str]:
+    """Every file the bundle carries, as `{archive path: content}` — `bytes`
+    for the small generated members, a filesystem path (str) for files that
+    are streamed from disk."""
+    members: dict[str, bytes | str] = {"manifest.json": json.dumps(_recovery_manifest(), indent=2).encode("utf-8")}
 
     if os.path.isfile(extensions.CONFIG_FILE):
         with open(extensions.CONFIG_FILE, "rb") as f:
@@ -301,10 +307,25 @@ def recovery_bundle():
         flash("Passphrases did not match.", "error")
         return redirect(url_for("database.database", tab="recovery"))
 
+    hostname = socket.gethostname() or "jen"
+    ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
+    filename = f"jen-recovery-{hostname}-{ts}.tar.enc"
+
+    tmp_path = None
+
+    def _discard():
+        if tmp_path:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
+
     try:
         members = _recovery_members()
-        blob = recovery.build(members, passphrase)
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".tar.enc")
+        with os.fdopen(fd, "wb") as f:
+            size = recovery.build_stream(members, passphrase, f)
     except recovery.BundleTooLarge as e:
+        _discard()
         logger.warning(f"recovery bundle too large: {e}")
         flash(
             f"Recovery bundle would be over the {recovery.SIZE_CAP_BYTES // (1024 * 1024)} MB size cap — "
@@ -313,21 +334,14 @@ def recovery_bundle():
         )
         return redirect(url_for("database.database", tab="recovery"))
     except Exception as e:
+        # anything that fails BEFORE streaming starts leaves no file behind
+        _discard()
         logger.error(f"recovery bundle build failed: {e}")
         flash("Could not build the recovery bundle — see server logs.", "error")
         return redirect(url_for("database.database", tab="recovery"))
 
-    hostname = socket.gethostname() or "jen"
-    ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
-    filename = f"jen-recovery-{hostname}-{ts}.tar.enc"
-
-    tmp_path = None
     try:
-        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
-        fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".tar.enc")
-        with os.fdopen(fd, "wb") as f:
-            f.write(blob)
-        __user.audit("RECOVERY_BUNDLE_EXPORT", "settings", f"{filename} ({len(blob)} bytes, {len(members)} members)")
+        __user.audit("RECOVERY_BUNDLE_EXPORT", "settings", f"{filename} ({size} bytes, {len(members)} members)")
 
         def _stream():
             try:
@@ -343,15 +357,12 @@ def recovery_bundle():
             mimetype="application/octet-stream",
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Length": str(len(blob)),
+                "Content-Length": str(size),
                 "Cache-Control": "no-store",  # a secrets file: never cached by a browser or proxy
             },
         )
     except Exception as e:
-        # anything that fails BEFORE streaming starts leaves no file behind
-        if tmp_path:
-            with contextlib.suppress(OSError):
-                os.remove(tmp_path)
+        _discard()
         logger.error(f"recovery bundle write failed: {e}")
         flash("Could not build the recovery bundle — see server logs.", "error")
         return redirect(url_for("database.database", tab="recovery"))

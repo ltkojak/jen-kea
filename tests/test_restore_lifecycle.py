@@ -19,7 +19,7 @@ import types
 
 import pytest
 
-from jen.services.recovery import build
+from jen.services.recovery import build, build_stream
 from jen.tools import restore
 
 PASS = "correct horse battery staple"
@@ -165,6 +165,23 @@ class TestHappyPath:
         assert (world.content / "icons" / "extra.png").read_bytes() == b"added-by-restore"
         assert ("health", 5777) in world.events
         assert list((world.content / "backups").glob("pre-restore-*"))
+
+    def test_a_jenrec2_bundle_restores_the_same_way(self, world):
+        """v5.65.0 (Q85) - the streaming format goes through the same lifecycle:
+        decrypted chunk by chunk to a scratch file, extracted, applied."""
+        blob = _make_bundle(world, extra={"content/icons/extra.png": b"added-by-restore"}, stream=True)
+        assert blob.startswith(b"JENREC2")
+        assert _run(world) == 0
+        assert (world.etc / "mfa_key").read_bytes() == b"NEW-MFA"
+        assert (world.content / "icons" / "extra.png").read_bytes() == b"added-by-restore"
+        assert ("health", 5777) in world.events
+
+    def test_a_tampered_jenrec2_bundle_is_refused_before_anything_is_stopped(self, world):
+        blob = bytearray(_make_bundle(world, stream=True))
+        blob[-3] ^= 0xFF
+        world.bundle.write_bytes(bytes(blob))
+        assert _run(world) == 1
+        assert world.events == []  # no systemctl, no snapshot, no DB call
 
     def test_not_running_is_left_stopped_unless_start_given(self, world):
         world.state.active = False
@@ -393,7 +410,7 @@ class TestHealthPoll:
 # no systemctl call at all.
 
 
-def _make_bundle(w, manifest=None, extra=None, passphrase=PASS):
+def _make_bundle(w, manifest=None, extra=None, passphrase=PASS, stream=False):
     m = _manifest()
     m.update(manifest or {})
     members = {
@@ -404,6 +421,10 @@ def _make_bundle(w, manifest=None, extra=None, passphrase=PASS):
         "jen_db.json.gz": b"irrelevant-here",
     }
     members.update(extra or {})
+    if stream:
+        with open(w.bundle, "wb") as fh:
+            build_stream(members, passphrase, fh)
+        return w.bundle.read_bytes()
     blob = build(members, passphrase)
     w.bundle.write_bytes(blob)
     return blob

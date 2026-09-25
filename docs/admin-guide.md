@@ -1128,6 +1128,8 @@ sudo systemctl restart jen
 - Uploaded content (custom icons, the nav logo) — not the plugin code trees themselves (those come back from the plugin registry on restore) and not the scheduled-backup archives (redundant with the fresh export just taken).
 - The latest Kea config Jen has a record of pushing or noticing, per server and service — a reference copy, never pushed anywhere automatically.
 
+Since 5.65.0 the bundle is written and read as a stream (format `JENREC2`), so building or restoring one no longer needs memory in proportion to its size, and the size limit is 2 GB rather than 200 MB. A bundle made by an earlier Jen (`JENREC1`) still restores exactly as before. A bundle that was cut short or edited is refused with the same message as a wrong passphrase, and nothing on the box is touched.
+
 The bundle is only as secret as the passphrase. Anyone with both the file and the passphrase can read all of the above. Store the file somewhere only you control, and never send the passphrase alongside it (a different channel, or memorize it).
 
 **Restore**, on the new machine, after a normal `sudo ./install.sh` has already set up Jen (venv, systemd unit, sudoers) with its own fresh secrets:
