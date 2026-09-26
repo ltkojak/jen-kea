@@ -58,6 +58,35 @@ def _ip_to_int(ip):
 
 @bp.route("/api/v1/health")
 def api_v1_health():
+    """Jen's own liveness, answered from Jen alone (v5.65.6, Q95). `kea_up` / `kea_version` come from
+    the last probe the background poller made (null until one has, or when it has gone stale) and this
+    route never calls Kea. It used to probe live, twice, each up to the Kea API timeout: with Kea down
+    - a condition Jen is meant to survive - it took ~20 s, and the self-updater's version confirmation
+    (5 s timeout) and the restore's health poll read that as "Jen is not up" and ROLLED BACK a healthy
+    update or restore. Callers that want a live probe use /api/v1/health/kea."""
+    from jen import JEN_VERSION as _ver
+    from jen.services.kea import cached_kea_health
+
+    cached = cached_kea_health()
+    return api_ok(
+        {
+            "jen_version": _ver,
+            "kea_up": cached["up"],
+            "kea_version": cached["version"],
+            "kea_checked_at": cached["checked_at"],
+            "subnets": len(extensions.SUBNET_MAP),
+        }
+    )
+
+
+@bp.route("/api/v1/health/kea")
+def api_v1_health_kea():
+    """The live probe (v5.65.6): asks the active Kea server now, so it can take as long as the Kea
+    API timeout when Kea is unreachable. Needs an API key - unlike /api/v1/health, which anyone can
+    poll, this one makes Jen wait on a network call per request."""
+    key = _api_auth()
+    if not key:
+        return api_error("Invalid or missing API key.", 401)
     up = kea_is_up()
     version = ""
     try:
@@ -67,9 +96,7 @@ def api_v1_health():
             version = version.splitlines()[0] if version else ""
     except Exception:
         pass
-    from jen import JEN_VERSION as _ver
-
-    return api_ok({"jen_version": _ver, "kea_up": up, "kea_version": version, "subnets": len(extensions.SUBNET_MAP)})
+    return api_ok({"kea_up": up, "kea_version": version})
 
 
 @bp.route("/api/v1/subnets")

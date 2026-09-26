@@ -331,3 +331,34 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
             r = logged_in_client.get("/api/stats")
         assert r.status_code == 200
         assert b"mno901" not in r.data
+
+
+class TestPluginsReportOnly:
+    """v5.65.6 (Q95) - the same scanner over the bundled plugins, REPORT-ONLY.
+
+    plugins/*/plugin.py were never scanned, and carry the same leak: a database or socket failure's own
+    text in a flash() or an API response. This prints every site it finds (as a pytest warning, so it
+    shows in the run summary) and passes. The plugin releases of this round fixed the sites in ipam,
+    presence and wol; Q96 fixes the rest and flips this to blocking, so a new leak in a plugin fails CI
+    the way one in jen/routes does."""
+
+    def test_report_the_plugin_sites(self):
+        import glob
+        import warnings
+
+        files = sorted(glob.glob("plugins/*/plugin.py"))
+        assert len(files) >= 6, "sanity check that the glob found the bundled plugins"
+        report = {}
+        for path in files:
+            found = _scan_route_file_for_raw_exception_leaks(path)
+            if found:
+                report[path] = found
+        total = sum(len(v) for v in report.values())
+        lines = [f"  {path}:{n}: {text}" for path, found in report.items() for n, text in found]
+        warnings.warn(
+            f"report-only: {total} raw-exception site(s) in bundled plugins (Q96 makes this blocking):\n"
+            + "\n".join(lines),
+            UserWarning,
+            stacklevel=1,
+        )
+        print("\n".join(lines))

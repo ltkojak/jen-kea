@@ -8,8 +8,12 @@ name: System boundaries
 # the unit suite proves each rule in isolation; this proves the rules
 # survive contact with processes that die, stall and lie.
 #
-# Weekly, on demand (`gh workflow run system-tests.yml`), and on every
-# release-candidate tag (`vX.Y.Z-rc.N`). Deliberately NOT called from
+# Weekly, on demand (`gh workflow run system-tests.yml`), on every
+# release-candidate tag (`vX.Y.Z-rc.N`), and - since v5.65.6 (Q95) - on every
+# beta tag (`vX.Y.Z-beta.N`), where it runs the CRITICAL subset only (Docker boot,
+# restore, the change-set partial failure and both rollback scenarios, and
+# /api/v1/health with Kea frozen: the ones an operator's data or a self-update
+# depends on); the full set stays weekly / rc / dispatch. Deliberately NOT called from
 # ci.yml or release.yml — like kea-compat.yml, a slow or flaky boundary
 # test must never turn a push or a tagged release red. A red run is read
 # in the job summary; it does not open an issue.
@@ -27,13 +31,14 @@ on:
   push:
     tags:
       - 'v*-rc.*'
+      - 'v*-beta.*'
 
 permissions:
   contents: read
 
 jobs:
   system:
-    name: Ten boundary scenarios
+    name: Boundary scenarios
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -57,8 +62,17 @@ jobs:
       - name: Run the scenarios
         env:
           SELECT: ${{ github.event.inputs.select }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          # 00 the stack boots, 01 restore, 02 change set when a server dies, 03 failed-restart rollback,
+          # 11 /api/v1/health with Kea frozen, 12 a revert whose restart fails is a persistent rollback_failed
+          CRITICAL: 'test_00 or test_01 or test_02 or test_03 or test_11 or test_12'
         run: |
           mkdir -p system-results
+          if [ -z "$SELECT" ] && [ "$EVENT" = "push" ] && [[ "$REF_NAME" == *-beta.* ]]; then
+            SELECT="$CRITICAL"
+            echo "beta tag $REF_NAME: running the critical subset ($SELECT)"
+          fi
           if [ -n "$SELECT" ]; then
             python -m pytest tests/system -m system -v -k "$SELECT"
           else

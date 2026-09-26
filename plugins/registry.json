@@ -78,7 +78,7 @@
   {
     "id": "ipam",
     "name": "IPAM Lite",
-    "version": "1.6.1",
+    "version": "1.6.2",
     "description": "Full IP address space management for Kea-managed AND unmanaged subnets, using everything Jen already knows: gateway, DNS and pool awareness (an address inside a DHCP pool is marked; infrastructure addresses are labelled, never \"available\"), a one-click next free address outside the pools, the devices table beside each lease, conflicts when a static address is taken by a DHCP client, per-address history, range operations, and Netbox/CSV import and export with a review step. Alerts on new conflicts, a JSON API for entries and next-free, and a global search provider. Replaces Netbox for simple static IP tracking.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.57.0",
@@ -177,8 +177,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ipam_conflict_state (id INT AUTO_INCREMENT PRIMARY KEY, ip VARCHAR(15) NOT NULL, subnet_kind ENUM('kea','ipam') NOT NULL, subnet_id INT NOT NULL, first_detected DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uniq_conflict (ip, subnet_kind, subnet_id))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.6.1",
-    "sha256": "4829106d36d938dde6a358b2e48b29fc93f3128daa2b64febef2c3b84571f971",
+    "download_url": "https://github.com/ltkojak/jen-plugin-ipam/raw/v1.6.2",
+    "sha256": "a46c37ff3dd3a81531f5c70b8929ce6eae204753668940a2c3210a50d405d8c5",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-ipam/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-ipam",
     "plugin_api": 3
@@ -331,10 +331,10 @@
   {
     "id": "wol",
     "name": "Wake & Actions",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Wake-on-LAN from any lease, reservation, or device row, plus a favourites list for the hosts you wake often. Sends a standard magic packet (with optional SecureOn password) to both the subnet's directed broadcast and 255.255.255.255.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.65.2",
+    "requires_jen": "5.65.6",
     "tags": [
       "network",
       "automation"
@@ -352,10 +352,15 @@
         "version": 1,
         "description": "wol_hosts table",
         "sql": "CREATE TABLE IF NOT EXISTS wol_hosts (id INT AUTO_INCREMENT PRIMARY KEY, mac VARCHAR(17) NOT NULL UNIQUE, ip VARCHAR(15) NULL, subnet_id INT NULL, label VARCHAR(100), secureon VARCHAR(23) NULL, last_woken_at DATETIME NULL, last_woken_by VARCHAR(100) NULL)"
+      },
+      {
+        "version": 2,
+        "description": "wol_hosts: secureon widened to TEXT so it can hold the encrypted form",
+        "sql": "ALTER TABLE wol_hosts MODIFY COLUMN secureon TEXT NULL"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.0.1",
-    "sha256": "73dabc5614372a878e0c390b7ab5679014a931013ae36459630fb91ca11ad374",
+    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.0.2",
+    "sha256": "dfd404cc3a5d90cd3bce206f17ce75c97ba195bd8db3239082be151a1c8db128",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-wol/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-wol",
     "plugin_api": 3
@@ -363,10 +368,10 @@
   {
     "id": "presence",
     "name": "Presence",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Publishes tracked devices' online/offline state to Home Assistant (webhook), MQTT, or any HTTP endpoint, so the house can react to a phone joining or leaving. Opt-in per MAC — nothing is published for a device you haven't chosen to track.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.65.2",
+    "requires_jen": "5.65.6",
     "tags": [
       "network",
       "automation",
@@ -397,8 +402,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS pr_sinks (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, kind ENUM('ha_webhook','mqtt','http') NOT NULL, url VARCHAR(255) NOT NULL, credential TEXT, topic_prefix VARCHAR(100) NOT NULL DEFAULT 'jen/presence', retain TINYINT(1) NOT NULL DEFAULT 1, discovery TINYINT(1) NOT NULL DEFAULT 0, enabled TINYINT(1) NOT NULL DEFAULT 1, last_error VARCHAR(300) NULL)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.0.1",
-    "sha256": "02e40aa0b817b6a43e2de0a6bd3f4abc3e62e2f1a261053f13db686edfff0aed",
+    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.0.2",
+    "sha256": "4dce0f6f4ede35842149f0f53b0d0382db843867ac58d756dfbd30e82f890ecd",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-presence/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-presence",
     "plugin_api": 3

@@ -177,6 +177,46 @@ def load_device(mac: str) -> dict | None:
         return None
 
 
+def client_subnet_for_mac(mac: str) -> int | None:
+    """The subnet a client is in RIGHT NOW, by the ONE precedence Jen uses everywhere a plugin (or a
+    core surface) has to attribute a MAC to a subnet: its current lease, then its reservation, then
+    the device table's last known subnet, else None. (v5.65.6, Q95.)
+
+    "Current lease" is Jen's own definition of active: state 0 and not past its expiry. A reservation
+    with no subnet (a global one) says nothing about where the client is, so it is skipped. None means
+    "no attributable subnet", which the callers must treat as unrestricted-only (`can_access_subnet`).
+    Wake, Presence and Switch Port each carried a private variant with a slightly different order; this
+    is the single place the order is decided. Never raises: an unreadable table is a missing source."""
+    mac = (mac or "").strip().lower()
+    if not mac:
+        return None
+    hexed = mac_hex(mac)
+    try:
+        with __db.kea_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT subnet_id FROM lease4 WHERE HEX(hwaddr)=%s AND state=0 AND expire > NOW() "
+                "ORDER BY expire DESC LIMIT 1",
+                (hexed,),
+            )
+            row = cur.fetchone()
+            if row and row["subnet_id"]:
+                return int(row["subnet_id"])
+            cur.execute(
+                "SELECT dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp_identifier_type=0 "
+                "AND HEX(dhcp_identifier)=%s AND dhcp4_subnet_id > 0 LIMIT 1",
+                (hexed,),
+            )
+            row = cur.fetchone()
+            if row and row["subnet_id"]:
+                return int(row["subnet_id"])
+    except Exception as e:
+        logger.error(f"client_subject: subnet lookup failed for mac={mac!r}: {e}")
+    device = load_device(mac)
+    if device and device.get("last_subnet_id"):
+        return int(device["last_subnet_id"])
+    return None
+
+
 def load_leases4(mac: str, ip: str = "") -> list[dict]:
     """Every active (state=0) v4 lease for this identifier — MAC first, or
     the single lease at this address when only an IP is known — newest
@@ -337,7 +377,12 @@ def macs_for_hostname(hostname: str, accessible_ids=None) -> set[str]:
                 "WHERE hostname=%s AND dhcp_identifier_type=0",
                 (hostname,),
             )
-            macs |= {_hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and keep(r["subnet_id"])}
+            # A GLOBAL reservation (no subnet: dhcp4_subnet_id 0 or NULL) belongs to no subnet a caller can be
+            # scoped out of, and `authorize()` keeps it for everyone; the hostname lookup used to drop it for a
+            # scoped caller, so a client known only by a global reservation was findable by MAC but not by name.
+            macs |= {
+                _hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and (not r["subnet_id"] or keep(r["subnet_id"]))
+            }
     except Exception as e:
         logger.error(f"client_subject: hostname lease/reservation lookup failed for {hostname!r}: {e}")
     try:

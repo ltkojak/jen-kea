@@ -58,10 +58,15 @@ def build_spec(version: str, base_url: str = "") -> dict:
                     "type": "object",
                     "properties": {
                         "jen_version": {"type": "string"},
-                        "kea_up": {"type": "boolean"},
-                        "kea_version": {"type": "string"},
+                        "kea_up": {"type": "boolean", "nullable": True},
+                        "kea_version": {"type": "string", "nullable": True},
+                        "kea_checked_at": {"type": "string", "nullable": True},
                         "subnets": {"type": "integer"},
                     },
+                },
+                "HealthKea": {
+                    "type": "object",
+                    "properties": {"kea_up": {"type": "boolean"}, "kea_version": {"type": "string"}},
                 },
                 "Subnet": {
                     "type": "object",
@@ -324,7 +329,17 @@ def build_spec(version: str, base_url: str = "") -> dict:
         },
         "paths": {
             "/api/v1/health": {
-                "get": {"summary": "Kea status and Jen version (no auth)", "responses": {"200": _resp("OK", "Health")}}
+                "get": {
+                    "summary": "Jen version and the last known Kea status, from cache (no auth; never calls Kea)",
+                    "responses": {"200": _resp("OK", "Health")},
+                }
+            },
+            "/api/v1/health/kea": {
+                "get": {
+                    "summary": "A live Kea probe: may take as long as the Kea API timeout when Kea is unreachable (v5.65.6)",
+                    "security": [_KEY],
+                    "responses": {"200": _resp("OK", "HealthKea"), "401": _ERR},
+                }
             },
             "/api/v1/health/checks": {
                 "get": {

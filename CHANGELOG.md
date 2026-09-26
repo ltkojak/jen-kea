@@ -2,6 +2,90 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.6-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.5-beta.1
+run. The release-candidate review of 5.65.5: eight findings from an outside
+review, all verified against the tree, plus one the system-boundary suite had
+already found and nobody had queued. It bundles IPAM Lite 1.6.2, Presence 1.0.2
+and Wake & Actions 1.0.2, each tagged and CI-green in its own repository first.
+This is the last code before a promotion.
+
+**`/api/v1/health` no longer waits on Kea.** This is the one an operator could
+have been bitten by. The endpoint called Kea twice, live, each call allowed up to
+the Kea API timeout. With Kea unreachable, which is a condition Jen is meant to
+survive, it took about twenty seconds. The self-updater confirms the running
+version by polling that endpoint with a five-second timeout, and a restore's health
+poll does the same, so with Kea down an update read "Jen is not answering" five
+times and rolled a healthy update back, and a restore rolled a healthy restore
+back. The endpoint now answers from Jen alone: the version and subnet count as
+before, and `kea_up` and `kea_version` from the last probe the background poller
+made, `null` until there has been one or when the last is more than two minutes
+old, plus `kea_checked_at` saying when. A separate `GET /api/v1/health/kea`, which
+needs an API key, keeps the live probe for anything that wants one. The unit
+tests hold the route to under a second when every Kea call would take five, and a
+new system scenario freezes both Kea servers and requires the endpoint to answer
+inside three seconds while the real updater's version confirmation succeeds.
+
+**A rollback whose restart fails is now reported, and remembered, as a failed
+rollback.** When one server of several committed a configuration change and a
+later server failed, the change set puts the committed server back on its old
+config and restarts it. If that restart failed, Jen showed a warning line and
+called the outcome `aborted`, and only `rolled_back` and `rollback_failed` are
+written to the Servers page banner. So the operator could be told "nothing was
+changed" about a server whose daemon was in fact stopped. That outcome is now an
+error line naming the server, `rollback_failed`, the server listed as needing
+attention, and the persisted banner, the same as the restart-phase rollback that
+5.65.1 fixed. A mixed case, where one server's revert call failed and another
+restored but would not restart, lists both. The test that pinned the old warning
+was rewritten, not removed, and a system scenario runs exactly the sequence: A
+commits, B dies, A reverts, A will not restart.
+
+IPAM Lite's unmanaged subnets were a global object with an ordinary admin's
+permissions. Who could see them was decided by whether an account could see
+every subnet, but who could create or delete one was decided by "is an admin",
+so a subnet-scoped admin could add unmanaged subnets they could never see,
+delete one by a guessed id, and read hidden subnets' names and CIDRs out of the
+overlap messages; and because the overlap check against Kea subnets ran over the
+caller's own subnets only, could create an unmanaged network overlapping a Kea
+subnet they have no access to. Creating and deleting now need an administrator who
+can see every subnet, the button follows, and the overlap checks run over the full
+map. The plugin route scanner had filed those two routes under "scoped by a
+subnet id in the URL" although they take none, which is what a reason written
+in a table cannot catch, so the matrix module now enumerates every mutation route
+of every bundled plugin from the live URL map and fails, naming the route, when
+none of its rows exercises it; twenty-one rows were added for the routes that had
+none, including these two.
+
+Presence now follows a client that changes subnet. `pr_tracked.subnet_id` was
+written once, when the device was tracked, and the page and the untrack route
+authorise on it, so a user scoped to the old subnet kept seeing and removing a
+client that lived in another. Jen adds `client_subnet_for_mac` to the plugin API,
+the one precedence for attributing a MAC to a subnet (current lease, then
+reservation, then the device's last known subnet), and Presence refreshes the stored
+subnet from it on every lease event it handles, handles `lease.ip_changed` too,
+and marks a device offline on `lease.expired` only when no active lease remains for
+its MAC. Wake & Actions uses the same helper in place of its private lookup, and
+also stores its SecureOn password encrypted (a legacy plain value still works and is
+re-encrypted the first time it is used). Wake and Presence now require this release.
+
+The hostname search no longer drops a client known only by a global reservation.
+`authorize` keeps a reservation with no subnet for every caller, but the hostname
+lookup required one in the caller's set, so such a client could be found by MAC and
+not by name. Reservations with no subnet are now kept for everyone; leases and devices
+with no subnet stay for unrestricted callers.
+
+The raw-exception scanner, which covered only Jen's own routes, now also runs over the
+bundled plugins in report-only mode: it passes, and lists every site where a database or
+socket failure's own text would reach a page or an API response, as a warning in the
+test summary. The IPAM, Presence and Wake releases fixed theirs; the rest is queued
+so the scanner can become blocking.
+
+The system-boundary workflow now also runs on beta tags, with only the critical scenarios
+(the stack boots, restore, the change-set partial failure, both rollback scenarios, and the
+health endpoint with Kea frozen), so a beta tag can no longer go out without one of the
+boundary checks having run; the full set stays weekly, on release candidates and on demand.
+
 ## [5.65.5-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.4-beta.1

@@ -114,7 +114,8 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   and `tests/system/conftest.py` overrides the unit suite's autouse DB fixtures the way
   `tests/kea_compat/conftest.py` does. It belongs to its own workflow,
   `.github/workflows/system-tests.yml` (weekly, `workflow_dispatch` with an optional `-k`
-  selector, and any `-rc.` tag — NOT called from ci.yml/release.yml, so a slow boundary
+  selector, any `-rc.` tag, and — the critical subset only, `test_00/01/02/03/11/12` — any `-beta.` tag;
+  NOT called from ci.yml/release.yml, so a slow boundary
   test can't redden a push or a tag). It has no Docker or WSL here, so a change to it
   is verified by dispatching the workflow (`gh workflow run system-tests.yml`, ~10 min a
   round). The job summary is the per-scenario table (`summarize.py`); a red run is read

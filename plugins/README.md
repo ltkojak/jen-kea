@@ -118,6 +118,7 @@ nothing new lives behind it, and importing it does no work:
 | Audit & settings | `audit(action, entity, details)`, `get_global_setting(key, default)`, `set_global_setting(key, value)` |
 | Access control | `assert_subnet_access(subnet_id)`, `get_accessible_subnet_map()`, `is_admin_or_above()`, `is_superadmin()`, decorators `admin_required`, `superadmin_required`, `viewer_or_above`; `can_access_subnet(subnet_id, *, allow_unattributed=False)` and `api_key_can_access_subnet(key, subnet_id, *, allow_unattributed=False)` (v5.65.2) |
 | Diagnostic surface (v5.65.2) | decorator `diagnostic_surface(subject="client")` — mark a route that looks up one client (see below) |
+| Client | `client_subnet_for_mac(mac)` → the subnet a client is in now, by Jen's ONE precedence (current lease, then reservation, then the device's last known subnet), or `None` — treat `None` as unrestricted-only via `can_access_subnet` (v5.65.6) |
 | Subnets | `subnet_map()` (all IPv4 subnets), `subnet_context(subnet_id)`, `classify_address(ctx, ip)`, `in_pool(ctx, ip)`, `dhcp4_config()` |
 | Alerts | `send_alert(alert_type, subnet_id=…, subject=…, body=…)` |
 | Background | `register_periodic(plugin_id, name, fn, every_minutes)`, `unregister_periodic`, `periodic_jobs()` |

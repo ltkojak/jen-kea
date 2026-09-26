@@ -482,3 +482,49 @@ class TestMacsForHostnameIsSubnetFiltered:
             assert scoped.kind == "mac" and scoped.mac == self.A_MAC and scoped.candidates == []
         finally:
             self._clean(db)
+
+
+class TestGlobalReservationsAreKeptInHostnameLookup:
+    """v5.65.6 (Q95 g): a reservation with no subnet (dhcp4_subnet_id 0 or NULL) is kept for every
+    caller, exactly as `authorize()` keeps it; only unattributed leases and devices stay
+    unrestricted-only."""
+
+    G_MAC, L_MAC, D_MAC = "aa:bb:cc:dd:e0:a1", "aa:bb:cc:dd:e0:b1", "aa:bb:cc:dd:e0:c1"
+    HOST = "q95-global"
+    HEXES = "('AABBCCDDE0A1','AABBCCDDE0B1','AABBCCDDE0C1')"
+
+    def _clean(self, db):
+        with db.cursor() as cur:
+            cur.execute(f"DELETE FROM lease4 WHERE HEX(hwaddr) IN {self.HEXES}")
+            cur.execute(f"DELETE FROM hosts WHERE HEX(dhcp_identifier) IN {self.HEXES}")
+            cur.execute("DELETE FROM devices WHERE mac IN (%s, %s)", (self.G_MAC, self.D_MAC))
+        db.commit()
+
+    def _seed(self, db):
+        self._clean(db)
+        with db.cursor() as cur:
+            # G: a GLOBAL reservation (subnet 0); L: a lease in subnet 2; D: a device with no subnet
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDE0A1'), 0, 0, inet_aton('10.98.9.31'), %s)",
+                (self.HOST,),
+            )
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, valid_lifetime, expire, state, hostname) VALUES "
+                "(inet_aton('10.77.0.41'), UNHEX('AABBCCDDE0B1'), 2, 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 0, %s)",
+                (self.HOST,),
+            )
+            cur.execute("INSERT INTO devices (mac, last_hostname) VALUES (%s, %s)", (self.D_MAC, self.HOST))
+        db.commit()
+
+    def test_a_scoped_caller_finds_a_client_known_only_by_a_global_reservation(self, db):
+        from jen.services.client_subject import macs_for_hostname
+
+        self._seed(db)
+        try:
+            assert macs_for_hostname(self.HOST, {1}) == {self.G_MAC}  # the global one, not B's lease, not the device
+            assert macs_for_hostname(self.HOST, set()) == {self.G_MAC}  # kept even for a caller with no subnets
+            assert macs_for_hostname(self.HOST, {2}) == {self.G_MAC, self.L_MAC}
+            assert macs_for_hostname(self.HOST) == {self.G_MAC, self.L_MAC, self.D_MAC}  # unrestricted: all
+        finally:
+            self._clean(db)

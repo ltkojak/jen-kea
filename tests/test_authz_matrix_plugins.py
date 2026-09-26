@@ -23,6 +23,7 @@ this file is what proves each fix. As of v5.65.5 every plugin fix has shipped an
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -48,6 +49,13 @@ from tests.test_authz_matrix import (  # noqa: F401 - fixtures are used by name
 # every test here runs on top of the shared two-subnet fixture
 pytestmark = pytest.mark.usefixtures("seeded")
 
+
+class FormBody(dict):
+    """A row body sent as a form (`application/x-www-form-urlencoded`), for the routes that read
+    `request.form`. A JSON body would leave the form empty, and the route would refuse it for
+    being empty, which proves nothing about who may call it."""
+
+
 N_MAC = "de:ad:be:ef:00:cd"  # a MAC Jen has never leased or reserved: no attributable subnet
 NULL_LABEL = B_NAME + "-nullsubnet"  # contains the B marker
 WD_B, WD_NULL = 9101, 9102
@@ -55,6 +63,7 @@ WOL_B, WOL_NULL = 9301, 9302
 DS_B = 9201
 SP_B = 9401
 PR_SINK = 9501
+IPAM_U = 9601
 
 Q93 = "Q93 (watchdog 1.0.2 / dns-sync 1.0.2 / IPAM 1.6.1)"
 Q94 = "Q94 (switchport 1.0.1 / wol 1.0.1 / presence 1.0.1)"
@@ -117,6 +126,18 @@ def plugin_app():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _wipe_created(cur):
+    """Everything the mutation rows might have created, and the unmanaged-subnet seed."""
+    cur.execute("DELETE FROM ipam_subnets WHERE id=%s OR name=%s", (IPAM_U, "created-by-matrix"))
+    cur.execute("DELETE FROM ipam_static_entries WHERE label=%s", ("created-by-matrix",))
+    cur.execute("DELETE FROM ds_targets WHERE name=%s", ("created-by-matrix",))
+    cur.execute("DELETE FROM sp_switches WHERE name=%s", ("created-by-matrix",))
+    cur.execute("DELETE FROM nd_scan_jobs WHERE subnet_id=2")
+    cur.execute("DELETE FROM nd_settings WHERE subnet_id=2")
+    cur.execute("DELETE FROM nd_known_hosts WHERE note=%s", ("created-by-matrix",))
+    cur.execute("DELETE FROM wol_hosts WHERE label=%s", ("created-by-matrix",))
+
+
 @pytest.fixture
 def pclient(plugin_app):
     return plugin_app.test_client()
@@ -138,6 +159,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (SP_B,))
         cur.execute("DELETE FROM sp_switches WHERE id=%s", (SP_B,))
         cur.execute("DELETE FROM pr_sinks WHERE id=%s OR name=%s", (PR_SINK, "created-by-matrix"))
+        _wipe_created(cur)
 
         cur.execute(
             "INSERT INTO wd_targets (id, ip, mac, subnet_id, label, source, probe) VALUES "
@@ -166,6 +188,9 @@ def plugin_data(plugin_app, db):
             (PR_SINK,),
         )
         cur.execute(
+            "INSERT INTO ipam_subnets (id, name, cidr) VALUES (%s, %s, '10.55.5.0/24')", (IPAM_U, B_NAME + "-unmanaged")
+        )
+        cur.execute(
             "INSERT INTO ds_targets (id, name, kind, url, domain, sources, subnet_ids, enabled, previewed_at) VALUES "
             "(%s, %s, 'pihole', 'http://10.77.0.53', 'lan', 'leases,reservations', '[2]', 1, NOW())",
             (DS_B, B_NAME),
@@ -189,6 +214,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (SP_B,))
         cur.execute("DELETE FROM sp_switches WHERE id=%s", (SP_B,))
         cur.execute("DELETE FROM pr_sinks WHERE id=%s OR name=%s", (PR_SINK, "created-by-matrix"))
+        _wipe_created(cur)
     db.commit()
 
 
@@ -260,6 +286,63 @@ def _ds_b_untouched(db, ctx):
     if row is None:
         return "the subnet-B DNS-sync target was DELETED"
     return "" if row["enabled"] == 1 else "the subnet-B DNS-sync target was toggled"
+
+
+def _ds_nothing_created(db, ctx):
+    return (
+        ""
+        if not _one(db, "SELECT id FROM ds_targets WHERE name=%s", ("created-by-matrix",))
+        else "a DNS Sync target was created by a subnet-scoped caller"
+    )
+
+
+def _wol_b_intact(db, ctx):
+    row = _one(db, "SELECT label FROM wol_hosts WHERE id=%s", (WOL_B,))
+    if row is None:
+        return "the subnet-B favourite is gone"
+    if row["label"] != B_NAME:
+        return f"the subnet-B favourite was re-labelled to {row['label']!r}"
+    if _one(db, "SELECT id FROM wol_hosts WHERE label=%s", ("created-by-matrix",)):
+        return "a favourite was created outside the caller's subnets"
+    return ""
+
+
+def _sp_b_untouched(db, ctx):
+    row = _one(db, "SELECT enabled FROM sp_switches WHERE id=%s", (SP_B,))
+    if row is None:
+        return "the subnet-B switch was DELETED"
+    if row["enabled"] != 1:
+        return "the subnet-B switch was paused"
+    port = _one(db, "SELECT is_uplink FROM sp_ports WHERE switch_id=%s AND ifindex=1", (SP_B,))
+    if port is not None and port["is_uplink"] is not None:
+        return "a port of the subnet-B switch was re-classified"
+    if _one(db, "SELECT id FROM sp_switches WHERE name=%s", ("created-by-matrix",)):
+        return "a switch was created by a subnet-scoped caller"
+    return ""
+
+
+def _ipam_unmanaged_untouched(db, ctx):
+    if _one(db, "SELECT id FROM ipam_subnets WHERE name=%s", ("created-by-matrix",)):
+        return "an unmanaged subnet was created by a subnet-scoped caller"
+    return "" if _one(db, "SELECT id FROM ipam_subnets WHERE id=%s", (IPAM_U,)) else "an unmanaged subnet was DELETED"
+
+
+def _ipam_no_entry(db, ctx):
+    return (
+        ""
+        if not _one(db, "SELECT id FROM ipam_static_entries WHERE label=%s", ("created-by-matrix",))
+        else "an IPAM entry was written in a subnet the caller cannot access"
+    )
+
+
+def _nd_nothing(db, ctx):
+    if _one(db, "SELECT id FROM nd_scan_jobs WHERE subnet_id=2"):
+        return "a scan was queued for a subnet the caller cannot access"
+    if _one(db, "SELECT subnet_id FROM nd_settings WHERE subnet_id=2"):
+        return "a scan schedule was set for a subnet the caller cannot access"
+    if _one(db, "SELECT id FROM nd_known_hosts WHERE note=%s", ("created-by-matrix",)):
+        return "a host was marked known by a caller who cannot access its subnet"
+    return ""
 
 
 # ── the rows ─────────────────────────────────────────────────────────────────
@@ -514,6 +597,245 @@ ROWS = [
     ),
     ("ipam api next-free in subnet B", "GET", "/api/v1/plugins/ipam/next-free/2", None, KEYS, {403, 404}, (), None, {}),
     ("ipam page of subnet B", "GET", "/network/ipam/subnet/kea/2", None, UI, _DENY, (), None, {}),
+    # ── v5.65.6 (Q95): a row for EVERY mutation route (the structural test below enforces it) ──
+    (
+        "watchdog add a target in subnet B",
+        "POST",
+        "/network/watchdog/targets/add",
+        FormBody(ip="10.77.0.150", label="created-by-matrix", probe="ping", interval_min="5", fails_to_down="3"),
+        UI,
+        _DENY,
+        (),
+        _wd_nothing_created,
+        {},
+    ),
+    (
+        "watchdog watch a subnet-B host from a row, naming subnet A in the query string",
+        "POST",
+        "/network/watchdog/watch?ip=10.77.0.151&hostname=created-by-matrix&subnet_id=1",
+        None,
+        UI,
+        _DENY,
+        (),
+        _wd_nothing_created,
+        {},
+    ),
+    (
+        "dns-sync add a target",
+        "POST",
+        "/network/dns-sync/targets/add",
+        FormBody(
+            name="created-by-matrix",
+            kind="pihole",
+            url="http://192.0.2.9",
+            domain="lan",
+            sources="leases",
+            scope_all="on",
+        ),
+        UI,
+        _DENY,
+        (),
+        _ds_nothing_created,
+        {},
+    ),
+    (
+        "dns-sync preview B's target",
+        "POST",
+        f"/network/dns-sync/targets/{DS_B}/preview",
+        None,
+        UI,
+        _DENY,
+        (),
+        _ds_b_untouched,
+        {},
+    ),
+    (
+        "wol add a favourite for a subnet-B MAC",
+        "POST",
+        "/management/wol/favourites/add",
+        FormBody(mac=B_MAC, label="created-by-matrix", ip="10.98.1.5", secureon=""),
+        UI,
+        _DENY,
+        (B_MAC,),
+        _wol_b_intact,
+        {},
+    ),
+    (
+        "presence track a subnet-B MAC",
+        "POST",
+        "/management/presence/track",
+        FormBody(mac=B_MAC, label="created-by-matrix"),
+        UI,
+        _DENY,
+        (B_MAC,),
+        _pr_b_not_retagged,
+        {},
+    ),
+    (
+        "switchport add a switch in subnet B",
+        "POST",
+        "/network/switchport/switches/add",
+        FormBody(name="created-by-matrix", host="10.77.0.9", vlan_indexing="none"),
+        UI,
+        _DENY,
+        (),
+        _sp_b_untouched,
+        {},
+    ),
+    (
+        "switchport pause B's switch",
+        "POST",
+        f"/network/switchport/switches/{SP_B}/toggle",
+        None,
+        UI,
+        _DENY,
+        (),
+        _sp_b_untouched,
+        {},
+    ),
+    (
+        "switchport delete B's switch",
+        "POST",
+        f"/network/switchport/switches/{SP_B}/delete",
+        None,
+        UI,
+        _DENY,
+        (),
+        _sp_b_untouched,
+        {},
+    ),
+    (
+        "switchport re-classify a port of B's switch",
+        "POST",
+        f"/network/switchport/ports/{SP_B}/1/uplink",
+        FormBody(value="up"),
+        UI,
+        _DENY,
+        (),
+        _sp_b_untouched,
+        {},
+    ),
+    (
+        "ipam create an unmanaged subnet overlapping subnet B",
+        "POST",
+        "/network/ipam/subnets/add",
+        FormBody(name="created-by-matrix", cidr="10.77.0.0/25"),
+        UI,
+        _DENY,
+        (),
+        _ipam_unmanaged_untouched,
+        {},
+    ),
+    (
+        "ipam delete an unmanaged subnet by id",
+        "POST",
+        f"/network/ipam/subnets/{IPAM_U}/delete",
+        None,
+        UI,
+        _DENY,
+        (),
+        _ipam_unmanaged_untouched,
+        {},
+    ),
+    (
+        "ipam save an entry in subnet B",
+        "POST",
+        "/network/ipam/entry/kea/2",
+        FormBody(ip="10.77.0.200", label="created-by-matrix", status="static"),
+        UI,
+        _DENY,
+        (),
+        _ipam_no_entry,
+        {},
+    ),
+    (
+        "ipam clear an entry in subnet B",
+        "POST",
+        "/network/ipam/entry/kea/2/delete",
+        FormBody(ip="10.77.0.200"),
+        UI,
+        _DENY,
+        (),
+        _ipam_no_entry,
+        {},
+    ),
+    (
+        "ipam range action in subnet B",
+        "POST",
+        "/network/ipam/range/kea/2",
+        FormBody(action="mark", first="10.77.0.200", last="10.77.0.201", label="created-by-matrix"),
+        UI,
+        _DENY,
+        (),
+        _ipam_no_entry,
+        {},
+    ),
+    (
+        "ipam import preview into subnet B",
+        "POST",
+        "/network/ipam/subnet/kea/2/import/preview",
+        None,
+        UI,
+        _DENY,
+        (),
+        _ipam_no_entry,
+        {},
+    ),
+    (
+        "ipam import commit into subnet B",
+        "POST",
+        "/network/ipam/subnet/kea/2/import/commit",
+        None,
+        UI,
+        _DENY,
+        (),
+        _ipam_no_entry,
+        {},
+    ),
+    (
+        "ipam api save an entry in subnet B",
+        "POST",
+        "/api/v1/plugins/ipam/entries",
+        {"subnet_id": 2, "ip": "10.77.0.200", "label": "created-by-matrix"},
+        KEYS,
+        {403, 404},
+        (),
+        _ipam_no_entry,
+        {},
+    ),
+    (
+        "discovery start a scan of subnet B",
+        "POST",
+        "/network/discovery/scan/2",
+        None,
+        UI,
+        _DENY,
+        (),
+        _nd_nothing,
+        {},
+    ),
+    (
+        "discovery set the scan schedule of subnet B",
+        "POST",
+        "/network/discovery/schedule/2",
+        FormBody(every_hours="1"),
+        UI,
+        _DENY,
+        (),
+        _nd_nothing,
+        {},
+    ),
+    (
+        "discovery mark a host known in subnet B",
+        "POST",
+        "/network/discovery/known/2",
+        FormBody(mac=B_MAC, note="created-by-matrix"),
+        UI,
+        _DENY,
+        (B_MAC,),
+        _nd_nothing,
+        {},
+    ),
 ]
 
 
@@ -534,7 +856,9 @@ def _cells():
 def test_plugin_cell(pclient, db, plugin_data, wol_sends, label, method, path, body, role, codes, typed, verify):
     headers = _caller(pclient, db, role)
     kwargs = {"headers": headers} if headers else {}
-    if body is not None:
+    if isinstance(body, FormBody):
+        kwargs["data"] = dict(body)
+    elif body is not None:
         kwargs["data"] = json.dumps(body)
         kwargs.setdefault("headers", {"Content-Type": "application/json"})
     r = pclient.open(path, method=method, follow_redirects=False, **kwargs)
@@ -611,3 +935,62 @@ class TestPresenceSinksAreSuperadminOnly:
         pclient.post(self.ROUTES[1][0], data={}, headers=headers or {}, follow_redirects=False)
         row = _one(db, "SELECT enabled FROM pr_sinks WHERE id=%s", (PR_SINK,))
         assert row is not None and row["enabled"] == 0, "the superadmin's toggle did not take effect"
+
+
+# Mutation routes whose behavioural coverage lives in a dedicated test (their bodies need a superadmin
+# control the matrix runner has no notion of), mapped to that test.
+COVERED_ELSEWHERE = {
+    "/management/presence/sinks/add": "TestPresenceSinksAreSuperadminOnly",
+    "/management/presence/sinks/<int:sink_id>/toggle": "TestPresenceSinksAreSuperadminOnly",
+    "/management/presence/sinks/<int:sink_id>/test": "TestPresenceSinksAreSuperadminOnly",
+    "/management/presence/sinks/<int:sink_id>/delete": "TestPresenceSinksAreSuperadminOnly",
+}
+
+_PLUGIN_PREFIXES = (
+    "/network/watchdog",
+    "/network/dns-sync",
+    "/management/wol",
+    "/management/presence",
+    "/network/switchport",
+    "/network/ipam",
+    "/network/discovery",
+    "/api/v1/plugins/",
+)
+_MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _rule_regex(rule):
+    parts = re.split(r"(<[^>]+>)", rule)
+    return re.compile("^" + "".join("[^/]+" if part.startswith("<") else re.escape(part) for part in parts) + "$")
+
+
+class TestEveryPluginMutationRouteHasARow:
+    """v5.65.6 (Q95). The route scanner in tests/test_authz_matrix.py proves a reason was WRITTEN for a
+    plugin route; it says nothing about the route's behaviour, and the IPAM unmanaged-subnet routes were
+    filed under "scoped by a subnet id in the URL" while having no subnet id at all. This enumerates every
+    POST/PUT/PATCH/DELETE rule under each bundled plugin from the live URL map and fails, naming the
+    route, when none of the rows above (or the dedicated test named in COVERED_ELSEWHERE) exercises it.
+    Read-only pages stay optional."""
+
+    def test_every_mutation_route_has_a_row(self, plugin_app):
+        rows = [(method, path.split("?")[0]) for (_label, method, path, *_rest) in ROWS]
+        found, missing = 0, []
+        for rule in plugin_app.url_map.iter_rules():
+            if not rule.rule.startswith(_PLUGIN_PREFIXES):
+                continue
+            for method in sorted(rule.methods & _MUTATING):
+                found += 1
+                if rule.rule in COVERED_ELSEWHERE:
+                    continue
+                rx = _rule_regex(rule.rule)
+                if not any(m == method and rx.match(p) for m, p in rows):
+                    missing.append(f"{method} {rule.rule}")
+        assert found >= 25, f"only {found} plugin mutation routes found - the plugin app did not load them all"
+        assert not missing, (
+            "plugin mutation routes with no authorization-matrix row (add one to ROWS in "
+            f"tests/test_authz_matrix_plugins.py): {missing}"
+        )
+
+    def test_the_dedicated_tests_named_above_exist(self):
+        for name in set(COVERED_ELSEWHERE.values()):
+            assert name in globals(), f"{name} is named in COVERED_ELSEWHERE but does not exist"

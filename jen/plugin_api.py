@@ -68,6 +68,9 @@ from jen.services.background import (  # noqa: E402
     unregister_periodic,
 )
 
+# ── Which subnet a client is in (v5.65.6, Q95) ───────────────────────────────
+from jen.services.client_subject import client_subnet_for_mac  # noqa: E402
+
 # ── Secrets (v5.57.0, Q73) ────────────────────────────────────────────────────
 from jen.services.crypto import decrypt_secret, encrypt_secret  # noqa: E402
 
@@ -155,6 +158,7 @@ __all__ = [
     "can_access_subnet",
     "classify_address",
     "classify_device",
+    "client_subnet_for_mac",
     "decrypt_secret",
     "dhcp4_config",
     "diagnostic_surface",

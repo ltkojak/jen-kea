@@ -289,9 +289,50 @@ def server_clock_offset(server: dict = None) -> float | None:
     return (server_time - local_midpoint).total_seconds()
 
 
+# v5.65.6 (Q95) - the last version-get answer per server, remembered by kea_is_up() itself.
+# The background alert loop asks every server every ~5 s, so this is fresh whenever the app is
+# running under its normal entrypoint; /api/v1/health answers from it instead of a live call
+# (see cached_kea_health) so it can never block on a Kea that is down.
+_HEALTH_CACHE: dict = {}
+_HEALTH_MAX_AGE_S = 120
+
+
+def _health_key(server):
+    if server and server.get("id") is not None:
+        return server["id"]
+    servers = extensions.KEA_SERVERS
+    return servers[0].get("id") if servers else None
+
+
+def _version_line(reply: dict) -> str:
+    text = (reply.get("arguments") or {}).get("extended") or reply.get("text") or ""
+    return text.splitlines()[0] if text else ""
+
+
 def kea_is_up(server: dict = None) -> bool:
     """Return True if the given server (or server 1) responds to version-get."""
-    return kea_command("version-get", server=server).get("result") == 0
+    reply = kea_command("version-get", server=server)
+    up = reply.get("result") == 0
+    _HEALTH_CACHE[_health_key(server)] = {
+        "up": up,
+        "version": _version_line(reply) if up else None,
+        "at": time.time(),
+    }
+    return up
+
+
+def cached_kea_health(server: dict = None, max_age: float = _HEALTH_MAX_AGE_S) -> dict:
+    """What Jen last learned about a server, WITHOUT asking Kea: {"up": bool | None, "version":
+    str | None, "checked_at": iso | None}. None means "not known" - nothing has probed yet, or the
+    last probe is older than `max_age` seconds (the poller stopped) - never a guess. Never blocks."""
+    entry = _HEALTH_CACHE.get(_health_key(server))
+    if not entry or (time.time() - entry["at"]) > max_age:
+        return {"up": None, "version": None, "checked_at": None}
+    return {
+        "up": entry["up"],
+        "version": entry["version"],
+        "checked_at": datetime.fromtimestamp(entry["at"], timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 def get_all_server_status() -> list:

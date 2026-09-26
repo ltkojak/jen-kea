@@ -684,3 +684,106 @@ def test_10_plugin_install_without_a_root_result_stays_pending(stack):
     assert s["control_consumed"] == ["sys-plugin"] and s["control_restart_pending"] == "true", (
         f"control: the same path applies a result once it does arrive: {s}"
     )
+
+
+# ── 11. /api/v1/health with Kea blackholed (v5.65.6, Q95) ─────────────────────
+
+UPDATER_PROBE = """
+import importlib.util, json
+spec = importlib.util.spec_from_file_location("jur", "/repo/jen-update-root.py")
+jur = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(jur)
+jur._local_base_url = lambda: "http://jen:5050"   # the updater box reaches Jen over the compose network
+running = jur._running_version()
+confirmed = jur._confirm_running_version(running, attempts=1, delay=0) if running else None
+print("@@ " + json.dumps({"running": running, "confirmed": confirmed}))
+"""
+
+
+def test_11_health_answers_fast_and_the_updater_confirms_with_kea_blackholed(stack):
+    """/api/v1/health: with every Kea server frozen (connects succeed, nothing answers) it still answers
+    200 inside 3 s, and the real updater's version confirmation reads it and succeeds."""
+    slow = []
+    try:
+        st.run(["docker", "pause", st.KEA_A, st.KEA_B])
+        deadline = time.monotonic() + 30  # long enough for the background poller to be stuck on a Kea call
+        while time.monotonic() < deadline:
+            t0 = time.monotonic()
+            try:
+                import urllib.request
+
+                with urllib.request.urlopen(f"{st.JEN_URL}/api/v1/health", timeout=3) as r:
+                    body = json.loads(r.read())
+                    status = r.status
+            except Exception as e:  # a timeout IS the failure this scenario exists for
+                slow.append(f"no answer inside 3 s: {type(e).__name__}: {e}")
+                break
+            took = time.monotonic() - t0
+            if status != 200 or took >= 3 or not body.get("jen_version"):
+                slow.append(f"status {status}, {took:.1f}s, body {body}")
+            time.sleep(1)
+        proc = st.dexec(st.UPDATER, "python3", "-c", UPDATER_PROBE, check=False, timeout=60)
+        probe = result_of(proc.stdout)
+    finally:
+        st.run(["docker", "unpause", st.KEA_A, st.KEA_B], check=False)
+    assert not slow, (
+        "INVARIANT: /api/v1/health never waits on Kea (a self-update or restore polls it with a 5 s timeout "
+        f"and rolls back a healthy result when it does): {slow[:3]}"
+    )
+    assert probe and probe["running"], (
+        f"the updater could not read Jen's running version with Kea frozen: {proc.stdout[-500:]}{proc.stderr[-500:]}"
+    )
+    assert probe["confirmed"] == probe["running"], (
+        f"INVARIANT: the updater's version confirmation succeeds while Kea is down: {probe}"
+    )
+    st.wait_for(
+        lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"), timeout=60, what="both Kea answering again"
+    )
+
+
+# ── 12. a rolled-back server whose restart fails is a persistent rollback_failed ──
+
+CHANGESET_REVERT_RESTART_FAILS = CHANGESET_B_DIES.replace("/tmp/s2-", "/tmp/s12-").replace(
+    'emit({"status": res.status, "lines": [l[1] for l in res.lines]})',
+    'emit({"status": res.status, "needs_hands": res.needs_hands, "lines": [l[1] for l in res.lines]})',
+)
+
+
+def test_12_a_revert_whose_restart_fails_is_a_persistent_rollback_failed(stack):
+    """kea_changeset: A commits, B dies, A is put back on its config and then will not restart -> the outcome
+    is rollback_failed naming kea-a, and the Servers banner still says so in a fresh request."""
+    st.sh(st.JEN, "rm -f /tmp/s12-*", check=False)
+    proc = st.jen_py_bg(CHANGESET_REVERT_RESTART_FAILS)
+    try:
+        st.sentinel_wait(st.JEN, "/tmp/s12-preflighted", timeout=120)
+        # kea-a's daemon can no longer start, for good (the harness heal puts the real binary back)
+        wrapper = """#!/bin/sh
+exit 1
+"""
+        st.dexec(
+            st.KEA_A,
+            "sh",
+            "-c",
+            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b"',
+            input=wrapper,
+        )
+        st.sshd_stop(st.KEA_B)
+        st.sh(st.JEN, "touch /tmp/s12-proceed")
+        stdout, stderr = proc.communicate(timeout=180)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    result = result_of(stdout)
+    assert result is not None, f"no result from the change set:\n{stdout[-1500:]}\n{stderr[-1500:]}"
+    assert "raised" not in result, f"INVARIANT: apply_change never raises: {result}"
+    assert result["status"] == "rollback_failed", (
+        f"INVARIANT: a revert whose restart fails is rollback_failed, not aborted: {result}"
+    )
+    assert result["needs_hands"] == ["kea-a"], f"INVARIANT: the server that would not restart is named: {result}"
+    assert st.kea_conf_bytes(st.KEA_A) == st.BASELINE[st.KEA_A], "kea-a's config on disk is the one it had before"
+
+    out, _p = st.jen_py("from jen.services import kea_changeset as cs\nemit(cs.attention())\ncs.clear_attention()\n")
+    note = emitted(out)
+    assert note and note["status"] == "rollback_failed" and note["needs_hands"] == ["kea-a"], (
+        f"INVARIANT: the outcome is persisted for the Servers banner: {note}"
+    )

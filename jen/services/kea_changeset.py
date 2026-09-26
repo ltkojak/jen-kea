@@ -274,7 +274,8 @@ def _run_change(
         else:
             lines.append(("error", _failure_line(t.name, res, daemon_label)))
 
-        revert_failed = []
+        revert_failed = []  # the revert call itself failed: still on the NEW config
+        restart_stuck = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
             rres = _safe(
                 _host.apply_config,
@@ -291,33 +292,44 @@ def _run_change(
             if restart:
                 rres_restart = _safe(_host.service_action, done.server, service, "restart")
                 if not rres_restart.get("ok"):
+                    # v5.65.6 (Q95) - this was a warning line and the status stayed "aborted", which is
+                    # never persisted: the Servers banner never showed it and the operator could miss
+                    # that Kea is DOWN on a server that was rolled back. It is the same state as the
+                    # restart-phase rollback below, so it gets the same treatment: an error line,
+                    # rollback_failed, needs_hands, and the persisted banner.
+                    restart_stuck.append(done.name)
                     lines.append(
                         (
-                            "warning",
-                            f"⚠️ {done.name}: rolled back, but {daemon_label} did not restart "
-                            f"({rres_restart.get('detail')})",
+                            "error",
+                            f"❌ {done.name}: previous config restored but {daemon_label} did not restart on it "
+                            f"({_tail(rres_restart.get('detail'))})",
                         )
                     )
 
-        if revert_failed:
+        if revert_failed or restart_stuck:
             # v5.28.1 (Q26, A1) — name all three groups correctly.
             # `revert_failed` holds targets whose REVERT call itself
             # failed, meaning THEY still carry the new config — the
             # previous wording had this exactly backwards, telling an
             # operator reading it for recovery instructions the
             # opposite of reality.
-            still_new = revert_failed
-            rolled_back = [d.name for d in committed if d.name not in revert_failed]
-            untouched = t.name
-            lines.append(
-                (
-                    "error",
-                    f"🛑 ROLLBACK FAILED — {', '.join(still_new)} still have the NEW config (their rollback "
-                    f"failed); {', '.join(rolled_back) or '(none)'} were rolled back to the old config; "
-                    f"{untouched} was never changed. Fix by hand: Servers → Config history → restore.",
+            if revert_failed:
+                still_new = revert_failed
+                rolled_back = [d.name for d in committed if d.name not in revert_failed]
+                untouched = t.name
+                lines.append(
+                    (
+                        "error",
+                        f"🛑 ROLLBACK FAILED — {', '.join(still_new)} still have the NEW config (their rollback "
+                        f"failed); {', '.join(rolled_back) or '(none)'} were rolled back to the old config; "
+                        f"{untouched} was never changed. Fix by hand: Servers → Config history → restore.",
+                    )
                 )
+            if restart_stuck:
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(restart_stuck)))
+            return ChangeSetResult(
+                "rollback_failed", res.get("code", "error"), lines, needs_hands=revert_failed + restart_stuck
             )
-            return ChangeSetResult("rollback_failed", res.get("code", "error"), lines, needs_hands=revert_failed)
 
         if committed:
             names = ", ".join(d.name for d in committed)

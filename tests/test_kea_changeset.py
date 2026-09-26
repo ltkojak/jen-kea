@@ -113,9 +113,11 @@ class TestApplyChangeRevert:
         assert "(none) were rolled back" in rollback_line
         assert "kea-b was never changed" in rollback_line
 
-    def test_revert_that_succeeds_but_whose_restart_fails_is_a_warning_line(self, fake):
-        """v5.28.1 (Q26, A1) — a revert's own service_action(restart)
-        result used to be silently ignored."""
+    def test_revert_that_succeeds_but_whose_restart_fails_is_rollback_failed(self, fake):
+        """v5.28.1 (Q26, A1) made the revert's own restart result visible as a warning line; v5.65.6
+        (Q95) makes it what it is: the server was put back on its old config and then would not
+        start, so Kea is DOWN there. It used to be `aborted` + a warning, which record_outcome never
+        persists, so the Servers banner never showed it."""
         fake.responses["test-config"] = {"ok": True}
 
         def apply_resp(server, op, payload):
@@ -128,10 +130,43 @@ class TestApplyChangeRevert:
 
         result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B])
 
-        assert result.status == "aborted"  # the revert itself succeeded — no ROLLBACK FAILED
-        warning_lines = [text for t, text in result.lines if t == "warning"]
-        assert len(warning_lines) == 1
-        assert warning_lines[0].startswith("⚠️ kea-a: rolled back, but Kea did not restart")
+        assert result.status == "rollback_failed"
+        assert result.needs_hands == ["kea-a"]
+        assert not [text for t, text in result.lines if t == "warning"], "no longer a warning line"
+        error_text = " | ".join(text for t, text in result.lines if t == "error")
+        assert "kea-a: previous config restored but Kea did not restart on it" in error_text
+        assert "ROLLBACK FAILED" in error_text
+
+    def test_mixed_one_revert_fails_another_restores_but_will_not_restart(self, fake):
+        """Three servers: A and B commit, C fails. B's revert works but its restart fails; A's revert
+        itself fails. Both are in needs_hands, and each is named for what actually happened to it."""
+        server_c = {**SERVER_B, "id": 3, "name": "kea-c"}
+        fake.configs[(3, "dhcp4")] = {"Dhcp4": {"subnet4": [{"id": 1}]}}
+        fake.shas[(3, "dhcp4")] = "sha-c"
+        fake.responses["test-config"] = {"ok": True}
+        calls = {"a_applies": 0}
+
+        def apply_resp(server, op, payload):
+            if server["id"] == 3:
+                return {"ok": False, "error": "conflict", "helper_version": 2}
+            if server["id"] == 1:
+                calls["a_applies"] += 1
+                if calls["a_applies"] >= 2:  # A's revert
+                    return {"ok": False, "error": "nope", "detail": "disk full", "helper_version": 2}
+            return {"ok": True, "sha256": f"new-{server['id']}", "helper_version": 2}
+
+        fake.responses["apply-config"] = apply_resp
+        fake.responses["service"] = lambda server, op, payload: (
+            {"ok": False, "error": "systemctl failed", "detail": "unit not found"}
+            if server["id"] == 2
+            else {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        )
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[SERVER_A, SERVER_B, server_c])
+        assert result.status == "rollback_failed"
+        assert sorted(result.needs_hands) == ["kea-a", "kea-b"]
+        text = " | ".join(t for _k, t in result.lines)
+        assert "kea-a still have the NEW config" in text
+        assert "kea-b: previous config restored but Kea did not restart on it" in text
 
 
 class TestApplyChangeV1SentinelRevert:

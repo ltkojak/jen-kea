@@ -1088,6 +1088,14 @@ place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
    "failed"), `rolled_back` (committed targets NOT in that set),
    `untouched` (the one target whose commit itself failed first,
    triggering the revert, and so was never written to at all).
+   **v5.65.6 (Q95)** — a revert whose own *restart* fails (the previous
+   config is back on disk but the daemon will not start on it) is the same
+   state as the restart-phase rollback below: an `error` line, `rollback_failed`,
+   the server in `needs_hands`, and the persisted Servers banner. It was a
+   `warning` line and status `aborted`, which `record_outcome` never persists,
+   so an operator could miss that Kea was down on a server that had just been
+   "rolled back". A mixed case (one target's revert call fails, another restores
+   but will not restart) lists both, each described for what happened to it.
 4. **Restart** — attempted for every committed target regardless of
    whether another target's restart already failed. **v5.65.1 (Q90)** —
    if any restart fails, the change did not stand, so EVERY target is put
@@ -1318,6 +1326,15 @@ As of the process work following the v4.4.10 audit series:
     the baseline fail CI; the existing, reviewed backlog doesn't block
     anything.
   - `pip-audit` against the actual installed dependency set.
+- **`/api/v1/health` answers from Jen alone (v5.65.6, Q95).** The self-updater
+  confirms the running version by polling it with a 5 s timeout, and the restore's
+  health poll does the same; it used to call Kea live, twice, so with Kea unreachable
+  (a condition Jen is meant to survive) it took ~20 s and a HEALTHY update or restore
+  was rolled back. It now reports `kea_up` / `kea_version` from the last probe
+  `kea_is_up()` recorded (the background alert loop asks every server every ~5 s;
+  `null` until one has, or once it is older than two minutes), plus `kea_checked_at`,
+  and never calls Kea. `GET /api/v1/health/kea` (API key) keeps the live probe.
+  `tests/test_health_endpoint.py` and system scenario 11 pin it.
 - **Dependabot** watches the GitHub Actions used in these workflows and
   opens PRs to bump pinned commit SHAs forward when new releases exist.
 - **`system-tests.yml`** (v5.64.x, Q84) sits beside `kea-compat.yml`: weekly, on
@@ -1325,6 +1342,9 @@ As of the process work following the v4.4.10 audit series:
   or `release.yml`, so a slow or flaky boundary test never reddens a push or a tag.
   `tests/system/` runs Jen under gunicorn against real Kea hosts (kea-dhcp4, sshd
   and the helper Jen installs), MariaDB and two fault injectors, with no mocks.
+  Since v5.65.6 it also runs on every `vX.Y.Z-beta.N` tag, the CRITICAL subset only
+  (Docker boot, restore, the change-set partial failure, both rollback scenarios,
+  and `/api/v1/health` with Kea frozen); the full set stays weekly / rc / dispatch.
   It exists to hold two invariants the unit suite cannot: (1) a config change set
   never raises out of `kea_changeset` and never leaves the servers disagreeing,
   including when a restart fails after the write (the before-config is re-applied

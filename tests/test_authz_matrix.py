@@ -648,6 +648,11 @@ _PLUGIN_OWN = (
     "the plugin's own configuration or list, filtered by subnet in its own query; reads none of the client tables"
 )
 _PLUGIN_SUBNET_URL = "scoped by a subnet id in the URL and checked with the subnet helpers before any read"
+_PLUGIN_GLOBAL_OBJECT = (
+    "creates or deletes a GLOBAL object (an unmanaged subnet belongs to no Kea subnet): it takes no subnet id, "
+    "so it needs an unrestricted admin, and its own rows in tests/test_authz_matrix_plugins.py prove a "
+    "subnet-scoped admin is refused and learns no hidden name or CIDR"
+)
 
 # By "<plugin dir>:<function>". A plugin route is a `@bp.route` function or a function handed to
 # `add_url_rule` through api_key_required(...).
@@ -678,6 +683,7 @@ PLUGIN_ROUTE_ALLOWLIST = {
     **{f"presence:{fn}": _PLUGIN_OWN for fn in ("index", "add_sink", "toggle_sink", "delete_sink", "test_sink")},
     **{f"switchport:{fn}": _PLUGIN_CLIENT_FACING for fn in ("index", "_api_locate")},
     **{f"switchport:{fn}": _PLUGIN_OWN for fn in ("add_switch", "toggle_switch", "delete_switch", "set_uplink")},
+    **{f"ipam:{fn}": _PLUGIN_GLOBAL_OBJECT for fn in ("add_subnet", "delete_subnet")},
     **{
         f"ipam:{fn}": _PLUGIN_SUBNET_URL
         for fn in (
@@ -691,8 +697,6 @@ PLUGIN_ROUTE_ALLOWLIST = {
             "save_entry",
             "delete_entry",
             "range_action",
-            "add_subnet",
-            "delete_subnet",
             "_api_list_entries",
             "_api_save_entry",
             "_api_next_free",
