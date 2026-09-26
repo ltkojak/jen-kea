@@ -20,6 +20,7 @@ from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
 from jen.services import client_subject as __subject
 from jen.services.access import diagnostic_surface
+from jen.services.api_auth import RATE_LIMIT_MESSAGE, write_rate_limited
 from jen.services.api_auth import api_auth as _api_auth
 from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
 from jen.services.fingerprint import get_device_info_map
@@ -65,15 +66,16 @@ def api_v1_health():
     (5 s timeout) and the restore's health poll read that as "Jen is not up" and ROLLED BACK a healthy
     update or restore. Callers that want a live probe use /api/v1/health/kea."""
     from jen import JEN_VERSION as _ver
-    from jen.services.kea import cached_kea_health
+    from jen.services.kea import all_cached_kea_health, cached_kea_health
 
-    cached = cached_kea_health()
+    cached = cached_kea_health()  # the server Jen is serving from (cached_active_server)
     return api_ok(
         {
             "jen_version": _ver,
             "kea_up": cached["up"],
             "kea_version": cached["version"],
             "kea_checked_at": cached["checked_at"],
+            "kea_servers": all_cached_kea_health(),
             "subnets": len(extensions.SUBNET_MAP),
         }
     )
@@ -87,16 +89,19 @@ def api_v1_health_kea():
     key = _api_auth()
     if not key:
         return api_error("Invalid or missing API key.", 401)
-    up = kea_is_up()
+    # the ACTIVE server (the one Jen serves from), not `[kea] api_url`'s primary: in an HA pair with
+    # server 1 down this said kea_up false while Jen was serving from server 2
+    server = get_active_kea_server()
+    up = kea_is_up(server=server)
     version = ""
     try:
-        ver = kea_command("version-get")
+        ver = kea_command("version-get", server=server)
         if ver.get("result") == 0:
             version = ver.get("arguments", {}).get("extended", ver.get("text", ""))
             version = version.splitlines()[0] if version else ""
     except Exception:
         pass
-    return api_ok({"kea_up": up, "kea_version": version})
+    return api_ok({"kea_up": up, "kea_version": version, "server": (server or {}).get("name")})
 
 
 @bp.route("/api/v1/subnets")
@@ -558,24 +563,6 @@ def api_v1_reservations():
 # Jen's own tables. Every write is audited with the key's name as the
 # actor — an API request has no Flask-Login user.
 
-_WRITE_RATE_PER_MINUTE = 60
-_write_hits: dict = {}
-
-
-def _write_rate_limited(key_id) -> bool:
-    """In-memory per-key limiter for the write endpoints: at most
-    _WRITE_RATE_PER_MINUTE calls in any rolling 60 s window."""
-    import time as _time
-
-    now = _time.monotonic()
-    hits = [t for t in _write_hits.get(key_id, []) if now - t < 60]
-    if len(hits) >= _WRITE_RATE_PER_MINUTE:
-        _write_hits[key_id] = hits
-        return True
-    hits.append(now)
-    _write_hits[key_id] = hits
-    return False
-
 
 def _api_write_gate():
     """(key, None) when the request may write, else (None, error response)."""
@@ -586,8 +573,8 @@ def _api_write_gate():
         return None, api_error(
             "This API key is read-only. Create one with write access under Settings → API Keys.", 403
         )
-    if _write_rate_limited(key["id"]):
-        return None, api_error("Rate limit: at most 60 write requests per minute per key.", 429)
+    if write_rate_limited(key["id"]):
+        return None, api_error(RATE_LIMIT_MESSAGE, 429)
     return key, None
 
 

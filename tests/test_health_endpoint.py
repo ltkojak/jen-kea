@@ -105,4 +105,41 @@ class TestLiveProbeIsSeparateAndKeyed:
         ):
             r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
         assert r.status_code == 200
-        assert r.get_json() == {"kea_up": True, "kea_version": "3.2.0"}
+        body = r.get_json()
+        assert body["kea_up"] is True and body["kea_version"] == "3.2.0" and "server" in body
+
+    def test_it_probes_the_active_server_not_the_primary(self, client, db):
+        raw = self._key(db)
+        second = {"id": 2, "name": "kea-b", "api_url": "http://kea-b:8000/"}
+        calls = []
+
+        def fake_command(cmd, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append(server)
+            return {"result": 0, "arguments": {"extended": "3.0.9"}}
+
+        with (
+            patch("jen.routes.api.get_active_kea_server", return_value=second),
+            patch("jen.routes.api.kea_command", side_effect=fake_command),
+            patch("jen.routes.api.kea_is_up", return_value=True) as up,
+        ):
+            r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
+        assert r.get_json()["server"] == "kea-b"
+        assert up.call_args.kwargs["server"] == second and calls == [second]
+
+
+class TestCacheIsPerServer:
+    def test_the_health_body_lists_every_server_and_never_probes(self, client):
+        with patch("jen.services.kea.kea_command", side_effect=_slow):
+            started = time.monotonic()
+            data = client.get("/api/v1/health").get_json()
+        assert time.monotonic() - started < 1.0
+        assert isinstance(data["kea_servers"], list) and all(
+            {"name", "up", "checked_at"} <= set(s) for s in data["kea_servers"]
+        )
+
+    def test_a_probe_of_one_server_does_not_answer_for_another(self):
+        one, two = {"id": 1, "name": "a"}, {"id": 2, "name": "b"}
+        with patch("jen.services.kea.kea_command", return_value={"result": 0, "arguments": {"extended": "3.0.1"}}):
+            kea_service.kea_is_up(server=one)
+        assert kea_service.cached_kea_health(one)["up"] is True
+        assert kea_service.cached_kea_health(two)["up"] is None

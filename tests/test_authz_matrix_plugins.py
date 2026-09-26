@@ -19,6 +19,12 @@ A cell that FAILS TODAY is marked `xfail(strict=True)` with the release that fix
 watchdog / dns-sync / IPAM, Q94 = switchport / wol / presence): strict, so the day the plugin
 is fixed the cell turns red until the marker is removed — the marker is the to-do list, and
 this file is what proves each fix. As of v5.65.5 every plugin fix has shipped and no cell is marked.
+
+v5.65.8 (Q97 l) adds the other half of the invariant: TestAnAllowedCallerGetsAnAnswer, one row per
+plugin API route with an UNRESTRICTED key expecting a 200 and a clean body. The refusal rows above
+passed while IPAM's API answered every allowed caller with a 500, because nothing asked. Those three
+cells are xfail(strict) tagged Q98 (IPAM 1.6.3): the day Q98 fixes them they turn red until the
+marker is removed.
 """
 
 import json
@@ -33,6 +39,7 @@ import pytest
 from jen import extensions
 from jen.services import access
 from tests.test_authz_matrix import (  # noqa: F401 - fixtures are used by name
+    A_MAC,
     B_HOST,
     B_LEASE_IP,
     B_MAC,
@@ -935,6 +942,115 @@ class TestPresenceSinksAreSuperadminOnly:
         pclient.post(self.ROUTES[1][0], data={}, headers=headers or {}, follow_redirects=False)
         row = _one(db, "SELECT enabled FROM pr_sinks WHERE id=%s", (PR_SINK,))
         assert row is not None and row["enabled"] == 0, "the superadmin's toggle did not take effect"
+
+
+Q98 = "Q98 (IPAM 1.6.3): the API answers every allowed caller with a 500"
+
+_ALL_KEY = "jen_authz_unrestricted_key"
+
+# (label, method, path, body, xfail reason | None) - every plugin API route, once
+POSITIVE_ROWS = [
+    ("watchdog api list targets", "GET", "/api/v1/plugins/watchdog/targets", None, None),
+    (
+        "watchdog api add a target in subnet A",
+        "POST",
+        "/api/v1/plugins/watchdog/targets",
+        {"ip": "10.98.1.99", "label": "created-by-matrix", "probe": "ping"},
+        None,
+    ),
+    ("wol api wake a client in subnet A", "POST", "/api/v1/plugins/wol/wake", {"mac": A_MAC}, None),
+    ("switchport api locate a client in subnet A", "GET", f"/api/v1/plugins/switchport/locate/{A_MAC}", None, None),
+    ("ipam api entries of subnet A", "GET", "/api/v1/plugins/ipam/entries?subnet_id=1", None, Q98),
+    (
+        "ipam api save an entry in subnet A",
+        "POST",
+        "/api/v1/plugins/ipam/entries",
+        {"subnet_id": 1, "ip": "10.98.1.200", "label": "created-by-matrix"},
+        Q98,
+    ),
+    ("ipam api next-free in subnet A", "GET", "/api/v1/plugins/ipam/next-free/1", None, Q98),
+]
+
+
+def _unrestricted_key(db, can_write=1):
+    """An API key with no subnet scope at all: the caller every refusal row above is the contrast to."""
+    import hashlib
+
+    from tests.test_api_key_authorization import _insert_api_key
+
+    key_id = _insert_api_key(db, "_authz_unrestricted", created_by=1, subnet_access=None)
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE api_keys SET key_hash=%s, can_write=%s WHERE id=%s",
+            (hashlib.sha256(_ALL_KEY.encode()).hexdigest(), can_write, key_id),
+        )
+    db.commit()
+    return {"Authorization": f"Bearer {_ALL_KEY}", "Content-Type": "application/json"}
+
+
+def _positive_cells():
+    return [
+        pytest.param(
+            label, method, path, body, id=label, marks=[pytest.mark.xfail(strict=True, reason=xfail)] if xfail else []
+        )
+        for label, method, path, body, xfail in POSITIVE_ROWS
+    ]
+
+
+class TestAnAllowedCallerGetsAnAnswer:
+    """v5.65.8 (Q97 l): the "allowed caller gets an answer" half of the invariant. An unrestricted key
+    calls every plugin API route on subnet A's data and must get a 200, a JSON object with no `error`
+    key, and no server-error text. (Subnet A's data only: an unrestricted key is entitled to B's, so a
+    marker check would say nothing here - that is what the refusal rows are for.)"""
+
+    @pytest.mark.parametrize("label,method,path,body", _positive_cells())
+    def test_an_unrestricted_key_gets_a_200(self, pclient, db, plugin_data, wol_sends, label, method, path, body):
+        headers = _unrestricted_key(db)
+        kwargs = {"headers": headers}
+        if body is not None:
+            kwargs["data"] = json.dumps(body)
+        r = pclient.open(path, method=method, follow_redirects=False, **kwargs)
+        assert r.status_code == 200, f"{label}: HTTP {r.status_code}, {r.data[:200]!r}"
+        text = r.data.decode("utf-8", "replace")
+        assert "Traceback" not in text
+        assert "Internal Server Error" not in text
+        payload = r.get_json()
+        assert isinstance(payload, dict), f"{label}: the body is not a JSON object"
+        assert "error" not in payload, f"{label}: {payload}"
+
+    def test_every_plugin_api_route_has_a_positive_row(self, plugin_app):
+        rows = [(method, path.split("?")[0]) for (_label, method, path, _body, _x) in POSITIVE_ROWS]
+        missing = []
+        for rule in plugin_app.url_map.iter_rules():
+            if not rule.rule.startswith("/api/v1/plugins/"):
+                continue
+            rx = _rule_regex(rule.rule)
+            for method in sorted(rule.methods & {"GET", "POST", "PUT", "PATCH", "DELETE"}):
+                if not any(m == method and rx.match(p) for m, p in rows):
+                    missing.append(f"{method} {rule.rule}")
+        assert not missing, f"plugin API routes with no positive-path row: {missing}"
+
+    def test_a_plugin_write_route_shares_the_per_key_write_limit(
+        self, pclient, db, plugin_data, wol_sends, monkeypatch
+    ):
+        """v5.65.8 (Q97 b): the limiter lives in api_key_required, so a plugin's write endpoint (one
+        magic packet per call) is limited like the core ones instead of not at all."""
+        from jen.services import api_auth
+
+        monkeypatch.setattr(api_auth, "WRITE_RATE_PER_MINUTE", 2)
+        api_auth._write_hits.clear()
+        headers = _unrestricted_key(db)
+        try:
+            codes = [
+                pclient.post("/api/v1/plugins/wol/wake", data=json.dumps({"mac": A_MAC}), headers=headers).status_code
+                for _ in range(3)
+            ]
+            assert codes[2] == 429, codes
+            assert 429 not in codes[:2], codes
+            # a read is not a write: it is never counted
+            assert pclient.get("/api/v1/plugins/watchdog/targets", headers=headers).status_code == 200
+        finally:
+            api_auth._write_hits.clear()
 
 
 # Mutation routes whose behavioural coverage lives in a dedicated test (their bodies need a superadmin

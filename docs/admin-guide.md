@@ -546,8 +546,8 @@ Go to **Settings → Access & Security → API Keys** to generate, view, and rev
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/health` | Jen version and the last known Kea status — no auth; answers from Jen's own state and never calls Kea, so `kea_up` / `kea_version` are `null` until the first probe (and `kea_checked_at` says when it was) (v5.65.6) |
-| GET | `/api/v1/health/kea` | A live Kea probe — needs an API key; can take as long as the Kea API timeout when Kea is unreachable (v5.65.6) |
+| GET | `/api/v1/health` | Jen version and the last known Kea status — no auth; answers from Jen's own state and never calls Kea, so `kea_up` / `kea_version` are `null` until the first probe (and `kea_checked_at` says when it was); `kea_servers` lists the last probe of every server (v5.65.6, `kea_servers` v5.65.8) |
+| GET | `/api/v1/health/kea` | A live probe of the server Jen is serving from (in an HA pair, the active one) — needs an API key; can take as long as the Kea API timeout when it is unreachable (v5.65.6) |
 | GET | `/api/v1/subnets` | Subnet utilization with pool sizes; since v5.36.0 also `peak_30d`, `trend_per_day`, `days_to_90pct` and `forecast` (rising / flat / falling / insufficient) |
 | GET | `/api/v1/servers` | Kea servers, HA state, and `packet_health` — `{status, window_minutes, rates}`, null until two snapshots exist (v5.41.0) |
 | GET | `/api/v1/events` | Raw event stream rows — params: mac, ip, kind, since (ISO 8601), limit (v5.42.0) |

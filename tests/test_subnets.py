@@ -917,3 +917,35 @@ class TestEditFormBaseSha:
         assert apply_calls_a[1]["config"] == fake.configs[(1, "dhcp4")]  # reverted to the pre-edit config
         assert fake.ops().count("service") == 1  # Kea A restarted once, back onto its original config
         assert fake.ops().count("service") == 1
+
+
+class TestEditSubnetAuditFollowsTheOutcome:
+    """v5.65.8 (Q97 e): EDIT_SUBNET / EDIT_SUBNET6 were written whatever the change set did, so a rollback
+    left an audit line saying the subnet had been edited. Every other caller gates on the outcome."""
+
+    def _count(self, db, action):
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action=%s", (action,))
+            return cur.fetchone()["n"]
+
+    def test_a_rolled_back_edit_is_not_audited_as_an_edit(self, logged_in_client, db):
+        from unittest.mock import patch
+
+        from jen.services.kea_changeset import ChangeSetResult
+
+        before = self._count(db, "EDIT_SUBNET")
+        rolled = ChangeSetResult("rolled_back", "restart-failed", [("error", "x")], ["kea-a"])
+        with patch("jen.services.kea_changeset.apply_change", return_value=rolled):
+            logged_in_client.post("/subnets/edit/1", data={"valid_lifetime": "7200"})
+        assert self._count(db, "EDIT_SUBNET") == before
+
+    def test_a_clean_edit_is_still_audited(self, logged_in_client, db):
+        from unittest.mock import patch
+
+        from jen.services.kea_changeset import ChangeSetResult
+
+        before = self._count(db, "EDIT_SUBNET")
+        with patch("jen.services.kea_changeset.apply_change", return_value=ChangeSetResult("ok", "ok", [], covered=[])):
+            logged_in_client.post("/subnets/edit/1", data={"valid_lifetime": "7200"})
+        assert self._count(db, "EDIT_SUBNET") == before + 1

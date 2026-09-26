@@ -414,3 +414,35 @@ class TestChangesetAttentionBanner:
     def test_dismiss_needs_login(self, client):
         r = client.post("/servers/changeset-attention/dismiss", follow_redirects=False)
         assert r.status_code in (301, 302, 308) and "login" in r.headers.get("Location", "").lower()
+
+
+class TestBannerDetailLinesAreAdminOnly:
+    """v5.65.8 (Q97 g): the banner's raw helper/SSH detail tails name hosts, ports and paths; a viewer gets
+    the status sentence, an admin gets the lines."""
+
+    NOTE = {
+        "status": "rollback_failed",
+        "summary": "add a pool",
+        "at": "2026-09-25T10:00:00+00:00",
+        "needs_hands": ["kea-b"],
+        "failed_restart": ["kea-b"],
+        "lines": ["NoValidConnectionsError: port 22 on 10.0.0.2"],
+    }
+
+    def _set(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("changeset_attention", json.dumps(self.NOTE))
+
+    def test_a_viewer_sees_the_sentence_and_no_host_detail(self, client, mock_kea, db):
+        from tests.conftest import restricted_client
+
+        self._set(db)
+        restricted_client(client, db, allowed_subnets=[1], role="viewer", username="_banner_viewer")
+        body = client.get("/servers").data.decode()
+        assert "could not be rolled back cleanly" in body
+        assert "10.0.0.2" not in body and "NoValidConnectionsError" not in body
+
+    def test_an_admin_sees_the_lines(self, logged_in_client, mock_kea, db):
+        self._set(db)
+        assert "NoValidConnectionsError" in logged_in_client.get("/servers").data.decode()

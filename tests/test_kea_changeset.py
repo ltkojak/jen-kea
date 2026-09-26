@@ -530,3 +530,82 @@ class TestOutcomeReachesTheServersPage:
         monkeypatch.setattr(user_mod, "get_global_setting", boom)
         cs.record_outcome(cs.ChangeSetResult("rollback_failed", "x"), "dhcp4", "s")  # no raise
         assert cs.attention() is None
+
+
+class TestARollbackFailedBannerIsClearedOnlyByARunThatCoveredTheServer:
+    """v5.65.8 (Q97 d): the banner is the only persistent sign that a daemon may be stopped, and it used
+    to be cleared by ANY later ok run - a DDNS save, or an edit of a server that was never in trouble."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        return data
+
+    def _fail_a(self, fake):
+        """kea-a's rollback fails, so `needs_hands == ['kea-a']` is recorded."""
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
+        fake.responses["service"] = {"ok": False, "error": "x", "detail": "boom"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
+        assert cs.attention()["needs_hands"] == ["kea-a"]
+        fake.responses["service"] = {"ok": True, "unit": "u", "state": "active"}
+
+    def test_an_ok_run_that_never_touched_the_server_leaves_it(self, fake, store):
+        self._fail_a(fake)
+        cs.apply_change("dhcp4", _mutate_add_pool, "edit b", servers=[SERVER_B])
+        assert cs.attention() is not None and cs.attention()["status"] == "rollback_failed"
+
+    def test_an_ok_run_of_another_service_leaves_it(self, fake, store):
+        self._fail_a(fake)
+        fake.configs[(1, "dhcp6")] = {"Dhcp6": {"subnet6": [{"id": 1}]}}
+        fake.shas[(1, "dhcp6")] = "sha-a6"
+
+        def mutate6(cfg):
+            import copy as _copy
+
+            c = _copy.deepcopy(cfg)
+            c["Dhcp6"]["valid-lifetime"] = 7200
+            return c, "ok"
+
+        result = cs.apply_change("dhcp6", mutate6, "edit v6", servers=[SERVER_A])
+        assert result.status == "ok" and cs.attention() is not None
+
+    def test_an_ok_run_that_covered_the_server_clears_it(self, fake, store):
+        self._fail_a(fake)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "fix a", servers=[SERVER_A, SERVER_B])
+        assert result.status == "ok" and result.covered == ["kea-a", "kea-b"]
+        assert cs.attention() is None
+
+    def test_a_rolled_back_note_is_still_cleared_by_any_clean_run(self, fake, store):
+        store[cs.ATTENTION_KEY] = '{"status": "rolled_back", "service": "dhcp4"}'
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
+        fake.responses["service"] = {"ok": True, "unit": "u", "state": "active"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "edit b", servers=[SERVER_B])
+        assert cs.attention() is None
+
+
+class TestRollbacksAreAudited:
+    """v5.65.8 (Q97 e): only DISMISSING the notice used to leave a mark in the audit log."""
+
+    def test_the_outcome_writes_an_audit_entry(self, fake, monkeypatch):
+        from jen.models import user as user_mod
+
+        seen = []
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": d)
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: None)
+        monkeypatch.setattr(
+            user_mod, "audit", lambda action, entity, details="": seen.append((action, entity, details))
+        )
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
+        fake.responses["service"] = {"ok": False, "error": "x", "detail": "boom"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
+        assert seen and seen[0][0] == "CONFIG_ROLLBACK_FAILED" and seen[0][1] == "dhcp4"
+        assert "kea-a" in seen[0][2] and "add a pool" in seen[0][2]

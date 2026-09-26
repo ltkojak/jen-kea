@@ -38,6 +38,8 @@ KINDS = (
     "discovery.unknown",
 )
 
+KIND_MAX_LENGTH = 40  # events.kind is VARCHAR(40) (jen/models/migrations.py)
+
 # v5.57.0 (Q73) — a plugin kind emit() will accept, lowercase, matching a
 # manifest id's own charset (letters/digits/hyphens) for the plugin id.
 _PLUGIN_KIND_RE = re.compile(r"^plugin\.[a-z0-9-]+\.[a-z_]+$")
@@ -187,6 +189,13 @@ def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None,
     emit()'s own contract for every other failure mode here."""
     if kind not in KINDS and not _PLUGIN_KIND_RE.match(kind or ""):
         logger.error(f"events.emit(): refusing unrecognized kind {kind!r}")
+        return None
+    if len(kind) > KIND_MAX_LENGTH:
+        # events.kind is VARCHAR(40): a longer kind fails the INSERT in strict mode, the row is lost, and
+        # every subscriber would still run with id=None. Refused like any other bad kind (emit never raises).
+        logger.error(
+            f"events.emit(): refusing kind {kind!r}: {len(kind)} characters, the column holds {KIND_MAX_LENGTH}"
+        )
         return None
     event_id = None
     try:

@@ -31,7 +31,6 @@ from jen.services import dns_reconcile as __reconcile
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.dhcp_explain import explain
 from jen.services.subnet_context import dhcp4_config
-from jen.services.timeline import subnet_id_for
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("client", __name__)
@@ -177,11 +176,7 @@ def client_page():
             # `view.candidates` (each judged like a subject of its own), never from
             # `subject.candidates`; and a denial is the same "no client matched"
             # answer as not-found, so the page is not an existence oracle.
-            if (
-                not view.candidates
-                and not current_user.all_subnets
-                and subnet_id_for(view.device, view.lease, view.reservation) is None
-            ):
+            if not view.candidates and not current_user.all_subnets and not __subject.names_a_subnet(view):
                 view = None
 
     # alert_log rows carry no subnet: unrestricted callers only (docs/ARCHITECTURE.md §2)

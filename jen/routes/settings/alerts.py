@@ -329,6 +329,9 @@ def save_alert_template():
 @_admin_required
 def reset_alert_template():
     alert_type = request.form.get("alert_type", "").strip()
+    if alert_type not in DEFAULT_TEMPLATES:
+        flash("Invalid alert type.", "error")
+        return redirect(url_for("settings.settings_alerts"))
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:

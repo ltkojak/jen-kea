@@ -525,11 +525,22 @@ def _is_global(row) -> bool:
         return False
 
 
-def _names_a_subnet(view: "ClientSubject") -> bool:
-    """Did anything survive that places this client in a subnet (the question Timeline asks)."""
+def names_a_subnet(view: "ClientSubject") -> bool:
+    """Did anything survive that places this client in a subnet (the question Timeline asks)?
+
+    v5.65.8 (Q97 f): a KEPT global reservation counts. `authorize` keeps a reservation with no subnet
+    for every caller (ARCHITECTURE section 2), but the gate that decides whether the Investigate page
+    shows anything asked `subnet_id_for()`, which is None for subnet 0 - so a client known only by a
+    global reservation survived authorization and was then hidden, by MAC and by hostname alike, from
+    exactly the callers the reservation is kept for."""
     from jen.services.timeline import subnet_id_for
 
-    return subnet_id_for(view.device, view.lease, view.reservation) is not None
+    if subnet_id_for(view.device, view.lease, view.reservation) is not None:
+        return True
+    return any(_is_global(row) for row in view.reservations)
+
+
+_names_a_subnet = names_a_subnet
 
 
 def authorize(

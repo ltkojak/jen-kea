@@ -273,6 +273,8 @@ ALERT_TYPE_LABELS = {
 # the owning plugin's name.
 PLUGIN_ALERT_TYPES: dict[str, str] = {}
 
+ALERT_TYPE_MAX_LENGTH = 50  # alert_log.alert_type / alert_templates.alert_type VARCHAR(50)
+
 
 def register_alert_type(plugin_id: str, type_id: str, *, label: str, icon: str, default_template: str) -> None:
     """Merges `type_id` into ALERT_TYPE_LABELS/ALERT_TYPE_ICONS/
@@ -286,6 +288,20 @@ def register_alert_type(plugin_id: str, type_id: str, *, label: str, icon: str, 
     prefix = f"{plugin_id}_"
     if not type_id.startswith(prefix):
         raise ValueError(f"type_id {type_id!r} must start with {prefix!r}")
+    if len(type_id) > ALERT_TYPE_MAX_LENGTH:
+        # alert_log.alert_type and alert_templates.alert_type are VARCHAR(50): a longer id makes every
+        # INSERT for that type fail. Raised here, so the plugin fails to load with this message
+        # instead of silently losing every alert it sends.
+        raise ValueError(
+            f"type_id {type_id!r} is {len(type_id)} characters; alert type ids are limited to {ALERT_TYPE_MAX_LENGTH}"
+        )
+    from jen.services.icons import is_icon
+
+    if not is_icon(icon):
+        logger.warning(
+            f"plugin {plugin_id}: alert type {type_id!r} names icon {icon!r}, which is not in the sprite - using 'bell'"
+        )
+        icon = "bell"
     ALERT_TYPE_LABELS[type_id] = label
     ALERT_TYPE_ICONS[type_id] = icon
     DEFAULT_TEMPLATES[type_id] = default_template

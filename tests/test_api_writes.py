@@ -82,13 +82,13 @@ class TestGate:
         assert client.get("/api/v1/subnets", headers=_h(RAW_RO)).status_code == 200
 
     def test_rate_limit(self, client, keys, mock_kea, monkeypatch):
-        from jen.routes import api as api_mod
+        from jen.services import api_auth
 
-        monkeypatch.setattr(api_mod, "_WRITE_RATE_PER_MINUTE", 3)
-        api_mod._write_hits.clear()
+        monkeypatch.setattr(api_auth, "WRITE_RATE_PER_MINUTE", 3)
+        api_auth._write_hits.clear()
         codes = [_post(client, "/api/v1/subnets/1/notes", RAW_RW, {"text": "x"}).status_code for _ in range(4)]
         assert codes == [200, 200, 200, 429]
-        api_mod._write_hits.clear()
+        api_auth._write_hits.clear()
 
 
 class TestReservations:

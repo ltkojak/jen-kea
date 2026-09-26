@@ -315,6 +315,10 @@ def discover_plugins() -> list[dict]:
                 # against a newer surface than this Jen offers is refused
                 # with a chip, not an ImportError at boot.
                 manifest["api_ok"] = plugin_api_ok(manifest)
+                # the Plugins page, the cards and the screenshot job read THESE manifests, not the
+                # loaded set _load_plugin sanitised: a registry plugin with a bad icon name would have
+                # printed the word on its card (v5.65.8, Q97 j)
+                sanitize_nav_icons(manifest)
                 by_id[manifest["id"]] = manifest  # later base in `bases` wins
             except Exception as e:
                 logger.warning(f"Could not load plugin manifest from {path}: {e}")

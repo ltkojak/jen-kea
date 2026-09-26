@@ -46,6 +46,7 @@ def is_icon(name) -> bool:
 
 FALLBACK_NAV_ICON = "puzzle"
 _NAME_SHAPED = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_nav_warned: set = set()
 
 
 def checked_nav_icon(value, owner: str = "") -> str:
@@ -57,7 +58,11 @@ def checked_nav_icon(value, owner: str = "") -> str:
     name - a plugin's own emoji - is left alone, as `nav_icon` always allowed."""
     if not isinstance(value, str) or not value or is_icon(value) or not _NAME_SHAPED.match(value):
         return value if isinstance(value, str) and value else FALLBACK_NAV_ICON
-    logger.warning(f"{owner or 'plugin'}: nav icon {value!r} is not in the icon sprite - showing {FALLBACK_NAV_ICON!r}")
+    if (owner, value) not in _nav_warned:  # discover_plugins() sanitises on every call: warn once
+        _nav_warned.add((owner, value))
+        logger.warning(
+            f"{owner or 'plugin'}: nav icon {value!r} is not in the icon sprite - showing {FALLBACK_NAV_ICON!r}"
+        )
     return FALLBACK_NAV_ICON
 
 

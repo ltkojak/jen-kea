@@ -164,6 +164,10 @@ jobs:
           JEN_DB_USER: jen
           JEN_DB_PASS: ci_jen_pw
           JEN_E2E_DATASET: demo
+          # Q97 k: the leak guard's personal markers. A dependabot run is given no secrets by
+          # GitHub, so the "was it present" assertion is not required there.
+          JEN_DOCS_FORBIDDEN: ${{ secrets.JEN_DOCS_FORBIDDEN }}
+          JEN_DOCS_FORBIDDEN_REQUIRED: ${{ github.actor != 'dependabot[bot]' && '1' || '' }}
         run: python -m pytest tests/e2e/test_docs_screenshots.py -m e2e -v
 
       - name: Upload docs screenshots

@@ -37,6 +37,19 @@ DESKTOP = {"width": 1600, "height": 1000}
 PHONE = {"width": 390, "height": 844}
 
 
+def test_the_leak_guard_was_given_its_secret_markers():
+    """v5.65.8 (Q97 k): the personal names live in the JEN_DOCS_FORBIDDEN secret, so a run where
+    it never arrived would guard only the generic marker and say nothing. CI sets
+    JEN_DOCS_FORBIDDEN_REQUIRED (not for a dependabot run, which GitHub gives no secrets), and then
+    an empty secret fails here instead of weakening the guard."""
+    if not os.environ.get("JEN_DOCS_FORBIDDEN_REQUIRED"):
+        pytest.skip("the secret markers are only required in CI (JEN_DOCS_FORBIDDEN_REQUIRED)")
+    assert len(demo_data.FORBIDDEN) > len(demo_data.GENERIC_FORBIDDEN), (
+        "JEN_DOCS_FORBIDDEN is empty: the leak guard would check only the generic marker. "
+        "Create the repository secret (gh secret set JEN_DOCS_FORBIDDEN)."
+    )
+
+
 def _leak_guard(page, name):
     text = page.evaluate("() => document.body.innerText").lower()
     hits = [f for f in demo_data.FORBIDDEN if f in text]

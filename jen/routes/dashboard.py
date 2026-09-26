@@ -287,7 +287,10 @@ def save_dashboard_prefs():
     validates it server-side either way — `dashboard_prefs.validate()` is the
     only place a client value reaches storage, so an inaccessible subnet id
     can never be pinned/ordered/hidden into a stored preference."""
-    body = request.json or {}
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        # a JSON array, string or number passed `"panels" in body` and then blew up on `.get` (a 500)
+        return jsonify({"ok": False, "error": "expected a JSON object"}), 400
     raw = body if "panels" in body or body.get("v") == 2 else body.get("widgets", [])
     accessible_ids = set(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
     prefs = __dprefs.validate(raw, accessible_ids)

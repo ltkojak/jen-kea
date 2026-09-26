@@ -83,6 +83,31 @@ def filter_subnet_ids(key_row, subnet_ids):
     return [sid for sid in subnet_ids if sid in scope]
 
 
+# v5.65.8 (Q97) - the per-key write limiter used to live in jen/routes/api.py's own write gate, so a
+# plugin's write endpoint (a wake packet per call, an IPAM entry) had no limit at all. It is here, and
+# `api_key_required(write=True)` applies it, so every write - core or plugin - shares one budget per key.
+WRITE_RATE_PER_MINUTE = 60
+_write_hits: dict = {}
+
+
+def write_rate_limited(key_id) -> bool:
+    """In-memory per-key limiter for the write endpoints: at most WRITE_RATE_PER_MINUTE calls in
+    any rolling 60 s window."""
+    import time as _time
+
+    now = _time.monotonic()
+    hits = [t for t in _write_hits.get(key_id, []) if now - t < 60]
+    if len(hits) >= WRITE_RATE_PER_MINUTE:
+        _write_hits[key_id] = hits
+        return True
+    hits.append(now)
+    _write_hits[key_id] = hits
+    return False
+
+
+RATE_LIMIT_MESSAGE = "Rate limit: at most 60 write requests per minute per key."
+
+
 def api_key_required(write: bool = False):
     """Decorator for plugin routes mounted under
     /api/v1/plugins/<plugin_id>/… — the same Bearer auth jen/routes/api.py
@@ -101,6 +126,8 @@ def api_key_required(write: bool = False):
                 return jsonify(
                     {"error": "This API key is read-only. Create one with write access under Settings → API Keys."}
                 ), 403
+            if write and write_rate_limited(key["id"]):
+                return jsonify({"error": RATE_LIMIT_MESSAGE}), 429
             g.api_key = key
             return fn(*args, **kwargs)
 

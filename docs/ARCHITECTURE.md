@@ -609,7 +609,9 @@ notes, subnet notes) — never for anything that edits a Kea
 configuration file, which needs the changeset engine (§3.11) and a
 human preview. Two additional controls: a per-key `can_write` flag
 (migration 25), off by default so every pre-existing key stays
-read-only; and a per-key rate limit on writes. An API request has no
+read-only; and a per-key rate limit on writes (60 a minute, applied by
+`api_key_required(write=True)` itself since v5.65.8, so a plugin's write
+endpoint shares the budget of the core ones). An API request has no
 Flask-Login user, so every write is audited with the key's name as the
 actor. The surface is described by `/api/v1/openapi.json`, generated
 from one Python dict; a test walks Flask's URL map and fails when a
@@ -1333,7 +1335,10 @@ As of the process work following the v4.4.10 audit series:
   was rolled back. It now reports `kea_up` / `kea_version` from the last probe
   `kea_is_up()` recorded (the background alert loop asks every server every ~5 s;
   `null` until one has, or once it is older than two minutes), plus `kea_checked_at`,
-  and never calls Kea. `GET /api/v1/health/kea` (API key) keeps the live probe.
+  and never calls Kea; since v5.65.8 it also lists `kea_servers` (each server's last
+  probe) and its top-level fields describe the server Jen is serving from, not
+  `[kea] api_url`'s primary. `GET /api/v1/health/kea` (API key) keeps the live probe,
+  now of that active server.
   `tests/test_health_endpoint.py` and system scenario 11 pin it.
 - **Dependabot** watches the GitHub Actions used in these workflows and
   opens PRs to bump pinned commit SHAs forward when new releases exist.

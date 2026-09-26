@@ -76,30 +76,44 @@ class TestScriptTagsHaveNonce:
                     missing.append(str(path))
         assert not missing, f"<script> tag(s) missing nonce=: {missing}"
 
+    @staticmethod
+    def _route_rendered_partials():
+        """Every `_*.html` a route (jen/routes/**, plugins/*/plugin.py) hands to render_template with a literal
+            name, multi-line-aware: `render_template(
+        "_x.html", ...)` is found too."""
+        import re
+
+        call = re.compile(r"render_template\(\s*[\"'](?:[\w./-]*/)?(_[\w.-]+\.html)[\"']", re.S)
+        files = sorted(pathlib.Path("jen/routes").rglob("*.py")) + sorted(pathlib.Path("plugins").glob("*/plugin.py"))
+        found = {}
+        for path in files:
+            for name in call.findall(path.read_text(encoding="utf-8")):
+                found.setdefault(name, path.as_posix())
+        return found
+
     def test_htmx_swapped_partials_contain_no_script_tag(self):
-        """The true swap-target set, from grepping jen/routes/*.py for
-        render_template("_....html" call sites — not just every
-        underscore-prefixed filename. _dhcp_options_table.html, for
-        example, has a <script> but is only ever {% include %}d, never
-        route-rendered directly, so it's not in this list."""
-        swapped_partials = [
-            "templates/_recent_leases_rows.html",
-            "templates/_recent_leases.html",
-            "templates/_devices_results.html",
-            "templates/_devices6_results.html",
-            "templates/_health_checks.html",
-            "templates/_leases_results.html",
-            "templates/_leases6_results.html",
-            "templates/_reservations_results.html",
-            "templates/_reservations6_results.html",
-            "templates/_class_preview.html",
-        ]
+        """The true swap-target set: every `_*.html` a route renders directly, DERIVED from the code (the old
+        hand-typed list had drifted: `_explain_result`, `_ha_maintenance_status`, `_timeline_rows` and
+        `_trace_results` were route-rendered and not in it). _dhcp_options_table.html, for example, has a
+        <script> but is only ever {% include %}d, never route-rendered directly, so the scan does not list it."""
+        rendered = self._route_rendered_partials()
+        assert len(rendered) >= 10, f"the scan found only {sorted(rendered)}: it has stopped working"
+        for name in (
+            "_explain_result.html",
+            "_ha_maintenance_status.html",
+            "_timeline_rows.html",
+            "_trace_results.html",
+            "_recent_leases_rows.html",
+        ):
+            assert name in rendered, f"the scan no longer finds {name}"
+        names = sorted(rendered)
         offenders = []
-        for rel in swapped_partials:
-            path = pathlib.Path(rel)
-            assert path.exists(), f"expected htmx-swapped partial not found: {rel}"
+        for name in names:
+            candidates = [pathlib.Path("templates") / name, *pathlib.Path("plugins").glob(f"*/templates/**/{name}")]
+            path = next((c for c in candidates if c.exists()), None)
+            assert path is not None, f"route-rendered partial not found on disk: {name}"
             if "<script" in path.read_text(encoding="utf-8").lower():
-                offenders.append(rel)
+                offenders.append(path.as_posix())
         assert not offenders, f"htmx-swapped partial(s) contain a <script> tag: {offenders}"
 
 

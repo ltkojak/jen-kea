@@ -358,3 +358,41 @@ class TestAlertLine:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM alert_log WHERE alert_type IN ('zz_marker_alert', 'zz_neighbour_alert')")
             db.commit()
+
+
+class TestAGlobalReservationOnlyClientIsFindable:
+    """v5.65.8 (Q97 f): a reservation with no subnet is kept for every caller, so a client known ONLY by one
+    must be findable by a subnet-restricted user - by MAC and by hostname. The view gate used to ask for a
+    subnet, found subnet 0 named none, and hid the view."""
+
+    G_MAC, G_HEX, G_HOST = "aa:bb:cc:dd:ef:20", "AABBCCDDEF20", "q97-global-only"
+
+    def _seed(self, db):
+        self._clean(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, 0, INET_ATON('10.45.9.20'), %s)",
+                (self.G_HEX, self.G_HOST),
+            )
+        db.commit()
+
+    def _clean(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.G_HEX,))
+            cur.execute("DELETE FROM devices WHERE mac=%s", (self.G_MAC,))
+        db.commit()
+
+    @pytest.mark.parametrize("by", ["mac", "hostname"])
+    def test_a_restricted_viewer_finds_it(self, client, db, by):
+        from tests.conftest import restricted_client
+
+        self._seed(db)
+        try:
+            restricted_client(client, db, allowed_subnets=[1], role="viewer", username=f"_client_global_{by}")
+            q = self.G_MAC if by == "mac" else self.G_HOST
+            r = client.get(f"/client?q={q}")
+            assert r.status_code == 200
+            assert self.G_MAC in r.get_data(as_text=True), "the client known only by a global reservation is shown"
+        finally:
+            self._clean(db)

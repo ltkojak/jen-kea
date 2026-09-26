@@ -321,11 +321,27 @@ def kea_is_up(server: dict = None) -> bool:
     return up
 
 
+def cached_active_server() -> dict | None:
+    """The server Jen is serving from, WITHOUT a probe: the one get_active_kea_server() last chose (its
+    10 s cache), else the first configured server. get_active_kea_server() itself probes in an HA pair,
+    so the health endpoint, which must never wait on Kea, reads this instead."""
+    cached = extensions._active_server_cache.get("server")
+    if cached:
+        return cached
+    servers = extensions.KEA_SERVERS
+    return servers[0] if servers else None
+
+
+def all_cached_kea_health() -> list:
+    """Per server, what Jen last learned and when: [{"name", "up", "version", "checked_at"}]. No probe."""
+    return [{"name": s.get("name"), **cached_kea_health(s)} for s in extensions.KEA_SERVERS]
+
+
 def cached_kea_health(server: dict = None, max_age: float = _HEALTH_MAX_AGE_S) -> dict:
     """What Jen last learned about a server, WITHOUT asking Kea: {"up": bool | None, "version":
     str | None, "checked_at": iso | None}. None means "not known" - nothing has probed yet, or the
     last probe is older than `max_age` seconds (the poller stopped) - never a guess. Never blocks."""
-    entry = _HEALTH_CACHE.get(_health_key(server))
+    entry = _HEALTH_CACHE.get(_health_key(server if server is not None else cached_active_server()))
     if not entry or (time.time() - entry["at"]) > max_age:
         return {"up": None, "version": None, "checked_at": None}
     return {

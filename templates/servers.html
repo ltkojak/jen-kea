@@ -18,7 +18,8 @@
     {{ ca.failed_restart|join(", ") or "A server" }} would not restart on the new config, so every server was put back on the previous one and restarted. Nothing was changed.
     {% endif %}
     <div class="u-bd72d7">{{ ca.summary }} &middot; {{ ca.at }}</div>
-    {% if ca.lines %}<ul style="margin:6px 0 0 18px;font-size:12px;">{% for l in ca.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}
+    {# the raw helper/SSH detail tails name hosts, ports and paths: admins only (v5.65.8, Q97 g) #}
+    {% if ca.lines and current_user.role in ('admin', 'superadmin') %}<ul style="margin:6px 0 0 18px;font-size:12px;">{% for l in ca.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}
     <form method="POST" action="{{ url_for('servers.dismiss_changeset_attention') }}" class="u-8a77e5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-sm btn-secondary">Dismiss</button>

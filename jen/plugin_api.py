@@ -129,7 +129,12 @@ def can_access_subnet(subnet_id, *, allow_unattributed: bool = False) -> bool:
 def api_key_can_access_subnet(key, subnet_id, *, allow_unattributed: bool = False) -> bool:
     """`can_access_subnet` for an API key row (`flask.g.api_key`): True for an
     unrestricted key, False for `None` on a scoped key unless `allow_unattributed`,
-    and a malformed scope fails closed (it reads as "no subnets")."""
+    and a malformed scope fails closed (it reads as "no subnets"). A MISSING key (`None`, an
+    empty row: a plugin route reached outside `api_key_required`) is False for everything, as the
+    session twin is for an anonymous user - `key_subnet_ids(None)` reads "no scope", which is
+    "unrestricted" for a real key row, and this used to inherit that and grant every subnet."""
+    if not key:
+        return False
     scope = _key_subnet_ids(key)
     if scope is None:
         return True

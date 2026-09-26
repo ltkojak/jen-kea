@@ -61,12 +61,28 @@ def build_spec(version: str, base_url: str = "") -> dict:
                         "kea_up": {"type": "boolean", "nullable": True},
                         "kea_version": {"type": "string", "nullable": True},
                         "kea_checked_at": {"type": "string", "nullable": True},
+                        "kea_servers": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string"},
+                                    "up": {"type": "boolean", "nullable": True},
+                                    "version": {"type": "string", "nullable": True},
+                                    "checked_at": {"type": "string", "nullable": True},
+                                },
+                            },
+                        },
                         "subnets": {"type": "integer"},
                     },
                 },
                 "HealthKea": {
                     "type": "object",
-                    "properties": {"kea_up": {"type": "boolean"}, "kea_version": {"type": "string"}},
+                    "properties": {
+                        "kea_up": {"type": "boolean"},
+                        "kea_version": {"type": "string"},
+                        "server": {"type": "string", "nullable": True},
+                    },
                 },
                 "Subnet": {
                     "type": "object",
@@ -336,7 +352,7 @@ def build_spec(version: str, base_url: str = "") -> dict:
             },
             "/api/v1/health/kea": {
                 "get": {
-                    "summary": "A live Kea probe: may take as long as the Kea API timeout when Kea is unreachable (v5.65.6)",
+                    "summary": "A live probe of the ACTIVE Kea server: may take as long as the Kea API timeout when it is unreachable (v5.65.6)",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "HealthKea"), "401": _ERR},
                 }

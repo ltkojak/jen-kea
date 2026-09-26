@@ -58,8 +58,15 @@ def run_search_providers(query: str, accessible_subnet_ids, all_subnets: bool) -
             elapsed = time.monotonic() - start
             if elapsed > BUDGET_SECONDS:
                 logger.warning(f"search provider {plugin_id!r} took {elapsed:.2f}s, over the {BUDGET_SECONDS}s budget")
+        # v5.65.8 (Q97 j): filter by the caller's subnets FIRST and truncate afterwards. It used to
+        # truncate to MAX_ROWS before the re-filter, so a restricted caller whose rows were 21 and later
+        # saw "No results". A malformed row (not a dict) is skipped, not allowed to raise here, outside
+        # the provider's own try, where it blanked every provider's card.
         rows = []
-        for row in raw_rows[:MAX_ROWS]:
+        for row in raw_rows if isinstance(raw_rows, (list, tuple)) else []:
+            if not isinstance(row, dict):
+                logger.warning(f"search provider {plugin_id!r} returned a non-dict row; skipped")
+                continue
             sid = row.get("subnet_id")
             if sid is None:
                 if not all_subnets:
@@ -67,5 +74,7 @@ def run_search_providers(query: str, accessible_subnet_ids, all_subnets: bool) -
             elif sid not in accessible:
                 continue
             rows.append(row)
+            if len(rows) >= MAX_ROWS:
+                break
         out.append({"plugin_id": plugin_id, "title": entry["title"], "rows": rows, "unavailable": unavailable})
     return out

@@ -76,6 +76,9 @@ class ChangeSetResult:
     restart_failures: list[str] = field(default_factory=list)  # server names whose restart failed
     # servers a person has to look at: the ones a failed revert / second restart left wrong
     needs_hands: list[str] = field(default_factory=list)
+    # the servers an "ok" run actually changed and restarted (v5.65.8): what record_outcome checks
+    # before it lets a run clear a rollback_failed banner
+    covered: list[str] = field(default_factory=list)
 
 
 # The statuses after which the change did NOT happen (or is half-applied): callers must not write
@@ -343,7 +346,7 @@ def _run_change(
         for t in targets:
             _events.emit("config.applied", server=t.name, detail=summary)
             lines.append(("success", f"✅ {t.name}: {summary}"))
-        return ChangeSetResult("ok", "ok", lines)
+        return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets])
 
     restarts = {t.name: _safe(_host.service_action, t.server, service, "restart") for t in targets}
     failed = [t for t in targets if not restarts[t.name].get("ok")]
@@ -351,7 +354,7 @@ def _run_change(
         for t in targets:
             _events.emit("config.applied", server=t.name, detail=summary)
             lines.append(("success", f"✅ {t.name}: {summary}, {daemon_label} restarted"))
-        return ChangeSetResult("ok", "ok", lines)
+        return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets])
 
     # A restart failed although the config passed preflight and was written: the daemon
     # cannot start from what it was just handed (and the restart already stopped the old
@@ -416,6 +419,29 @@ def _run_change(
 ATTENTION_KEY = "changeset_attention"
 
 
+def _ok_run_clears(raw: str, result: ChangeSetResult, service: str) -> bool:
+    """May this clean run take the banner down? (v5.65.8, Q97.)
+
+    A `rolled_back` note says every server was put back and is running, so any later clean run
+    clears it. A `rollback_failed` note is the only persistent sign that a daemon may be STOPPED,
+    and it used to be cleared by ANY ok run - a DDNS save, a single-server edit that never touched
+    the server that needs hands. It now clears only when the run was for the same service and
+    covered every server in `needs_hands` (a clean restart of each is proof it is running);
+    otherwise it stays until an admin dismisses it."""
+    import json
+
+    try:
+        note = json.loads(raw)
+    except Exception:
+        return True  # unreadable: nothing worth protecting
+    if not isinstance(note, dict) or note.get("status") != "rollback_failed":
+        return True
+    if note.get("service") != service:
+        return False
+    needed = set(note.get("needs_hands") or [])
+    return needed <= set(result.covered)
+
+
 def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
     """Remember a rolled-back / failed-rollback outcome for the Servers page; clear it after a
     clean run. Best-effort telemetry: never raises, never changes the result."""
@@ -440,8 +466,19 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
                     }
                 ),
             )
-        elif result.status == "ok" and _user.get_global_setting(ATTENTION_KEY, ""):
-            _user.set_global_setting(ATTENTION_KEY, "")
+            # v5.65.8 (Q97): the audit log used to record only that someone DISMISSED the notice. A rollback
+            # is an event in its own right (and a rollback_failed is a server that may be stopped).
+            _user.audit(
+                "CONFIG_ROLLBACK_FAILED" if result.status == "rollback_failed" else "CONFIG_ROLLED_BACK",
+                service,
+                f"{summary}"
+                + (f"; needs attention: {', '.join(result.needs_hands)}" if result.needs_hands else "")
+                + (f"; restart failed on: {', '.join(result.restart_failures)}" if result.restart_failures else ""),
+            )
+        elif result.status == "ok":
+            noted = _user.get_global_setting(ATTENTION_KEY, "")
+            if noted and _ok_run_clears(noted, result, service):
+                _user.set_global_setting(ATTENTION_KEY, "")
     except Exception as e:
         logger.debug(f"kea_changeset: could not record the outcome: {e}")
 

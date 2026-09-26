@@ -102,17 +102,13 @@ def _reword_edit_restart_lines(lines, summary, daemon_label="Kea"):
     kea_changeset's generic "{summary}, {daemon_label} restarted" success
     line. Rewrite just those two known shapes back to the original text
     rather than teaching the shared module a per-caller template.
-    v5.28.1 (Q26, A4) — kea_changeset's own manual-restart-needed line
-    changed shape (now "did NOT restart", a warning, not a success
-    "success" line reading "restart … manually") — `manual_old` tracks
-    that; `style` is left alone, so a manual-restart line correctly
-    stays a warning here too."""
+    v5.65.8 (Q97) - the "restart Kea manually" shape this once also rewrote
+    is gone: since v5.65.1 a restart that fails rolls the change back, so
+    only the success shape is reworded."""
     ok_old = f"{summary}, {daemon_label} restarted"
-    manual_old = f"{summary} — {daemon_label} did NOT restart"
-    manual_new = f"config updated — restart {daemon_label} manually"
     out = []
     for style, text in lines:
-        text = text.replace(ok_old, "config validated, updated and restarted").replace(manual_old, manual_new)
+        text = text.replace(ok_old, "config validated, updated and restarted")
         out.append((style, text))
     return out
 
@@ -796,7 +792,10 @@ def edit_subnet_post(subnet_id):
         changes.append(f"routers={new_routers}")
     if new_dns:
         changes.append(f"dns={new_dns}")
-    __user.audit("EDIT_SUBNET", str(subnet_id), ", ".join(changes) if changes else "no changes")
+    # gated like every other caller (v5.65.8, Q97): after a rollback nothing was edited, and the change
+    # set's own outcome is audited by record_outcome
+    if result.last_code == "ok":
+        __user.audit("EDIT_SUBNET", str(subnet_id), ", ".join(changes) if changes else "no changes")
 
     return redirect(url_for("subnets.subnets"))
 
@@ -809,15 +808,14 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
     Kea server. `mutate_fn(cfg) -> (cfg, code)`; `code_messages` maps a
     non-"ok" code to its flash text. Flashes per-server results; returns
     the ChangeSetResult so the caller can pick a redirect/audit off
-    `result.last_code` and note a partial restart failure via
-    `_restart_failure_suffix(result)`.
+    `result.last_code`.
     v5.28.0 (Q24, C2) — a thin wrapper over kea_changeset.apply_change(),
     which owns the actual plan/preflight/commit-with-revert/restart logic
     shared with subnets.py's direct callers and ddns.py.
     v5.28.1 (Q26, A4) — returns the whole ChangeSetResult, not just
-    `last_code`: a restart failure is a real operational problem
-    (`status == "restart_failed"`) that the config-still-applied audit
-    line should say, not silently swallow."""
+    `last_code`. (The "restart_failed" status that paragraph once described
+    was retired in v5.65.1: a restart failure now rolls the change back, and
+    record_outcome audits and persists that.)"""
     result = __changeset.apply_change(
         "dhcp4",
         mutate_fn,
@@ -828,17 +826,6 @@ def _apply_dhcp4_change(mutate_fn, done_phrase, code_messages, summary=None):
     for style, text in result.lines:
         flash(text, style)
     return result
-
-
-def _restart_failure_suffix(result) -> str:
-    """v5.28.1 (Q26, A4) — "" normally, else a fragment naming which
-    server(s) didn't restart, joined into an audit detail with
-    `", ".join(filter(None, [existing_detail, _restart_failure_suffix(result)]))`
-    so a restart failure that still applied cleanly shows up in the
-    audit log, not only in a flash the operator might not have seen."""
-    if result.status != "restart_failed":
-        return ""
-    return f"restart failed on {', '.join(result.restart_failures)}"
 
 
 @bp.route("/subnets/shared-networks/add", methods=["POST"])
@@ -863,9 +850,7 @@ def add_shared_network():
         {"exists": f'a shared network named "{name}" already exists'},
     )
     if result.last_code == "ok":
-        detail = ", ".join(
-            filter(None, [f"interface={interface}" if interface else "", _restart_failure_suffix(result)])
-        )
+        detail = f"interface={interface}" if interface else ""
         __user.audit("ADD_SHARED_NETWORK", name, detail)
     return redirect(url_for("subnets.subnets"))
 
@@ -891,7 +876,7 @@ def delete_shared_network():
         },
     )
     if result.last_code == "ok":
-        __user.audit("DELETE_SHARED_NETWORK", name, _restart_failure_suffix(result))
+        __user.audit("DELETE_SHARED_NETWORK", name)
     return redirect(url_for("subnets.subnets"))
 
 
@@ -921,7 +906,7 @@ def move_subnet(subnet_id):
         },
     )
     if result.last_code == "ok":
-        detail = ", ".join(filter(None, [f"network={target or '(top level)'}", _restart_failure_suffix(result)]))
+        detail = f"network={target or '(top level)'}"
         __user.audit("MOVE_SUBNET", str(subnet_id), detail)
     return redirect(url_for("subnets.subnets"))
 
@@ -1114,9 +1099,7 @@ def dhcp_options_set():
         summary=f"set option {name} ({code}) at {level_raw}",
     )
     if apply_result.last_code == "ok":
-        detail = ", ".join(
-            filter(None, [f"level={level_raw} key={key_raw} code={code}", _restart_failure_suffix(apply_result)])
-        )
+        detail = f"level={level_raw} key={key_raw} code={code}"
         __user.audit("SET_DHCP_OPTION", name, detail)
     return _dhcp_options_redirect(level_raw, key_raw)
 
@@ -1152,9 +1135,7 @@ def dhcp_options_remove():
         summary=f"remove option {name} ({code}) at {level_raw}",
     )
     if apply_result.last_code == "ok":
-        detail = ", ".join(
-            filter(None, [f"level={level_raw} key={key_raw} code={code}", _restart_failure_suffix(apply_result)])
-        )
+        detail = f"level={level_raw} key={key_raw} code={code}"
         __user.audit("REMOVE_DHCP_OPTION", name, detail)
     return _dhcp_options_redirect(level_raw, key_raw)
 
@@ -1508,7 +1489,7 @@ def dhcp_class_save():
     pre_push_cfg = _live_dhcp4_cfg()
     result = _apply_dhcp4_change(_mutate, f'class "{name}" saved', {}, summary=f'save class "{name}"')
     if result.last_code == "ok":
-        detail = ", ".join(filter(None, ["new" if is_new else "edit", _restart_failure_suffix(result)]))
+        detail = "new" if is_new else "edit"
         __user.audit("SAVE_DHCP_CLASS", name, detail)
         if only_additional and not __classes.attached_as_additional(pre_push_cfg, name):
             flash(_only_additional_warning(name), "warning")
@@ -1537,7 +1518,7 @@ def dhcp_class_delete():
         summary=f'delete class "{name}"',
     )
     if result.last_code == "ok":
-        __user.audit("DELETE_DHCP_CLASS", name, _restart_failure_suffix(result))
+        __user.audit("DELETE_DHCP_CLASS", name)
     return redirect(url_for("subnets.dhcp_classes_page"))
 
 
@@ -1564,7 +1545,7 @@ def dhcp_class_reorder():
         summary=f'reorder class "{name}" {direction}',
     )
     if result.last_code == "ok":
-        detail = ", ".join(filter(None, [direction, _restart_failure_suffix(result)]))
+        detail = direction
         __user.audit("REORDER_DHCP_CLASS", name, detail)
     return redirect(url_for("subnets.dhcp_classes_page"))
 
@@ -1605,12 +1586,7 @@ def dhcp_class_attach():
         summary=f'{verb} class "{name}" {scope_level} {scope_display}',
     )
     if result.last_code == "ok":
-        detail = ", ".join(
-            filter(
-                None,
-                [f"{scope_level}={scope_display} mode={mode} attach={attach}", _restart_failure_suffix(result)],
-            )
-        )
+        detail = f"{scope_level}={scope_display} mode={mode} attach={attach}"
         __user.audit("ATTACH_DHCP_CLASS", name, detail)
     return redirect(url_for("subnets.dhcp_class_edit_page", name=name))
 
@@ -1872,7 +1848,8 @@ def edit_subnet6_post(subnet_id):
         changes.append(f"rebind-timer={fields['new_rebind']}")
     if fields["new_dns"]:
         changes.append(f"dns={fields['new_dns']}")
-    __user.audit("EDIT_SUBNET6", str(subnet_id), ", ".join(changes) if changes else "no changes")
+    if result.last_code == "ok":
+        __user.audit("EDIT_SUBNET6", str(subnet_id), ", ".join(changes) if changes else "no changes")
 
     return redirect(url_for("subnets.subnets"))
 

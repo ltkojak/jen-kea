@@ -576,10 +576,11 @@ def create_app() -> Flask:
     # from here rather than hand-written: every built-in preset
     # (jen.services.theme.PRESETS) plus the install's custom palette, if one
     # is defined. theme_custom's tokens went through validate_palette() at
-    # save time (jen/routes/settings/theme.py) — the JSON in the settings
-    # table is never re-validated here, but render_css() only ever emits
-    # exactly the fields that call put there, so a corrupted row degrades to
-    # a broken *value*, never broken CSS syntax.
+    # save time (jen/routes/settings/theme.py) AND are re-validated below on
+    # every render (v5.56.1, Q68o: a restored database, a manual edit or a
+    # changed validator must not put an unvalidated string into a |safe
+    # style block); render_css() then emits only the fields that call
+    # returned, so a corrupted row is ignored with one warning.
     # v5.56.1 (Q68o) — "once per process, not per request" for the warning
     # below. A closure-local flag rather than a module-level one: each
     # create_app() call (one per test's `app` fixture, one per gunicorn

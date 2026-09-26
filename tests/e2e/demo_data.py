@@ -21,6 +21,7 @@ against — every marker the maintainer gave as identifying their own network.
 
 from __future__ import annotations
 
+import os
 import random
 from datetime import datetime, timedelta, timezone
 
@@ -139,11 +140,24 @@ RESERVATION_NOTES = [
     "Reception display",
 ]
 
-# The maintainer's real markers — every string the leak guard checks every
-# captured screenshot's text against. Fail closed: if any of these appears,
-# the dataset stopped being fictional somewhere and the run must not upload
+# The markers every captured screenshot's text is checked against. Fail closed: if any of
+# these appears, the dataset stopped being fictional somewhere and the run must not upload
 # the picture.
-FORBIDDEN = ("10.10.", "matthew", "laura", "micah", "lucia", "thibodeau", "constantping")
+#
+# v5.65.8 (Q97 k): the committed list holds only the GENERIC marker (the maintainer's real
+# address range). The personal names - family first names, surname, domain - used to be spelt
+# out here, which published in a public repo exactly what the guard exists to keep out of a
+# picture. They now come from the CI secret JEN_DOCS_FORBIDDEN (comma-separated), appended
+# when present. (`git log` keeps the old file; history is not rewritten.)
+GENERIC_FORBIDDEN = ("10.10.",)
+
+
+def _secret_markers(raw: str | None = None) -> tuple:
+    raw = os.environ.get("JEN_DOCS_FORBIDDEN", "") if raw is None else raw
+    return tuple(m.strip().lower() for m in raw.split(",") if m.strip())
+
+
+FORBIDDEN = GENERIC_FORBIDDEN + _secret_markers()
 
 ALERT_KINDS = ("kea_up", "new_lease", "new_reservation", "new_device", "daily_summary", "kea_down")
 

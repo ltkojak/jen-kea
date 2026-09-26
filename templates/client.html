@@ -60,7 +60,7 @@
 <div class="card u-8bfeea">
     <div class="u-b5711a">
         {% for t in tabs %}
-        <a href="/client?q={{ q|urlencode }}&tab={{ t }}" class="badge {% if t == tab %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ t|capitalize }}</a>
+        <a href="/client?q={{ q|urlencode }}&tab={{ t }}" class="badge {% if t == tab %}badge-reserved{% else %}badge-dynamic{% endif %}">{{ 'DNS' if t == 'dns' else t|capitalize }}</a>
         {% endfor %}
     </div>
 </div>
