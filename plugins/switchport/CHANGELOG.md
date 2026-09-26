@@ -1,5 +1,21 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.0.3] - 2026-09-26
+
+Requires Jen 5.65.6 or later (`client_subnet_for_mac` in the plugin API); 1.0.2 required 5.65.2.
+
+### Fixed: database error text reached the page
+
+A failed save put the database's own error message into the page, which can carry a table or column name, a user name or a host address. The details are now written to Jen's log and the page shows a generic message. Jen's test suite now scans every bundled plugin for this and fails on a new one; messages about the outside world this plugin was configured to talk to (an SNMP walk's own failure, shown on the switch) are the deliberate exception, because that text is the diagnostic an operator needs.
+
+### Changed: one place decides which subnet a MAC is in
+
+The plugin carried its own lookup (the device's last known subnet first, then a lease, then a reservation), which disagreed with Wake and Presence about where a client is. It now asks Jen's `client_subnet_for_mac` (current lease, then reservation, then the device's last known subnet), so a MAC is judged on the same subnet by every plugin and by the core pages.
+
+### Changed
+
+- `tools/test_plugin.py` checks that the subnet comes from the plugin API, and runs a failing database through the add route.
+
 ## [1.0.2] - 2026-09-25
 
 Requires Jen 5.65.2 or later, like 1.0.1. No code path changed.

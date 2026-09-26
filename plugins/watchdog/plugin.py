@@ -653,7 +653,8 @@ def add_target():
         flash(f"Now watching {label or ip}.", "success")
         _audit("WATCHDOG_ADD", ip, f"label={label} probe={probe}")
     except Exception as e:
-        flash(f"Could not add target: {e}", "error")
+        logger.error(f"Watchdog: could not add target: {e}")
+        flash("Could not add target; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -678,7 +679,8 @@ def toggle_target(target_id):
         db.commit()
         flash("Target resumed." if new_enabled else "Target paused.", "success")
     except Exception as e:
-        flash(f"Could not update target: {e}", "error")
+        logger.error(f"Watchdog: could not update target: {e}")
+        flash("Could not update target; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -705,7 +707,8 @@ def delete_target(target_id):
         flash("Target removed.", "success")
         _audit("WATCHDOG_DELETE", str(target_id), "target removed")
     except Exception as e:
-        flash(f"Could not remove target: {e}", "error")
+        logger.error(f"Watchdog: could not remove target: {e}")
+        flash("Could not remove target; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -786,7 +789,8 @@ def watch_from_row():
         flash(f"Now watching {hostname or ip}.", "success")
         _audit("WATCHDOG_ADD", ip, f"label={hostname} source=reservation")
     except Exception as e:
-        flash(f"Could not add target: {e}", "error")
+        logger.error(f"Watchdog: could not add target: {e}")
+        flash("Could not add target; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -864,7 +868,8 @@ def _api_add_target():
             new_id = cur.lastrowid
         db.commit()
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Watchdog: API request failed: {e}")
+        return jsonify({"error": "internal error; the details are in the Jen log"}), 500
     finally:
         if db:
             db.close()

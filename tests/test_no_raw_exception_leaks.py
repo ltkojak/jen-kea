@@ -161,6 +161,21 @@ ALLOWED_RAW_EXCEPTION_LINES = [
         "value the admin just typed into the DHCP options form — never a "
         "raw exception object.",
     ),
+    # v5.65.7 (Q96) - the bundled plugins are scanned too; these are the only two lines that are safe by
+    # design (a message written for the user, or the diagnostic of an integration the admin configured).
+    (
+        "plugins/ipam/plugin.py",
+        'flash(str(e), "error")',
+        "e is IPAM's own _ImportTooLarge, raised with a hand-written sentence about the size of the file the "
+        "user just uploaded - not a raw exception from a database or the filesystem.",
+    ),
+    (
+        "plugins/presence/plugin.py",
+        'flash(f"Test failed: {e}", "error")',
+        "Send-test on a sink, a superadmin-only action: e is the connection or HTTP failure of the webhook/MQTT "
+        "broker the superadmin just configured - the actionable diagnostic, the same category as the alert "
+        "channel test above.",
+    ),
 ]
 
 # These aren't exception leaks at all — an integer error/success COUNT
@@ -198,7 +213,7 @@ def _scan_route_file_for_raw_exception_leaks(path):
             continue
         if any(fp in line for fp in KNOWN_FALSE_POSITIVE_SUBSTRINGS):
             continue
-        if any(path.endswith(f) and sig in line for f, sig, _ in ALLOWED_RAW_EXCEPTION_LINES):
+        if any(path.replace("\\", "/").endswith(f) and sig in line for f, sig, _ in ALLOWED_RAW_EXCEPTION_LINES):
             continue
         findings.append((lineno, line.strip()))
     return findings
@@ -333,32 +348,28 @@ class TestRepresentativeFixesActuallyHideRawExceptionText:
         assert b"mno901" not in r.data
 
 
-class TestPluginsReportOnly:
-    """v5.65.6 (Q95) - the same scanner over the bundled plugins, REPORT-ONLY.
+class TestBundledPluginsAreScannedToo:
+    """v5.65.7 (Q96) - the same scanner over plugins/*/plugin.py, BLOCKING (it was report-only in
+    5.65.6).
 
-    plugins/*/plugin.py were never scanned, and carry the same leak: a database or socket failure's own
-    text in a flash() or an API response. This prints every site it finds (as a pytest warning, so it
-    shows in the run summary) and passes. The plugin releases of this round fixed the sites in ipam,
-    presence and wol; Q96 fixes the rest and flips this to blocking, so a new leak in a plugin fails CI
-    the way one in jen/routes does."""
+    Plugins carried the same leak as the core routes had: a database or socket failure's own text in a
+    flash() or an API response, which names tables, users and hosts. Every such site in the bundled
+    plugins now logs the exception and shows a generic message; the two lines that are safe by design
+    are in ALLOWED_RAW_EXCEPTION_LINES above with their reasons. A new leak in a plugin fails here the
+    way one in jen/routes does."""
 
-    def test_report_the_plugin_sites(self):
+    def test_no_plugin_leaks_an_exception_to_a_page_or_an_api_response(self):
         import glob
-        import warnings
 
         files = sorted(glob.glob("plugins/*/plugin.py"))
-        assert len(files) >= 6, "sanity check that the glob found the bundled plugins"
+        assert len(files) >= 7, "sanity check that the glob found the bundled plugins"
         report = {}
         for path in files:
             found = _scan_route_file_for_raw_exception_leaks(path)
             if found:
                 report[path] = found
-        total = sum(len(v) for v in report.values())
-        lines = [f"  {path}:{n}: {text}" for path, found in report.items() for n, text in found]
-        warnings.warn(
-            f"report-only: {total} raw-exception site(s) in bundled plugins (Q96 makes this blocking):\n"
-            + "\n".join(lines),
-            UserWarning,
-            stacklevel=1,
+        assert not report, (
+            f"raw exception text reaches the user in a bundled plugin: {report}. Log the exception and show a "
+            "generic message; if the text is a deliberate, actionable diagnostic about an integration the admin "
+            "configured, add it to ALLOWED_RAW_EXCEPTION_LINES with the reason."
         )
-        print("\n".join(lines))

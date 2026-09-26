@@ -362,6 +362,10 @@ Document your own plugin's endpoints in its README — Jen's
 `/api/v1/openapi.json` deliberately doesn't list them (see its own
 `description` field).
 
+### Error text — log it, show a generic message (v5.65.7)
+
+A failed database or filesystem call must not put its own exception text into a page or an API response: it names tables, columns, users and hosts. Log it (`logger.error(f"...: {e}")`) and show a generic sentence ("Could not save the target; the details are in Jen's log."; `{"error": "internal error; the details are in the Jen log"}` for an API). Jen's test suite (`tests/test_no_raw_exception_leaks.py`) scans every bundled plugin's `plugin.py` for `flash(f"...{e}")`, `flash(str(e))` and `jsonify(... str(e))` and fails on one. The only exceptions are messages written for the user, and the diagnostic of an integration the admin configured (a DNS server, a webhook, an SNMP switch): those go in that test's allow-list with the reason.
+
 ### Secrets — `encrypt_secret(plaintext)` / `decrypt_secret(stored)` (v5.57.0)
 
 The same encryption Jen uses for MFA secrets and alert-channel tokens

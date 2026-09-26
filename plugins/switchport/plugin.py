@@ -380,12 +380,6 @@ def _get_db():
     return get_jen_db()
 
 
-def _get_kea_db():
-    from jen.plugin_api import get_kea_db
-
-    return get_kea_db()
-
-
 def _subnet_map():
     from jen.plugin_api import subnet_map
 
@@ -428,49 +422,16 @@ def _audit(action, target, detail):
         logger.error(f"Switch Port Locator: audit failed: {e}")
 
 
-# ── The MAC's current subnet — filter_client_view's rule (v3 plugin API doesn't
-# export that helper directly), reimplemented against the same three sources it
-# judges from, in the same priority order: a device's own last-known placement,
-# then an active lease, then a reservation. ──────────────────────────────────
+# ── The MAC's current subnet: Jen's ONE precedence (plugin_api.client_subnet_for_mac, v5.65.6) ──
 
 
 def _current_subnet_for_mac(mac):
-    db = None
-    try:
-        db = _get_db()
-        with db.cursor() as cur:
-            cur.execute("SELECT last_subnet_id FROM devices WHERE mac=%s", (mac,))
-            row = cur.fetchone()
-            if row and row.get("last_subnet_id") is not None:
-                return row["last_subnet_id"]
-    except Exception as e:
-        logger.warning(f"Switch Port Locator: device subnet lookup failed: {e}")
-    finally:
-        if db:
-            db.close()
+    """The subnet a MAC is in now: current lease, then reservation, then the device's last known
+    subnet, else None. This plugin used to carry its own lookup (device first, then lease, then
+    reservation), which disagreed with Wake and Presence about where a client is."""
+    from jen.plugin_api import client_subnet_for_mac
 
-    hex_mac = mac.replace(":", "").upper()
-    kdb = None
-    try:
-        kdb = _get_kea_db()
-        with kdb.cursor() as cur:
-            cur.execute("SELECT subnet_id FROM lease4 WHERE HEX(hwaddr)=%s AND state=0", (hex_mac,))
-            row = cur.fetchone()
-            if row:
-                return row["subnet_id"]
-            cur.execute(
-                "SELECT dhcp4_subnet_id AS subnet_id FROM hosts WHERE dhcp_identifier_type=0 AND HEX(dhcp_identifier)=%s",
-                (hex_mac,),
-            )
-            row = cur.fetchone()
-            if row:
-                return row["subnet_id"]
-    except Exception as e:
-        logger.warning(f"Switch Port Locator: lease/reservation subnet lookup failed: {e}")
-    finally:
-        if kdb:
-            kdb.close()
-    return None
+    return client_subnet_for_mac(mac)
 
 
 def _mac_visible(mac):
@@ -870,7 +831,8 @@ def add_switch():
         flash(f"{name} added.", "success")
         _audit("SWITCHPORT_ADD_SWITCH", name, f"host={host}")
     except Exception as e:
-        flash(f"Could not add switch: {e}", "error")
+        logger.error(f"Switch Port Locator: could not add switch: {e}")
+        flash("Could not add switch; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -895,7 +857,8 @@ def toggle_switch(switch_id):
         db.commit()
         flash("Switch enabled." if new_enabled else "Switch paused.", "success")
     except Exception as e:
-        flash(f"Could not update switch: {e}", "error")
+        logger.error(f"Switch Port Locator: could not update switch: {e}")
+        flash("Could not update switch; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -922,7 +885,8 @@ def delete_switch(switch_id):
         flash("Switch removed.", "success")
         _audit("SWITCHPORT_DELETE_SWITCH", str(switch_id), "switch removed")
     except Exception as e:
-        flash(f"Could not remove switch: {e}", "error")
+        logger.error(f"Switch Port Locator: could not remove switch: {e}")
+        flash("Could not remove switch; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()
@@ -951,7 +915,8 @@ def set_uplink(switch_id, ifindex):
         db.commit()
         flash("Port updated.", "success")
     except Exception as e:
-        flash(f"Could not update port: {e}", "error")
+        logger.error(f"Switch Port Locator: could not update port: {e}")
+        flash("Could not update port; the details are in Jen's log.", "error")
     finally:
         if db:
             db.close()

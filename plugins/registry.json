@@ -2,7 +2,7 @@
   {
     "id": "network-discovery",
     "name": "Network Discovery",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "description": "Scan your subnets and account for every device on them: Kea lease or reservation, the subnet's own gateway/DNS/Kea/Jen addresses, an IPAM Lite entry, a device Jen has seen, or one you marked known — only what's left is unknown, and only a new unknown alerts. Vendor from the MAC, scheduled scans, since-last-scan changes, one-click reservation or IPAM entry, CSV export. A new unknown host also reaches the Timeline, and the last-seen results are in Jen's global search. Needs nmap on the Jen host (Settings → Plugins can install it).",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.57.0",
@@ -66,8 +66,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS nd_settings (subnet_id INT PRIMARY KEY, every_hours INT NOT NULL DEFAULT 0, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.2.0",
-    "sha256": "cebd1ecacaafaccef92498c2cdcc65ab02a2a1434404356c6b1f56ec7a5f0062",
+    "download_url": "https://github.com/ltkojak/jen-plugin-network-discovery/raw/v1.2.1",
+    "sha256": "458b0ed8c620fabb27cccabe4488c8996ba321f8737f94ebe2351e3184228a8d",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-network-discovery/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-network-discovery",
     "os_packages": [
@@ -186,7 +186,7 @@
   {
     "id": "watchdog",
     "name": "Host Watchdog",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Probes chosen hosts on a schedule and alerts when one stops answering, and again when it comes back — the gap Network Discovery leaves, since it only alerts on a new unknown host appearing. Ping (unprivileged ICMP) or TCP connect, added from a Kea reservation, an IPAM Lite entry, or any IP. 7-day uptime, per-target history, a JSON API.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.65.2",
@@ -225,8 +225,8 @@
         "sql": "ALTER TABLE wd_checks ADD INDEX idx_target_checked (target_id, checked_at)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.0.2",
-    "sha256": "d3dca026963028ddaa48fe764ea6f7a3f777656a534ff13703ef011223d26991",
+    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.0.3",
+    "sha256": "995c65d058b7eeb2b50e7d94c69e131b91005585e45314dc8a423d3ccd3bd17c",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-watchdog/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-watchdog",
     "os_packages": [
@@ -237,7 +237,7 @@
   {
     "id": "dns-sync",
     "name": "Local DNS Sync",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Pushes DHCP names into Pi-hole or AdGuard Home local DNS so hostnames like nas.lan resolve without Kea DDNS — Jen only ever touches records it created itself (a ledger), and an Unbound export is offered for setups with no API.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.65.2",
@@ -266,8 +266,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS ds_records (id INT AUTO_INCREMENT PRIMARY KEY, target_id INT NOT NULL, name VARCHAR(63) NOT NULL, ip VARCHAR(15) NOT NULL, source ENUM('lease','reservation','ipam') NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY ux_target_name (target_id, name))"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.0.2",
-    "sha256": "0e9848a796a513a51b4d6ad34a11dd98b12679d09e23576b9dd19475cde3fcc7",
+    "download_url": "https://github.com/ltkojak/jen-plugin-dns-sync/raw/v1.0.3",
+    "sha256": "6c7d3e425f0834c8fb97e94dd97004f778f8bf28546a91bea1cd23f5e98d3e92",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-dns-sync/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-dns-sync",
     "plugin_api": 3
@@ -275,10 +275,10 @@
   {
     "id": "switchport",
     "name": "Switch Port Locator",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Answers the one question Client Investigation can't: which switch port is this MAC on? Polls managed switches' MAC address tables over SNMP (BRIDGE-MIB / Q-BRIDGE-MIB) every 10 minutes, resolves the port name and alias (IF-MIB), and auto-detects uplinks by MAC count so trunk ports never look like where a device “lives”. Alerts when a known MAC's port changes.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.65.2",
+    "requires_jen": "5.65.6",
     "tags": [
       "network",
       "snmp",
@@ -319,8 +319,8 @@
         "sql": "ALTER TABLE sp_ports ADD COLUMN mac_count INT NOT NULL DEFAULT 0"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.0.2",
-    "sha256": "a9a152cde7b6cd26ad1d478d4f4e1b97dad9eef0304ccc6f312fdfb663481267",
+    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.0.3",
+    "sha256": "b81e06b216bf39a0c49eb0a0c6d058a372ad9fd89063b3dcc2ee813315466e57",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-switchport/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-switchport",
     "os_packages": [

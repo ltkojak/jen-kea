@@ -1,10 +1,10 @@
 {
   "id": "switchport",
   "name": "Switch Port Locator",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Answers the one question Client Investigation can't: which switch port is this MAC on? Polls managed switches' MAC address tables over SNMP (BRIDGE-MIB / Q-BRIDGE-MIB) every 10 minutes, resolves the port name and alias (IF-MIB), and auto-detects uplinks by MAC count so trunk ports never look like where a device “lives”. Alerts when a known MAC's port changes.",
   "author": "Matthew Thibodeau",
-  "requires_jen": "5.65.2",
+  "requires_jen": "5.65.6",
   "plugin_api": 3,
   "tags": [
     "network",

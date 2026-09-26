@@ -2,6 +2,40 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.7-beta.1] - 2026-09-26
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.6-beta.1
+run. Plugin error hygiene, finishing what the last release began. It bundles
+Host Watchdog 1.0.3, Local DNS Sync 1.0.3, Switch Port Locator 1.0.3 and Network
+Discovery 1.2.1, each tagged and CI-green in its own repository first, and
+re-pins the plugin registry to those tags. It is the last code before a promotion.
+
+The raw-exception scanner now blocks. Jen's own routes were swept for
+this in 5.2.14: a database or socket failure's own text in a message or an API
+response names tables, columns, users and hosts, which is useful to nobody but
+someone probing the application. The bundled plugins were never scanned, and
+carried thirty-one such sites; 5.65.6 fixed the IPAM, Presence and Wake ones and
+ran the scanner over the rest in report-only mode. This release fixes every
+remaining site in Host Watchdog, Local DNS Sync and Switch Port Locator (each now
+logs the exception and shows a generic message, and Watchdog's JSON API returns a
+generic error body), and turns the scanner from a warning into a failing test over
+every bundled plugin. Two lines are allowed, each with its reason in the test: IPAM's
+"upload too large" sentence, which is written for the user rather than taken from an
+exception, and Presence's Send-test result, which is the connection or HTTP failure of
+the webhook or broker a superadmin just configured. Network Discovery already logged
+and showed generic messages, so its release is the last inline styles moved into
+classes and the style check added to its verify step.
+
+Switch Port Locator now asks Jen which subnet a MAC is in. It was the last of the
+three plugins that carried a private lookup, and its order (the device's last known
+subnet first) disagreed with Wake and Presence about where a client is. It now uses
+`client_subnet_for_mac` like the others: current lease, then reservation, then the
+device's last known subnet. Switch Port therefore requires this release or the last
+one, 5.65.6, where the helper was added.
+
+The plugin guide gains a short section on the rule, so a new plugin starts on the
+right side of it.
+
 ## [5.65.6-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.5-beta.1

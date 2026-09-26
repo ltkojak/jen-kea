@@ -6,7 +6,7 @@ Answers the one question [Jen](https://github.com/ltkojak/jen-kea)'s own Client 
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.65.2 or later
+- [Jen](https://github.com/ltkojak/jen-kea) v5.65.6 or later
 - `snmpbulkwalk` (package `snmp`) on the Jen host — Settings → Plugins offers an **Install** button on a systemd host
 - Switches that answer SNMPv2c and implement standard BRIDGE-MIB / Q-BRIDGE-MIB / IF-MIB (almost every managed switch does; SNMPv3 with auth/priv is a later release, not this one)
 
