@@ -18,7 +18,7 @@ row in a subnet the caller cannot see); and "no attributable subnet" is read as 
 A cell that FAILS TODAY is marked `xfail(strict=True)` with the release that fixes it (Q93 =
 watchdog / dns-sync / IPAM, Q94 = switchport / wol / presence): strict, so the day the plugin
 is fixed the cell turns red until the marker is removed — the marker is the to-do list, and
-this file is what proves each fix.
+this file is what proves each fix. As of v5.65.5 every plugin fix has shipped and no cell is marked.
 """
 
 import json
@@ -54,6 +54,7 @@ WD_B, WD_NULL = 9101, 9102
 WOL_B, WOL_NULL = 9301, 9302
 DS_B = 9201
 SP_B = 9401
+PR_SINK = 9501
 
 Q93 = "Q93 (watchdog 1.0.2 / dns-sync 1.0.2 / IPAM 1.6.1)"
 Q94 = "Q94 (switchport 1.0.1 / wol 1.0.1 / presence 1.0.1)"
@@ -136,6 +137,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (SP_B,))
         cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (SP_B,))
         cur.execute("DELETE FROM sp_switches WHERE id=%s", (SP_B,))
+        cur.execute("DELETE FROM pr_sinks WHERE id=%s OR name=%s", (PR_SINK, "created-by-matrix"))
 
         cur.execute(
             "INSERT INTO wd_targets (id, ip, mac, subnet_id, label, source, probe) VALUES "
@@ -160,6 +162,10 @@ def plugin_data(plugin_app, db):
         cur.execute("INSERT INTO sp_ports (switch_id, ifindex, ifname) VALUES (%s, 1, 'Gi0/1')", (SP_B,))
         cur.execute("INSERT INTO sp_mac_ports (mac, switch_id, ifindex, vlan) VALUES (%s, %s, 1, 10)", (N_MAC, SP_B))
         cur.execute(
+            "INSERT INTO pr_sinks (id, name, kind, url, enabled) VALUES (%s, 'matrix-sink', 'http', 'http://192.0.2.1/hook', 1)",
+            (PR_SINK,),
+        )
+        cur.execute(
             "INSERT INTO ds_targets (id, name, kind, url, domain, sources, subnet_ids, enabled, previewed_at) VALUES "
             "(%s, %s, 'pihole', 'http://10.77.0.53', 'lan', 'leases,reservations', '[2]', 1, NOW())",
             (DS_B, B_NAME),
@@ -182,6 +188,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (SP_B,))
         cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (SP_B,))
         cur.execute("DELETE FROM sp_switches WHERE id=%s", (SP_B,))
+        cur.execute("DELETE FROM pr_sinks WHERE id=%s OR name=%s", (PR_SINK, "created-by-matrix"))
     db.commit()
 
 
@@ -343,7 +350,7 @@ ROWS = [
         _DENY,
         (),
         _wol_b_favourite_exists,
-        {"admin_A": Q94 + ": delete_favourite acts on any id"},
+        {},
     ),
     (
         "wol wake B's favourite",
@@ -365,7 +372,7 @@ ROWS = [
         _DENY,
         (B_MAC,),
         _no_wake_sent,
-        {"admin_A": Q94 + ": wake_from_row authorises the TYPED subnet, not the MAC's own"},
+        {},
     ),
     (
         "wol api wake a B MAC",
@@ -387,7 +394,7 @@ ROWS = [
         {403, 404},
         (N_MAC,),
         _no_wake_sent,
-        {"key_write": Q94 + ": _api_wake lets a None subnet through"},
+        {},
     ),
     # ── Presence ─────────────────────────────────────────────────────────────
     ("presence page", "GET", "/management/presence/", None, UI, {200}, (), None, {}),
@@ -400,7 +407,7 @@ ROWS = [
         _DENY,
         (B_MAC,),
         _pr_b_still_tracked,
-        {"admin_A": Q94 + ": untrack acts on any MAC"},
+        {},
     ),
     (
         "presence track a B MAC from a row, naming subnet A in the query string",
@@ -411,7 +418,7 @@ ROWS = [
         _DENY,
         (B_MAC,),
         _pr_b_not_retagged,
-        {"admin_A": Q94 + ": track_from_row trusts the typed subnet_id"},
+        {},
     ),
     # ── Switch Port ──────────────────────────────────────────────────────────
     (
@@ -423,7 +430,7 @@ ROWS = [
         {403, 404},
         (N_MAC,),
         None,
-        dict.fromkeys(KEYS, Q94 + ": _api_locate lets a None subnet through"),
+        {},
     ),
     (
         "switchport api locate a B MAC",
@@ -445,7 +452,7 @@ ROWS = [
         {200},
         (N_MAC,),
         None,
-        dict.fromkeys(UI, Q94 + ": the locate form shows a MAC with no subnet to anyone"),
+        {},
     ),
     # ── DNS Sync ─────────────────────────────────────────────────────────────
     ("dns-sync page", "GET", "/network/dns-sync/", None, UI, {200}, (), None, {}),
@@ -568,3 +575,39 @@ class TestPluginFixtureIsReal:
     def test_an_unrestricted_caller_can_export_the_ledger(self, pclient, db, plugin_data):
         _caller(pclient, db, "superadmin")
         assert B_HOST in pclient.get(f"/network/dns-sync/targets/{DS_B}/export-unbound").data.decode()
+
+
+class TestPresenceSinksAreSuperadminOnly:
+    """v5.65.5 (Q94): every transition publishes every tracked client's MAC, label, IP, hostname and
+    state to every enabled sink, so a sink is a cross-subnet exfiltration path for whoever can
+    configure one. Configuring one (add, pause/enable, test, remove) is a superadmin action. The
+    add route needs a real form body, which the matrix runner above cannot send, so this is its own
+    test: a subnet-restricted admin and a viewer are refused on all four routes and nothing changes;
+    a superadmin can."""
+
+    ROUTES = (
+        ("/management/presence/sinks/add", {"name": "created-by-matrix", "kind": "http", "url": "http://192.0.2.1/x"}),
+        (f"/management/presence/sinks/{PR_SINK}/toggle", {}),
+        (f"/management/presence/sinks/{PR_SINK}/test", {}),
+        (f"/management/presence/sinks/{PR_SINK}/delete", {}),
+    )
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    def test_refused_and_nothing_changes(self, pclient, db, plugin_data, role):
+        headers = _caller(pclient, db, role)
+        for path, form in self.ROUTES:
+            r = pclient.post(path, data=form, headers=headers or {}, follow_redirects=False)
+            assert r.status_code in _DENY, f"{path} as {role}: HTTP {r.status_code}"
+            assert_no_marker(r.data)
+        assert _one(db, "SELECT id FROM pr_sinks WHERE name=%s", ("created-by-matrix",)) is None, "a sink was created"
+        row = _one(db, "SELECT enabled FROM pr_sinks WHERE id=%s", (PR_SINK,))
+        assert row is not None and row["enabled"] == 1, "the existing sink was removed or paused"
+
+    def test_a_superadmin_can_configure_sinks(self, pclient, db, plugin_data):
+        headers = _caller(pclient, db, "superadmin")
+        add_path, add_form = self.ROUTES[0]
+        pclient.post(add_path, data=add_form, headers=headers or {}, follow_redirects=False)
+        assert _one(db, "SELECT id FROM pr_sinks WHERE name=%s", ("created-by-matrix",)) is not None
+        pclient.post(self.ROUTES[1][0], data={}, headers=headers or {}, follow_redirects=False)
+        row = _one(db, "SELECT enabled FROM pr_sinks WHERE id=%s", (PR_SINK,))
+        assert row is not None and row["enabled"] == 0, "the superadmin's toggle did not take effect"

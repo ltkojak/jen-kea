@@ -1,10 +1,10 @@
 {
   "id": "switchport",
   "name": "Switch Port Locator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Answers the one question Client Investigation can't: which switch port is this MAC on? Polls managed switches' MAC address tables over SNMP (BRIDGE-MIB / Q-BRIDGE-MIB) every 10 minutes, resolves the port name and alias (IF-MIB), and auto-detects uplinks by MAC count so trunk ports never look like where a device “lives”. Alerts when a known MAC's port changes.",
   "author": "Matthew Thibodeau",
-  "requires_jen": "5.57.0",
+  "requires_jen": "5.65.2",
   "plugin_api": 3,
   "tags": [
     "network",
@@ -27,6 +27,7 @@
     {"version": 1, "description": "sp_switches table", "sql": "CREATE TABLE IF NOT EXISTS sp_switches (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, host VARCHAR(255) NOT NULL, community TEXT, vlan_indexing ENUM('none','community') NOT NULL DEFAULT 'none', vlans VARCHAR(255) NULL, enabled TINYINT(1) NOT NULL DEFAULT 1, last_poll_at DATETIME NULL, last_error VARCHAR(300) NULL, created_by VARCHAR(100), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"},
     {"version": 2, "description": "sp_ports table", "sql": "CREATE TABLE IF NOT EXISTS sp_ports (switch_id INT NOT NULL, ifindex INT NOT NULL, ifname VARCHAR(100) NOT NULL, ifalias VARCHAR(200) NULL, is_uplink TINYINT(1) NULL, PRIMARY KEY (switch_id, ifindex))"},
     {"version": 3, "description": "sp_mac_ports table", "sql": "CREATE TABLE IF NOT EXISTS sp_mac_ports (mac VARCHAR(17) NOT NULL, switch_id INT NOT NULL, ifindex INT NOT NULL, vlan INT NULL, first_seen DATETIME DEFAULT CURRENT_TIMESTAMP, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (mac, switch_id))"},
-    {"version": 4, "description": "sp_mac_ports: index for the per-switch port table and global MAC lookup", "sql": "ALTER TABLE sp_mac_ports ADD INDEX idx_switch_ifindex (switch_id, ifindex)"}
+    {"version": 4, "description": "sp_mac_ports: index for the per-switch port table and global MAC lookup", "sql": "ALTER TABLE sp_mac_ports ADD INDEX idx_switch_ifindex (switch_id, ifindex)"},
+    {"version": 5, "description": "sp_ports: mac_count (every MAC seen behind the port at the last poll, uplinks included)", "sql": "ALTER TABLE sp_ports ADD COLUMN mac_count INT NOT NULL DEFAULT 0"}
   ]
 }

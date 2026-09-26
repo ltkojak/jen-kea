@@ -67,8 +67,34 @@ position (any switch, not just the one being polled right now) against
 where this poll just found it — a MAC that hops from one access switch
 to another is exactly the case this plugin exists to catch, and
 per-switch-scoped tracking alone would miss it.
+
+**Uplinks are visible (v1.0.1).** The located-MAC table only ever holds
+MACs that were NOT behind an uplink, so counting rows in it showed 0 MACs
+on exactly the port the heuristic had just excluded. The poll now stores
+each port's real MAC count (`sp_ports.mac_count`, uplinks included) and
+the page shows "Auto (uplink, 37 MACs)" — the operator can see the
+heuristic fired, and why.
+
+**Who sees what (v1.0.1).** A MAC is shown only when its CURRENT subnet
+(device, active lease, reservation, in that order) is one the caller may
+see; "no attributable subnet" is for unrestricted callers only, for API
+keys and the search provider too (`plugin_api.can_access_subnet` /
+`api_key_can_access_subnet`). A switch belongs to the subnet its
+management address is in (`derive_subnet_id`): a scoped account sees, and
+may change, only switches whose address is in its own subnets; a switch
+addressed by hostname, or by an address in no Kea subnet, is for
+unrestricted accounts. The subnet is derived server-side; a value the
+caller types is never the subject of a decision.
+
+**The community string is an argv.** net-snmp's `snmpbulkwalk -c` takes
+the SNMPv2c community on the command line, so it is visible in `ps` on the
+Jen host for the few seconds a walk runs. net-snmp has no alternative for
+v2c (a config file or the environment would move the same secret, not
+protect it), which is one more reason to use a read-only community and
+one that opens nothing else.
 """
 
+import ipaddress
 import logging
 import os as _os
 import re
@@ -294,6 +320,43 @@ def detect_moves(old_positions, new_positions):
     return moves
 
 
+def port_is_uplink(is_uplink, mac_count, threshold=_UPLINK_THRESHOLD):
+    """Pure: is a port treated as an uplink? A manual pin (1/0) wins; unpinned
+    (None) follows the MAC-count heuristic — strictly more than `threshold`."""
+    if is_uplink is None:
+        return (mac_count or 0) > threshold
+    return bool(is_uplink)
+
+
+_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?$")
+
+
+def valid_switch_host(host):
+    """Pure: a hostname or an IPv4 address, and never anything that could be read as
+    an option. `host` becomes an argument of `snmpbulkwalk` (list-args, so no shell),
+    and an argument starting with `-` would still be parsed by it as a flag."""
+    host = (host or "").strip()
+    if not host or host.startswith("-") or len(host) > 255:
+        return False
+    return bool(_HOST_RE.match(host))
+
+
+def derive_subnet_id(ip, subnet_map):
+    """Pure: the Kea subnet id (from `subnet_map`, {id: {"cidr": ...}}) whose CIDR
+    contains `ip`, or None — for a hostname, garbage, or an address in no Kea subnet."""
+    try:
+        addr = ipaddress.IPv4Address(ip)
+    except ValueError:
+        return None
+    for sid, info in subnet_map.items():
+        try:
+            if addr in ipaddress.IPv4Network(info["cidr"], strict=False):
+                return sid
+        except ValueError:
+            continue
+    return None
+
+
 def _in_placeholders(values):
     return ",".join(["%s"] * len(values))
 
@@ -329,10 +392,12 @@ def _subnet_map():
     return subnet_map()
 
 
-def _accessible_subnets():
-    from jen.plugin_api import get_accessible_subnet_map
+def _can(subnet_id):
+    """May the session user act on something in `subnet_id`? None ("no attributable
+    subnet") is for unrestricted users only — plugin_api decides (v5.65.2)."""
+    from jen.plugin_api import can_access_subnet
 
-    return get_accessible_subnet_map()
+    return can_access_subnet(subnet_id)
 
 
 def _is_admin():
@@ -352,10 +417,6 @@ def _require_write():
         return True
     flash("Viewers can look at Switch Ports but not change it.", "error")
     return False
-
-
-def _all_subnets_user():
-    return bool(getattr(current_user, "all_subnets", False))
 
 
 def _audit(action, target, detail):
@@ -412,11 +473,35 @@ def _current_subnet_for_mac(mac):
     return None
 
 
-def _mac_visible(mac, accessible, all_subnets):
-    if all_subnets:
+def _mac_visible(mac):
+    """May the session user see where this MAC is? Judged on the MAC's current subnet;
+    a MAC with none (or an unknown one) is for unrestricted users only."""
+    if _can(None):
         return True
-    sid = _current_subnet_for_mac(mac)
-    return sid is not None and sid in accessible
+    return _can(_current_subnet_for_mac(mac))
+
+
+def _switch_subnet(host):
+    """The Kea subnet a switch's management address is in, or None."""
+    return derive_subnet_id(host, _subnet_map())
+
+
+def _load_switch(switch_id):
+    """(row, refusal): the sp_switches row when the caller may act on it, else
+    (None, why) — a switch in a subnet the caller cannot see reads as one that does
+    not exist."""
+    db = None
+    try:
+        db = _get_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT id, host, enabled FROM sp_switches WHERE id=%s", (switch_id,))
+            row = cur.fetchone()
+    finally:
+        if db:
+            db.close()
+    if row is None or not _can(_switch_subnet(row["host"])):
+        return None, "Switch not found."
+    return row, ""
 
 
 # ── SNMP polling (impure: subprocess) ───────────────────────────────────────────
@@ -476,18 +561,19 @@ def _poll_switch(switch):
     try:
         db = _get_db()
         with db.cursor() as cur:
+            counts = mac_counts_by_ifindex(positions)
             for ifindex, name in ifnames.items():
                 cur.execute(
-                    "INSERT INTO sp_ports (switch_id, ifindex, ifname, ifalias) VALUES (%s, %s, %s, %s) "
-                    "ON DUPLICATE KEY UPDATE ifname=VALUES(ifname), ifalias=VALUES(ifalias)",
-                    (switch["id"], ifindex, name, ifaliases.get(ifindex, "")),
+                    "INSERT INTO sp_ports (switch_id, ifindex, ifname, ifalias, mac_count) VALUES (%s, %s, %s, %s, %s) "
+                    "ON DUPLICATE KEY UPDATE ifname=VALUES(ifname), ifalias=VALUES(ifalias), "
+                    "mac_count=VALUES(mac_count)",
+                    (switch["id"], ifindex, name, ifaliases.get(ifindex, ""), counts.get(ifindex, 0)),
                 )
             cur.execute("SELECT ifindex, is_uplink FROM sp_ports WHERE switch_id=%s", (switch["id"],))
             overrides = {r["ifindex"]: r["is_uplink"] for r in cur.fetchall()}
             manual_up = {ix for ix, v in overrides.items() if v == 1}
             manual_down = {ix for ix, v in overrides.items() if v == 0}
 
-            counts = mac_counts_by_ifindex(positions)
             auto_up = auto_uplinks(counts)
             located = located_macs(positions, auto_up, manual_up, manual_down)
             new_positions = {mac: (switch["id"], ifindex) for mac, (ifindex, _vlan) in located.items()}
@@ -495,7 +581,7 @@ def _poll_switch(switch):
             old_positions = {}
             if new_positions:
                 cur.execute(
-                    f"SELECT mac, switch_id, ifindex, last_seen FROM sp_mac_ports "
+                    f"SELECT mac, switch_id, ifindex, last_seen FROM sp_mac_ports "  # nosec B608 - only `%s` placeholders are interpolated; every value is bound
                     f"WHERE mac IN ({_in_placeholders(new_positions)}) ORDER BY last_seen DESC",
                     tuple(new_positions),
                 )
@@ -564,15 +650,27 @@ def _port_label(switch_id, ifindex):
             db.close()
 
 
+_MOVED_ALERT_TYPE = "switchport_moved"
+_MOVED_TEMPLATE = "🔀 <b>{mac}</b> moved: {old} → {new}"
+
+
 def _emit_move(mac, old_pos, new_pos):
     old_label = _port_label(*old_pos)
     new_label = _port_label(*new_pos)
+    subnet_id = _current_subnet_for_mac(mac)
+    try:
+        from jen.plugin_api import send_alert
+
+        send_alert(_MOVED_ALERT_TYPE, subnet_id=subnet_id, mac=mac, old=old_label, new=new_label)
+    except Exception as e:
+        logger.warning(f"Switch Port Locator: could not send move alert for {mac}: {e}")
     try:
         from jen.plugin_api import emit
 
         emit(
             "plugin.switchport.moved",
             mac=mac,
+            subnet_id=subnet_id,
             detail=f"{old_label} → {new_label}",
         )
     except Exception as e:
@@ -655,14 +753,17 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
                     (like, like),
                 )
             for row in cur.fetchall():
-                if not (all_subnets or _mac_visible(row["mac"], set(accessible_subnet_ids or []), False)):
+                # the MAC's own current subnet: Jen drops any row whose subnet_id is not in the
+                # caller's scope, so a None here made every result vanish for a restricted user
+                sid = _current_subnet_for_mac(row["mac"])
+                if not _can(sid):
                     continue
                 out.append(
                     {
                         "title": row["mac"],
                         "subtitle": f"{row['switch_name']} · {row.get('ifname') or '?'}",
                         "href": url_for("switchport.index", mac=row["mac"]),
-                        "subnet_id": None,
+                        "subnet_id": sid,
                     }
                 )
     except Exception as e:
@@ -685,15 +786,16 @@ def _switch_rows():
                 "SELECT id, name, host, vlan_indexing, vlans, enabled, last_poll_at, last_error "
                 "FROM sp_switches ORDER BY name"
             )
-            switches = cur.fetchall()
+            switches = [s for s in cur.fetchall() if _can(_switch_subnet(s["host"]))]
             for s in switches:
                 cur.execute(
-                    "SELECT p.ifindex, p.ifname, p.ifalias, p.is_uplink, COUNT(mp.mac) AS mac_count "
-                    "FROM sp_ports p LEFT JOIN sp_mac_ports mp ON mp.switch_id = p.switch_id AND mp.ifindex = p.ifindex "
-                    "WHERE p.switch_id=%s GROUP BY p.ifindex, p.ifname, p.ifalias, p.is_uplink ORDER BY p.ifname",
+                    "SELECT ifindex, ifname, ifalias, is_uplink, mac_count FROM sp_ports "
+                    "WHERE switch_id=%s ORDER BY ifname",
                     (s["id"],),
                 )
                 s["ports"] = cur.fetchall()
+                for port in s["ports"]:
+                    port["uplink"] = port_is_uplink(port["is_uplink"], port["mac_count"])
     except Exception as e:
         logger.error(f"Switch Port Locator: index error: {e}")
         switches = []
@@ -706,15 +808,13 @@ def _switch_rows():
 @bp.route("/")
 @login_required
 def index():
-    accessible = _accessible_subnets()
-    all_subnets = _all_subnets_user()
     switches = _switch_rows()
 
     located = None
     query_mac = (request.args.get("mac") or "").strip()
     if query_mac:
         mac = _normalize_mac(query_mac)
-        if mac and _mac_visible(mac, accessible, all_subnets):
+        if mac and _mac_visible(mac):
             located = _locate_mac(mac)
             located = {"mac": mac, **located} if located else {"mac": mac}
 
@@ -724,6 +824,7 @@ def index():
         located=located,
         query_mac=query_mac,
         vlan_indexing_choices=_VLAN_INDEXING_CHOICES,
+        uplink_threshold=_UPLINK_THRESHOLD,
         is_admin=_is_admin(),
     )
 
@@ -738,6 +839,12 @@ def add_switch():
     host = request.form.get("host", "").strip()[:255]
     if not name or not host:
         flash("Name and host are required.", "error")
+        return redirect(url_for("switchport.index"))
+    if not valid_switch_host(host):
+        flash("Host must be a hostname or an IPv4 address (it cannot start with a dash).", "error")
+        return redirect(url_for("switchport.index"))
+    if not _can(_switch_subnet(host)):
+        flash("A switch must be addressed by an IP in a subnet you can access.", "error")
         return redirect(url_for("switchport.index"))
     vlan_indexing = request.form.get("vlan_indexing", "none")
     if vlan_indexing not in _VLAN_INDEXING_CHOICES:
@@ -775,16 +882,15 @@ def add_switch():
 def toggle_switch(switch_id):
     if not _require_write():
         return redirect(url_for("switchport.index"))
+    row, refusal = _load_switch(switch_id)
+    if row is None:
+        flash(refusal, "error")
+        return redirect(url_for("switchport.index"))
+    new_enabled = 0 if row["enabled"] else 1
     db = None
     try:
         db = _get_db()
         with db.cursor() as cur:
-            cur.execute("SELECT enabled FROM sp_switches WHERE id=%s", (switch_id,))
-            row = cur.fetchone()
-            if row is None:
-                flash("Switch not found.", "error")
-                return redirect(url_for("switchport.index"))
-            new_enabled = 0 if row["enabled"] else 1
             cur.execute("UPDATE sp_switches SET enabled=%s WHERE id=%s", (new_enabled, switch_id))
         db.commit()
         flash("Switch enabled." if new_enabled else "Switch paused.", "success")
@@ -800,6 +906,10 @@ def toggle_switch(switch_id):
 @login_required
 def delete_switch(switch_id):
     if not _require_write():
+        return redirect(url_for("switchport.index"))
+    row, refusal = _load_switch(switch_id)
+    if row is None:
+        flash(refusal, "error")
         return redirect(url_for("switchport.index"))
     db = None
     try:
@@ -823,6 +933,10 @@ def delete_switch(switch_id):
 @login_required
 def set_uplink(switch_id, ifindex):
     if not _require_write():
+        return redirect(url_for("switchport.index"))
+    row, refusal = _load_switch(switch_id)
+    if row is None:
+        flash(refusal, "error")
         return redirect(url_for("switchport.index"))
     value = request.form.get("value", "auto")
     is_uplink = {"auto": None, "up": 1, "down": 0}.get(value)
@@ -859,13 +973,14 @@ api_bp = Blueprint("switchport_api", __name__, url_prefix="/api/v1/plugins/switc
 def _api_locate(mac):
     from flask import g
 
-    from jen.plugin_api import filter_subnet_ids
+    from jen.plugin_api import api_key_can_access_subnet
 
     normalized = _normalize_mac(mac)
     if not normalized:
         return jsonify({"error": "invalid mac"}), 400
     sid = _current_subnet_for_mac(normalized)
-    if sid is not None and sid not in filter_subnet_ids(g.api_key, [sid]):
+    # a MAC with no attributable subnet is for an unrestricted key only — a scoped key read it as "allow"
+    if not api_key_can_access_subnet(g.api_key, sid):
         return jsonify({"error": "subnet not accessible to this key"}), 403
     row = _locate_mac(normalized)
     if not row:
@@ -888,6 +1003,7 @@ def register(app):
 
     from jen.plugin_api import (
         api_key_required,
+        register_alert_type,
         register_periodic,
         register_row_action,
         register_search_provider,
@@ -906,6 +1022,13 @@ def register(app):
             method="GET",
             roles=("viewer", "admin", "superadmin"),
         )
+    register_alert_type(
+        PLUGIN_ID,
+        _MOVED_ALERT_TYPE,
+        label="Switch Port: device moved",
+        icon="cable",
+        default_template=_MOVED_TEMPLATE,
+    )
     register_search_provider(PLUGIN_ID, title="Switch Ports", fn=_switchport_search)
     register_periodic(PLUGIN_ID, "poll", _tick, 10)
 

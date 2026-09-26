@@ -275,10 +275,10 @@
   {
     "id": "switchport",
     "name": "Switch Port Locator",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Answers the one question Client Investigation can't: which switch port is this MAC on? Polls managed switches' MAC address tables over SNMP (BRIDGE-MIB / Q-BRIDGE-MIB) every 10 minutes, resolves the port name and alias (IF-MIB), and auto-detects uplinks by MAC count so trunk ports never look like where a device “lives”. Alerts when a known MAC's port changes.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.57.0",
+    "requires_jen": "5.65.2",
     "tags": [
       "network",
       "snmp",
@@ -312,10 +312,15 @@
         "version": 4,
         "description": "sp_mac_ports: index for the per-switch port table and global MAC lookup",
         "sql": "ALTER TABLE sp_mac_ports ADD INDEX idx_switch_ifindex (switch_id, ifindex)"
+      },
+      {
+        "version": 5,
+        "description": "sp_ports: mac_count (every MAC seen behind the port at the last poll, uplinks included)",
+        "sql": "ALTER TABLE sp_ports ADD COLUMN mac_count INT NOT NULL DEFAULT 0"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.0.0",
-    "sha256": "5f7ace8bf887994e1153a3c6be81105273567fd367710ae4cf0343a708f797b4",
+    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.0.1",
+    "sha256": "afdefc59b14db913b3f2027d3c1d9a197f39ee25715d6f68cc23f738cb9263dd",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-switchport/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-switchport",
     "os_packages": [
@@ -326,10 +331,10 @@
   {
     "id": "wol",
     "name": "Wake & Actions",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Wake-on-LAN from any lease, reservation, or device row, plus a favourites list for the hosts you wake often. Sends a standard magic packet (with optional SecureOn password) to both the subnet's directed broadcast and 255.255.255.255.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.57.0",
+    "requires_jen": "5.65.2",
     "tags": [
       "network",
       "automation"
@@ -349,8 +354,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS wol_hosts (id INT AUTO_INCREMENT PRIMARY KEY, mac VARCHAR(17) NOT NULL UNIQUE, ip VARCHAR(15) NULL, subnet_id INT NULL, label VARCHAR(100), secureon VARCHAR(23) NULL, last_woken_at DATETIME NULL, last_woken_by VARCHAR(100) NULL)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.0.0",
-    "sha256": "d3f39ad1a9ddc1f841c5d17aad73fb5ee9d507f20f71bd0e6b21653952b97835",
+    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.0.1",
+    "sha256": "73dabc5614372a878e0c390b7ab5679014a931013ae36459630fb91ca11ad374",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-wol/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-wol",
     "plugin_api": 3
@@ -358,10 +363,10 @@
   {
     "id": "presence",
     "name": "Presence",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Publishes tracked devices' online/offline state to Home Assistant (webhook), MQTT, or any HTTP endpoint, so the house can react to a phone joining or leaving. Opt-in per MAC — nothing is published for a device you haven't chosen to track.",
     "author": "Matthew Thibodeau",
-    "requires_jen": "5.57.0",
+    "requires_jen": "5.65.2",
     "tags": [
       "network",
       "automation",
@@ -392,8 +397,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS pr_sinks (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, kind ENUM('ha_webhook','mqtt','http') NOT NULL, url VARCHAR(255) NOT NULL, credential TEXT, topic_prefix VARCHAR(100) NOT NULL DEFAULT 'jen/presence', retain TINYINT(1) NOT NULL DEFAULT 1, discovery TINYINT(1) NOT NULL DEFAULT 0, enabled TINYINT(1) NOT NULL DEFAULT 1, last_error VARCHAR(300) NULL)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.0.0",
-    "sha256": "062aee2eeccf61417a5379d5c75f73bf18c7eb249b67f8623c0ffe1146e90b93",
+    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.0.1",
+    "sha256": "02e40aa0b817b6a43e2de0a6bd3f4abc3e62e2f1a261053f13db686edfff0aed",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-presence/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-presence",
     "plugin_api": 3

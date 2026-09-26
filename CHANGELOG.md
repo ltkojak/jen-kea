@@ -2,6 +2,60 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.5-beta.1] - 2026-09-25
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.4-beta.1
+run. Bundles Switch Port Locator 1.0.1, Wake & Actions 1.0.1 and Presence
+1.0.1, each tagged and CI-green in its own repository first, and re-pins the
+plugin registry to those tags. This finishes the round the last release
+started: the plugin routes that the authorization matrix had marked as known
+failures are all fixed, and the matrix now has no marked cell left.
+
+The bug shape is the one the audit named across the plugins: a route
+authorises on one thing (a subnet id the caller typed into the query string,
+or nothing at all for a by-id POST) and then acts on another (the MAC's real
+subnet, a row in a subnet the caller cannot see), and "no attributable
+subnet" was read as "allow".
+
+Wake & Actions: the "Wake" row action authorised the subnet in the URL, and the
+packet also goes out on the limited broadcast to the Jen host's own segment,
+so a subnet-scoped admin could name a subnet they own and wake any host there.
+The URL value is now ignored and the subnet is the MAC's own; adding a favourite
+takes it from the MAC instead of a typed address; removing a favourite checks
+the row; the API refuses a MAC with no subnet for a scoped key. A blank SecureOn
+on a re-add no longer erases the saved one, and the once-per-five-seconds map no
+longer grows for as long as Jen runs.
+
+Presence: a sink receives every tracked device's MAC, label, IP, hostname and
+state, so any admin who could add one could send another subnet's presence to a
+server they control. Sink configuration is now superadmin-only (the rest of the admins see
+the list read-only), and the matrix has a test that a viewer and a scoped admin
+are refused on all four sink routes. Tracking upserted over the stored subnet, so
+a scoped admin who knew a hidden device's MAC could re-track it into their own; it
+now authorises the existing row and only ever changes its label, and untrack and
+"Track presence" derive the subnet from the MAC. Devices on a segment the Jen host
+has no interface on flapped offline fifteen minutes after joining because the
+neighbour table never held them; they are now lease-based, the page says so, and
+the README states the limitation. A renewal is no longer a transition, the test
+button no longer leaves a retained discovery entry behind, and a batch of MQTT and
+sink-URL validation fixes ride along.
+
+Switch Port Locator: the uplink heuristic worked but showed 0 MACs on the very
+port it had excluded, so each port's real MAC count is now stored and the page
+reads "Auto (uplink, 37 MACs)". The alert on a moved MAC the README promised now
+exists. The locate API and the search provider judge the MAC's real subnet (the
+search provider used to return none, so a restricted user found nothing), and a
+switch belongs to the subnet its management address is in, so a scoped account
+sees and changes only its own switches. The host of a switch is validated before it
+reaches the SNMP walk, and the community string being visible in the process list
+during a walk is documented.
+
+Watchdog and DNS Sync are unchanged here; Wake, Switch Port and Presence now require Jen
+5.65.2 or later like them, because they use the subnet helpers added to the plugin
+API there. Wake's own README and changelog had said 5.61.0 while its manifest said
+5.57.0; all three now agree. All three plugins also keep their styling out of
+inline attributes, with the check added to each repository's `tools/verify.py`.
+
 ## [5.65.4-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.3-beta.1

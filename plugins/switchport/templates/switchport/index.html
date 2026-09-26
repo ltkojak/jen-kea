@@ -2,6 +2,15 @@
 {% block title %}Switch Ports{% endblock %}
 {% block content %}
 
+<style>
+/* static declarations live here, not in inline style attributes (docs/ui.md); a plugin page has no
+   shared stylesheet hook, so the page carries its own block */
+.sp-mac-input{max-width:220px}
+.sp-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center}
+.sp-dialog{width:min(460px,94vw);max-height:90vh;overflow-y:auto}
+.sp-hidden{display:none}
+</style>
+
 <div class="page-header flex items-center between wrap gap-3">
     <div>
         <h1>{{ icon("cable", "ico-lg") }} Switch Ports</h1>
@@ -18,7 +27,7 @@
 
 <div class="card">
     <form method="GET" action="{{ url_for('switchport.index') }}" class="flex gap-2 items-center wrap">
-        <input type="text" name="mac" value="{{ query_mac }}" placeholder="aa:bb:cc:dd:ee:ff" class="mono" autocomplete="off" style="max-width:220px;">
+        <input type="text" name="mac" value="{{ query_mac }}" placeholder="aa:bb:cc:dd:ee:ff" class="mono sp-mac-input" autocomplete="off">
         <button type="submit" class="btn btn-primary">{{ icon("search") }} Locate</button>
     </form>
     {% if query_mac %}
@@ -71,7 +80,7 @@
             <th>Port</th>
             <th>Alias</th>
             <th>MACs</th>
-            <th>Uplink</th>
+            <th>Uplink <span class="small muted">(more than {{ uplink_threshold }} MACs)</span></th>
         </tr></thead>
         <tbody>
         {% for p in s.ports %}
@@ -84,13 +93,13 @@
                 <form method="POST" action="{{ url_for('switchport.set_uplink', switch_id=s.id, ifindex=p.ifindex) }}" class="flex gap-1 items-center">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <select name="value" class="btn-sm sp-uplink-select">
-                        <option value="auto" {% if p.is_uplink is none %}selected{% endif %}>Auto{{ ' (uplink)' if p.mac_count > 8 else '' }}</option>
+                        <option value="auto" {% if p.is_uplink is none %}selected{% endif %}>Auto{{ (' (uplink, ' ~ p.mac_count ~ ' MACs)') if p.uplink else '' }}</option>
                         <option value="up" {% if p.is_uplink == 1 %}selected{% endif %}>Uplink</option>
                         <option value="down" {% if p.is_uplink == 0 %}selected{% endif %}>Not uplink</option>
                     </select>
                 </form>
                 {% else %}
-                {{ 'Uplink' if (p.is_uplink == 1 or (p.is_uplink is none and p.mac_count > 8)) else '—' }}
+                {% if p.uplink %}Uplink <span class="small muted">({{ p.mac_count }} MACs{{ ', auto' if p.is_uplink is none else '' }})</span>{% else %}—{% endif %}
                 {% endif %}
             </td>
         </tr>
@@ -108,8 +117,8 @@
 {% endif %}
 
 {% if is_admin %}
-<div id="sp-add-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:500;align-items:center;justify-content:center;">
-<div class="card" style="width:min(460px,94vw);max-height:90vh;overflow-y:auto;">
+<div id="sp-add-modal" class="sp-modal">
+<div class="card sp-dialog">
     <div class="flex between items-center mb-3">
         <h3>{{ icon("plus") }} Add Switch</h3>
         <button id="sp-add-close-btn" class="btn btn-sm btn-secondary" aria-label="Close">{{ icon("x") }}</button>
@@ -137,7 +146,7 @@
                 {% endfor %}
             </select>
         </div>
-        <div class="form-group" id="sp-vlans-group" style="display:none;">
+        <div class="form-group sp-hidden" id="sp-vlans-group">
             <label>VLANs (comma-separated)</label>
             <input type="text" name="vlans" autocomplete="off" placeholder="1,10,20">
         </div>
@@ -160,7 +169,7 @@ document.getElementById('sp-add-close-btn').addEventListener('click', function()
 document.getElementById('sp-add-cancel-btn').addEventListener('click', function() { _spModal('sp-add-modal', false); });
 document.getElementById('sp-add-modal').addEventListener('click', function(e) { if (e.target === this) _spModal('sp-add-modal', false); });
 document.getElementById('sp-vlan-indexing').addEventListener('change', function() {
-    document.getElementById('sp-vlans-group').style.display = this.value === 'community' ? '' : 'none';
+    document.getElementById('sp-vlans-group').classList.toggle('sp-hidden', this.value !== 'community');
 });
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') _spModal('sp-add-modal', false);

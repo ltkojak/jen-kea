@@ -687,19 +687,28 @@ subnets.
 **Switch Port Locator** — which switch port a MAC is on. *Needs* `snmpbulkwalk` (package `snmp`) on the Jen host
 (an Install button on a systemd host) and managed switches that answer SNMPv2c. *Stores* the switches (with their
 SNMP community string, which is kept as entered, so use a read-only community), the port list and the MAC sightings
-in its own `sp_*` tables. *Sends* SNMP walks to the switches you add, every ten minutes.
+in its own `sp_*` tables. *Sends* SNMP walks to the switches you add, every ten minutes, and a "moved" alert
+(off until a channel opts in) when a known MAC changes port. The community string is a command-line argument of the
+walk, so it is visible in the process list on the Jen host for those few seconds; net-snmp has no alternative for
+SNMPv2c. A port with more than eight MACs is treated as an uplink and shown as "Auto (uplink, 37 MACs)". A switch
+belongs to the subnet its management address is in: a subnet-scoped account sees and changes only switches
+addressed inside its own subnets, and a switch addressed by hostname is for accounts that can see every subnet.
 
 **Wake & Actions** — Wake-on-LAN from a lease, reservation or device row, and a favourites list. *Needs* nothing
 from the host beyond being able to send UDP broadcast on the target's subnet. *Stores* the favourites (and an
 optional SecureOn password) in its own `wol_hosts` table. *Sends* one standard magic packet per wake, to the subnet's
 directed broadcast address and the limited broadcast address, at most one per MAC every five seconds; every wake
-is audited.
+is audited. The subnet of a wake or a new favourite is the one the MAC is in (its active lease, then its
+reservation), never a value in the request, and a MAC Jen has never seen is for accounts that can see every subnet.
 
 **Presence** — publishes tracked devices' online or offline state. *Needs* the Jen host's IPv4 neighbour table
 (`ip -4 neigh`, read every five minutes alongside lease events). *Stores* the devices you track, their current
 state, and your sinks (an MQTT password or HTTP bearer token is stored encrypted and never shown again) in its own
 `pr_*` tables. *Sends* every state change to each sink you configured: a Home Assistant webhook, MQTT, or any HTTP
-endpoint; nothing is published for a device you did not choose to track.
+endpoint; nothing is published for a device you did not choose to track. Because every state change goes to every
+enabled sink, adding, pausing, testing and removing a sink is superadmin-only; other admins see the list
+read-only. A device that is not on a segment the Jen host has an interface on cannot appear in its neighbour table,
+so its state follows lease events only, and the page says "lease-based" beside it.
 
 *Presence* is also the push alternative to the polling example in the Home Assistant quick start above, which asks
 the REST API whether a device is online.

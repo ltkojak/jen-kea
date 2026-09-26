@@ -641,8 +641,8 @@ NAMED_ALLOWLIST = {
 }
 
 _PLUGIN_CLIENT_FACING = (
-    "acts on, or reads, a client row chosen by an id or address in the request; left undecorated until the "
-    "plugin fix (Q93/Q94) that the matching row in tests/test_authz_matrix_plugins.py is marked for - that row is the proof"
+    "acts on, or reads, a client row chosen by an id or address in the request, and judges the row's own subnet "
+    "(never a typed one); the matching row in tests/test_authz_matrix_plugins.py is the proof"
 )
 _PLUGIN_OWN = (
     "the plugin's own configuration or list, filtered by subnet in its own query; reads none of the client tables"
