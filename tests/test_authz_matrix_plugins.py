@@ -22,9 +22,8 @@ this file is what proves each fix. As of v5.65.5 every plugin fix has shipped an
 
 v5.65.8 (Q97 l) adds the other half of the invariant: TestAnAllowedCallerGetsAnAnswer, one row per
 plugin API route with an UNRESTRICTED key expecting a 200 and a clean body. The refusal rows above
-passed while IPAM's API answered every allowed caller with a 500, because nothing asked. Those three
-cells are xfail(strict) tagged Q98 (IPAM 1.6.3): the day Q98 fixes them they turn red until the
-marker is removed.
+passed while IPAM's API answered every allowed caller with a 500, because nothing asked. Its three
+cells were xfail(strict) tagged Q98 until IPAM 1.6.3 shipped (v5.65.9); none is marked now.
 """
 
 import json
@@ -944,8 +943,6 @@ class TestPresenceSinksAreSuperadminOnly:
         assert row is not None and row["enabled"] == 0, "the superadmin's toggle did not take effect"
 
 
-Q98 = "Q98 (IPAM 1.6.3): the API answers every allowed caller with a 500"
-
 _ALL_KEY = "jen_authz_unrestricted_key"
 
 # (label, method, path, body, xfail reason | None) - every plugin API route, once
@@ -960,15 +957,15 @@ POSITIVE_ROWS = [
     ),
     ("wol api wake a client in subnet A", "POST", "/api/v1/plugins/wol/wake", {"mac": A_MAC}, None),
     ("switchport api locate a client in subnet A", "GET", f"/api/v1/plugins/switchport/locate/{A_MAC}", None, None),
-    ("ipam api entries of subnet A", "GET", "/api/v1/plugins/ipam/entries?subnet_id=1", None, Q98),
+    ("ipam api entries of subnet A", "GET", "/api/v1/plugins/ipam/entries?subnet_id=1", None, None),
     (
         "ipam api save an entry in subnet A",
         "POST",
         "/api/v1/plugins/ipam/entries",
         {"subnet_id": 1, "ip": "10.98.1.200", "label": "created-by-matrix"},
-        Q98,
+        None,
     ),
-    ("ipam api next-free in subnet A", "GET", "/api/v1/plugins/ipam/next-free/1", None, Q98),
+    ("ipam api next-free in subnet A", "GET", "/api/v1/plugins/ipam/next-free/1", None, None),
 ]
 
 

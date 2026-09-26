@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.9-beta.1] - 2026-09-26
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.8-beta.1
+run. The first deep audit of the two oldest plugins. It bundles IPAM Lite
+1.6.3 and Network Discovery 1.2.2, each tagged and CI-green in its own
+repository first, and re-pins the plugin registry to those tags. There is no
+Jen code change in this release; the two plugin audits are the change. It is the
+last code before a promotion.
+
+IPAM's JSON API now works for the keys it was written for. The three routes
+added in 1.6.0 (`GET` and `POST /api/v1/plugins/ipam/entries`, `GET
+/api/v1/plugins/ipam/next-free/<subnet_id>`) looked the subnet up through the
+logged-in user, which a request that carries only an API key does not have, so
+every call the key was allowed to make failed with a server error; only the
+refusal for a subnet outside the key's scope ever worked, and it was the only
+thing the tests asked. They now decide access with the key's own scope and read
+the address range from Jen's subnet map. If you tried the API in 5.57 to 5.65.8
+and gave up on it, call it again; a key with no subnet scope reaches every
+subnet, a scoped key only its own. The authorization matrix's new
+allowed-caller rows (added in 5.65.8, expected to fail for IPAM until now) pass,
+and the plugin requires Jen 5.65.2.
+
+IPAM also stops handing out an address that only a global Kea reservation holds
+(next-free, the API and the range operations all treated it as free), counts a
+lease as active only until it expires as Jen does everywhere else, refuses to
+mark static or planned an address a lease or reservation already holds, and its
+fifteen-minute conflict check is set arithmetic instead of building every
+address of every subnet and asking the devices table about each MAC.
+
+One behaviour change an administrator can act on: Network Discovery's known-hosts
+list is now for administrators who can see every subnet. Marking a host known
+writes a row that has no subnet, so it silenced or re-armed the rogue-device
+alert for that MAC on every subnet, yet the route only checked the one in the
+URL; an administrator scoped to subnet A could hide subnet B's rogue host. If a
+scoped administrator has been marking hosts known, an unrestricted administrator
+has to do it from now on; entries already on the list are untouched, and the
+Known and Forget buttons disappear for a scoped account.
+
+Discovery also keeps its last good scan through a failure (a run that failed
+after pruning committed the delete, so the next scan had no baseline and could
+alert for every unknown host at once), shows the latest completed scan with a
+banner when a newer one failed instead of listing every host as gone, no longer
+expires a queued scan whose thread is still waiting for the scan lock, and
+searches each subnet's latest scan only. The rest of both changelogs is in the
+plugins' own CHANGELOG.md.
+
+Every plugin repository's `tools/verify.py` now fails a template with a POST
+form that has no `csrf_token`. Four of the seven already did; IPAM, Discovery and
+Watchdog were added in this sweep (Watchdog's is a verify-only commit with no
+new version, because that file is not part of the shipped plugin).
+
 ## [5.65.8-beta.1] - 2026-09-26
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.7-beta.1

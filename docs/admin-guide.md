@@ -659,7 +659,8 @@ program is missing the page says so.
 **Network Discovery** — finds devices on a subnet that Kea does not know about. *Needs* `nmap` on the Jen host
 (Settings → Plugins offers an Install button on a systemd host). *Stores* scan results (the last three per
 subnet), the hosts you marked known, and its schedule in its own `nd_*` tables. *Sends* probes to the addresses of
-the subnet you scan and, when an unknown host appears, a "Rogue Device" alert to the channels you opted in.
+the subnet you scan and, when an unknown host appears, a "Rogue Device" alert to the channels you opted in. The
+known list has no subnet, so marking or forgetting a host is for an administrator who can see every subnet (5.65.9).
 
 **IPAM Lite** — the whole address space of a subnet, Kea-managed or not: what is leased, reserved, static or
 planned, with labels and owners. *Needs* nothing from the host. *Stores* the static and planned entries, the
