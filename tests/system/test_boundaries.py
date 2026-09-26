@@ -756,8 +756,12 @@ def test_12_a_revert_whose_restart_fails_is_a_persistent_rollback_failed(stack):
     proc = st.jen_py_bg(CHANGESET_REVERT_RESTART_FAILS)
     try:
         st.sentinel_wait(st.JEN, "/tmp/s12-preflighted", timeout=120)
-        # kea-a's daemon can no longer start, for good (the harness heal puts the real binary back)
+        # kea-a's daemon can no longer START, for good (the harness heal puts the real binary back). Config
+        # validation (`kea-dhcp4 -t`) must still work, or the commit itself fails instead of the revert's restart.
         wrapper = """#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "-t" ]; then exec "$0.real" "$@"; fi
+done
 exit 1
 """
         st.dexec(
