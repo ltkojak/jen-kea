@@ -2,6 +2,67 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.8-beta.1] - 2026-09-26
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.7-beta.1
+run. The second audit of the release candidate: twelve small and medium
+fixes, no new feature, nothing an operator has to do to take them. It is
+the last code before a promotion apart from the two plugin audits after it.
+
+Two of the fixes tighten an access decision. A plugin route that reads a
+caller's API key through `api_key_can_access_subnet` used to grant every
+subnet when the key itself was missing (a route reached outside the key
+decorator); it now answers no, as the session-side check always did, so if
+you maintain a plugin, keep every API route behind `api_key_required`. And
+the per-key limit of 60 write requests a minute lived in Jen's own API routes
+only, so a plugin's write endpoint (a wake packet per call, an IPAM entry)
+had none; the limit now lives in the key decorator, and a plugin's writes
+share the one budget of the key that makes them. A script that bulk-writes
+through a plugin endpoint will now see HTTP 429 after the sixtieth call in a
+minute and should back off, exactly as it already had to for the core routes.
+
+A failed rollback can no longer be hidden by an unrelated save. When a
+configuration push failed and a server could not be put back, Jen kept a
+warning that a daemon may be stopped. Any later clean change cleared it, a
+DDNS save or an edit of one server that was never the broken one, so the one
+persistent sign was gone while the daemon was still down. The banner now
+clears only when a clean run covered every server that needed hands and was
+for the same kind of change; otherwise it stays until an admin dismisses it,
+so if you see it, restart the named server by hand (or repeat the change until
+it succeeds everywhere) rather than waiting for it to go. Rollbacks, both the
+clean one and the failed one, are now written to the audit log, and a subnet
+edit is audited only when it went through (it was audited as done after a
+rollback, and the retired `restart_failed` status was still being read).
+
+The rest, in short. A client that exists only as a global reservation is now
+findable in the Investigate view instead of reading "not found". The Servers
+banner shows its per-server detail lines to admins only. `/api/v1/health/kea`
+probes the server Jen is actually serving from (in an HA pair with server one
+down it used to report Kea down while Jen was serving from server two), and
+`/api/v1/health` gains `kea_servers`, still without calling Kea. Event kinds
+and plugin alert type ids longer than their database columns are refused or
+rejected at registration instead of losing rows in strict mode, and a plugin
+alert type naming an icon that does not exist gets the bell. The dashboard
+preferences endpoint answers 400 to a JSON array instead of 500, search
+providers filter to the caller's subnets before they truncate (a restricted
+caller whose rows came after twenty out-of-scope ones saw nothing) and skip a
+malformed row instead of blanking the page, the Plugins page no longer prints
+an unknown icon's name on a registry plugin's card, resetting an alert template
+validates the type, the theme comment says what the code does, and the client
+page's DNS tab reads DNS. The CSP test's list of swap-target partials is now
+derived from a scan of the routes, not typed by hand.
+
+Test infrastructure. The docs-screenshot leak guard used to spell the
+maintainer's family names, surname and domain in a public file, which is
+exactly what it exists to keep out of a picture; they now come from the CI
+secret `JEN_DOCS_FORBIDDEN`, and the CI run fails if it is empty. The old
+file remains in `git log`; history is not rewritten. The plugin authorization
+matrix gains its missing half: one row per plugin API route with an
+unrestricted key expecting a 200, so "the allowed caller gets an answer" is
+tested and not only "the refused caller gets nothing". IPAM's three API routes
+answer those rows with a 500 today and are marked as expected failures for the
+next release, which fixes them.
+
 ## [5.65.7-beta.1] - 2026-09-26
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.6-beta.1
