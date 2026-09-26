@@ -651,7 +651,7 @@ def _port_label(switch_id, ifindex):
 
 
 _MOVED_ALERT_TYPE = "switchport_moved"
-_MOVED_TEMPLATE = "🔀 <b>{mac}</b> moved: {old} → {new}"
+_MOVED_TEMPLATE = "ℹ️ <b>{mac}</b> moved: {old} → {new}"
 
 
 def _emit_move(mac, old_pos, new_pos):
@@ -1026,7 +1026,7 @@ def register(app):
         PLUGIN_ID,
         _MOVED_ALERT_TYPE,
         label="Switch Port: device moved",
-        icon="cable",
+        icon="info",
         default_template=_MOVED_TEMPLATE,
     )
     register_search_provider(PLUGIN_ID, title="Switch Ports", fn=_switchport_search)

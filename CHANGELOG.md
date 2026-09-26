@@ -5,7 +5,7 @@
 ## [5.65.5-beta.1] - 2026-09-25
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.4-beta.1
-run. Bundles Switch Port Locator 1.0.1, Wake & Actions 1.0.1 and Presence
+run. Bundles Switch Port Locator 1.0.2, Wake & Actions 1.0.1 and Presence
 1.0.1, each tagged and CI-green in its own repository first, and re-pins the
 plugin registry to those tags. This finishes the round the last release
 started: the plugin routes that the authorization matrix had marked as known
@@ -49,6 +49,8 @@ switch belongs to the subnet its management address is in, so a scoped account
 sees and changes only its own switches. The host of a switch is validated before it
 reaches the SNMP walk, and the community string being visible in the process list
 during a walk is documented.
+
+Switch Port Locator's own 1.0.1 was never released: its new moved alert opened with a glyph and used an icon outside the ones Jen's alert tests accept, which failed the suite when it was first bundled, so 1.0.2 (the same code with a standard glyph and a whitelisted icon) is what ships.
 
 Watchdog and DNS Sync are unchanged here; Wake, Switch Port and Presence now require Jen
 5.65.2 or later like them, because they use the subnet helpers added to the plugin

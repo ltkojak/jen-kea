@@ -1,5 +1,13 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.0.2] - 2026-09-25
+
+Requires Jen 5.65.2 or later, like 1.0.1. No code path changed.
+
+### Fixed: the moved alert used a glyph and an icon Jen does not accept
+
+1.0.1 registered the `switchport_moved` alert type with a default template that opened with a glyph outside Jen's four standard ones (critical, warning, recovered, information) and with the `cable` icon, which the dashboard's alert-icon whitelist does not include. Jen's own test suite holds every alert type to both lists, and it failed when 1.0.1 was bundled, so 1.0.1 was never released to an install. The alert now opens with the information glyph and uses the `info` icon. `tools/test_plugin.py` enforces both rules in its `register(app)` stub, so this is caught here next time, before a bundle.
+
 ## [1.0.1] - 2026-09-25
 
 Requires Jen 5.65.2 or later (the `can_access_subnet` and `api_key_can_access_subnet` helpers in the plugin API). Adds one migration (a `mac_count` column on `sp_ports`); it runs by itself on the next start.
