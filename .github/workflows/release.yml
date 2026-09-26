@@ -15,6 +15,8 @@ jobs:
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
+    secrets:
+      JEN_DOCS_FORBIDDEN: ${{ secrets.JEN_DOCS_FORBIDDEN }}
 
   release:
     needs: test

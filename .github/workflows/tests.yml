@@ -4,6 +4,11 @@ name: Tests
 # (gates every tagged release). Not meant to be triggered directly.
 on:
   workflow_call:
+    secrets:
+      # Q97 k: the docs-screenshot leak guard's personal markers. Passed by name from each
+      # caller (never `secrets: inherit`: release.yml holds the signing key).
+      JEN_DOCS_FORBIDDEN:
+        required: false
 
 permissions:
   contents: read
