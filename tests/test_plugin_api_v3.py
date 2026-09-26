@@ -369,8 +369,14 @@ class TestApiKeyCanAccessSubnet:
     def test_an_unrestricted_key_sees_everything(self):
         from jen.plugin_api import api_key_can_access_subnet as can
 
-        for key in ({"subnet_access": None}, {}):
-            assert can(key, 5) is True and can(key, None) is True
+        key = {"subnet_access": None}
+        assert can(key, 5) is True and can(key, None) is True
+
+    def test_a_missing_key_is_not_an_unrestricted_one(self):
+        # v5.65.8 (Q97 a): an empty row used to read as "no scope" and so as "everything"
+        from jen.plugin_api import api_key_can_access_subnet as can
+
+        assert can({}, 5) is False and can({}, None) is False and can(None, 5) is False
 
     def test_a_malformed_scope_fails_closed(self):
         from jen.plugin_api import api_key_can_access_subnet as can

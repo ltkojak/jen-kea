@@ -61,7 +61,7 @@ class TestResolution:
         assert r.status_code == 200
         body = r.data.decode()
         assert MAC in body
-        for tab in ("Overview", "Explain", "Trace", "Timeline", "Dns", "Config"):
+        for tab in ("Overview", "Explain", "Trace", "Timeline", "DNS", "Config"):
             assert tab in body
 
     def test_found_by_ip_resolves_the_holder(self, logged_in_client, seeded):
