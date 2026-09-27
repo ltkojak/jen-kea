@@ -2,6 +2,96 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.10-beta.1] - 2026-09-26
+
+Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.9-beta.1
+run. The third audit of the release candidate, Jen side: what was left
+after the first two, found by three review passes and a review of the
+same beta by a second reviewer, each item checked against the running
+code. There is no new feature. It adds the shared plugin helpers that
+the next plugin release builds on. The 5.56.3 to promoted upgrade still
+needs no migration, no sudoers change and no new dependency.
+
+A failed rollback can no longer be hidden by a later, clean one. The
+Servers banner was one slot that every new rolled-back or failed-rollback
+result overwrote. A rollback that worked on kea-b replaced an unresolved
+failed rollback on kea-a with "nothing was changed", and the next clean
+change of anything cleared it while a daemon was still stopped; two failed
+rollbacks in a row kept only the second one's servers. The banner is now a
+list of the unresolved incidents, all shown. A clean change clears the
+incidents it actually covers: a clean rollback always, a failed one only
+when the change was for the same service and restarted every server that
+needed hands. If you see a banner naming a server, restart Kea there by
+hand and repeat the change; it goes when that server has been restarted
+cleanly by a change, or an administrator dismisses it (the Dismiss button
+is now offered to administrators only, since the route always refused
+everyone else). A banner recorded before the upgrade is read as one
+incident.
+
+The live Kea probe is one call, and the public health page is smaller.
+`GET /api/v1/health/kea` ran the high-availability election (a version
+call and a heartbeat per server), then a probe, then a second version call:
+two to six requests at the ten-second timeout, so a dead server cost twenty
+seconds and a half-dead one could report "up" with no version. There is now
+one probe, used by the alert loop, the status page and the API alike, and
+the endpoint asks the server Jen is serving from once. `GET /api/v1/health`,
+which needs no key and which the self-updater and the restore poll read,
+returns only `jen_version`, `kea_up`, `kea_version`, `kea_checked_at` and
+`subnets`: the per-server list that 5.65.8 added there named every Kea
+server to anyone who could reach the page and nothing reads it. It moved to
+the key-gated `/api/v1/health/kea` as `servers`. If a script read
+`kea_servers` from the public page, read `servers` there with an API key.
+
+A box that cannot take a plugin update no longer offers it. The plugin
+registry is read from `main`, so the moment a plugin release raises the Jen
+version it needs, every older Jen sees it, and the Plugins page showed
+"update available" and an Update button that only failed, after downloading
+the plugin, or, on a systemd host, after writing a request and starting a
+root service. All seven bundled plugins need 5.57.0 or later and five need
+5.65.2 or later, so a stable 5.56.3 box was offered updates it could not
+take, and so will anyone who defers a Jen upgrade after promotion. The page
+now says "Update needs Jen X.Y.Z, upgrade Jen first" in place of the badge
+and the button, and the update and install routes refuse before anything is
+fetched or requested.
+
+Export buttons and validation messages stop misbehaving. A form whose answer
+is a file never navigates, so nothing ever reset the button Jen had disabled
+or stopped the progress bar sweeping: after Export Jen database, Export Kea
+data or the recovery bundle the button stayed dead until you left the page
+and a second export needed a reload. Those three forms now leave the button
+alone and stop the bar after two seconds. A form that refuses its own
+submission (Watchdog's "Enter at least one port") no longer has its button
+disabled anyway, Enter in a field of the forms that submit through script no
+longer starts a bar nothing stops, and a failed request no longer stops the
+shared bar twice and hides it while another request is still running.
+
+The rest, in short. A JSON array sent to the three passkey routes or to a
+core write endpoint is a 400, not a 500. The helper, TLS-setup and Trace
+capabilities need an SSH host, so a stale recorded helper version no longer
+reads "helper on" beside "no host has SSH configured". In the Docker image
+the self-update and Restart controls are hidden (they drive a systemd
+service the container does not have), and `nmap`, `iputils-ping` and `snmp`
+are installed so Discovery, Watchdog and Switch Port work there; both
+compose files lose a comment about a one-release transition that ended long ago. The
+per-key write limit takes a lock, and a pull request from a fork no longer
+fails the screenshot job for want of a secret it cannot receive. The
+Message Templates card hides the legacy rogue-device template while Network
+Discovery's own is registered, and a click on a control inside a card header
+on a phone no longer folds the card.
+
+For plugin authors: `jen.plugin_api` gains `json_object_body`, `str_field`,
+`normalize_mac`, `like_pattern`, `in_placeholders`, `subnet_for_ip`,
+`search_scope`, `require_write` and `subnet_or_404`, and
+`assert_subnet_access` takes `notify=False` for JSON routes. They replace
+code seven plugins each copied and that had drifted (a search that took a
+typed `%` as a wildcard in two plugins and literally in two, six copies of
+the MAC check with two failure conventions). `plugins/README.md` documents
+each, says that a search provider's own `LIMIT` must come after its own
+subnet filter (the old text told authors Jen would drop out-of-scope rows,
+which is what led four providers to limit first), and states the rule that
+a per-client row's stored subnet is a cache to be judged against
+`client_subnet_for_mac`. `PLUGIN_API_VERSION` stays 3.
+
 ## [5.65.9-beta.1] - 2026-09-26
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.8-beta.1
