@@ -306,11 +306,18 @@ def _prepare_mosquitto():
     mosq = WORK / "mosquitto"
     certs = mosq / "certs"
 
+    # --user matches the container to the host's own uid:gid, so the passwd file it writes is
+    # owned by whoever is running this harness, not root or the image's own mosquitto user - the
+    # os.chmod() right after this needs to own the file to change its mode at all (bit CI learned
+    # the hard way: PermissionError, "Operation not permitted", on a file docker run had left
+    # root-owned).
     run(
         [
             "docker",
             "run",
             "--rm",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
             "-v",
             f"{mosq}:/out",
             "eclipse-mosquitto:2",
